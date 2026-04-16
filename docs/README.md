@@ -28,7 +28,7 @@ A minimal, hackable Lisp interpreter written in Python — with macros, modules,
 ## Quick Start
 
 ```bash
-python3 multiline_repl27.py
+python3 multiline_repl.py
 ```
 
 ```
@@ -51,7 +51,7 @@ Omega Lisp — type 'exit' to quit
 Or from the shell:
 
 ```bash
-python3 multiline_repl27.py   # then type (load "examples.ol")
+python3 multiline_repl.py   # then type (load "examples.ol")
 ```
 
 ---
@@ -59,14 +59,14 @@ python3 multiline_repl27.py   # then type (load "examples.ol")
 ## Files
 
 | File | Purpose |
-|------|---------|
-| `multiline_repl27.py` | The interpreter — parser, evaluator, REPL |
-| `verify.ol` | Feature verification — run to confirm everything works |
-| `examples.ol` | Core library: math, BST, Maybe/Result, streams |
-| `examples_v2.ol` | Extended library with explicit `(export ...)` |
-| `transpiler12.ol` | Omega Lisp → Python transpiler |
-| `python_to_lisp4.py` | Python → Omega Lisp transpiler |
-| `py_lift.ol` | REPL bridge for the Python→Lisp transpiler |
+|---------------------|--------------------------------------------------------|
+| `multiline_repl.py` | The interpreter — parser, evaluator, REPL              |
+| `verify.ol`         | Feature verification — run to confirm everything works |
+| `examples.ol`       | Core library: math, BST, Maybe/Result, streams         |
+| `examples_v2.ol`    | Extended library with explicit `(export ...)`          |
+| `transpiler.ol`     | Omega Lisp → Python transpiler                         |
+| `python_to_lisp.py` | Python → Omega Lisp transpiler                         |
+| `py_lift.ol`        | REPL bridge for the Python→Lisp transpiler             |
 
 ---
 

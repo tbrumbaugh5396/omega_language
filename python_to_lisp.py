@@ -365,7 +365,7 @@ def _convert_import_from(node):
 # ── stdlib detection ──────────────────────────────────────────────────────
 # Mirrors the set in ModuleResolver._PYTHON_STDLIB so transpiler and
 # interpreter agree on what is "native" vs "file".  Kept as a plain set
-# here so python_to_lisp2.py has no dependency on the interpreter.
+# here so python_to_lisp.py has no dependency on the interpreter.
 
 _PYTHON_STDLIB_NAMES = {
     "sys", "os", "re", "math", "json", "hashlib", "shutil",

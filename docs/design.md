@@ -2,7 +2,7 @@
 
 ## Overview
 
-Omega Lisp is implemented as a single Python file (`multiline_repl27.py`). Every semantic decision is visible in that file. This document explains the key design choices and why they were made.
+Omega Lisp is implemented as a single Python file (`multiline_repl.py`). Every semantic decision is visible in that file. This document explains the key design choices and why they were made.
 
 ---
 

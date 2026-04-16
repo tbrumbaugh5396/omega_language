@@ -1,9 +1,9 @@
 # Omega Lisp — Complete Reference
 
-> **Interpreter**: `multiline_repl31.py`  
+> **Interpreter**: `multiline_repl.py`  
 > **Standard library**: `types.ol`, `effects.ol`, `std.ol`  
-> **Tools**: `transpiler12.ol`, `py_lift.ol`, `html_weather.ol`  
-> **Companion**: `python_to_lisp4.py`
+> **Tools**: `transpiler.ol`, `py_lift.ol`, `html_weather.ol`  
+> **Companion**: `python_to_lisp.py`
 
 ---
 
@@ -26,7 +26,7 @@
 ## Quick Start
 
 ```bash
-python3 multiline_repl31.py
+python3 multiline_repl.py
 ```
 
 ```lisp
@@ -88,16 +88,16 @@ python3 multiline_repl31.py
 ### Lists
 
 ```lisp
-(list 1 2 3)           ; => (1 2 3)
-'(1 2 3)               ; quoted list
-(cons 0 '(1 2 3))      ; => (0 1 2 3)
-(first '(1 2 3))       ; => 1  (same as car)
-(rest  '(1 2 3))       ; => (2 3)  (same as cdr)
-(second '(1 2 3))      ; => 2
-(nth '(1 2 3) 2)       ; => 3  (0-indexed)
-(length '(1 2 3))      ; => 3
-(append '(1 2) '(3 4)) ; => (1 2 3 4)
-(reverse '(1 2 3))     ; => (3 2 1)
+(list 1 2 3)            ; => (1 2 3)
+'(1 2 3)                ; quoted list
+(cons 0 '(1 2 3))       ; => (0 1 2 3)
+(first '(1 2 3))        ; => 1  (same as car)
+(rest  '(1 2 3))        ; => (2 3)  (same as cdr)
+(second '(1 2 3))       ; => 2
+(nth '(1 2 3) 2)        ; => 3  (0-indexed)
+(length '(1 2 3))       ; => 3
+(append '(1 2) '(3 4))  ; => (1 2 3 4)
+(reverse '(1 2 3))      ; => (3 2 1)
 (map f lst)
 (filter pred lst)
 (fold f init lst)       ; left fold: (fold + 0 '(1 2 3)) => 6
@@ -123,7 +123,7 @@ python3 multiline_repl31.py
 (string-length "abc")                 ; => 3
 (string-split "a,b,c" ",")            ; => ("a" "b" "c")
 (string-contains "hello" "ell")       ; => true
-(substring "hello" 1 3)              ; => "el"
+(substring "hello" 1 3)               ; => "el"
 (number->string 42)                   ; => "42"
 (string->number "42")                 ; => 42
 (symbol->string 'foo)                 ; => "foo"
@@ -541,21 +541,21 @@ def fib(n):
 
 ```lisp
 (defined? 'some-name)        ; => true if bound in current env, false otherwise
-(defined? 'transpile-file)   ; => false before loading transpiler12.ol
+(defined? 'transpile-file)   ; => false before loading transpiler.ol
 ```
 
 ---
 
 ## Transpiler
 
-**Load**: `(load "transpiler12.ol")`
+**Load**: `(load "transpiler.ol")`
 
 Compiles Omega Lisp functions to Python source code with a self-contained runtime prelude.
 
 ### Basic Usage
 
 ```lisp
-(load "transpiler12.ol")
+(load "transpiler.ol")
 
 (define (square x) (* x x))
 (define (cube   x) (* x x x))
@@ -602,7 +602,7 @@ python3 -c "import math_funcs; print(math_funcs.square(5))"   # => 25
 Omega names are mangled to valid Python identifiers:
 
 | Omega    | Python       |
-|----------|-------------|
+|----------|--------------|
 | `square` | `square`     |
 | `is-ok?` | `is_ok_p`    |
 | `->str`  | `_to_str`    |
@@ -621,7 +621,7 @@ Effects (`perform`, `handle`, `shift`, `reset`), `py-exec`/`py-eval`, macros, `l
 ## Python Lifter
 
 **Load**: `(load "py_lift.ol")`  
-**Requires**: `python_to_lisp4.py` in the working directory
+**Requires**: `python_to_lisp.py` in the working directory
 
 Converts Python source files to Omega Lisp. Handles functions, classes (partially), conditionals, loops (partially converted to recursion).
 
@@ -653,7 +653,7 @@ Converts Python source files to Omega Lisp. Handles functions, classes (partiall
 ### Full Round-trip (Python → Lisp → Python)
 
 ```lisp
-(load "transpiler12.ol")   ; load transpiler first
+(load "transpiler.ol")   ; load transpiler first
 (load "py_lift.ol")
 
 (py-roundtrip "input.py" "output.py")
@@ -746,11 +746,11 @@ The only unsafe input would be a literal `'''` in the HTML content — which nev
 
 After loading `types.ol`, these are three different things:
 
-| Expression | Value | Use for |
-|-----------|-------|---------|
-| `None` (bare) | `<Lambda ()>` — the None ADT *constructor* | never use as a value |
-| `(None)` | `['None']` — an Option None *instance* | "no value" in Option context |
-| `'()` | `[]` — the empty list | unit/void return, null sentinel |
+| Expression    | Value | Use for |
+|---------------|--------------------------------------------|---------------------------------|
+| `None` (bare) | `<Lambda ()>` — the None ADT *constructor* | never use as a value            |
+| `(None)`      | `['None']` — an Option None *instance*     | "no value" in Option context    |
+| `'()`         | `[]` — the empty list                      | unit/void return, null sentinel |
 
 ```lisp
 (null? None)    ; => false  (None is a Lambda)

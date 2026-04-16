@@ -13,8 +13,8 @@
 ;   (py-roundtrip "src.py" "rt.py")    ; Python -> Lisp -> Python round-trip
 ;
 ; Round-trip note:
-;   Full automated round-trip requires transpiler12.ol loaded first:
-;     (load "transpiler12.ol")
+;   Full automated round-trip requires transpiler.ol loaded first:
+;     (load "transpiler.ol")
 ;     (load "py_lift.ol")
 ;     (py-roundtrip "myfile.py" "myfile_rt.py")
 ;
@@ -105,11 +105,11 @@
   ;   1. Lift src-path → clean Lisp (Omega runtime prelude stripped automatically)
   ;   2. Write the Lisp to "<src-path>.roundtrip.ol"
   ;   3. Load the .ol into the current REPL environment
-  ;   4. If transpile-file is defined (transpiler12.ol loaded), write dst-path
+  ;   4. If transpile-file is defined (transpiler.ol loaded), write dst-path
   ;      Otherwise return a message with next steps
   ;
   ; For full automation load transpiler12.ol first:
-  ;   (load "transpiler12.ol")
+  ;   (load "transpiler.ol")
   ;   (load "py_lift.ol")
   ;   (py-roundtrip "myfile.py" "myfile_rt.py")
 
@@ -128,7 +128,7 @@
             dst-path)
           (string-append
             "Wrote " ol-path
-            " — load transpiler12.ol then call: "
+            " — load transpiler.ol then call: "
             "(transpile-file \"" dst-path "\" '(fn1 fn2 ...))"))))
 
 ) ; end module PyLift
