@@ -1,0 +1,18 @@
+(define vector-pkg
+  (derivation
+    (name "vector-lib")
+    (src (read-file "vector.omega"))
+    (build-caps (list FS-CAP)) ;; Requires filesystem to "build"
+    (inputs (list math-core-pkg))))
+
+;; Running a "Pure" shell
+(with-isolated-env (list vector-pkg)
+    (magnitude (vector 3 4))) ;; This works
+    (print "hello")            ;; This FAILS (print was not injected)
+
+
+(define math-image (freeze-env "math-engine-v1"))
+
+;; This 'math-image' can now be saved to disk as a JSON/Binary file
+(save-image "math-engine-v1.img" math-image)
+

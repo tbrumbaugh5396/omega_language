@@ -1,0 +1,91 @@
+                                     ┌────────────────────────────┐
+                                     │        REPL / Input        │
+                                     │  (User input, text parsing)│
+                                     └─────────────┬──────────────┘
+                                                   │
+                                                   ▼
+                                     ┌────────────────────────────┐
+                                     │     Reader Macros          │
+                                     │  (Parse / transform code)  │
+                                     │  - Coinductive DAG of U    │
+                                     │  - Lazy, cycle-detecting   │
+                                     └─────────────┬──────────────┘
+                                                   │
+                                                   ▼
+                                     ┌────────────────────────────┐
+                                     │      Macro Expansion       │
+                                     │  (Coinductive DAG of U)    │
+                                     │  - Lazy expansion          │
+                                     │  - Cycle detection         │
+                                     └─────────────┬──────────────┘
+                                                   │
+                                                   ▼
+                                     ┌────────────────────────────┐
+                                     │      Functions / Calls     │
+                                     │  (DAG of U → U)            │
+                                     │  - Lazy evaluation         │
+                                     │  - Recursive / coinductive │
+                                     └─────────────┬──────────────┘
+                                                   │
+                                                   ▼
+                                     ┌───────────────────────────-─┐
+                                     │   Coinductive Structures    │
+                                     │   (Streams / Infinite lists)│
+                                     │  - Thunked DAGs             │
+                                     │  - Meta for reflection      │
+                                     └─────────────┬──────────────-┘
+                                                   │
+                                                   ▼
+                                     ┌────────────────────────────-┐
+                                     │        Interfaces           │
+                                     │  (Structural types of U)    │
+                                     │  - Methods may return DAGs  │
+                                     │  - Coinductive cycles safe  │
+                                     └─────────────┬──────────────-┘
+                                                   │
+                                                   ▼
+                                     ┌────────────────────────────-┐
+                                     │       Dependent Types       │
+                                     │  (U → Type / DAG meta)      │
+                                     │  - Refinement / Logical     │
+                                     │    types                    │
+                                     │  - Type-level eval / proofs │
+                                     │  - Lazy finite observations │
+                                     └─────────────┬──────────────-┘
+                                                   │
+                                                   ▼
+┌──────────────────────────────────────────────────────────────────--─────────────┐
+│                              Universal Object U                                 │
+│  - Coinductive DAG representing any object:                                     │
+│      functions, macros, streams, interfaces, dependent types, proofs,           │
+│      equivalences, higher homotopies                                            │
+│  - Lazy evaluation via thunks                                                   │
+│  - Reflection/meta exposes DAG structure                                        │
+│  - Equivalence proofs as first-class DAGs                                       │
+│  - Higher homotopies = DAGs of DAGs                                             │
+│  - Refinement types = dependent types with predicates                           │
+│  - Logical types = propositions stored as DAGs                                  │
+└─────────────┬───────────────────────────────┬─────────────────────────────────--┘
+              │                               │
+              ▼                               ▼
+┌────────────────────────────┐     ┌────────────────────────────┐
+│   Reflection / Meta        │     │ Equivalence / Higher Paths │
+│  - Inspect DAG of any U    │     │ - DAG comparison for U     │
+│  - Type-level and runtime  │     │ - First-class Equiv proofs │
+│  - Productivity checks     │     │ - Higher homotopies via    │
+│                            │     │   DAGs of DAGs             │
+│  - Inspect refinement /    │     │ - Proof-carrying supported │
+│    logical type predicates │     │   (proofs as DAGs)         │
+└─────────────┬──────────────┘     └─────────────┬──────────────┘
+              │                                  │
+              └───────────────┬───────────--─────┘
+                              ▼
+                  ┌────────────────────────────┐
+                  │ Type-level & Runtime Eval  │
+                  │ - Lazy evaluation of U DAG │
+                  │ - Observe only finite DAGs │
+                  │ - Coinductive productivity │
+                  │ - Type-check refinement /  │
+                  │   logical predicates       │
+                  │ - Verify proofs / equiv    │
+                  └────────────────────────────┘

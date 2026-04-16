@@ -1,0 +1,12 @@
+(define Math (import "math.lisp"))
+
+(module MathTests
+    (open Math.Vector)
+    
+    (define test-1 (= (magnitude (list 3 4)) 5))
+    
+    (define test-2 (= (Math.fact 5) 120))
+    
+    (define test-3 (= Math.Constants.PI 3.1415926535)))
+
+(print "Tests Loaded Successfully.")

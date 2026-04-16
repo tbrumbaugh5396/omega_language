@@ -1,0 +1,527 @@
+(register-macro! defmacro
+    (name params body)
+    (list (quote register-macro!)
+        (list (quote quote) name)
+        params
+        body))
+
+
+(defmacro let (bindings body)
+    ((lambda (vars vals)
+        (append (list (list (quote lambda) vars body))
+            vals))
+    (map first bindings)
+    (map second bindings)))
+
+
+; reader macro
+(defmacro set-reader-macro (char handler)
+    (list (quote register-reader-macro!) char handler))
+  
+
+(define qq-expand (lambda (x)
+    (match
+        ( (atom x) 
+            (list (quote quote) x))
+ 
+        ( (equals x (quote ()))
+            (quote ()))
+ 
+        ((equals (start x) (quote unquote))
+            (start (rest x)))
+    
+        (1
+            (list (quote prepend)
+            (qq-expand (start x))
+            (qq-expand (rest x)))))))
+
+
+(define qq-expand (lambda (x level)
+    (match
+        ((atom x) (list 'quote x))
+        ((equals (start x) 'quasiquote)
+        (list 'list ''quasiquote (qq-expand (second x) (+ level 1))))
+        ((equals (start x) 'unquote)
+        (if (equals level 0)
+            (second x)
+            (list 'list ''unquote (qq-expand (second x) (- level 1)))))
+        (1 (list 'prepend (qq-expand (start x) level) (qq-expand (rest x) level))))))
+
+
+(defmacro quasiquote (x) 
+    (qq-expand x))
+
+
+(defmacro unquote-slicing (x)
+    (list (quote evaluate) x))
+
+
+; quote
+(set-reader-macro (quote ' )
+    (lambda (stream) 
+        (list (quote quote) (read stream))))
+
+'(+ 1 2)
+(evaluate '(+ 1 2))
+
+; quasiquote
+(set-reader-macro (quote ` )
+    (lambda (stream)
+        (list 'quasiquote (read stream))))
+
+` (+ 1 2)
+
+ (set-reader-macro (quote ,)
+    (lambda (stream)
+        (list (quote unquote) (read stream))))
+
+`(+ 1 , (+ 1 2))
+
+(set-reader-macro (quote ,@ )
+    (lambda (stream) 
+        (list (quote unquote-slicing) (read stream))))
+
+`(+ 1 ,@ (list 1 2))
+
+
+
+(defmacro alias (existing new) (list (quote define) new existing))
+
+(defmacro swap (var1 var2) 
+    (list (quote define) var2 var1))
+
+; (swap first car) ; (define car first)
+; (swap rest  cdr) ; (define cdr rest)
+; (alias eq equals)
+
+(define comment (lambda (x) (quote ())))
+
+;; Standardize names
+(alias start car)
+(alias rest  cdr)
+(alias prepend cons)
+(alias equals eq)
+
+(define map 
+    (lambda (f l)
+        (if (equals l (quote ()))
+            (quote ())
+            (prepend (f (start l)) 
+                (map f (rest l))))))
+
+(defmacro cond (c1 c2) 
+    (list (quote match) c1 c2))
+
+(defmacro apply (fn args)
+    (prepend fn args))
+
+
+
+(defmacro ;  args (quote ()))
+(defmacro ;; args (quote ()))
+
+(defmacro evaluate (expr) (list (quote evaluate) expr))
+
+
+
+
+; Type
+(define *adt-tags* (quote (Some None)))
+
+(defmacro define-type (name constructors)
+    (prepend (quote list)
+        (map (lambda (ctor)
+            (if (atom ctor)
+                (list (quote define) 
+                      ctor
+                      (list (quote lambda) (quote ())
+                          (list (quote list) (list (quote quote) ctor))))
+                (list (quote define) 
+                      (start ctor)
+                      (list (quote lambda) (rest ctor)
+                            (prepend (quote list)
+                                      (prepend (list (quote quote) (start ctor))
+                                      (rest ctor)))))))
+            constructors)))
+
+(define-type Option ((Some x) (None)))
+
+
+(define *adt-tags* (quote ()))
+
+(defmacro define-type (name constructors)
+    (list (quote begin)
+        (list (quote define) (quote *adt-tags*) 
+            (prepend (quote list) (prepend (quote *adt-tags*) 
+                (map (lambda (c) (if (atom c) c (start c))) constructors))))
+        (prepend (quote list)
+            (map (lambda (ctor)
+                (list (quote define) 
+                    (if (atom ctor) ctor (start ctor))
+                    (list (quote lambda) (quote args)
+                        (list (quote prepend) 
+                            (list (quote quote) (if (atom ctor) ctor (start ctor))) 
+                            (quote args)))))
+        constructors))))
+
+
+(define empty? (lambda (x) (equals x (quote ()))))
+
+(define contains? (lambda (lst sym)
+    (if (empty? lst)
+        0
+        (if (equals (start lst) sym)
+            1
+            (contains? (rest lst) sym)))))
+
+(define is-constructor? (lambda (sym) (contains? *adt-tags* sym)))
+
+(define lower-node (lambda (expr)
+      (if (atom expr)
+          (list (quote uam-node) (quote :const) expr)
+          (if (is-constructor? (start expr))
+              (list (quote uam-node)
+                    (quote :adt)
+                    (list (quote quote) (start expr))
+                    (map lower-node (rest expr)))
+              (list (quote uam-node)
+                    (quote :apply)
+                    (lower-node (start expr))
+                    (map lower-node (rest expr)))))))
+
+(defmacro lower (expr)
+      (list (quote quote) (lower-node expr)))
+
+(define lower
+(lambda (expr)
+  (define inner
+    (lambda (e)
+      (if (atom e)
+          (list (quote uam-node) (quote :const) e)
+          (if (is-constructor? (start e))
+              (list (quote uam-node) (quote :adt) (list (quote quote) (start e))
+                    (map inner (rest e)))
+              (list (quote uam-node) (quote :apply)
+                    (inner (start e))
+                    (map inner (rest e)))))))
+  (inner expr)))
+
+
+(lower (Some 42))
+
+
+(define-type Result ((Ok value) (Err message)))
+
+(define *adt-tags* (prepend (quote Ok) (prepend (quote Err) *adt-tags*)))
+
+(lower (Err "Type Mismatch"))
+
+; 
+(define *macros* (quote (lower define-type)))
+
+;; 2. Define the predicate
+(define is-macro? (lambda (sym) (contains? *macros* sym)))
+
+;; 3. Define the manual expander
+;; This simply calls the macro logic without evaluating the result
+(define macroexpand (lambda (expr)
+      (if (atom expr)
+          expr
+          (if (is-macro? (start expr))
+              (lower-node (second expr)) ;; Specialized for 'lower'
+              expr))))
+
+
+(define-type Stream ((SCons head tail)))
+
+(define *adt-tags* (prepend (quote SCons) *adt-tags*))
+
+
+(defmacro delay (expr)
+  (list (quote lambda) (quote ()) expr))
+
+
+(define force (lambda (thunk) (thunk)))
+
+(define ones (lambda () 
+      (SCons 1 (delay (ones)))))
+
+(start (rest (ones)))
+
+
+(start (rest (force (second (rest (ones))))))
+
+(lower (SCons 1 (delay (ones))))
+
+
+(define ones 0)
+
+
+(define ones (lambda () 
+      (SCons 1 (delay (ones)))))
+
+
+(define take (lambda (n stream-func)
+      (if (equals n 0)
+          (quote ())
+          (begin
+            (define s (stream-func))
+            (prepend (second s) ;; The head
+                     (take (- n 1) (force (third s))))))))
+
+
+(define ones-gen (lambda (self) 
+      (SCons 1 (delay (self self)))))
+
+
+(define ones (lambda () (ones-gen ones-gen)))
+
+
+(lower (ones-gen ones-gen))
+
+(lower (SCons 1 (delay (ones-gen ones-gen))))
+
+;;
+(define s (ones))
+(second (rest s))
+(define thunk (third (rest s)))
+(define next-s (force thunk))
+(second (rest next-s))
+
+
+(lower (ones))
+
+(define pos-node (lambda (n expr)
+    (if (equals n 1)
+        (list (quote start) expr)
+        (pos-node (- n 1) (list (quote rest) expr)))))
+
+(defmacro pos (n expr)
+  (pos-node n expr))
+
+(define nth (lambda (n s-func)
+      (if (equals n 0)
+          (pos 2 (s-func))
+          (nth (- n 1) (lambda () (force (pos 3 (s-func))))))))
+
+(nth 5 ones)
+
+
+(define nth-iter (lambda (n s-func)
+    (begin
+      ;; 1. Initialize the state
+      (define current-s s-func)
+      (define i n)
+      
+      ;; 2. The Iteration Loop
+      (while (not (equals i 0))
+          (begin
+            ;; Move to the next state by forcing the tail
+            (set! current-s (lambda () (force (pos 3 (current-s)))))
+            (set! i (- i 1))))
+      
+      ;; 3. Return the final value
+      (pos 2 (current-s)))))
+
+(define i 0)
+(while (less-than i 5) (begin (print i) (set! i (+ i 1))))
+
+
+(defmacro safe-swap (a b)
+  (define g (gensym))
+  (list (quote begin)
+        (list (quote define) g a)
+        (list (quote set!) a b)
+        (list (quote set!) b g)))
+
+
+(define skip-until-end (lambda (stream)
+  (begin
+    (define t (next-token stream))
+    (if (equals t (quote ;/))
+        None
+        (if (equals t (quote /;))
+            (begin (skip-until-end stream) (skip-until-end stream))
+            (if (equals t None)
+                None
+                (skip-until-end stream)))))))
+
+
+(set-reader-macro /; (lambda (stream) (skip-until-end stream)))
+
+; Test Nested Comments
+(+ 1 /; this is a /; nested ;/ comment ;/ 1)
+
+
+(set-reader-macro ;;
+  (lambda (stream)
+    (begin
+      (read-until-newline stream)
+      None)))
+
+(set-reader-macro ;
+  (lambda (stream)
+    (begin
+      (read-until-newline stream)
+      None)))
+
+;; This is a trick: since your apply evaluates args,
+;; simply returning the last one works as a 'begin'
+(define begin (lambda args
+      (last args)))
+
+
+(define last (lambda (lst)
+  (match lst
+    ((x) x)             ;; Base case: Only one element left
+    ((x . rest) (last rest))))) ;; Recursive case: Keep going
+
+
+; let
+(defmacro let (bindings body)
+  ((lambda (vars vals)
+     (append (list (list (quote lambda) vars body))
+             vals))
+   (map first bindings)
+   (map second bindings)))
+
+(register-macro! (quote let)
+      (list (quote bindings) (quote body))
+      (quote (prepend (list (quote lambda) (map first bindings) body)
+                      (map second bindings))))
+
+; macro
+(register-macro! (quote defmacro)
+      (list (quote name) (quote params) (quote body))
+      (quote 
+        (list (quote let)
+              (list (list (quote _)
+                          (list (quote register-macro!)
+                                (list (quote quote) name)
+                                (list (quote quote) params)
+                                (list (quote quote) body))))
+              (list (quote quote) (list (quote quote) (quote OMEGA-MACRO-REGISTERED))))))
+
+;; <--- This quote delays the evaluation until defmacro is called
+
+    
+(defmacro inc (n) (+ 1 n))
+
+(inc 3)
+
+
+
+ ;; Wraps the value of 'char' in a quote
+
+
+
+;; Foreign Function Interface
+(define next-token (lambda (stream) 
+      (call-method stream "next")))
+
+(define peek-token (lambda (stream) 
+      (call-method stream "peek")))
+
+(define clear-stream (lambda (stream) 
+      (call-method stream "clear")))
+
+(define read (lambda (stream) 
+      (python-read-node stream)))
+
+(define read (lambda (stream)
+  (begin
+    (define token (next-token stream))
+    (if (equals token None) None
+      (if (equals token "(") (read-list stream)
+        (if (equals token ")") "Error: unexpected )"
+          (parse-atom token))))))
+
+
+; Preprocessing
+(define preprocess (lambda (s)
+  (let ((padded (tokenize-str s)))
+    ;; Imagine a function 'string-replace' that swaps "=>" for "lambda"
+    (string-replace padded "=>" "lambda"))))
+
+
+(define is-string-token? (lambda (t)
+  (let ((chars (string->list t)))
+    (if (null? chars)
+        false
+        (equals (char->int (first chars)) 34)))))
+
+
+(define process-literals (lambda (tokens)
+  (if (null? tokens)
+      (quote ())
+      (let ((t (first tokens)))
+        (if (is-string-token? t)
+            (prepend (list (quote string-literal) t) 
+                     (process-literals (rest tokens)))
+            (prepend t 
+                     (process-literals (rest tokens))))))))
+
+;; Use a single list wrap so it stays an argument, not a function call
+            
+
+
+(process-literals (quote ("a +" "b")))
+
+
+(define preprocess (lambda (line)
+  (process-literals (tokenize-str line))))
+
+(define preprocess process-literals)
+
+(py-eval (quote "len('hello world')"))
+(py-eval "len('hello world')")
+
+
+(call-method NewName "define" "magnitude" Math.Vector.magnitude)
+(call-method NewName "define" "dot-product" Math.LinearAlgebra.dot-product)
+
+;; Now this will work
+(NewName.magnitude (list 3 4))
+
+
+(define ModuleMap
+  (lambda (Source TransformFunc)
+    (let ((NewMod (Environment)))
+      (map (lambda (key) 
+             (define-const (string-append NewMod "." key) 
+                           (TransformFunc (call-method Source "get" key))))
+           (module-keys Source)))))
+
+
+
+(define FS-CAP (new-capability "filesystem"))
+(define write-file (new-effect "filesystem" (lambda (path data) (print "Writing to disk..."))))
+
+;; 2. Attempting to use the effect fails by default
+(write-file "log.txt" "data")
+  ! Type Error: Effect Violation: Missing 'filesystem' capability
+
+;; 3. Grant the capability locally
+(with-capability FS-CAP
+        (write-file "log.txt" "secure data"))
+
+
+(define def-secure
+  (macro (name effects-list body)
+    (list 'define name 
+          (list 'lambda (second body) 
+                (list ':effects effects-list) 
+                (rest (rest body))))))
+
+
+(define write-log (lambda (msg) (:effects "filesystem") (print msg)))
+
+
+(define-macro (secure-lambda params effects body)
+  (list 'lambda params 
+        (list 'quote ':metadata) 
+        (list 'quote effects)
+        body))
+
+
+(save-image "std-prelude" (find-root))
