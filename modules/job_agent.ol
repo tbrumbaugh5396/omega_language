@@ -36,7 +36,22 @@
 ; record-first order and an empty-string default. A missing field then reads as
 ; "" and flows through to the proposal — visible to the human reviewing it —
 ; instead of raising three stages later where the cause is unrecoverable.
-(define (jget rec key) (alist-get key rec ""))
+; TWO RECORD SHAPES, ONE PRINTED FORM. Omega code builds alists — lists of
+; (key value) pairs — but host primitives like `propose` return Python dicts, and
+; the printer renders BOTH as (("action" "propose") ...). They are not
+; interchangeable: alist-get filters over pairs and silently returns its default
+; on a dict, while `get` reads a dict and not an alist.
+;
+; That cost a real bug. consider() read (jget verdict "action") off propose's
+; dict, got "", and recorded every gated job with an empty outcome — the
+; proposal reached the cockpit correctly, but the agent's own ledger had no idea
+; what the gate had decided. Nothing raised; the value just quietly went missing.
+;
+; So jget dispatches on the shape rather than assuming one.
+(define (jget rec key)
+  (if (list? rec)
+      (alist-get key rec "")
+      (let ((v (get rec key))) (if (null? v) "" v))))
 
 ; ── configuration ────────────────────────────────────────────────────────────
 ; The capset this agent is meant to run under. `browse` lets it drive the
@@ -72,7 +87,7 @@
   (ctrl-http "POST" "/browser/op" (list (list "op" op) (list "params" params))))
 
 (define (fetch-page url)
-  (do (browser-op "goto" (list (list "url" url)))
+  (begin (browser-op "goto" (list (list "url" url)))
       (browser-op "wait_for" (list (list "ms" 1500)))
       (env-value (browser-op "get_dom" (list)))))
 
@@ -89,13 +104,61 @@
       (substring html 0 20000)
       (list (list "max-tokens" 2000) (list "temperature" 0)))))
 
+; ── scoring: two implementations, and the result says which one ran ──────────
+; The LLM is the least interesting part of this pipeline — it is a black box
+; call. The interesting parts (the threshold, the gate, the proposal, the
+; seen-ledger) do not need it. So scoring degrades to a local, deterministic
+; keyword scorer when no provider is configured, and the record carries a
+; "scorer" field saying which ran.
+;
+; This is not a mock. It is a real second implementation with a real weakness —
+; it counts word overlap and cannot read a sentence — and labelling it honestly
+; in the output is what keeps that weakness from being mistaken for judgement.
+; A human reading a proposal scored "keyword" knows exactly how much to trust it.
+
+; There is no contains? primitive, but str-split gives one for free: splitting a
+; haystack on a needle yields more than one part exactly when the needle occurs.
+(define (contains? hay needle) (> (length (str-split hay needle)) 1))
+
+; NB: case-SENSITIVE. There is no str-lower primitive, and rather than fake one
+; out of 26 str-replace calls this scorer matches literally and says so. It is a
+; genuine weakness of the keyword path, which is precisely why the record it
+; produces is labelled "keyword" — see the note above score-local.
+; `fold`, not `reduce`. This kernel's reduce is (reduce f lst) with no seed —
+; passing one makes it read the seed as the list and fail with "expected a list,
+; but got int (0)". fold is the Scheme-order (fold f init lst).
+(define (count-hits words text)
+  (fold (lambda (acc w)
+          (if (and (> (string-length w) 3) (contains? text w)) (+ acc 1) acc))
+        0 words))
+
+(define (score-local profile job)
+  (let* ((hay   (string-append (jget job "title") " "
+                               (jget job "summary") " "
+                               (jget job "company")))
+         (want  (str-split (jget profile "skills") ", "))
+         (avoid (str-split (jget profile "avoid") ", "))
+         (hits  (count-hits want hay))
+         (bad   (count-hits avoid hay))
+         (score (- (* hits 18) (* bad 40))))
+    (list (list "score" (if (< score 0) 0 (if (> score 100) 100 score)))
+          (list "reasons" (string-append "matched " (number->string hits)
+                                         " of " (number->string (length want))
+                                         " skill terms"))
+          (list "concerns" (if (> bad 0)
+                               "matches an avoid-term"
+                               "keyword scoring cannot read the posting"))
+          (list "scorer" "keyword"))))
+
 (define (score-job profile job)
-  (env-value
-    (ctrl-llm
-      "Score how well this candidate fits this job, honestly. A low score is a useful answer; do not inflate. Return ONLY JSON: {\"score\": 0-100, \"reasons\": \"one sentence\", \"concerns\": \"one sentence\"}"
-      (string-append "CANDIDATE:\n" (json-stringify profile)
-                     "\n\nJOB:\n" (json-stringify job))
-      (list (list "max-tokens" 400) (list "temperature" 0)))))
+  (let ((e (ctrl-llm
+             "Score how well this candidate fits this job, honestly. A low score is a useful answer; do not inflate. Return ONLY JSON: {\"score\": 0-100, \"reasons\": \"one sentence\", \"concerns\": \"one sentence\"}"
+             (string-append "CANDIDATE:\n" (json-stringify profile)
+                            "\n\nJOB:\n" (json-stringify job))
+             (list (list "max-tokens" 400) (list "temperature" 0)))))
+    (if (usable? (env-value e))
+        (alist-set "scorer" "llm" (env-value e))
+        (score-local profile job))))
 
 (define (tailor-bullets profile job)
   (env-value
@@ -170,13 +233,13 @@
             (list (list "job" job) (list "outcome" "llm-unavailable")
                   (list "note" "ctrl-llm returned no value — configure a provider"))
         (if (< score (job-agent-threshold))
-            (do (mark-seen! job "below-threshold")
+            (begin (mark-seen! job "below-threshold")
                 (list (list "job" job) (list "score" score)
                       (list "outcome" "below-threshold")))
             (let* ((bullets (tailor-bullets profile job))
                    (verdict (propose-application job scored bullets))
                    (action  (jget verdict "action")))
-              (do (mark-seen! job action)
+              (begin (mark-seen! job action)
                   (list (list "job" job) (list "score" score)
                         (list "bullets" bullets)
                         (list "outcome" action)))))))))
@@ -186,6 +249,43 @@
          (html    (fetch-page url))
          (jobs    (extract-jobs html)))
     (map (lambda (j) (consider profile j)) jobs)))
+
+; ── running it on a list you already have ────────────────────────────────────
+; run-job-agent needs a browser and an LLM to turn a URL into job records.
+; run-jobs takes the records directly, so the half of the pipeline that is
+; actually interesting — score, threshold, gate, propose, remember — runs with
+; neither. This is the entry point for a proof of concept, and also the one a
+; capture-by-click source would call once the human has done the authenticated
+; read for you.
+(define (run-jobs jobs)
+  (let ((profile (job-agent-profile)))
+    (map (lambda (j) (consider profile j)) jobs)))
+
+; A small realistic corpus: two strong matches, one weak, one that trips an
+; avoid-term. Enough to show the threshold discriminating rather than just
+; passing everything through.
+(define (sample-jobs)
+  (list
+    (list (list "title" "Staff Engineer, Language & Runtime")
+          (list "company" "Kernel Labs")
+          (list "location" "Remote (US)")
+          (list "url" "https://example.com/jobs/kernel-labs-staff")
+          (list "summary" "Own our language design and runtime. Deep work on capability security, distributed systems and developer-tools. Lisp experience welcome."))
+    (list (list "title" "Principal Systems Engineer")
+          (list "company" "Reticule")
+          (list "location" "Remote")
+          (list "url" "https://example.com/jobs/reticule-principal")
+          (list "summary" "Design distributed systems at scale. Python throughout. Strong interest in language design a plus."))
+    (list (list "title" "Frontend Engineer II")
+          (list "company" "Brightly")
+          (list "location" "On-site, Austin")
+          (list "url" "https://example.com/jobs/brightly-fe2")
+          (list "summary" "React and CSS for our marketing site. Pixel-perfect work, fast iteration."))
+    (list (list "title" "Senior Protocol Engineer")
+          (list "company" "ChainForge")
+          (list "location" "Remote")
+          (list "url" "https://example.com/jobs/chainforge-protocol")
+          (list "summary" "Build our crypto settlement layer. Distributed systems and Python. Adtech integrations a plus."))))
 
 ; ── dry run ──────────────────────────────────────────────────────────────────
 ; Exercises the pipeline's SHAPE with no network, no LLM and no writes, so the
