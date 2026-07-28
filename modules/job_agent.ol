@@ -127,12 +127,25 @@
 ; across re-listings, unlike title or summary.
 (define (seen-key job) (string-append "jobagent:seen:" (jget job "url")))
 
+; NATIVE kv, not (ctrl-http "GET" "/kv/..."). The first version of this used
+; ctrl-http and it was wrong in two ways at once, which an end-to-end run found
+; in one shot and no amount of reading would have:
+;
+;   * /kv is not in the route table, so the call fell back to a loopback socket,
+;     deadlocked against the eval lock, and took 15.12 SECONDS to time out.
+;   * the timed-out result was still truthy, so already-seen? answered `true` for
+;     every job — the agent would have silently skipped all of them, forever,
+;     while looking like it ran fine.
+;
+; kv-get/kv-set are in-process primitives. Beyond being correct and instant,
+; this DELETES a send-class effect from the agent's signature: talking to
+; yourself over a socket reads as network egress to the effect deriver, and an
+; agent whose capset is (base browse) should not appear to send anything.
 (define (already-seen? job)
-  (not (null? (env-value (ctrl-http "GET" (string-append "/kv/" (seen-key job)) (list))))))
+  (not (equal? (kv-get (seen-key job) "") "")))
 
 (define (mark-seen! job verdict)
-  (ctrl-http "PUT" (string-append "/kv/" (seen-key job))
-             (list (list "value" (string-append verdict " @ " (now))))))
+  (kv-set (seen-key job) (string-append verdict " @ " (now))))
 
 ; ── the pipeline ─────────────────────────────────────────────────────────────
 (define (consider profile job)
