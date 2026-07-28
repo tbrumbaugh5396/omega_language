@@ -86,10 +86,16 @@
 (define (browser-op op params)
   (ctrl-http "POST" "/browser/op" (list (list "op" op) (list "params" params))))
 
+; The op's payload sits three layers deep: the ctrl-http envelope's `value` is
+; the HTTP response {status, body}, and the body is the browser-op's own
+; {ok, op, session_of, result} — the DOM string is `result`. The first version
+; returned the whole {status, body} record; string-length of that was 2, which
+; is how "the browser works" and "fetch-page returns nothing useful" were both
+; true at once. Found the first time real Chromium answered.
 (define (fetch-page url)
   (begin (browser-op "goto" (list (list "url" url)))
       (browser-op "wait_for" (list (list "ms" 1500)))
-      (env-value (browser-op "get_dom" (list)))))
+      (jget (jget (env-value (browser-op "get_dom" (list))) "body") "result")))
 
 ; ── extraction, scoring, tailoring: three narrow LLM calls ───────────────────
 ; Narrow and separate on purpose. One mega-prompt that scrapes, judges and
