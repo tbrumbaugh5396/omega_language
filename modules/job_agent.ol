@@ -261,6 +261,29 @@
   (let ((profile (job-agent-profile)))
     (map (lambda (j) (consider profile j)) jobs)))
 
+; ── scheduled entry point ────────────────────────────────────────────────────
+; A scheduled job's handler is called as (handler (list ) "") — the same shape
+; as a route handler, so one function can serve both. See _execute_job in
+; services/scheduler_service.py.
+;
+; SCHEDULED, NOT A CRON *AGENT*. cron_agents fires the LLM task loop with a
+; prompt; scheduled_jobs calls an Omega symbol. This agent is code, not a
+; prompt, so it belongs here — and it means the run is deterministic and needs
+; no model just to decide to start.
+;
+; The source is sample-jobs until a browser and a provider are configured.
+; That is deliberate and visible rather than hidden behind a stub that pretends
+; to fetch: when fetch-page works, this one line changes.
+(define (job-agent-cron params body)
+  (run-jobs (sample-jobs)))
+
+; Every weekday at 09:00. Nothing is applied by this — the run ends at a
+; proposal in the cockpit, so the worst a bad schedule can do is queue work for
+; a human to reject.
+(define-cron "0 9 * * 1-5" job-agent-cron
+  :name "job-agent"
+  :description "Score new jobs, propose the ones worth applying to")
+
 ; A small realistic corpus: two strong matches, one weak, one that trips an
 ; avoid-term. Enough to show the threshold discriminating rather than just
 ; passing everything through.
