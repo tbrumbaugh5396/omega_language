@@ -1,4 +1,4 @@
-; std/core.ol — Core macros and higher-order functions
+;; modules/core.ol — Core macros and higher-order functions
 
 (module Core
   (export let not compose partial constantly identity)

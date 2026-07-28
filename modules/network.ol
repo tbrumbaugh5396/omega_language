@@ -1,4 +1,6 @@
-(module Net
+;; modules/network.ol - a module for network requests
+
+(module Network
   (export get get-json post download)
 
   (define _bootstrapped false)
@@ -8,10 +10,13 @@
           (py-exec "import requests")
           (set! _bootstrapped true))))
 
+  ;; (net.get-json "https://miniclip.com")
   (define (get url)
     (ensure-req)
     (py-eval (string-append "requests.get('" url "').text")))
 
+  ;; (net.get-json "https://jsonplaceholder.typicode.com/todos/1")
+  ;; => {'userId': 1, 'id': 1, 'title': 'delectus aut autem', 'completed': False}
   (define (get-json url)
     (ensure-req)
     (py-eval (string-append "requests.get('" url "').json()")))

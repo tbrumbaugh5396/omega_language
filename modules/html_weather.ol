@@ -1,4 +1,4 @@
-;; html_weather.ol — Omega Lisp HTML weather page generator
+;; modules/html_weather.ol — Omega Lisp HTML weather page generator
 ;;
 ;; Uses triple-quoted Python strings so HTML/CSS with single-quoted
 ;; attributes (font-family: 'Segoe UI', color: #666) works safely.

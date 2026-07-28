@@ -1,4 +1,4 @@
-; std/monad.ol — Maybe and Result types
+;; modules/monad.ol — Maybe and Result types
 
 (module Monad
   (export Just Nothing just? nothing? from-just 

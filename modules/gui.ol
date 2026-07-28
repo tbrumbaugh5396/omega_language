@@ -1,3 +1,5 @@
+;; modules/gui - moduel for making graphical user interface programs
+
 (module GUI
   (export make-window run-app add-label add-button add-frame pack-opts
           make-string-var get-var set-var) ; Added these exports 

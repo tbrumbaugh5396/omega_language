@@ -1,35 +1,42 @@
+;; modules/weather.ol - example Weather UI program
+
+
 (py-exec "import requests")
 (py-exec "import urllib.parse") ;; NEW: Safely handles spaces in city names
 (py-exec "import time")         ;; NEW: For adding timestamps
 
 ;; Initialize Model in Python
-(py-exec "m = {'city': 'London', 'temp': '--', 'status': 'Ready', 'updated': 'Never'}")
+(py-exec "m = {'city': 'Baltimore', 'temp': '--', 'status': 'Ready', 'updated': 'Never'}")
 
-(import "ui.ol" ui)
-(import "std.ol" std)
+(import "modules/ui.ol" ui)
+(import "modules/std.ol" std)
+
+(define (c_to_f x) (+ (* (/ 9 5) x) 32))
+
+(define (safe_convert x) (if (= "--" x) "--" (c_to_f (string->number x))))
 
 ;; ── 1. UPDATE ────────────────────────────────────────────────────────
 (define (update key value)
   (py-exec (string-append "m['" key "'] = '" value "'"))
-  (ui.run-refresh!))
+  (std.ui.run-refresh!))
 
 ;; ── 2. VIEW ──────────────────────────────────────────────────────────
 (define (weather-view)
-  (ui.make-vbox 
+  (std.ui.make-vbox 
     (list
       ;; Status Indicator
-      (ui.make-label (lambda () (string-append "Status: " (py-eval "m['status']"))))
+      (std.ui.make-label (lambda () (string-append "Status: " (py-eval "m['status']"))))
       
       ;; Main Temperature Display
-      (ui.make-label (lambda () 
-        (string-append "Current temp in " (py-eval "m['city']") ": " (py-eval "m['temp']") "°C")))
+      (std.ui.make-label (lambda () 
+        (string-append "Current temp in " (py-eval "m['city']") ": " (safe_convert (py-eval "m['temp']")) "°F")))
       
       ;; Timestamp
-      (ui.make-label (lambda () (string-append "Last update: " (py-eval "m['updated']"))))
+      (std.ui.make-label (lambda () (string-append "Last update: " (py-eval "m['updated']"))))
       
-      (ui.make-hbox
+      (std.ui.make-hbox
         (list
-          (ui.make-button "Refresh" 
+          (std.ui.make-button "Refresh" 
             (lambda ()
               ;; 1. Set status to loading
               (update "status" "Fetching weather...")
@@ -50,7 +57,7 @@
 
 ;; ── 3. RUNTIME ───────────────────────────────────────────────────────
 (define (start-weather)
-  (let ((app (ui.make-window "Omega Dash" (list (weather-view)))))
-    (ui.run-app app)))
+  (let ((app (std.ui.make-window "Omega Dash" (list (weather-view)))))
+    (std.ui.run-app app)))
 
 (start-weather)

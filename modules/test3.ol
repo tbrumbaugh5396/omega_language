@@ -1,4 +1,4 @@
-; std/test.ol — Minimal testing framework
+;; modules/test3.ol — Minimal testing framework
 
 (module Test
   (export assert-equal assert-true describe it run-tests)

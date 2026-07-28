@@ -1,4 +1,4 @@
-; continuations.ol — Delimited Continuations for Omega Lisp
+; modules/continuations.ol — Delimited Continuations for Omega Lisp
 ;
 ; New special forms:
 ;   (reset expr)              — establish a delimiter; evaluate expr

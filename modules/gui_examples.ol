@@ -1,14 +1,14 @@
-; gui_examples.ol — Example GUI apps for Omega Lisp
-;
-; (load "gui_examples.ol")  then  (run-counter) etc.
-;
-; Each example reloads ui.ol to ensure fresh macro/function definitions,
-; overriding any stale macros from the prelude.
+;; modules/gui_examples.ol — Example GUI apps for Omega Lisp
+;;
+;; (load "gui_examples.ol")  then  (run-counter) etc.
+;;
+;; Each example reloads ui.ol to ensure fresh macro/function definitions,
+;; overriding any stale macros from the prelude.
 
-; ── bootstrap ────────────────────────────────────────────────────────────
-; Always reload ui.ol fresh — this ensures the DSL functions and macros
-; are correct regardless of what's in the autosave prelude.
-(load "ui.ol")
+;; ── bootstrap ────────────────────────────────────────────────────────────
+;; Always reload ui.ol fresh — this ensures the DSL functions and macros
+;; are correct regardless of what's in the autosave prelude.
+(load "modules/ui.ol")
 
 
 ; ── Example 1: Counter ───────────────────────────────────────────────────

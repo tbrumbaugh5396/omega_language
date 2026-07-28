@@ -1,22 +1,22 @@
-; ui.ol — Declarative UI DSL for Omega Lisp (function-based, no macros)
-;
-; Uses plain functions instead of macros so prelude restoration
-; never overrides the DSL with stale definitions.
-;
-; (load "ui.ol")
-;
-; Usage:
-;   (load "ui.ol")
-;   (define count 0)
-;   (define app (make-window "Counter"
-;     (list
-;       (make-label (lambda () (string-append "Count: " (number->string count))))
-;       (make-hbox (list
-;         (make-button "−" (lambda () (set! count (- count 1))))
-;         (make-button "+" (lambda () (set! count (+ count 1)))))))))
-;   (run-app app)
+;; modules/ui.ol — Declarative UI DSL for Omega Lisp (function-based, no macros)
+;;
+;; Uses plain functions instead of macros so prelude restoration
+;; never overrides the DSL with stale definitions.
+;;
+;; (load "modules/ui.ol")
+;;
+;; Usage:
+;;   (load "modules/ui.ol")
+;;   (define count 0)
+;;   (define app (make-window "Counter"
+;;     (list
+;;       (make-label (lambda () (string-append "Count: " (number->string count))))
+;;       (make-hbox (list
+;;         (make-button "−" (lambda () (set! count (- count 1))))
+;;         (make-button "+" (lambda () (set! count (+ count 1)))))))))
+;;   (run-app app)
 
-(import "gui.ol" g)
+(import "modules/gui.ol" g)
 
 (module UI
 

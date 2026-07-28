@@ -1,28 +1,28 @@
-; ui_react.ol — Component-based reactive UI for Omega Lisp
-;
-; Extends ui.ol with a React-like component model:
-;
-;   (defui counter ()
-;     (state count 0)
-;     (vbox
-;       (label (string-append "Count: " (number->string count)))
-;       (button "+" (set! count (+ count 1)))
-;       (button "Reset" (set! count 0))))
-;
-;   (define app (mount counter "Counter App"))
-;   (run-app app)
-;
-; Re-render model:
-;   - Components re-render their entire widget tree when state changes.
-;   - Old widgets are destroyed, new ones created.
-;   - Simpler than diffing — fine for desktop GUIs at this scale.
-;
-; Usage:
-;   (import "ui_react.ol" r)
-;   (r.defui ...)      ; or (load "ui_react.ol") + (defui ...)
+;; modules/ui_react.ol — Component-based reactive UI for Omega Lisp
+;;
+;; Extends ui.ol with a React-like component model:
+;;
+;;   (defui counter ()
+;;     (state count 0)
+;;     (vbox
+;;       (label (string-append "Count: " (number->string count)))
+;;       (button "+" (set! count (+ count 1)))
+;;       (button "Reset" (set! count 0))))
+;;
+;;   (define app (mount counter "Counter App"))
+;;   (run-app app)
+;;
+;; Re-render model:
+;;   - Components re-render their entire widget tree when state changes.
+;;   - Old widgets are destroyed, new ones created.
+;;   - Simpler than diffing — fine for desktop GUIs at this scale.
+;;
+;; Usage:
+;;   (import "ui_react.ol" r)
+;;   (r.defui ...)      ; or (load "ui_react.ol") + (defui ...)
 
-(import "gui.ol"  g)
-(import "ui.ol"   u)
+(import "modules/gui.ol"  g)
+(import "modules/ui.ol"   u)
 
 (module ReactUI
 

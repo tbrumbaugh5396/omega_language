@@ -1,8 +1,8 @@
-; =============================================================================
-; testing.ol — Omega Lisp module system, sealed exports, dot access
-; Run: (load "testing.ol")
-; Covers: module, open, with-module, dot notation, export sealing, state monad
-; =============================================================================
+;; =============================================================================
+;; testing.ol — Omega Lisp module system, sealed exports, dot access
+;; Run: (load "testing.ol")
+;; Covers: module, open, with-module, dot notation, export sealing, state monad
+;; =============================================================================
 
 
 ; ---------------------------------------------------------------------------

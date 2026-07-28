@@ -1,3 +1,5 @@
+;; IO - a module for input and output files
+
 (module IO
   (export read-file write-file exists? list-dir delete-file)
 

@@ -1,14 +1,14 @@
+;; modules/effects.ol — Algebraic Effects for Omega Lisp
+;;
+;; Implements algebraic effects via shift/reset + Python-level effect-handle.
+;; Requires: types.ol (loaded first)
+;;
+;; Usage: (load "effects.ol")
+
 ; unit = void/no-meaningful-value
 (define unit '())
 
-; effects.ol — Algebraic Effects for Omega Lisp
-;
-; Implements algebraic effects via shift/reset + Python-level effect-handle.
-; Requires: types.ol (loaded first)
-;
-; Usage: (load "effects.ol")
-
-(load "types.ol")
+(load "modules/types.ol")
 
 (module Effects
 

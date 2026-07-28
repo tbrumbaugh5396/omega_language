@@ -1,12 +1,12 @@
-; weather.ol — Real-time weather dashboard in Omega Lisp
-;
-; Usage: (load "weather.ol")
-;        (start-weather)
-;
-; Requires: ui.ol, gui.ol (loaded transitively)
-;           Python packages: requests (pip install requests)
+;; weather.ol — Real-time weather dashboard in Omega Lisp
+;;
+;; Usage: (load "weather.ol")
+;;        (start-weather)
+;;
+;; Requires: ui.ol, gui.ol (loaded transitively)
+;;           Python packages: requests (pip install requests)
 
-(load "ui.ol")    ; brings make-window, make-label, make-button,
+(load "modules/ui.ol")    ; brings make-window, make-label, make-button,
                   ; make-hbox, make-vbox, run-app, run-refresh! into scope
 
 ; ── Python setup ─────────────────────────────────────────────────────────

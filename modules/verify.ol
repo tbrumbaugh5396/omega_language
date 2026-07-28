@@ -1,7 +1,7 @@
-; =============================================================================
-; verify.ol — Omega Lisp feature verification
-; Run: (load "verify.ol")   or   (import "verify.ol" v)
-; =============================================================================
+;; =============================================================================
+;; modules/verify.ol — Omega Lisp feature verification
+;; Run: (load "verify.ol")   or   (import "verify.ol" v)
+;; =============================================================================
 
 
 ; ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@
 ; 6. MODULE SYSTEM — import, dot-access, open
 ; ---------------------------------------------------------------------------
 
-(import "examples.ol" e)
+(import "modules/examples.ol" e)
 
 (module? e)                  ; => true
 (module-name e)              ; => "examples.ol"
@@ -136,13 +136,13 @@ tau                          ; => 6.28318
 ; 8. NATIVE MODULE ACCESS
 ; ---------------------------------------------------------------------------
 
-(import "math" math)
+(import "modules/math.ol" math)
 
 (module? math)                ; => true
 (module-origin math)          ; => "native"
-(getattr math pi)             ; => 3.141592653589793
-((getattr math floor) 3.7)    ; => 3
-((getattr math sqrt) 144)     ; => 12.0
+math.pi                       ; => 3.141592653589793
+(math.floor 3.7)              ; => 3
+(math.sqrt 144)               ; => 12.0   (getattr math sqrt)
 
 
 ; ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ tau                          ; => 6.28318
 ; 13. IMPORT + OPEN + LOAD  (reader macro isolation)
 ; ---------------------------------------------------------------------------
 
-(import "examples_v2.ol" ev2)
+(import "modules/examples_v2.ol" ev2)
 
 (module? ev2)                ; => true
 (module-name ev2)            ; => "examples_v2.ol"

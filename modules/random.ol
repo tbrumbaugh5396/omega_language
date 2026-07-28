@@ -1,3 +1,5 @@
+;; modules/random.ol - a module for randomization
+
 (module Random
   (export float int choice shuffle)
 

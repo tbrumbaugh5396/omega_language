@@ -1,8 +1,8 @@
-; =============================================================================
-; test2.ol — Omega Lisp iteration, Pi estimation, macro patterns
-; Run: (load "test2.ol")
-; Covers: letrec loops, let binding, functional iteration, macro-built loops
-; =============================================================================
+;; =============================================================================
+;; test2.ol — Omega Lisp iteration, Pi estimation, macro patterns
+;; Run: (load "test2.ol")
+;; Covers: letrec loops, let binding, functional iteration, macro-built loops
+;; =============================================================================
 
 
 ; ---------------------------------------------------------------------------

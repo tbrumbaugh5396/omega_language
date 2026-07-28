@@ -1,27 +1,27 @@
-; py_lift.ol — Python → Omega Lisp lifting bridge
-;
-; Converts Python source files to Omega Lisp using python_to_lisp4.py.
-; Requires python_to_lisp4.py in the same directory (or on sys.path).
-;
-; Usage:
-;   (load "py_lift.ol")
-;   (py->lisp "myfile.py")             ; print annotated Lisp, return path
-;   (py->lisp-clean "myfile.py")       ; print clean Lisp (no confidence annotations)
-;   (py-ast "myfile.py")               ; return lifted source as a string
-;   (py-save "myfile.py" "out.ol")     ; lift and write .ol file, return path
-;   (py-stats "myfile.py")             ; return lossiness report string
-;   (py-roundtrip "src.py" "rt.py")    ; Python -> Lisp -> Python round-trip
-;
-; Round-trip note:
-;   Full automated round-trip requires transpiler.ol loaded first:
-;     (load "transpiler.ol")
-;     (load "py_lift.ol")
-;     (py-roundtrip "myfile.py" "myfile_rt.py")
-;
-; Fixes vs py_lift.ol:
-;   - (defined? sym) now works (built-in special form added to interpreter)
-;   - load works correctly inside function bodies
-;   - ensure-bootstrap is idempotent even when called from multiple contexts
+;; modules/py_lift.ol — Python → Omega Lisp lifting bridge
+;;
+;; Converts Python source files to Omega Lisp using python_to_lisp4.py.
+;; Requires python_to_lisp4.py in the same directory (or on sys.path).
+;;
+;; Usage:
+;;   (load "py_lift.ol")
+;;   (py->lisp "myfile.py")             ; print annotated Lisp, return path
+;;   (py->lisp-clean "myfile.py")       ; print clean Lisp (no confidence annotations)
+;;   (py-ast "myfile.py")               ; return lifted source as a string
+;;   (py-save "myfile.py" "out.ol")     ; lift and write .ol file, return path
+;;   (py-stats "myfile.py")             ; return lossiness report string
+;;   (py-roundtrip "src.py" "rt.py")    ; Python -> Lisp -> Python round-trip
+;;
+;; Round-trip note:
+;;   Full automated round-trip requires transpiler.ol loaded first:
+;;     (load "transpiler.ol")
+;;     (load "py_lift.ol")
+;;     (py-roundtrip "myfile.py" "myfile_rt.py")
+;;
+;; Fixes vs py_lift.ol:
+;;   - (defined? sym) now works (built-in special form added to interpreter)
+;;   - load works correctly inside function bodies
+;;   - ensure-bootstrap is idempotent even when called from multiple contexts
 
 (module PyLift
 

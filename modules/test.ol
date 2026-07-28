@@ -1,8 +1,8 @@
-; =============================================================================
-; test.ol — Omega Lisp kernel stress tests
-; Run: (load "test.ol")
-; Covers: deep recursion, memoization, macros, quasiquote splicing, modules
-; =============================================================================
+;; =============================================================================
+;; test.ol — Omega Lisp kernel stress tests
+;; Run: (load "test.ol")
+;; Covers: deep recursion, memoization, macros, quasiquote splicing, modules
+;; =============================================================================
 
 
 ; ---------------------------------------------------------------------------

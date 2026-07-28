@@ -1,4 +1,6 @@
-(define Math (import "math.lisp"))
+;; modules/tests.omega - a simple testing module
+
+(define Math (import "../omega/modules/math.lisp"))
 
 (module MathTests
     (open Math.Vector)

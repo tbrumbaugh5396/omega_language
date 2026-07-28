@@ -1,3 +1,5 @@
+;; modules/json - a module for storing and loading json files
+
 (module JSON
   (export parse stringify)
   

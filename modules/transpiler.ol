@@ -1,19 +1,19 @@
-; transpiler.ol — Omega Lisp → Python transpiler (v1 complete)
-;
-; Handles all v1 primitives:
-;   Core forms: define, lambda, if, cond, let/let*/letrec, begin, quote
-;   Arithmetic, comparison, boolean operators
-;   Type predicates: null?, number?, integer?, string?, symbol?, list?, bool?, lambda?
-;   v1 additions: eq?, equal?, fold, memoize, memoized?, trace-calls, traced?
-;                 module?, module-name, module-origin, module-exports, module-lookup
-;   Output: runtime prelude + transpiled defs written to .py file
-;
-; Usage:
-;   (load "transpiler.ol")
-;   (define (square x) (* x x))
-;   (transpile-file "square.py" '(square))
-;   ;=> writes square.py
-;   ;   python3 -c "import square; print(square.square(5))"  → 25
+;; modules/transpiler.ol — Omega Lisp → Python transpiler (v1 complete)
+;;
+;; Handles all v1 primitives:
+;;   Core forms: define, lambda, if, cond, let/let*/letrec, begin, quote
+;;   Arithmetic, comparison, boolean operators
+;;   Type predicates: null?, number?, integer?, string?, symbol?, list?, bool?, lambda?
+;;   v1 additions: eq?, equal?, fold, memoize, memoized?, trace-calls, traced?
+;;                 module?, module-name, module-origin, module-exports, module-lookup
+;;   Output: runtime prelude + transpiled defs written to .py file
+;;
+;; Usage:
+;;   (load "transpiler.ol")
+;;   (define (square x) (* x x))
+;;   (transpile-file "square.py" '(square))
+;;   ;=> writes square.py
+;;   ;   python3 -c "import square; print(square.square(5))"  → 25
 
 (module PythonTranspiler
 

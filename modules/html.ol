@@ -1,25 +1,25 @@
-; html.ol — General-purpose Lisp → HTML library for Omega Lisp
-;
-; Self-contained: only requires the base interpreter (multiline_repl31.py).
-; No dependency on types.ol, effects.ol, or std.ol.
-;
-; Usage:
-;   (load "html.ol")
-;   (html-save "page.html"
-;     (page "My Site"
-;       (h1 "Hello World")
-;       (p "This is a paragraph.")
-;       (ul (li "Item 1") (li "Item 2") (li "Item 3"))))
-;
-; Attribute syntax — keywords (symbols starting with :) become attributes:
-;   (div :id "main" :class "container" "content")
-;   => <div id="main" class="container">content</div>
-;
-; Void elements self-close:
-;   (br) => <br>    (img :src "x.jpg" :alt "X") => <img src="x.jpg" alt="X">
-;
-; Full page with built-in stylesheet:
-;   (html-save-page "out.html" "Title" (h1 "Hello") (p "World"))
+;; modules/html.ol — General-purpose Lisp → HTML library for Omega Lisp
+;;
+;; Self-contained: only requires the base interpreter (multiline_repl31.py).
+;; No dependency on types.ol, effects.ol, or std.ol.
+;;
+;; Usage:
+;;   (load "html.ol")
+;;   (html-save "page.html"
+;;     (page "My Site"
+;;       (h1 "Hello World")
+;;       (p "This is a paragraph.")
+;;       (ul (li "Item 1") (li "Item 2") (li "Item 3"))))
+;;
+;; Attribute syntax — keywords (symbols starting with :) become attributes:
+;;   (div :id "main" :class "container" "content")
+;;   => <div id="main" class="container">content</div>
+;;
+;; Void elements self-close:
+;;   (br) => <br>    (img :src "x.jpg" :alt "X") => <img src="x.jpg" alt="X">
+;;
+;; Full page with built-in stylesheet:
+;;   (html-save-page "out.html" "Title" (h1 "Hello") (p "World"))
 
 ;; ── PRIVATE HELPERS ──────────────────────────────────────────────────────
 

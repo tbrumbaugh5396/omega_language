@@ -1,9 +1,9 @@
-; types.ol — Algebraic Data Types for Omega Lisp
-;
-; Provides: Option, Result, Either, Pair, Stream, and generic ADT machinery.
-; Works with the algebraic effects system in effects.ol.
-;
-; Usage:  (load "types.ol")
+;; modules/types.ol — Algebraic Data Types for Omega Lisp
+;;
+;; Provides: Option, Result, Either, Pair, Stream, and generic ADT machinery.
+;; Works with the algebraic effects system in effects.ol.
+;;
+;; Usage:  (load "types.ol")
 
 (module Types
 

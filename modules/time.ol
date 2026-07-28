@@ -1,3 +1,5 @@
+;; modules/time.ol - simple time library
+
 (module Time
   (export now sleep format-now)
 
