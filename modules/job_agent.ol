@@ -51,7 +51,7 @@
 (define (jget rec key)
   (if (list? rec)
       (alist-get key rec "")
-      (let ((v (get rec key))) (if (null? v) "" v))))
+      (let ((v (get rec key ""))) (if (null? v) "" v))))
 
 ; ── configuration ────────────────────────────────────────────────────────────
 ; The capset this agent is meant to run under. `browse` lets it drive the
