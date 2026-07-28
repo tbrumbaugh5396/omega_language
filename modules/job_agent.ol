@@ -277,12 +277,25 @@
 (define (job-agent-cron params body)
   (run-jobs (sample-jobs)))
 
+; A cron REQUIRES a deployment. _sync_code_routes resolves each declared cron's
+; deployment slug and files it as a conflict — "deployment '<slug>' not found" —
+; if there is none, so a (define-cron) on its own is silently never registered.
+; That is why /jobs stayed empty while the handler itself worked fine.
+(define-deployment "job-agent"
+  :name "Job agent"
+  :description "Scheduled job scoring and proposal")
+
 ; Every weekday at 09:00. Nothing is applied by this — the run ends at a
 ; proposal in the cockpit, so the worst a bad schedule can do is queue work for
 ; a human to reject.
+; :capabilities is the whole thesis in one line — the authority this runs under
+; is declared in the source, next to the schedule, and reviewed in the same diff
+; as the code. Not configured elsewhere, not inherited from whoever saved the
+; file, not whatever the scheduler thread happened to be carrying.
 (define-cron "0 9 * * 1-5" job-agent-cron
   :name "job-agent"
-  :description "Score new jobs, propose the ones worth applying to")
+  :description "Score new jobs, propose the ones worth applying to"
+  :capabilities "base browse")
 
 ; A small realistic corpus: two strong matches, one weak, one that trips an
 ; avoid-term. Enough to show the threshold discriminating rather than just
