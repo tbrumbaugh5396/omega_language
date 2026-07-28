@@ -148,11 +148,27 @@
   (kv-set (seen-key job) (string-append verdict " @ " (now))))
 
 ; ── the pipeline ─────────────────────────────────────────────────────────────
+; A stage that returned nothing must STOP the pipeline, not flow an empty value
+; into the next stage. The first version read (jget scored "score") straight off
+; score-job's result; with no LLM provider configured ctrl-llm returns an
+; envelope whose value is `false`, jget tried to filter over it, and the whole
+; call died with "'NoneType' object is not iterable" — a message that names
+; neither the missing provider nor the stage that failed.
+;
+; env-ok? existed for exactly this and was not being used. Now a dead stage
+; yields an explicit "llm-unavailable" outcome: nothing is proposed, nothing is
+; marked seen (so the job is reconsidered once the provider is configured), and
+; the reason is in the result instead of in a stack trace.
+(define (usable? v) (and (not (null? v)) (list? v)))
+
 (define (consider profile job)
   (if (already-seen? job)
       (list (list "job" job) (list "outcome" "skipped-seen"))
       (let* ((scored (score-job profile job))
-             (score  (jget scored "score")))
+             (score  (if (usable? scored) (jget scored "score") 0)))
+        (if (not (usable? scored))
+            (list (list "job" job) (list "outcome" "llm-unavailable")
+                  (list "note" "ctrl-llm returned no value — configure a provider"))
         (if (< score (job-agent-threshold))
             (do (mark-seen! job "below-threshold")
                 (list (list "job" job) (list "score" score)
@@ -163,7 +179,7 @@
               (do (mark-seen! job action)
                   (list (list "job" job) (list "score" score)
                         (list "bullets" bullets)
-                        (list "outcome" action))))))))
+                        (list "outcome" action)))))))))
 
 (define (run-job-agent url)
   (let* ((profile (job-agent-profile))
