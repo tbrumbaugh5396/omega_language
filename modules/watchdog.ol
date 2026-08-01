@@ -52,6 +52,12 @@
 ; ── 3. source — the node's own WHERE lens, in-process ────────────────────────
 ; /node/inspect is in the route table, so ctrl-http dispatches it on this
 ; thread. The SAME authority check that gates a human gates this call.
+; env-value unwraps the ctrl-* envelope. Defined HERE, not borrowed: the jail
+; (sandbox_worker) runs this agent in a clean env with only its own symbols, and
+; it exposed that watchdog was silently relying on job_agent.ol having left
+; env-value in the shared space. A self-contained agent defines what it uses.
+(define (env-value e) (jget e "value"))
+
 (define (observe-node)
   (env-value (ctrl-http "GET" "/node/inspect" (list))))
 
