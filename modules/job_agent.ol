@@ -115,11 +115,12 @@
 ; separately and are separately checkable.
 
 (define (extract-jobs html)
-  (env-value
-    (ctrl-llm
+  (let* ((e (ctrl-llm
       "Extract job postings from this page. Return ONLY a JSON array; each element has keys: title, company, location, url, summary. No prose, no code fence."
       (substring html 0 20000)
-      (list (list "max-tokens" 2000) (list "temperature" 0)))))
+      (list (list "max-tokens" 2000) (list "temperature" 0))))
+         (t (llm-text e)))
+    (if (json-array? t) (json-parse t) (list))))
 
 ; ── scoring: two implementations, and the result says which one ran ──────────
 ; The LLM is the least interesting part of this pipeline — it is a black box
@@ -167,14 +168,35 @@
                                "keyword scoring cannot read the posting"))
           (list "scorer" "keyword"))))
 
+; ctrl-llm returns the model's response as TEXT. That fact was unknown until
+; the branch first executed (against local Ollama) — score-job handed the text
+; to jget, usable? rejected a string, and every "llm" run silently fell back to
+; keyword. The unwrap: strip code fences, and parse ONLY if the result is
+; brace-wrapped JSON (there is no catch form; a structural guard is the safe
+; parse). Anything else — prose, refusal, empty — degrades to keyword with the
+; honest label, per the standing rule.
+(define (llm-text e)
+  (str-trim (str-replace (str-replace (str-concat "" (env-value e))
+                                      "```json" "") "```" "")))
+(define (json-object? t) (and (starts-with? t "{") (ends-with? t "}")))
+(define (json-array? t) (and (starts-with? t "[") (ends-with? t "]")))
+
 (define (score-job profile job)
-  (let ((e (ctrl-llm
+  (let* ((e (ctrl-llm
              "Score how well this candidate fits this job, honestly. A low score is a useful answer; do not inflate. Return ONLY JSON: {\"score\": 0-100, \"reasons\": \"one sentence\", \"concerns\": \"one sentence\"}"
              (string-append "CANDIDATE:\n" (json-stringify profile)
                             "\n\nJOB:\n" (json-stringify job))
-             (list (list "max-tokens" 400) (list "temperature" 0)))))
-    (if (usable? (env-value e))
-        (alist-set "scorer" "llm" (env-value e))
+             (list (list "max-tokens" 400) (list "temperature" 0))))
+         (t (llm-text e)))
+    (if (json-object? t)
+        ; json-parse returns a python DICT — the alists-vs-dicts trap, fifth
+        ; appearance (alist-set over a dict shreds it into bare keys). Rebuild
+        ; the record explicitly through jget, which dispatches on shape.
+        (let ((parsed (json-parse t)))
+          (list (list "score" (jget parsed "score"))
+                (list "reasons" (jget parsed "reasons"))
+                (list "concerns" (jget parsed "concerns"))
+                (list "scorer" "llm")))
         (score-local profile job))))
 
 (define (tailor-bullets profile job)
