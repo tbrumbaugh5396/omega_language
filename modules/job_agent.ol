@@ -28,7 +28,18 @@
 ;;      exfiltrate one. Confinement by absence — see confined-root in the spec.
 ;;      `(job-agent-capset)` is the declaration; put it on the cron_agents row.
 
-(load "modules/alist.ol")   ; alist-get / alist-set / alist-keys
+; SELF-CONTAINED — no (load ...). The scheduled-job executor stitches only this
+; file's own symbols as its eval preamble, so a load of another space file fails
+; at fire time while passing every REPL test. The Inspect pane's History card is
+; what exposed it: two scheduled runs errored "(load): file not found" while
+; every manual /eval run was green. Same gotcha, same fix as watchdog.ol.
+(define (alist-get key alist default)
+  (let ((entry (filter (lambda (p) (equal? (first p) key)) alist)))
+    (if (null? entry) default (second (first entry)))))
+
+(define (alist-set key value alist)
+  (cons (list key value)
+        (filter (lambda (p) (not (equal? (first p) key))) alist)))
 
 ; ── field access ─────────────────────────────────────────────────────────────
 ; alist-get takes (key alist default). Every lookup in this file is "pull a
