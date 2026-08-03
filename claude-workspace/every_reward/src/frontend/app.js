@@ -226,12 +226,13 @@ async function loadWallet() {
   const w = await api("/wallet");
   $("#balance").textContent = w.balance;
   const box = $("#deposit-box");
+  let boxHtml = "";
   if (INFO.deposits_enabled) {
     const rates = [`1 ETH = ${INFO.credits_per_eth} cr`].concat(
       Object.entries(INFO.tokens || {}).map(
         ([sym, t]) => `1 ${sym} = ${t.credits_per_token} cr`));
     const assets = ["ETH"].concat(Object.keys(INFO.tokens || {})).join(" or ");
-    box.innerHTML = `
+    boxHtml += `
       <p class="fine">Buy credits: send ${esc(assets)} on ${esc(INFO.chain_name)} to the deposit
       address below <b>from your own wallet</b>, then paste the transaction hash.
       Rates: ${esc(rates.join(" · "))}. ${INFO.min_confirmations} confirmations required.</p>
@@ -242,10 +243,26 @@ async function loadWallet() {
         <input id="dep-tx" placeholder="0x… transaction hash">
         <button onclick="claimDeposit()" style="flex:0 0 auto">Claim credits</button>
       </div>`;
-  } else {
-    box.innerHTML = `<p class="fine">On-chain deposits are not configured yet
-      (set <code>deposit_address</code> in data/config.json). An admin can grant credits meanwhile.</p>`;
   }
+  if (INFO.monero && INFO.monero.enabled) {
+    boxHtml += `
+      <p class="fine" style="margin-top:${INFO.deposits_enabled ? 14 : 0}px">
+      Or send XMR to the Monero address below, then paste the transaction id
+      <b>and its tx secret key</b> (your wallet shows it in the transaction
+      details — monero-wallet-cli: <code>get_tx_key</code>). The key proves the
+      payment without revealing anything else.
+      Rate: 1 XMR = ${INFO.monero.credits_per_xmr} cr.
+      ${INFO.monero.min_confirmations} confirmations required.</p>
+      <div class="addr">${esc(INFO.monero.address)}</div>
+      <div class="row" style="margin-top:8px">
+        <input id="xmr-txid" placeholder="transaction id (64 hex)">
+        <input id="xmr-key" placeholder="tx secret key (64 hex)">
+        <button onclick="claimMoneroDeposit()" style="flex:0 0 auto">Claim</button>
+      </div>`;
+  }
+  box.innerHTML = boxHtml || `<p class="fine">On-chain deposits are not configured yet
+      (set <code>deposit_address</code> or <code>monero</code> in data/config.json).
+      An admin can grant credits meanwhile.</p>`;
   const { bets } = await api("/bets");
   $("#bets-list").innerHTML = bets.map((b) => {
     const won = b.settled && b.payout > 0;
@@ -277,6 +294,16 @@ async function sendDeposit() {
     });
     $("#dep-tx").value = hash;
     toast(`Sent. Once it has ${INFO.min_confirmations} confirmations, hit Claim credits.`);
+  } catch (e) { toast(e.message); }
+}
+
+async function claimMoneroDeposit() {
+  try {
+    const r = await api("/deposit", { method: "POST",
+      body: { tx_hash: $("#xmr-txid").value, tx_key: $("#xmr-key").value } });
+    toast(`Verified via wallet-rpc: +${r.credits} cr`);
+    $("#xmr-txid").value = ""; $("#xmr-key").value = "";
+    loadWallet(); loadMe();
   } catch (e) { toast(e.message); }
 }
 

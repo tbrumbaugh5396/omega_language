@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, chain, config, db, engines, ledger, resolvers
+from . import auth, chain, config, db, engines, ledger, monero, resolvers
 
 app = FastAPI(title="Every Reward")
 CFG = config.load()
@@ -81,6 +81,12 @@ def info():
         "min_confirmations": CFG["min_confirmations"],
         "dev_login": CFG["dev_login"],
         "deposits_enabled": bool(CFG["deposit_address"]),
+        "monero": {
+            "enabled": monero.enabled(CFG),
+            "address": CFG["monero"].get("address", ""),
+            "credits_per_xmr": CFG["monero"].get("credits_per_xmr", 0),
+            "min_confirmations": CFG["monero"].get("min_confirmations", 10),
+        },
     }
 
 
@@ -134,6 +140,7 @@ def me(user=Depends(current_user), con=Depends(get_con)):
 
 class DepositBody(BaseModel):
     tx_hash: str
+    tx_key: str = ""  # present => Monero claim (txid + per-tx secret key)
 
 
 @app.get("/api/wallet")
@@ -159,9 +166,14 @@ def deposit(body: DepositBody, user=Depends(current_user), con=Depends(get_con))
     if dup:
         raise HTTPException(400, "that transaction was already claimed")
     try:
-        # Wallet-authenticated users may only claim their own transactions.
-        result = chain.verify_deposit(CFG, tx_hash, expected_from=user["address"])
-    except chain.ChainError as e:
+        if body.tx_key:
+            # Monero: possession of the tx_key proves the claimant is the
+            # sender, so no address binding is possible or needed.
+            result = monero.verify_deposit(CFG, tx_hash, body.tx_key)
+        else:
+            # EVM: wallet-authenticated users may only claim their own txs.
+            result = chain.verify_deposit(CFG, tx_hash, expected_from=user["address"])
+    except (chain.ChainError, monero.MoneroError) as e:
         raise HTTPException(400, str(e))
     credits = result["credits"]
     if credits <= 0:
@@ -171,7 +183,9 @@ def deposit(body: DepositBody, user=Depends(current_user), con=Depends(get_con))
             "INSERT INTO deposits(user_id,tx_hash,asset,amount_wei,credits,status,detail,created_at) "
             "VALUES(?,?,?,?,?,?,?,?)",
             (user["id"], tx_hash, result["asset"], str(result["amount_raw"]), credits,
-             "confirmed", f"from {result['from']}", db.now()),
+             "confirmed",
+             f"from {result['from']}" if result["from"] else "sender anonymous (XMR)",
+             db.now()),
         )
         ledger.post(
             con,

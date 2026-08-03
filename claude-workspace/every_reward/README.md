@@ -49,6 +49,14 @@ device (expect a one-time browser warning).
   sent **from their own signed-in address**. The app **never** holds keys or
   sends transactions (the "send with wallet" button just prefills a tx for the
   user to approve in MetaMask).
+- **Monero (optional)** — because Monero is private by design, verification
+  goes through a `monero-wallet-rpc` sidecar loaded with your **view-only**
+  wallet (sees incoming funds, cannot spend; the spend key stays offline).
+  Users claim by pasting their txid + tx secret key; `check_tx_key` proves the
+  payment cryptographically, and possession of the tx_key proves they sent it.
+  Disabled until `monero.wallet_rpc_url` and `monero.address` are set. Note:
+  accepting an anonymity coin for wagering greatly amplifies the legal note
+  below — treat this adapter as an experiment, not a product feature.
 - **ERC-20 deposits** — besides native ETH, any token configured under `tokens`
   in config (USDC by default) is accepted: the server scans the receipt's
   `Transfer` logs for transfers to the deposit wallet and credits at that
@@ -71,6 +79,7 @@ device (expect a one-time browser warning).
 | `credits_per_eth` | ETH deposit exchange rate |
 | `tokens` | ERC-20s accepted for deposit: `{SYM: {address, decimals, credits_per_token}}` — plain tokens only (fee-on-transfer or rebasing tokens would credit the wrong amount) |
 | `oracle_max_age_sec` | reject Chainlink rounds older than this (default 6h) |
+| `monero` | optional XMR deposits: `{wallet_rpc_url, rpc_login, address, credits_per_xmr, min_confirmations}` — off while `wallet_rpc_url` is empty |
 | `min_confirmations` | confirmations required to credit a deposit |
 | `admin_addresses` | wallet addresses that get admin on sign-in |
 | `admin_key` | grants admin to dev logins (printed at install) |

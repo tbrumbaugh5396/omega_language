@@ -25,6 +25,15 @@ DEFAULTS = {
     },
     "min_confirmations": 3,
     "oracle_max_age_sec": 21600,    # reject Chainlink rounds older than 6h
+    # Monero deposits (optional). Needs a monero-wallet-rpc sidecar with your
+    # VIEW-ONLY wallet; empty wallet_rpc_url keeps the whole adapter off.
+    "monero": {
+        "wallet_rpc_url": "",       # e.g. http://127.0.0.1:18083/json_rpc
+        "rpc_login": "",            # "user:pass" if the daemon uses --rpc-login
+        "address": "",              # your primary XMR address (4... / 8...)
+        "credits_per_xmr": 20000,
+        "min_confirmations": 10,
+    },
     # Auth
     "dev_login": True,              # name-only login for local testing (no wallet)
     "admin_addresses": [],          # lowercase 0x addresses that get admin
