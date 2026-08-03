@@ -110,6 +110,51 @@ with con:
     assert catalog.sync_item(con, CFG, item(iid)) == "suspended"
 assert "unavailable" in item(iid)["suspend_reason"]
 
+# ---- card sources, offline via a faked HTTP seam ----
+real_http = catalog._http_json
+
+POKE_RESP = {"data": {
+    "name": "Charizard", "number": "4", "rarity": "Rare Holo",
+    "set": {"name": "Base"},
+    "images": {"small": "https://img.example/base1-4.png"},
+    "tcgplayer": {"prices": {
+        "normal": {"market": 100.0},
+        "holofoil": {"market": 420.69},
+    }}}}
+YGO_RESP = {"data": [{
+    "name": "Dark Magician", "type": "Normal Monster",
+    "card_prices": [{"tcgplayer_price": "12.34"}],
+    "card_images": [{"image_url_small": "https://img.example/dm.jpg"}]}]}
+
+try:
+    catalog._http_json = lambda url, headers=None: POKE_RESP
+    info = catalog.fetch(CFG, "pokemontcg", "base1-4")
+    # holofoil market wins over normal (chase value is the holo printing)
+    assert info["price_cents"] == 42069, info
+    assert info["image_url"] == "https://img.example/base1-4.png"
+    assert "Charizard" in info["name"] and "Base" in info["name"]
+
+    catalog._http_json = lambda url, headers=None: YGO_RESP
+    info = catalog.fetch(CFG, "ygoprodeck", "46986414")
+    assert info["price_cents"] == 1234 and info["emoji"] == "🃏", info
+
+    # no price listed -> clean error, never a 0-credit listing
+    catalog._http_json = lambda url, headers=None: {"data": {"name": "X", "set": {}}}
+    try:
+        catalog.fetch(CFG, "pokemontcg", "base1-4")
+        raise AssertionError("priceless card accepted")
+    except catalog.CatalogError as e:
+        assert "no market price" in str(e)
+
+    catalog._http_json = lambda url, headers=None: {"data": []}
+    try:
+        catalog.fetch(CFG, "ygoprodeck", "0")
+        raise AssertionError("missing card accepted")
+    except catalog.CatalogError as e:
+        assert "not found" in str(e)
+finally:
+    catalog._http_json = real_http
+
 # sync_due only touches catalog items with data older than catalog_sync_sec
 set_feed(f)
 with con:

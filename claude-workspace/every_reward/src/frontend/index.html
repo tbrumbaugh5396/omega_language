@@ -15,6 +15,7 @@
   <div class="brand"><span class="logo">◆</span> Every Reward</div>
   <nav id="tabs">
     <button data-tab="markets" class="active">Markets</button>
+    <button data-tab="openings">Openings</button>
     <button data-tab="store">Store</button>
     <button data-tab="wallet">Wallet</button>
     <button data-tab="admin" id="admin-tab" hidden>Admin</button>
@@ -24,6 +25,26 @@
 
 <main>
   <section id="tab-markets" class="tab active"><div id="markets-list" class="cards"></div></section>
+  <section id="tab-openings" class="tab">
+    <div class="card" id="new-opening-card" hidden>
+      <h3>New pack opening</h3>
+      <div class="row">
+        <input id="no-title" placeholder="e.g. Saturday break: Surging Sparks booster box">
+        <select id="no-game" style="max-width:130px">
+          <option value="pokemon">Pokémon</option>
+          <option value="yugioh">Yu-Gi-Oh!</option>
+          <option value="baseball">Baseball</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <input id="no-desc" placeholder="What's being opened, when the reveal drops">
+      <button onclick="createOpening()">Create opening</button>
+      <p class="fine">Flow: create → add markets to it (Admin tab) → people bet →
+      <b>Seal betting</b> → record/upload the reveal → resolve markets from the video.
+      The upload slot stays locked until betting is sealed.</p>
+    </div>
+    <div id="openings-list"></div>
+  </section>
   <section id="tab-store" class="tab">
     <div id="store-list" class="cards"></div>
     <h3>My redemptions</h3><div id="redemptions-list"></div>
@@ -46,6 +67,9 @@
           <option value="parimutuel">Parimutuel pool</option>
           <option value="fixed">Fixed odds</option>
           <option value="lmsr">LMSR market maker</option>
+        </select>
+        <select id="nm-opening" title="Attach to a pack opening (optional)">
+          <option value="">no opening</option>
         </select>
         <select id="nm-resolver">
           <option value="manual">Resolve manually</option>

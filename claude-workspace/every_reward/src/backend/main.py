@@ -1,10 +1,11 @@
 """Every Reward — FastAPI backend. Serves the API and the PWA frontend."""
 import json
+import shutil
 import sqlite3
 import threading
 import time
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -201,6 +202,106 @@ def deposit(body: DepositBody, user=Depends(current_user), con=Depends(get_con))
             "balance": ledger.balance(con, ledger.user_account(user["id"]))}
 
 
+# ---------- pack openings ----------
+# Integrity rule enforced here, not by trust: the video slot only unlocks once
+# every linked market is closed, so the opener can never take bets on a pull
+# they have already seen.
+
+VIDEO_DIR = config.DATA_DIR / "videos"
+
+
+class OpeningIn(BaseModel):
+    title: str
+    description: str = ""
+    game: str = "pokemon"
+
+
+def opening_json(con, o) -> dict:
+    d = dict(o)
+    d.pop("video_path", None)  # server-side detail
+    d["has_video"] = o["status"] == "revealed" and bool(o["video_path"])
+    markets = con.execute(
+        "SELECT * FROM markets WHERE opening_id=? ORDER BY id", (o["id"],)).fetchall()
+    d["markets"] = [market_json(con, m) for m in markets]
+    return d
+
+
+@app.get("/api/openings")
+def list_openings(con=Depends(get_con)):
+    rows = con.execute(
+        "SELECT * FROM openings ORDER BY (status!='revealed') DESC, id DESC").fetchall()
+    return {"openings": [opening_json(con, o) for o in rows]}
+
+
+@app.post("/api/openings")
+def create_opening(body: OpeningIn, user=Depends(admin_user), con=Depends(get_con)):
+    with con:
+        cur = con.execute(
+            "INSERT INTO openings(title,description,game,creator_id,created_at) "
+            "VALUES(?,?,?,?,?)",
+            (body.title, body.description, body.game, user["id"], db.now()))
+    o = con.execute("SELECT * FROM openings WHERE id=?", (cur.lastrowid,)).fetchone()
+    return opening_json(con, o)
+
+
+@app.post("/api/openings/{opening_id}/seal")
+def seal_opening(opening_id: int, user=Depends(admin_user), con=Depends(get_con)):
+    o = con.execute("SELECT * FROM openings WHERE id=?", (opening_id,)).fetchone()
+    if o is None:
+        raise HTTPException(404, "no such opening")
+    if o["status"] != "open":
+        raise HTTPException(400, f"opening is already {o['status']}")
+    with con:
+        con.execute(
+            "UPDATE markets SET status='closed' WHERE opening_id=? AND status='open'",
+            (opening_id,))
+        con.execute("UPDATE openings SET status='sealed' WHERE id=?", (opening_id,))
+    return {"ok": True}
+
+
+@app.post("/api/openings/{opening_id}/video")
+def upload_video(opening_id: int, file: UploadFile,
+                 user=Depends(admin_user), con=Depends(get_con)):
+    o = con.execute("SELECT * FROM openings WHERE id=?", (opening_id,)).fetchone()
+    if o is None:
+        raise HTTPException(404, "no such opening")
+    if o["status"] == "open":
+        raise HTTPException(400, "seal betting before uploading the reveal — "
+                                 "bets must close before the result can exist")
+    still_open = con.execute(
+        "SELECT COUNT(*) c FROM markets WHERE opening_id=? AND status='open'",
+        (opening_id,)).fetchone()["c"]
+    if still_open:
+        raise HTTPException(400, "some linked markets are still open")
+    if not (file.content_type or "").startswith("video/"):
+        raise HTTPException(400, "upload a video file (webm/mp4)")
+    ext = ".mp4" if "mp4" in (file.content_type or "") else ".webm"
+    VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+    dest = VIDEO_DIR / f"opening_{opening_id}{ext}"
+    with open(dest, "wb") as out:
+        shutil.copyfileobj(file.file, out)
+    with con:
+        con.execute(
+            "UPDATE openings SET status='revealed', video_path=?, "
+            "video_uploaded_at=? WHERE id=?",
+            (dest.name, db.now(), opening_id))
+    return {"ok": True, "bytes": dest.stat().st_size}
+
+
+@app.get("/api/openings/{opening_id}/video")
+def get_video(opening_id: int, con=Depends(get_con)):
+    o = con.execute("SELECT * FROM openings WHERE id=?", (opening_id,)).fetchone()
+    if o is None or not o["video_path"]:
+        raise HTTPException(404, "no video")
+    if o["status"] != "revealed":
+        raise HTTPException(403, "video is sealed until betting closes")
+    path = VIDEO_DIR / o["video_path"]
+    if not path.exists():
+        raise HTTPException(404, "video file missing")
+    media = "video/mp4" if path.suffix == ".mp4" else "video/webm"
+    return FileResponse(path, media_type=media)
+
+
 # ---------- markets ----------
 
 class OutcomeIn(BaseModel):
@@ -218,6 +319,7 @@ class MarketIn(BaseModel):
     resolver_config: dict = {}
     rake_bps: int | None = None
     lmsr_b: float | None = None
+    opening_id: int | None = None
 
 
 class BetIn(BaseModel):
@@ -255,16 +357,23 @@ def create_market(body: MarketIn, user=Depends(admin_user), con=Depends(get_con)
         for o in body.outcomes:
             if not o.fixed_odds or o.fixed_odds <= 1.0:
                 raise HTTPException(400, f"outcome {o.label!r} needs decimal odds > 1.0")
+    if body.opening_id is not None:
+        op = con.execute("SELECT status FROM openings WHERE id=?",
+                         (body.opening_id,)).fetchone()
+        if op is None:
+            raise HTTPException(400, "no such opening")
+        if op["status"] != "open":
+            raise HTTPException(400, "that opening is sealed — betting is over")
     with con:
         cur = con.execute(
             "INSERT INTO markets(title,description,mechanism,close_at,resolver,"
-            "resolver_config,rake_bps,lmsr_b,creator_id,created_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "resolver_config,rake_bps,lmsr_b,opening_id,creator_id,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (body.title, body.description, body.mechanism, body.close_at,
              body.resolver, json.dumps(body.resolver_config),
              body.rake_bps if body.rake_bps is not None else CFG["default_rake_bps"],
              body.lmsr_b if body.lmsr_b is not None else CFG["default_lmsr_b"],
-             user["id"], db.now()),
+             body.opening_id, user["id"], db.now()),
         )
         mid = cur.lastrowid
         for o in body.outcomes:
@@ -515,11 +624,12 @@ def catalog_add(body: CatalogIn, user=Depends(admin_user), con=Depends(get_con))
     with con:
         cur = con.execute(
             "INSERT INTO store_items(name,description,price,stock,emoji,active,"
-            "source,source_id,base_price_cents,markup_bps,last_synced) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "source,source_id,base_price_cents,markup_bps,last_synced,image_url) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (info["name"], info["description"], info["credits"], body.stock,
              info["emoji"], int(info["in_stock"]), body.source, body.source_id,
-             info["price_cents"], info["markup_bps"], db.now()))
+             info["price_cents"], info["markup_bps"], db.now(),
+             info.get("image_url")))
     return {"id": cur.lastrowid, **info}
 
 

@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS deposits (
     detail TEXT,
     created_at INTEGER NOT NULL
 );
+-- Pack-opening events: betting seals BEFORE the video is uploadable, so the
+-- opener can never take bets on a result they already know.
+CREATE TABLE IF NOT EXISTS openings (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    game TEXT NOT NULL DEFAULT 'pokemon',   -- pokemon|yugioh|baseball|other
+    status TEXT NOT NULL DEFAULT 'open',    -- open (betting) -> sealed -> revealed
+    video_path TEXT,
+    video_uploaded_at INTEGER,
+    creator_id INTEGER,
+    created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS markets (
     id INTEGER PRIMARY KEY,
     title TEXT NOT NULL,
@@ -59,6 +72,7 @@ CREATE TABLE IF NOT EXISTS markets (
     winner_outcome_id INTEGER,
     rake_bps INTEGER NOT NULL DEFAULT 0,
     lmsr_b REAL NOT NULL DEFAULT 500.0,
+    opening_id INTEGER REFERENCES openings(id),
     creator_id INTEGER,
     created_at INTEGER NOT NULL
 );
@@ -96,7 +110,8 @@ CREATE TABLE IF NOT EXISTS store_items (
     base_price_cents INTEGER,               -- source price at last sync
     markup_bps INTEGER,
     last_synced INTEGER,
-    suspend_reason TEXT                     -- set when auto-suspended
+    suspend_reason TEXT,                    -- set when auto-suspended
+    image_url TEXT                          -- card/product image from the source
 );
 CREATE TABLE IF NOT EXISTS redemptions (
     id INTEGER PRIMARY KEY,
@@ -129,9 +144,13 @@ def init() -> None:
         for name, decl in [("source", "TEXT NOT NULL DEFAULT 'manual'"),
                            ("source_id", "TEXT"), ("base_price_cents", "INTEGER"),
                            ("markup_bps", "INTEGER"), ("last_synced", "INTEGER"),
-                           ("suspend_reason", "TEXT")]:
+                           ("suspend_reason", "TEXT"), ("image_url", "TEXT")]:
             if name not in cols:  # migration for pre-catalog databases
                 con.execute(f"ALTER TABLE store_items ADD COLUMN {name} {decl}")
+        cols = [r["name"] for r in con.execute("PRAGMA table_info(markets)")]
+        if "opening_id" not in cols:  # migration for pre-openings databases
+            con.execute("ALTER TABLE markets ADD COLUMN opening_id INTEGER "
+                        "REFERENCES openings(id)")
     con.close()
 
 

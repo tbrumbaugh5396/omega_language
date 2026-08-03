@@ -19,6 +19,8 @@ Sync rules, mirroring the oracle staleness guard:
 """
 import json
 import math
+import urllib.parse
+import urllib.request
 
 from . import config
 from .db import now
@@ -63,9 +65,76 @@ def _mock_fetch(source_id: str) -> dict:
             "in_stock": bool(it.get("in_stock", True))}
 
 
+def _http_json(url: str, headers: dict = None):
+    """One HTTP-GET-JSON seam for all real sources (tests monkeypatch this)."""
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "every-reward/1.0", **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        raise CatalogError(f"source unreachable: {e}")
+
+
+# TCGplayer price variants, most-collectible first: a chase card's value is in
+# its holo printing, so that's the market price we quote when several exist.
+_POKE_VARIANTS = ["1stEditionHolofoil", "holofoil", "reverseHolofoil",
+                  "1stEditionNormal", "normal", "unlimitedHolofoil"]
+
+
+def _pokemontcg_fetch(cfg: dict, source_id: str) -> dict:
+    """pokemontcg.io card by id, e.g. 'base1-4' (Base Set Charizard)."""
+    headers = {}
+    if cfg.get("pokemontcg_api_key"):
+        headers["X-Api-Key"] = cfg["pokemontcg_api_key"]
+    data = _http_json(
+        f"https://api.pokemontcg.io/v2/cards/{urllib.parse.quote(source_id)}",
+        headers)
+    card = data.get("data")
+    if not card:
+        raise CatalogError(f"card {source_id!r} not found on pokemontcg.io")
+    prices = (card.get("tcgplayer") or {}).get("prices") or {}
+    market = None
+    for variant in _POKE_VARIANTS + list(prices):
+        market = (prices.get(variant) or {}).get("market")
+        if market:
+            break
+    if not market:
+        raise CatalogError(f"no market price listed for {source_id!r}")
+    setname = (card.get("set") or {}).get("name", "")
+    return {"name": f"{card['name']} · {setname} {card.get('number', '')}".strip(),
+            "description": f"Pokémon TCG · {card.get('rarity', 'card')}",
+            "emoji": "🎴", "price_cents": int(round(market * 100)),
+            "in_stock": True,
+            "image_url": (card.get("images") or {}).get("small")}
+
+
+def _ygoprodeck_fetch(source_id: str) -> dict:
+    """YGOPRODeck card by passcode id or exact name."""
+    key = "id" if source_id.isdigit() else "name"
+    data = _http_json("https://db.ygoprodeck.com/api/v7/cardinfo.php?"
+                      + urllib.parse.urlencode({key: source_id}))
+    cards = data.get("data")
+    if not cards:
+        raise CatalogError(f"card {source_id!r} not found on YGOPRODeck")
+    card = cards[0]
+    price = float((card.get("card_prices") or [{}])[0].get("tcgplayer_price") or 0)
+    if price <= 0:
+        raise CatalogError(f"no TCGplayer price listed for {source_id!r}")
+    return {"name": card["name"],
+            "description": f"Yu-Gi-Oh! · {card.get('type', 'card')}",
+            "emoji": "🃏", "price_cents": int(round(price * 100)),
+            "in_stock": True,
+            "image_url": (card.get("card_images") or [{}])[0].get("image_url_small")}
+
+
 def fetch(cfg: dict, source: str, source_id: str) -> dict:
     if source == "mock":
         return _mock_fetch(source_id)
+    if source == "pokemontcg":
+        return _pokemontcg_fetch(cfg, source_id)
+    if source == "ygoprodeck":
+        return _ygoprodeck_fetch(source_id)
     raise CatalogError(f"unknown catalog source {source!r}")
 
 
@@ -105,9 +174,10 @@ def sync_item(con, cfg: dict, item) -> str:
     credits = price_credits(cfg, info["price_cents"], item["markup_bps"] or 0)
     con.execute(
         "UPDATE store_items SET name=?, description=?, emoji=?, price=?, "
-        "base_price_cents=?, last_synced=?, active=1, suspend_reason=NULL WHERE id=?",
+        "base_price_cents=?, image_url=?, last_synced=?, active=1, "
+        "suspend_reason=NULL WHERE id=?",
         (info["name"], info["description"], info["emoji"], credits,
-         info["price_cents"], now(), item["id"]))
+         info["price_cents"], info.get("image_url"), now(), item["id"]))
     return "resumed" if item["suspend_reason"] else "synced"
 
 

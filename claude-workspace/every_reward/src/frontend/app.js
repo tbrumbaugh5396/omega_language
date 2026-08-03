@@ -88,15 +88,15 @@ function outcomeLine(m, o) {
     <span>${esc(o.label)}</span><span class="odds">${right}</span></button>`;
 }
 
-async function loadMarkets() {
-  const { markets } = await api("/markets");
-  $("#markets-list").innerHTML = markets.map((m) => `
+function renderMarket(m) {
+  return `
     <div class="card">
       <div class="market-title">${esc(m.title)}</div>
       <div class="market-meta">
         <span class="pill ${m.status}">${m.status}</span>
         <span class="pill">${mechLabel(m.mechanism)}</span>
         <span class="pill">${m.total_staked} cr staked</span>
+        ${m.opening_id ? `<span class="pill">📦 opening #${m.opening_id}</span>` : ""}
         ${m.close_at ? `<span class="pill">closes ${new Date(m.close_at * 1000).toLocaleString()}</span>` : ""}
         ${m.resolver !== "manual" ? `<span class="pill">oracle: ${esc(m.resolver)}</span>` : ""}
       </div>
@@ -107,7 +107,13 @@ async function loadMarkets() {
           <button class="ghost" onclick="adminResolve(${m.id}, ${JSON.stringify(m.outcomes.map(o => ({ id: o.id, label: o.label }))).replace(/"/g, "&quot;")}, '${esc(m.resolver)}')">Resolve</button>
           <button class="danger" onclick="adminVoid(${m.id})">Void</button>
         </div>` : ""}
-    </div>`).join("") || "<p>No markets yet.</p>";
+    </div>`;
+}
+
+async function loadMarkets() {
+  const { markets } = await api("/markets");
+  $("#markets-list").innerHTML =
+    markets.map(renderMarket).join("") || "<p>No markets yet.</p>";
 }
 
 async function betPrompt(marketId, outcomeId, label) {
@@ -159,6 +165,13 @@ function addOutcomeRow() {
   $("#nm-outcomes").appendChild(div);
 }
 
+async function loadOpeningOptions() {
+  const { openings } = await api("/openings");
+  $("#nm-opening").innerHTML = '<option value="">no opening</option>' +
+    openings.filter((o) => o.status === "open")
+      .map((o) => `<option value="${o.id}">📦 #${o.id} ${esc(o.title)}</option>`).join("");
+}
+
 async function createMarket() {
   const outcomes = [...document.querySelectorAll(".outcome-row")].map((r) => ({
     label: r.querySelector(".o-label").value.trim(),
@@ -174,6 +187,7 @@ async function createMarket() {
       mechanism: $("#nm-mech").value, outcomes,
       close_at: closeRaw ? Math.floor(new Date(closeRaw).getTime() / 1000) : null,
       resolver: $("#nm-resolver").value, resolver_config: rconfig,
+      opening_id: $("#nm-opening").value ? parseInt($("#nm-opening").value, 10) : null,
     }});
     toast("Market created");
     $("#nm-title").value = ""; $("#nm-desc").value = "";
@@ -181,12 +195,134 @@ async function createMarket() {
   } catch (e) { toast(e.message); }
 }
 
+/* ---------- pack openings ---------- */
+async function apiUpload(path, formData) {
+  const r = await fetch("/api" + path, {
+    method: "POST", headers: { Authorization: "Bearer " + TOKEN }, body: formData });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || r.statusText);
+  return data;
+}
+
+const GAME_ICONS = { pokemon: "⚡", yugioh: "🃏", baseball: "⚾", other: "📦" };
+let REC = null; // { openingId, stream, mr, chunks }
+
+function openingControls(o) {
+  if (!ME || !ME.is_admin) return "";
+  if (o.status === "open") {
+    return `<button class="danger" onclick="sealOpening(${o.id})">🔒 Seal betting</button>
+      <p class="fine">Sealing closes all linked markets and unlocks the video slot.</p>`;
+  }
+  if (o.status === "sealed") {
+    return `
+      <div class="row">
+        <button onclick="startRec(${o.id})" id="rec-btn-${o.id}">⏺ Record reveal</button>
+        <button class="ghost" onclick="stopRec()" id="stop-btn-${o.id}" disabled>⏹ Stop &amp; upload</button>
+      </div>
+      <video id="rec-preview-${o.id}" muted playsinline style="display:none"></video>
+      <div class="row">
+        <input type="file" id="vid-file-${o.id}" accept="video/*">
+        <button class="ghost" onclick="uploadVideoFile(${o.id})" style="flex:0 0 auto">Upload file</button>
+      </div>`;
+  }
+  return "";
+}
+
+function renderOpening(o) {
+  return `
+    <div class="card">
+      <div class="market-title">${GAME_ICONS[o.game] || "📦"} ${esc(o.title)}</div>
+      <div class="market-meta">
+        <span class="pill ${o.status === "open" ? "open" : o.status === "revealed" ? "resolved" : "closed"}">${esc(o.status)}</span>
+        <span class="pill">${esc(o.game)}</span>
+        <span class="pill">${o.markets.length} market${o.markets.length === 1 ? "" : "s"}</span>
+      </div>
+      ${o.description ? `<div class="fine" style="margin-bottom:8px">${esc(o.description)}</div>` : ""}
+      ${o.has_video ? `<video controls preload="metadata" src="/api/openings/${o.id}/video"></video>` : ""}
+      ${o.status === "sealed" && !o.has_video ? `<p class="fine">🔒 Betting sealed — reveal video coming.</p>` : ""}
+      ${openingControls(o)}
+      ${o.markets.map(renderMarket).join("")}
+    </div>`;
+}
+
+async function loadOpenings() {
+  $("#new-opening-card").hidden = !(ME && ME.is_admin);
+  const { openings } = await api("/openings");
+  $("#openings-list").innerHTML =
+    openings.map(renderOpening).join("") || "<p>No pack openings yet.</p>";
+}
+
+async function createOpening() {
+  try {
+    await api("/openings", { method: "POST", body: {
+      title: $("#no-title").value, description: $("#no-desc").value,
+      game: $("#no-game").value } });
+    toast("Opening created — now add markets to it in the Admin tab");
+    $("#no-title").value = ""; $("#no-desc").value = "";
+    loadOpenings();
+  } catch (e) { toast(e.message); }
+}
+
+async function sealOpening(id) {
+  if (!confirm("Seal betting? All linked markets close and the video slot unlocks.")) return;
+  try {
+    await api(`/openings/${id}/seal`, { method: "POST" });
+    toast("Sealed — record or upload the reveal");
+    loadOpenings();
+  } catch (e) { toast(e.message); }
+}
+
+async function startRec(openingId) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    const preview = $(`#rec-preview-${openingId}`);
+    preview.style.display = "block";
+    preview.srcObject = stream;
+    preview.play();
+    const mr = new MediaRecorder(stream, { mimeType: "video/webm" });
+    REC = { openingId, stream, mr, chunks: [] };
+    mr.ondataavailable = (e) => e.data.size && REC.chunks.push(e.data);
+    mr.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      preview.style.display = "none";
+      const blob = new Blob(REC.chunks, { type: "video/webm" });
+      await uploadVideoBlob(openingId, blob);
+      REC = null;
+    };
+    mr.start();
+    $(`#rec-btn-${openingId}`).disabled = true;
+    $(`#stop-btn-${openingId}`).disabled = false;
+    toast("Recording… open those packs 🎬");
+  } catch (e) { toast("camera unavailable: " + e.message); }
+}
+
+function stopRec() {
+  if (REC) REC.mr.stop();
+}
+
+async function uploadVideoBlob(openingId, blob) {
+  const fd = new FormData();
+  fd.append("file", blob, "reveal.webm");
+  try {
+    const r = await apiUpload(`/openings/${openingId}/video`, fd);
+    toast(`Reveal uploaded (${(r.bytes / 1e6).toFixed(1)} MB) — resolve the markets!`);
+    loadOpenings();
+  } catch (e) { toast(e.message); }
+}
+
+async function uploadVideoFile(openingId) {
+  const input = $(`#vid-file-${openingId}`);
+  if (!input.files.length) { toast("choose a video file first"); return; }
+  await uploadVideoBlob(openingId, input.files[0]);
+}
+
 /* ---------- store ---------- */
 async function loadStore() {
   const { items } = await api("/store");
   $("#store-list").innerHTML = items.map((i) => `
     <div class="card store-item">
-      <div class="emoji">${esc(i.emoji)}</div>
+      ${i.image_url ? `<img class="item-img" src="${esc(i.image_url)}" alt="">`
+        : `<div class="emoji">${esc(i.emoji)}</div>`}
       <div class="market-title">${esc(i.name)}</div>
       <div class="fine">${esc(i.description)}</div>
       ${i.source && i.source !== "manual" ? `<span class="pill">via ${esc(i.source)}
@@ -401,9 +537,10 @@ async function fulfill(rid) {
 /* ---------- boot ---------- */
 function refresh(tab) {
   if (tab === "markets") loadMarkets();
+  if (tab === "openings") loadOpenings();
   if (tab === "store") loadStore();
   if (tab === "wallet") loadWallet();
-  if (tab === "admin") loadAdmin();
+  if (tab === "admin") { loadAdmin(); loadOpeningOptions(); }
 }
 
 async function loadMe() {

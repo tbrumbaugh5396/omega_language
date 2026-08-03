@@ -90,6 +90,8 @@ input, textarea, select {
 h3 { margin: 22px 0 8px; color: var(--dim); font-size: 14px; text-transform: uppercase; letter-spacing: .05em; }
 .store-item { text-align: center; }
 .store-item .emoji { font-size: 42px; }
+.store-item .item-img { height: 130px; max-width: 100%; object-fit: contain; }
+video { width: 100%; border-radius: 10px; margin: 8px 0; background: #000; }
 .store-item .price { color: var(--accent); font-weight: 700; margin: 6px 0; }
 .stock { color: var(--dim); font-size: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }

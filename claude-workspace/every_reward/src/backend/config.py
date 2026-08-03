@@ -44,6 +44,7 @@ DEFAULTS = {
     "catalog_max_drift_bps": 2000,  # >20% price move -> suspend for admin review
     "catalog_sync_sec": 300,        # re-fetch source prices every 5 min
     "catalog_max_age_sec": 900,     # refuse redemptions on data older than 15 min
+    "pokemontcg_api_key": "",       # optional; raises pokemontcg.io rate limits
     # Markets
     "default_rake_bps": 200,        # 2% house rake on parimutuel pools
     "default_lmsr_b": 500.0,
