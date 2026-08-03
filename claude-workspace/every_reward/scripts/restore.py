@@ -1,10 +1,11 @@
 """Restore the database + config from a backup made by backup.py."""
+import os
 import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data"
+DATA = Path(os.environ.get("EVERY_REWARD_DATA", ROOT / "data"))
 BACKUPS = DATA / "backups"
 
 

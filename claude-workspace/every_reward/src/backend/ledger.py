@@ -9,6 +9,19 @@ class LedgerError(Exception):
     pass
 
 
+def begin_write(con: sqlite3.Connection) -> None:
+    """Take the write lock NOW (BEGIN IMMEDIATE), before any balance reads.
+
+    Python's sqlite3 runs SELECTs in autocommit and only starts the write
+    transaction at the first INSERT/UPDATE — so without this, two concurrent
+    requests can both pass a balance check and overdraw the account. Callers
+    hold the lock until their `with con:` block commits. No-op if this
+    connection already holds a transaction (and therefore the lock).
+    """
+    if not con.in_transaction:
+        con.execute("BEGIN IMMEDIATE")
+
+
 def balance(con: sqlite3.Connection, account: str) -> int:
     row = con.execute(
         "SELECT COALESCE(SUM(delta),0) AS b FROM ledger WHERE account=?", (account,)
@@ -26,6 +39,7 @@ def post(con: sqlite3.Connection, entries: list, kind: str, ref: str = None,
     """
     if sum(d for _, d in entries) != 0:
         raise LedgerError("ledger entries must sum to zero")
+    begin_write(con)  # overdraft checks below must happen under the write lock
     txn = secrets.token_hex(8)
     ts = now()
     for account, delta in entries:

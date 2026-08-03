@@ -1,5 +1,6 @@
 """Every Reward — FastAPI backend. Serves the API and the PWA frontend."""
 import json
+import sqlite3
 import threading
 import time
 
@@ -178,20 +179,24 @@ def deposit(body: DepositBody, user=Depends(current_user), con=Depends(get_con))
     credits = result["credits"]
     if credits <= 0:
         raise HTTPException(400, "deposit too small to yield any credits")
-    with con:
-        con.execute(
-            "INSERT INTO deposits(user_id,tx_hash,asset,amount_wei,credits,status,detail,created_at) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (user["id"], tx_hash, result["asset"], str(result["amount_raw"]), credits,
-             "confirmed",
-             f"from {result['from']}" if result["from"] else "sender anonymous (XMR)",
-             db.now()),
-        )
-        ledger.post(
-            con,
-            [("house", -credits), (ledger.user_account(user["id"]), credits)],
-            kind="deposit", ref=f"tx:{tx_hash}", memo=result["asset"],
-        )
+    try:
+        with con:
+            con.execute(
+                "INSERT INTO deposits(user_id,tx_hash,asset,amount_wei,credits,"
+                "status,detail,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                (user["id"], tx_hash, result["asset"], str(result["amount_raw"]),
+                 credits, "confirmed",
+                 f"from {result['from']}" if result["from"] else "sender anonymous (XMR)",
+                 db.now()),
+            )
+            ledger.post(
+                con,
+                [("house", -credits), (ledger.user_account(user["id"]), credits)],
+                kind="deposit", ref=f"tx:{tx_hash}", memo=result["asset"],
+            )
+    except sqlite3.IntegrityError:
+        # concurrent claim of the same tx: UNIQUE(tx_hash) is the backstop
+        raise HTTPException(400, "that transaction was already claimed")
     return {"credits": credits, "asset": result["asset"],
             "balance": ledger.balance(con, ledger.user_account(user["id"]))}
 
@@ -344,7 +349,10 @@ def resolve_market(market_id: int, body: ResolveIn,
         winner, evidence = r["winner_outcome_id"], r["evidence"]
     if winner not in [o["id"] for o in outs]:
         raise HTTPException(400, "winner is not an outcome of this market")
-    result = engines.settle(con, m, winner)
+    try:
+        result = engines.settle(con, m, winner)
+    except engines.BetError as e:
+        raise HTTPException(400, str(e))
     result["evidence"] = evidence
     return result
 
@@ -356,7 +364,10 @@ def void_market(market_id: int, user=Depends(admin_user), con=Depends(get_con)):
         raise HTTPException(404, "no such market")
     if m["status"] in ("resolved", "void"):
         raise HTTPException(400, f"market is {m['status']}")
-    refunded = engines.void(con, m)
+    try:
+        refunded = engines.void(con, m)
+    except engines.BetError as e:
+        raise HTTPException(400, str(e))
     return {"refunded_bets": refunded}
 
 
@@ -401,9 +412,14 @@ def redeem(item_id: int, user=Depends(current_user), con=Depends(get_con)):
                 kind="redeem", ref=f"item:{item_id}", memo=item["name"],
             )
             if item["stock"] > 0:
-                con.execute(
-                    "UPDATE store_items SET stock=stock-1 WHERE id=?", (item_id,)
+                # guard in the UPDATE: a concurrent redeem of the last unit
+                # must fail here (and roll the ledger entry back), not go to -1
+                cur = con.execute(
+                    "UPDATE store_items SET stock=stock-1 WHERE id=? AND stock>0",
+                    (item_id,)
                 )
+                if cur.rowcount == 0:
+                    raise HTTPException(400, "out of stock")
             con.execute(
                 "INSERT INTO redemptions(item_id,user_id,price_paid,created_at) "
                 "VALUES(?,?,?,?)", (item_id, user["id"], item["price"], db.now()),
