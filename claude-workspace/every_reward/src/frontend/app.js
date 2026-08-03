@@ -189,6 +189,8 @@ async function loadStore() {
       <div class="emoji">${esc(i.emoji)}</div>
       <div class="market-title">${esc(i.name)}</div>
       <div class="fine">${esc(i.description)}</div>
+      ${i.source && i.source !== "manual" ? `<span class="pill">via ${esc(i.source)}
+        · $${(i.base_price_cents / 100).toFixed(2)} + markup</span>` : ""}
       <div class="price">${i.price} cr</div>
       <div class="stock">${i.stock < 0 ? "unlimited" : i.stock + " left"}</div>
       <button style="margin-top:8px" onclick="redeem(${i.id}, '${esc(i.name)}', ${i.price})">Redeem</button>
@@ -316,6 +318,46 @@ async function claimDeposit() {
   } catch (e) { toast(e.message); }
 }
 
+/* ---------- catalog admin ---------- */
+function catBody() {
+  return { source: $("#cat-source").value, source_id: $("#cat-sku").value.trim(),
+    markup_bps: $("#cat-markup").value ? parseInt($("#cat-markup").value, 10) : null };
+}
+
+async function catalogPreview() {
+  try {
+    const p = await api("/admin/catalog/preview", { method: "POST", body: catBody() });
+    $("#cat-preview").innerHTML = `${esc(p.emoji)} <b>${esc(p.name)}</b> —
+      $${(p.price_cents / 100).toFixed(2)} + ${p.markup_bps} bps →
+      <b>${p.credits} cr</b> ${p.in_stock ? "" : "· ⚠️ out of stock at source"}`;
+  } catch (e) { toast(e.message); }
+}
+
+async function catalogAdd() {
+  try {
+    const r = await api("/admin/catalog/add", { method: "POST", body: catBody() });
+    toast(`Added "${r.name}" at ${r.credits} cr`);
+    $("#cat-sku").value = ""; $("#cat-preview").innerHTML = "";
+    loadAdmin(); loadStore();
+  } catch (e) { toast(e.message); }
+}
+
+async function catalogSyncNow() {
+  try {
+    const r = await api("/admin/catalog/sync", { method: "POST" });
+    toast("Synced: " + (r.synced.map((s) => `#${s.id} ${s.action}`).join(", ") || "no catalog items"));
+    loadAdmin(); loadStore();
+  } catch (e) { toast(e.message); }
+}
+
+async function reactivateItem(id) {
+  try {
+    const r = await api(`/admin/items/${id}/activate`, { method: "POST" });
+    toast(`Item ${id}: ${r.action}`);
+    loadAdmin(); loadStore();
+  } catch (e) { toast(e.message); }
+}
+
 /* ---------- admin ---------- */
 async function loadAdmin() {
   const o = await api("/admin/overview");
@@ -325,6 +367,17 @@ async function loadAdmin() {
       <td>${u.balance} cr</td>
       <td><button class="ghost" onclick="grantCredits(${u.id})">grant</button></td></tr>`).join("") +
     `</table><p class="fine">House balance: ${o.house_balance} cr</p>`;
+  $("#catalog-table").innerHTML = (o.catalog_items.length ? `
+    <table><tr><th>id</th><th>item</th><th>source</th><th>base</th><th>cr</th><th>status</th><th></th></tr>` +
+    o.catalog_items.map((c) => `<tr><td>${c.id}</td>
+      <td>${esc(c.emoji)} ${esc(c.name)}</td>
+      <td>${esc(c.source)}:${esc(c.source_id)}</td>
+      <td>$${((c.base_price_cents || 0) / 100).toFixed(2)}</td>
+      <td>${c.price}</td>
+      <td>${c.active ? "active" : `<span style="color:var(--bad)">${esc(c.suspend_reason || "suspended")}</span>`}</td>
+      <td>${c.active ? "" : `<button class="ghost" onclick="reactivateItem(${c.id})">reactivate</button>`}</td>
+    </tr>`).join("") + "</table>" : "") +
+    `<button class="ghost" style="margin-top:8px" onclick="catalogSyncNow()">Sync catalog now</button>`;
   $("#admin-redemptions").innerHTML = o.pending_redemptions.map((r) => `
     <div class="line-item"><span>${esc(r.emoji)} ${esc(r.name)} → ${esc(r.nickname)}</span>
       <button class="ghost" onclick="fulfill(${r.id})">mark fulfilled</button></div>`).join("")

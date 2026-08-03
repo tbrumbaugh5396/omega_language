@@ -38,6 +38,12 @@ DEFAULTS = {
     "dev_login": True,              # name-only login for local testing (no wallet)
     "admin_addresses": [],          # lowercase 0x addresses that get admin
     "admin_key": "",                # set on first run; grants admin to dev logins
+    # Catalog (auto-priced store items from external feeds)
+    "usd_to_credits": 50,           # $1.00 = 50 credits (matches USDC deposit rate)
+    "default_markup_bps": 1500,     # 15% markup over source price
+    "catalog_max_drift_bps": 2000,  # >20% price move -> suspend for admin review
+    "catalog_sync_sec": 300,        # re-fetch source prices every 5 min
+    "catalog_max_age_sec": 900,     # refuse redemptions on data older than 15 min
     # Markets
     "default_rake_bps": 200,        # 2% house rake on parimutuel pools
     "default_lmsr_b": 500.0,

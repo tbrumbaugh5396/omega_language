@@ -65,6 +65,20 @@
       <button onclick="createMarket()">Create market</button>
     </div>
     <div class="card">
+      <h3>Catalog item (auto-priced from a source feed)</h3>
+      <div class="row">
+        <select id="cat-source" style="max-width:110px"><option value="mock">mock</option></select>
+        <input id="cat-sku" placeholder="source id, e.g. WM-AF101">
+        <input id="cat-markup" type="number" placeholder="markup bps (default 1500)">
+      </div>
+      <div id="cat-preview" class="fine"></div>
+      <div class="row">
+        <button class="ghost" onclick="catalogPreview()">Preview price</button>
+        <button onclick="catalogAdd()">Add to store</button>
+      </div>
+      <div id="catalog-table"></div>
+    </div>
+    <div class="card">
       <h3>New store item</h3>
       <div class="row">
         <input id="ni-emoji" placeholder="🎁" style="max-width:70px">

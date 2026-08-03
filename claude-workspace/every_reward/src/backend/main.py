@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, chain, config, db, engines, ledger, monero, resolvers
+from . import auth, catalog, chain, config, db, engines, ledger, monero, resolvers
 
 app = FastAPI(title="Every Reward")
 CFG = config.load()
@@ -388,6 +388,11 @@ def redeem(item_id: int, user=Depends(current_user), con=Depends(get_con)):
         raise HTTPException(404, "no such item")
     if item["stock"] == 0:
         raise HTTPException(400, "out of stock")
+    if item["source"] != "manual":
+        age = db.now() - (item["last_synced"] or 0)
+        if age > int(CFG.get("catalog_max_age_sec", 900)):
+            raise HTTPException(
+                400, "price data for this item is stale — try again in a minute")
     try:
         with con:
             ledger.post(
@@ -460,6 +465,76 @@ def grant(body: GrantIn, user=Depends(admin_user), con=Depends(get_con)):
     return {"balance": ledger.balance(con, ledger.user_account(body.user_id))}
 
 
+class CatalogIn(BaseModel):
+    source: str
+    source_id: str
+    markup_bps: int | None = None
+    stock: int = -1
+
+
+def _catalog_quote(body: CatalogIn):
+    markup = body.markup_bps if body.markup_bps is not None else CFG["default_markup_bps"]
+    try:
+        info = catalog.fetch(CFG, body.source, body.source_id)
+    except catalog.CatalogError as e:
+        raise HTTPException(400, str(e))
+    info["markup_bps"] = markup
+    info["credits"] = catalog.price_credits(CFG, info["price_cents"], markup)
+    return info
+
+
+@app.post("/api/admin/catalog/preview")
+def catalog_preview(body: CatalogIn, user=Depends(admin_user)):
+    return _catalog_quote(body)
+
+
+@app.post("/api/admin/catalog/add")
+def catalog_add(body: CatalogIn, user=Depends(admin_user), con=Depends(get_con)):
+    info = _catalog_quote(body)
+    dup = con.execute(
+        "SELECT id FROM store_items WHERE source=? AND source_id=?",
+        (body.source, body.source_id)).fetchone()
+    if dup:
+        raise HTTPException(400, f"already in the store (item {dup['id']})")
+    with con:
+        cur = con.execute(
+            "INSERT INTO store_items(name,description,price,stock,emoji,active,"
+            "source,source_id,base_price_cents,markup_bps,last_synced) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (info["name"], info["description"], info["credits"], body.stock,
+             info["emoji"], int(info["in_stock"]), body.source, body.source_id,
+             info["price_cents"], info["markup_bps"], db.now()))
+    return {"id": cur.lastrowid, **info}
+
+
+@app.post("/api/admin/catalog/sync")
+def catalog_sync(user=Depends(admin_user), con=Depends(get_con)):
+    items = con.execute("SELECT * FROM store_items WHERE source!='manual'").fetchall()
+    with con:
+        results = [{"id": it["id"], "action": catalog.sync_item(con, CFG, it)}
+                   for it in items]
+    return {"synced": results}
+
+
+@app.post("/api/admin/items/{item_id}/activate")
+def reactivate_item(item_id: int, user=Depends(admin_user), con=Depends(get_con)):
+    item = con.execute("SELECT * FROM store_items WHERE id=?", (item_id,)).fetchone()
+    if item is None:
+        raise HTTPException(404, "no such item")
+    with con:
+        if item["source"] != "manual":
+            # accept the source's current price as the new baseline
+            con.execute("UPDATE store_items SET suspend_reason=NULL, "
+                        "base_price_cents=NULL WHERE id=?", (item_id,))
+            item = con.execute("SELECT * FROM store_items WHERE id=?",
+                               (item_id,)).fetchone()
+            action = catalog.sync_item(con, CFG, item)
+        else:
+            con.execute("UPDATE store_items SET active=1 WHERE id=?", (item_id,))
+            action = "activated"
+    return {"action": action}
+
+
 @app.get("/api/admin/overview")
 def overview(user=Depends(admin_user), con=Depends(get_con)):
     users = con.execute("SELECT * FROM users ORDER BY id").fetchall()
@@ -473,9 +548,12 @@ def overview(user=Depends(admin_user), con=Depends(get_con)):
         "JOIN store_items i ON i.id=r.item_id JOIN users u ON u.id=r.user_id "
         "WHERE r.status='pending' ORDER BY r.id"
     ).fetchall()
+    catalog_items = con.execute(
+        "SELECT * FROM store_items WHERE source!='manual' ORDER BY id").fetchall()
     return {"users": out,
             "house_balance": ledger.balance(con, "house"),
             "pending_redemptions": [dict(r) for r in pending],
+            "catalog_items": [dict(r) for r in catalog_items],
             "admin_key_hint": CFG["admin_key"][:4] + "…"}
 
 
@@ -492,6 +570,7 @@ def _housekeeping_loop():
                     (db.now(),),
                 )
                 con.execute("DELETE FROM sessions WHERE expires_at<=?", (db.now(),))
+                catalog.sync_due(con, CFG)
             due = con.execute(
                 "SELECT * FROM markets WHERE status='closed' AND resolver!='manual'"
             ).fetchall()

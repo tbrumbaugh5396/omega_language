@@ -89,7 +89,14 @@ CREATE TABLE IF NOT EXISTS store_items (
     price INTEGER NOT NULL,
     stock INTEGER NOT NULL DEFAULT 0,       -- -1 = unlimited
     emoji TEXT NOT NULL DEFAULT '🎁',
-    active INTEGER NOT NULL DEFAULT 1
+    active INTEGER NOT NULL DEFAULT 1,
+    -- catalog-sourced items (source != 'manual') are auto-priced and synced
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_id TEXT,
+    base_price_cents INTEGER,               -- source price at last sync
+    markup_bps INTEGER,
+    last_synced INTEGER,
+    suspend_reason TEXT                     -- set when auto-suspended
 );
 CREATE TABLE IF NOT EXISTS redemptions (
     id INTEGER PRIMARY KEY,
@@ -118,6 +125,13 @@ def init() -> None:
         cols = [r["name"] for r in con.execute("PRAGMA table_info(deposits)")]
         if "asset" not in cols:  # migration for databases created before ERC-20 support
             con.execute("ALTER TABLE deposits ADD COLUMN asset TEXT NOT NULL DEFAULT 'ETH'")
+        cols = [r["name"] for r in con.execute("PRAGMA table_info(store_items)")]
+        for name, decl in [("source", "TEXT NOT NULL DEFAULT 'manual'"),
+                           ("source_id", "TEXT"), ("base_price_cents", "INTEGER"),
+                           ("markup_bps", "INTEGER"), ("last_synced", "INTEGER"),
+                           ("suspend_reason", "TEXT")]:
+            if name not in cols:  # migration for pre-catalog databases
+                con.execute(f"ALTER TABLE store_items ADD COLUMN {name} {decl}")
     con.close()
 
 
