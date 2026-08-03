@@ -1,0 +1,56 @@
+"""Configuration and paths. Everything lives inside the project folder."""
+import json
+import os
+import secrets
+from pathlib import Path
+
+APP_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = Path(os.environ.get("EVERY_REWARD_DATA", APP_ROOT / "data"))
+FRONTEND_DIR = APP_ROOT / "src" / "frontend"
+CONFIG_PATH = DATA_DIR / "config.json"
+DB_PATH = DATA_DIR / "every_reward.db"
+
+DEFAULTS = {
+    # Chain settings. Mainnet by default per project decision; the app is
+    # non-custodial: deposit_address is YOUR wallet, we only verify txs.
+    "chain_id": 1,
+    "chain_name": "Ethereum Mainnet",
+    "rpc_urls": ["https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"],
+    "deposit_address": "",          # empty => deposits disabled until configured
+    "credits_per_eth": 100000,      # 1 ETH deposited = 100,000 credits
+    # ERC-20 deposits: any Transfer of these tokens to deposit_address counts.
+    "tokens": {
+        "USDC": {"address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                 "decimals": 6, "credits_per_token": 50},
+    },
+    "min_confirmations": 3,
+    "oracle_max_age_sec": 21600,    # reject Chainlink rounds older than 6h
+    # Auth
+    "dev_login": True,              # name-only login for local testing (no wallet)
+    "admin_addresses": [],          # lowercase 0x addresses that get admin
+    "admin_key": "",                # set on first run; grants admin to dev logins
+    # Markets
+    "default_rake_bps": 200,        # 2% house rake on parimutuel pools
+    "default_lmsr_b": 500.0,
+    # Server
+    "port": 8850,
+}
+
+
+def load() -> dict:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    cfg = dict(DEFAULTS)
+    if CONFIG_PATH.exists():
+        try:
+            cfg.update(json.loads(CONFIG_PATH.read_text()))
+        except Exception:
+            pass
+    if not cfg.get("admin_key"):
+        cfg["admin_key"] = secrets.token_urlsafe(24)
+        save(cfg)
+    return cfg
+
+
+def save(cfg: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))

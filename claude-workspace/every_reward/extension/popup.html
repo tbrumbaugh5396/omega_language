@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 400px; height: 580px; background: #0d1117;
+    color: #e6edf3; font: 13px -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    background: #161b22; border-bottom: 1px solid #2d3646; }
+  .logo { color: #d4a017; }
+  .title { font-weight: 700; flex: 1; }
+  button { background: #1c2330; color: #e6edf3; border: 1px solid #2d3646;
+    border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+  iframe { border: 0; flex: 1; width: 100%; display: none; }
+  #offline { flex: 1; display: none; flex-direction: column; align-items: center;
+    justify-content: center; gap: 10px; padding: 24px; text-align: center; }
+  #offline b { color: #f85149; }
+  input { background: #1c2330; color: #e6edf3; border: 1px solid #2d3646;
+    border-radius: 6px; padding: 6px 8px; width: 260px; font-size: 12px; }
+  .fine { color: #8b949e; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">◆</span><span class="title">Every Reward</span>
+  <button id="open-tab" title="Open in a full browser tab">Open in tab ↗</button>
+</header>
+<iframe id="app"></iframe>
+<div id="offline">
+  <div><b>Server not reachable.</b></div>
+  <div class="fine">Start it with “Start Every Reward.command”, then reopen this popup.</div>
+  <input id="base" placeholder="http://127.0.0.1:8850">
+  <button id="save">Save server URL &amp; retry</button>
+  <div class="fine">Tip: wallet (MetaMask) sign-in works best in the full tab —
+  use dev login inside the popup.</div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>

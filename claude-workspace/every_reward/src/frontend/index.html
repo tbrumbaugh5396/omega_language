@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Every Reward</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<meta name="theme-color" content="#0d1117">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">◆</span> Every Reward</div>
+  <nav id="tabs">
+    <button data-tab="markets" class="active">Markets</button>
+    <button data-tab="store">Store</button>
+    <button data-tab="wallet">Wallet</button>
+    <button data-tab="admin" id="admin-tab" hidden>Admin</button>
+  </nav>
+  <div id="who" class="who"></div>
+</header>
+
+<main>
+  <section id="tab-markets" class="tab active"><div id="markets-list" class="cards"></div></section>
+  <section id="tab-store" class="tab">
+    <div id="store-list" class="cards"></div>
+    <h3>My redemptions</h3><div id="redemptions-list"></div>
+  </section>
+  <section id="tab-wallet" class="tab">
+    <div class="card">
+      <div class="balance-row">Balance <b id="balance">—</b> <span class="cr">cr</span></div>
+      <div id="deposit-box"></div>
+    </div>
+    <h3>My bets</h3><div id="bets-list"></div>
+    <h3>Activity</h3><div id="ledger-list"></div>
+  </section>
+  <section id="tab-admin" class="tab">
+    <div class="card">
+      <h3>New market</h3>
+      <input id="nm-title" placeholder="Question, e.g. Will ETH close above $4000 on Friday?">
+      <textarea id="nm-desc" placeholder="Description / resolution criteria"></textarea>
+      <div class="row">
+        <select id="nm-mech">
+          <option value="parimutuel">Parimutuel pool</option>
+          <option value="fixed">Fixed odds</option>
+          <option value="lmsr">LMSR market maker</option>
+        </select>
+        <select id="nm-resolver">
+          <option value="manual">Resolve manually</option>
+          <option value="chainlink_price">Chainlink price feed</option>
+          <option value="http_json">HTTP JSON oracle</option>
+        </select>
+        <input id="nm-close" type="datetime-local" title="Close time (optional)">
+      </div>
+      <div id="nm-outcomes">
+        <div class="row outcome-row"><input class="o-label" placeholder="Outcome, e.g. Yes"><input class="o-odds" placeholder="odds (fixed only)" type="number" step="0.01"></div>
+        <div class="row outcome-row"><input class="o-label" placeholder="Outcome, e.g. No"><input class="o-odds" placeholder="odds (fixed only)" type="number" step="0.01"></div>
+      </div>
+      <div class="row">
+        <button class="ghost" onclick="addOutcomeRow()">+ outcome</button>
+        <textarea id="nm-rconfig" placeholder='resolver config JSON, e.g. {"feed":"0x...","threshold":4000,"above_outcome":"Yes","below_outcome":"No"}'></textarea>
+      </div>
+      <button onclick="createMarket()">Create market</button>
+    </div>
+    <div class="card">
+      <h3>New store item</h3>
+      <div class="row">
+        <input id="ni-emoji" placeholder="🎁" style="max-width:70px">
+        <input id="ni-name" placeholder="Item name">
+        <input id="ni-price" type="number" placeholder="price (cr)">
+        <input id="ni-stock" type="number" placeholder="stock (-1 = ∞)">
+      </div>
+      <input id="ni-desc" placeholder="Description">
+      <button onclick="createItem()">Add item</button>
+    </div>
+    <div class="card"><h3>Users</h3><div id="admin-users"></div></div>
+    <div class="card"><h3>Pending redemptions</h3><div id="admin-redemptions"></div></div>
+  </section>
+</main>
+
+<div id="login" class="overlay">
+  <div class="card login-card">
+    <div class="brand big"><span class="logo">◆</span> Every Reward</div>
+    <p>Predict outcomes. Earn credits. Redeem rewards.</p>
+    <button id="btn-wallet" onclick="walletLogin()">🦊 Sign in with wallet</button>
+    <div id="dev-login-box">
+      <div class="sep">or</div>
+      <input id="dev-nick" placeholder="nickname (local dev login)">
+      <input id="dev-key" placeholder="admin key (optional)">
+      <button class="ghost" onclick="devLogin()">Enter without wallet</button>
+    </div>
+    <p class="fine">Non-custodial: signing in only proves you own your address.
+    This app never asks for keys or funds and never sends transactions.</p>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+EVERY REWARD — start here
+
+1. Open the command_utilities folder.
+2. Double-click "Install Every Reward.command"  (one time; note the admin key it prints)
+3. Double-click "Start Every Reward.command"    (opens http://127.0.0.1:8850)
+4. Sign in with your wallet, or type a nickname + the admin key to be admin.
+5. Optional: browser menu -> "Install app..." for the PWA, or
+   "Install App Icon.command" for a Desktop icon.
+
+To stop the server: "Stop Every Reward.command".
+Everything lives in this folder. Data is in ./data. See README.md for the rest.

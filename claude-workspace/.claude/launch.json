@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "every-reward",
+      "runtimeExecutable": "every_reward/.venv/bin/python3",
+      "runtimeArgs": ["every_reward/scripts/launch.py", "--port", "8850"],
+      "port": 8850
+    }
+  ]
+}
