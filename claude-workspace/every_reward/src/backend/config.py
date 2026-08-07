@@ -47,6 +47,7 @@ DEFAULTS = {
     "pokemontcg_api_key": "",       # optional; raises pokemontcg.io rate limits
     # Markets
     "default_rake_bps": 200,        # 2% house rake on parimutuel pools
+    "fixed_odds_margin_bps": 700,   # 7% house edge baked into preset odds
     "default_lmsr_b": 500.0,
     # Server
     "port": 8850,

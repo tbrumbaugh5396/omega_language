@@ -84,4 +84,20 @@ assert r.status_code == 200, r.text
 bal = client.get("/api/me", headers=BH).json()["balance"]
 assert bal == 1000 - 200 + 196, bal  # sole winner: pot minus 2% rake
 
+# ---- pull-rate presets ----
+r = client.get("/api/presets").json()
+assert r["margin_bps"] == 700
+hit = next(p for p in r["presets"] if p["key"] == "poke_pack_hit")
+# p=0.25 -> fair 4.0, shaved 7% -> 3.72
+assert hit["outcomes"][0]["odds"] == 3.72, hit
+for p in r["presets"]:
+    assert abs(sum(o["probability"] for o in p["outcomes"]) - 1.0) < 1e-6, p["key"]
+    for o in p["outcomes"]:
+        assert o["odds"] > 1.0
+
+# ---- leaderboard: bettor staked 200, won 196 -> net -4, 1/1 wins ----
+leaders = client.get("/api/leaderboard").json()["leaders"]
+row = next(l for l in leaders if l["nickname"] == "bettor")
+assert (row["net"], row["wins"], row["settled"]) == (-4, 1, 1), row
+
 print("test_openings: OK")

@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, catalog, chain, config, db, engines, ledger, monero, resolvers
+from . import (auth, catalog, chain, config, db, engines, ledger, monero,
+               presets, resolvers)
 
 app = FastAPI(title="Every Reward")
 CFG = config.load()
@@ -200,6 +201,26 @@ def deposit(body: DepositBody, user=Depends(current_user), con=Depends(get_con))
         raise HTTPException(400, "that transaction was already claimed")
     return {"credits": credits, "asset": result["asset"],
             "balance": ledger.balance(con, ledger.user_account(user["id"]))}
+
+
+@app.get("/api/presets")
+def pull_rate_presets():
+    return {"presets": presets.presets_with_odds(CFG),
+            "margin_bps": CFG.get("fixed_odds_margin_bps", 700)}
+
+
+@app.get("/api/leaderboard")
+def leaderboard(con=Depends(get_con)):
+    rows = con.execute(
+        "SELECT u.id, u.nickname, COUNT(*) AS bets, "
+        "  SUM(b.settled) AS settled, "
+        "  SUM(CASE WHEN b.settled=1 AND b.payout>0 THEN 1 ELSE 0 END) AS wins, "
+        "  SUM(CASE WHEN b.settled=1 THEN b.stake ELSE 0 END) AS staked, "
+        "  SUM(CASE WHEN b.settled=1 THEN COALESCE(b.payout,0) ELSE 0 END) AS won "
+        "FROM bets b JOIN users u ON u.id=b.user_id "
+        "GROUP BY u.id HAVING settled>0 "
+        "ORDER BY (won - staked) DESC LIMIT 50").fetchall()
+    return {"leaders": [dict(r) | {"net": r["won"] - r["staked"]} for r in rows]}
 
 
 # ---------- pack openings ----------

@@ -70,7 +70,7 @@ input, textarea, select {
   display: flex; justify-content: space-between; gap: 10px; padding: 7px 4px;
   border-bottom: 1px solid var(--line); font-size: 13px;
 }
-.line-item .plus { color: var(--good); } .line-item .minus { color: var(--bad); }
+.plus { color: var(--good); } .minus { color: var(--bad); }
 .overlay {
   position: fixed; inset: 0; background: rgba(5,8,12,.92); display: flex;
   align-items: center; justify-content: center; z-index: 10; padding: 16px;

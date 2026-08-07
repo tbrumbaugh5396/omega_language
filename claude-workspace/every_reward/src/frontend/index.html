@@ -17,6 +17,7 @@
     <button data-tab="markets" class="active">Markets</button>
     <button data-tab="openings">Openings</button>
     <button data-tab="store">Store</button>
+    <button data-tab="leaders">Leaders</button>
     <button data-tab="wallet">Wallet</button>
     <button data-tab="admin" id="admin-tab" hidden>Admin</button>
   </nav>
@@ -49,6 +50,12 @@
     <div id="store-list" class="cards"></div>
     <h3>My redemptions</h3><div id="redemptions-list"></div>
   </section>
+  <section id="tab-leaders" class="tab">
+    <div class="card">
+      <h3>🏆 Leaderboard — settled bets only</h3>
+      <div id="leaders-table"></div>
+    </div>
+  </section>
   <section id="tab-wallet" class="tab">
     <div class="card">
       <div class="balance-row">Balance <b id="balance">—</b> <span class="cr">cr</span></div>
@@ -60,6 +67,10 @@
   <section id="tab-admin" class="tab">
     <div class="card">
       <h3>New market</h3>
+      <select id="nm-preset" onchange="applyPreset()">
+        <option value="">pull-rate preset… (fills fixed odds from known rates)</option>
+      </select>
+      <div id="preset-note" class="fine"></div>
       <input id="nm-title" placeholder="Question, e.g. Will ETH close above $4000 on Friday?">
       <textarea id="nm-desc" placeholder="Description / resolution criteria"></textarea>
       <div class="row">

@@ -165,6 +165,49 @@ function addOutcomeRow() {
   $("#nm-outcomes").appendChild(div);
 }
 
+let PRESETS = [];
+
+async function loadPresets() {
+  const r = await api("/presets");
+  PRESETS = r.presets;
+  $("#nm-preset").innerHTML =
+    '<option value="">pull-rate preset… (fills fixed odds from known rates)</option>' +
+    PRESETS.map((p) => `<option value="${esc(p.key)}">${esc(p.label)}</option>`).join("");
+}
+
+function applyPreset() {
+  const p = PRESETS.find((x) => x.key === $("#nm-preset").value);
+  if (!p) { $("#preset-note").textContent = ""; return; }
+  $("#nm-mech").value = "fixed";
+  const box = $("#nm-outcomes");
+  box.innerHTML = "";
+  for (const o of p.outcomes) {
+    const div = document.createElement("div");
+    div.className = "row outcome-row";
+    div.innerHTML = `<input class="o-label"><input class="o-odds" type="number" step="0.01">`;
+    div.querySelector(".o-label").value = o.label;
+    div.querySelector(".o-odds").value = o.odds;
+    box.appendChild(div);
+  }
+  if (!$("#nm-title").value) $("#nm-title").value = p.label;
+  $("#preset-note").textContent = "Approximate rates: " +
+    p.outcomes.map((o) => `${o.label} ${Math.round(o.probability * 1000) / 10}%`).join(" · ") +
+    " — odds include the house margin; edit freely, real rates vary by set.";
+}
+
+async function loadLeaders() {
+  const { leaders } = await api("/leaderboard");
+  const medal = (i) => ["🥇", "🥈", "🥉"][i] || `${i + 1}.`;
+  $("#leaders-table").innerHTML = leaders.length ? `
+    <table><tr><th></th><th>who</th><th>bets</th><th>wins</th><th>staked</th><th>net</th></tr>` +
+    leaders.map((l, i) => `<tr>
+      <td>${medal(i)}</td><td>${esc(l.nickname)}</td>
+      <td>${l.bets}</td><td>${l.wins}/${l.settled}</td><td>${l.staked} cr</td>
+      <td class="${l.net >= 0 ? "plus" : "minus"}">${l.net >= 0 ? "+" : ""}${l.net} cr</td>
+    </tr>`).join("") + "</table>"
+    : "<p class='fine'>No settled bets yet — the podium is wide open.</p>";
+}
+
 async function loadOpeningOptions() {
   const { openings } = await api("/openings");
   $("#nm-opening").innerHTML = '<option value="">no opening</option>' +
@@ -539,8 +582,9 @@ function refresh(tab) {
   if (tab === "markets") loadMarkets();
   if (tab === "openings") loadOpenings();
   if (tab === "store") loadStore();
+  if (tab === "leaders") loadLeaders();
   if (tab === "wallet") loadWallet();
-  if (tab === "admin") { loadAdmin(); loadOpeningOptions(); }
+  if (tab === "admin") { loadAdmin(); loadOpeningOptions(); loadPresets(); }
 }
 
 async function loadMe() {
