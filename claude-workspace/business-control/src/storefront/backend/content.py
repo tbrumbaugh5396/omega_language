@@ -131,6 +131,7 @@ def i18n_payload(con) -> str:
     from . import affiliates as aff
     data = {"currencies": currencies(con), "locales": locales(con),
             "ui": UI_KEYS,
+            "regions": CFG.get("regions") or [],
             "affiliate_window_days": aff.window_days(CFG),
             "strings": {loc: translations_for(con, loc)
                         for loc in locales(con) if loc != "en"}}

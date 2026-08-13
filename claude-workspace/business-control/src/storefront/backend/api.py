@@ -1221,6 +1221,9 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
    {"Add to cart" if in_stock else "Sold out"}</button>
  </div>
 </div>
+<button class="buy-fab" id="buy-fab" aria-label="Buy now"{"" if in_stock else " disabled"}>
+ {sect.icon("cart", "ico ico-sm")}<span>{"Buy now" if in_stock else "Sold out"}</span>
+</button>
 <script>
 let v=localStorage.getItem('sf_vid')||crypto.randomUUID();localStorage.setItem('sf_vid',v);
 fetch('/api/store/track',{{method:'POST',headers:{{'Content-Type':'application/json'}},
@@ -1259,7 +1262,10 @@ const realBuy=document.getElementById('pp-add');
 const sticky=document.getElementById('sticky-buy');
 if(window.IntersectionObserver&&realBuy&&sticky){{
  new IntersectionObserver(function(es){{
-  sticky.classList.toggle('show',!es[0].isIntersecting&&es[0].boundingClientRect.top<0);
+  const shown=!es[0].isIntersecting&&es[0].boundingClientRect.top<0;
+  sticky.classList.toggle('show',shown);
+  const fab=document.getElementById('buy-fab');
+  if(fab)fab.classList.toggle('lifted',shown);
  }},{{threshold:0}}).observe(realBuy);
 }}
 document.querySelectorAll('.pp-thumb').forEach(function(b){{
@@ -1292,6 +1298,8 @@ function addToCart(){{
 document.getElementById('pp-add').onclick=addToCart;
 const sa=document.getElementById('sticky-add');
 if(sa)sa.onclick=addToCart;
+const bf=document.getElementById('buy-fab');
+if(bf)bf.onclick=addToCart;
 </script></body></html>"""
     return HTMLResponse(page)
 

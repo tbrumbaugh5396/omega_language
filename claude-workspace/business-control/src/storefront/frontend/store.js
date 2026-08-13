@@ -19,28 +19,44 @@ const t = (key, fallback) =>
 const pname = (p) => t(`product:${p.id}:name`, p.name);
 const pdesc = (p) => t(`product:${p.id}:description`, p.description || "");
 
+/* Region, language and currency live in the preferences panel (with the
+   accessibility controls), not the top bar — one quiet corner for everything
+   about "how this site speaks to me", Celsius-style. Always populated, even
+   with one option, so the shopper can see what they're set to. */
 function buildPickers() {
-  const cs = $("#currency-select"), ls = $("#locale-select");
-  if (cs && I18N.currencies.length > 1) {
-    cs.hidden = false;
-    cs.innerHTML = I18N.currencies.map((c) =>
+  const cs = $("#currency-select"), ls = $("#locale-select"),
+    rs = $("#region-select");
+  if (cs) {
+    const curs = I18N.currencies.length
+      ? I18N.currencies : [{ code: "USD", symbol: "$", rate: 1 }];
+    cs.innerHTML = curs.map((c) =>
       `<option value="${c.code}" ${c.code === CUR.code ? "selected" : ""}>
         ${c.symbol} ${c.code}</option>`).join("");
+    cs.disabled = curs.length < 2;
     cs.onchange = () => {
-      CUR = I18N.currencies.find((c) => c.code === cs.value);
+      CUR = I18N.currencies.find((c) => c.code === cs.value) || CUR;
       localStorage.setItem("sf_cur", CUR.code);
       drawGrid(); drawCart();
     };
   }
-  if (ls && I18N.locales.length > 1) {
-    ls.hidden = false;
+  if (ls) {
     ls.innerHTML = I18N.locales.map((l) =>
       `<option value="${l}" ${l === LOCALE ? "selected" : ""}>
         ${l.toUpperCase()}</option>`).join("");
+    ls.disabled = I18N.locales.length < 2;
     ls.onchange = () => {
       LOCALE = ls.value; localStorage.setItem("sf_locale", LOCALE);
       location.reload();
     };
+  }
+  if (rs) {
+    const regions = I18N.regions && I18N.regions.length
+      ? I18N.regions : ["Everywhere"];
+    const saved = localStorage.getItem("sf_region") || regions[0];
+    rs.innerHTML = regions.map((r) =>
+      `<option value="${r}" ${r === saved ? "selected" : ""}>${r}</option>`)
+      .join("");
+    rs.onchange = () => localStorage.setItem("sf_region", rs.value);
   }
 }
 
@@ -313,18 +329,28 @@ if ($("#search-input")) $("#search-input").oninput = () => {
   }, 250);
 };
 
+/* The menu is a storefront in miniature, not a list of links — every product
+   shows its face (Primal Queen-style), so the range is browsable before the
+   page even scrolls. */
 function drawSideMenu() {
   const host = $("#side-collections");
-  let html = '<div class="side-group">Shop</div>' +
-    `<a class="side-item" href="#shop" data-close>${ico("bag")} All products</a>`;
+  let html = '<div class="side-group">The range</div><div class="menu-tiles">';
+  for (const p of CATALOG.products) {
+    html += `<a class="menu-tile" href="/product/${p.id}-${p.slug}"
+      style="--flavour:${flavourOf(p)};--flavour-soft:${flavourOf(p)}1f">
+      ${art(p, "art", false)}
+      <b>${pname(p)}</b>
+      <span>${money(p.variants.length
+        ? p.variants[0].price_cents : p.price_cents)}</span></a>`;
+  }
+  html += '</div><div class="side-group">Browse</div><div class="menu-cols">' +
+    `<a class="side-item" href="#shop" data-close>${ico("bag", "ico ico-sm")}
+      All products</a>`;
   for (const c of CATALOG.collections) {
     html += `<a class="side-item" href="#shop" data-close
-      data-colnav="${c.id}">▸ ${c.name}</a>`;
+      data-colnav="${c.id}">${c.name}</a>`;
   }
-  html += '<div class="side-group">Products</div>';
-  for (const p of CATALOG.products.slice(0, 12)) {
-    html += `<a class="side-item" href="#shop" data-close>· ${p.name}</a>`;
-  }
+  html += "</div>";
   host.innerHTML = html;
   host.querySelectorAll("[data-colnav]").forEach((a) => a.onclick = () => {
     activeCollection = +a.dataset.colnav; drawTabs(); drawGrid();
@@ -342,12 +368,34 @@ function hydrateHero() {
     || CATALOG.products[0];
   if (!p) return;
   const shot = (p.media || [])[0];
-  stage.innerHTML = `<a href="/product/${p.id}-${p.slug}"
+  // the ripple breathes behind the can — the packaging grammar at page scale
+  const rings = `<svg class="hero-rings" viewBox="0 0 400 400" aria-hidden="true">
+    <g fill="none" stroke="${flavourOf(p)}">
+      <circle cx="200" cy="200" r="70" stroke-width="2" opacity=".28"/>
+      <circle cx="200" cy="200" r="115" stroke-width="1.6" opacity=".2"/>
+      <circle cx="200" cy="200" r="160" stroke-width="1.3" opacity=".13"/>
+      <circle cx="200" cy="200" r="198" stroke-width="1" opacity=".07"/>
+    </g></svg>`;
+  stage.innerHTML = `${rings}<a href="/product/${p.id}-${p.slug}"
     aria-label="${pname(p)}">${shot
       ? `<img src="${shot.thumb}" alt="${(shot.alt || pname(p))
           .replace(/"/g, "&quot;")}" style="border-radius:var(--r-lg)">`
       : canSVG(p, { k: "hero" })}</a>`;
 }
+
+/* The buy button that never scrolls away. With items it opens the cart;
+   empty it takes you to the range. */
+(function wireBuyFab() {
+  const fab = $("#buy-fab");
+  if (!fab) return;
+  fab.onclick = () => {
+    const n = Object.values(CART).reduce((a, b) => a + b, 0);
+    if (n) { drawCart(); openCart(); return; }
+    const shop = document.getElementById("shop");
+    if (shop) shop.scrollIntoView({ behavior: "smooth" });
+    else location.href = "/#shop";
+  };
+})();
 
 async function loadCatalog() {
   const r = await fetch("/api/store/catalog");
@@ -433,6 +481,8 @@ function saveCart() {
   localStorage.setItem("sf_cart", JSON.stringify(CART));
   const n = Object.values(CART).reduce((a, b) => a + b, 0);
   $("#cart-count").textContent = n;
+  const fc = $("#buy-fab-count");
+  if (fc) { fc.hidden = !n; fc.textContent = n; }
 }
 
 function addToCart(pid, vid = 0) {
@@ -504,7 +554,15 @@ function drawCart() {
   if (sub) rows.push(`<div class="row grand"><span>Total</span>
     <span>${money(total)}</span></div>`);
   $("#cart-total").innerHTML = rows.join("");
-  $("#checkout-btn").disabled = !sub;
+  const co = $("#checkout-btn");
+  co.disabled = !sub;
+  // the button carries the total — Recess-style, no hunting for the number
+  co.innerHTML = sub
+    ? `Checkout · ${money(total)} ${ico("arrow", "ico ico-sm")}`
+    : `Checkout ${ico("arrow", "ico ico-sm")}`;
+  const n = Object.values(CART).reduce((a, b) => a + b, 0);
+  const hc = $("#cart-head-count");
+  if (hc) hc.textContent = n ? `(${n} ${n === 1 ? "can" : "items"})` : "";
 
   // Free-shipping meter: the single highest-leverage thing in a cart drawer.
   const meter = $("#ship-meter");
@@ -740,11 +798,13 @@ async function loadPromos() {
 
 // ---------- menus, modal, toast plumbing ----------
 function openCart() { $("#cart-drawer").classList.add("open");
-  $("#scrim").classList.add("show"); }
+  $("#scrim").classList.add("show");
+  document.body.classList.add("drawer-open"); }
 function closeMenus() {
   $("#cart-drawer").classList.remove("open");
   $("#side-menu").classList.remove("open");
   $("#scrim").classList.remove("show");
+  document.body.classList.remove("drawer-open");
 }
 function openModal(html) { $("#modal-card").innerHTML = html;
   $("#modal").classList.add("show"); wireModalClose(); }
@@ -764,7 +824,8 @@ function toast(txt) {
 }
 
 $("#menu-btn").onclick = () => { $("#side-menu").classList.add("open");
-  $("#scrim").classList.add("show"); };
+  $("#scrim").classList.add("show");
+  document.body.classList.add("drawer-open"); };
 $("#menu-close").onclick = closeMenus;
 $("#cart-btn").onclick = () => { drawCart(); openCart(); };
 $("#cart-close").onclick = closeMenus;
@@ -1055,6 +1116,14 @@ function applyA11y() {
   $("#a11y-reset").onclick = () => {
     A11Y = { text: "", contrast: false, motion: false, links: false };
     applyA11y();
+    // region & language reset too — the button says "all"
+    localStorage.removeItem("sf_region");
+    localStorage.removeItem("sf_cur");
+    CUR = I18N.currencies[0] || { code: "USD", symbol: "$", rate: 1 };
+    buildPickers(); drawGrid(); drawCart();
+    if (LOCALE !== "en") {
+      localStorage.setItem("sf_locale", "en"); location.reload();
+    }
   };
   applyA11y();
 })();

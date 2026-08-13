@@ -29,8 +29,6 @@
   <a class="brand" href="/"><!--BRAND--></a>
   <nav class="top-links"><!--NAV--></nav>
   <div class="top-actions">
-    <select id="locale-select" class="mini-select" hidden aria-label="Language"></select>
-    <select id="currency-select" class="mini-select" hidden aria-label="Currency"></select>
     <button class="icon-btn" id="account-btn" title="My account" aria-label="My account">
       <svg class="ico" aria-hidden="true"><use href="#i-user"/></svg></button>
     <button class="icon-btn" id="track-btn" title="Track my order" aria-label="Track my order">
@@ -81,9 +79,10 @@
 
 <!-- cart drawer -->
 <aside class="cart-drawer" id="cart-drawer" aria-label="Your cart">
-  <div class="side-head"><b>Your cart</b>
+  <div class="side-head"><b>Your cart <span class="cart-head-count" id="cart-head-count"></span></b>
     <button class="icon-btn" id="cart-close" aria-label="Close cart">
       <svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+  <p class="cart-tag">breathe in, check out.</p>
   <div class="ship-meter" id="ship-meter" hidden>
     <p id="ship-meter-msg"></p>
     <div class="bar"><div class="fill" id="ship-meter-fill" style="width:0"></div></div>
@@ -104,16 +103,20 @@
     <div class="cart-total" id="cart-total"></div>
     <button class="btn-pill primary" id="checkout-btn">Checkout
       <svg class="ico ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+    <p class="cart-note">Free shipping over $40 · skip or cancel boxes any time</p>
   </div>
 </aside>
 
-<!-- accessibility preferences -->
-<button class="a11y-fab" id="a11y-fab" aria-label="Accessibility options"
+<!-- preferences: accessibility + region & language, Celsius-style -->
+<button class="a11y-fab" id="a11y-fab" aria-label="Accessibility and language options"
         aria-expanded="false" aria-controls="a11y-panel">
   <svg class="ico" aria-hidden="true"><use href="#i-a11y"/></svg></button>
-<div class="a11y-panel" id="a11y-panel" role="dialog" aria-label="Accessibility options">
-  <h4>Accessibility</h4>
-  <p class="dim" style="font-size:13px;margin-bottom:6px">Saved on this device.</p>
+<div class="a11y-panel" id="a11y-panel" role="dialog"
+     aria-label="Accessibility and language options">
+  <h4>Preferences</h4>
+  <p class="dim" style="font-size:13px;margin-bottom:2px">Saved on this device.</p>
+
+  <div class="a11y-group">Accessibility</div>
   <div class="a11y-row"><span>Text size</span>
     <span class="a11y-seg" id="a11y-text" role="group" aria-label="Text size">
       <button data-size="" class="on">A</button>
@@ -129,9 +132,25 @@
   <div class="a11y-row"><span id="a11y-links-lbl">Underline links</span>
     <button class="a11y-toggle" id="a11y-links" role="switch"
             aria-checked="false" aria-labelledby="a11y-links-lbl"></button></div>
+
+  <div class="a11y-group">Region &amp; language</div>
+  <div class="a11y-row"><label for="region-select">Region</label>
+    <select id="region-select" class="pref-select"></select></div>
+  <div class="a11y-row"><label for="locale-select">Language</label>
+    <select id="locale-select" class="pref-select"></select></div>
+  <div class="a11y-row"><label for="currency-select">Currency</label>
+    <select id="currency-select" class="pref-select"></select></div>
+
   <button class="btn-pill ghost sm wide" id="a11y-reset"
-          style="margin-top:12px">Reset</button>
+          style="margin-top:14px">Reset all</button>
 </div>
+
+<!-- always-reachable buy button -->
+<button class="buy-fab" id="buy-fab" aria-label="Buy now">
+  <svg class="ico ico-sm" aria-hidden="true"><use href="#i-cart"/></svg>
+  <span>Buy now</span>
+  <span class="buy-fab-count" id="buy-fab-count" hidden>0</span>
+</button>
 
 <!-- modals -->
 <div class="modal" id="modal">
