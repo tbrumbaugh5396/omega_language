@@ -43,8 +43,6 @@ function buildPickers() {
     };
   }
 }
-const CATEGORY_ART = { beverage: "🧃", drink: "🧃", snack: "🍪", tea: "🍵",
-  coffee: "☕", supplement: "💊", merch: "👕" };
 
 // ---------- visitor id + funnel/pixel events ----------
 const VID = localStorage.getItem("sf_vid") || crypto.randomUUID();
@@ -138,33 +136,105 @@ pageview("home");
 let CATALOG = { products: [], collections: [] };
 let activeCollection = null;
 
-function art(p, cls = "art", badge = true) {
+const ico = (name, cls = "ico") =>
+  `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+
+// Flavour colour drives the card, the PDP and the cart line. Falls back to
+// brand purple for anything without merchandising meta.
+const flavourOf = (p) => p.colour || "#6c00bf";
+
+/* Stand-in product art until photography exists.
+   Draws the can using the brand's packaging grammar — same geometry, one ring
+   colour per flavour (docs/brand/zen-artwork.html). It lives in a 4:5 slot so
+   dropping real photos in later is a swap with no layout change. */
+function canSVG(p, opts = {}) {
+  const c = flavourOf(p);
+  const id = "cg" + p.id + (opts.k || "");
+  const label = (p.flavour === "pack" ? "" : (pname(p) || "").split(" —")[0]);
+  return `<svg class="can" viewBox="0 0 200 320" role="img"
+    aria-label="${(pname(p) || "").replace(/"/g, "&quot;")} can">
+   <defs>
+     <linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
+       <stop offset="0" stop-color="${c}" stop-opacity=".95"/>
+       <stop offset="1" stop-color="${c}" stop-opacity=".72"/>
+     </linearGradient>
+     <clipPath id="${id}c"><rect x="40" y="26" width="120" height="268" rx="26"/></clipPath>
+   </defs>
+   <ellipse cx="100" cy="300" rx="52" ry="7" fill="rgba(27,24,31,.13)"/>
+   <rect x="40" y="26" width="120" height="268" rx="26" fill="url(#${id})"/>
+   <g clip-path="url(#${id}c)" fill="none" stroke="#fff">
+     <circle cx="100" cy="182" r="10" stroke-width="6" opacity=".95"/>
+     <circle cx="100" cy="182" r="26" stroke-width="4.6" opacity=".8"/>
+     <circle cx="100" cy="182" r="44" stroke-width="3.4" opacity=".6"/>
+     <circle cx="100" cy="182" r="63" stroke-width="2.4" opacity=".42"/>
+     <circle cx="100" cy="182" r="83" stroke-width="1.8" opacity=".26"/>
+   </g>
+   <rect x="40" y="26" width="120" height="268" rx="26" fill="none"
+     stroke="rgba(27,24,31,.10)"/>
+   <path d="M52 32h96" stroke="rgba(255,255,255,.55)" stroke-width="7"
+     stroke-linecap="round"/>
+   <ellipse cx="100" cy="26" rx="60" ry="9" fill="#d9d4dd"/>
+   <ellipse cx="100" cy="24" rx="52" ry="7" fill="#eceaef"/>
+   ${opts.mini ? "" : `<text x="100" y="92" text-anchor="middle" fill="#fff"
+     font-size="21" font-family="Quicksand, sans-serif" font-weight="700"
+     letter-spacing="-.5" aria-hidden="true">zenjoy<tspan fill="#ffd9b8">.</tspan></text>`}
+   ${label && !opts.mini ? `<text x="100" y="266" text-anchor="middle" fill="#fff"
+     font-size="13" font-family="Inter, sans-serif" font-weight="600"
+     opacity=".95" aria-hidden="true">${label}</text>` : ""}
+  </svg>`;
+}
+
+// The concentric-ring mark on its own — flavour chips and pickers.
+function ringSVG(colour, cls = "ring") {
+  return `<svg class="${cls}" viewBox="0 0 120 120" aria-hidden="true">
+    <g fill="none" stroke="${colour}">
+      <circle cx="60" cy="60" r="9" stroke-width="11"/>
+      <circle cx="60" cy="60" r="26" stroke-width="8"/>
+      <circle cx="60" cy="60" r="44" stroke-width="5.5" opacity=".7"/>
+    </g></svg>`;
+}
+
+function art(p, cls = "art", badge = true, mini = false) {
+  const style = ` style="--flavour:${flavourOf(p)};--flavour-soft:${
+    flavourOf(p)}1f"`;
   const media = p.media || [];
   const first = media[0];
   if (first) {
     const alt = (first.alt || p.name).replace(/"/g, "&quot;");
     const count = badge && media.length > 1
       ? `<span class="media-count">${media.length} ${
-          media.some((m) => m.kind === "video") ? "▶" : "📷"}</span>` : "";
-    return `<div class="${cls}"><img src="${first.thumb}" alt="${alt}"
+          media.some((m) => m.kind === "video") ? "video" : "photos"}</span>` : "";
+    return `<div class="${cls}"${style}><img src="${first.thumb}" alt="${alt}"
       loading="lazy">${count}</div>`;
   }
-  if (p.image) return `<div class="${cls}">
+  if (p.image) return `<div class="${cls}"${style}>
     <img src="/media/product/${p.id}" alt="${p.name}" loading="lazy"></div>`;
-  const e = CATEGORY_ART[(p.category || "").toLowerCase()] || "🧃";
-  return `<div class="${cls}">${e}</div>`;
+  return `<div class="${cls}"${style}>${canSVG(p, { k: cls, mini })}</div>`;
 }
 
 function drawTabs() {
   const host = $("#collection-tabs");
   if (!host) return;
+  // Flavour-led filtering: one chip per flavour, colour-coded, plus the
+  // editor's collections. Flavour is the way people actually shop a range.
+  const flavs = [];
+  for (const p of CATALOG.products) {
+    if (!p.flavour || p.flavour === "pack") continue;
+    if (!flavs.some((f) => f.slug === p.flavour)) {
+      flavs.push({ slug: p.flavour, name: pname(p), colour: flavourOf(p) });
+    }
+  }
   const tabs = [{ slug: null, name: "All" },
-    ...CATALOG.collections.map((c) => ({ slug: c.id, name: c.name }))];
-  host.innerHTML = tabs.map((t) =>
-    `<button class="tab ${activeCollection === t.slug ? "on" : ""}"
-      data-col="${t.slug ?? ""}">${t.name}</button>`).join("");
+    ...CATALOG.collections.map((c) => ({ slug: c.id, name: c.name })),
+    ...flavs.map((f) => ({ slug: "f:" + f.slug, name: f.name, colour: f.colour }))];
+  host.innerHTML = tabs.map((tb) =>
+    `<button class="tab ${activeCollection === tb.slug ? "on" : ""}"
+      data-col="${tb.slug ?? ""}">${tb.colour
+        ? `<span class="swatch" style="background:${tb.colour}"></span>` : ""
+      }${tb.name}</button>`).join("");
   host.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
-    activeCollection = b.dataset.col === "" ? null : +b.dataset.col;
+    const v = b.dataset.col;
+    activeCollection = v === "" ? null : (v.startsWith("f:") ? v : +v);
     drawTabs(); drawGrid();
   });
 }
@@ -179,30 +249,37 @@ function drawGrid() {
   const limit = +gridHost.dataset.limit || 0;
   let prods = CATALOG.products;
   if (SEARCH != null) prods = prods.filter((p) => SEARCH.has(p.id));
-  else {
+  else if (typeof activeCollection === "string"
+           && activeCollection.startsWith("f:")) {
+    const f = activeCollection.slice(2);
+    prods = prods.filter((p) => p.flavour === f);
+  } else {
     const col = CATALOG.collections.find(
       (c) => c.id === (activeCollection ?? pinned));
     if (col) prods = prods.filter((p) => col.product_ids.includes(p.id));
   }
   if (limit > 0) prods = prods.slice(0, limit);
   gridHost.innerHTML = prods.map((p) => `
-    <div class="product">
-      <a href="/product/${p.id}-${p.slug}">${art(p)}</a>
-      <a href="/product/${p.id}-${p.slug}"><b>${pname(p)}</b></a>
-      <span class="stars" data-rev="${p.id}">
-        ${p.review_avg ? "★".repeat(Math.round(p.review_avg)) +
-          ` ${p.review_avg} (${p.review_count})` : "☆ be the first to review"}
-      </span>
-      <span class="desc">${pdesc(p)}</span>
-      ${p.variants.length ? `<select class="var-sel" data-varsel="${p.id}">
-        ${p.variants.map((v) => `<option value="${v.id}"
-          data-price="${v.price_cents}" ${v.stock <= 0 ? "disabled" : ""}>
-          ${v.name} — ${money(v.price_cents)}${v.stock <= 0 ? " · sold out" : ""}
-        </option>`).join("")}</select>` : ""}
-      <div class="price-row">
-        <span class="price" data-price-for="${p.id}">
-          ${money(p.variants.length ? p.variants[0].price_cents : p.price_cents)}</span>
-        <button class="add-btn" data-add="${p.id}">${t("add_to_cart", "Add to cart")}</button>
+    <div class="product" style="--flavour:${flavourOf(p)}">
+      ${p.badge ? `<span class="badge">${p.badge}</span>` : ""}
+      <a href="/product/${p.id}-${p.slug}" aria-label="${pname(p)}">${art(p)}</a>
+      <div class="body">
+        <a href="/product/${p.id}-${p.slug}"><b>${pname(p)}</b></a>
+        ${p.review_avg ? `<span class="stars" data-rev="${p.id}">
+            ${ico("star", "ico").repeat(Math.round(p.review_avg))}
+            ${p.review_avg} (${p.review_count})</span>` : ""}
+        <span class="note">${p.note || pdesc(p)}</span>
+        ${p.variants.length ? `<select class="var-sel" data-varsel="${p.id}"
+          aria-label="Choose an option">
+          ${p.variants.map((v) => `<option value="${v.id}"
+            data-price="${v.price_cents}" ${v.stock <= 0 ? "disabled" : ""}>
+            ${v.name} — ${money(v.price_cents)}${v.stock <= 0 ? " · sold out" : ""}
+          </option>`).join("")}</select>` : ""}
+        <div class="price-row">
+          <span class="price" data-price-for="${p.id}">
+            ${money(p.variants.length ? p.variants[0].price_cents : p.price_cents)}</span>
+          <button class="add-btn" data-add="${p.id}">${t("add_to_cart", "Add")}</button>
+        </div>
       </div>
     </div>`).join("") ||
     `<p class="dim">${SEARCH != null ? "Nothing matched — try another word."
@@ -239,7 +316,7 @@ if ($("#search-input")) $("#search-input").oninput = () => {
 function drawSideMenu() {
   const host = $("#side-collections");
   let html = '<div class="side-group">Shop</div>' +
-    '<a class="side-item" href="#shop" data-close>🛍 All products</a>';
+    `<a class="side-item" href="#shop" data-close>${ico("bag")} All products</a>`;
   for (const c of CATALOG.collections) {
     html += `<a class="side-item" href="#shop" data-close
       data-colnav="${c.id}">▸ ${c.name}</a>`;
@@ -256,10 +333,26 @@ function drawSideMenu() {
     a.addEventListener("click", closeMenus));
 }
 
+/* The hero sells the product, so the product has to be in it. Picks the first
+   single flavour and shows its photo if one exists, else the drawn can. */
+function hydrateHero() {
+  const stage = $("#hero-stage");
+  if (!stage) return;
+  const p = CATALOG.products.find((x) => x.flavour && x.flavour !== "pack")
+    || CATALOG.products[0];
+  if (!p) return;
+  const shot = (p.media || [])[0];
+  stage.innerHTML = `<a href="/product/${p.id}-${p.slug}"
+    aria-label="${pname(p)}">${shot
+      ? `<img src="${shot.thumb}" alt="${(shot.alt || pname(p))
+          .replace(/"/g, "&quot;")}" style="border-radius:var(--r-lg)">`
+      : canSVG(p, { k: "hero" })}</a>`;
+}
+
 async function loadCatalog() {
   const r = await fetch("/api/store/catalog");
   CATALOG = await r.json();
-  drawTabs(); drawGrid(); drawSideMenu(); drawReviewWall();
+  drawTabs(); drawGrid(); drawSideMenu(); drawReviewWall(); hydrateHero();
 }
 
 // ---------- review wall + review modal ----------
@@ -268,7 +361,7 @@ async function drawReviewWall() {
   if (!host) return;         // the reviews section renders server-side now
   const top = CATALOG.products.filter((p) => p.review_count > 0).slice(0, 3);
   if (!top.length) {
-    host.innerHTML = `<div class="review-card"><span class="stars">★★★★★</span>
+    host.innerHTML = `<div class="review-card"><span class="stars">${ico("star").repeat(5)}</span>
       <p>"The calm I didn't know a can could hold."</p>
       <span class="who">— early tester · reviews go live with your first customers</span></div>`;
     return;
@@ -278,7 +371,7 @@ async function drawReviewWall() {
     const revs = await (await fetch(`/api/store/reviews/${p.id}`)).json();
     for (const rv of revs.slice(0, 2)) {
       cards.push(`<div class="review-card">
-        <span class="stars">${"★".repeat(rv.rating)}</span>
+        <span class="stars">${ico("star").repeat(rv.rating)}</span>
         <p>"${rv.body || "Love it."}"</p>
         <span class="who">— ${rv.name} · ${p.name}</span></div>`);
     }
@@ -293,13 +386,13 @@ async function openReviews(pid) {
   const revs = await (await fetch(`/api/store/reviews/${pid}`)).json();
   openModal(`<h3>${p.name} — reviews</h3>
     ${revs.map((rv) => `<div class="review-card" style="margin-bottom:10px">
-      <span class="stars">${"★".repeat(rv.rating)}</span>
-      ${rv.verified ? '<span class="dim">✓ verified buyer</span>' : ""}
+      <span class="stars">${ico("star").repeat(rv.rating)}</span>
+      ${rv.verified ? `<span class="dim">${ico("check","ico ico-sm")} verified buyer</span>` : ""}
       <p>${rv.body || ""}</p><span class="who">— ${rv.name}</span></div>`)
       .join("") || '<p class="dim">No reviews yet — start the party.</p>'}
     <h3 style="margin-top:16px">Leave yours</h3>
     <label>Name</label><input id="rv-name" placeholder="Your name">
-    <label>Email <span class="dim">(order email → ✓ verified-buyer badge)</span></label>
+    <label>Email <span class="dim">(order email earns a verified-buyer badge)</span></label>
     <input id="rv-email" type="email">
     <label>Rating</label>
     <select id="rv-rating"><option>5</option><option>4</option><option>3</option>
@@ -316,7 +409,7 @@ async function openReviews(pid) {
         name: $("#rv-name").value, email: $("#rv-email").value,
         rating: +$("#rv-rating").value,
         body: $("#rv-body").value }) });
-    if (r.ok) { toast("Thanks! Your review appears once approved 💜");
+    if (r.ok) { toast("Thanks — your review appears once approved.");
       closeModal(); }
   };
 }
@@ -347,48 +440,85 @@ function addToCart(pid, vid = 0) {
   CART[key] = (CART[key] || 0) + 1;
   saveCart(); drawCart(); openCart();
   funnel("add_to_cart", { product_id: pid });
-  toast("Added to cart 🛒");
+  toast("Added to cart");
 }
+
+const FREE_SHIP_AT = 4000;
 
 function drawCart() {
   const host = $("#cart-items");
   const lines = Object.entries(CART).map(([key, qty]) => {
     const l = cartLine(key);
     if (!l) return "";
-    return `<div class="cart-line">${art(l.p, "art", false)}
-      <div><b>${l.label}</b><span class="dim">${money(l.unit)} each</span></div>
+    return `<div class="cart-line" style="--flavour:${flavourOf(l.p)}">
+      ${art(l.p, "art", false, true)}
+      <div><b>${l.label}</b>
+        <span class="dim">${money(l.unit)} each</span>
+        <span class="line-price">${money(l.unit * qty)}</span></div>
       <div class="qty">
-        <button data-dec="${key}">−</button><span>${qty}</span>
-        <button data-inc="${key}">+</button>
+        <button data-dec="${key}" aria-label="Remove one ${l.label}">
+          ${ico("minus", "ico ico-sm")}</button>
+        <span>${qty}</span>
+        <button data-inc="${key}" aria-label="Add one ${l.label}">
+          ${ico("plus", "ico ico-sm")}</button>
       </div></div>`;
   }).join("");
-  host.innerHTML = lines || '<p class="dim">Cart\'s empty — fix that ✨</p>';
+  host.innerHTML = lines || `<div class="cart-empty">
+    ${ico("bag", "ico")}<p>Your cart is empty.</p>
+    <button class="btn-pill ghost sm" id="cart-empty-shop"
+      style="margin-top:14px">Shop the range</button></div>`;
+  const shopBtn = $("#cart-empty-shop");
+  if (shopBtn) shopBtn.onclick = () => {
+    closeMenus();
+    const shop = document.getElementById("shop");
+    if (shop) shop.scrollIntoView({ behavior: "smooth" });
+    else location.href = "/#shop";
+  };
   host.querySelectorAll("[data-inc]").forEach((b) => b.onclick = () => {
     CART[b.dataset.inc]++; saveCart(); drawCart(); });
   host.querySelectorAll("[data-dec]").forEach((b) => b.onclick = () => {
     const k = b.dataset.dec;
     if (--CART[k] <= 0) delete CART[k];
     saveCart(); drawCart(); });
-  const sub = Object.entries(CART).reduce((a, [key, q]) => {
-    const l = cartLine(key);
-    return a + (l ? l.unit * q : 0); }, 0);
-  let total = sub, note = "";
+
+  const sub = cartSubtotal();
+  let total = sub;
+  const rows = [];
+  if (sub) rows.push(`<div class="row"><span>Subtotal</span>
+    <span>${money(sub)}</span></div>`);
   if (DISCOUNT) {
-    total = Math.max(0, sub - (DISCOUNT.amount_cents || 0));
-    note = `<span class="dim">${DISCOUNT.code} · ${DISCOUNT.label} ·
-      <span class="strike">${money(sub)}</span></span>`;
+    const off = Math.min(DISCOUNT.amount_cents || 0, total);
+    total = Math.max(0, total - off);
+    rows.push(`<div class="row"><span>${DISCOUNT.code} · ${DISCOUNT.label}</span>
+      <span>−${money(off)}</span></div>`);
   }
   if (GIFT) {
     const used = Math.min(GIFT.balance_cents, total);
     total = Math.max(0, total - used);
-    note += `<span class="dim">🎁 ${GIFT.code} −${money(used)}</span>`;
+    rows.push(`<div class="row"><span>Gift card ${GIFT.code}</span>
+      <span>−${money(used)}</span></div>`);
   }
-  const freeShip = DISCOUNT && DISCOUNT.free_shipping;
-  $("#cart-total").innerHTML = sub ?
-    `${t("total", "Total")}: ${money(total)} ${note}
-     <span class="dim">${freeShip ? "🚚 free shipping applied"
-       : sub >= 4000 ? "🎉 free shipping"
-       : t("free_shipping_at", "free shipping at $40")}</span>` : "";
+  const freeShip = (DISCOUNT && DISCOUNT.free_shipping) || sub >= FREE_SHIP_AT;
+  if (sub) rows.push(`<div class="row"><span>Shipping</span>
+    <span>${freeShip ? "Free" : "calculated at checkout"}</span></div>`);
+  if (sub) rows.push(`<div class="row grand"><span>Total</span>
+    <span>${money(total)}</span></div>`);
+  $("#cart-total").innerHTML = rows.join("");
+  $("#checkout-btn").disabled = !sub;
+
+  // Free-shipping meter: the single highest-leverage thing in a cart drawer.
+  const meter = $("#ship-meter");
+  if (meter) {
+    meter.hidden = !sub;
+    if (sub) {
+      const pct = Math.min(100, (sub / FREE_SHIP_AT) * 100);
+      const left = FREE_SHIP_AT - sub;
+      $("#ship-meter-msg").innerHTML = freeShip
+        ? `${ico("truck", "ico ico-sm")} <b>Free shipping unlocked.</b>`
+        : `You're <b>${money(left)}</b> from free shipping.`;
+      $("#ship-meter-fill").style.width = pct + "%";
+    }
+  }
   drawUpsell();
 }
 
@@ -405,7 +535,7 @@ $("#discount-apply").onclick = async () => {
     body: JSON.stringify({ code, subtotal_cents: cartSubtotal() }) });
   const out = await r.json();
   if (r.ok) { DISCOUNT = out;
-    $("#discount-msg").textContent = `${out.label} applied ✔`; }
+    $("#discount-msg").textContent = `${out.label} applied`; }
   else { DISCOUNT = null;
     // The server explains *why* (min spend, expired, already used…).
     $("#discount-msg").textContent = out.detail || "invalid code"; }
@@ -419,7 +549,7 @@ $("#gift-apply").onclick = async () => {
   if (!code) return;
   const r = await fetch(`/api/store/gift-card/${encodeURIComponent(code)}`);
   if (r.ok) { GIFT = await r.json();
-    $("#gift-msg").textContent = `${money(GIFT.balance_cents)} available ✔`; }
+    $("#gift-msg").textContent = `${money(GIFT.balance_cents)} available`; }
   else { GIFT = null; $("#gift-msg").textContent = "no such gift card"; }
   drawCart();
 };
@@ -443,7 +573,7 @@ async function drawUpsell() {
     ${show.map((r) => `<div class="upsell-row">
       ${r.media && r.media[0]
         ? `<img src="${r.media[0].thumb}" alt="">`
-        : '<span class="upsell-emoji">🧃</span>'}
+        : `<span class="upsell-emoji">${canSVG(u, { k: "up", mini: true })}</span>`}
       <div><b>${pname(r)}</b><span class="dim">${money(r.price_cents)}</span></div>
       <button class="btn-pill ghost sm" data-up="${r.id}">Add</button>
     </div>`).join("")}</div>` : "";
@@ -478,7 +608,7 @@ $("#checkout-btn").onclick = async () => {
     <label class="ship-opt"><input type="radio" name="co-pay" value="cod">
       <b>Pay on delivery</b></label>
     <label class="ship-opt"><input type="checkbox" id="co-subscribe">
-      <b>🔁 Make it a monthly box</b>
+      <b>${ico("repeat", "ico ico-sm")} Make it a monthly box</b>
       <span class="dim">skip · pause · cancel any time</span></label>
     <div class="modal-actions">
       <button class="btn-pill ghost sm" data-close-modal>Back</button>
@@ -543,9 +673,9 @@ async function placeOrder() {
       body: JSON.stringify({ email, source: "checkout" }) });
     CART = {}; DISCOUNT = null; saveCart(); drawCart();
     closeModal(); closeMenus();
-    openModal(`<h3>Order placed 💜</h3>
+    openModal(`<h3>Order placed</h3>
       <p>Order <b>#${out.id || out.order_id || ""}</b> is in. Track it any
-      time with the 📦 button.</p>
+      time with the parcel button in the header.</p>
       <div class="modal-actions">
         <button class="btn-pill primary sm" data-close-modal>Done</button>
       </div>`);
@@ -584,7 +714,7 @@ if ($("#subscribe-form")) $("#subscribe-form").onsubmit = async (e) => {
     body: JSON.stringify({ email: $("#subscribe-email").value,
       source: "rewards" }) });
   $("#subscribe-msg").textContent = r.ok ?
-    "Welcome to the club — check your inbox 💌" : "hmm, try a real email?";
+    "Welcome to the club — check your inbox." : "hmm, try a real email?";
   if (r.ok) $("#subscribe-email").value = "";
 };
 
@@ -653,7 +783,7 @@ function acctToken() {
 
 function openAccount() {
   if (!acctToken()) {
-    openModal(`<h3>My account 👤</h3>
+    openModal(`<h3>My account</h3>
       <p class="dim">Sign in with the name (and email) you ordered with.</p>
       <label>Name</label><input id="ac-name" placeholder="Your name">
       <label>Email</label><input id="ac-email" type="email">
@@ -686,7 +816,7 @@ async function drawAccount() {
   const aff = await (await fetch("/api/store/affiliate/stats",
     { headers: H })).json().catch(() => ({ joined: false }));
   const affBlock = aff.joined ? `
-    <h3 style="font-size:15px;margin-top:14px">🔗 Affiliate</h3>
+    <h3 style="font-size:15px;margin-top:14px">Affiliate</h3>
     <div class="ship-opt"><b>${location.origin}/r/${aff.code}</b></div>
     <div class="ship-opt">
       <span class="dim">${aff.clicks} clicks · ${aff.landing_views} landing
@@ -694,7 +824,7 @@ async function drawAccount() {
       <b>${money(aff.earned_cents)} earned</b>
       <a class="btn-pill ghost sm" href="${aff.landing}">view page</a>
     </div>` : `
-    <h3 style="font-size:15px;margin-top:14px">🔗 Affiliate</h3>
+    <h3 style="font-size:15px;margin-top:14px">Affiliate</h3>
     <div class="ship-opt"><span class="dim">Share what you love and earn on
       every order.</span>
       <a class="btn-pill ghost sm" href="/affiliates">Join the program</a>
@@ -702,8 +832,8 @@ async function drawAccount() {
   const cutoffNote = subs.changes_open ? "" :
     `<p class="dim">⏳ Box changes are closed for this cycle (curation is
      locked) — skip reopens after shipping.</p>`;
-  openModal(`<h3>My account 👤</h3>
-    <h3 style="font-size:15px;margin-top:6px">🔁 Monthly boxes</h3>
+  openModal(`<h3>My account</h3>
+    <h3 style="font-size:15px;margin-top:6px">Monthly boxes</h3>
     ${cutoffNote}
     ${(subs.subscriptions || []).map((s) => `
       <div class="ship-opt"><b>${s.name} × ${s.qty}</b>
@@ -716,8 +846,8 @@ async function drawAccount() {
        : `<button class="btn-pill ghost sm" data-sub="${s.id}:resume">resume</button>`}
        <button class="btn-pill ghost sm" data-sub="${s.id}:cancel">cancel</button>
       </div>`).join("") ||
-      '<p class="dim">No boxes yet — tick 🔁 at checkout.</p>'}
-    <h3 style="font-size:15px;margin-top:14px">📦 Orders</h3>
+      '<p class="dim">No boxes yet — choose a monthly box at checkout.</p>'}
+    <h3 style="font-size:15px;margin-top:14px">Orders</h3>
     ${(orders || []).map((o) => `
       <div class="ship-opt"><b>#${o.id}</b>
        <span class="dim">${o.items.map((i) =>
@@ -752,7 +882,7 @@ function openSupport() {
   const saved = JSON.parse(localStorage.getItem("sf_support") || "null");
   if (saved && saved.token) { SUPPORT.token = saved.token;
     SUPPORT.me = saved.me; startSupportChat(); return; }
-  openModal(`<h3>We're here 💬</h3>
+  openModal(`<h3>We're here</h3>
     <p class="dim">Real humans on the other end — same system the team runs
     on. What should we call you?</p>
     <label>Name</label><input id="sp-name" placeholder="Your name">
@@ -785,7 +915,7 @@ async function startSupportChat() {
   const conv = convs.convs.find((c) => c.kind === "support");
   if (!conv) return;
   SUPPORT.conv = conv.id;
-  openModal(`<h3>Support 💬</h3>
+  openModal(`<h3>Support</h3>
     <div id="sp-msgs" style="max-height:300px;overflow-y:auto;
       background:#f7f4fb;border-radius:12px;padding:12px;margin:8px 0;
       display:flex;flex-direction:column;gap:6px"></div>
@@ -793,7 +923,7 @@ async function startSupportChat() {
       <button class="btn-pill primary sm" id="sp-send"
         style="flex:0 0 auto">Send</button></div>
     <p class="dim" style="margin-top:6px">Messages land in the team's inbox
-    (💬 in the ops app) — replies appear here live.</p>`);
+    (support chat in the ops app) — replies appear here live.</p>`);
   const draw = (msgs) => {
     const host = $("#sp-msgs");
     if (!host) return;
@@ -815,7 +945,7 @@ async function startSupportChat() {
     `/api/chat/convs/${SUPPORT.conv}/messages`, { headers: H })).json();
   SUPPORT.lastId = 0; draw(hist);
   if (!hist.length) draw([{ id: 0.5, user_id: -1, name: "Zenjoy",
-    body: "Hey! How can we help? 💜" }]);
+    body: "Hey — how can we help?" }]);
   // realtime: the same /ws the team uses
   try {
     const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -859,16 +989,75 @@ async function confirmPaidReturn() {
       method: "POST", headers: { "Content-Type": "application/json",
         Authorization: "Bearer " + token },
       body: JSON.stringify({ session_id: sid }) });
-    if (r.ok) openModal(`<h3>Payment confirmed 💳</h3>
+    if (r.ok) openModal(`<h3>Payment confirmed</h3>
       <p>Order <b>#${+oid}</b> is paid and in the queue — receipt's in your
-      inbox, and 👤 has the details.</p>
+      inbox, and your account has the details.</p>
       <div class="modal-actions">
         <button class="btn-pill primary sm" data-close-modal>Done</button>
       </div>`);
-    else toast("Payment is still settling — check 👤 in a minute");
+    else toast("Payment is still settling — check your account in a minute");
   } catch {}
 }
-if (qs.get("cancelled")) toast("Checkout cancelled — cart's still here 💜");
+if (qs.get("cancelled")) toast("Checkout cancelled — your cart is still here");
+
+/* ---------- accessibility preferences ----------
+   Applied as classes on <html> so every surface — storefront, product page,
+   cart drawer — inherits them, and persisted per device. Deliberately small:
+   the four controls people actually use, not a widget that repaints the site.
+   The OS-level prefers-reduced-motion is still honoured on its own in CSS. */
+const A11Y_KEY = "sf_a11y";
+let A11Y = { text: "", contrast: false, motion: false, links: false };
+try { A11Y = { ...A11Y, ...JSON.parse(localStorage.getItem(A11Y_KEY) || "{}") }; }
+catch {}
+
+function applyA11y() {
+  const r = document.documentElement;
+  r.classList.remove("a11y-text-lg", "a11y-text-xl");
+  if (A11Y.text) r.classList.add("a11y-text-" + A11Y.text);
+  r.classList.toggle("a11y-contrast", !!A11Y.contrast);
+  r.classList.toggle("a11y-motion", !!A11Y.motion);
+  r.classList.toggle("a11y-links", !!A11Y.links);
+  localStorage.setItem(A11Y_KEY, JSON.stringify(A11Y));
+  const seg = $("#a11y-text");
+  if (seg) {
+    seg.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("on", (b.dataset.size || "") === A11Y.text));
+  }
+  for (const k of ["contrast", "motion", "links"]) {
+    const btn = $("#a11y-" + k);
+    if (!btn) continue;
+    btn.classList.toggle("on", !!A11Y[k]);
+    btn.setAttribute("aria-checked", A11Y[k] ? "true" : "false");
+  }
+}
+
+(function wireA11y() {
+  const fab = $("#a11y-fab"), panel = $("#a11y-panel");
+  if (!fab || !panel) return;
+  const setOpen = (open) => {
+    panel.classList.toggle("open", open);
+    fab.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  fab.onclick = (e) => {
+    e.stopPropagation();
+    setOpen(!panel.classList.contains("open"));
+  };
+  panel.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => setOpen(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") setOpen(false);
+  });
+  $("#a11y-text").querySelectorAll("button").forEach((b) =>
+    b.onclick = () => { A11Y.text = b.dataset.size || ""; applyA11y(); });
+  for (const k of ["contrast", "motion", "links"]) {
+    $("#a11y-" + k).onclick = () => { A11Y[k] = !A11Y[k]; applyA11y(); };
+  }
+  $("#a11y-reset").onclick = () => {
+    A11Y = { text: "", contrast: false, motion: false, links: false };
+    applyA11y();
+  };
+  applyA11y();
+})();
 
 // ---------- boot ----------
 buildPickers();

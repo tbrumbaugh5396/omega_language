@@ -138,6 +138,16 @@ CREATE TABLE IF NOT EXISTS store_meta (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
+-- Merchandising facts the ERP has no opinion about: which flavour a SKU is,
+-- its ring colour, tasting note, nutrition panel and ingredients. Kept beside
+-- the catalog adapter rather than on `products` so swapping the catalog slot
+-- for Shopify or another ERP doesn't take the storefront's copy with it.
+CREATE TABLE IF NOT EXISTS store_product_meta (
+  product_id INTEGER NOT NULL,
+  k TEXT NOT NULL,                         -- flavour|colour|note|nutrition|ingredients|badge
+  v TEXT DEFAULT '',
+  PRIMARY KEY (product_id, k)
+);
 CREATE TABLE IF NOT EXISTS page_sections (
   id INTEGER PRIMARY KEY,
   page_slug TEXT NOT NULL,                 -- 'home' or a store_pages.slug
@@ -259,11 +269,13 @@ THEME_DEFAULT = {
     "description": "Functional beverages that help you unwind. "
                    "Shop the collection.",
     "purple": "#6c00bf", "lavender": "#8a77e1", "orange": "#ff6900",
-    "ink": "#3a3a3a", "bg": "#fdfdfd", "font": "Quicksand",
-    "announce": ["✨ Free shipping over $40",
-                 "🎁 Join rewards — 10% off your first order",
-                 "⏳ Limited-time drops every month",
-                 "💜 Feel good, naturally"],
+    "ink": "#1b181f", "bg": "#fbf9f6",
+    # Two faces, two jobs: `font` is the interface (buttons, prices, nav),
+    # `display_font` is the brand voice (headlines only). Setting one face for
+    # both is what made the old storefront read as cute.
+    "font": "Inter", "display_font": "Fraunces",
+    "announce": ["Free shipping over $40",
+                 "200mg L-theanine in every can"],
     "footer": "© 2026 Zenjoy · powered by business-control",
 }
 
@@ -280,9 +292,87 @@ def get_theme(con) -> dict:
 
 
 def theme_css(t: dict) -> str:
+    """Emit tokens only. store.css owns the rules — the theme just rebinds the
+    variables, so a colour change can't fight the stylesheet's cascade."""
+    disp = t.get("display_font") or THEME_DEFAULT["display_font"]
     return (f":root{{--purple:{t['purple']};--lavender:{t['lavender']};"
-            f"--orange:{t['orange']};--ink:{t['ink']};--bg:{t['bg']};}}"
-            f"body{{font-family:'{t['font']}',system-ui,sans-serif}}")
+            f"--orange:{t['orange']};--ink:{t['ink']};--bg:{t['bg']};"
+            f"--ui:'{t['font']}',system-ui,sans-serif;"
+            f"--display:'{disp}',Georgia,serif;}}")
+
+
+FONT_LINK = (
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;'
+    '500;600;700&family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@'
+    '9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet">')
+
+
+def icon_sprite() -> str:
+    """The shared SVG symbol sheet. One file, injected into every document, so
+    the storefront and the server-rendered product page can't drift apart."""
+    try:
+        return (config.STOREFRONT_DIR / "icons.svg").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def can_svg(pid: int, name: str, colour: str, key: str = "",
+            mini: bool = False) -> str:
+    """Server-side twin of canSVG() in store.js — the drawn can that stands in
+    until real photography exists. Both draw the brand's ring grammar, so the
+    product page and the grid show the same thing."""
+    c = colour or "#6c00bf"
+    gid = f"pc{pid}{key}"
+    label = _html.escape((name or "").split(" —")[0])
+    return f"""<svg class="can" viewBox="0 0 200 320" role="img"
+ aria-label="{_html.escape(name or '')} can">
+ <defs><linearGradient id="{gid}" x1="0" y1="0" x2="1" y2="1">
+ <stop offset="0" stop-color="{c}" stop-opacity=".95"/>
+ <stop offset="1" stop-color="{c}" stop-opacity=".72"/></linearGradient>
+ <clipPath id="{gid}c"><rect x="40" y="26" width="120" height="268" rx="26"/></clipPath></defs>
+ <ellipse cx="100" cy="300" rx="52" ry="7" fill="rgba(27,24,31,.13)"/>
+ <rect x="40" y="26" width="120" height="268" rx="26" fill="url(#{gid})"/>
+ <g clip-path="url(#{gid}c)" fill="none" stroke="#fff">
+ <circle cx="100" cy="182" r="10" stroke-width="6" opacity=".95"/>
+ <circle cx="100" cy="182" r="26" stroke-width="4.6" opacity=".8"/>
+ <circle cx="100" cy="182" r="44" stroke-width="3.4" opacity=".6"/>
+ <circle cx="100" cy="182" r="63" stroke-width="2.4" opacity=".42"/>
+ <circle cx="100" cy="182" r="83" stroke-width="1.8" opacity=".26"/></g>
+ <rect x="40" y="26" width="120" height="268" rx="26" fill="none"
+ stroke="rgba(27,24,31,.10)"/>
+ <path d="M52 32h96" stroke="rgba(255,255,255,.55)" stroke-width="7"
+ stroke-linecap="round"/>
+ <ellipse cx="100" cy="26" rx="60" ry="9" fill="#d9d4dd"/>
+ <ellipse cx="100" cy="24" rx="52" ry="7" fill="#eceaef"/>
+ {"" if mini else f'''<text x="100" y="92" text-anchor="middle" fill="#fff"
+ font-size="21" font-family="Quicksand, sans-serif" font-weight="700"
+ letter-spacing="-.5" aria-hidden="true">zenjoy<tspan fill="#ffd9b8">.</tspan></text>
+ <text x="100" y="266" text-anchor="middle" fill="#fff" font-size="13"
+ font-family="Inter, sans-serif" font-weight="600" opacity=".95"
+ aria-hidden="true">{label}</text>'''}
+</svg>"""
+
+
+def product_meta(con, pid: int) -> dict:
+    return {r["k"]: r["v"] for r in con.execute(
+        "SELECT k, v FROM store_product_meta WHERE product_id=?",
+        (pid,)).fetchall()}
+
+
+def asset_version() -> str:
+    """Newest mtime across the storefront's static assets, as a cache key.
+
+    Without this a deploy leaves every returning customer on the previous
+    CSS/JS until they hard-reload — the service worker is network-first, so
+    the stale copy comes from ordinary HTTP caching rather than the SW."""
+    newest = 0.0
+    for name in ("store.css", "store.js", "index.html"):
+        try:
+            newest = max(newest, (config.STOREFRONT_DIR / name).stat().st_mtime)
+        except OSError:
+            pass
+    return str(int(newest))
 
 
 def render_shell(con, body_html: str, *, title=None, description=None) -> str:
@@ -290,6 +380,9 @@ def render_shell(con, body_html: str, *, title=None, description=None) -> str:
     from . import content as content_mod
     t = get_theme(con)
     shell = (config.STOREFRONT_DIR / "index.html").read_text(encoding="utf-8")
+    v = asset_version()
+    shell = (shell.replace('href="/store.css"', f'href="/store.css?v={v}"')
+                  .replace('src="/store.js"', f'src="/store.js?v={v}"'))
     announce = "".join(f"<span>{sect.esc(a)}</span>"
                        for a in (t.get("announce") or []) * 2)
     nav = content_mod.menus(con)
@@ -301,6 +394,7 @@ def render_shell(con, body_html: str, *, title=None, description=None) -> str:
             f'<a href="{sect.esc(m["url"])}">{sect.esc(m["label"])}</a>'
             for m in nav.get("footer", [])),
         "<!--I18N-->": content_mod.i18n_payload(con),
+        "<!--ICONS-->": icon_sprite(),
         "<!--SECTIONS-->": body_html,
         "<!--ANNOUNCE-->": announce,
         "<!--THEME-CSS-->": f"<style>{theme_css(t)}</style>",
@@ -524,6 +618,9 @@ def catalog(con=Depends(get_con)):
     for m in media_json(con.execute(
             "SELECT * FROM product_media ORDER BY position, id").fetchall()):
         media.setdefault(m["product_id"], []).append(m)
+    meta: dict[int, dict] = {}
+    for m in con.execute("SELECT * FROM store_product_meta").fetchall():
+        meta.setdefault(m["product_id"], {})[m["k"]] = m["v"]
     for p in prods:
         rv = reviews.get(p["id"])
         p["review_count"] = rv["n"] if rv else 0
@@ -531,6 +628,16 @@ def catalog(con=Depends(get_con)):
         p["variants"] = variants.get(p["id"], [])
         p["media"] = media.get(p["id"], [])
         p["slug"] = slugify(p["name"])
+        md = meta.get(p["id"], {})
+        p["flavour"] = md.get("flavour", "")
+        p["colour"] = md.get("colour", "")
+        p["note"] = md.get("note", "")
+        p["ingredients"] = md.get("ingredients", "")
+        p["badge"] = md.get("badge", "")
+        try:
+            p["nutrition"] = json.loads(md.get("nutrition") or "{}")
+        except ValueError:
+            p["nutrition"] = {}
     return {"products": prods, "collections": cols}
 
 
@@ -889,6 +996,14 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
     name = _html.escape(p["name"])
     desc = _html.escape(p["description"] or f"{p['name']} from Zenjoy.")
     canonical = f"{base}/product/{pid}-{slugify(p['name'])}"
+    meta = product_meta(con, pid)
+    colour = meta.get("colour") or "#6c00bf"
+    note = _html.escape(meta.get("note") or "")
+    ingredients = _html.escape(meta.get("ingredients") or "")
+    try:
+        nutri = json.loads(meta.get("nutrition") or "{}")
+    except ValueError:
+        nutri = {}
     media = media_json(con.execute(
         "SELECT * FROM product_media WHERE product_id=? ORDER BY position, id",
         (pid,)).fetchall())
@@ -948,7 +1063,7 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
             f' data-alt="{_html.escape(m["alt"] or p["name"])}">'
             f'<img src="{m["thumb"]}" alt="{_html.escape(m["alt"] or p["name"])}"'
             f' loading="lazy">'
-            f'{"<span class=play>▶</span>" if m["kind"] == "video" else ""}'
+            f'{sect.icon("play", "ico play") if m["kind"] == "video" else ""}'
             f'</button>' for m in media) if len(media) > 1 else ""
         art = f'<div class="pp-stage">{stage}</div>' + (
             f'<div class="pp-strip">{strip}</div>' if strip else "")
@@ -956,7 +1071,7 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
         art = (f'<div class="pp-stage"><img src="/media/product/{pid}"'
                f' alt="{name}"></div>')
     else:
-        art = '<div class="pp-stage"><span class="big-art">🧃</span></div>'
+        art = f'<div class="pp-stage">{can_svg(pid, p["name"], colour)}</div>'
     var_html = ""
     if variants:
         opts = "".join(
@@ -967,25 +1082,81 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
             for v in variants)
         var_html = f'<select id="pp-var" class="var-sel">{opts}</select>'
     revs_html = "".join(
-        f'<div class="review-card" style="margin-bottom:10px">'
-        f'<span class="stars">{"★" * r["rating"]}</span>'
-        f'<p>{_html.escape(r["body"] or "")}</p>'
-        f'<span class="who">— {_html.escape(r["name"])}</span></div>'
+        f'<div class="review-card" style="margin-bottom:12px">'
+        f'<span class="stars">{sect.icon("star") * r["rating"]}</span>'
+        f'<p>&ldquo;{_html.escape(r["body"] or "")}&rdquo;</p>'
+        f'<span class="who">{_html.escape(r["name"])}</span></div>'
         for r in revs) or '<p class="dim">No reviews yet.</p>'
+
+    # Flavour switcher — the range, not a dropdown. Each sibling keeps its own
+    # ring colour so the page recolours as you move through the family.
+    sibs = con.execute(
+        "SELECT p.id, p.name, m.v colour FROM products p"
+        " JOIN store_product_meta m ON m.product_id=p.id AND m.k='colour'"
+        " WHERE p.active=1 AND p.id IN (SELECT product_id FROM"
+        " store_product_meta WHERE k='flavour' AND v NOT IN ('','pack'))"
+        " ORDER BY p.name").fetchall()
+    flav_html = ""
+    if len(sibs) > 1:
+        opts = "".join(
+            f'<a class="flav-opt{" on" if s["id"] == pid else ""}"'
+            f' href="/product/{s["id"]}-{slugify(s["name"])}">'
+            f'<svg class="ring" viewBox="0 0 120 120" aria-hidden="true">'
+            f'<g fill="none" stroke="{s["colour"]}">'
+            f'<circle cx="60" cy="60" r="9" stroke-width="11"/>'
+            f'<circle cx="60" cy="60" r="26" stroke-width="8"/>'
+            f'<circle cx="60" cy="60" r="44" stroke-width="5.5" opacity=".7"/>'
+            f'</g></svg>{_html.escape(s["name"].split(" ")[0])}</a>'
+            for s in sibs)
+        flav_html = (f'<div class="pp-block"><span class="eyebrow">'
+                     f'Flavour</span>'
+                     f'<div class="flavour-picker">{opts}</div></div>')
+
+    nutri_html = ""
+    if nutri:
+        rows = "".join(
+            f'<div class="nutri-row"><span>{_html.escape(str(k))}</span>'
+            f'<b>{_html.escape(str(v))}</b></div>' for k, v in nutri.items())
+        nutri_html = (
+            f'<div class="pp-block"><span class="eyebrow">Per can</span>'
+            f'<div class="nutri">{rows}</div>'
+            + (f'<p class="ingredients" style="margin-top:12px">'
+               f'<b>Ingredients.</b> {ingredients}</p>' if ingredients else "")
+            + '</div>')
+
+    unit = min(prices)
+    sub_price = int(round(unit * 0.85))
+    buy_html = (
+        f'<div class="pp-block"><span class="eyebrow">How often</span>'
+        f'<div class="buy-mode">'
+        f'<label class="buy-opt on" data-mode="once">'
+        f'<input type="radio" name="buymode" value="once" checked>'
+        f'<span class="lbl"><b>One time</b>'
+        f'<span>${unit / 100:.2f} — no commitment</span></span></label>'
+        f'<label class="buy-opt" data-mode="sub">'
+        f'<input type="radio" name="buymode" value="sub">'
+        f'<span class="lbl"><b>Subscribe &amp; save</b>'
+        f'<span>${sub_price / 100:.2f} — every month, skip or cancel any time'
+        f'</span></span><span class="save">Save 15%</span></label>'
+        f'</div></div>')
     # "You may also like" — co-purchase first, then same category.
     from . import promos as promos_mod
     recs = promos_mod.recommendations(pid, 4, con)
     recs_html = ""
     if recs:
         cards = "".join(
-            f'<a class="product" href="/product/{r["id"]}-{r["slug"]}">'
+            f'<a class="product" href="/product/{r["id"]}-{r["slug"]}"'
+            f' style="--flavour:{product_meta(con, r["id"]).get("colour") or "#6c00bf"}">'
             + (f'<div class="art"><img src="{r["media"][0]["thumb"]}"'
                f' alt="" loading="lazy"></div>' if r.get("media")
-               else '<div class="art">🧃</div>')
-            + f'<b>{_html.escape(r["name"])}</b>'
+               else f'<div class="art">'
+                    f'{can_svg(r["id"], r["name"], product_meta(con, r["id"]).get("colour") or "", "rec")}'
+                    f'</div>')
+            + f'<div class="body"><b>{_html.escape(r["name"])}</b>'
             f'<div class="price-row"><span class="price">'
-            f'${r["price_cents"] / 100:,.2f}</span></div></a>' for r in recs)
-        recs_html = (f'<h2 style="margin-top:40px">You may also like</h2>'
+            f'${r["price_cents"] / 100:,.2f}</span></div></div></a>'
+            for r in recs)
+        recs_html = (f'<h2 style="margin-top:56px">You may also like</h2>'
                      f'<div class="grid">{cards}</div>')
     page = f"""<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -997,31 +1168,59 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
 <meta property="og:description" content="{desc[:200]}">
 {f'<meta property="og:image" content="{img}">' if img else ''}
 <meta property="og:url" content="{canonical}">
-<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/store.css">
+{FONT_LINK}
+<link rel="stylesheet" href="/store.css?v={asset_version()}">
+<style>:root{{--flavour:{colour};--flavour-soft:{colour}1c}}</style>
 <script type="application/ld+json">{json.dumps(ld)}</script></head>
-<body><nav class="topbar"><a class="brand" href="/">zenjoy<span class="brand-dot">.</span></a>
-<div class="top-actions"><a class="btn-pill ghost sm" href="/"
- style="color:var(--purple);border:2px solid var(--purple)">← Shop</a></div></nav>
-<main class="section" style="padding-top:34px">
+<body>{icon_sprite()}
+<a class="skip-link" href="#pp-main">Skip to content</a>
+<nav class="topbar"><a class="brand" href="/">zenjoy<span class="brand-dot">.</span></a>
+<div class="top-actions"><a class="btn-pill ghost sm" href="/">
+ {sect.icon("arrow", "ico ico-sm")} Back to shop</a>
+ <a class="btn-pill dark sm" href="/?cart=1">
+ {sect.icon("cart", "ico ico-sm")} Cart</a></div></nav>
+<main class="section" style="padding-top:40px" id="pp-main">
  <div class="pp-grid">
   <div class="pp-art">{art}</div>
-  <div>
-   <h2 style="margin-bottom:6px">{name}</h2>
-   <span class="stars">{("★" * round(agg["avg"]) + f" {agg['avg']:.1f} ({agg['n']})") if agg["n"] else "☆ no reviews yet"}</span>
-   <p style="margin:14px 0">{desc}</p>
-   {var_html}
-   <div class="price-row" style="margin-top:14px;max-width:340px">
-    <span class="price" id="pp-price">${min(prices) / 100:.2f}</span>
-    <button class="add-btn" id="pp-add"{"" if in_stock else " disabled"}>
-     {"Add to cart" if in_stock else "Sold out"}</button>
+  <div class="pp-info">
+   <h1>{name}</h1>
+   {f'<p class="pp-tagline">{note}</p>' if note else ''}
+   <span class="stars">{(sect.icon("star") * round(agg["avg"]) + f' {agg["avg"]:.1f} ({agg["n"]} reviews)') if agg["n"] else ''}</span>
+   <div class="pp-price"><span class="amt" id="pp-price">${min(prices) / 100:.2f}</span>
+    <span class="dim">12 fl oz can</span></div>
+   <p style="color:var(--ink-2)">{desc}</p>
+   {flav_html}
+   {f'<div class="pp-block"><span class="eyebrow">Options</span>{var_html}</div>' if var_html else ''}
+   {buy_html}
+   <div class="pp-block">
+    <div class="buy-row">
+     <span class="qty-step">
+      <button id="pp-minus" aria-label="Decrease quantity">{sect.icon("minus", "ico ico-sm")}</button>
+      <span id="pp-qty">1</span>
+      <button id="pp-plus" aria-label="Increase quantity">{sect.icon("plus", "ico ico-sm")}</button>
+     </span>
+     <button class="btn-pill primary" id="pp-add"{"" if in_stock else " disabled"}>
+      {"Add to cart" if in_stock else "Sold out"}</button>
+    </div>
+    <p class="dim" style="margin-top:12px">
+     {sect.icon("truck", "ico ico-sm")} Free shipping over $40 ·
+     {sect.icon("shield", "ico ico-sm")} Love it or we make it right</p>
    </div>
+   {nutri_html}
   </div>
  </div>
  {recs_html}
- <h2 style="margin-top:40px">Reviews</h2>
+ <h2 style="margin-top:56px">Reviews</h2>
  {revs_html}
 </main>
+<div class="sticky-buy" id="sticky-buy">
+ <div class="sticky-inner">
+  {can_svg(pid, p["name"], colour, "sticky", mini=True)}
+  <span class="who"><b>{name}</b><span class="dim" id="sticky-price">${min(prices) / 100:.2f}</span></span>
+  <button class="btn-pill primary" id="sticky-add"{"" if in_stock else " disabled"}>
+   {"Add to cart" if in_stock else "Sold out"}</button>
+ </div>
+</div>
 <script>
 let v=localStorage.getItem('sf_vid')||crypto.randomUUID();localStorage.setItem('sf_vid',v);
 fetch('/api/store/track',{{method:'POST',headers:{{'Content-Type':'application/json'}},
@@ -1029,8 +1228,40 @@ fetch('/api/store/track',{{method:'POST',headers:{{'Content-Type':'application/j
 fetch('/api/events',{{method:'POST',headers:{{'Content-Type':'application/json'}},
  body:JSON.stringify({{visitor_id:v,step:'view_product',product_id:{pid}}})}}).catch(()=>{{}});
 const sel=document.getElementById('pp-var');
-if(sel)sel.onchange=()=>{{document.getElementById('pp-price').textContent=
- '$'+(+sel.selectedOptions[0].dataset.price/100).toFixed(2);}};
+const SUB_RATE=0.85;
+let qty=1, mode='once';
+function unitPrice(){{
+ const base=sel?+sel.selectedOptions[0].dataset.price:{unit};
+ return mode==='sub'?Math.round(base*SUB_RATE):base;
+}}
+function paint(){{
+ const each=unitPrice();
+ document.getElementById('pp-price').textContent='$'+(each/100).toFixed(2);
+ const s=document.getElementById('sticky-price');
+ if(s)s.textContent='$'+(each*qty/100).toFixed(2)+(qty>1?' · '+qty+' cans':'');
+ document.getElementById('pp-qty').textContent=qty;
+}}
+if(sel)sel.onchange=paint;
+document.getElementById('pp-plus').onclick=()=>{{qty++;paint();}};
+document.getElementById('pp-minus').onclick=()=>{{if(qty>1)qty--;paint();}};
+document.querySelectorAll('.buy-opt').forEach(function(o){{
+ o.onclick=function(){{
+  mode=o.dataset.mode;
+  document.querySelectorAll('.buy-opt').forEach(function(x){{
+   x.classList.toggle('on',x===o);}});
+  o.querySelector('input').checked=true;
+  paint();
+ }};}});
+paint();
+// Sticky buy bar appears once the real one scrolls off — the single most
+// reliable conversion lift on a long product page.
+const realBuy=document.getElementById('pp-add');
+const sticky=document.getElementById('sticky-buy');
+if(window.IntersectionObserver&&realBuy&&sticky){{
+ new IntersectionObserver(function(es){{
+  sticky.classList.toggle('show',!es[0].isIntersecting&&es[0].boundingClientRect.top<0);
+ }},{{threshold:0}}).observe(realBuy);
+}}
 document.querySelectorAll('.pp-thumb').forEach(function(b){{
  b.onclick=function(){{
   var stage=document.querySelector('.pp-stage');
@@ -1047,12 +1278,20 @@ document.querySelectorAll('.pp-thumb').forEach(function(b){{
  }};}});
 if(document.querySelector('.pp-thumb'))
  document.querySelector('.pp-thumb').classList.add('on');
-document.getElementById('pp-add').onclick=()=>{{
+function addToCart(){{
  const cart=JSON.parse(localStorage.getItem('sf_cart')||'{{}}');
  const key='{pid}:'+(sel?sel.value:0);
- cart[key]=(cart[key]||0)+1;
+ cart[key]=(cart[key]||0)+qty;
  localStorage.setItem('sf_cart',JSON.stringify(cart));
- location.href='/?cart=1';}};
+ if(mode==='sub')localStorage.setItem('sf_sub_intent','{pid}');
+ fetch('/api/events',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+  body:JSON.stringify({{visitor_id:v,step:'add_to_cart',product_id:{pid}}})}})
+  .catch(()=>{{}});
+ location.href='/?cart=1';
+}}
+document.getElementById('pp-add').onclick=addToCart;
+const sa=document.getElementById('sticky-add');
+if(sa)sa.onclick=addToCart;
 </script></body></html>"""
     return HTMLResponse(page)
 

@@ -15,32 +15,43 @@
 </head>
 <body>
 
+<!--ICONS-->
+
+<a class="skip-link" href="#page-body">Skip to content</a>
+
 <div class="announce" id="announce">
   <div class="announce-track" id="announce-track"><!--ANNOUNCE--></div>
 </div>
 
 <header class="topbar">
-  <button class="icon-btn" id="menu-btn" aria-label="menu">☰</button>
+  <button class="icon-btn" id="menu-btn" aria-label="Menu">
+    <svg class="ico" aria-hidden="true"><use href="#i-menu"/></svg></button>
   <a class="brand" href="/"><!--BRAND--></a>
   <nav class="top-links"><!--NAV--></nav>
   <div class="top-actions">
-    <select id="locale-select" class="mini-select" hidden></select>
-    <select id="currency-select" class="mini-select" hidden></select>
-    <button class="icon-btn" id="account-btn" title="My account">👤</button>
-    <button class="icon-btn" id="track-btn" title="Track my order">📦</button>
-    <button class="icon-btn" id="support-btn" title="Support">💬</button>
-    <button class="cart-btn" id="cart-btn">🛒 <span class="cart-count" id="cart-count">0</span></button>
+    <select id="locale-select" class="mini-select" hidden aria-label="Language"></select>
+    <select id="currency-select" class="mini-select" hidden aria-label="Currency"></select>
+    <button class="icon-btn" id="account-btn" title="My account" aria-label="My account">
+      <svg class="ico" aria-hidden="true"><use href="#i-user"/></svg></button>
+    <button class="icon-btn" id="track-btn" title="Track my order" aria-label="Track my order">
+      <svg class="ico" aria-hidden="true"><use href="#i-box"/></svg></button>
+    <button class="icon-btn" id="support-btn" title="Support" aria-label="Support">
+      <svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg></button>
+    <button class="cart-btn" id="cart-btn" aria-label="Open cart">
+      <svg class="ico ico-sm" aria-hidden="true"><use href="#i-cart"/></svg>
+      <span class="cart-count" id="cart-count">0</span></button>
   </div>
 </header>
 
-<aside class="side-menu" id="side-menu">
+<aside class="side-menu" id="side-menu" aria-label="Main menu">
   <div class="side-head">
-    <b>Menu</b><button class="icon-btn" id="menu-close">✕</button>
+    <b>Menu</b><button class="icon-btn" id="menu-close" aria-label="Close menu">
+      <svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button>
   </div>
   <div id="side-collections"></div>
   <div class="side-foot">
-    <a href="#rewards">🎁 Rewards</a>
-    <a href="#" id="side-track">📦 Track order</a>
+    <a href="#rewards"><svg class="ico" aria-hidden="true"><use href="#i-gift"/></svg> Rewards</a>
+    <a href="#" id="side-track"><svg class="ico" aria-hidden="true"><use href="#i-box"/></svg> Track order</a>
     <a href="/admin" class="dim-link">Team sign-in →</a>
   </div>
 </aside>
@@ -48,7 +59,7 @@
 
 <section class="promo-strip" id="promo-strip" hidden>
   <div class="promo-inner">
-    <span class="promo-flame">⏳</span>
+    <span class="promo-flame"><svg class="ico" aria-hidden="true"><use href="#i-clock"/></svg></span>
     <div><b id="promo-name"></b><span class="dim" id="promo-body"></span></div>
     <span class="countdown" id="promo-countdown"></span>
   </div>
@@ -69,24 +80,58 @@
 </footer>
 
 <!-- cart drawer -->
-<aside class="cart-drawer" id="cart-drawer">
+<aside class="cart-drawer" id="cart-drawer" aria-label="Your cart">
   <div class="side-head"><b>Your cart</b>
-    <button class="icon-btn" id="cart-close">✕</button></div>
+    <button class="icon-btn" id="cart-close" aria-label="Close cart">
+      <svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button></div>
+  <div class="ship-meter" id="ship-meter" hidden>
+    <p id="ship-meter-msg"></p>
+    <div class="bar"><div class="fill" id="ship-meter-fill" style="width:0"></div></div>
+  </div>
   <div class="cart-items" id="cart-items"></div>
   <div id="cart-upsell"></div>
-  <div class="cart-discount">
-    <input id="discount-input" placeholder="Discount code">
-    <button class="btn-pill ghost sm" id="discount-apply">Apply</button>
-    <span class="dim" id="discount-msg"></span>
+  <div class="cart-foot">
+    <div class="cart-discount">
+      <input id="discount-input" placeholder="Discount code" aria-label="Discount code">
+      <button class="btn-pill ghost sm" id="discount-apply">Apply</button>
+      <span class="dim" id="discount-msg"></span>
+    </div>
+    <div class="cart-discount">
+      <input id="gift-input" placeholder="Gift card code" aria-label="Gift card code">
+      <button class="btn-pill ghost sm" id="gift-apply">Apply</button>
+      <span class="dim" id="gift-msg"></span>
+    </div>
+    <div class="cart-total" id="cart-total"></div>
+    <button class="btn-pill primary" id="checkout-btn">Checkout
+      <svg class="ico ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg></button>
   </div>
-  <div class="cart-discount">
-    <input id="gift-input" placeholder="Gift card code">
-    <button class="btn-pill ghost sm" id="gift-apply">Apply</button>
-    <span class="dim" id="gift-msg"></span>
-  </div>
-  <div class="cart-total" id="cart-total"></div>
-  <button class="btn-pill primary wide" id="checkout-btn">Checkout →</button>
 </aside>
+
+<!-- accessibility preferences -->
+<button class="a11y-fab" id="a11y-fab" aria-label="Accessibility options"
+        aria-expanded="false" aria-controls="a11y-panel">
+  <svg class="ico" aria-hidden="true"><use href="#i-a11y"/></svg></button>
+<div class="a11y-panel" id="a11y-panel" role="dialog" aria-label="Accessibility options">
+  <h4>Accessibility</h4>
+  <p class="dim" style="font-size:13px;margin-bottom:6px">Saved on this device.</p>
+  <div class="a11y-row"><span>Text size</span>
+    <span class="a11y-seg" id="a11y-text" role="group" aria-label="Text size">
+      <button data-size="" class="on">A</button>
+      <button data-size="lg">A+</button>
+      <button data-size="xl">A++</button>
+    </span></div>
+  <div class="a11y-row"><span id="a11y-contrast-lbl">High contrast</span>
+    <button class="a11y-toggle" id="a11y-contrast" role="switch"
+            aria-checked="false" aria-labelledby="a11y-contrast-lbl"></button></div>
+  <div class="a11y-row"><span id="a11y-motion-lbl">Reduce motion</span>
+    <button class="a11y-toggle" id="a11y-motion" role="switch"
+            aria-checked="false" aria-labelledby="a11y-motion-lbl"></button></div>
+  <div class="a11y-row"><span id="a11y-links-lbl">Underline links</span>
+    <button class="a11y-toggle" id="a11y-links" role="switch"
+            aria-checked="false" aria-labelledby="a11y-links-lbl"></button></div>
+  <button class="btn-pill ghost sm wide" id="a11y-reset"
+          style="margin-top:12px">Reset</button>
+</div>
 
 <!-- modals -->
 <div class="modal" id="modal">

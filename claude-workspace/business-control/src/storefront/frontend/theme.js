@@ -268,8 +268,10 @@ const THEME_FIELDS = [
   { k: "orange", t: "color", label: "Accent colour" },
   { k: "ink", t: "color", label: "Text colour" },
   { k: "bg", t: "color", label: "Background" },
-  { k: "font", t: "select", label: "Font",
-    options: ["Quicksand", "Inter", "Fraunces"] },
+  { k: "font", t: "select", label: "Interface font (buttons, prices, nav)",
+    options: ["Inter", "Quicksand", "Fraunces"] },
+  { k: "display_font", t: "select", label: "Display font (headlines only)",
+    options: ["Fraunces", "Inter", "Quicksand"] },
   { k: "footer", t: "text", label: "Footer note" },
 ];
 

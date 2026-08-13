@@ -8,6 +8,7 @@ type means adding one entry here: the editor UI needs no changes.
 """
 import html as _html
 import json
+import re
 
 
 def esc(v) -> str:
@@ -18,24 +19,51 @@ def esc(v) -> str:
 SECTION_TYPES = {
     "hero": {
         "label": "Hero banner", "icon": "🌊",
-        "help": "Full-width opener with headline and buttons.",
+        "help": "Opener with headline, one button and the product beside it.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
-             "default": "Feel good,\nnaturally."},
+             "default": "Some days come\nat you in waves."},
             {"k": "sub", "t": "textarea", "label": "Sub-heading",
-             "default": "Functional beverages crafted to help you unwind — "
-                        "no crash, no junk, all joy."},
+             "default": "Sparkling tea with 200mg L-theanine — calm that "
+                        "doesn't cloud. And then it doesn't."},
             {"k": "cta_text", "t": "text", "label": "Primary button",
-             "default": "Shop the collection"},
+             "default": "Shop the range"},
             {"k": "cta_link", "t": "text", "label": "Primary link",
              "default": "#shop"},
             {"k": "cta2_text", "t": "text", "label": "Secondary button",
-             "default": "Get 10% off"},
+             "default": ""},
             {"k": "cta2_link", "t": "text", "label": "Secondary link",
              "default": "#rewards"},
+            {"k": "layout", "t": "select", "label": "Layout",
+             "options": ["split", "centred"], "default": "split"},
+            {"k": "show_product", "t": "checkbox",
+             "label": "Show product beside the copy", "default": True},
+            {"k": "stat1", "t": "text", "label": "Stat 1",
+             "default": "200mg|L-theanine per can"},
+            {"k": "stat2", "t": "text", "label": "Stat 2",
+             "default": "15|calories"},
+            {"k": "stat3", "t": "text", "label": "Stat 3",
+             "default": "5|flavours to find yours"},
             {"k": "bg", "t": "select", "label": "Background",
-             "options": ["shader", "gradient", "image"], "default": "shader"},
+             "options": ["shader", "gradient", "image"], "default": "gradient"},
             {"k": "media_id", "t": "media", "label": "Background image"},
+        ]},
+    "benefits": {
+        "label": "Benefit strip", "icon": "✅",
+        "help": "The nutrition and claims row — the numbers that sell a "
+                "functional drink. Keep to four or five.",
+        "fields": [
+            {"k": "items", "t": "repeat", "label": "Benefits",
+             "item": [{"k": "icon", "t": "text", "label": "Icon name"},
+                      {"k": "value", "t": "text", "label": "Value"},
+                      {"k": "label", "t": "text", "label": "Label"}],
+             "default": [
+                 {"icon": "leaf", "value": "200mg", "label": "L-theanine"},
+                 {"icon": "drop", "value": "15", "label": "calories"},
+                 {"icon": "sparkle", "value": "2g", "label": "sugar"},
+                 {"icon": "shield", "value": "0", "label": "artificial anything"},
+                 {"icon": "truck", "value": "Free", "label": "shipping over $40"},
+             ]},
         ]},
     "product_grid": {
         "label": "Product grid", "icon": "🛍",
@@ -71,17 +99,20 @@ SECTION_TYPES = {
              "default": "What's inside?"},
             {"k": "items", "t": "list", "label": "Columns",
              "item_fields": [
-                 {"k": "icon", "t": "text", "label": "Emoji", "default": "🌿"},
+                 {"k": "icon", "t": "text", "label": "Icon name",
+                  "default": "leaf"},
                  {"k": "title", "t": "text", "label": "Title",
                   "default": "Clean ingredients"},
                  {"k": "text", "t": "textarea", "label": "Text",
                   "default": "Nothing artificial. Everything pronounceable."}],
              "default": [
-                 {"icon": "🌿", "title": "Clean ingredients",
+                 {"icon": "leaf", "title": "Clean ingredients",
                   "text": "Nothing artificial. Everything pronounceable."},
-                 {"icon": "🧘", "title": "Calm, not sleepy",
-                  "text": "Takes the edge off without taking you out."},
-                 {"icon": "🚚", "title": "Fresh to your door",
+                 {"icon": "drop", "title": "Calm, not sleepy",
+                  "text": "L-theanine takes the edge off without taking you "
+                          "out. No crash, because there's nothing to crash "
+                          "from."},
+                 {"icon": "truck", "title": "Fresh to your door",
                   "text": "Small batches, shipped fast, tracked all the way."}]},
         ]},
     "image_banner": {
@@ -135,7 +166,7 @@ SECTION_TYPES = {
         "help": "Rewards / newsletter capture.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
-             "default": "Join the club 💜"},
+             "default": "Join the club"},
             {"k": "body", "t": "textarea", "label": "Body",
              "default": "10% off your first order, early access to drops, "
                         "and rewards on every sip."},
@@ -150,18 +181,19 @@ SECTION_TYPES = {
              "default": "In the wild"},
             {"k": "items", "t": "list", "label": "Profiles",
              "item_fields": [
-                 {"k": "icon", "t": "text", "label": "Emoji", "default": "📸"},
+                 {"k": "icon", "t": "text", "label": "Icon name",
+                  "default": "instagram"},
                  {"k": "handle", "t": "text", "label": "Handle",
                   "default": "@zenjoy"},
                  {"k": "network", "t": "text", "label": "Network",
                   "default": "Instagram"},
                  {"k": "link", "t": "text", "label": "Link", "default": "#"}],
              "default": [
-                 {"icon": "📸", "handle": "@zenjoy", "network": "Instagram",
+                 {"icon": "instagram", "handle": "@zenjoy",
+                  "network": "Instagram", "link": "#"},
+                 {"icon": "music", "handle": "@zenjoy", "network": "TikTok",
                   "link": "#"},
-                 {"icon": "🎵", "handle": "@zenjoy", "network": "TikTok",
-                  "link": "#"},
-                 {"icon": "▶️", "handle": "Zenjoy", "network": "YouTube",
+                 {"icon": "play", "handle": "Zenjoy", "network": "YouTube",
                   "link": "#"}]},
         ]},
     "latest_posts": {
@@ -224,38 +256,78 @@ def _media_url(con, mid, thumb=False) -> str:
     return f"/media/m/{mid}{'/thumb' if thumb else ''}"
 
 
+def icon(name: str, cls: str = "ico") -> str:
+    """Reference the sprite in index.html. Falls back to nothing rather than
+    rendering a broken glyph if an old emoji value is still stored."""
+    name = re.sub(r"[^a-z0-9-]", "", str(name or "").lower())
+    if not name:
+        return ""
+    return f'<svg class="{cls}" aria-hidden="true"><use href="#i-{name}"/></svg>'
+
+
+def _stat(raw: str) -> str:
+    """"200mg|L-theanine per can" -> big number over small label."""
+    if not raw:
+        return ""
+    value, _, label = str(raw).partition("|")
+    return f"<div><b>{esc(value)}</b>{esc(label)}</div>"
+
+
 def _hero(con, s) -> str:
     head = "<br>".join(esc(l) for l in str(s["heading"]).split("\n"))
-    bg = s.get("bg", "shader")
+    bg = s.get("bg", "gradient")
+    centred = s.get("layout") == "centred"
     img = _media_url(con, s.get("media_id"))
     style = ""
     canvas = ""
     if bg == "image" and img:
         style = (f' style="background-image:linear-gradient('
-                 f'rgba(50,0,90,.45),rgba(50,0,90,.45)),url({img});'
+                 f'rgba(27,24,31,.42),rgba(27,24,31,.42)),url({img});'
                  f'background-size:cover;background-position:center"')
     elif bg == "gradient":
-        style = (' style="background:linear-gradient(135deg,'
-                 'var(--purple),var(--lavender))"')
+        # Soft wash rather than a saturated flood — the copy has to sit on it.
+        style = (' style="background:radial-gradient(120% 100% at 78% 30%,'
+                 'var(--lav-soft) 0%, #f6f1fb 42%, var(--bg) 100%)"')
     else:
         canvas = '<canvas id="shader-bg"></canvas>'
     btns = ""
     if s.get("cta_text"):
         btns += (f'<a class="btn-pill primary" href="{esc(s["cta_link"])}">'
-                 f'{esc(s["cta_text"])}</a>')
+                 f'{esc(s["cta_text"])}'
+                 f'{icon("arrow", "ico ico-sm")}</a>')
     if s.get("cta2_text"):
         btns += (f'<a class="btn-pill ghost" href="{esc(s["cta2_link"])}">'
                  f'{esc(s["cta2_text"])}</a>')
-    return (f'<section class="hero"{style}>{canvas}'
-            f'<div class="hero-inner"><h1>{head}</h1>'
-            f'<p>{esc(s["sub"])}</p>'
-            f'<div class="hero-cta">{btns}</div></div></section>')
+    stats = "".join(_stat(s.get(k, "")) for k in ("stat1", "stat2", "stat3"))
+    stats = f'<div class="hero-note">{stats}</div>' if stats else ""
+    # The stage is filled client-side with the first product's can (or its
+    # photo once real imagery exists) — see hydrateHero() in store.js.
+    stage = ('<div class="hero-stage" id="hero-stage"></div>'
+             if s.get("show_product", True) and not centred else "")
+    cls = "hero centred" if centred else "hero"
+    return (f'<section class="{cls}"{style}>{canvas}'
+            f'<div class="hero-grid"><div class="hero-inner">'
+            f'<h1>{head}</h1><p>{esc(s["sub"])}</p>'
+            f'<div class="hero-cta">{btns}</div>{stats}</div>'
+            f'{stage}</div></section>')
+
+
+def _benefits(con, s) -> str:
+    cells = "".join(
+        f'<div class="benefit">{icon(i.get("icon"))}'
+        f'<b>{esc(i.get("value"))}</b><span>{esc(i.get("label"))}</span></div>'
+        for i in (s.get("items") or []))
+    return (f'<section class="benefits"><div class="benefits-row">{cells}'
+            f'</div></section>')
 
 
 def _product_grid(con, s) -> str:
-    search = ('<input id="search-input" type="search" placeholder="🔍 Search…">'
+    search = (f'<span class="search-wrap">{icon("search")}'
+              f'<input id="search-input" type="search" placeholder="Search"'
+              f' aria-label="Search products"></span>'
               if s.get("show_search") else "")
-    tabs = ('<div class="collection-tabs" id="collection-tabs"></div>'
+    tabs = ('<div class="collection-tabs" id="collection-tabs"'
+            ' role="group" aria-label="Filter products"></div>'
             if s.get("show_tabs") else "")
     return (f'<section class="section" id="shop">'
             f'<div class="shop-head"><h2>{esc(s["heading"])}</h2>{search}</div>'
@@ -273,7 +345,8 @@ def _rich_text(con, s) -> str:
 
 def _feature_columns(con, s) -> str:
     cards = "".join(
-        f'<div class="story-card"><span>{esc(i.get("icon"))}</span>'
+        f'<div class="story-card"><span class="ico-wrap">'
+        f'{icon(i.get("icon"), "ico ico-lg")}</span>'
         f'<b>{esc(i.get("title"))}</b><p>{esc(i.get("text"))}</p></div>'
         for i in (s.get("items") or []))
     return (f'<section class="section story"><h2>{esc(s["heading"])}</h2>'
@@ -319,18 +392,21 @@ def _reviews(con, s) -> str:
         "SELECT r.name, r.rating, r.body, r.verified, p.name pname"
         " FROM product_reviews r JOIN products p ON p.id=r.product_id"
         " WHERE r.approved=1 ORDER BY r.id DESC LIMIT ?", (lim,)).fetchall()
+    verified = (f'<span class="dim">{icon("check", "ico ico-sm")}'
+                f' verified buyer</span>')
     if rows:
         cards = "".join(
             f'<div class="review-card"><span class="stars">'
-            f'{"★" * r["rating"]}</span>'
-            f'{"<span class=dim>✓ verified buyer</span>" if r["verified"] else ""}'
-            f'<p>"{esc(r["body"])}"</p>'
-            f'<span class="who">— {esc(r["name"])} · {esc(r["pname"])}</span>'
+            f'{icon("star") * r["rating"]}</span>'
+            f'{verified if r["verified"] else ""}'
+            f'<p>&ldquo;{esc(r["body"])}&rdquo;</p>'
+            f'<span class="who">{esc(r["name"])} · {esc(r["pname"])}</span>'
             f'</div>' for r in rows)
     else:
-        cards = ('<div class="review-card"><span class="stars">★★★★★</span>'
-                 '<p>"Reviews appear here as customers post them."</p>'
-                 '<span class="who">— awaiting your first review</span></div>')
+        cards = (f'<div class="review-card"><span class="stars">'
+                 f'{icon("star") * 5}</span>'
+                 f'<p>Reviews appear here as customers post them.</p>'
+                 f'<span class="who">Awaiting your first review</span></div>')
     return (f'<section class="section" id="reviews">'
             f'<h2>{esc(s["heading"])}</h2>'
             f'<div class="grid">{cards}</div></section>')
@@ -360,7 +436,7 @@ def _newsletter(con, s) -> str:
 def _social(con, s) -> str:
     cards = "".join(
         f'<a class="social-card" href="{esc(i.get("link") or "#")}">'
-        f'{esc(i.get("icon"))}<b>{esc(i.get("handle"))}</b>'
+        f'{icon(i.get("icon"), "ico ico-lg")}<b>{esc(i.get("handle"))}</b>'
         f'<span>{esc(i.get("network"))}</span></a>'
         for i in (s.get("items") or []))
     return (f'<section class="section social"><h2>{esc(s["heading"])}</h2>'
@@ -407,7 +483,8 @@ def _latest_posts(con, s) -> str:
 
 
 RENDERERS = {
-    "hero": _hero, "product_grid": _product_grid, "rich_text": _rich_text,
+    "hero": _hero, "benefits": _benefits,
+    "product_grid": _product_grid, "rich_text": _rich_text,
     "feature_columns": _feature_columns, "image_banner": _image_banner,
     "video": _video, "reviews": _reviews, "faq": _faq,
     "newsletter": _newsletter, "social": _social, "spacer": _spacer,
@@ -438,5 +515,8 @@ def render_page(con, rows, liquid_renderer=None) -> str:
 
 # The storefront home page as shipped — seeded once so merchants start from
 # the designed layout instead of a blank canvas.
-HOME_DEFAULT = ["hero", "product_grid", "feature_columns", "reviews",
-                "social", "newsletter", "faq"]
+# Order is a selling argument: hook, proof, product, then the softer story.
+# The benefit strip sits directly under the hero because the numbers (200mg,
+# 15 cal, 2g sugar) are what qualify a functional drink for the shopper.
+HOME_DEFAULT = ["hero", "benefits", "product_grid", "feature_columns",
+                "reviews", "social", "newsletter", "faq"]
