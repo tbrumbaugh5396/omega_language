@@ -73,6 +73,7 @@ PATH_RULES = [
     ("/api/store/admin/currencies", "settings"),
     ("/api/store/admin/staff", "settings"),
     ("/api/store/admin/audit", "settings"),
+    ("/api/store/admin/enquiries", "customers"),
 ]
 
 

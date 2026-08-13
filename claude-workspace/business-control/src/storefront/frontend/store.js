@@ -3,6 +3,11 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
+/* Bind a click only if the element is on this page. The shell now serves
+   several page shapes (home, partner pages, events, locator), and a missing
+   optional control used to throw at module scope and take the rest of the
+   script — including the menu — down with it. */
+const on = (sel, fn) => { const el = $(sel); if (el) el.onclick = fn; return el; };
 
 // ---------- currency + locale ----------
 const I18N = window.STORE_I18N || { currencies: [], locales: ["en"],
@@ -98,7 +103,9 @@ function pageview(page) {
     body: JSON.stringify({ visitor_id: VID, page }) }).catch(() => {});
 }
 funnel("visit");
-pageview("home");
+// the shell now serves partner pages, events and the locator too, so record
+// the path rather than always claiming "home"
+pageview(location.pathname === "/" ? "home" : location.pathname.slice(0, 60));
 
 // ---------- shader hero (fragment-shader gradient flow) ----------
 (function shaderHero() {
@@ -334,7 +341,18 @@ if ($("#search-input")) $("#search-input").oninput = () => {
    page even scrolls. */
 function drawSideMenu() {
   const host = $("#side-collections");
-  let html = '<div class="side-group">The range</div><div class="menu-tiles">';
+  // Browse first: the shopper picks a lane, then sees the faces. Putting the
+  // tiles above the filters made people scroll past the filters entirely.
+  let html = '<div class="menu-headline">Shop the range</div>' +
+    '<div class="side-group">Browse</div><div class="menu-cols">' +
+    `<a class="side-item" href="/#shop" data-close>${ico("bag", "ico ico-sm")}
+      All products</a>`;
+  for (const c of CATALOG.collections) {
+    html += `<a class="side-item" href="/#shop" data-close
+      data-colnav="${c.id}">${c.name}</a>`;
+  }
+  html += '</div><div class="side-group">Every flavour</div>' +
+    '<div class="menu-tiles">';
   for (const p of CATALOG.products) {
     html += `<a class="menu-tile" href="/product/${p.id}-${p.slug}"
       style="--flavour:${flavourOf(p)};--flavour-soft:${flavourOf(p)}1f">
@@ -342,13 +360,6 @@ function drawSideMenu() {
       <b>${pname(p)}</b>
       <span>${money(p.variants.length
         ? p.variants[0].price_cents : p.price_cents)}</span></a>`;
-  }
-  html += '</div><div class="side-group">Browse</div><div class="menu-cols">' +
-    `<a class="side-item" href="#shop" data-close>${ico("bag", "ico ico-sm")}
-      All products</a>`;
-  for (const c of CATALOG.collections) {
-    html += `<a class="side-item" href="#shop" data-close
-      data-colnav="${c.id}">${c.name}</a>`;
   }
   html += "</div>";
   host.innerHTML = html;
@@ -483,6 +494,8 @@ function saveCart() {
   $("#cart-count").textContent = n;
   const fc = $("#buy-fab-count");
   if (fc) { fc.hidden = !n; fc.textContent = n; }
+  const mc = $("#menu-cart-count");
+  if (mc) mc.textContent = n;
 }
 
 function addToCart(pid, vid = 0) {
@@ -803,6 +816,9 @@ function openCart() { $("#cart-drawer").classList.add("open");
 function closeMenus() {
   $("#cart-drawer").classList.remove("open");
   $("#side-menu").classList.remove("open");
+  $("#side-menu").setAttribute("aria-hidden", "true");
+  const panel = $("#a11y-panel");
+  if (panel) panel.classList.remove("open");
   $("#scrim").classList.remove("show");
   document.body.classList.remove("drawer-open");
 }
@@ -823,9 +839,43 @@ function toast(txt) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2400);
 }
 
-$("#menu-btn").onclick = () => { $("#side-menu").classList.add("open");
+/* Every way to work with us, mirrored from PATHS in partners.py. Kept here
+   rather than server-rendered so the menu is identical on every page,
+   including the ones the section engine doesn't render. */
+const PARTNER_LINKS = [
+  ["stock-zen", "box", "Stock Zenjoy", "Get the range into your store"],
+  ["reorder", "repeat", "Reorder for my store", "Already carrying us"],
+  ["distribute", "truck", "Distribute Zenjoy", "Run routes in your region"],
+  ["brand", "sparkle", "We'll distribute your brand", "Get onto our trucks"],
+  ["partner-brand", "shield", "Stock a partner brand",
+    "Other brands we carry, same invoice"],
+];
+
+(function drawPartnerLinks() {
+  const host = $("#menu-partners");
+  if (!host) return;
+  host.innerHTML = PARTNER_LINKS.map(([slug, icn, label, sub]) =>
+    `<a class="menu-link" href="/partners/${slug}">${ico(icn)}
+      <span>${label}<small>${sub}</small></span></a>`).join("");
+})();
+
+function openMenu() {
+  $("#side-menu").classList.add("open");
+  $("#side-menu").setAttribute("aria-hidden", "false");
   $("#scrim").classList.add("show");
-  document.body.classList.add("drawer-open"); };
+  document.body.classList.add("drawer-open");
+}
+$("#menu-btn").onclick = openMenu;
+// the hamburger in the menu bar collapses it again
+$("#menu-cart-btn").onclick = () => { closeMenus(); drawCart(); openCart(); };
+$("#menu-account").onclick = (e) => { e.preventDefault(); closeMenus();
+  openAccount(); };
+$("#menu-track").onclick = (e) => { e.preventDefault(); closeMenus();
+  openTracking(); };
+$("#menu-support").onclick = (e) => { e.preventDefault(); closeMenus();
+  openSupport(); };
+$("#menu-prefs").onclick = (e) => { e.preventDefault(); closeMenus();
+  openPrefs(); };
 $("#menu-close").onclick = closeMenus;
 $("#cart-btn").onclick = () => { drawCart(); openCart(); };
 $("#cart-close").onclick = closeMenus;
@@ -833,40 +883,51 @@ $("#scrim").onclick = closeMenus;
 $("#modal").addEventListener("click", (e) => {
   if (e.target.id === "modal") closeModal(); });
 $("#track-btn").onclick = openTracking;
-$("#foot-track").onclick = (e) => { e.preventDefault(); openTracking(); };
-$("#side-track").onclick = (e) => { e.preventDefault(); closeMenus();
-  openTracking(); };
+on("#foot-track", (e) => { e.preventDefault(); openTracking(); });
+on("#foot-support", (e) => { e.preventDefault(); openSupport(); });
 // ---------- customer account: orders + subscription self-service ----------
 function acctToken() {
   try { return JSON.parse(localStorage.getItem("sf_support") || "{}").token; }
   catch { return null; }
 }
 
+/* One sign-in for the whole storefront.
+   Account and support used to raise two different modals against the same
+   endpoint and the same stored token, which read as two accounts. This is the
+   single door; callers say what they want to do once they're through. */
+function signIn(intro, onDone) {
+  if (acctToken()) { onDone(); return; }
+  openModal(`<h3>Sign in</h3>
+    <p class="dim">${intro}</p>
+    <label>Name</label><input id="si-name" placeholder="Your name"
+      autocomplete="name">
+    <label>Email <span class="dim">(the one you ordered with)</span></label>
+    <input id="si-email" type="email" autocomplete="email">
+    <div class="modal-actions">
+      <button class="btn-pill ghost sm" data-close-modal>Later</button>
+      <button class="btn-pill primary sm" id="si-go">Sign in</button>
+    </div>`);
+  const go = async () => {
+    const name = $("#si-name").value.trim();
+    if (!name) { $("#si-name").focus(); return; }
+    const out = await (await fetch("/api/login", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, role: "customer",
+        email: $("#si-email").value.trim() }) })).json();
+    if (!out.token) { toast("Couldn't sign you in — try again"); return; }
+    localStorage.setItem("sf_support",
+      JSON.stringify({ token: out.token, me: out.id }));
+    SUPPORT.token = out.token; SUPPORT.me = out.id;
+    onDone();
+  };
+  $("#si-go").onclick = go;
+  $("#si-name").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  $("#si-email").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  setTimeout(() => $("#si-name").focus(), 30);
+}
+
 function openAccount() {
-  if (!acctToken()) {
-    openModal(`<h3>My account</h3>
-      <p class="dim">Sign in with the name (and email) you ordered with.</p>
-      <label>Name</label><input id="ac-name" placeholder="Your name">
-      <label>Email</label><input id="ac-email" type="email">
-      <div class="modal-actions">
-        <button class="btn-pill ghost sm" data-close-modal>Later</button>
-        <button class="btn-pill primary sm" id="ac-go">Sign in</button>
-      </div>`);
-    $("#ac-go").onclick = async () => {
-      const name = $("#ac-name").value.trim();
-      if (!name) return;
-      const out = await (await fetch("/api/login", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, role: "customer",
-          email: $("#ac-email").value.trim() }) })).json();
-      if (!out.token) return;
-      localStorage.setItem("sf_support",
-        JSON.stringify({ token: out.token, me: out.id }));
-      drawAccount();
-    };
-    return;
-  }
-  drawAccount();
+  signIn("Orders, monthly boxes and rewards — all in one place.", drawAccount);
 }
 
 async function drawAccount() {
@@ -943,28 +1004,8 @@ function openSupport() {
   const saved = JSON.parse(localStorage.getItem("sf_support") || "null");
   if (saved && saved.token) { SUPPORT.token = saved.token;
     SUPPORT.me = saved.me; startSupportChat(); return; }
-  openModal(`<h3>We're here</h3>
-    <p class="dim">Real humans on the other end — same system the team runs
-    on. What should we call you?</p>
-    <label>Name</label><input id="sp-name" placeholder="Your name">
-    <label>Email (optional)</label><input id="sp-email" type="email">
-    <div class="modal-actions">
-      <button class="btn-pill ghost sm" data-close-modal>Later</button>
-      <button class="btn-pill primary sm" id="sp-start">Start chat</button>
-    </div>`);
-  $("#sp-start").onclick = async () => {
-    const name = $("#sp-name").value.trim();
-    if (!name) return;
-    const out = await (await fetch("/api/login", { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, role: "customer",
-        email: $("#sp-email").value.trim() }) })).json();
-    if (!out.token) return;
-    SUPPORT.token = out.token; SUPPORT.me = out.id;
-    localStorage.setItem("sf_support",
-      JSON.stringify({ token: out.token, me: out.id }));
-    startSupportChat();
-  };
+  signIn("Real humans on the other end — the same system the team runs on.",
+    startSupportChat);
 }
 
 async function startSupportChat() {
@@ -1032,7 +1073,6 @@ async function startSupportChat() {
   $("#sp-input").onkeydown = (e) => { if (e.key === "Enter") send(); };
 }
 $("#support-btn").onclick = openSupport;
-$("#foot-support").onclick = (e) => { e.preventDefault(); openSupport(); };
 
 // ---------- PWA ----------
 if ("serviceWorker" in navigator)
@@ -1092,21 +1132,22 @@ function applyA11y() {
   }
 }
 
+let openPrefs = () => {};
+
 (function wireA11y() {
-  const fab = $("#a11y-fab"), panel = $("#a11y-panel");
-  if (!fab || !panel) return;
+  const panel = $("#a11y-panel");
+  if (!panel) return;
   const setOpen = (open) => {
     panel.classList.toggle("open", open);
-    fab.setAttribute("aria-expanded", open ? "true" : "false");
+    $("#scrim").classList.toggle("show", open);
+    if (open) panel.querySelector("button").focus();
   };
-  fab.onclick = (e) => {
-    e.stopPropagation();
-    setOpen(!panel.classList.contains("open"));
-  };
+  openPrefs = () => setOpen(true);
+  const closer = $("#prefs-close");
+  if (closer) closer.onclick = () => setOpen(false);
   panel.addEventListener("click", (e) => e.stopPropagation());
-  document.addEventListener("click", () => setOpen(false));
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") setOpen(false);
+    if (e.key === "Escape" && panel.classList.contains("open")) setOpen(false);
   });
   $("#a11y-text").querySelectorAll("button").forEach((b) =>
     b.onclick = () => { A11Y.text = b.dataset.size || ""; applyA11y(); });
@@ -1126,6 +1167,149 @@ function applyA11y() {
     }
   };
   applyA11y();
+})();
+
+/* ---------- partner enquiry forms ---------- */
+(function wireEnquiry() {
+  const form = $("#enq-form");
+  if (!form) return;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = $("#enq-msg");
+    const body = { kind: form.dataset.kind };
+    for (const el of form.elements) if (el.name) body[el.name] = el.value.trim();
+    if (!body.name) { msg.className = "enq-msg bad";
+      msg.textContent = "We need a name to reply to."; return; }
+    const btn = form.querySelector("button[type=submit]");
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/store/enquiry", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) });
+      if (!r.ok) throw new Error((await r.json()).detail || "failed");
+      form.reset();
+      msg.className = "enq-msg ok";
+      msg.textContent = "Got it — we'll come back to you within two working days.";
+      // Not funnel(): FUNNEL_STEPS is the ordered purchase funnel, and a B2B
+      // enquiry is a parallel path, not a step toward checkout. The lead is
+      // already recorded in store_enquiries, the ERP pipeline and a webhook.
+      pageview("enquiry:" + body.kind);
+    } catch (err) {
+      msg.className = "enq-msg bad";
+      msg.textContent = "That didn't send. Try again, or use the chat.";
+    } finally { btn.disabled = false; }
+  };
+})();
+
+/* ---------- events ---------- */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+(async function drawEvents() {
+  const host = $("#event-list");
+  if (!host) return;
+  const evs = await (await fetch("/api/store/events")).json();
+  const regions = [...new Set(evs.map((e) => e.region).filter(Boolean))];
+  let active = null;
+  const filters = $("#event-filters");
+  const paint = () => {
+    const shown = active ? evs.filter((e) => e.region === active) : evs;
+    host.innerHTML = shown.map((e) => {
+      const d = new Date(e.starts * 1000);
+      return `<article class="event-card">
+        <div class="event-date"><b>${d.getDate()}</b>
+          <span>${MONTHS[d.getMonth()]}</span></div>
+        <div>
+          <span class="event-kind">${e.kind}</span>
+          <h3>${e.name}</h3>
+          <p class="where">${ico("search", "ico ico-sm")}
+            ${[e.venue, e.city].filter(Boolean).join(" · ")}</p>
+          <p>${e.body || ""}</p>
+          ${e.url ? `<p style="margin-top:10px"><a class="text-link"
+            href="${e.url}">More details</a></p>` : ""}
+        </div></article>`;
+    }).join("") || `<p class="dim">Nothing on the calendar in that region yet.
+      <a class="text-link" href="/partners/work">Ask us to come to you.</a></p>`;
+  };
+  filters.innerHTML = [["All", null], ...regions.map((r) => [r, r])]
+    .map(([label, val]) =>
+      `<button class="tab ${val === active ? "on" : ""}"
+        data-region="${val ?? ""}">${label}</button>`).join("");
+  filters.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
+    active = b.dataset.region || null;
+    filters.querySelectorAll(".tab").forEach((x) =>
+      x.classList.toggle("on", x === b));
+    paint();
+  });
+  paint();
+})();
+
+/* ---------- store locator ---------- */
+(async function drawLocator() {
+  const host = $("#loc-list");
+  if (!host) return;
+  const stores = await (await fetch("/api/store/locations")).json();
+  const regions = [...new Set(stores.map((s) => s.region).filter(Boolean))];
+  let active = null, query = "", here = null;
+
+  // straight-line distance is honest for "which of these is nearest" and
+  // needs no map tiles or third-party call
+  const milesBetween = (a, b, c, d) => {
+    const R = 3958.8, rad = (x) => x * Math.PI / 180;
+    const dLat = rad(c - a), dLng = rad(d - b);
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+
+  const paint = () => {
+    let shown = stores.slice();
+    if (active) shown = shown.filter((s) => s.region === active);
+    if (query) {
+      const q = query.toLowerCase();
+      shown = shown.filter((s) => (s.name + " " + s.city).toLowerCase()
+        .includes(q));
+    }
+    if (here) {
+      shown.forEach((s) => s._d = (s.lat && s.lng)
+        ? milesBetween(here.lat, here.lng, s.lat, s.lng) : Infinity);
+      shown.sort((a, b) => a._d - b._d);
+    }
+    $("#loc-empty").hidden = shown.length > 0;
+    host.innerHTML = shown.map((s) => `<div class="loc-card">
+      <b>${s.name}</b>
+      <div class="where">${[s.city, s.region].filter(Boolean).join(" · ")}</div>
+      ${here && isFinite(s._d)
+        ? `<span class="dist">${s._d.toFixed(1)} miles away</span>` : ""}
+    </div>`).join("");
+  };
+
+  $("#loc-filters").innerHTML = [["All", null], ...regions.map((r) => [r, r])]
+    .map(([label, val]) => `<button class="tab ${val === active ? "on" : ""}"
+      data-region="${val ?? ""}">${label}</button>`).join("");
+  $("#loc-filters").querySelectorAll(".tab").forEach((b) => b.onclick = () => {
+    active = b.dataset.region || null;
+    $("#loc-filters").querySelectorAll(".tab").forEach((x) =>
+      x.classList.toggle("on", x === b));
+    paint();
+  });
+  let t;
+  $("#loc-search").oninput = (e) => {
+    clearTimeout(t);
+    t = setTimeout(() => { query = e.target.value.trim(); paint(); }, 180);
+  };
+  $("#loc-near").onclick = () => {
+    if (!navigator.geolocation) { toast("This browser won't share location"); return; }
+    navigator.geolocation.getCurrentPosition((pos) => {
+      here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      active = null;
+      $("#loc-filters").querySelectorAll(".tab").forEach((x, i) =>
+        x.classList.toggle("on", i === 0));
+      paint();
+      toast("Sorted by distance from you");
+    }, () => toast("Couldn't get your location"));
+  };
+  paint();
 })();
 
 // ---------- boot ----------

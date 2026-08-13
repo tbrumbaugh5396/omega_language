@@ -493,11 +493,12 @@ def init_tables():
                 "INSERT INTO store_shipping_methods(name,price_cents,eta,"
                 " position) VALUES ('Standard',599,'3–5 business days',0),"
                 " ('Express',1499,'1–2 business days',1)")
-        from . import affiliates, content, governance, promos
+        from . import affiliates, content, governance, partners, promos
         promos.init_tables(con)
         content.init_tables(con)
         governance.init_tables(con)
         affiliates.init_tables(con)
+        partners.init_tables(con)
         ensure_search_index(con)
         # Self-heal: a stale index from an older build makes any write to
         # products fail. Probe with a rolled-back no-op and rebuild if needed.

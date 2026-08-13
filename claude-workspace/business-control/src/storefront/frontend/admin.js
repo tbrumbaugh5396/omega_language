@@ -56,7 +56,7 @@ const TAB_PERMS = {
   products: "products", orders: "orders", reviews: "content",
   pages: "content", collections: "products", discounts: "discounts",
   webhooks: "settings", api: "settings", blog: "content",
-  affiliates: "customers",
+  affiliates: "customers", enquiries: "customers",
   nav: "content", intl: "settings", staff: "settings",
   analytics: "analytics",
 };
@@ -360,6 +360,33 @@ $("#gc-issue").onclick = async () => {
 };
 
 // ---------- affiliates ----------
+async function drawEnquiries() {
+  const rows = await api("/api/store/admin/enquiries");
+  if (!rows.length) {
+    $("#enq-list").innerHTML =
+      '<p class="dim">No enquiries yet. They arrive from the partner pages ' +
+      'linked in the storefront menu.</p>';
+    return;
+  }
+  $("#enq-list").innerHTML = rows.map((e) => {
+    const when = new Date(e.created_at * 1000).toLocaleDateString();
+    const contact = [e.email, e.phone].filter(Boolean).join(" · ") || "—";
+    const where = [e.city, e.region].filter(Boolean).join(", ") || "—";
+    return `<div class="adm-item" style="flex-wrap:wrap;gap:8px">
+      <b style="flex:0 0 170px">${e.company || e.name}</b>
+      <span class="dim" style="flex:0 0 150px">${e.nav}</span>
+      <span class="dim" style="flex:0 0 170px">${e.name} · ${contact}</span>
+      <span class="dim" style="flex:0 0 130px">${where}</span>
+      <span class="dim" style="flex:1;min-width:180px">${e.detail || ""}
+        ${e.message ? `<em>“${e.message}”</em>` : ""}</span>
+      <span class="dim" style="flex:0 0 80px">${when}</span>
+      ${e.outreach_id
+        ? `<a class="btn-pill ghost mini" href="/ops/" target="_blank">
+             lead #${e.outreach_id}</a>` : ""}
+    </div>`;
+  }).join("");
+}
+
 async function drawAffiliates() {
   const rows = await api("/api/store/admin/affiliates");
   $("#af-list").innerHTML = rows.map((a) => `
@@ -724,7 +751,7 @@ async function boot() {
   if (can("products")) await drawProducts().catch(() => {});
   run("products", drawCollections); run("products", drawVariants);
   run("products", drawMedia);
-  run("customers", drawAffiliates);
+  run("customers", drawAffiliates); run("customers", drawEnquiries);
   run("content", drawPages); run("content", drawReviewQueue);
   run("content", drawPosts); run("content", drawMenus);
   run("content", drawRedirects);

@@ -41,16 +41,55 @@
   </div>
 </header>
 
-<aside class="side-menu" id="side-menu" aria-label="Main menu">
-  <div class="side-head">
-    <b>Menu</b><button class="icon-btn" id="menu-close" aria-label="Close menu">
-      <svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button>
+<aside class="side-menu" id="side-menu" aria-label="Main menu" aria-hidden="true">
+  <div class="menu-bar">
+    <button class="icon-btn" id="menu-close" aria-label="Close menu">
+      <svg class="ico" aria-hidden="true"><use href="#i-menu"/></svg></button>
+    <a class="brand" href="/"><!--BRAND--></a>
+    <button class="cart-btn" id="menu-cart-btn" aria-label="Open cart">
+      <svg class="ico ico-sm" aria-hidden="true"><use href="#i-cart"/></svg>
+      <span id="menu-cart-count">0</span></button>
   </div>
-  <div id="side-collections"></div>
-  <div class="side-foot">
-    <a href="#rewards"><svg class="ico" aria-hidden="true"><use href="#i-gift"/></svg> Rewards</a>
-    <a href="#" id="side-track"><svg class="ico" aria-hidden="true"><use href="#i-box"/></svg> Track order</a>
-    <a href="/admin" class="dim-link">Team sign-in →</a>
+  <div class="menu-inner">
+    <div class="menu-grid">
+      <div id="side-collections"></div>
+      <div>
+        <div class="side-group">Come find us</div>
+        <div class="menu-links">
+          <a class="menu-link" href="/events">
+            <svg class="ico" aria-hidden="true"><use href="#i-sparkle"/></svg>
+            <span>Events<small>Tastings, pop-ups and markets</small></span></a>
+          <a class="menu-link" href="/find">
+            <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
+            <span>Find a store<small>Shops that carry the range</small></span></a>
+          <a class="menu-link" href="/partners/work">
+            <svg class="ico" aria-hidden="true"><use href="#i-leaf"/></svg>
+            <span>Zen at work<small>Stock your office kitchen</small></span></a>
+        </div>
+
+        <div class="side-group">Work with us</div>
+        <div class="menu-links" id="menu-partners"></div>
+
+        <div class="side-group">Your account</div>
+        <div class="menu-links">
+          <a class="menu-link" href="#" id="menu-account">
+            <svg class="ico" aria-hidden="true"><use href="#i-user"/></svg>
+            <span>Sign in<small>Orders, boxes and rewards</small></span></a>
+          <a class="menu-link" href="#" id="menu-track">
+            <svg class="ico" aria-hidden="true"><use href="#i-box"/></svg>
+            <span>Track an order<small>Where your cans are right now</small></span></a>
+          <a class="menu-link" href="#" id="menu-support">
+            <svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg>
+            <span>Support<small>Real humans, same system the team runs on</small></span></a>
+          <a class="menu-link" href="#" id="menu-prefs">
+            <svg class="ico" aria-hidden="true"><use href="#i-a11y"/></svg>
+            <span>Accessibility &amp; language<small>Text size, contrast, region and currency</small></span></a>
+          <a class="menu-link dim-link" href="/admin">
+            <svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg>
+            <span>Team sign-in</span></a>
+        </div>
+      </div>
+    </div>
   </div>
 </aside>
 <div class="scrim" id="scrim"></div>
@@ -107,13 +146,14 @@
   </div>
 </aside>
 
-<!-- preferences: accessibility + region & language, Celsius-style -->
-<button class="a11y-fab" id="a11y-fab" aria-label="Accessibility and language options"
-        aria-expanded="false" aria-controls="a11y-panel">
-  <svg class="ico" aria-hidden="true"><use href="#i-a11y"/></svg></button>
+<!-- preferences: accessibility + region & language.
+     Opened from the menu — no floating badge over the shop. -->
 <div class="a11y-panel" id="a11y-panel" role="dialog"
      aria-label="Accessibility and language options">
-  <h4>Preferences</h4>
+  <div class="side-head"><b>Preferences</b>
+    <button class="icon-btn" id="prefs-close" aria-label="Close preferences">
+      <svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button>
+  </div>
   <p class="dim" style="font-size:13px;margin-bottom:2px">Saved on this device.</p>
 
   <div class="a11y-group">Accessibility</div>
