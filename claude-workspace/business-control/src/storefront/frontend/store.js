@@ -920,7 +920,10 @@ function signIn(intro, onDone) {
     <div class="modal-actions">
       <button class="btn-pill ghost sm" data-close-modal>Later</button>
       <button class="btn-pill primary sm" id="si-go">Sign in</button>
-    </div>`);
+    </div>
+    <p class="dim" style="margin-top:14px;padding-top:12px;
+      border-top:1px solid var(--line)">On the team?
+      <a class="text-link" href="/admin">Back-office sign-in →</a></p>`);
   const go = async () => {
     const name = $("#si-name").value.trim();
     if (!name) { $("#si-name").focus(); return; }

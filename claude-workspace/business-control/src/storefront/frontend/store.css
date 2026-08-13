@@ -754,11 +754,19 @@ svg.can { display: block; width: 100%; height: auto; }
 
 /* ---------- measurement consent ---------- */
 .consent-bar { position: fixed; left: 20px; right: 20px; bottom: 20px;
-  z-index: 70; max-width: 620px; margin: 0 auto; display: flex;
+  z-index: 55; max-width: 620px; margin: 0 auto; display: flex;
   align-items: center; gap: 18px; flex-wrap: wrap;
   background: linear-gradient(140deg, var(--purple) 0%, #5a00a3 60%,
   var(--purple-deep) 100%); color: #fff; border-radius: var(--r-lg);
   padding: 18px 22px; box-shadow: var(--sh-2); }
+/* The hidden attribute is only UA-level display:none, and the flex rule
+   above outranks it — without this the bar was visible from page load,
+   empty and inert, regardless of what the JS thought. */
+.consent-bar[hidden] { display: none; }
+/* z-index 55 keeps it under the drawers (60), and it steps aside entirely
+   while a drawer is open so it can never cover the menu's own entries. */
+body.drawer-open .consent-bar { opacity: 0; pointer-events: none;
+  transition: opacity .2s; }
 .consent-bar p { font-size: 13.5px; flex: 1; min-width: 220px;
   color: rgba(255,255,255,.86); }
 .consent-acts { display: flex; gap: 10px; }

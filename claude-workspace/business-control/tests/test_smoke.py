@@ -764,5 +764,17 @@ _html = c.get("/").text
 ok('id="consent-yes"' in _html and 'id="consent-no"' in _html,
    "both consent buttons are on the page")
 ok('id="pref-consent-row"' in _html, "preferences carry a consent switch")
+# display:flex on the class outranks the UA's [hidden] rule, so without an
+# explicit author rule the bar is visible from page load — empty and inert.
+_css = c.get("/store.css").text
+ok(".consent-bar[hidden]" in _css, "hidden consent bar actually hides")
+c.post("/api/store/admin/pixels", headers=A, json={
+    "enabled": True, "consent_required": True,
+    "consent_text": "Custom words <script>here",
+    "ids": {"meta": "123456789012345"}})
+_home2 = c.get("/").text
+ok("Custom words scripthere" in _home2,
+   "custom consent wording reaches the page, tags stripped")
+c.post("/api/store/admin/pixels", headers=A, json={"enabled": False})
 
 print(f"\nall {checks} checks passed")

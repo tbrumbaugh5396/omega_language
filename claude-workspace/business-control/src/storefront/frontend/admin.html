@@ -4,33 +4,55 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Store admin — Zenjoy</title>
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/store.css">
   <style>
-    body { background: #f7f5fb; }
-    .adm-wrap { max-width: 1080px; margin: 0 auto; padding: 20px; }
-    .adm-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
-    .adm-panel { background: #fff; border: 1.5px solid #e8e2f4;
-      border-radius: 18px; padding: 22px; margin-bottom: 18px; }
-    .adm-panel h3 { color: var(--purple); margin-bottom: 12px; }
-    .adm-panel label { display: block; font-size: 13px; font-weight: 700;
-      margin: 10px 0 4px; }
+    /* The admin borrows the storefront's design system rather than keeping
+       its own: same paper background, same type pairing, same radii. What
+       makes a back office feel sleek is mostly restraint — one accent, flat
+       cards, generous air, and a nav that stays put. */
+    body { background: var(--bg); }
+    .adm-wrap { max-width: 1120px; margin: 0 auto; padding: 10px 24px 60px; }
+    .adm-tabs { display: flex; gap: 6px; flex-wrap: nowrap; overflow-x: auto;
+      position: sticky; top: 0; z-index: 30; margin: 0 -24px 22px;
+      padding: 12px 24px; background: rgba(251,249,246,.92);
+      backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+      scrollbar-width: none; }
+    .adm-tabs::-webkit-scrollbar { display: none; }
+    .adm-tabs .tab { flex: none; }
+    .adm-panel { background: var(--paper); border: 1px solid var(--line);
+      border-radius: var(--r-lg); padding: 26px 28px; margin-bottom: 20px;
+      box-shadow: var(--sh-1); }
+    .adm-panel h3 { font-size: 22px; margin-bottom: 6px; }
+    .adm-panel > .dim { margin-bottom: 14px; max-width: 64ch; }
+    .adm-panel label { display: block; font-size: 11.5px; font-weight: 700;
+      letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+      margin: 14px 0 5px; }
     .adm-panel input, .adm-panel textarea, .adm-panel select { width: 100%;
-      border: 1.5px solid #e5e0f2; border-radius: 10px; padding: 9px 12px;
-      font-family: inherit; font-size: 14px; }
+      border: 1px solid var(--line); border-radius: var(--r-sm);
+      padding: 10px 13px; font-family: var(--ui); font-size: 14px;
+      background: var(--bg); color: var(--ink); }
+    .adm-panel input:focus, .adm-panel textarea:focus,
+    .adm-panel select:focus { outline: none; border-color: var(--purple);
+      background: var(--paper); }
     .adm-panel textarea { font-family: ui-monospace, monospace; font-size: 12.5px; }
-    .adm-row { display: flex; gap: 12px; }
+    .adm-row { display: flex; gap: 14px; }
     .adm-row > * { flex: 1; }
-    .adm-list { border-top: 1px solid #f0ebfa; margin-top: 14px; }
-    .adm-item { display: flex; align-items: center; gap: 10px; padding: 10px 2px;
-      border-bottom: 1px solid #f0ebfa; font-size: 14px; }
-    .adm-item b { flex: 1; }
+    .adm-list { border-top: 1px solid var(--line-2); margin-top: 16px; }
+    .adm-item { display: flex; align-items: center; gap: 10px;
+      padding: 11px 8px; border-bottom: 1px solid var(--line-2);
+      font-size: 14px; border-radius: var(--r-sm); }
+    .adm-item:hover { background: var(--bg); }
+    .adm-item b { flex: 1; font-weight: 600; }
     .mini { padding: 5px 12px; font-size: 12.5px; }
     table.adm { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-    table.adm th { text-align: left; color: var(--lavender);
-      border-bottom: 2px solid var(--lav-soft); padding: 6px 4px; }
-    table.adm td { padding: 6px 4px; border-bottom: 1px solid #f4f0fb; }
-    #login-card { max-width: 420px; margin: 60px auto; }
+    table.adm th { text-align: left; font-size: 11px; font-weight: 700;
+      letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+      border-bottom: 1px solid var(--line); padding: 8px 6px; }
+    table.adm td { padding: 8px 6px; border-bottom: 1px solid var(--line-2); }
+    #login-card { max-width: 440px; margin: 70px auto; }
+    #login-card h3 { font-size: 26px; }
     .hidden { display: none; }
     .md-grid { display: grid; gap: 12px; margin-top: 12px;
       grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
@@ -82,13 +104,13 @@
 <body>
 <header class="topbar">
   <a class="brand" href="/">zenjoy<span class="brand-dot">.</span></a>
-  <b style="color:#9a92b8">store admin</b>
+  <b style="color:var(--ink-3);font-weight:600;font-size:14px">Store admin</b>
   <span class="dim" id="who-label" style="font-size:12px"></span>
-  <div class="top-actions">
-    <a class="btn-pill primary sm" href="/admin/theme"
-       style="background:var(--purple);color:#fff">🎨 Theme &amp; pages</a>
-    <a class="btn-pill ghost sm" href="/" style="color:var(--purple);border:2px solid var(--purple)">View store →</a>
-    <a class="btn-pill ghost sm" href="/ops/" style="color:var(--purple);border:2px solid var(--purple)">ERP / ops →</a>
+  <div class="top-actions" style="gap:8px">
+    <a class="btn-pill dark sm" href="/admin/theme"
+       style="background:var(--purple)">Theme &amp; pages</a>
+    <a class="btn-pill ghost sm" href="/">View store</a>
+    <a class="btn-pill ghost sm" href="/ops/">ERP / ops</a>
   </div>
 </header>
 

@@ -190,11 +190,16 @@ def snippet(cfg: dict) -> str:
     loaders = "".join(f"try{{{p}}}catch(e){{}}" for p in parts)
     custom = cfg.get("custom_head") or ""
     gate = "true" if not cfg.get("consent_required") else "false"
+    # "</" -> "<\/" so a consent string can never contain a literal
+    # "</script>" and break out of the block; harmless inside a JS string.
+    payload = json.dumps({
+        "ids": ids, "events": cfg["events"], "map": EVENT_MAP,
+        "consentRequired": bool(cfg.get("consent_required")),
+        "consentText": cfg.get("consent_text") or DEFAULT["consent_text"],
+    }).replace("</", "<\\/")
     return (
-        "<script>window.__pixelConfig=" + json.dumps({
-            "ids": ids, "events": cfg["events"], "map": EVENT_MAP,
-            "consentRequired": bool(cfg.get("consent_required")),
-        }) + ";window.__pixelConsent=" + gate + ";"
+        "<script>window.__pixelConfig=" + payload
+        + ";window.__pixelConsent=" + gate + ";"
         "window.__pixelLoad=function(){if(window.__pixelLoaded)return;"
         "window.__pixelLoaded=1;" + loaders + "};"
         "if(window.__pixelConsent)window.__pixelLoad();</script>" + custom)
@@ -231,7 +236,10 @@ def save_pixels(body: PixelBody, u=Depends(admin_user), con=Depends(get_con)):
     cfg = {
         "enabled": bool(body.enabled),
         "consent_required": bool(body.consent_required),
-        "consent_text": sect.esc(body.consent_text or "")[:400]
+        # Strip angle brackets rather than HTML-escaping: this string reaches
+        # the page as JSON and lands via textContent, so entities would show
+        # literally ("&#x27;" instead of an apostrophe).
+        "consent_text": re.sub(r"[<>]", "", body.consent_text or "")[:400]
         or DEFAULT["consent_text"],
         "ids": ids,
         "events": {k: bool(body.events.get(k, True)) for k in EVENT_MAP},
