@@ -57,6 +57,7 @@ const TAB_PERMS = {
   pages: "content", collections: "products", discounts: "discounts",
   webhooks: "settings", api: "settings", blog: "content",
   affiliates: "customers", enquiries: "customers",
+  events: "content", heatmap: "analytics",
   nav: "content", intl: "settings", staff: "settings",
   analytics: "analytics",
 };
@@ -360,6 +361,125 @@ $("#gc-issue").onclick = async () => {
 };
 
 // ---------- affiliates ----------
+const EV_KINDS = { tasting: "Tasting", popup: "Pop-up", market: "Market",
+  class: "Class" };
+
+async function drawEvents() {
+  const rows = await api("/api/store/admin/events");
+  const now = Date.now() / 1000;
+  $("#ev-list").innerHTML = rows.map((e) => {
+    const d = new Date(e.starts * 1000);
+    const past = e.starts < now;
+    return `<div class="adm-item" style="flex-wrap:wrap;gap:8px;
+      ${past ? "opacity:.55" : ""}">
+      <b style="flex:0 0 60px">${d.toLocaleDateString(undefined,
+        { day: "numeric", month: "short" })}</b>
+      <span style="flex:0 0 180px">${e.name}</span>
+      <span class="dim" style="flex:0 0 90px">${EV_KINDS[e.kind] || e.kind}</span>
+      <span class="dim" style="flex:1;min-width:150px">
+        ${[e.venue, e.city, e.region].filter(Boolean).join(" · ")}</span>
+      ${past ? '<span class="dim" style="flex:0 0 50px">past</span>' : ""}
+      <label style="font-size:11.5px;font-weight:600;display:flex;gap:4px">
+        <input type="checkbox" style="width:auto" data-evon="${e.id}"
+          ${e.active ? "checked" : ""}> live</label>
+      <button class="btn-pill ghost mini" data-evdel="${e.id}">delete</button>
+    </div>`;
+  }).join("") || '<p class="dim">No events yet.</p>';
+
+  $("#ev-list").querySelectorAll("[data-evon]").forEach((c) =>
+    c.onchange = async () => {
+      const e = rows.find((r) => r.id === +c.dataset.evon);
+      await api(`/api/store/admin/events/${e.id}`, { method: "PATCH",
+        body: JSON.stringify({ ...e, active: c.checked ? 1 : 0 }) });
+      drawEvents();
+    });
+  $("#ev-list").querySelectorAll("[data-evdel]").forEach((b) =>
+    b.onclick = async () => {
+      if (!confirm("Delete this event?")) return;
+      await api(`/api/store/admin/events/${b.dataset.evdel}`,
+        { method: "DELETE" });
+      drawEvents();
+    });
+}
+
+$("#ev-add").onclick = async () => {
+  const name = $("#ev-name").value.trim();
+  if (!name) { alert("An event needs a name."); return; }
+  const date = $("#ev-date").value;
+  await api("/api/store/admin/events", { method: "POST",
+    body: JSON.stringify({
+      name, kind: $("#ev-kind").value,
+      venue: $("#ev-venue").value.trim(), city: $("#ev-city").value.trim(),
+      region: $("#ev-region").value.trim(), url: $("#ev-url").value.trim(),
+      body: $("#ev-body").value.trim(),
+      // noon local, so the date shown never slips a day across time zones
+      starts: date ? new Date(date + "T12:00").getTime() / 1000
+        : Date.now() / 1000 }) });
+  ["ev-name", "ev-venue", "ev-city", "ev-region", "ev-url", "ev-body"]
+    .forEach((id) => $("#" + id).value = "");
+  drawEvents();
+};
+
+/* ---------- heatmap ---------- */
+async function drawHeatPages() {
+  const pages = await api("/api/store/admin/heatmap/pages");
+  const sel = $("#hm-page");
+  if (!pages.length) {
+    $("#hm-summary").textContent =
+      "No clicks recorded yet — browse the storefront and they'll appear here.";
+    $("#hm-stage").innerHTML = "";
+    return;
+  }
+  sel.innerHTML = pages.map((p) =>
+    `<option value="${p.page}">${p.page} — ${p.clicks} clicks</option>`).join("");
+  sel.onchange = drawHeat;
+  $("#hm-mode").onchange = drawHeat;
+  drawHeat();
+}
+
+async function drawHeat() {
+  const page = $("#hm-page").value;
+  if (!page) return;
+  const d = await api("/api/store/admin/heatmap?page=" +
+    encodeURIComponent(page));
+  const mode = $("#hm-mode").value;
+  $("#hm-summary").innerHTML =
+    `<b>${d.count}</b> clicks on <code>${d.page}</code>. The frame below is the
+     live page; the overlay is where people actually clicked.`;
+
+  // The page itself, in an iframe, with the clicks painted on top. Same-origin
+  // so it renders exactly what a visitor saw.
+  const blobs = d.hits.map((h) =>
+    mode === "dots"
+      ? `<circle cx="${(h.x * 100).toFixed(2)}%" cy="${(h.y * 100).toFixed(2)}%"
+           r="4" class="hm-dot"/>`
+      : `<circle cx="${(h.x * 100).toFixed(2)}%" cy="${(h.y * 100).toFixed(2)}%"
+           r="28" class="hm-blob"/>`).join("");
+  $("#hm-stage").innerHTML = `
+    <div class="hm-frame">
+      <iframe src="${page}" title="Page preview" loading="lazy"></iframe>
+      <svg class="hm-overlay ${mode}" preserveAspectRatio="none">${blobs}</svg>
+    </div>`;
+
+  $("#hm-top").innerHTML = d.top.map((t) => {
+    const max = d.top[0].n || 1;
+    return `<div class="adm-item">
+      <code style="flex:0 0 200px">${t.label}</code>
+      <span class="hm-bar" style="flex:1">
+        <span style="width:${(t.n / max * 100).toFixed(1)}%"></span></span>
+      <b style="flex:0 0 40px;text-align:right">${t.n}</b>
+    </div>`;
+  }).join("") || '<p class="dim">Nothing yet.</p>';
+
+  $("#hm-reach").innerHTML = d.reach.map((r) => `
+    <div class="adm-item" style="gap:10px">
+      <span class="dim" style="flex:0 0 54px">${r.band}%</span>
+      <span class="hm-bar" style="flex:1">
+        <span style="width:${r.pct}%"></span></span>
+      <b style="flex:0 0 44px;text-align:right">${r.pct}%</b>
+    </div>`).join("");
+}
+
 async function drawEnquiries() {
   const rows = await api("/api/store/admin/enquiries");
   if (!rows.length) {
@@ -752,6 +872,7 @@ async function boot() {
   run("products", drawCollections); run("products", drawVariants);
   run("products", drawMedia);
   run("customers", drawAffiliates); run("customers", drawEnquiries);
+  run("content", drawEvents); run("analytics", drawHeatPages);
   run("content", drawPages); run("content", drawReviewQueue);
   run("content", drawPosts); run("content", drawMenus);
   run("content", drawRedirects);

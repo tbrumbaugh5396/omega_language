@@ -657,4 +657,63 @@ ok(r.status_code == 200 and r.json()["result"] == "processed",
    "signed billing webhook processed")
 _C["shopify"]["webhook_secret"] = ""
 
+# --- partner funnels, events, locator, heatmap ---
+import time  # noqa: E402
+r = c.post("/api/store/enquiry", json={
+    "kind": "brand", "name": "Ada Lovelace", "company": "Analytical Drinks",
+    "email": "ada@example.com", "city": "Boston MA", "region": "Northeast",
+    "detail": "cold-brew tea, 4 SKUs"})
+ok(r.status_code == 200 and r.json()["ok"], "partner enquiry accepted")
+_oid = r.json()["outreach_id"]
+ok(any(o["id"] == _oid and o["stage"] == "lead"
+       for o in c.get("/api/outreach", headers=A).json()),
+   "enquiry opens a lead in the ERP pipeline")
+ok(c.post("/api/store/enquiry", json={"kind": "nope", "name": "X"}
+          ).status_code == 400, "unknown enquiry kind rejected")
+ok(c.post("/api/store/enquiry", json={"kind": "work", "name": "  "}
+          ).status_code == 400, "enquiry needs a name")
+ok(any(e["kind"] == "brand"
+       for e in c.get("/api/store/admin/enquiries", headers=A).json()),
+   "enquiry visible in the store admin")
+
+for _slug in ("work", "stock-zen", "reorder", "distribute", "brand",
+              "partner-brand"):
+    ok(c.get(f"/partners/{_slug}").status_code == 200,
+       f"partner page /{_slug} renders")
+ok(c.get("/partners/nonsense").status_code == 404, "unknown partner page 404s")
+ok(c.get("/events").status_code == 200, "events page renders")
+ok(c.get("/find").status_code == 200, "store locator renders")
+
+_ev = c.post("/api/store/admin/events", headers=A, json={
+    "name": "Tasting — Test Shop", "kind": "tasting", "city": "Austin TX",
+    "region": "Southwest", "starts": time.time() + 86400})
+ok(_ev.status_code == 200, "admin creates an event")
+_eid = _ev.json()["id"]
+ok(any(e["id"] == _eid for e in c.get("/api/store/events").json()),
+   "future event appears on the public list")
+ok(c.post("/api/store/admin/events", headers=A,
+          json={"name": "X", "kind": "rave"}).status_code == 400,
+   "bad event kind rejected")
+c.patch(f"/api/store/admin/events/{_eid}", headers=A, json={
+    "name": "Tasting — Test Shop", "kind": "tasting", "active": 0,
+    "starts": time.time() + 86400})
+ok(not any(e["id"] == _eid for e in c.get("/api/store/events").json()),
+   "deactivated event drops off the public list")
+ok(c.delete(f"/api/store/admin/events/{_eid}", headers=A).status_code == 200,
+   "admin deletes an event")
+
+_locs = c.get("/api/store/locations").json()
+ok(_locs and all(s["kind"] == "retail" for s in _locs),
+   "locator lists retail stores only")
+
+ok(c.post("/api/store/clicks", json={"page": "/", "hits": [
+    {"x": 0.5, "y": 0.25, "vw": 1280, "label": "button.add-btn", "depth": 0.4},
+    {"x": 9.9, "y": 0.5},                      # out of range, dropped
+]}).json()["stored"] == 1, "heatmap keeps in-range clicks, drops the rest")
+_hm = c.get("/api/store/admin/heatmap?page=/", headers=A).json()
+ok(_hm["count"] >= 1 and len(_hm["reach"]) == 10,
+   "heatmap returns hits and a scroll-depth profile")
+ok(c.get("/api/store/admin/heatmap?page=/").status_code == 403,
+   "heatmap needs admin")
+
 print(f"\nall {checks} checks passed")

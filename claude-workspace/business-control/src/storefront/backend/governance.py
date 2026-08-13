@@ -74,6 +74,8 @@ PATH_RULES = [
     ("/api/store/admin/staff", "settings"),
     ("/api/store/admin/audit", "settings"),
     ("/api/store/admin/enquiries", "customers"),
+    ("/api/store/admin/events", "content"),
+    ("/api/store/admin/heatmap", "analytics"),
 ]
 
 

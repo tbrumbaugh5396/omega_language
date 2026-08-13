@@ -90,7 +90,7 @@ svg.can { display: block; width: 100%; height: auto; }
 .ico-lg { width: 26px; height: 26px; }
 
 /* announcement — one message, quiet */
-.announce { background: var(--ink); color: #fff; overflow: hidden;
+.announce { background: var(--purple); color: #fff; overflow: hidden;
   font-size: 12.5px; font-weight: 500; letter-spacing: .01em; }
 .announce-track { display: flex; gap: 56px; width: max-content;
   padding: 9px 0; animation: marquee 40s linear infinite; }
@@ -156,6 +156,21 @@ svg.can { display: block; width: 100%; height: auto; }
 .menu-link span { min-width: 0; }
 .menu-headline { font-family: var(--display); font-size: clamp(26px, 3vw, 34px);
   font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
+/* Collapsible menu groups. <details> so the state survives without JS and
+   keyboard users get the native toggle for free. */
+.menu-fold summary { list-style: none; cursor: pointer; display: flex;
+  align-items: center; gap: 8px; }
+.menu-fold summary::-webkit-details-marker { display: none; }
+.menu-fold summary .side-group { margin: 22px 0 10px; }
+.fold-chev { color: var(--ink-3); transform: rotate(90deg);
+  transition: transform .22s; margin-top: 12px; }
+.menu-fold[open] .fold-chev { transform: rotate(-90deg); }
+.menu-fold summary:hover .side-group,
+.menu-fold summary:hover .fold-chev { color: var(--purple); }
+/* the locator is the one link people hunt for, so it wears the CTA colour */
+.menu-link.locator-link { background: #fff4ec; border: 1px solid #ffd6bb; }
+.menu-link.locator-link .ico { color: var(--orange); }
+.menu-link.locator-link:hover { background: #ffe9d9; }
 @media (max-width: 900px) {
   .menu-grid { grid-template-columns: 1fr; gap: 32px; }
   .menu-inner { padding: 24px 22px 60px; }
@@ -372,7 +387,7 @@ svg.can { display: block; width: 100%; height: auto; }
   font-size: 13.5px; cursor: pointer; font-family: var(--ui); color: var(--ink);
   transition: border-color .18s, background .18s, color .18s; }
 .tab:hover { border-color: var(--ink-3); }
-.tab.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.tab.on { background: var(--purple); border-color: var(--purple); color: #fff; }
 .tab .swatch { width: 9px; height: 9px; border-radius: 50%; }
 
 /* ---------- product page ---------- */
@@ -495,7 +510,8 @@ svg.can { display: block; width: 100%; height: auto; }
 .social-card span { font-size: 12.5px; color: var(--ink-2); }
 
 /* rewards */
-.rewards-card { background: var(--ink); color: #fff;
+.rewards-card { background: linear-gradient(150deg, var(--purple) 0%,
+  #5a00a3 55%, var(--purple-deep) 100%); color: #fff;
   border-radius: var(--r-lg); padding: 56px 34px; text-align: center; }
 .rewards-card h2 { color: #fff; }
 .rewards-card p { max-width: 480px; margin: 12px auto 24px;
@@ -703,8 +719,30 @@ svg.can { display: block; width: 100%; height: auto; }
 
 .locator-bar { display: flex; gap: 12px; flex-wrap: wrap;
   align-items: center; margin-bottom: 6px; }
+#loc-near { background: var(--orange); color: #fff; border-color: var(--orange);
+  font-weight: 700; }
+#loc-near:hover { background: #e85f00; border-color: #e85f00; }
+.loc-map-wrap { background: var(--paper); border: 1px solid var(--line);
+  border-radius: var(--r-lg); padding: 14px; margin: 6px 0 20px; }
+.loc-map { width: 100%; height: auto; display: block; }
+.loc-map .us { fill: var(--lav-soft); stroke: var(--line);
+  stroke-width: 2; stroke-linejoin: round; }
+.loc-pin { cursor: pointer; }
+.loc-pin .halo { fill: var(--orange); opacity: .16;
+  transition: r .2s, opacity .2s; }
+.loc-pin .dot { fill: var(--orange); stroke: #fff; stroke-width: 2;
+  transition: r .2s; }
+.loc-pin:hover .halo, .loc-pin:focus-visible .halo { opacity: .3; }
+.loc-pin.on .dot { fill: var(--purple); }
+.loc-pin.on .halo { fill: var(--purple); opacity: .26; }
+.loc-me .me-dot { fill: var(--purple); stroke: #fff; stroke-width: 2.5; }
+.loc-me .me-halo { fill: var(--purple); opacity: .14; }
 .loc-list { display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.loc-card { cursor: pointer; transition: border-color .18s, box-shadow .18s; }
+.loc-card:hover { border-color: var(--ink-3); }
+.loc-card.on { border-color: var(--purple); border-width: 2px;
+  padding: 17px 19px; box-shadow: var(--sh-1); }
 .loc-card { background: var(--paper); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 18px 20px; }
 .loc-card b { font-size: 16px; font-weight: 600; display: block; }

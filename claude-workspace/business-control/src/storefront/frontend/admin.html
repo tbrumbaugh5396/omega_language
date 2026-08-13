@@ -50,6 +50,26 @@
       border: 1.5px solid #e8e2f4; background: #fff; border-radius: 8px;
       cursor: pointer; font-family: inherit; }
     .md-acts button:hover { border-color: var(--purple); }
+
+    /* heatmap */
+    .hm-stage { margin-top: 10px; }
+    .hm-frame { position: relative; border: 1.5px solid #e8e2f4;
+      border-radius: 14px; overflow: hidden; background: #fff;
+      height: 620px; }
+    .hm-frame iframe { width: 100%; height: 100%; border: none;
+      display: block; }
+    .hm-overlay { position: absolute; inset: 0; width: 100%; height: 100%;
+      pointer-events: none; }
+    /* Blobs blur into each other so density reads as heat, the way a
+       CrazyEgg overlay does; dot mode keeps them crisp for pinpointing. */
+    .hm-overlay.heat { filter: blur(14px) contrast(2.2); opacity: .72;
+      mix-blend-mode: multiply; }
+    .hm-blob { fill: #ff6900; opacity: .5; }
+    .hm-dot { fill: #6c00bf; opacity: .55; stroke: #fff; stroke-width: 1; }
+    .hm-bar { display: block; height: 8px; border-radius: 999px;
+      background: #efe9f8; overflow: hidden; }
+    .hm-bar > span { display: block; height: 100%; border-radius: 999px;
+      background: linear-gradient(90deg, #6c00bf, #8a77e1); }
   </style>
 </head>
 <body>
@@ -92,6 +112,8 @@
       <button class="tab" data-tab="webhooks">Webhooks</button>
       <button class="tab" data-tab="affiliates">Affiliates</button>
       <button class="tab" data-tab="enquiries">Enquiries</button>
+      <button class="tab" data-tab="events">Events</button>
+      <button class="tab" data-tab="heatmap">Heatmap</button>
       <button class="tab" data-tab="blog">Blog</button>
       <button class="tab" data-tab="nav">Nav &amp; redirects</button>
       <button class="tab" data-tab="intl">Currency &amp; language</button>
@@ -220,6 +242,68 @@
         pipeline, so your reps see it in
         <a href="/ops/" target="_blank">Outreach ↗</a> without re-keying it.</p>
       <div class="adm-list" id="enq-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="events">
+      <h3>Events — tastings, pop-ups and markets</h3>
+      <p class="dim">These appear on
+        <a href="/events" target="_blank"><b>/events ↗</b></a>, newest first,
+        filtered by region. Past events drop off the public page
+        automatically.</p>
+      <div class="adm-row">
+        <div><label>Name</label>
+          <input id="ev-name" placeholder="Tasting — Lakeview Pantry"></div>
+        <div><label>Kind</label>
+          <select id="ev-kind">
+            <option value="tasting">Tasting</option>
+            <option value="popup">Pop-up</option>
+            <option value="market">Market</option>
+            <option value="class">Class</option>
+          </select></div>
+        <div><label>Date</label><input id="ev-date" type="date"></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Venue</label><input id="ev-venue"></div>
+        <div><label>City</label><input id="ev-city" placeholder="Chicago IL"></div>
+        <div><label>Region</label><input id="ev-region" placeholder="Midwest"></div>
+      </div>
+      <div class="adm-row">
+        <div style="flex:2"><label>Details</label>
+          <input id="ev-body" placeholder="We'll be pouring 4–7pm, no ticket needed."></div>
+        <div><label>Link (optional)</label><input id="ev-url"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="ev-add">Add event</button>
+      </div>
+      <div class="adm-list" id="ev-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="heatmap">
+      <h3>Heatmap — where people click</h3>
+      <p class="dim">Click positions are recorded as a fraction of the page,
+        so the overlay lines up whatever screen the visitor used. No visitor
+        ids and no typed text are stored — password and email fields are
+        skipped entirely.</p>
+      <div class="adm-row">
+        <div><label>Page</label><select id="hm-page"></select></div>
+        <div><label>Overlay</label>
+          <select id="hm-mode">
+            <option value="heat">Heat blobs</option>
+            <option value="dots">Individual clicks</option>
+          </select></div>
+      </div>
+      <div id="hm-summary" class="dim" style="margin:10px 0"></div>
+      <div id="hm-stage" class="hm-stage"></div>
+      <div class="adm-row" style="align-items:flex-start;margin-top:16px">
+        <div style="flex:1">
+          <label>Most-clicked elements</label>
+          <div class="adm-list" id="hm-top"></div>
+        </div>
+        <div style="flex:1">
+          <label>How far down people scroll</label>
+          <div id="hm-reach"></div>
+        </div>
+      </div>
     </div>
 
     <div class="adm-panel hidden" data-panel="orders">

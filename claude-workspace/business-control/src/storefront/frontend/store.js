@@ -1251,7 +1251,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
   if (!host) return;
   const stores = await (await fetch("/api/store/locations")).json();
   const regions = [...new Set(stores.map((s) => s.region).filter(Boolean))];
-  let active = null, query = "", here = null;
+  let active = null, query = "", here = null, focused = null;
 
   // straight-line distance is honest for "which of these is nearest" and
   // needs no map tiles or third-party call
@@ -1261,6 +1261,77 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
     const h = Math.sin(dLat / 2) ** 2 +
       Math.cos(rad(a)) * Math.cos(rad(c)) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(h));
+  };
+
+  /* A map without tiles. An equirectangular projection over the lower-48
+     bounding box is accurate enough to answer "roughly where is this", costs
+     no third-party request, and can't leak the shopper's viewing habits to a
+     tile server. The outline is a coarse path — it reads as the US at this
+     size without shipping a 200KB topology. */
+  const BOX = { w: -125, e: -66.5, n: 49.5, s: 24.5 };
+  const MAP_W = 1000, MAP_H = 560;
+  const project = (lat, lng) => [
+    ((lng - BOX.w) / (BOX.e - BOX.w)) * MAP_W,
+    ((BOX.n - lat) / (BOX.n - BOX.s)) * MAP_H,
+  ];
+  /* Coarse lower-48 outline as real [lat, lng] waypoints, projected through
+     the same function as the pins. Hand-drawing the path in SVG units put
+     stores outside the country — deriving both from one projection makes that
+     impossible. The Great Lakes are traced along their southern shores rather
+     than cut out; at this size that reads correctly. */
+  const US_EDGE = [
+    [49.0, -123.0], [48.4, -124.7], [46.2, -124.0], [44.6, -124.1],
+    [42.0, -124.2], [40.4, -124.4], [38.0, -123.0], [36.6, -121.9],
+    [34.4, -120.5], [33.7, -118.3], [32.5, -117.1],
+    [32.5, -114.8], [31.3, -111.0], [31.8, -106.5], [29.8, -102.4],
+    [25.9, -97.4], [27.8, -97.4], [29.3, -94.8], [29.7, -93.3],
+    [29.2, -90.0], [30.2, -88.0], [30.4, -86.5], [29.7, -84.9],
+    [28.0, -82.8], [25.1, -80.9], [25.8, -80.2], [28.4, -80.6],
+    [32.0, -80.8], [33.9, -78.0], [35.2, -75.5], [37.0, -76.0],
+    [38.8, -75.1], [40.5, -74.0], [41.4, -71.5], [42.0, -70.1],
+    [43.7, -70.0], [44.8, -67.0], [47.0, -69.2], [45.0, -71.5],
+    [45.0, -74.7], [43.3, -79.1], [42.3, -83.0], [46.0, -84.4],
+    [46.8, -90.0], [47.4, -92.0], [49.0, -95.2],
+  ];
+  const US_PATH = US_EDGE.map(([la, ln], i) => {
+    const [x, y] = project(la, ln);
+    return `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(" ") + " Z";
+
+  const drawMap = (shown) => {
+    const host = $("#loc-map");
+    if (!host) return;
+    const pins = shown.filter((s) => s.lat && s.lng).map((s) => {
+      const [x, y] = project(s.lat, s.lng);
+      const on = s.id === focused;
+      return `<g class="loc-pin ${on ? "on" : ""}" data-pin="${s.id}"
+        transform="translate(${x.toFixed(1)},${y.toFixed(1)})"
+        tabindex="0" role="button"
+        aria-label="${s.name}, ${s.city}">
+        <circle class="halo" r="${on ? 26 : 18}"/>
+        <circle class="dot" r="${on ? 9 : 6.5}"/>
+        <title>${s.name} — ${s.city}</title></g>`;
+    }).join("");
+    const me = here ? (() => {
+      const [x, y] = project(here.lat, here.lng);
+      return `<g class="loc-me" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
+        <circle class="me-halo" r="22"/><circle class="me-dot" r="7"/>
+        <title>You are here</title></g>`;
+    })() : "";
+    host.innerHTML = `<svg viewBox="0 0 ${MAP_W} ${MAP_H}" class="loc-map"
+      role="img" aria-label="Map of stores carrying Zenjoy">
+      <path class="us" d="${US_PATH}"/>${me}${pins}</svg>`;
+    host.querySelectorAll("[data-pin]").forEach((g) => {
+      const pick = () => {
+        focused = +g.dataset.pin;
+        paint();
+        const card = document.querySelector(`[data-loc="${focused}"]`);
+        if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+      };
+      g.onclick = pick;
+      g.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault(); pick(); } };
+    });
   };
 
   const paint = () => {
@@ -1277,13 +1348,19 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
       shown.sort((a, b) => a._d - b._d);
     }
     $("#loc-empty").hidden = shown.length > 0;
-    host.innerHTML = shown.map((s) => `<div class="loc-card">
+    host.innerHTML = shown.map((s) => `<div class="loc-card
+      ${s.id === focused ? "on" : ""}" data-loc="${s.id}">
       <b>${s.name}</b>
       <div class="where">${ico("pin", "ico ico-sm")}
         ${[s.city, s.region].filter(Boolean).join(" · ")}</div>
       ${here && isFinite(s._d)
         ? `<span class="dist">${s._d.toFixed(1)} miles away</span>` : ""}
     </div>`).join("");
+    host.querySelectorAll("[data-loc]").forEach((c) => c.onclick = () => {
+      focused = focused === +c.dataset.loc ? null : +c.dataset.loc;
+      paint();
+    });
+    drawMap(shown);
   };
 
   $("#loc-filters").innerHTML = [["All", null], ...regions.map((r) => [r, r])]
@@ -1312,6 +1389,70 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
     }, () => toast("Couldn't get your location"));
   };
   paint();
+})();
+
+/* ---------- interaction heatmap ----------
+   Records where on the page people click and how far they scroll, so the
+   admin can see a page the way its visitors use it. Coordinates are stored as
+   a fraction of the page box rather than pixels, so one recording replays at
+   any viewport. Nothing identifying is captured — no visitor id, no typed
+   text, and password/email fields are skipped entirely. */
+(function heatmap() {
+  const HITS = [];
+  let deepest = 0;
+
+  const trackDepth = () => {
+    const h = document.documentElement.scrollHeight - innerHeight;
+    deepest = Math.max(deepest, h > 0 ? Math.min(1, scrollY / h) : 1);
+  };
+  addEventListener("scroll", trackDepth, { passive: true });
+  trackDepth();
+
+  // A coarse description of what was hit — tag plus its first class, or an
+  // id. Never the element's text, which can contain what someone typed.
+  const describe = (el) => {
+    if (!el || !el.tagName) return "";
+    const t = el.tagName.toLowerCase();
+    if (el.id) return `${t}#${el.id}`;
+    const cls = (el.className || "").toString().trim().split(/\s+/)[0];
+    return cls ? `${t}.${cls}` : t;
+  };
+
+  addEventListener("click", (e) => {
+    const el = e.target;
+    if (el && el.closest && el.closest("input[type=password], input[type=email]")) return;
+    const doc = document.documentElement;
+    const w = doc.scrollWidth, h = doc.scrollHeight;
+    if (!w || !h) return;
+    HITS.push({
+      x: +(e.pageX / w).toFixed(4),
+      y: +(e.pageY / h).toFixed(4),
+      vw: innerWidth,
+      label: describe(el.closest("a,button,input,select,summary") || el),
+      depth: +deepest.toFixed(3),
+    });
+    if (HITS.length >= 60) flush();
+  }, { passive: true, capture: true });
+
+  function flush() {
+    if (!HITS.length) return;
+    const body = JSON.stringify({
+      page: location.pathname.slice(0, 120),
+      hits: HITS.splice(0, HITS.length),
+    });
+    // sendBeacon survives the page going away; fetch is the fallback
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon("/api/store/clicks",
+        new Blob([body], { type: "application/json" }));
+    } else {
+      fetch("/api/store/clicks", { method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json" }, body }).catch(() => {});
+    }
+  }
+  addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flush();
+  });
+  addEventListener("pagehide", flush);
 })();
 
 // ---------- boot ----------

@@ -54,21 +54,29 @@
     <div class="menu-grid">
       <div id="side-collections"></div>
       <div>
-        <div class="side-group">Come find us</div>
-        <div class="menu-links">
-          <a class="menu-link" href="/events">
-            <svg class="ico" aria-hidden="true"><use href="#i-sparkle"/></svg>
-            <span>Events<small>Tastings, pop-ups and markets</small></span></a>
-          <a class="menu-link" href="/find">
-            <svg class="ico" aria-hidden="true"><use href="#i-search"/></svg>
-            <span>Find a store<small>Shops that carry the range</small></span></a>
-          <a class="menu-link" href="/partners/work">
-            <svg class="ico" aria-hidden="true"><use href="#i-leaf"/></svg>
-            <span>Zen at work<small>Stock your office kitchen</small></span></a>
-        </div>
+        <details class="menu-fold" id="fold-find" open>
+          <summary><span class="side-group">Come find us</span>
+            <svg class="ico ico-sm fold-chev" aria-hidden="true">
+              <use href="#i-arrow"/></svg></summary>
+          <div class="menu-links">
+            <a class="menu-link locator-link" href="/find">
+              <svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg>
+              <span>Find a store<small>Shops that carry the range</small></span></a>
+            <a class="menu-link" href="/events">
+              <svg class="ico" aria-hidden="true"><use href="#i-sparkle"/></svg>
+              <span>Events<small>Tastings, pop-ups and markets</small></span></a>
+            <a class="menu-link" href="/partners/work">
+              <svg class="ico" aria-hidden="true"><use href="#i-leaf"/></svg>
+              <span>Zen at work<small>Stock your office kitchen</small></span></a>
+          </div>
+        </details>
 
-        <div class="side-group">Work with us</div>
-        <div class="menu-links" id="menu-partners"></div>
+        <details class="menu-fold" id="fold-partners" open>
+          <summary><span class="side-group">Work with us</span>
+            <svg class="ico ico-sm fold-chev" aria-hidden="true">
+              <use href="#i-arrow"/></svg></summary>
+          <div class="menu-links" id="menu-partners"></div>
+        </details>
 
         <div class="side-group">Your account</div>
         <div class="menu-links">

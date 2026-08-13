@@ -64,6 +64,22 @@ CREATE TABLE IF NOT EXISTS store_events (
   active INTEGER DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS store_events_when ON store_events(starts);
+
+-- Interaction heatmap. Coordinates are stored as a fraction of the page box
+-- (0..1), not pixels, so one recording replays sensibly at any viewport —
+-- pixel coordinates from a 1440px desktop are meaningless on a phone.
+-- `label` is a coarse element description, never text the visitor typed.
+CREATE TABLE IF NOT EXISTS store_clicks (
+  id INTEGER PRIMARY KEY,
+  page TEXT NOT NULL,
+  x REAL NOT NULL,                         -- 0..1 across the page
+  y REAL NOT NULL,                         -- 0..1 down the full document
+  vw INTEGER DEFAULT 0,                    -- viewport width bucket
+  label TEXT DEFAULT '',                   -- e.g. "button.add-btn"
+  depth REAL DEFAULT 0,                    -- how far down the visitor scrolled
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS store_clicks_page ON store_clicks(page, created_at);
 """
 
 # kind -> page copy + which optional fields the form asks for.
@@ -284,6 +300,72 @@ def create_enquiry(body: EnquiryBody, con=Depends(get_con),
     return {"ok": True, "outreach_id": oid}
 
 
+class ClickBody(BaseModel):
+    page: str
+    hits: list[dict] = []
+
+
+@router.post("/api/store/clicks")
+def record_clicks(body: ClickBody, con=Depends(get_con),
+                  _rl=Depends(rate_limit)):
+    """Batched at page-hide so a browsing session is one request, not one per
+    click. Nothing here identifies a person: no visitor id, no text content,
+    just where on the page the pointer landed."""
+    page = (body.page or "/")[:120]
+    now = time.time()
+    rows = []
+    for h in body.hits[:200]:
+        try:
+            x, y = float(h.get("x", 0)), float(h.get("y", 0))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= x <= 1 and 0 <= y <= 1):
+            continue
+        rows.append((page, x, y, int(h.get("vw") or 0),
+                     str(h.get("label") or "")[:60],
+                     float(h.get("depth") or 0), now))
+    if rows:
+        con.executemany(
+            "INSERT INTO store_clicks(page,x,y,vw,label,depth,created_at)"
+            " VALUES(?,?,?,?,?,?,?)", rows)
+        con.commit()
+    return {"ok": True, "stored": len(rows)}
+
+
+@router.get("/api/store/admin/heatmap/pages")
+def heatmap_pages(u=Depends(admin_user), con=Depends(get_con)):
+    return [dict(r) for r in con.execute(
+        "SELECT page, COUNT(*) clicks, MAX(created_at) last"
+        " FROM store_clicks GROUP BY page ORDER BY clicks DESC"
+        " LIMIT 60").fetchall()]
+
+
+@router.get("/api/store/admin/heatmap")
+def heatmap(page: str, u=Depends(admin_user), con=Depends(get_con)):
+    rows = con.execute(
+        "SELECT x, y, label, depth FROM store_clicks WHERE page=?"
+        " ORDER BY created_at DESC LIMIT 4000", (page,)).fetchall()
+    hits = [{"x": r["x"], "y": r["y"]} for r in rows]
+    by_label: dict[str, int] = {}
+    for r in rows:
+        if r["label"]:
+            by_label[r["label"]] = by_label.get(r["label"], 0) + 1
+    top = sorted(by_label.items(), key=lambda kv: -kv[1])[:15]
+    depths = sorted(r["depth"] for r in rows if r["depth"])
+    # How far down the page people actually got, in tenths.
+    buckets = [0] * 10
+    for d in depths:
+        buckets[min(9, int(d * 10))] += 1
+    reach = []
+    remaining = len(depths)
+    for i, b in enumerate(buckets):
+        reach.append({"band": (i + 1) * 10,
+                      "pct": round(100 * remaining / len(depths)) if depths else 0})
+        remaining -= b
+    return {"page": page, "count": len(rows), "hits": hits,
+            "top": [{"label": k, "n": v} for k, v in top], "reach": reach}
+
+
 @router.get("/api/store/events")
 def list_events(con=Depends(get_con)):
     rows = con.execute(
@@ -303,6 +385,66 @@ def list_locations(con=Depends(get_con)):
 
 
 # ---------- admin ----------
+
+class EventBody(BaseModel):
+    name: str
+    kind: str = "tasting"
+    venue: str = ""
+    city: str = ""
+    region: str = ""
+    starts: float = 0
+    url: str = ""
+    body: str = ""
+    active: int = 1
+
+
+EVENT_KINDS = ("tasting", "popup", "market", "class")
+
+
+@router.get("/api/store/admin/events")
+def admin_events(u=Depends(admin_user), con=Depends(get_con)):
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM store_events ORDER BY starts DESC").fetchall()]
+
+
+@router.post("/api/store/admin/events")
+def admin_add_event(body: EventBody, u=Depends(admin_user),
+                    con=Depends(get_con)):
+    if not body.name.strip():
+        raise HTTPException(400, "an event needs a name")
+    if body.kind not in EVENT_KINDS:
+        raise HTTPException(400, f"kind must be one of {EVENT_KINDS}")
+    cur = con.execute(
+        "INSERT INTO store_events(name,kind,venue,city,region,starts,url,"
+        " body,active) VALUES(?,?,?,?,?,?,?,?,?)",
+        (body.name.strip(), body.kind, body.venue.strip(), body.city.strip(),
+         body.region.strip(), body.starts or time.time(), body.url.strip(),
+         body.body.strip(), 1 if body.active else 0))
+    con.commit()
+    return {"id": cur.lastrowid}
+
+
+@router.patch("/api/store/admin/events/{eid}")
+def admin_edit_event(eid: int, body: EventBody, u=Depends(admin_user),
+                     con=Depends(get_con)):
+    if body.kind not in EVENT_KINDS:
+        raise HTTPException(400, f"kind must be one of {EVENT_KINDS}")
+    con.execute(
+        "UPDATE store_events SET name=?,kind=?,venue=?,city=?,region=?,"
+        " starts=?,url=?,body=?,active=? WHERE id=?",
+        (body.name.strip(), body.kind, body.venue.strip(), body.city.strip(),
+         body.region.strip(), body.starts, body.url.strip(),
+         body.body.strip(), 1 if body.active else 0, eid))
+    con.commit()
+    return {"ok": True}
+
+
+@router.delete("/api/store/admin/events/{eid}")
+def admin_del_event(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    con.execute("DELETE FROM store_events WHERE id=?", (eid,))
+    con.commit()
+    return {"ok": True}
+
 
 @router.get("/api/store/admin/enquiries")
 def admin_enquiries(limit: int = 100, u=Depends(admin_user),
@@ -431,6 +573,7 @@ def locator_page(request: Request, con=Depends(get_con)):
  </div>
  <div class="collection-tabs" id="loc-filters"
    role="group" aria-label="Filter stores by region"></div>
+ <div class="loc-map-wrap"><div id="loc-map"></div></div>
  <div class="loc-list" id="loc-list"></div>
  <p class="dim" id="loc-empty" hidden>No stores match that yet — we're
   adding accounts every week. <a class="text-link"
