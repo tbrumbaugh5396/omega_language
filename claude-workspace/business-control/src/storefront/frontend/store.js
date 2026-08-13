@@ -1417,6 +1417,13 @@ const PIXEL = (() => {
   let consent = null;
   try { consent = JSON.parse(localStorage.getItem(KEY)); } catch {}
 
+  const paintToggle = () => {
+    const t = $("#pref-consent");
+    if (!t) return;
+    t.classList.toggle("on", consent === true);
+    t.setAttribute("aria-checked", consent === true ? "true" : "false");
+  };
+
   const applyConsent = (yes) => {
     consent = yes;
     localStorage.setItem(KEY, JSON.stringify(yes));
@@ -1425,6 +1432,7 @@ const PIXEL = (() => {
     }
     const bar = $("#consent-bar");
     if (bar) bar.hidden = true;
+    paintToggle();
   };
 
   // Show the bar only when there is actually something to consent to.
@@ -1442,6 +1450,24 @@ const PIXEL = (() => {
     consent = true;
   } else if (consent === true && window.__pixelLoad) {
     window.__pixelConsent = true; window.__pixelLoad();
+  }
+
+  /* Withdrawing consent has to be as easy as giving it, so the choice lives
+     in the preferences panel too — the bar only ever appears once. Only shown
+     when there is actually something to consent to. */
+  if (cfg && cfg.consentRequired && !PREVIEW) {
+    const row = $("#pref-consent-row"), grp = $("#pref-privacy-group");
+    if (row && grp) {
+      row.hidden = false; grp.hidden = false;
+      paintToggle();
+      $("#pref-consent").onclick = () => {
+        const turningOff = consent === true;
+        applyConsent(!turningOff);
+        // Scripts already in the page can't be unloaded, so turning it off
+        // reloads — otherwise "off" would be a label rather than a fact.
+        if (turningOff) location.reload();
+      };
+    }
   }
 
   return {

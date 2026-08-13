@@ -757,4 +757,12 @@ ok('__preview' in c.get("/store.js").text,
 _after = c.get("/api/store/admin/heatmap?page=/", headers=A).json()["count"]
 ok(_before == _after, "viewing the heatmap doesn't add to it")
 
+# Consent has to be withdrawable as easily as it is given.
+_js = c.get("/store.js").text
+ok("pref-consent" in _js, "consent can be changed from the preferences panel")
+_html = c.get("/").text
+ok('id="consent-yes"' in _html and 'id="consent-no"' in _html,
+   "both consent buttons are on the page")
+ok('id="pref-consent-row"' in _html, "preferences carry a consent switch")
+
 print(f"\nall {checks} checks passed")
