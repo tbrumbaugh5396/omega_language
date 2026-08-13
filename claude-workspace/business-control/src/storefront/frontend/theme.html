@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Theme &amp; page editor — Zenjoy</title>
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root { --purple:#6c00bf; --lavender:#8a77e1; --orange:#ff6900;
+      --ink:#3a3a3a; --line:#e8e2f4; }
+    * { box-sizing: border-box; margin: 0; }
+    body { font-family:'Quicksand',system-ui,sans-serif; color:var(--ink);
+      background:#f7f5fb; height:100vh; display:flex; flex-direction:column; }
+    a { color: inherit; text-decoration: none; }
+    .bar { display:flex; align-items:center; gap:14px; padding:10px 18px;
+      background:#fff; border-bottom:1px solid var(--line); flex:none; }
+    .brand { font-size:22px; font-weight:700; color:var(--purple); }
+    .brand span { color:var(--orange); }
+    .bar .grow { flex:1; }
+    .btn { border:none; border-radius:999px; padding:8px 16px; font-weight:700;
+      font-family:inherit; font-size:13.5px; cursor:pointer;
+      background:var(--purple); color:#fff; }
+    .btn.ghost { background:#fff; color:var(--purple);
+      border:2px solid var(--purple); }
+    .btn.sm { padding:5px 12px; font-size:12px; }
+    .wrap { flex:1; display:grid; grid-template-columns:340px 1fr; min-height:0; }
+    .panel { background:#fff; border-right:1px solid var(--line);
+      overflow-y:auto; padding:14px; }
+    .panel h3 { font-size:13px; text-transform:uppercase; letter-spacing:1.4px;
+      color:var(--lavender); margin:14px 0 8px; }
+    .page-pick { display:flex; gap:6px; align-items:center; }
+    .page-pick select { flex:1; padding:8px 10px; border-radius:10px;
+      border:1.5px solid var(--line); font-family:inherit; font-size:13.5px; }
+    .sec { border:1.5px solid var(--line); border-radius:12px; padding:9px 11px;
+      margin-bottom:7px; cursor:pointer; background:#fff; }
+    .sec.on { border-color:var(--purple); border-width:2px;
+      box-shadow:0 4px 14px rgba(108,0,191,.12); }
+    .sec.off { opacity:.5; }
+    .sec-head { display:flex; align-items:center; gap:8px; font-weight:700;
+      font-size:13.5px; }
+    .sec-head .ico { font-size:16px; }
+    .sec-head .sp { flex:1; }
+    .sec-acts button { border:none; background:none; cursor:pointer;
+      font-size:12px; padding:2px 4px; border-radius:6px; color:#8a82a0; }
+    .sec-acts button:hover { background:#f0ebfa; color:var(--purple); }
+    .add-row { display:flex; gap:6px; }
+    .add-row select { flex:1; padding:8px; border-radius:10px;
+      border:1.5px solid var(--line); font-family:inherit; }
+    .form label { display:block; font-size:12px; font-weight:700;
+      margin:10px 0 4px; }
+    .form input[type=text], .form input[type=number], .form textarea,
+    .form select { width:100%; border:1.5px solid var(--line);
+      border-radius:10px; padding:8px 10px; font-family:inherit;
+      font-size:13.5px; }
+    .form textarea { min-height:70px; }
+    .form .row { display:flex; gap:8px; align-items:center; }
+    .form .chk { display:flex; gap:8px; align-items:center; font-size:13px;
+      font-weight:600; margin-top:10px; }
+    .form .chk input { width:auto; }
+    .list-item { border:1px dashed var(--line); border-radius:10px;
+      padding:8px; margin:6px 0; }
+    .list-item .del { float:right; cursor:pointer; color:#c01060;
+      font-weight:700; }
+    .preview { position:relative; background:#eee; }
+    .preview iframe { width:100%; height:100%; border:none; background:#fff; }
+    .preview .toolbar { position:absolute; top:8px; right:12px; z-index:3;
+      display:flex; gap:6px; }
+    .preview .toolbar button { border:1px solid var(--line); background:#fff;
+      border-radius:8px; padding:5px 10px; cursor:pointer; font-size:12px;
+      font-family:inherit; font-weight:700; }
+    .preview .toolbar button.on { background:var(--purple); color:#fff; }
+    .frame-wrap { height:100%; display:flex; justify-content:center;
+      align-items:flex-start; }
+    .frame-wrap.mobile iframe { width:390px; box-shadow:0 0 0 8px #ddd;
+      border-radius:22px; margin-top:14px; height:calc(100% - 28px); }
+    .saved { color:#2a9d5c; font-size:12.5px; font-weight:700; }
+    .swatch { display:flex; gap:8px; align-items:center; }
+    .swatch input[type=color] { width:38px; height:32px; padding:0;
+      border:1.5px solid var(--line); border-radius:8px; background:#fff; }
+    #login { max-width:400px; margin:70px auto; background:#fff;
+      border:1.5px solid var(--line); border-radius:16px; padding:22px; }
+    #login input { width:100%; border:1.5px solid var(--line);
+      border-radius:10px; padding:9px 12px; font-family:inherit; margin:6px 0; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+
+<div id="login">
+  <h2 style="color:var(--purple);margin-bottom:6px">Theme editor</h2>
+  <p style="font-size:13px;color:#7a7a7a">Sign in with an admin account.</p>
+  <input id="li-name" placeholder="admin name">
+  <input id="li-pass" type="password" placeholder="password (if set)">
+  <input id="li-key" placeholder="admin key (first sign-in)">
+  <button class="btn" id="li-go" style="margin-top:8px">Sign in</button>
+  <p id="li-msg" style="font-size:13px;color:#c01060;margin-top:8px"></p>
+</div>
+
+<div class="bar hidden" id="topbar">
+  <a class="brand" href="/admin">zenjoy<span>.</span></a>
+  <b style="color:#9a92b8;font-size:13px">theme &amp; page editor</b>
+  <span class="grow"></span>
+  <span class="saved hidden" id="saved">saved ✓</span>
+  <a class="btn ghost sm" href="/" target="_blank">View store ↗</a>
+  <a class="btn ghost sm" href="/admin">Store admin →</a>
+</div>
+
+<div class="wrap hidden" id="app">
+  <div class="panel">
+    <h3>Page</h3>
+    <div class="page-pick">
+      <select id="page-select"></select>
+      <button class="btn sm" id="new-page" title="New page">＋</button>
+    </div>
+    <p style="font-size:11.5px;color:#8a82a0;margin-top:6px" id="page-url"></p>
+
+    <h3>Sections</h3>
+    <div id="sec-list"></div>
+    <div class="add-row">
+      <select id="add-type"></select>
+      <button class="btn sm" id="add-go">Add</button>
+    </div>
+
+    <h3>Settings</h3>
+    <div class="form" id="sec-form">
+      <p style="font-size:13px;color:#8a82a0">Pick a section above to edit it.</p>
+    </div>
+
+    <h3>Theme</h3>
+    <div class="form" id="theme-form"></div>
+  </div>
+
+  <div class="preview">
+    <div class="toolbar">
+      <button id="vp-desktop" class="on">🖥 Desktop</button>
+      <button id="vp-mobile">📱 Mobile</button>
+      <button id="vp-reload">↻</button>
+    </div>
+    <div class="frame-wrap" id="frame-wrap">
+      <iframe id="preview" src="/"></iframe>
+    </div>
+  </div>
+</div>
+
+<script src="/theme.js"></script>
+</body>
+</html>

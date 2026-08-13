@@ -1,0 +1,14 @@
+# Runtime data — holds the admin key, SMTP credentials, TLS private keys,
+# the live database and customer uploads. Never commit.
+data/
+
+# Local virtualenv (~100MB) and build output
+.venv/
+business-control.zip
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

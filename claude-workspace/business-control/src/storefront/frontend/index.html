@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><!--TITLE--></title>
+  <meta name="description" content="<!--DESCRIPTION-->">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Inter:wght@400;600;700&family=Fraunces:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/store.css">
+  <!--THEME-CSS-->
+  <link rel="manifest" href="/store.webmanifest">
+  <link rel="icon" href="/ops/icons/icon-192.png">
+</head>
+<body>
+
+<div class="announce" id="announce">
+  <div class="announce-track" id="announce-track"><!--ANNOUNCE--></div>
+</div>
+
+<header class="topbar">
+  <button class="icon-btn" id="menu-btn" aria-label="menu">☰</button>
+  <a class="brand" href="/"><!--BRAND--></a>
+  <nav class="top-links"><!--NAV--></nav>
+  <div class="top-actions">
+    <select id="locale-select" class="mini-select" hidden></select>
+    <select id="currency-select" class="mini-select" hidden></select>
+    <button class="icon-btn" id="account-btn" title="My account">👤</button>
+    <button class="icon-btn" id="track-btn" title="Track my order">📦</button>
+    <button class="icon-btn" id="support-btn" title="Support">💬</button>
+    <button class="cart-btn" id="cart-btn">🛒 <span class="cart-count" id="cart-count">0</span></button>
+  </div>
+</header>
+
+<aside class="side-menu" id="side-menu">
+  <div class="side-head">
+    <b>Menu</b><button class="icon-btn" id="menu-close">✕</button>
+  </div>
+  <div id="side-collections"></div>
+  <div class="side-foot">
+    <a href="#rewards">🎁 Rewards</a>
+    <a href="#" id="side-track">📦 Track order</a>
+    <a href="/admin" class="dim-link">Team sign-in →</a>
+  </div>
+</aside>
+<div class="scrim" id="scrim"></div>
+
+<section class="promo-strip" id="promo-strip" hidden>
+  <div class="promo-inner">
+    <span class="promo-flame">⏳</span>
+    <div><b id="promo-name"></b><span class="dim" id="promo-body"></span></div>
+    <span class="countdown" id="promo-countdown"></span>
+  </div>
+</section>
+
+<main id="page-body">
+<!--SECTIONS-->
+</main>
+
+<footer class="footer">
+  <a class="brand" href="/"><!--BRAND--></a>
+  <div class="foot-links"><!--FOOTNAV-->
+    <a href="#" id="foot-track">Track order</a>
+    <a href="#" id="foot-support">Support</a>
+    <a href="/admin" class="dim-link">Store admin</a>
+  </div>
+  <p class="dim"><!--FOOTER--></p>
+</footer>
+
+<!-- cart drawer -->
+<aside class="cart-drawer" id="cart-drawer">
+  <div class="side-head"><b>Your cart</b>
+    <button class="icon-btn" id="cart-close">✕</button></div>
+  <div class="cart-items" id="cart-items"></div>
+  <div id="cart-upsell"></div>
+  <div class="cart-discount">
+    <input id="discount-input" placeholder="Discount code">
+    <button class="btn-pill ghost sm" id="discount-apply">Apply</button>
+    <span class="dim" id="discount-msg"></span>
+  </div>
+  <div class="cart-discount">
+    <input id="gift-input" placeholder="Gift card code">
+    <button class="btn-pill ghost sm" id="gift-apply">Apply</button>
+    <span class="dim" id="gift-msg"></span>
+  </div>
+  <div class="cart-total" id="cart-total"></div>
+  <button class="btn-pill primary wide" id="checkout-btn">Checkout →</button>
+</aside>
+
+<!-- modals -->
+<div class="modal" id="modal">
+  <div class="modal-card" id="modal-card"></div>
+</div>
+
+<!--I18N-->
+<script src="/store.js"></script>
+</body>
+</html>

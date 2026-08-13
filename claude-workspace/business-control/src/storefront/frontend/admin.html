@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Store admin — Zenjoy</title>
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/store.css">
+  <style>
+    body { background: #f7f5fb; }
+    .adm-wrap { max-width: 1080px; margin: 0 auto; padding: 20px; }
+    .adm-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+    .adm-panel { background: #fff; border: 1.5px solid #e8e2f4;
+      border-radius: 18px; padding: 22px; margin-bottom: 18px; }
+    .adm-panel h3 { color: var(--purple); margin-bottom: 12px; }
+    .adm-panel label { display: block; font-size: 13px; font-weight: 700;
+      margin: 10px 0 4px; }
+    .adm-panel input, .adm-panel textarea, .adm-panel select { width: 100%;
+      border: 1.5px solid #e5e0f2; border-radius: 10px; padding: 9px 12px;
+      font-family: inherit; font-size: 14px; }
+    .adm-panel textarea { font-family: ui-monospace, monospace; font-size: 12.5px; }
+    .adm-row { display: flex; gap: 12px; }
+    .adm-row > * { flex: 1; }
+    .adm-list { border-top: 1px solid #f0ebfa; margin-top: 14px; }
+    .adm-item { display: flex; align-items: center; gap: 10px; padding: 10px 2px;
+      border-bottom: 1px solid #f0ebfa; font-size: 14px; }
+    .adm-item b { flex: 1; }
+    .mini { padding: 5px 12px; font-size: 12.5px; }
+    table.adm { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    table.adm th { text-align: left; color: var(--lavender);
+      border-bottom: 2px solid var(--lav-soft); padding: 6px 4px; }
+    table.adm td { padding: 6px 4px; border-bottom: 1px solid #f4f0fb; }
+    #login-card { max-width: 420px; margin: 60px auto; }
+    .hidden { display: none; }
+    .md-grid { display: grid; gap: 12px; margin-top: 12px;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+    .md-card { border: 1.5px solid #e8e2f4; border-radius: 14px;
+      overflow: hidden; background: #fff; }
+    .md-card.primary { border-color: var(--purple); border-width: 2.5px; }
+    .md-thumb { height: 110px; background: var(--lav-soft); display: flex;
+      align-items: center; justify-content: center; position: relative; }
+    .md-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .md-tag { position: absolute; left: 6px; top: 6px; font-size: 10px;
+      font-weight: 700; background: var(--purple); color: #fff;
+      border-radius: 999px; padding: 2px 8px; }
+    .md-body { padding: 8px; }
+    .md-body input { font-size: 12px; padding: 6px 8px; }
+    .md-acts { display: flex; gap: 4px; margin-top: 6px; }
+    .md-acts button { flex: 1; font-size: 11px; padding: 4px 0;
+      border: 1.5px solid #e8e2f4; background: #fff; border-radius: 8px;
+      cursor: pointer; font-family: inherit; }
+    .md-acts button:hover { border-color: var(--purple); }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">zenjoy<span class="brand-dot">.</span></a>
+  <b style="color:#9a92b8">store admin</b>
+  <span class="dim" id="who-label" style="font-size:12px"></span>
+  <div class="top-actions">
+    <a class="btn-pill primary sm" href="/admin/theme"
+       style="background:var(--purple);color:#fff">🎨 Theme &amp; pages</a>
+    <a class="btn-pill ghost sm" href="/" style="color:var(--purple);border:2px solid var(--purple)">View store →</a>
+    <a class="btn-pill ghost sm" href="/ops/" style="color:var(--purple);border:2px solid var(--purple)">ERP / ops →</a>
+  </div>
+</header>
+
+<div class="adm-wrap">
+  <div class="adm-panel" id="login-card">
+    <h3>Team sign-in</h3>
+    <p class="dim">One door for the whole team. Same accounts as the ERP —
+    you'll land on the back office if you manage the store, or be sent
+    straight to the <b>ERP / ops app</b> (time clock, routes, chat) if that's
+    where your work lives.</p>
+    <label>Name</label><input id="li-name" placeholder="admin name">
+    <label>Password (if set)</label><input id="li-pass" type="password">
+    <label>Admin key (first sign-in)</label><input id="li-key" placeholder="optional if already admin">
+    <div class="modal-actions">
+      <button class="btn-pill primary" id="li-go">Sign in</button>
+    </div>
+    <p class="dim" id="li-msg"></p>
+  </div>
+
+  <div id="adm-app" class="hidden">
+    <div class="adm-tabs" id="adm-tabs">
+      <button class="tab on" data-tab="products">Products</button>
+      <button class="tab" data-tab="orders">Orders</button>
+      <button class="tab" data-tab="reviews">Reviews</button>
+      <button class="tab" data-tab="pages">Pages</button>
+      <button class="tab" data-tab="collections">Collections</button>
+      <button class="tab" data-tab="discounts">Discounts</button>
+      <button class="tab" data-tab="webhooks">Webhooks</button>
+      <button class="tab" data-tab="affiliates">Affiliates</button>
+      <button class="tab" data-tab="blog">Blog</button>
+      <button class="tab" data-tab="nav">Nav &amp; redirects</button>
+      <button class="tab" data-tab="intl">Currency &amp; language</button>
+      <button class="tab" data-tab="api">API keys</button>
+      <button class="tab" data-tab="staff">Staff &amp; audit</button>
+      <button class="tab" data-tab="analytics">Analytics</button>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="affiliates">
+      <h3>Affiliate program</h3>
+      <p class="dim">Anyone can join from
+        <a href="/affiliates" target="_blank"><b>/affiliates ↗</b></a>.
+        Each affiliate gets a tracked link <code>/r/&lt;code&gt;</code> and a
+        landing page <code>/a/&lt;code&gt;</code>. To design a specific
+        affiliate's page, open the
+        <a href="/admin/theme"><b>page builder</b></a> and create the page
+        <code>affiliate:&lt;code&gt;</code>; otherwise a good default is used.</p>
+      <div class="adm-list" id="af-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="blog">
+      <h3>Journal — the organic-traffic engine</h3>
+      <div class="adm-row">
+        <div><label>Title</label><input id="bp-title"></div>
+        <div><label>Slug (blank = from title)</label><input id="bp-slug"></div>
+        <div><label>Author</label><input id="bp-author"></div>
+      </div>
+      <label>Excerpt</label><input id="bp-excerpt">
+      <label>Body (HTML)</label><textarea id="bp-body" rows="6"></textarea>
+      <div class="adm-row">
+        <div><label>Hero image</label><select id="bp-media"></select></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="bp-save">Save post</button>
+      </div>
+      <div class="adm-list" id="bp-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="nav">
+      <h3>Navigation menus</h3>
+      <div class="adm-row">
+        <div><label>Location</label><select id="mn-loc">
+          <option value="header">header</option>
+          <option value="footer">footer</option></select></div>
+        <div><label>Label</label><input id="mn-label"></div>
+        <div><label>URL</label><input id="mn-url" placeholder="/blog or #shop"></div>
+        <div><label>Position</label><input id="mn-pos" type="number" value="0"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="mn-add">Add link</button>
+      </div>
+      <div class="adm-list" id="mn-list"></div>
+
+      <h3 style="margin-top:20px">URL redirects</h3>
+      <p class="dim">Keep inbound links alive after a migration or a slug
+      change. Applied on any 404 page request.</p>
+      <div class="adm-row">
+        <div><label>From path</label><input id="rd-from" placeholder="/old-url"></div>
+        <div><label>To path</label><input id="rd-to" placeholder="/product/1-name"></div>
+        <div><label>Code</label><select id="rd-code">
+          <option>301</option><option>302</option></select></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="rd-add">Add redirect</button>
+      </div>
+      <div class="adm-list" id="rd-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="intl">
+      <h3>Currencies</h3>
+      <p class="dim">The first row is the base currency (rate 1.0) — prices
+      are stored in it. Others are display conversions.</p>
+      <div id="cu-list"></div>
+      <div class="modal-actions">
+        <button class="btn-pill ghost sm" id="cu-add">＋ currency</button>
+        <button class="btn-pill primary sm" id="cu-save">Save currencies</button>
+      </div>
+
+      <h3 style="margin-top:20px">Translations</h3>
+      <div class="adm-row">
+        <div><label>Locale code</label>
+          <input id="tr-locale" placeholder="es" style="max-width:120px"></div>
+        <div><label>&nbsp;</label>
+          <button class="btn-pill ghost sm" id="tr-load">Load strings</button></div>
+      </div>
+      <p class="dim" id="tr-msg"></p>
+      <div id="tr-form"></div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm hidden" id="tr-save">Save translations</button>
+      </div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="staff">
+      <h3>Staff permissions</h3>
+      <p class="dim">Grant only what each person needs. Blank = their role's
+      default. Owners and admin-key holders keep full access.</p>
+      <div class="adm-list" id="st-list"></div>
+
+      <h3 style="margin-top:20px">Audit log</h3>
+      <p class="dim">Every admin mutation, newest first.</p>
+      <table class="adm" id="au-table"></table>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="api">
+      <h3>API keys — build apps on this store</h3>
+      <p class="dim">Scoped keys for the public
+        <a href="/api/v1/docs" target="_blank"><b>Storefront API v1 ↗</b></a>.
+        Keys are stored hashed and shown once at creation.</p>
+      <div class="adm-row">
+        <div><label>Key name</label>
+          <input id="ak-name" placeholder="Fulfilment app"></div>
+      </div>
+      <label>Scopes</label>
+      <div id="ak-scopes" class="adm-list" style="border:none"></div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="ak-create">Create key</button>
+      </div>
+      <div id="ak-new"></div>
+      <div class="adm-list" id="ak-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="orders">
+      <h3>Orders — fulfil & refund</h3>
+      <div class="adm-list" id="or-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="reviews">
+      <h3>Review moderation — pending approval</h3>
+      <p class="dim">New reviews are held here until approved. ✓ = verified
+      buyer (their email has an order containing the product).</p>
+      <div class="adm-list" id="rv-queue"></div>
+    </div>
+
+    <div class="adm-panel" data-panel="products">
+      <h3>Products</h3>
+      <div class="adm-row">
+        <div><label>SKU</label><input id="pr-sku"></div>
+        <div><label>Name</label><input id="pr-name"></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Category</label><input id="pr-cat" placeholder="beverage"></div>
+        <div><label>Price (cents)</label><input id="pr-price" type="number"></div>
+        <div><label>Case price (cents)</label><input id="pr-case" type="number"></div>
+      </div>
+      <label>Description</label><input id="pr-desc">
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="pr-add">Add product</button>
+      </div>
+      <div class="adm-list" id="pr-list"></div>
+      <h3 style="margin-top:20px">Media — photos & video</h3>
+      <p class="dim">First item is the primary image (used on cards, cart, OG
+      tags and the ERP). Thumbnails and 1400px display copies are generated on
+      upload. Images ≤8 MB, video ≤25 MB — or paste an embed URL for big video.</p>
+      <div class="adm-row">
+        <div><label>Product</label><select id="md-product"></select></div>
+        <div><label>Alt text (accessibility + SEO)</label>
+          <input id="md-alt" placeholder="Cold can of Michelada Mix on ice"></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Upload image or video</label>
+          <input id="md-file" type="file" accept="image/*,video/*"></div>
+        <div><label>…or video embed URL</label>
+          <input id="md-url" placeholder="https://www.youtube.com/embed/…"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="md-add">Add media</button>
+      </div>
+      <p class="dim" id="md-msg"></p>
+      <div id="md-grid" class="md-grid"></div>
+
+      <h3 style="margin-top:20px">Variants — size · flavor · pack</h3>
+      <div class="adm-row">
+        <div><label>Product</label><select id="vr-product"></select></div>
+        <div><label>Variant name</label><input id="vr-name" placeholder="12-pack · Mango"></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Option 1 (size)</label><input id="vr-opt1"></div>
+        <div><label>Option 2 (flavor)</label><input id="vr-opt2"></div>
+        <div><label>SKU</label><input id="vr-sku"></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Price (cents)</label><input id="vr-price" type="number"></div>
+        <div><label>Stock</label><input id="vr-stock" type="number" value="0"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="vr-add">Add variant</button>
+      </div>
+      <div class="adm-list" id="vr-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="pages">
+      <h3>Pages — landing pages, embeds, experiments</h3>
+      <div class="adm-row">
+        <div><label>Slug</label><input id="pg-slug" placeholder="summer-drop"></div>
+        <div><label>Title</label><input id="pg-title"></div>
+      </div>
+      <label>HTML</label><textarea id="pg-html" rows="5" placeholder="<h1>Any HTML…</h1>"></textarea>
+      <label>CSS</label><textarea id="pg-css" rows="3"></textarea>
+      <label>JavaScript</label><textarea id="pg-js" rows="3"></textarea>
+      <label>Liquid snippet — rendered server-side with the shop context:
+        <code>products</code> · <code>collections</code> · <code>shop</code></label>
+      <textarea id="pg-liquid" rows="3" placeholder="{% for p in products %}{{ p.name }} — {{ p.price }}{% endfor %}"></textarea>
+      <p class="dim">Prefer building pages visually?
+        <a href="/admin/theme"><b>Open the page builder →</b></a> — it edits
+        the same pages with drag-free section blocks and a live preview.</p>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="pg-save">Save page</button>
+      </div>
+      <div class="adm-list" id="pg-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="collections">
+      <h3>Collections — group products</h3>
+      <div class="adm-row">
+        <div><label>Slug</label><input id="co-slug" placeholder="best-sellers"></div>
+        <div><label>Name</label><input id="co-name" placeholder="Best sellers"></div>
+      </div>
+      <label>Products</label>
+      <div id="co-products" class="adm-list" style="border:none"></div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="co-save">Save collection</button>
+      </div>
+      <div class="adm-list" id="co-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="discounts">
+      <h3>Discount codes</h3>
+      <div class="adm-row">
+        <div><label>Code (blank = auto-generated)</label>
+          <input id="di-code" placeholder="WELCOME10"></div>
+        <div><label>Kind</label><select id="di-kind">
+          <option value="percent">% off</option>
+          <option value="fixed">fixed amount off</option>
+          <option value="free_shipping">free shipping</option>
+          <option value="bogo">buy X get Y free</option></select></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Percent</label><input id="di-pct" type="number" value="10"></div>
+        <div><label>Amount off (cents)</label><input id="di-value" type="number" value="0"></div>
+        <div><label>Min spend (cents)</label><input id="di-min" type="number" value="0"></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Buy qty</label><input id="di-buy" type="number" value="0"></div>
+        <div><label>Get free</label><input id="di-get" type="number" value="0"></div>
+        <div><label>BOGO product</label><select id="di-bogo-product">
+          <option value="">any product</option></select></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Total uses (0 = ∞)</label><input id="di-limit" type="number" value="0"></div>
+        <div><label>Per customer (0 = ∞)</label><input id="di-per" type="number" value="0"></div>
+        <div><label>Automatic (no code needed)</label>
+          <select id="di-auto"><option value="0">no</option>
+          <option value="1">yes</option></select></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="di-save">Save code</button>
+      </div>
+      <div class="adm-list" id="di-list"></div>
+
+      <h3 style="margin-top:20px">Gift cards</h3>
+      <div class="adm-row">
+        <div><label>Amount (cents)</label><input id="gc-amount" type="number" value="2500"></div>
+        <div><label>Recipient email</label><input id="gc-email"></div>
+        <div><label>Note</label><input id="gc-note"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="gc-issue">Issue gift card</button>
+      </div>
+      <div id="gc-new"></div>
+      <div class="adm-list" id="gc-list"></div>
+      <h3 style="margin-top:20px">Shipping methods</h3>
+      <p class="dim">Position 0 = standard (free-shipping threshold applies).
+      Label printing (Shippo / EasyPost) is roadmap.</p>
+      <div class="adm-row">
+        <div><label>Name</label><input id="sh-name" placeholder="Express"></div>
+        <div><label>Price (cents)</label><input id="sh-price" type="number"></div>
+        <div><label>ETA</label><input id="sh-eta" placeholder="1–2 business days"></div>
+        <div><label>Position</label><input id="sh-pos" type="number" value="1"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="sh-add">Add method</button>
+      </div>
+      <div class="adm-list" id="sh-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="webhooks">
+      <h3>Webhooks</h3>
+      <p class="dim">Deliveries are HMAC-SHA256 signed —
+      <code>X-Store-Signature: sha256=…</code> with this secret:
+      <code id="wh-secret" style="user-select:all"></code></p>
+      <div class="adm-row">
+        <div><label>Event</label>
+          <select id="wh-event">
+            <option>order.created</option>
+            <option>subscriber.created</option>
+            <option>review.created</option>
+          </select></div>
+        <div><label>URL</label><input id="wh-url" placeholder="https://…"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="wh-add">Add webhook</button>
+      </div>
+      <div class="adm-list" id="wh-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="analytics">
+      <h3>Page navigation & funnel</h3>
+      <p class="dim" id="an-subs"></p>
+      <div class="adm-row">
+        <div><h3 style="font-size:15px">Pages</h3>
+          <table class="adm" id="an-pages"></table></div>
+        <div><h3 style="font-size:15px">Funnel</h3>
+          <table class="adm" id="an-funnel"></table>
+          <p class="dim" style="margin-top:8px">Pixels (GA4 · Meta · TikTok)
+          forward server-side from these events — IDs configured in
+          <a href="/ops/"><b>ERP → Admin → Tracking</b></a>.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/admin.js"></script>
+</body>
+</html>

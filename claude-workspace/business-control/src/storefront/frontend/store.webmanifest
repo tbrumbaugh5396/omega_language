@@ -1,0 +1,14 @@
+{
+  "name": "Zenjoy",
+  "short_name": "Zenjoy",
+  "description": "Feel good, naturally — shop the collection.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#fdfdfd",
+  "theme_color": "#6c00bf",
+  "icons": [
+    { "src": "/ops/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/ops/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

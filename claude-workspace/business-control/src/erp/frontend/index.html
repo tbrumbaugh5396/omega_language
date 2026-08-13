@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Business Control</title>
+  <link rel="stylesheet" href="/ops/styles.css">
+  <link rel="manifest" href="/ops/manifest.webmanifest">
+  <link rel="icon" href="/ops/icons/icon-192.png">
+  <meta name="theme-color" content="#101418">
+</head>
+<body>
+  <header id="topbar">
+    <span id="brand">Business Control</span>
+    <span id="topbar-right">
+      <a class="surface-link" href="/" title="Open the customer storefront">🛍 Storefront ↗</a>
+      <a class="surface-link" href="/admin" title="Products, pages, discounts">🛠 Store admin</a>
+      <span id="whoami"></span>
+    </span>
+  </header>
+  <div id="layout">
+    <nav id="tabs"></nav>
+    <main id="view"></main>
+  </div>
+  <div id="toast"></div>
+  <script src="/ops/app.js"></script>
+</body>
+</html>

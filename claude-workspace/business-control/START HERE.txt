@@ -1,0 +1,16 @@
+Business Control — start here
+
+1) Double-click:  command_utilities/Install Business Control.command
+   (one-time setup; note the ADMIN KEY it prints)
+
+2) Double-click:  command_utilities/Start Business Control.command
+   Your browser opens at http://127.0.0.1:8860
+
+3) Sign in with your name + the admin key to unlock everything.
+   Employees clock in on the Time Clock tab with their PIN.
+
+Stop the server:  command_utilities/Stop Business Control.command
+Desktop app icon: command_utilities/Install App Icon.command
+
+Demo PINs after seeding: 1111, 2222, 3333, 4444
+Demo affiliate link:     http://127.0.0.1:8860/r/ava01

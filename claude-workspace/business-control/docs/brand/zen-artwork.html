@@ -1,0 +1,1540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Zen — connotations &amp; artwork studies</title>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,300;9..144,600&display=swap" rel="stylesheet">
+<style>
+:root{--purple:#6c00bf;--lav:#8a77e1;--orange:#ff6900;--ink:#3a3a3a;
+ --paper:#f7f4ef;--line:#e6e0d8}
+*{box-sizing:border-box;margin:0}
+body{font-family:Quicksand,system-ui,sans-serif;color:var(--ink);
+ background:var(--paper);padding:0 24px 80px}
+.wrap{max-width:1200px;margin:0 auto}
+header{padding:56px 0 22px;border-bottom:1px solid var(--line)}
+h1{font-family:Fraunces,Georgia,serif;font-weight:300;font-size:clamp(34px,5vw,58px);
+ letter-spacing:-.5px;line-height:1.05}
+h1 b{font-weight:600;color:var(--purple)}
+.sub{margin-top:12px;max-width:640px;font-size:15.5px;line-height:1.6;color:#6b6560}
+h2{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:22px;
+ margin:44px 0 14px;color:var(--purple)}
+.conn{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:12px}
+.conn div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:13px 15px}
+.conn b{display:block;font-size:14px;margin-bottom:3px}
+.conn span{font-size:12.5px;color:#6b6560;line-height:1.5}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+ gap:26px;margin-top:18px}
+figure{margin:0}
+.art{width:100%;aspect-ratio:4/5;border-radius:16px;overflow:hidden;
+ box-shadow:0 8px 30px rgba(60,30,90,.13);background:#fff;display:block}
+figcaption{margin-top:10px}
+.no{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--lav);
+ font-weight:700}
+.ttl{font-family:Fraunces,Georgia,serif;font-size:18px;font-weight:600;margin:2px 0 4px}
+.meta{font-size:12.5px;color:#6b6560;line-height:1.55}
+.meta em{color:var(--orange);font-style:normal;font-weight:700}
+.strip{border-radius:18px;overflow:hidden;box-shadow:0 10px 34px rgba(60,30,90,.16);
+ margin:14px 0 22px}
+.strip svg{display:block;width:100%;height:auto}
+.beats{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:14px}
+.beat{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.bno{font-size:10px;letter-spacing:2px;color:var(--lav);font-weight:700}
+.beat b{display:block;font-family:Fraunces,Georgia,serif;font-size:17px;margin:4px 0 5px}
+.beat p{font-size:12.5px;color:#6b6560;line-height:1.55}
+.beat em{color:var(--orange);font-style:normal;font-weight:700}
+.beat i{color:#3a3a3a;font-style:italic}
+.flav{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:14px}
+.flav div{background:#fff;border:1px solid var(--line);border-radius:14px;
+ padding:12px;text-align:center}
+.flav svg{width:88px;height:88px}
+.flav b{display:block;font-size:14px;margin-top:4px}
+.flav span{font-size:11.5px;color:#6b6560;line-height:1.45;display:block}
+.probs{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:12px}
+.prob{background:#fff;border:1px solid var(--line);border-radius:14px;padding:13px 15px}
+.prob .em{font-size:22px}
+.prob b{display:block;font-size:14px;margin:4px 0 3px}
+.prob .feel{font-size:12px;color:#6b6560;line-height:1.45;display:block;min-height:34px}
+.prob .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:1px;
+ border-radius:999px;padding:2px 8px;margin-top:7px;background:#f0ebfa;color:#6c00bf}
+.prob .when{font-size:10.5px;color:#a49c90;margin-left:6px}
+.chop{display:inline-block;vertical-align:middle;margin-left:6px}
+.res{display:grid;gap:12px}
+.resrow{display:grid;grid-template-columns:1.15fr auto 1fr auto 1fr;gap:12px;
+ align-items:center;background:#fff;border:1px solid var(--line);
+ border-radius:14px;padding:13px 16px}
+.resrow .arrow{color:var(--lav);font-weight:700;font-size:16px}
+.resrow b{font-size:13.5px;display:block}
+.resrow span{font-size:11.5px;color:#6b6560;line-height:1.45}
+.resrow .pivot b{color:var(--orange)}
+.resrow .pay{font-family:Fraunces,Georgia,serif;font-size:14px;color:var(--purple)}
+@media(max-width:820px){.resrow{grid-template-columns:1fr}.resrow .arrow{display:none}}
+.sets{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:14px}
+.set{background:#fff;border:1px solid var(--line);border-radius:14px;padding:15px 17px}
+.set .kind{font-size:10px;letter-spacing:2px;font-weight:700;color:var(--lav)}
+.set .ln{display:grid;grid-template-columns:52px 1fr;gap:9px;margin-top:9px;
+ align-items:baseline}
+.set .bt{font-size:9.5px;letter-spacing:1px;color:#a49c90;font-weight:700;
+ text-transform:uppercase;padding-top:3px}
+.set .tx{font-family:Fraunces,Georgia,serif;font-size:16.5px;line-height:1.3}
+.set .tx.small{font-size:14px;font-family:Quicksand,sans-serif;color:#6b6560}
+.set .tx.pay{color:var(--purple);font-weight:600}
+.set .note{font-size:11.5px;color:#6b6560;line-height:1.5;margin-top:10px;
+ border-top:1px dashed var(--line);padding-top:8px}
+.bank{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.bank div{background:#fff;border:1px solid var(--line);border-radius:12px;
+ padding:10px 13px;font-family:Fraunces,Georgia,serif;font-size:14.5px}
+.bank div span{display:block;font-family:Quicksand,sans-serif;font-size:11px;
+ color:#a49c90;margin-top:3px}
+.warn{background:#fff6f0;border:1px solid #f0d2bd;border-radius:14px;
+ padding:14px 17px;max-width:840px;margin:10px 0 18px}
+.warn b{color:#c0530a}
+</style>
+</head>
+<body><div class="wrap">
+
+<header>
+ <h1>zen <b>·</b> connotation studies</h1>
+ <p class="sub">What the word already carries before you print it on a can —
+ and ten ways that meaning can look. Each study is drawn, not photographed, so
+ the vocabulary survives translation to a label, a poster or a feed.</p>
+</header>
+
+<h2>What "zen" already means to a drinker</h2>
+<div class="conn">
+ <div><b>The pause</b><span>A held breath between doing. The drink <em>is</em>
+  the interval — permission to stop.</span></div>
+ <div><b>Emptiness (mu)</b><span>Not lack — clearance. Room made, not filled.
+  The ensō's open gap.</span></div>
+ <div><b>Ma — negative space</b><span>The interval that gives shape to what's
+  around it. Silence as an ingredient.</span></div>
+ <div><b>Balance</b><span>Stacked stones that shouldn't hold but do. Calm as
+  equilibrium, not sedation.</span></div>
+ <div><b>Ripple</b><span>One drop, consequences spreading outward. Small act,
+  wide calm.</span></div>
+ <div><b>Wabi-sabi</b><span>Weathered, uneven, honest. Permission for the
+  imperfect — anti-slick.</span></div>
+ <div><b>Wu wei — effortless flow</b><span>Water taking the easy path and still
+  cutting stone.</span></div>
+ <div><b>Ritual</b><span>Tea ceremony. The pour as a small ceremony worth
+  repeating daily.</span></div>
+ <div><b>Clarity</b><span>Transparent liquid, nothing hidden — a claim about
+  the label as much as the mood.</span></div>
+ <div><b>Groundedness</b><span>Stone, earth, moss, root. Heavy calm rather
+  than floaty calm.</span></div>
+ <div><b>One brushstroke</b><span>Done once, no correction. Confidence read as
+  simplicity.</span></div>
+ <div><b>Nature, tended</b><span>The raked garden: not wild, arranged. Craft
+  applied to botanicals.</span></div>
+</div>
+<p class="meta" style="margin-top:12px;max-width:720px">Watch the two risks:
+ <em>zen</em> tips into wellness cliché (bamboo, pebbles, spa beige) or into
+ sedation (sleepy, inert). The studies below lean on <em>clearance, balance
+ and flow</em> — awake calm — and avoid the spa shelf.</p>
+
+<h2>Ten studies</h2>
+<div class="grid">
+
+<!-- 1 · SUMI-E ENSŌ -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <filter id="f1"><feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="3" seed="7"/>
+   <feDisplacementMap in="SourceGraphic" scale="7"/></filter>
+  <radialGradient id="g1" cx="50%" cy="45%"><stop offset="0%" stop-color="#fffdf9"/>
+   <stop offset="100%" stop-color="#efe9e0"/></radialGradient>
+ </defs>
+ <rect width="400" height="500" fill="url(#g1)"/>
+ <g filter="url(#f1)">
+  <path d="M275 145 A115 115 0 1 0 292 305" fill="none" stroke="#241a2e"
+   stroke-width="26" stroke-linecap="round" opacity=".93"/>
+  <path d="M282 152 A108 108 0 1 0 288 300" fill="none" stroke="#241a2e"
+   stroke-width="9" stroke-linecap="round" opacity=".5"/>
+ </g>
+ <circle cx="309" cy="322" r="5" fill="#241a2e" opacity=".65"/>
+ <circle cx="322" cy="338" r="2.6" fill="#241a2e" opacity=".45"/>
+ <circle cx="299" cy="341" r="1.8" fill="#241a2e" opacity=".35"/>
+ <rect x="41" y="392" width="34" height="34" fill="#c0392b" opacity=".85"/>
+ <text x="58" y="415" text-anchor="middle" font-size="17" fill="#fffdf9"
+  font-family="serif">禅</text>
+ <text x="90" y="414" font-size="12.5" fill="#6b6560"
+  font-family="Quicksand,sans-serif" letter-spacing="3">ONE BREATH</text>
+</svg>
+<figcaption><span class="no">01</span>
+ <div class="ttl">Ensō</div>
+ <p class="meta"><em>Sumi-e ink wash.</em> The circle left open — drawn in one
+ motion, never corrected. Carries <em>emptiness, the pause, wabi-sabi</em>.
+ Strongest as a debossed mark on a matte can; the gap does the work.</p></figcaption>
+</figure>
+
+<!-- 2 · UKIYO-E WAVE -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <rect width="400" height="500" fill="#efe6d8"/>
+ <circle cx="292" cy="118" r="46" fill="#ff6900" opacity=".9"/>
+ <path d="M0 300 C70 250 120 330 190 300 C250 274 250 190 330 205
+          C372 213 392 250 400 268 L400 500 L0 500 Z" fill="#6c00bf"/>
+ <path d="M0 340 C80 300 130 372 205 344 C268 320 282 250 340 260
+          C374 266 392 292 400 306 L400 500 L0 500 Z" fill="#8a77e1" opacity=".95"/>
+ <path d="M330 205 C300 196 276 214 268 236 C284 224 306 220 322 228"
+  fill="#fffdf9"/>
+ <g fill="#fffdf9">
+  <circle cx="268" cy="238" r="9"/><circle cx="250" cy="252" r="6.5"/>
+  <circle cx="236" cy="266" r="4.5"/><circle cx="226" cy="278" r="3"/>
+  <circle cx="292" cy="222" r="5.5"/><circle cx="308" cy="216" r="3.6"/>
+ </g>
+ <path d="M0 388 C90 356 150 420 230 396 C296 376 320 330 400 344"
+  fill="none" stroke="#fffdf9" stroke-width="2.4" opacity=".55"/>
+ <path d="M0 428 C90 400 150 458 230 436 C296 418 330 384 400 396"
+  fill="none" stroke="#fffdf9" stroke-width="1.8" opacity=".38"/>
+</svg>
+<figcaption><span class="no">02</span>
+ <div class="ttl">The Wave</div>
+ <p class="meta"><em>Ukiyo-e woodblock.</em> Flat planes, hard outline, foam as
+ claws. Reads as <em>flow and contained power</em> — motion held still. Best
+ wrapped fully around a can so the wave never resolves.</p></figcaption>
+</figure>
+
+<!-- 3 · BAUHAUS BALANCE -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <rect width="400" height="500" fill="#f2ede4"/>
+ <g style="mix-blend-mode:multiply">
+  <circle cx="200" cy="150" r="78" fill="#ff6900" opacity=".92"/>
+  <rect x="120" y="228" width="160" height="96" fill="#6c00bf" opacity=".92"/>
+  <path d="M200 336 L292 452 L108 452 Z" fill="#8a77e1" opacity=".95"/>
+ </g>
+ <circle cx="200" cy="150" r="78" fill="none" stroke="#241a2e" stroke-width="2"/>
+ <rect x="120" y="228" width="160" height="96" fill="none" stroke="#241a2e" stroke-width="2"/>
+ <path d="M200 336 L292 452 L108 452 Z" fill="none" stroke="#241a2e" stroke-width="2"/>
+ <line x1="200" y1="42" x2="200" y2="470" stroke="#241a2e" stroke-width=".8" opacity=".35"/>
+ <text x="34" y="472" font-size="11" fill="#6b6560" letter-spacing="4"
+  font-family="Quicksand,sans-serif">EQUILIBRIUM</text>
+</svg>
+<figcaption><span class="no">03</span>
+ <div class="ttl">Three Bodies</div>
+ <p class="meta"><em>Bauhaus geometry.</em> Stacked stones abstracted to circle,
+ bar and triangle on one axis. Says <em>balance</em> without a single pebble —
+ the calm is structural, not scenic.</p></figcaption>
+</figure>
+
+<!-- 4 · ART DECO CEREMONY -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <defs><linearGradient id="g4" x1="0" y1="0" x2="0" y2="1">
+  <stop offset="0%" stop-color="#2a0f45"/><stop offset="100%" stop-color="#4a1173"/>
+ </linearGradient></defs>
+ <rect width="400" height="500" fill="url(#g4)"/>
+ <g stroke="#e9b45a" fill="none" stroke-width="1.5" opacity=".9">
+  <path d="M200 300 L200 96"/><path d="M200 300 L133 112"/><path d="M200 300 L267 112"/>
+  <path d="M200 300 L76 150"/><path d="M200 300 L324 150"/>
+  <path d="M200 300 L40 204"/><path d="M200 300 L360 204"/>
+ </g>
+ <g fill="none" stroke="#e9b45a" stroke-width="2">
+  <path d="M92 300 A108 108 0 0 1 308 300"/>
+  <path d="M116 300 A84 84 0 0 1 284 300"/>
+  <path d="M140 300 A60 60 0 0 1 260 300"/>
+ </g>
+ <rect x="60" y="300" width="280" height="3" fill="#e9b45a"/>
+ <g fill="#ff6900"><circle cx="200" cy="300" r="13"/></g>
+ <g fill="none" stroke="#e9b45a" stroke-width="1.2" opacity=".75">
+  <rect x="60" y="330" width="280" height="26"/>
+  <rect x="72" y="336" width="256" height="14"/>
+ </g>
+ <text x="200" y="404" text-anchor="middle" font-size="12" fill="#e9b45a"
+  letter-spacing="7" font-family="Quicksand,sans-serif">CEREMONY</text>
+ <text x="200" y="430" text-anchor="middle" font-size="10" fill="#c9a26a"
+  letter-spacing="3" font-family="Quicksand,sans-serif">THE DAILY POUR</text>
+</svg>
+<figcaption><span class="no">04</span>
+ <div class="ttl">Ceremony</div>
+ <p class="meta"><em>Art Deco.</em> Rays, stepped rules, gold on aubergine.
+ Elevates the drink into <em>ritual</em> — the argument that a daily habit
+ deserves ornament. Reads expensive; use sparingly.</p></figcaption>
+</figure>
+
+<!-- 5 · KARESANSUI -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <rect width="400" height="500" fill="#efe9dc"/>
+ <g fill="none" stroke="#b9ad99" stroke-width="1.6">
+  <path d="M-20 120 C90 104 150 150 200 150 C250 150 310 104 420 120"/>
+  <path d="M-20 140 C90 122 148 172 200 172 C252 172 310 122 420 140"/>
+  <path d="M-20 160 C90 140 146 194 200 194 C254 194 310 140 420 160"/>
+  <path d="M-20 182 C90 160 144 216 200 216 C256 216 310 160 420 182"/>
+  <path d="M-20 206 C90 182 142 240 200 240 C258 240 310 182 420 206"/>
+  <path d="M-20 232 C86 206 140 266 200 266 C260 266 314 206 420 232"/>
+  <path d="M-20 260 C86 232 138 294 200 294 C262 294 314 232 420 260"/>
+  <path d="M-20 292 C80 262 136 326 200 326 C264 326 320 262 420 292"/>
+  <path d="M-20 328 C80 296 134 362 200 362 C266 362 320 296 420 328"/>
+  <path d="M-20 368 C80 334 132 402 200 402 C268 402 320 334 420 368"/>
+  <path d="M-20 412 C80 376 130 446 200 446 C270 446 320 376 420 412"/>
+ </g>
+ <ellipse cx="200" cy="150" rx="34" ry="27" fill="#5a5148"/>
+ <ellipse cx="196" cy="144" rx="26" ry="19" fill="#6e6459"/>
+ <ellipse cx="118" cy="228" rx="17" ry="13" fill="#5a5148"/>
+ <ellipse cx="286" cy="252" rx="12" ry="9" fill="#5a5148"/>
+ <circle cx="330" cy="82" r="26" fill="#ff6900" opacity=".22"/>
+ <text x="34" y="466" font-size="11" fill="#8d8375" letter-spacing="4"
+  font-family="Quicksand,sans-serif">TENDED, NOT WILD</text>
+</svg>
+<figcaption><span class="no">05</span>
+ <div class="ttl">Karesansui</div>
+ <p class="meta"><em>Raked garden / contour drawing.</em> Repetition around
+ obstacles — the visual form of <em>attention</em>. Says the botanicals were
+ arranged, not foraged. Beautiful embossed, colourless.</p></figcaption>
+</figure>
+
+<!-- 6 · RISO BOTANICAL -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <defs><filter id="f6"><feTurbulence type="fractalNoise" baseFrequency=".9"
+   numOctaves="3" seed="3"/><feColorMatrix type="saturate" values="0"/>
+   <feComponentTransfer><feFuncA type="linear" slope=".22"/></feComponentTransfer>
+   <feComposite operator="in" in2="SourceGraphic"/></filter></defs>
+ <rect width="400" height="500" fill="#f6f1e6"/>
+ <g style="mix-blend-mode:multiply" opacity=".88">
+  <g fill="#ff6900" transform="translate(6,-5)">
+   <path d="M200 400 C150 330 150 220 200 132 C250 220 250 330 200 400Z"/>
+   <path d="M200 372 C142 340 106 274 108 214 C168 244 196 306 200 372Z"/>
+   <path d="M200 372 C258 340 294 274 292 214 C232 244 204 306 200 372Z"/>
+  </g>
+  <g fill="#6c00bf">
+   <path d="M200 400 C150 330 150 220 200 132 C250 220 250 330 200 400Z"/>
+   <path d="M200 372 C142 340 106 274 108 214 C168 244 196 306 200 372Z"/>
+   <path d="M200 372 C258 340 294 274 292 214 C232 244 204 306 200 372Z"/>
+  </g>
+ </g>
+ <line x1="200" y1="132" x2="200" y2="446" stroke="#3d2a1f" stroke-width="2.4"/>
+ <rect width="400" height="500" filter="url(#f6)" fill="#3d2a1f" opacity=".5"/>
+ <text x="200" y="472" text-anchor="middle" font-size="11" fill="#6b6560"
+  letter-spacing="5" font-family="Quicksand,sans-serif">TWO INKS, ONE PLANT</text>
+</svg>
+<figcaption><span class="no">06</span>
+ <div class="ttl">Overprint</div>
+ <p class="meta"><em>Risograph duotone.</em> Two inks deliberately
+ mis-registered, grain left in. <em>Wabi-sabi</em> as a printing method —
+ honest, cheap-feeling in the right way, and it photographs beautifully.</p></figcaption>
+</figure>
+
+<!-- 7 · RIPPLE OP-ART -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <defs><radialGradient id="g7" cx="50%" cy="42%">
+  <stop offset="0%" stop-color="#fff"/><stop offset="100%" stop-color="#ede7f7"/>
+ </radialGradient></defs>
+ <rect width="400" height="500" fill="url(#g7)"/>
+ <g fill="none" stroke="#6c00bf">
+  <circle cx="200" cy="210" r="14" stroke-width="5"/>
+  <circle cx="200" cy="210" r="32" stroke-width="4.4" opacity=".92"/>
+  <circle cx="200" cy="210" r="54" stroke-width="3.9" opacity=".84"/>
+  <circle cx="200" cy="210" r="80" stroke-width="3.4" opacity=".75"/>
+  <circle cx="200" cy="210" r="110" stroke-width="2.9" opacity=".64"/>
+  <circle cx="200" cy="210" r="144" stroke-width="2.4" opacity=".52"/>
+  <circle cx="200" cy="210" r="182" stroke-width="2" opacity=".4"/>
+  <circle cx="200" cy="210" r="224" stroke-width="1.6" opacity=".28"/>
+  <circle cx="200" cy="210" r="270" stroke-width="1.3" opacity=".18"/>
+ </g>
+ <ellipse cx="200" cy="126" rx="9" ry="13" fill="#ff6900"/>
+ <ellipse cx="200" cy="150" rx="5" ry="7" fill="#ff6900" opacity=".6"/>
+ <text x="200" y="452" text-anchor="middle" font-size="11.5" fill="#6b6560"
+  letter-spacing="5" font-family="Quicksand,sans-serif">ONE DROP</text>
+</svg>
+<figcaption><span class="no">07</span>
+ <div class="ttl">Ripple</div>
+ <p class="meta"><em>Op-art concentrics.</em> A single drop and its
+ consequence. The most literal beverage metaphor here — <em>small act, wide
+ calm</em> — and the easiest to animate for social.</p></figcaption>
+</figure>
+
+<!-- 8 · MA / SWISS -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <rect width="400" height="500" fill="#fbfaf7"/>
+ <line x1="40" y1="40" x2="360" y2="40" stroke="#d9d3c9" stroke-width="1"/>
+ <line x1="40" y1="460" x2="360" y2="460" stroke="#d9d3c9" stroke-width="1"/>
+ <text x="40" y="30" font-size="9.5" fill="#a49c90" letter-spacing="3"
+  font-family="Quicksand,sans-serif">間</text>
+ <text x="360" y="30" text-anchor="end" font-size="9.5" fill="#a49c90"
+  letter-spacing="3" font-family="Quicksand,sans-serif">MA</text>
+ <circle cx="200" cy="250" r="7" fill="#ff6900"/>
+ <text x="40" y="452" font-size="12" fill="#3a3a3a" letter-spacing="1"
+  font-family="Quicksand,sans-serif">the interval is the ingredient</text>
+ <text x="360" y="452" text-anchor="end" font-size="9.5" fill="#a49c90"
+  font-family="Quicksand,sans-serif">01 / 10</text>
+</svg>
+<figcaption><span class="no">08</span>
+ <div class="ttl">Ma</div>
+ <p class="meta"><em>Swiss minimalism.</em> Almost nothing, placed exactly.
+ The <em>negative space</em> study — it only works if you resist adding to it,
+ which makes it the truest test of whether the brand can hold its nerve.</p></figcaption>
+</figure>
+
+<!-- 9 · LIQUID LIGHT -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <filter id="f9"><feGaussianBlur stdDeviation="12"/></filter>
+  <filter id="f9b"><feTurbulence type="fractalNoise" baseFrequency=".012"
+   numOctaves="3" seed="9"/><feDisplacementMap in="SourceGraphic" scale="34"/>
+   <feGaussianBlur stdDeviation="5"/></filter>
+  <radialGradient id="ga"><stop offset="0%" stop-color="#ff6900"/>
+   <stop offset="100%" stop-color="#ff6900" stop-opacity="0"/></radialGradient>
+  <radialGradient id="gb"><stop offset="0%" stop-color="#8a77e1"/>
+   <stop offset="100%" stop-color="#8a77e1" stop-opacity="0"/></radialGradient>
+  <radialGradient id="gc"><stop offset="0%" stop-color="#00d4b8"/>
+   <stop offset="100%" stop-color="#00d4b8" stop-opacity="0"/></radialGradient>
+ </defs>
+ <rect width="400" height="500" fill="#1a0b2e"/>
+ <g filter="url(#f9b)">
+  <circle cx="150" cy="190" r="118" fill="url(#ga)"/>
+  <circle cx="262" cy="286" r="130" fill="url(#gb)"/>
+  <circle cx="186" cy="360" r="96" fill="url(#gc)"/>
+  <circle cx="286" cy="140" r="70" fill="url(#gb)"/>
+ </g>
+ <g filter="url(#f9)" opacity=".5">
+  <ellipse cx="200" cy="256" rx="86" ry="120" fill="none" stroke="#fff" stroke-width="2"/>
+ </g>
+ <text x="200" y="452" text-anchor="middle" font-size="11.5" fill="#e5d9ff"
+  letter-spacing="6" font-family="Quicksand,sans-serif">UNWIND</text>
+</svg>
+<figcaption><span class="no">09</span>
+ <div class="ttl">Liquid Light</div>
+ <p class="meta"><em>60s oil-wheel projection.</em> Warm colour bleeding through
+ dark. This is <em>flow and altered calm</em> — the one study that admits the
+ drink <em>does something</em>. Dangerous and memorable.</p></figcaption>
+</figure>
+
+<!-- 10 · CYANOTYPE -->
+<figure>
+<svg class="art" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient id="g10" x1="0" y1="0" x2="1" y2="1">
+   <stop offset="0%" stop-color="#123a63"/><stop offset="55%" stop-color="#1d2b6b"/>
+   <stop offset="100%" stop-color="#3a1f6b"/></linearGradient>
+  <filter id="f10"><feTurbulence type="fractalNoise" baseFrequency=".7"
+   numOctaves="3" seed="11"/><feColorMatrix type="saturate" values="0"/>
+   <feComponentTransfer><feFuncA type="linear" slope=".3"/></feComponentTransfer>
+   <feComposite operator="in" in2="SourceGraphic"/></filter>
+ </defs>
+ <rect width="400" height="500" fill="url(#g10)"/>
+ <g fill="#eaf3ff" opacity=".92">
+  <circle cx="200" cy="196" r="62"/>
+ </g>
+ <g stroke="#1d2b6b" stroke-width="2" fill="none">
+  <path d="M200 134 L200 258"/><path d="M138 196 L262 196"/>
+  <path d="M156 152 L244 240"/><path d="M244 152 L156 240"/>
+ </g>
+ <g fill="#eaf3ff" opacity=".88">
+  <path d="M96 330 C120 292 158 280 176 296 C150 316 128 342 118 372 C104 360 96 346 96 330Z"/>
+  <path d="M304 330 C280 292 242 280 224 296 C250 316 272 342 282 372 C296 360 304 346 304 330Z"/>
+  <path d="M200 300 C214 336 214 380 200 412 C186 380 186 336 200 300Z"/>
+ </g>
+ <g stroke="#eaf3ff" stroke-width="1.2" opacity=".55" fill="none">
+  <path d="M118 372 C150 356 176 330 176 296"/>
+  <path d="M282 372 C250 356 224 330 224 296"/>
+ </g>
+ <rect width="400" height="500" filter="url(#f10)" fill="#eaf3ff" opacity=".45"/>
+ <text x="200" y="458" text-anchor="middle" font-size="10.5" fill="#cddcf5"
+  letter-spacing="5" font-family="Quicksand,sans-serif">SUN-PRINTED · CITRUS + LEAF</text>
+</svg>
+<figcaption><span class="no">10</span>
+ <div class="ttl">Cyanotype</div>
+ <p class="meta"><em>Sun print / blueprint.</em> Botanicals recorded by light
+ alone — provenance as an image. Carries <em>clarity and nature</em> while
+ staying cold and adult, which keeps it off the wellness shelf.</p></figcaption>
+</figure>
+
+</div>
+
+<h2>The narrative — one motif, whole page</h2>
+<p class="meta" style="max-width:820px;margin-bottom:6px">The studies above are
+vocabulary. This is the <b>sentence</b>: noise → the drop → the eclipse →
+the landing → the ripple → stillness. One water line runs unbroken from the
+top of the page to the footer, choppy at the start and flat by the end. The
+visitor never sees a "section" — they see the sea calming as they scroll,
+which <em>is</em> the product claim, made structurally instead of in copy.</p>
+
+<div class="strip">
+<svg viewBox="0 0 1400 430" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient id="sky" x1="0" y1="0" x2="1" y2="0">
+   <stop offset="0%" stop-color="#160b28"/><stop offset="28%" stop-color="#2b1150"/>
+   <stop offset="50%" stop-color="#5a1b86"/><stop offset="68%" stop-color="#a24a6d"/>
+   <stop offset="84%" stop-color="#e8d9e8"/><stop offset="100%" stop-color="#f7f4ef"/>
+  </linearGradient>
+  <radialGradient id="sun2"><stop offset="0%" stop-color="#ffd08a"/>
+   <stop offset="60%" stop-color="#ff8c1a"/><stop offset="100%" stop-color="#ff6900"/></radialGradient>
+  <linearGradient id="deep" x1="0" y1="0" x2="1" y2="0">
+   <stop offset="0%" stop-color="#0d0619"/><stop offset="55%" stop-color="#3d1568"/>
+   <stop offset="100%" stop-color="#8a77e1"/></linearGradient>
+  <radialGradient id="glow2"><stop offset="0%" stop-color="#ff6900" stop-opacity=".55"/>
+   <stop offset="100%" stop-color="#ff6900" stop-opacity="0"/></radialGradient>
+ </defs>
+
+ <rect width="1400" height="430" fill="url(#sky)"/>
+ <circle cx="660" cy="132" r="132" fill="url(#glow2)"/>
+ <circle cx="660" cy="132" r="62" fill="url(#sun2)"/>
+
+ <!-- the drop's flight: launch → eclipse → landing -->
+ <path d="M300 268 C420 150 540 118 660 132 C780 146 900 210 1000 300"
+  fill="none" stroke="#ffd08a" stroke-width="2" stroke-dasharray="7 9" opacity=".65"/>
+
+ <!-- ECLIPSE: the drop meets the sun -->
+ <path d="M660 86 C686 118 700 136 700 152 A40 40 0 0 1 620 152
+          C620 136 634 118 660 86Z" fill="#ff6900"/>
+ <path d="M652 108 C662 120 666 132 664 142 C654 138 648 126 652 108Z"
+  fill="#ffd9a8" opacity=".85"/>
+
+ <!-- launching droplet + spray -->
+ <path d="M300 246 C310 262 316 272 316 280 A16 16 0 0 1 284 280
+          C284 272 290 262 300 246Z" fill="#ff8c1a"/>
+ <g fill="#ffb066" opacity=".8">
+  <circle cx="272" cy="238" r="4"/><circle cx="330" cy="230" r="3.2"/>
+  <circle cx="256" cy="262" r="2.6"/><circle cx="344" cy="256" r="2.2"/>
+  <circle cx="312" cy="212" r="2.4"/>
+ </g>
+
+ <!-- landing splash -->
+ <path d="M1000 274 C1008 288 1012 296 1012 302 A12 12 0 0 1 988 302
+          C988 296 992 288 1000 274Z" fill="#ff6900"/>
+ <g stroke="#ffb066" stroke-width="2" fill="none" opacity=".75">
+  <path d="M974 292 C968 274 962 266 954 258"/>
+  <path d="M1026 292 C1032 274 1038 266 1046 258"/>
+  <path d="M988 286 C984 268 982 258 980 246"/>
+  <path d="M1012 286 C1016 268 1018 258 1020 246"/>
+ </g>
+
+ <!-- the water: choppy at left, glass by the right -->
+ <path d="M0 430 L0 300 L18 262 L36 322 L54 256 L72 326 L90 262 L108 320
+   L126 258 L144 324 L162 264 L180 318 L198 260 L216 322 L234 266 L252 316
+   L270 262 L288 320 L306 268 L324 314 L342 266 L360 316 L378 270 L396 312
+   L414 268 L432 314 L450 272 L468 310 L486 270 L504 312 L522 274 L540 308
+   L558 272 L576 310 L594 276 L612 306 L630 274 L648 308 L666 278 L684 304
+   L702 276 L720 306 L738 280 L756 302 L774 278 L792 304 L810 282 L828 300
+   L846 280 L864 302 L882 284 L900 298 L918 284 L936 300 L954 288 L972 296
+   L990 290 L1008 298 L1026 292 L1044 297 L1062 293 L1080 296 L1098 294
+   L1400 295 L1400 430 Z" fill="url(#deep)"/>
+
+ <!-- calm ripples spreading right from the landing -->
+ <g fill="none" stroke="#ffffff" opacity=".5">
+  <ellipse cx="1000" cy="302" rx="42" ry="7" stroke-width="2.4"/>
+  <ellipse cx="1000" cy="302" rx="88" ry="12" stroke-width="2"/>
+  <ellipse cx="1000" cy="302" rx="150" ry="17" stroke-width="1.7"/>
+  <ellipse cx="1000" cy="302" rx="224" ry="22" stroke-width="1.4"/>
+  <ellipse cx="1000" cy="302" rx="308" ry="27" stroke-width="1.1"/>
+  <ellipse cx="1000" cy="302" rx="400" ry="32" stroke-width=".9"/>
+ </g>
+
+ <!-- the cans arrive in the calm -->
+ <g>
+  <rect x="1168" y="228" width="42" height="74" rx="7" fill="#ff8c1a"/>
+  <rect x="1168" y="228" width="42" height="12" rx="6" fill="#ffc98a"/>
+  <rect x="1224" y="216" width="46" height="86" rx="8" fill="#6c00bf"/>
+  <rect x="1224" y="216" width="46" height="13" rx="6" fill="#a98be8"/>
+  <rect x="1286" y="234" width="40" height="68" rx="7" fill="#00b39a"/>
+  <rect x="1286" y="234" width="40" height="11" rx="6" fill="#7ee0d0"/>
+  <g opacity=".28">
+   <rect x="1168" y="304" width="42" height="30" rx="6" fill="#ff8c1a"/>
+   <rect x="1224" y="304" width="46" height="34" rx="6" fill="#6c00bf"/>
+   <rect x="1286" y="304" width="40" height="26" rx="6" fill="#00b39a"/>
+  </g>
+ </g>
+
+ <g font-family="Quicksand,sans-serif" font-size="11" letter-spacing="3">
+  <text x="24" y="404" fill="#b9a7d6">NOISE</text>
+  <text x="272" y="404" fill="#d8b9e8">THE DROP</text>
+  <text x="612" y="404" fill="#ffd9a8">ECLIPSE</text>
+  <text x="952" y="404" fill="#e8d3ff">LANDING</text>
+  <text x="1150" y="404" fill="#6b6560">STILLNESS</text>
+ </g>
+</svg>
+</div>
+
+<div class="beats">
+ <div class="beat"><span class="bno">BEAT 1 · HERO</span>
+  <b>The noise</b>
+  <p>Choppy water, almost black. No product yet. <em>Emotion: recognition</em>
+  — "that's my Tuesday." Copy sits in the trough: <i>"Some days come at you
+  in waves."</i></p></div>
+ <div class="beat"><span class="bno">BEAT 2 · SCROLL 1</span>
+  <b>The drop rises</b>
+  <p>A single warm droplet launches out of the chop — the first orange on the
+  page. <em>Emotion: anticipation.</em> This is the product entering, and it
+  enters <i>from</i> the problem, not beside it.</p></div>
+ <div class="beat"><span class="bno">BEAT 3 · PRODUCT</span>
+  <b>The eclipse</b>
+  <p>The drop meets the sun and holds — for one scroll-length they're the same
+  object. <em>Emotion: alignment.</em> The hero product shot lives exactly
+  here; the drop <i>is</i> the can, seen end-on.</p></div>
+ <div class="beat"><span class="bno">BEAT 4 · BENEFIT</span>
+  <b>The landing</b>
+  <p>Impact. A crown of spray, then quiet. <em>Emotion: release</em> — the
+  exhale. One line of copy, nothing else on screen: <i>"…and then it
+  doesn't."</i></p></div>
+ <div class="beat"><span class="bno">BEAT 5 · FLAVOURS</span>
+  <b>The ripple</b>
+  <p>Rings spread outward and the water flattens behind them. Each ring is a
+  flavour. <em>Emotion: choice, play.</em> Cans stand in the calm they made —
+  the shelf shot earns its place because the sea is already still.</p></div>
+ <div class="beat"><span class="bno">BEAT 6 · CTA</span>
+  <b>Stillness</b>
+  <p>Glass water, one horizon, vast empty space — study 08 (<i>Ma</i>) as a
+  full section. <em>Emotion: calm ownership.</em> The only thing in it is the
+  button. Space makes it unmissable.</p></div>
+</div>
+
+<h2>The flavour system rides the ripple</h2>
+<p class="meta" style="max-width:800px">Each SKU owns one ring colour and one
+emotional note. The ripple is the packaging grammar: same geometry, different
+hue — instantly a family on shelf, and the site can tint a whole section to
+the flavour you're browsing without redrawing anything.</p>
+<div class="flav">
+ <div><svg viewBox="0 0 120 120"><g fill="none" stroke="#ff8c1a">
+   <circle cx="60" cy="60" r="9" stroke-width="5"/><circle cx="60" cy="60" r="22" stroke-width="4"/>
+   <circle cx="60" cy="60" r="37" stroke-width="3" opacity=".8"/>
+   <circle cx="60" cy="60" r="52" stroke-width="2.2" opacity=".55"/></g></svg>
+  <b>Yuzu Calm</b><span>bright · citrus · the first exhale</span></div>
+ <div><svg viewBox="0 0 120 120"><g fill="none" stroke="#00b39a">
+   <circle cx="60" cy="60" r="9" stroke-width="5"/><circle cx="60" cy="60" r="22" stroke-width="4"/>
+   <circle cx="60" cy="60" r="37" stroke-width="3" opacity=".8"/>
+   <circle cx="60" cy="60" r="52" stroke-width="2.2" opacity=".55"/></g></svg>
+  <b>Matcha Still</b><span>green · grounding · focus without edge</span></div>
+ <div><svg viewBox="0 0 120 120"><g fill="none" stroke="#e0407a">
+   <circle cx="60" cy="60" r="9" stroke-width="5"/><circle cx="60" cy="60" r="22" stroke-width="4"/>
+   <circle cx="60" cy="60" r="37" stroke-width="3" opacity=".8"/>
+   <circle cx="60" cy="60" r="52" stroke-width="2.2" opacity=".55"/></g></svg>
+  <b>Hibiscus Hush</b><span>tart · rose-red · the evening turn</span></div>
+ <div><svg viewBox="0 0 120 120"><g fill="none" stroke="#6c00bf">
+   <circle cx="60" cy="60" r="9" stroke-width="5"/><circle cx="60" cy="60" r="22" stroke-width="4"/>
+   <circle cx="60" cy="60" r="37" stroke-width="3" opacity=".8"/>
+   <circle cx="60" cy="60" r="52" stroke-width="2.2" opacity=".55"/></g></svg>
+  <b>Lotus Drift</b><span>floral · deep violet · the long unwind</span></div>
+ <div><svg viewBox="0 0 120 120"><g fill="none" stroke="#c98a2e">
+   <circle cx="60" cy="60" r="9" stroke-width="5"/><circle cx="60" cy="60" r="22" stroke-width="4"/>
+   <circle cx="60" cy="60" r="37" stroke-width="3" opacity=".8"/>
+   <circle cx="60" cy="60" r="52" stroke-width="2.2" opacity=".55"/></g></svg>
+  <b>Ginger Ground</b><span>warm · root · steady, not sleepy</span></div>
+</div>
+
+<h2>The emotional arc</h2>
+<div class="strip" style="box-shadow:none;background:#fff;border:1px solid var(--line)">
+<svg viewBox="0 0 1200 260" xmlns="http://www.w3.org/2000/svg">
+ <line x1="60" y1="210" x2="1150" y2="210" stroke="#d9d3c9"/>
+ <line x1="60" y1="40" x2="60" y2="210" stroke="#d9d3c9"/>
+ <text x="16" y="56" font-size="10.5" fill="#a49c90" font-family="Quicksand,sans-serif">tension</text>
+ <text x="20" y="206" font-size="10.5" fill="#a49c90" font-family="Quicksand,sans-serif">calm</text>
+ <path d="M60 70 C140 60 190 96 250 78 C300 62 330 48 400 56
+          C470 64 520 120 620 96 C700 76 720 60 780 66
+          C860 74 900 176 1000 190 C1070 200 1110 196 1150 198"
+  fill="none" stroke="#6c00bf" stroke-width="3"/>
+ <g fill="#ff6900">
+  <circle cx="150" cy="72" r="6"/><circle cx="330" cy="52" r="6"/>
+  <circle cx="620" cy="96" r="6"/><circle cx="790" cy="66" r="6"/>
+  <circle cx="960" cy="168" r="6"/><circle cx="1120" cy="197" r="6"/>
+ </g>
+ <g font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560">
+  <text x="122" y="238">noise</text><text x="296" y="238">the drop</text>
+  <text x="584" y="238">eclipse</text><text x="754" y="238">landing</text>
+  <text x="922" y="238">flavours</text><text x="1088" y="238">CTA</text>
+ </g>
+ <text x="640" y="34" text-anchor="middle" font-size="11.5" fill="#8a8072"
+  font-family="Quicksand,sans-serif">tension has to RISE before it falls — a page that opens calm has nothing to resolve</text>
+</svg>
+</div>
+
+<h2>The five rules that keep it one thing</h2>
+<div class="conn">
+ <div><b>1 · The water line never breaks</b><span>One continuous horizon from
+  hero to footer, choppy → glass. Sections butt against it; nothing has its
+  own frame.</span></div>
+ <div><b>2 · Orange appears once, then earns it</b><span>No warm colour until
+  the drop. After the landing, orange is only ever the CTA. Scarcity makes it
+  a signal.</span></div>
+ <div><b>3 · Backgrounds lighten as you scroll</b><span>Near-black to paper.
+  The visitor feels the release before reading a claim about it.</span></div>
+ <div><b>4 · Every ring is a flavour</b><span>Concentric geometry is the brand
+  grammar — cans, badges, loaders, the cursor. Change only hue.</span></div>
+ <div><b>5 · Space grows toward the end</b><span>Padding widens beat to beat.
+  The page literally opens up, so the CTA sits in the most air on the
+  site.</span></div>
+</div>
+<p class="meta" style="max-width:820px;margin-top:10px"><b>Cheapest way to
+prove it:</b> the drop's flight is a single SVG path. Tie the droplet's
+position along that path to scroll offset and the whole story animates with
+about fifteen lines of JS — no video, no library, and it degrades to a
+perfectly good static illustration when motion is reduced.</p>
+
+<h2>Everyday turbulence — the problem bank</h2>
+<p class="meta" style="max-width:840px">Raw material for the first beat. Three
+rules keep this out of pharma-ad territory: make it <b>mundane, not dramatic</b>
+(a forgotten coffee beats a panic attack), play it <b>wry, not therapeutic</b>
+(we sell composure, not treatment), and make it <b>readable in two seconds</b>
+with no dialogue. Each situation is graded on the same water the motif
+uses — that grade tells the editor how choppy the frame should be.</p>
+
+<div class="strip" style="box-shadow:none;border:1px solid var(--line);background:#fff">
+<svg viewBox="0 0 1200 150" xmlns="http://www.w3.org/2000/svg">
+ <g font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560">
+  <text x="40" y="26" letter-spacing="2">THE TURBULENCE SCALE — how choppy the water gets</text>
+  <text x="90" y="140">1 · ripple</text><text x="370" y="140">2 · chop</text>
+  <text x="650" y="140">3 · swell</text><text x="920" y="140">4 · storm</text>
+ </g>
+ <g fill="none" stroke="#6c00bf" stroke-width="2.4">
+  <path d="M40 90 C70 84 100 96 130 90 C160 84 190 96 220 90"/>
+  <path d="M310 90 C334 70 358 110 382 90 C406 70 430 110 454 90 C478 70 502 110 526 90"/>
+  <path d="M590 90 C610 48 630 132 650 90 C670 48 690 132 710 90 C730 48 750 132 770 90
+           C790 48 806 120 820 96"/>
+  <path d="M870 90 C884 30 898 150 912 86 C926 26 940 152 954 84 C968 24 982 154 996 88
+           C1010 28 1024 148 1038 92 C1052 40 1066 136 1080 94"/>
+ </g>
+ <g fill="#ff6900" opacity=".85">
+  <circle cx="130" cy="90" r="3.5"/><circle cx="430" cy="90" r="3.5"/>
+  <circle cx="710" cy="90" r="3.5"/><circle cx="954" cy="84" r="3.5"/>
+ </g>
+</svg>
+</div>
+
+<div class="probs">
+ <div class="prob"><span class="em">☕️</span><b>The forgotten coffee</b>
+  <span class="feel">Halfway to work, hand reaches for a cup that isn't there.
+  Small betrayal by your own morning.</span>
+  <span class="tag">SCALE 2</span><span class="when">7:40am</span></div>
+ <div class="prob"><span class="em">🚗</span><b>Stopped traffic</b>
+  <span class="feel">Brake lights to the horizon. Nothing to do, nowhere to
+  put the frustration.</span>
+  <span class="tag">SCALE 3</span><span class="when">8:15am</span></div>
+ <div class="prob"><span class="em">⏳</span><b>The deadline</b>
+  <span class="feel">Cursor blinking, three hours left, four hours of work.
+  The clock is the antagonist.</span>
+  <span class="tag">SCALE 4</span><span class="when">2:00pm</span></div>
+ <div class="prob"><span class="em">🥤</span><b>The fridge decision</b>
+  <span class="feel">Standing in the cooler aisle choosing between sugar and
+  regret. Decision fatigue dressed as a drink.</span>
+  <span class="tag">SCALE 2</span><span class="when">12:30pm</span></div>
+ <div class="prob"><span class="em">🎒</span><b>Out and on the go</b>
+  <span class="feel">Bag on shoulder, three stops to make, nothing steady in
+  hand.</span>
+  <span class="tag">SCALE 2</span><span class="when">all day</span></div>
+ <div class="prob"><span class="em">⚡️</span><b>Caffeine overload</b>
+  <span class="feel">Fourth cup. Heart doing something conversational. Alert
+  but useless.</span>
+  <span class="tag">SCALE 4</span><span class="when">11:00am</span></div>
+ <div class="prob"><span class="em">🔋</span><b>The 3pm floor</b>
+  <span class="feel">Energy gone, day not over. Reading the same line four
+  times.</span>
+  <span class="tag">SCALE 3</span><span class="when">3:00pm</span></div>
+ <div class="prob"><span class="em">🗣</span><b>Ten minutes before</b>
+  <span class="feel">Presentation about to start. Notes fine, hands not.</span>
+  <span class="tag">SCALE 4</span><span class="when">9:50am</span></div>
+ <div class="prob"><span class="em">💻</span><b>Back-to-back calls</b>
+  <span class="feel">Sixth meeting, no gap between. Camera on, battery
+  empty.</span>
+  <span class="tag">SCALE 3</span><span class="when">1:00pm</span></div>
+ <div class="prob"><span class="em">📥</span><b>The 4pm inbox</b>
+  <span class="feel">Forty unread, each one someone else's urgency.</span>
+  <span class="tag">SCALE 3</span><span class="when">4:00pm</span></div>
+ <div class="prob"><span class="em">🏋️</span><b>Pre-workout, post-day</b>
+  <span class="feel">Gym bag by the door, willpower nowhere near it.</span>
+  <span class="tag">SCALE 2</span><span class="when">6:00pm</span></div>
+ <div class="prob"><span class="em">🍻</span><b>The other option</b>
+  <span class="feel">Everyone's ordering. You want the ritual without the
+  hangover.</span>
+  <span class="tag">SCALE 2</span><span class="when">7:30pm</span></div>
+ <div class="prob"><span class="em">🌙</span><b>Wired at 10</b>
+  <span class="feel">Body done, head still filing. Tomorrow already
+  starting.</span>
+  <span class="tag">SCALE 3</span><span class="when">10:00pm</span></div>
+ <div class="prob"><span class="em">✈️</span><b>Gate change</b>
+  <span class="feel">Terminal sprint, everything in one hand.</span>
+  <span class="tag">SCALE 4</span><span class="when">travel</span></div>
+</div>
+
+<h2>The resolution bank</h2>
+<p class="meta" style="max-width:840px"><b>The rule that makes these work:
+the person is the hero, the drink is the pivot.</b> Zenjoy never solves the
+problem — the crack of the can is the beat where they stop reacting and start
+choosing, and then <em>they</em> handle it. Get this backwards and you've made
+a pharmaceutical ad; get it right and you've made a competence fantasy, which
+is far more shareable.</p>
+
+<div class="strip" style="box-shadow:none;border:1px solid var(--line);background:#fff">
+<svg viewBox="0 0 1200 170" xmlns="http://www.w3.org/2000/svg">
+ <text x="40" y="26" font-family="Quicksand,sans-serif" font-size="11"
+  fill="#6b6560" letter-spacing="2">THE PIVOT — every cut is this shape, at any length</text>
+ <path d="M40 100 C60 46 80 154 100 96 C120 40 140 156 160 98 C180 44 200 152 220 100
+          C240 56 260 140 280 104 C300 70 320 128 340 106"
+  fill="none" stroke="#6c00bf" stroke-width="2.6"/>
+ <path d="M340 106 C420 104 470 102 520 100" fill="none" stroke="#6c00bf"
+  stroke-width="2.6" opacity=".5" stroke-dasharray="5 6"/>
+ <path d="M520 74 C532 92 538 102 538 110 A18 18 0 0 1 502 110
+          C502 102 508 92 520 74Z" fill="#ff6900"/>
+ <g fill="none" stroke="#ff8c1a" stroke-width="1.8" opacity=".7">
+  <path d="M492 96 C486 82 482 74 476 66"/><path d="M548 96 C554 82 558 74 564 66"/>
+ </g>
+ <g fill="none" stroke="#8a77e1">
+  <ellipse cx="520" cy="128" rx="34" ry="6" stroke-width="2"/>
+  <ellipse cx="520" cy="128" rx="70" ry="10" stroke-width="1.7" opacity=".8"/>
+  <ellipse cx="520" cy="128" rx="112" ry="14" stroke-width="1.4" opacity=".6"/>
+ </g>
+ <path d="M640 106 C740 104 840 102 1160 101" fill="none" stroke="#6c00bf"
+  stroke-width="2.6"/>
+ <g font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560">
+  <text x="120" y="150">1 · the turbulence</text>
+  <text x="470" y="150">2 · the sip</text>
+  <text x="840" y="150">3 · they handle it</text>
+ </g>
+</svg>
+</div>
+
+<div class="res">
+ <div class="resrow">
+  <div><b>☕️ Forgot the coffee</b><span>reaching for a cup that isn't
+   there</span></div><div class="arrow">→</div>
+  <div class="pivot"><b>The cold can from the bag</b><span>a better answer than
+   the one they lost</span></div><div class="arrow">→</div>
+  <div><span class="pay">Walks in early, not frantic</span><span
+   style="display:block">payoff: <b>self-possession</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>🚗 Stopped traffic</b><span>brake lights, nowhere to put it</span>
+   </div><div class="arrow">→</div>
+  <div class="pivot"><b>One sip, then the map</b><span>stops fuming, starts
+   thinking</span></div><div class="arrow">→</div>
+  <div><span class="pay">Takes the better route</span><span
+   style="display:block">payoff: <b>agency</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>🗣 Ten minutes before</b><span>notes fine, hands not</span></div>
+  <div class="arrow">→</div>
+  <div class="pivot"><b>Crack, exhale, walk in</b><span>the can as a
+   pre-flight ritual</span></div><div class="arrow">→</div>
+  <div><span class="pay">Nails the room</span><span style="display:block">
+   payoff: <b>composure</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>🥤 The fridge decision</b><span>sugar or regret</span></div>
+  <div class="arrow">→</div>
+  <div class="pivot"><b>Reaches past both</b><span>the third option that
+   isn't a compromise</span></div><div class="arrow">→</div>
+  <div><span class="pay">Doesn't think about it again</span><span
+   style="display:block">payoff: <b>ease</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>⚡️ Caffeine overload</b><span>alert but useless</span></div>
+  <div class="arrow">→</div>
+  <div class="pivot"><b>Swaps the fourth cup</b><span>down-shift, not
+   shut-down</span></div><div class="arrow">→</div>
+  <div><span class="pay">Finishes the actual work</span><span
+   style="display:block">payoff: <b>clarity</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>🔋 The 3pm floor</b><span>same line, four times</span></div>
+  <div class="arrow">→</div>
+  <div class="pivot"><b>Steps outside with it</b><span>a boundary, in
+   liquid form</span></div><div class="arrow">→</div>
+  <div><span class="pay">Comes back different</span><span
+   style="display:block">payoff: <b>reset</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>🏋️ Gym bag by the door</b><span>willpower elsewhere</span></div>
+  <div class="arrow">→</div>
+  <div class="pivot"><b>Drinks it lacing up</b><span>the small yes that
+   unlocks the big one</span></div><div class="arrow">→</div>
+  <div><span class="pay">Goes anyway — run, yoga, walk</span><span
+   style="display:block">payoff: <b>momentum</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>🍻 Everyone's ordering</b><span>wants the ritual, not the
+   hangover</span></div><div class="arrow">→</div>
+  <div class="pivot"><b>Orders one anyway</b><span>same glass, same
+   cheers</span></div><div class="arrow">→</div>
+  <div><span class="pay">Stays out, wakes up fine</span><span
+   style="display:block">payoff: <b>belonging</b></span></div></div>
+
+ <div class="resrow">
+  <div><b>🌙 Wired at 10</b><span>body done, head filing</span></div>
+  <div class="arrow">→</div>
+  <div class="pivot"><b>Last one of the day</b><span>a full stop, not a
+   sedative</span></div><div class="arrow">→</div>
+  <div><span class="pay">Puts the phone down</span><span
+   style="display:block">payoff: <b>closure</b></span></div></div>
+</div>
+
+<p class="meta" style="max-width:840px;margin-top:12px"><b>Casting the arcs:</b>
+the strongest films come from the rows with the widest gap between the two
+ends — <i>ten minutes before → nails the room</i> and <i>traffic → better
+route</i> both turn a person from passenger into driver, literally and not.
+The weakest is <i>fridge decision</i>: true, useful on a shelf-talker, but
+there's no transformation in it, so it belongs in a 6-second cut, never a
+hero film.</p>
+
+<h2>Resolving "some days come at you in waves"</h2>
+<p class="meta" style="max-width:840px">The payoff to protect is
+<em>"…and then it doesn't."</em> It works because it under-plays — no claim, no
+adjective, just the weather changing. Everything below is built to make that
+line land harder, not to replace it.</p>
+
+<div class="warn">
+ <b>One craft note first — the antecedent.</b> "Some days come at you in
+ waves" is plural ("days… come"); "and then it doesn't" is singular. Spoken
+ fast, nobody objects — "it" reads as <i>the whole situation</i>. But on a
+ quiet page with three seconds of silence around it, the mismatch is faintly
+ felt. Three clean fixes, all keeping your line intact: make the opener
+ <b>singular</b> ("The day comes at you in waves"), let <b>the water</b> be
+ the antecedent (put a line about the water between them), or keep the plural
+ opener and let "it" mean <i>the coming-at-you</i> — which is defensible, and
+ the deadpan is worth the grammatical shrug. Sets below show each.
+</div>
+
+<h2 style="font-size:18px;margin:22px 0 10px">Six ways to resolve it</h2>
+<div class="sets">
+
+ <div class="set"><span class="kind">01 · DEADPAN — RECOMMENDED</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Some days come at you in waves.</span></div>
+  <div class="ln"><span class="bt">drop</span>
+   <span class="tx small">(no copy — just the drop and the sound)</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <div class="ln"><span class="bt">cta</span>
+   <span class="tx small">Meet the day flat.</span></div>
+  <p class="note">Nothing between the setup and the payoff but the crack of
+  the can. The silence <i>is</i> the argument — and it's the only version that
+  works with the audio signature alone.</p></div>
+
+ <div class="set"><span class="kind">02 · SINGULAR — CLEANEST GRAMMAR</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">The day comes at you in waves.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <div class="ln"><span class="bt">cta</span>
+   <span class="tx small">Still water, on demand.</span></div>
+  <p class="note">One word changed, mismatch gone, and "the day" is more
+  personal than "some days" — it's <i>today</i>, the one they're having while
+  reading.</p></div>
+
+ <div class="set"><span class="kind">03 · THE WATER BRIDGE</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Some days come at you in waves.</span></div>
+  <div class="ln"><span class="bt">mid</span>
+   <span class="tx small">So change the water.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <p class="note">The bridge gives "it" something to point at and states the
+  product's job in four words. Strongest for the scrolling site, where the
+  middle line lands exactly on the eclipse.</p></div>
+
+ <div class="set"><span class="kind">04 · COMPETENCE</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Some days come at you in waves.</span></div>
+  <div class="ln"><span class="bt">mid</span>
+   <span class="tx small">You don't need calmer days.<br>You need a steadier
+   surface.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <p class="note">Puts the person back in charge — the resolution-bank rule in
+  copy form. Best for the benefit section where you need one paragraph of
+  actual reasoning.</p></div>
+
+ <div class="set"><span class="kind">05 · WRY</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Some days come at you in waves.</span></div>
+  <div class="ln"><span class="bt">mid</span>
+   <span class="tx small">Rude, honestly.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <p class="note">Two words of humour buy enormous goodwill and inoculate the
+  whole thing against wellness-brand piety. Use on social, never on pack.</p></div>
+
+ <div class="set"><span class="kind">06 · TIME</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Some days come at you in waves.</span></div>
+  <div class="ln"><span class="bt">mid</span>
+   <span class="tx small">9:40. 11:15. 2:00. 3:47.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <p class="note">Timestamps do the storytelling — each one a wave in the
+  hero graphic. Ties copy directly to the turbulence scale and needs no
+  actors at all.</p></div>
+
+</div>
+
+<h2 style="font-size:18px;margin:26px 0 10px">If you ever need to test against it</h2>
+<p class="meta" style="max-width:840px">Alternates that keep the same shape.
+Test them; expect the original to win — the others explain, and explaining is
+what breaks the spell.</p>
+<div class="bank">
+ <div>And then it doesn't.<span>control — deadpan, no claim</span></div>
+ <div>And then it just… doesn't.<span>the ellipsis buys a breath; risks cute</span></div>
+ <div>Then it stops.<span>blunter, colder, very confident</span></div>
+ <div>And the water goes flat.<span>stays inside the motif</span></div>
+ <div>Then it's just a Tuesday.<span>funniest; weakest on pack</span></div>
+ <div>And nothing comes at you at all.<span>over-promises — probably a claim</span></div>
+ <div>Same day. Different sea.<span>reframe; good OOH, poor film</span></div>
+ <div>And then you're the flat part.<span>oddest, most ownable, riskiest</span></div>
+</div>
+
+<h2 style="font-size:18px;margin:26px 0 10px">Six-second cut</h2>
+<div class="sets">
+ <div class="set"><span class="kind">PAID SOCIAL · 6s</span>
+  <div class="ln"><span class="bt">0–2s</span>
+   <span class="tx">Waves.</span></div>
+  <div class="ln"><span class="bt">2–3s</span>
+   <span class="tx small">— crack —</span></div>
+  <div class="ln"><span class="bt">3–6s</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <p class="note">The hero line compressed to one word because the picture
+  already says it. Same payoff, same sound — so it inherits the meaning of the
+  long film for free.</p></div>
+ <div class="set"><span class="kind">PACK &amp; OOH FRAGMENTS</span>
+  <div class="ln"><span class="bt">can</span>
+   <span class="tx small">flat sea, cold can</span></div>
+  <div class="ln"><span class="bt">ooh</span>
+   <span class="tx small">Waves optional.</span></div>
+  <div class="ln"><span class="bt">ooh</span>
+   <span class="tx small">Chop is a choice.</span></div>
+  <div class="ln"><span class="bt">shelf</span>
+   <span class="tx small">The third option in the cooler.</span></div>
+  <p class="note">Fragments of the same world that never repeat the hero line
+  — so the film stays the only place it's said, and keeps its weight.</p></div>
+</div>
+
+<h2>Tea changes the motif — and improves it</h2>
+<div class="warn" style="background:#f2fbf6;border-color:#bfe4cf;max-width:900px">
+ <b>The big idea:</b> for a canned soda the ripple was a <i>metaphor</i>. For
+ tea it's <b>literally what happens in the cup</b> — something enters still
+ water and colour spreads outward in rings until the whole vessel is changed.
+ The steep <i>is</i> the story. That means the hero film needs no actors, no
+ VFX and no ocean: a macro shot of an infusion blooming, shot once, is the
+ entire brand arc in eight seconds.
+</div>
+
+<div class="strip" style="box-shadow:none;border:1px solid var(--line);background:#fff">
+<svg viewBox="0 0 1200 260" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <radialGradient id="steep1"><stop offset="0%" stop-color="#c9822e" stop-opacity=".9"/>
+   <stop offset="100%" stop-color="#c9822e" stop-opacity="0"/></radialGradient>
+  <radialGradient id="steep2"><stop offset="0%" stop-color="#8a5a1e" stop-opacity=".85"/>
+   <stop offset="100%" stop-color="#c9822e" stop-opacity="0"/></radialGradient>
+ </defs>
+ <text x="40" y="26" font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560"
+  letter-spacing="2">THE STEEP — the same arc, filmed in a cup</text>
+ <g>
+  <circle cx="170" cy="140" r="76" fill="#fbf7ef" stroke="#d9d3c9" stroke-width="3"/>
+  <ellipse cx="170" cy="140" rx="66" ry="66" fill="#fdfcf8"/>
+  <path d="M170 76 C176 92 180 100 180 106 A10 10 0 0 1 160 106 C160 100 164 92 170 76Z"
+   fill="#5a7d3a"/>
+  <text x="170" y="238" text-anchor="middle" font-size="11"
+   font-family="Quicksand,sans-serif" fill="#6b6560">0:00 — still</text>
+ </g>
+ <g>
+  <circle cx="420" cy="140" r="76" fill="#fbf7ef" stroke="#d9d3c9" stroke-width="3"/>
+  <circle cx="420" cy="140" r="66" fill="#fdfcf8"/>
+  <circle cx="420" cy="140" r="30" fill="url(#steep1)"/>
+  <circle cx="420" cy="140" r="16" fill="url(#steep2)"/>
+  <text x="420" y="238" text-anchor="middle" font-size="11"
+   font-family="Quicksand,sans-serif" fill="#6b6560">0:20 — the bloom</text>
+ </g>
+ <g>
+  <circle cx="670" cy="140" r="76" fill="#fbf7ef" stroke="#d9d3c9" stroke-width="3"/>
+  <circle cx="670" cy="140" r="66" fill="#fdfcf8"/>
+  <circle cx="670" cy="140" r="60" fill="url(#steep1)" opacity=".8"/>
+  <circle cx="670" cy="140" r="34" fill="url(#steep2)"/>
+  <g fill="none" stroke="#a8701f" opacity=".45">
+   <circle cx="670" cy="140" r="20"/><circle cx="670" cy="140" r="38"/>
+   <circle cx="670" cy="140" r="54"/></g>
+  <text x="670" y="238" text-anchor="middle" font-size="11"
+   font-family="Quicksand,sans-serif" fill="#6b6560">1:30 — rings spreading</text>
+ </g>
+ <g>
+  <circle cx="920" cy="140" r="76" fill="#fbf7ef" stroke="#d9d3c9" stroke-width="3"/>
+  <circle cx="920" cy="140" r="66" fill="#b5761f"/>
+  <ellipse cx="900" cy="118" rx="18" ry="10" fill="#e0a75a" opacity=".45"/>
+  <text x="920" y="238" text-anchor="middle" font-size="11"
+   font-family="Quicksand,sans-serif" fill="#6b6560">3:00 — whole cup changed</text>
+ </g>
+ <g stroke="#c9c2b6" stroke-width="1.4" fill="none">
+  <path d="M258 140 L332 140"/><path d="M508 140 L582 140"/><path d="M758 140 L832 140"/>
+ </g>
+ <text x="1010" y="128" font-family="Fraunces,Georgia,serif" font-size="15" fill="#6c00bf">
+  the ripple isn't</text>
+ <text x="1010" y="150" font-family="Fraunces,Georgia,serif" font-size="15" fill="#6c00bf">
+  a metaphor here —</text>
+ <text x="1010" y="172" font-family="Fraunces,Georgia,serif" font-size="15" fill="#6c00bf">
+  it's the product</text>
+</svg>
+</div>
+
+<div class="probs">
+ <div class="prob"><span class="em">⏳</span><b>Three minutes is the product</b>
+  <span class="feel">Steeping "wastes" 3 minutes — that's not a drawback, it's
+  the entire benefit. You're not selling leaves, you're selling a sanctioned
+  pause. Own the timer: on pack, on site, as a QR that starts a 3-minute
+  breathing screen.</span>
+  <span class="tag">STRONGEST IDEA</span></div>
+
+ <div class="prob"><span class="em">🔇</span><b>The audio signature changes</b>
+  <span class="feel">A can cracks; tea doesn't. The signature becomes the
+  <i>kettle click → pour → first silence</i>. Quieter and more ownable — and
+  it works in a library, which is where half your customers are.</span>
+  <span class="tag">REVISION</span></div>
+
+ <div class="prob"><span class="em">🌡</span><b>Two temperatures, one motif</b>
+  <span class="feel">Hot: steam rings rising. Iced: condensation rings on the
+  glass. Same geometry, two occasions — morning steadying and afternoon
+  reset — without a second visual language.</span>
+  <span class="tag">RANGE</span></div>
+
+ <div class="prob"><span class="em">🍃</span><b>Ingredients as characters</b>
+  <span class="feel">L-theanine the quiet one, ashwagandha the steady one,
+  lemon balm the kind one, chamomile the old friend. Each gets a ring colour
+  and one sentence — botany with a personality, not a supplement panel.</span>
+  <span class="tag">FORMULATION</span></div>
+
+ <div class="prob"><span class="em">🍵</span><b>Ceremony you've actually earned</b>
+  <span class="feel">Every other brand borrows "zen." Tea has a real 400-year
+  ceremony behind it. You can reference <i>chadō</i> honestly — the ritual is
+  native to the category, not appropriated for a soda.</span>
+  <span class="tag">AUTHENTICITY</span></div>
+
+ <div class="prob"><span class="em">📦</span><b>Two formats, one arc</b>
+  <span class="feel">Sachets for the desk and the 3-minute ritual; RTD cans of
+  the same formula, iced, for the commute. The film's arc covers both — the
+  drop lands in a cup <i>or</i> a can.</span>
+  <span class="tag">ARCHITECTURE</span></div>
+
+ <div class="prob"><span class="em">🧭</span><b>Don't sell calm — sell composure</b>
+  <span class="feel">Every tea on the shelf owns "calm"; it's table stakes and
+  it sounds like sleep. Composure is calm <i>under load</i> — it implies a
+  demanding life, which is flattering, and it's exactly what the waves motif
+  already says.</span>
+  <span class="tag">DIFFERENTIATION</span></div>
+
+ <div class="prob"><span class="em">🌀</span><b>The leaf is the drop</b>
+  <span class="feel">Recast the golden drop as the sachet descending, or a
+  single leaf turning as it falls. Keeps the entire storyboard intact and
+  makes the hero object the thing you actually sell.</span>
+  <span class="tag">MOTIF FIX</span></div>
+
+ <div class="prob"><span class="em">🎞</span><b>Shoot once, cut forever</b>
+  <span class="feel">One macro rig, one afternoon: a dozen infusion blooms in
+  different colours. That's the hero film, every 6-second cut, all flavour
+  headers and the loading animation — from a single shoot day.</span>
+  <span class="tag">PRODUCTION</span></div>
+
+ <div class="prob"><span class="em">🫖</span><b>The pour as the eclipse</b>
+  <span class="feel">Water arcing from kettle to cup <i>is</i> the drop's
+  flight path. Shot backlit, the stream catches light exactly like the
+  sun-eclipse frame — same beat, real footage, no compositing.</span>
+  <span class="tag">CINEMATOGRAPHY</span></div>
+</div>
+
+<div class="warn" style="max-width:900px;margin-top:16px">
+ <b>Claims guardrail — read before writing a word of pack copy.</b> A
+ stress-relief formulation puts you in structure/function territory, and the
+ line is sharper than most founders expect. Safer: <i>"supports a calm
+ mind," "helps you feel steady," "traditionally used to unwind,"</i> and
+ letting the <b>ingredient</b> carry the story rather than an outcome
+ promise. Riskier: <i>"relieves anxiety," "treats stress," "reduces
+ cortisol"</i> — those describe treating a condition and invite regulatory
+ attention plus a substantiation burden. Practical rule for this brand:
+ <b>describe the moment, not the mechanism.</b> "Three minutes that are
+ yours" is unimpeachable and does more selling than any biochemistry — and
+ conveniently it's the same discipline that keeps the copy good. Get a
+ regulatory read before print regardless; this is a flag, not advice.
+</div>
+
+<h2 style="font-size:18px;margin:26px 0 10px">Lines that only work for tea</h2>
+<div class="bank">
+ <div>Three minutes that are yours.<span>the timer as the whole promise</span></div>
+ <div>Steeped, not stirred up.<span>wry; social only</span></div>
+ <div>The pause is the ingredient.<span>ties to Ma — study 08</span></div>
+ <div>Watch it change the water.<span>literal, and it's the film's direction</span></div>
+ <div>Made to be waited for.<span>turns the drawback into the pitch</span></div>
+ <div>Loose leaf, tight grip.<span>composure, not sleep</span></div>
+ <div>Calm you can hold.<span>the warm cup, physically</span></div>
+ <div>Some days come at you in waves.<span>still the hero — unchanged</span></div>
+</div>
+
+<h2>Canned — what that changes</h2>
+<div class="warn" style="max-width:900px">
+ <b>Correcting the previous slide honestly.</b> Some of it was written for
+ loose leaf and doesn't survive contact with a can.
+ <b style="display:block;margin-top:7px">Dies:</b> "three minutes is the
+ product." Nobody steeps a can — the single best idea on that slide is gone as
+ written, and pretending otherwise would cost you a shoot.
+ <b style="display:block;margin-top:5px">Comes back:</b> the crack. The audio
+ signature returns to the can opening — and it's <i>better</i> than the kettle,
+ because the crack <b>is</b> the drop landing. One sound, one story beat.
+ <b style="display:block;margin-top:5px">Survives untouched:</b> the waves
+ motif, "composure not calm," the ripple-as-flavour system, and the whole
+ storyboard — the drop simply lands in a can instead of a cup.
+</div>
+
+<h2 style="font-size:18px;margin:22px 0 10px">The can is a 360° canvas — use the multipack</h2>
+<div class="strip" style="box-shadow:none;border:1px solid var(--line);background:#fff">
+<svg viewBox="0 0 1200 300" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient id="cylA" x1="0" y1="0" x2="1" y2="0">
+   <stop offset="0%" stop-color="#3d1568"/><stop offset="22%" stop-color="#6c00bf"/>
+   <stop offset="70%" stop-color="#5a1b9e"/><stop offset="100%" stop-color="#33115c"/>
+  </linearGradient>
+ </defs>
+ <text x="40" y="26" font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560"
+  letter-spacing="2">RINGS ALIGN ACROSS THE PACK — the artwork only completes in fours</text>
+ <g>
+  <g transform="translate(150,50)">
+   <rect x="0" y="0" width="118" height="200" rx="14" fill="url(#cylA)"/>
+   <rect x="0" y="0" width="118" height="16" rx="8" fill="#b9a7d6"/></g>
+  <g transform="translate(288,50)">
+   <rect x="0" y="0" width="118" height="200" rx="14" fill="url(#cylA)"/>
+   <rect x="0" y="0" width="118" height="16" rx="8" fill="#b9a7d6"/></g>
+  <g transform="translate(426,50)">
+   <rect x="0" y="0" width="118" height="200" rx="14" fill="url(#cylA)"/>
+   <rect x="0" y="0" width="118" height="16" rx="8" fill="#b9a7d6"/></g>
+  <g transform="translate(564,50)">
+   <rect x="0" y="0" width="118" height="200" rx="14" fill="url(#cylA)"/>
+   <rect x="0" y="0" width="118" height="16" rx="8" fill="#b9a7d6"/></g>
+ </g>
+ <g fill="none" stroke="#ffffff" opacity=".62">
+  <ellipse cx="401" cy="168" rx="46" ry="15" stroke-width="2.6"/>
+  <ellipse cx="401" cy="168" rx="98" ry="30" stroke-width="2.2"/>
+  <ellipse cx="401" cy="168" rx="152" ry="45" stroke-width="1.8"/>
+  <ellipse cx="401" cy="168" rx="208" ry="60" stroke-width="1.5"/>
+  <ellipse cx="401" cy="168" rx="266" ry="76" stroke-width="1.2"/>
+ </g>
+ <path d="M401 120 C412 138 418 150 418 158 A17 17 0 0 1 384 158
+          C384 150 390 138 401 120Z" fill="#ff8c1a"/>
+ <g fill="#6b6560" font-family="Quicksand,sans-serif" font-size="11">
+  <text x="150" y="272">one can: a fragment</text>
+  <text x="470" y="272">four cans: the drop lands</text>
+ </g>
+ <g transform="translate(760,50)">
+  <text x="0" y="-14" font-family="Quicksand,sans-serif" font-size="11"
+   fill="#6b6560" letter-spacing="2">THE COOLER-DOOR TEST</text>
+  <g><rect x="0" y="10" width="92" height="158" rx="12" fill="url(#cylA)"/>
+   <g fill="none" stroke="#fff" opacity=".6"><ellipse cx="46" cy="96" rx="30" ry="11" stroke-width="2.4"/>
+    <ellipse cx="46" cy="96" rx="56" ry="20" stroke-width="1.8"/></g>
+   <circle cx="46" cy="72" r="9" fill="#ff8c1a"/>
+   <text x="46" y="188" text-anchor="middle" font-size="10"
+    font-family="Quicksand,sans-serif" fill="#6b6560">clear</text></g>
+  <g opacity=".72"><rect x="120" y="10" width="92" height="158" rx="12" fill="url(#cylA)"/>
+   <g fill="none" stroke="#fff" opacity=".5"><ellipse cx="166" cy="96" rx="30" ry="11" stroke-width="2.4"/>
+    <ellipse cx="166" cy="96" rx="56" ry="20" stroke-width="1.8"/></g>
+   <circle cx="166" cy="72" r="9" fill="#ff8c1a"/>
+   <g fill="#fff" opacity=".55"><circle cx="134" cy="40" r="3"/><circle cx="196" cy="62" r="2.4"/>
+    <circle cx="146" cy="120" r="3.4"/><circle cx="188" cy="140" r="2.6"/>
+    <circle cx="160" cy="30" r="2"/><circle cx="176" cy="108" r="2.2"/></g>
+   <text x="166" y="188" text-anchor="middle" font-size="10"
+    font-family="Quicksand,sans-serif" fill="#6b6560">condensation</text></g>
+  <g opacity=".5"><rect x="240" y="10" width="92" height="158" rx="12" fill="url(#cylA)"/>
+   <circle cx="286" cy="72" r="11" fill="#ff8c1a" opacity=".9"/>
+   <text x="286" y="188" text-anchor="middle" font-size="10"
+    font-family="Quicksand,sans-serif" fill="#6b6560">backlit blur</text></g>
+  <text x="0" y="216" font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560">
+   Only the orange drop survives all three.</text>
+  <text x="0" y="234" font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560">
+   That dot is the brand asset — make it huge.</text>
+ </g>
+</svg>
+</div>
+
+<div class="probs">
+ <div class="prob"><span class="em">⏱</span><b>"The steeping's done."</b>
+  <span class="feel">Rescues the dead idea. You don't wait — but the waiting
+  <i>was done properly</i>, by someone who cared. Cold-brewed slowly so you
+  don't have to. <i>"Three minutes, already spent."</i> The ritual is
+  delivered, not performed.</span>
+  <span class="tag">THE SAVE</span></div>
+
+ <div class="prob"><span class="em">🥫</span><b>The crack is the drop</b>
+  <span class="feel">Your audio signature and your key visual are now the same
+  event. Film the crack in macro, sync it to the splash frame — one sound
+  carries the whole arc, and it's free every time a customer opens one.</span>
+  <span class="tag">SIGNATURE</span></div>
+
+ <div class="prob"><span class="em">🧊</span><b>Own "cold calm"</b>
+  <span class="feel">Calm is coded warm — blankets, mugs, dusk. Cold calm is
+  an empty space: refreshing <i>and</i> settling, alert <i>and</i> unhurried.
+  It's the only way a cold can beats a warm mug at its own claim.</span>
+  <span class="tag">POSITIONING</span></div>
+
+ <div class="prob"><span class="em">🍬</span><b>Fight the sweet-tea reflex</b>
+  <span class="feel">"Canned tea" means sugar to most shoppers — Arizona, Gold
+  Peak, gallons of it. You need a two-second signal that this isn't that:
+  matte where they're glossy, small where they're huge, one number where
+  they're loud.</span>
+  <span class="tag">CATEGORY RISK</span></div>
+
+ <div class="prob"><span class="em">🚪</span><b>Design for the wet glass</b>
+  <span class="feel">The shelf is the real ad: three seconds, backlit through
+  a fogged cooler door, half-hidden behind a competitor. Test every design
+  blurred and condensation-flecked before you test it flat on screen.</span>
+  <span class="tag">SHELF</span></div>
+
+ <div class="prob"><span class="em">🔗</span><b>Art that completes in fours</b>
+  <span class="feel">Rings align across a 4-pack so the ripple only resolves
+  when the cans sit together — a fragment alone, a picture as a set. Quiet
+  pressure toward the multipack, and it makes a stocked fridge look
+  designed.</span>
+  <span class="tag">PACK IDEA</span></div>
+
+ <div class="prob"><span class="em">💧</span><b>Condensation is free ripple</b>
+  <span class="feel">Rings of sweat on the can, rings left on the desk. Your
+  core geometry appears without being printed — every photograph gets the
+  motif for nothing.</span>
+  <span class="tag">PHOTOGRAPHY</span></div>
+
+ <div class="prob"><span class="em">⭕️</span><b>Top-down is the ensō</b>
+  <span class="feel">An open can shot from above is a perfect circle of dark
+  liquid with a gap at the tab — study 01, occurring naturally. Make it the
+  profile picture, the loader, the favicon.</span>
+  <span class="tag">MOTIF</span></div>
+
+ <div class="prob"><span class="em">🫧</span><b>Decide: sparkling or still</b>
+  <span class="feel">Sparkling gives you the hiss after the crack — better
+  audio, more "refreshment," fights the sweet-tea code. Still reads more
+  premium and more tea-like. This choice shapes the film's sound design, so
+  make it before you shoot.</span>
+  <span class="tag">OPEN QUESTION</span></div>
+
+ <div class="prob"><span class="em">📍</span><b>Sold by the moment, not the routine</b>
+  <span class="feel">RTD is bought for a <i>specific</i> three o'clock — not a
+  morning habit. Merchandise by occasion (desk, commute, gym bag, before the
+  meeting) and the problem bank becomes your media plan directly.</span>
+  <span class="tag">GO-TO-MARKET</span></div>
+</div>
+
+<h2 style="font-size:18px;margin:26px 0 10px">Lines for a can</h2>
+<div class="bank">
+ <div>Three minutes, already spent.<span>the steep, done for you</span></div>
+ <div>Crack. Then quiet.<span>the audio signature as copy</span></div>
+ <div>Cold tea, steady hands.<span>cold calm in four words</span></div>
+ <div>Brewed slow. Opened fast.<span>the whole product in two beats</span></div>
+ <div>The calm one in the cooler.<span>shelf navigation, not poetry</span></div>
+ <div>Unsweetened. Unbothered.<span>kills the sweet-tea reflex</span></div>
+ <div>Pull tab, flat sea.<span>ties crack to motif</span></div>
+ <div>Some days come at you in waves.<span>still the hero — unchanged</span></div>
+</div>
+
+<h2>Sparkling — decided, and what it unlocks</h2>
+<div class="warn" style="background:#f2fbf6;border-color:#bfe4cf;max-width:900px">
+ <b>Three things resolve the moment you commit to sparkling.</b>
+ <b style="display:block;margin-top:7px">① The sound design is finished:</b>
+ <i>crack → hiss → pour → silence.</i> Four beats, no music needed, and the
+ hiss is the one sound a still tea can never own.
+ <b style="display:block;margin-top:5px">② The sweet-tea reflex is broken for
+ free:</b> carbonation reads "refreshment," not "gallon of sweet tea." The
+ format argues your positioning before a word is read.
+ <b style="display:block;margin-top:5px">③ You gain a second motif layer:</b>
+ bubbles are ripples that travel <i>up</i>. Rings spread out, bubbles rise —
+ same geometry, two directions, and the can is full of them.
+</div>
+
+<div class="strip" style="box-shadow:none;border:1px solid var(--line);background:#fff">
+<svg viewBox="0 0 1200 260" xmlns="http://www.w3.org/2000/svg">
+ <text x="40" y="26" font-family="Quicksand,sans-serif" font-size="11" fill="#6b6560"
+  letter-spacing="2">BUBBLES ARE RIPPLES THAT RISE — the two directions of the same circle</text>
+ <g transform="translate(90,44)">
+  <rect x="0" y="0" width="150" height="182" rx="16" fill="#2b1150"/>
+  <rect x="0" y="0" width="150" height="14" rx="7" fill="#b9a7d6"/>
+  <g fill="none" stroke="#8a77e1" opacity=".85">
+   <circle cx="46" cy="150" r="4"/><circle cx="86" cy="128" r="6"/>
+   <circle cx="58" cy="104" r="5"/><circle cx="104" cy="92" r="7"/>
+   <circle cx="72" cy="68" r="8"/><circle cx="42" cy="52" r="5.5"/>
+   <circle cx="110" cy="46" r="6.5"/><circle cx="88" cy="26" r="9"/>
+  </g>
+  <g fill="none" stroke="#ff8c1a" opacity=".9" stroke-width="1.6">
+   <circle cx="72" cy="68" r="12"/><circle cx="88" cy="26" r="14"/>
+  </g>
+  <text x="75" y="206" text-anchor="middle" font-size="11"
+   font-family="Quicksand,sans-serif" fill="#6b6560">inside: rising</text>
+ </g>
+ <g transform="translate(330,120)">
+  <g fill="none" stroke="#6c00bf">
+   <circle cx="0" cy="0" r="12" stroke-width="4"/><circle cx="0" cy="0" r="30" stroke-width="3.2"/>
+   <circle cx="0" cy="0" r="52" stroke-width="2.6" opacity=".8"/>
+   <circle cx="0" cy="0" r="76" stroke-width="2" opacity=".6"/></g>
+  <text x="0" y="118" text-anchor="middle" font-size="11"
+   font-family="Quicksand,sans-serif" fill="#6b6560">surface: spreading</text>
+ </g>
+ <text x="470" y="96" font-family="Fraunces,Georgia,serif" font-size="17" fill="#6c00bf">
+  One circle, two vectors:</text>
+ <text x="470" y="122" font-family="Quicksand,sans-serif" font-size="13" fill="#6b6560">
+  bubbles carry the energy up — the fizz, the lift, the wake-up;</text>
+ <text x="470" y="144" font-family="Quicksand,sans-serif" font-size="13" fill="#6b6560">
+  ripples carry the calm out — the settle, the flat sea, the exhale.</text>
+ <text x="470" y="174" font-family="Quicksand,sans-serif" font-size="13" fill="#3a3a3a">
+  That contradiction <tspan font-weight="700">is</tspan> the product:
+  alert and unhurried at the same time.</text>
+ <text x="470" y="204" font-family="Quicksand,sans-serif" font-size="12" fill="#a49c90">
+  Sparkling stress-relief is a genuinely odd pairing — lean into it rather than hiding it.</text>
+</svg>
+</div>
+
+<h2>Connecting the two lines</h2>
+<div class="warn" style="max-width:900px">
+ <b>Your inclusivity note is the most commercially important call here.</b> If
+ the brand only makes sense on a bad day, you've capped frequency and made
+ buying it a small admission of struggle. Two fixes, and they're the same
+ edit: drop <i>"at you"</i> (which is adversarial) and move from <i>"some
+ days"</i> to <i>every</i> day. <b>Waves were never only bad</b> — a great day
+ comes in waves too: rush, momentum, too much at once. A wave is motion, not
+ misfortune. Bonus: <i>"Every day comes"</i> is singular, which quietly fixes
+ the antecedent problem — <i>"and then it doesn't"</i> now agrees.
+</div>
+
+<div class="warn" style="background:#f4f1fb;border-color:#d6cdee;max-width:900px">
+ <b>The rhyme, precisely.</b> <i>Days</i> /deɪz/ and <i>waves</i> /weɪvz/ share
+ the vowel <i>and</i> the final z — everything but the v. That's a slant rhyme
+ so close it lands like a rhyme without the sing-song a perfect one brings.
+ It's why the line feels good and doesn't feel like an ad. The untapped move:
+ <b>days and ways is a true rhyme</b> — so a third beat can close what the
+ first two open.
+</div>
+
+<div class="sets">
+ <div class="set"><span class="kind">A · THE SPINE — RECOMMENDED</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Every day comes in waves.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <div class="ln"><span class="bt">cta</span>
+   <span class="tx small">Find your zen.</span></div>
+  <p class="note">All three lines you like, in the order they work. Inclusive
+  (every day, not just bad ones), grammatically clean, and "find your zen"
+  finally has a job: it's the <i>invitation</i> after the observation and the
+  release.</p></div>
+
+ <div class="set"><span class="kind">B · THE RHYME TRIPLE</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Every day comes in waves.</span></div>
+  <div class="ln"><span class="bt">mid</span>
+   <span class="tx small">Everyone has their ways.</span></div>
+  <div class="ln"><span class="bt">cta</span>
+   <span class="tx pay">Find your zen.</span></div>
+  <p class="note">days / waves / ways — the true rhyme closes the couplet the
+  slant rhyme opened. "Their ways" makes zen personal, which is exactly what
+  a five-flavour range needs.</p></div>
+
+ <div class="set"><span class="kind">C · PARALLEL — WRY, PRODUCT-FORWARD</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Days come in waves.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">Zen comes in a can.</span></div>
+  <p class="note">Matching syntax does all the work; the joke is the
+  structure, not a punchline. Best on OOH and shelf, where you get one glance
+  and no scroll. Six words total.</p></div>
+
+ <div class="set"><span class="kind">D · BOTH DIRECTIONS EXPLICIT</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Some days crash.<br>Some days carry.</span></div>
+  <div class="ln"><span class="bt">mid</span>
+   <span class="tx small">Both come in waves.</span></div>
+  <div class="ln"><span class="bt">cta</span>
+   <span class="tx pay">Find your zen.</span></div>
+  <p class="note">Says the inclusivity out loud instead of implying it — good
+  days get their own can. Use when you need the point made in one asset
+  rather than across a campaign.</p></div>
+
+ <div class="set"><span class="kind">E · KEEPS YOUR ORIGINAL FOR STRESS ADS</span>
+  <div class="ln"><span class="bt">hero</span>
+   <span class="tx">Some days come at you in waves.</span></div>
+  <div class="ln"><span class="bt">payoff</span>
+   <span class="tx pay">And then it doesn't.</span></div>
+  <p class="note">Don't retire this — <i>demote</i> it. It's the sharpest
+  version and belongs on the problem-led cuts (traffic, deadline, ten minutes
+  before). Master line inclusive, situational lines pointed.</p></div>
+
+ <div class="set"><span class="kind">F · THE FLAVOUR MECHANIC</span>
+  <div class="ln"><span class="bt">line</span>
+   <span class="tx">Five waves. Five ways.</span></div>
+  <div class="ln"><span class="bt">cta</span>
+   <span class="tx pay">Find your zen.</span></div>
+  <p class="note">Turns the slogan into a <i>selector</i>: each flavour is a
+  different zen, so "find yours" becomes a real on-site quiz and a shelf
+  navigation system — not just a sentiment.</p></div>
+</div>
+
+<h2 style="font-size:18px;margin:26px 0 10px">Line architecture — one brand, two registers</h2>
+<div class="strip" style="box-shadow:none;border:1px solid var(--line);background:#fff">
+<svg viewBox="0 0 1200 250" xmlns="http://www.w3.org/2000/svg">
+ <rect x="330" y="20" width="530" height="56" rx="12" fill="#f0ebfa" stroke="#6c00bf" stroke-width="2"/>
+ <text x="595" y="44" text-anchor="middle" font-family="Fraunces,Georgia,serif"
+  font-size="18" fill="#3a3a3a">Every day comes in waves.</text>
+ <text x="595" y="64" text-anchor="middle" font-family="Quicksand,sans-serif"
+  font-size="10.5" fill="#6c00bf" letter-spacing="2">MASTER LINE — pack · OOH · brand film</text>
+ <line x1="595" y1="76" x2="595" y2="100" stroke="#a49c90" stroke-width="1.5"/>
+ <line x1="230" y1="100" x2="960" y2="100" stroke="#a49c90" stroke-width="1.5"/>
+ <g stroke="#a49c90" stroke-width="1.5">
+  <line x1="230" y1="100" x2="230" y2="124"/><line x1="595" y1="100" x2="595" y2="124"/>
+  <line x1="960" y1="100" x2="960" y2="124"/></g>
+ <g>
+  <rect x="90" y="124" width="280" height="80" rx="11" fill="#fff" stroke="#e01878" stroke-width="1.8"/>
+  <text x="230" y="148" text-anchor="middle" font-size="10" fill="#c01060"
+   font-family="Quicksand,sans-serif" letter-spacing="2">STRESS CUTS</text>
+  <text x="230" y="170" text-anchor="middle" font-family="Fraunces,Georgia,serif"
+   font-size="13.5" fill="#3a3a3a">Some days come at you</text>
+  <text x="230" y="189" text-anchor="middle" font-family="Fraunces,Georgia,serif"
+   font-size="13.5" fill="#3a3a3a">in waves.</text>
+ </g>
+ <g>
+  <rect x="455" y="124" width="280" height="80" rx="11" fill="#fff" stroke="#f0a020" stroke-width="1.8"/>
+  <text x="595" y="148" text-anchor="middle" font-size="10" fill="#a86a08"
+   font-family="Quicksand,sans-serif" letter-spacing="2">GOOD-DAY CUTS</text>
+  <text x="595" y="170" text-anchor="middle" font-family="Fraunces,Georgia,serif"
+   font-size="13.5" fill="#3a3a3a">Some days carry you</text>
+  <text x="595" y="189" text-anchor="middle" font-family="Fraunces,Georgia,serif"
+   font-size="13.5" fill="#3a3a3a">in waves.</text>
+ </g>
+ <g>
+  <rect x="820" y="124" width="280" height="80" rx="11" fill="#fff" stroke="#8a77e1" stroke-width="1.8"/>
+  <text x="960" y="148" text-anchor="middle" font-size="10" fill="#6d5aa8"
+   font-family="Quicksand,sans-serif" letter-spacing="2">RANGE / SHELF</text>
+  <text x="960" y="170" text-anchor="middle" font-family="Fraunces,Georgia,serif"
+   font-size="13.5" fill="#3a3a3a">Five waves. Five ways.</text>
+  <text x="960" y="189" text-anchor="middle" font-family="Fraunces,Georgia,serif"
+   font-size="13.5" fill="#3a3a3a">Find your zen.</text>
+ </g>
+ <text x="595" y="232" text-anchor="middle" font-family="Quicksand,sans-serif"
+  font-size="11.5" fill="#6b6560">Every variant keeps the word <tspan font-weight="700">waves</tspan> —
+  that repetition is the brand, not the sentence around it.</text>
+</svg>
+</div>
+
+<h2 style="font-size:18px;margin:26px 0 10px">"Find your zen" — making it earn its place</h2>
+<div class="probs">
+ <div class="prob"><span class="em">🏷</span><b>Your name is the differentiator</b>
+  <span class="feel">"Find your zen" alone is wellness wallpaper — everyone
+  can say it. <i>You</i> own the word. Set <b>zen</b> in the brand face inside
+  the line and the cliché becomes a signature.</span>
+  <span class="tag">TYPOGRAPHY</span></div>
+ <div class="prob"><span class="em">🎯</span><b>Make "your" literal</b>
+  <span class="feel">Five flavours = five zens. The line stops being a
+  sentiment and becomes a product finder: quiz, shelf navigation, ring colour
+  on every can.</span>
+  <span class="tag">MECHANIC</span></div>
+ <div class="prob"><span class="em">🔁</span><b>Never say it in the film</b>
+  <span class="feel">Let the film end on <i>"and then it doesn't"</i> and put
+  "find your zen" only on the end card and the CTA. Spoken, it's a slogan;
+  written after silence, it's an invitation.</span>
+  <span class="tag">DISCIPLINE</span></div>
+ <div class="prob"><span class="em">⚖️</span><b>It also covers you</b>
+  <span class="feel">"Find your zen" is a mood, not a medical outcome — it
+  sits far from the structure/function line while still selling the benefit.
+  The safest strong line you have.</span>
+  <span class="tag">CLAIMS</span></div>
+</div>
+
+<h2>If you only pick two</h2>
+<p class="meta" style="max-width:760px">Pair one <b>mark</b> with one
+<b>world</b>. <em>Ensō (01)</em> or <em>Ripple (07)</em> works as the mark —
+ownable, debossable, animatable, legible at 12px on a bottle cap.
+<em>Overprint (06)</em> or <em>Cyanotype (10)</em> works as the world — the
+texture behind photography, on cartons and in the feed. <em>Ma (08)</em> isn't
+artwork so much as a rule: whatever you choose, leave more room around it than
+feels comfortable. That single discipline is what will read as "zen" long
+after the motif changes.</p>
+
+</div></body></html>
