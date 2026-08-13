@@ -1934,6 +1934,7 @@ from storefront.backend import api as store_api  # noqa: E402
 from storefront.backend import content as store_content  # noqa: E402
 from storefront.backend import governance as store_gov  # noqa: E402
 from storefront.backend import partners as store_partners  # noqa: E402
+from storefront.backend import pixels as store_pixels  # noqa: E402
 from storefront.backend import promos as store_promos  # noqa: E402
 from storefront.backend import public_api as store_v1  # noqa: E402
 
@@ -1944,6 +1945,7 @@ app.include_router(store_content.router)
 app.include_router(store_aff.router)
 app.include_router(store_gov.router)
 app.include_router(store_partners.router)
+app.include_router(store_pixels.router)
 app.include_router(store_v1.router)
 
 

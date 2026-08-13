@@ -375,6 +375,14 @@ def asset_version() -> str:
     return str(int(newest))
 
 
+def pixels_snippet(con) -> str:
+    from . import pixels as _px
+    try:
+        return _px.snippet(_px.get_config(con))
+    except Exception:          # a bad pixel config must never break the shop
+        return ""
+
+
 def render_shell(con, body_html: str, *, title=None, description=None) -> str:
     """Wrap rendered sections in the storefront shell (nav, cart, modals)."""
     from . import content as content_mod
@@ -398,6 +406,7 @@ def render_shell(con, body_html: str, *, title=None, description=None) -> str:
         "<!--SECTIONS-->": body_html,
         "<!--ANNOUNCE-->": announce,
         "<!--THEME-CSS-->": f"<style>{theme_css(t)}</style>",
+        "<!--PIXELS-->": pixels_snippet(con),
         "<!--BRAND-->": (f'{sect.esc(t["brand"])}'
                          f'<span class="brand-dot">{sect.esc(t["dot"])}</span>'),
         "<!--TITLE-->": sect.esc(title or t["title"]),
@@ -493,12 +502,13 @@ def init_tables():
                 "INSERT INTO store_shipping_methods(name,price_cents,eta,"
                 " position) VALUES ('Standard',599,'3–5 business days',0),"
                 " ('Express',1499,'1–2 business days',1)")
-        from . import affiliates, content, governance, partners, promos
+        from . import affiliates, content, governance, partners, pixels, promos
         promos.init_tables(con)
         content.init_tables(con)
         governance.init_tables(con)
         affiliates.init_tables(con)
         partners.init_tables(con)
+        pixels.init_tables(con)
         ensure_search_index(con)
         # Self-heal: a stale index from an older build makes any write to
         # products fail. Probe with a rolled-back no-op and rebuild if needed.

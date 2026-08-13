@@ -53,13 +53,20 @@
 
     /* heatmap */
     .hm-stage { margin-top: 10px; }
+    /* The frame is the viewport; .hm-doc is the whole page at full height
+       with the overlay stretched over it. Scrolling the frame moves page and
+       blobs together — with the iframe scrolling internally instead, the
+       overlay stayed put and every blob drifted off its target. */
     .hm-frame { position: relative; border: 1.5px solid #e8e2f4;
-      border-radius: 14px; overflow: hidden; background: #fff;
-      height: 620px; }
-    .hm-frame iframe { width: 100%; height: 100%; border: none;
-      display: block; }
-    .hm-overlay { position: absolute; inset: 0; width: 100%; height: 100%;
+      border-radius: 14px; overflow: auto; background: #fff;
+      height: 640px; resize: vertical; }
+    .hm-doc { position: relative; width: 100%; }
+    .hm-frame iframe { width: 100%; border: none; display: block;
       pointer-events: none; }
+    .hm-overlay { position: absolute; top: 0; left: 0; width: 100%;
+      height: 100%; pointer-events: none; }
+    .hm-loading { padding: 40px; text-align: center; color: #8a82a0;
+      font-size: 14px; }
     /* Blobs blur into each other so density reads as heat, the way a
        CrazyEgg overlay does; dot mode keeps them crisp for pinpointing. */
     .hm-overlay.heat { filter: blur(14px) contrast(2.2); opacity: .72;
@@ -114,6 +121,7 @@
       <button class="tab" data-tab="enquiries">Enquiries</button>
       <button class="tab" data-tab="events">Events</button>
       <button class="tab" data-tab="heatmap">Heatmap</button>
+      <button class="tab" data-tab="pixels">Pixels</button>
       <button class="tab" data-tab="blog">Blog</button>
       <button class="tab" data-tab="nav">Nav &amp; redirects</button>
       <button class="tab" data-tab="intl">Currency &amp; language</button>
@@ -304,6 +312,39 @@
           <div id="hm-reach"></div>
         </div>
       </div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="pixels">
+      <h3>Marketing pixels</h3>
+      <p class="dim">Paste the IDs — no theme editing. Nothing third-party
+        loads until the shopper agrees, if consent is required. Every event is
+        also written to our own log below, so you can check a platform's
+        numbers against your actual orders.</p>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="px-enabled" style="width:auto">
+        Pixels enabled</label>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="px-consent" style="width:auto">
+        Ask for consent before loading them <span class="dim">(required in
+        the EU and UK)</span></label>
+      <label>Consent wording</label>
+      <input id="px-consent-text">
+      <div id="px-ids"></div>
+      <label>Events to forward</label>
+      <div id="px-events" style="display:flex;gap:14px;flex-wrap:wrap"></div>
+      <label>Custom head HTML <span class="dim">(escape hatch — rendered
+        verbatim into every page, so treat it like code)</span></label>
+      <textarea id="px-custom" rows="3"
+        placeholder="&lt;!-- any other tag your agency gives you --&gt;"></textarea>
+      <div class="modal-actions">
+        <span class="dim" id="px-msg" style="margin-right:auto"></span>
+        <button class="btn-pill primary sm" id="px-save">Save pixels</button>
+      </div>
+      <h3 style="margin-top:22px;font-size:16px">What we sent — last 30 days</h3>
+      <p class="dim">First-party, counted here regardless of consent. Compare
+        <b>Purchase</b> against the order count: a big gap means blocked
+        pixels, not lost sales.</p>
+      <div class="adm-list" id="px-log"></div>
     </div>
 
     <div class="adm-panel hidden" data-panel="orders">

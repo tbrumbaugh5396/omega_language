@@ -716,4 +716,45 @@ ok(_hm["count"] >= 1 and len(_hm["reach"]) == 10,
 ok(c.get("/api/store/admin/heatmap?page=/").status_code == 403,
    "heatmap needs admin")
 
+# --- marketing pixels ---
+ok(c.get("/api/store/admin/pixels").status_code == 403, "pixel config needs admin")
+_px = c.get("/api/store/admin/pixels", headers=A).json()
+ok(_px["consent_required"] and not _px["enabled"],
+   "pixels ship off, with consent required by default")
+ok(c.post("/api/store/admin/pixels", headers=A, json={
+    "enabled": True, "ids": {"meta": '"><script>alert(1)</script>'}}
+).status_code == 400, "a pixel ID that isn't an ID is rejected")
+ok(c.post("/api/store/admin/pixels", headers=A, json={
+    "enabled": True, "ids": {"ga4": "not-a-ga4-id"}}
+).status_code == 400, "GA4 ID shape enforced")
+r = c.post("/api/store/admin/pixels", headers=A, json={
+    "enabled": True, "consent_required": True,
+    "ids": {"meta": "123456789012345", "ga4": "G-ABC1234567"},
+    "events": {k: True for k in ["page_view", "purchase"]}})
+ok(r.status_code == 200 and set(r.json()["active"]) == {"meta", "ga4"},
+   "valid pixel IDs saved")
+_home = c.get("/").text
+ok("__pixelConsent=false" in _home and "connect.facebook.net" in _home,
+   "pixel loaders are present but gated behind consent")
+ok(c.post("/api/store/pixel-event",
+          json={"event": "nope"}).status_code == 400,
+   "unknown pixel event rejected")
+c.post("/api/store/pixel-event",
+       json={"event": "purchase", "value_cents": 3499, "consent": True})
+_log = c.get("/api/store/admin/pixels/log", headers=A).json()
+ok(any(e["event"] == "purchase" and e["consented"] == 1
+       for e in _log["events"]), "pixel events logged first-party")
+# turn them back off so the dev store ships clean
+c.post("/api/store/admin/pixels", headers=A, json={"enabled": False})
+ok("connect.facebook.net" not in c.get("/").text,
+   "disabling pixels removes the tags entirely")
+
+# The heatmap preview renders the storefront in an iframe; it must not record
+# its own visit, or looking at the data would change it.
+_before = c.get("/api/store/admin/heatmap?page=/", headers=A).json()["count"]
+ok('__preview' in c.get("/store.js").text,
+   "storefront honours the preview guard")
+_after = c.get("/api/store/admin/heatmap?page=/", headers=A).json()["count"]
+ok(_before == _after, "viewing the heatmap doesn't add to it")
+
 print(f"\nall {checks} checks passed")

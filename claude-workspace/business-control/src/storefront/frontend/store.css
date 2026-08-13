@@ -752,6 +752,21 @@ svg.can { display: block; width: 100%; height: auto; }
 .loc-card .dist { font-size: 12.5px; font-weight: 600; color: var(--purple);
   margin-top: 8px; display: block; }
 
+/* ---------- measurement consent ---------- */
+.consent-bar { position: fixed; left: 20px; right: 20px; bottom: 20px;
+  z-index: 70; max-width: 620px; margin: 0 auto; display: flex;
+  align-items: center; gap: 18px; flex-wrap: wrap;
+  background: linear-gradient(140deg, var(--purple) 0%, #5a00a3 60%,
+  var(--purple-deep) 100%); color: #fff; border-radius: var(--r-lg);
+  padding: 18px 22px; box-shadow: var(--sh-2); }
+.consent-bar p { font-size: 13.5px; flex: 1; min-width: 220px;
+  color: rgba(255,255,255,.86); }
+.consent-acts { display: flex; gap: 10px; }
+.consent-bar .btn-pill.ghost { color: #fff; border-color: rgba(255,255,255,.4); }
+.consent-bar .btn-pill.ghost:hover { border-color: #fff; background: none; }
+@media (max-width: 620px) { .consent-bar { left: 12px; right: 12px;
+  bottom: 12px; padding: 16px; } }
+
 /* ---------- always-visible buy button ---------- */
 .buy-fab { position: fixed; right: 20px; bottom: 20px; z-index: 48;
   display: inline-flex; align-items: center; gap: 8px;

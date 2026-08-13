@@ -10,6 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Inter:wght@400;600;700&family=Fraunces:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/store.css">
   <!--THEME-CSS-->
+  <!--PIXELS-->
   <link rel="manifest" href="/store.webmanifest">
   <link rel="icon" href="/ops/icons/icon-192.png">
 </head>
@@ -203,6 +204,17 @@
   <span>Buy now</span>
   <span class="buy-fab-count" id="buy-fab-count" hidden>0</span>
 </button>
+
+<!-- cookie/measurement consent — only rendered when pixels are configured
+     and consent is required, and nothing third-party loads until it's answered -->
+<div class="consent-bar" id="consent-bar" role="dialog"
+     aria-label="Measurement cookies" hidden>
+  <p id="consent-text"></p>
+  <div class="consent-acts">
+    <button class="btn-pill ghost sm" id="consent-no">No thanks</button>
+    <button class="btn-pill primary sm" id="consent-yes">That's fine</button>
+  </div>
+</div>
 
 <!-- modals -->
 <div class="modal" id="modal">

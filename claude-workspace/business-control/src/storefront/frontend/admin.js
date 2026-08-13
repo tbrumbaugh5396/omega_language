@@ -57,7 +57,7 @@ const TAB_PERMS = {
   pages: "content", collections: "products", discounts: "discounts",
   webhooks: "settings", api: "settings", blog: "content",
   affiliates: "customers", enquiries: "customers",
-  events: "content", heatmap: "analytics",
+  events: "content", heatmap: "analytics", pixels: "settings",
   nav: "content", intl: "settings", staff: "settings",
   analytics: "analytics",
 };
@@ -88,7 +88,13 @@ document.querySelectorAll("#adm-tabs .tab").forEach((b) => b.onclick = () => {
     x.classList.toggle("on", x === b));
   document.querySelectorAll("[data-panel]").forEach((p) =>
     p.classList.toggle("hidden", p.dataset.panel !== b.dataset.tab));
-  if (b.dataset.tab === "analytics") drawAnalytics();
+  // Panels that show live traffic have to refresh on open — loading them once
+  // at boot meant a tab opened an hour later showed the state at sign-in.
+  const REFRESH = { analytics: () => drawAnalytics(),
+    heatmap: () => drawHeatPages(), events: () => drawEvents(),
+    enquiries: () => drawEnquiries(), pixels: () => drawPixels() };
+  const fn = REFRESH[b.dataset.tab];
+  if (fn) fn();
 });
 
 // ---------- products ----------
@@ -361,6 +367,64 @@ $("#gc-issue").onclick = async () => {
 };
 
 // ---------- affiliates ----------
+/* ---------- marketing pixels ---------- */
+let PX = null;
+
+async function drawPixels() {
+  PX = await api("/api/store/admin/pixels");
+  $("#px-enabled").checked = !!PX.enabled;
+  $("#px-consent").checked = !!PX.consent_required;
+  $("#px-consent-text").value = PX.consent_text || "";
+  $("#px-custom").value = PX.custom_head || "";
+  $("#px-ids").innerHTML = Object.entries(PX.providers).map(([k, p]) => `
+    <label>${p.label} <span class="dim">— ${p.hint}</span></label>
+    <input data-pxid="${k}" placeholder="${p.placeholder}"
+      value="${(PX.ids[k] || "").replace(/"/g, "&quot;")}">`).join("");
+  $("#px-events").innerHTML = PX.event_keys.map((e) => `
+    <label style="display:flex;gap:6px;align-items:center;font-weight:500">
+      <input type="checkbox" style="width:auto" data-pxev="${e}"
+        ${PX.events[e] ? "checked" : ""}> ${e.replace(/_/g, " ")}</label>`).join("");
+  drawPixelLog();
+}
+
+async function drawPixelLog() {
+  const d = await api("/api/store/admin/pixels/log");
+  const rows = d.events.map((e) => {
+    const gap = e.event === "purchase" && d.orders
+      ? ` <span class="dim">· ${d.orders} orders in the ledger</span>` : "";
+    return `<div class="adm-item">
+      <b style="flex:0 0 130px">${e.event.replace(/_/g, " ")}</b>
+      <span style="flex:0 0 90px">${e.n} fired</span>
+      <span class="dim" style="flex:1">${e.consented} with consent${gap}</span>
+      ${e.value ? `<b style="flex:0 0 90px;text-align:right">${money(e.value)}</b>` : ""}
+    </div>`;
+  }).join("");
+  $("#px-log").innerHTML = rows ||
+    '<p class="dim">Nothing recorded yet.</p>';
+}
+
+$("#px-save").onclick = async () => {
+  const ids = {};
+  document.querySelectorAll("[data-pxid]").forEach((i) => {
+    if (i.value.trim()) ids[i.dataset.pxid] = i.value.trim();
+  });
+  const events = {};
+  document.querySelectorAll("[data-pxev]").forEach((c) =>
+    events[c.dataset.pxev] = c.checked);
+  try {
+    const out = await api("/api/store/admin/pixels", { method: "POST",
+      body: JSON.stringify({
+        enabled: $("#px-enabled").checked,
+        consent_required: $("#px-consent").checked,
+        consent_text: $("#px-consent-text").value,
+        ids, events, custom_head: $("#px-custom").value }) });
+    $("#px-msg").textContent = out.active.length
+      ? `Saved — live: ${out.active.join(", ")}` : "Saved.";
+  } catch (e) {
+    $("#px-msg").textContent = e.message;
+  }
+};
+
 const EV_KINDS = { tasting: "Tasting", popup: "Pop-up", market: "Market",
   class: "Class" };
 
@@ -447,8 +511,8 @@ async function drawHeat() {
     `<b>${d.count}</b> clicks on <code>${d.page}</code>. The frame below is the
      live page; the overlay is where people actually clicked.`;
 
-  // The page itself, in an iframe, with the clicks painted on top. Same-origin
-  // so it renders exactly what a visitor saw.
+  // The page itself, in an iframe, with the clicks painted on top. Same-origin,
+  // so it renders exactly what a visitor saw and we can measure its height.
   const blobs = d.hits.map((h) =>
     mode === "dots"
       ? `<circle cx="${(h.x * 100).toFixed(2)}%" cy="${(h.y * 100).toFixed(2)}%"
@@ -457,9 +521,38 @@ async function drawHeat() {
            r="28" class="hm-blob"/>`).join("");
   $("#hm-stage").innerHTML = `
     <div class="hm-frame">
-      <iframe src="${page}" title="Page preview" loading="lazy"></iframe>
-      <svg class="hm-overlay ${mode}" preserveAspectRatio="none">${blobs}</svg>
+      <div class="hm-doc" id="hm-doc">
+        <iframe src="${page}${page.includes("?") ? "&" : "?"}__preview=1"
+          title="Page preview" id="hm-iframe"></iframe>
+        <svg class="hm-overlay ${mode}" preserveAspectRatio="none">${blobs}</svg>
+      </div>
+      <div class="hm-loading" id="hm-loading">Loading the page…</div>
     </div>`;
+
+  /* Grow the iframe to its full document height so it never scrolls
+     internally — the outer frame does the scrolling, carrying the overlay
+     with it. Recorded coordinates are fractions of the page box, so the
+     overlay lines up at whatever width the admin panel happens to be. */
+  const frame = $("#hm-iframe"), doc = $("#hm-doc");
+  const fit = () => {
+    try {
+      const d2 = frame.contentDocument;
+      if (!d2) return;
+      const h = Math.max(d2.documentElement.scrollHeight, d2.body.scrollHeight);
+      if (h > 0) { frame.style.height = h + "px"; doc.style.height = h + "px"; }
+    } catch { /* cross-origin: leave the default height */ }
+  };
+  frame.onload = () => {
+    const l = $("#hm-loading");
+    if (l) l.remove();
+    fit();
+    // Fonts and lazy images settle after load and change the height.
+    setTimeout(fit, 400);
+    setTimeout(fit, 1500);
+    try {
+      new ResizeObserver(fit).observe(frame.contentDocument.documentElement);
+    } catch {}
+  };
 
   $("#hm-top").innerHTML = d.top.map((t) => {
     const max = d.top[0].n || 1;
@@ -873,6 +966,7 @@ async function boot() {
   run("products", drawMedia);
   run("customers", drawAffiliates); run("customers", drawEnquiries);
   run("content", drawEvents); run("analytics", drawHeatPages);
+  run("settings", drawPixels);
   run("content", drawPages); run("content", drawReviewQueue);
   run("content", drawPosts); run("content", drawMenus);
   run("content", drawRedirects);

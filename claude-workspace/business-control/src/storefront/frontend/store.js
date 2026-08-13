@@ -91,13 +91,20 @@ function activeRef() {
   return localStorage.getItem("sf_ref") || "";   // pre-window visitors
 }
 
+/* The admin's heatmap renders this page in an iframe. Without a guard that
+   preview would record its own pageviews, funnel steps and pixel events, so
+   looking at the data would change it. Every telemetry path checks this. */
+const PREVIEW = qs.get("__preview") === "1";
+
 function funnel(step, extra = {}) {
+  if (PREVIEW) return;
   fetch("/api/events", { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ visitor_id: VID, step, ...extra }) })
     .catch(() => {});
 }
 function pageview(page) {
+  if (PREVIEW) return;
   fetch("/api/store/track", { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ visitor_id: VID, page }) }).catch(() => {});
@@ -106,6 +113,10 @@ funnel("visit");
 // the shell now serves partner pages, events and the locator too, so record
 // the path rather than always claiming "home"
 pageview(location.pathname === "/" ? "home" : location.pathname.slice(0, 60));
+// PIXEL is defined further down; fire the page view once it exists.
+addEventListener("DOMContentLoaded", () => {
+  if (typeof PIXEL !== "undefined") PIXEL.track("page_view");
+});
 
 // ---------- shader hero (fragment-shader gradient flow) ----------
 (function shaderHero() {
@@ -503,6 +514,7 @@ function addToCart(pid, vid = 0) {
   CART[key] = (CART[key] || 0) + 1;
   saveCart(); drawCart(); openCart();
   funnel("add_to_cart", { product_id: pid });
+  PIXEL.track("add_to_cart", { value_cents: (cartLine(key) || {}).unit || 0 });
   toast("Added to cart");
 }
 
@@ -656,6 +668,7 @@ async function drawUpsell() {
 $("#checkout-btn").onclick = async () => {
   if (!Object.keys(CART).length) { toast("Cart is empty"); return; }
   funnel("checkout");
+  PIXEL.track("checkout", { value_cents: cartSubtotal() });
   pageview("checkout");
   const methods = await (await fetch("/api/store/shipping")).json();
   const sub = Object.entries(CART).reduce((a, [key, q]) => {
@@ -723,6 +736,7 @@ async function placeOrder() {
     const out = await r.json();
     if (!r.ok) { msg.textContent = out.detail || "order failed"; return; }
     funnel("purchase", { value_cents: out.total_cents || 0 });
+    PIXEL.track("purchase", { value_cents: out.total_cents || 0 });
     // Stay signed in after checkout (account, chat, payment confirmation).
     localStorage.setItem("sf_support",
       JSON.stringify({ token: login.token, me: login.id }));
@@ -786,7 +800,7 @@ if ($("#subscribe-form")) $("#subscribe-form").onsubmit = async (e) => {
       source: "rewards" }) });
   $("#subscribe-msg").textContent = r.ok ?
     "Welcome to the club — check your inbox." : "hmm, try a real email?";
-  if (r.ok) $("#subscribe-email").value = "";
+  if (r.ok) { $("#subscribe-email").value = ""; PIXEL.track("subscribe"); }
 };
 
 // ---------- promo strip (limited-time offers) ----------
@@ -1195,6 +1209,7 @@ let openPrefs = () => {};
       // enquiry is a parallel path, not a step toward checkout. The lead is
       // already recorded in store_enquiries, the ERP pipeline and a webhook.
       pageview("enquiry:" + body.kind);
+      PIXEL.track("enquiry");
     } catch (err) {
       msg.className = "enq-msg bad";
       msg.textContent = "That didn't send. Try again, or use the chat.";
@@ -1391,6 +1406,78 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
   paint();
 })();
 
+/* ---------- marketing pixels + consent ----------
+   The snippet in <head> defines window.__pixelConfig and a __pixelLoad() that
+   only runs once consent is given. This half translates the storefront's own
+   events into each provider's vocabulary and mirrors every one to our own log,
+   so the merchant can reconcile the platforms' numbers against the ledger. */
+const PIXEL = (() => {
+  const cfg = window.__pixelConfig;
+  const KEY = "sf_consent";
+  let consent = null;
+  try { consent = JSON.parse(localStorage.getItem(KEY)); } catch {}
+
+  const applyConsent = (yes) => {
+    consent = yes;
+    localStorage.setItem(KEY, JSON.stringify(yes));
+    if (yes && window.__pixelLoad) {
+      window.__pixelConsent = true; window.__pixelLoad();
+    }
+    const bar = $("#consent-bar");
+    if (bar) bar.hidden = true;
+  };
+
+  // Show the bar only when there is actually something to consent to.
+  if (PREVIEW) { consent = false; } else if (cfg && cfg.consentRequired && consent === null) {
+    const bar = $("#consent-bar");
+    if (bar) {
+      $("#consent-text").textContent = cfg.consentText || "We use cookies to "
+        + "measure our ads. You can say no — the shop works exactly the same "
+        + "either way.";
+      bar.hidden = false;
+      $("#consent-yes").onclick = () => applyConsent(true);
+      $("#consent-no").onclick = () => applyConsent(false);
+    }
+  } else if (cfg && !cfg.consentRequired) {
+    consent = true;
+  } else if (consent === true && window.__pixelLoad) {
+    window.__pixelConsent = true; window.__pixelLoad();
+  }
+
+  return {
+    track(event, { value_cents = 0, ...extra } = {}) {
+      if (PREVIEW) return;
+      // Always record it first-party — that's ours, and it's what makes the
+      // platforms' numbers checkable. Consent only gates the third parties.
+      fetch("/api/store/pixel-event", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event, value_cents,
+          consent: consent === true }) }).catch(() => {});
+      if (!cfg || !cfg.events || !cfg.events[event] || consent !== true) return;
+      const map = (cfg.map || {})[event] || {};
+      const val = value_cents / 100;
+      const money = val ? { value: val, currency: "USD" } : {};
+      try {
+        if (cfg.ids.meta && window.fbq && map.meta) {
+          window.fbq("track", map.meta, { ...money, ...extra });
+        }
+        if (cfg.ids.tiktok && window.ttq && map.tiktok) {
+          window.ttq.track(map.tiktok, money);
+        }
+        if ((cfg.ids.ga4 || cfg.ids.gads) && window.gtag) {
+          window.gtag("event", event, money);
+        }
+        if (cfg.ids.pinterest && window.pintrk && map.pinterest) {
+          window.pintrk("track", map.pinterest, money);
+        }
+        if (cfg.ids.snap && window.snaptr && map.snap) {
+          window.snaptr("track", map.snap, val ? { price: val } : {});
+        }
+      } catch {}
+    },
+  };
+})();
+
 /* ---------- interaction heatmap ----------
    Records where on the page people click and how far they scroll, so the
    admin can see a page the way its visitors use it. Coordinates are stored as
@@ -1398,6 +1485,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
    any viewport. Nothing identifying is captured — no visitor id, no typed
    text, and password/email fields are skipped entirely. */
 (function heatmap() {
+  if (PREVIEW) return;          // never record the admin's own preview
   const HITS = [];
   let deepest = 0;
 
