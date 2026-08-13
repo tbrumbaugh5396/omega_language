@@ -426,7 +426,7 @@ def locator_page(request: Request, con=Depends(get_con)):
      aria-label="Search stores">
   </span>
   <button class="btn-pill ghost sm" id="loc-near">
-   <svg class="ico ico-sm" aria-hidden="true"><use href="#i-drop"/></svg>
+   <svg class="ico ico-sm" aria-hidden="true"><use href="#i-pin"/></svg>
    Use my location</button>
  </div>
  <div class="collection-tabs" id="loc-filters"

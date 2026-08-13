@@ -147,7 +147,11 @@
 </aside>
 
 <!-- preferences: accessibility + region & language.
-     Opened from the menu — no floating badge over the shop. -->
+     Reachable two ways — this badge while browsing, and an entry in the menu
+     (where the badge would otherwise be covered by the fullscreen overlay). -->
+<button class="a11y-fab" id="a11y-fab" aria-label="Accessibility and language options"
+        aria-expanded="false" aria-controls="a11y-panel">
+  <svg class="ico" aria-hidden="true"><use href="#i-a11y"/></svg></button>
 <div class="a11y-panel" id="a11y-panel" role="dialog"
      aria-label="Accessibility and language options">
   <div class="side-head"><b>Preferences</b>

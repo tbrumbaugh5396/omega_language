@@ -350,12 +350,15 @@ svg.can { display: block; width: 100%; height: auto; }
 .shop-head { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap;
   margin-bottom: 8px; }
 .shop-head h2 { margin-bottom: 0; flex: 1; }
-#search-input { border: 1px solid var(--line); border-radius: var(--r-pill);
-  padding: 11px 18px 11px 40px; font-family: var(--ui); font-size: 14.5px;
-  min-width: 240px; background: var(--paper) no-repeat 14px center; }
-#search-input:focus { outline: none; border-color: var(--purple); }
+/* Scoped to the wrapper, not one id — the locator reuses this pattern, and
+   scoping the left padding to #search-input let the icon sit on top of the
+   locator's placeholder. */
 .search-wrap { position: relative; display: flex; align-items: center; }
-.search-wrap .ico { position: absolute; left: 14px; color: var(--ink-3);
+.search-wrap input { border: 1px solid var(--line); border-radius: var(--r-pill);
+  padding: 11px 18px 11px 42px; font-family: var(--ui); font-size: 14.5px;
+  min-width: 240px; background: var(--paper); color: var(--ink); }
+.search-wrap input:focus { outline: none; border-color: var(--purple); }
+.search-wrap .ico { position: absolute; left: 15px; color: var(--ink-3);
   pointer-events: none; }
 .var-sel { border: 1px solid var(--line); border-radius: var(--r-sm);
   padding: 10px 12px; font-family: var(--ui); font-size: 13.5px; width: 100%;
@@ -705,7 +708,9 @@ svg.can { display: block; width: 100%; height: auto; }
 .loc-card { background: var(--paper); border: 1px solid var(--line);
   border-radius: var(--r-md); padding: 18px 20px; }
 .loc-card b { font-size: 16px; font-weight: 600; display: block; }
-.loc-card .where { font-size: 13.5px; color: var(--ink-2); margin-top: 3px; }
+.loc-card .where { font-size: 13.5px; color: var(--ink-2); margin-top: 4px;
+  display: flex; align-items: center; gap: 6px; }
+.loc-card .where .ico { color: var(--ink-3); }
 .loc-card .dist { font-size: 12.5px; font-weight: 600; color: var(--purple);
   margin-top: 8px; display: block; }
 
@@ -725,13 +730,15 @@ body.drawer-open .buy-fab { opacity: 0; pointer-events: none; }
 .buy-fab.lifted { bottom: 88px; }   /* sits above the PDP sticky bar */
 
 /* ---------- accessibility menu ---------- */
-.a11y-fab { display: none; }
-.a11y-fab--unused { position: fixed; left: 20px; bottom: 20px; z-index: 65;
+.a11y-fab { position: fixed; left: 20px; bottom: 20px; z-index: 48;
   width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line);
   background: var(--paper); color: var(--purple); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  box-shadow: var(--sh-1); transition: transform .18s; }
+  box-shadow: var(--sh-1); transition: transform .18s, opacity .2s; }
 .a11y-fab:hover { transform: scale(1.06); }
+/* The fullscreen menu covers this corner and carries its own entry, so the
+   badge steps aside while a drawer is open — same rule as the buy button. */
+body.drawer-open .a11y-fab { opacity: 0; pointer-events: none; }
 /* Opened from the menu, so it centres over whatever is on screen rather
    than hanging off a floating badge. */
 .a11y-panel { position: fixed; left: 50%; top: 50%; z-index: 75;

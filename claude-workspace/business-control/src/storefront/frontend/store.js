@@ -1143,6 +1143,7 @@ let openPrefs = () => {};
     if (open) panel.querySelector("button").focus();
   };
   openPrefs = () => setOpen(true);
+  on("#a11y-fab", (e) => { e.stopPropagation(); setOpen(true); });
   const closer = $("#prefs-close");
   if (closer) closer.onclick = () => setOpen(false);
   panel.addEventListener("click", (e) => e.stopPropagation());
@@ -1222,7 +1223,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
         <div>
           <span class="event-kind">${e.kind}</span>
           <h3>${e.name}</h3>
-          <p class="where">${ico("search", "ico ico-sm")}
+          <p class="where">${ico("pin", "ico ico-sm")}
             ${[e.venue, e.city].filter(Boolean).join(" · ")}</p>
           <p>${e.body || ""}</p>
           ${e.url ? `<p style="margin-top:10px"><a class="text-link"
@@ -1278,7 +1279,8 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
     $("#loc-empty").hidden = shown.length > 0;
     host.innerHTML = shown.map((s) => `<div class="loc-card">
       <b>${s.name}</b>
-      <div class="where">${[s.city, s.region].filter(Boolean).join(" · ")}</div>
+      <div class="where">${ico("pin", "ico ico-sm")}
+        ${[s.city, s.region].filter(Boolean).join(" · ")}</div>
       ${here && isFinite(s._d)
         ? `<span class="dist">${s._d.toFixed(1)} miles away</span>` : ""}
     </div>`).join("");
