@@ -1,0 +1,67 @@
+AV Trainer — start here
+
+1) Double-click:  command_utilities/Install AV Trainer.command
+   (one-time setup — builds a private .venv inside this folder)
+
+2) Double-click:  command_utilities/Start AV Trainer.command
+   Your browser opens at http://127.0.0.1:8910
+
+3) On first launch you'll see a landing page — click "Sign up" to create
+   your account. Each account keeps its own private data on this machine.
+   Your profile (top-right) lets you rename yourself, change your password,
+   log out, back up, restore, or load starter content.
+
+Stop the server:  command_utilities/Stop AV Trainer.command
+Desktop app icon: command_utilities/Install App Icon.command
+Uninstall:        command_utilities/Uninstall AV Trainer.command
+                  (keeps your data unless you say otherwise)
+
+Use headphones. Half the drills are ear drills, and laptop speakers cannot
+reproduce anything below about 150 Hz — which is exactly where several of
+them live.
+
+Want example content first?
+  Profile menu → "Load starter content", or double-click
+  command_utilities/Seed Starter Content.command
+  You get three pieces at different stages with real postmortems, a week of
+  practice, and the theory items those breaks pulled in. It is there to show
+  you the shape of the loop, not to pretend you have a history.
+
+
+WHAT THIS IS
+
+A training environment built on one claim: intuition is amortized search
+over trained perceptual features. Expensive deliberate work gets distilled
+by volume into a fast policy that runs feedforward. That claim dictates the
+build order, and the app is arranged around it:
+
+  Perception first     — taste and discrimination are trainable
+  Volume second        — the policy is found by search under feedback
+  Articulation apart   — explaining is its own network, trained separately
+  Theory pulled        — read what answers the problem you actually hit
+
+Three tracks run in parallel, not in sequence: MAKE (one finished piece a
+week), TOOLS (one tool until it is invisible), THEORY (raided, not marched
+through). Perceptual training runs inside all three.
+
+
+SUGGESTED FIRST SESSION
+
+  · Today — accept this week's brief. It arrives with a constraint; keep it.
+    Write the rubric before you start making anything.
+  · Train → Drills — ten minutes. Pick one ear drill and one eye drill.
+    Every answer comes back with the mechanism, which is where the
+    vocabulary gets built.
+  · Lab — open "SDF shapes" and drag the blend knob until the join reads as
+    cast rather than cut. Then break it on purpose.
+  · Analyze — drop in one reference you love. Describe before you judge.
+  · Library — do not read it front to back. Search a symptom instead:
+    "halo", "buried vocal", "reads as mechanical".
+
+
+THE ONE THING THAT MATTERS
+
+Ship the piece, then write the postmortem honestly: what reads wrong, the
+mechanism you think caused it, and what you will read to fix it. The app
+uses that to pull the theory in with your failure attached to it. Everything
+else here is support for that loop.

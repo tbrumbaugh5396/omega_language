@@ -1,0 +1,13 @@
+{
+  "name": "AV Trainer",
+  "short_name": "AV Trainer",
+  "description": "A training environment for the audiovisual crafts: discrimination drills for the eye and ear, an effects lab over the maths spine, a reference analyzer, and a weekly practice loop with postmortems.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0f18",
+  "theme_color": "#0d0f18",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

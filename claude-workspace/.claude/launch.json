@@ -2,10 +2,62 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "omega-dev",
+      "runtimeExecutable": "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+      "runtimeArgs": [
+        "omega-dev/scripts/launch.py",
+        "--port",
+        "8901",
+        "--db",
+        "omega-dev/.preview.db",
+        "--dev"
+      ],
+      "port": 8901,
+      "env": {
+        "OMEGA_BROWSER_ENABLED": "1"
+      }
+    },
+    {
       "name": "every-reward",
       "runtimeExecutable": "every_reward/.venv/bin/python3",
       "runtimeArgs": ["every_reward/scripts/launch.py", "--port", "8850"],
       "port": 8850
+    },
+    {
+      "name": "business-control",
+      "runtimeExecutable": "business-control/.venv/bin/python3",
+      "runtimeArgs": ["business-control/scripts/launch.py", "--port", "8860"],
+      "port": 8860
+    },
+    {
+      "name": "data-transfer",
+      "runtimeExecutable": "data-transfer/.venv/bin/python3",
+      "runtimeArgs": ["data-transfer/scripts/launch.py", "--port", "8870"],
+      "port": 8870
+    },
+    {
+      "name": "seven-habits",
+      "runtimeExecutable": "seven-habits/.venv/bin/python3",
+      "runtimeArgs": ["seven-habits/scripts/launch.py", "--port", "8880"],
+      "port": 8880
+    },
+    {
+      "name": "the-approach",
+      "runtimeExecutable": "the-approach/.venv/bin/python3",
+      "runtimeArgs": ["the-approach/scripts/launch.py", "--port", "8890"],
+      "port": 8890
+    },
+    {
+      "name": "macro-kitchen",
+      "runtimeExecutable": "macro-kitchen/.venv/bin/python3",
+      "runtimeArgs": ["macro-kitchen/scripts/launch.py", "--port", "8900"],
+      "port": 8900
+    },
+    {
+      "name": "audiovisual-trainer",
+      "runtimeExecutable": "audiovisual-trainer/.venv/bin/python3",
+      "runtimeArgs": ["audiovisual-trainer/scripts/launch.py", "--port", "8910"],
+      "port": 8910
     }
   ]
 }

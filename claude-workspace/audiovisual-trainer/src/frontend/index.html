@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AV Trainer</title>
+<meta name="theme-color" content="#0d0f18">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<!-- landing / auth ------------------------------------------------------ -->
+<div id="gate" class="gate">
+  <div class="gate-inner">
+    <div class="gate-mark"><img src="/static/icons/icon-192.png" alt=""></div>
+    <h1>AV Trainer</h1>
+    <p class="gate-thesis">
+      Intuition is amortized search over trained perceptual features.
+      Perception first, volume second, articulation as its own track, theory
+      pulled by friction.
+    </p>
+    <div class="gate-tracks">
+      <div><b>MAKE</b><span>one finished piece a week</span></div>
+      <div><b>TOOLS</b><span>one tool until it's invisible</span></div>
+      <div><b>THEORY</b><span>read what explains the break</span></div>
+      <div><b>PERCEPTION</b><span>drills, every day, with feedback</span></div>
+    </div>
+
+    <form id="auth-form" class="gate-form" autocomplete="on">
+      <div class="tabs-mini">
+        <button type="button" class="on" data-mode="login">Sign in</button>
+        <button type="button" data-mode="signup">Sign up</button>
+      </div>
+      <label>Username<input name="username" autocomplete="username" required></label>
+      <label class="signup-only" hidden>Display name<input name="display_name" autocomplete="nickname"></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <p class="err" id="auth-err" hidden></p>
+      <button class="primary" type="submit" id="auth-go">Sign in</button>
+      <p class="fine">Your account and everything in it stays on this machine.</p>
+    </form>
+  </div>
+</div>
+
+<!-- app ----------------------------------------------------------------- -->
+<div id="app" hidden>
+  <header class="top">
+    <div class="brand"><img src="/static/icons/icon-192.png" alt=""><span>AV Trainer</span></div>
+    <nav id="nav" class="nav"></nav>
+    <div class="who">
+      <button id="who-btn" class="ghost"></button>
+      <div id="who-menu" class="menu" hidden>
+        <button data-act="profile">Profile</button>
+        <button data-act="backup">Back up data</button>
+        <button data-act="restore">Restore from file</button>
+        <button data-act="seed">Load starter content</button>
+        <button data-act="logout">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="view"></main>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+<div id="modal" class="modal" hidden><div class="modal-card" id="modal-card"></div></div>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
