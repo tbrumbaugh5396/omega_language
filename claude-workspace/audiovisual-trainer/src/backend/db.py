@@ -173,6 +173,36 @@ CREATE TABLE IF NOT EXISTS articulation (
     created INTEGER NOT NULL
 );
 
+-- The studio: one row per document, whatever kind of document it is. The
+-- editors differ completely but the shell, the asset store, the AI panel and
+-- the link back to a MAKE piece are shared, so the row is too.
+CREATE TABLE IF NOT EXISTS studio_projects (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL DEFAULT 'untitled',
+    kind TEXT NOT NULL DEFAULT 'canvas',      -- canvas|music|video
+    data TEXT NOT NULL DEFAULT '{}',          -- the document, JSON
+    thumb TEXT NOT NULL DEFAULT '',           -- small dataURL for the browser
+    piece_id INTEGER,                         -- the week's piece, if this is it
+    created INTEGER NOT NULL,
+    updated INTEGER NOT NULL
+);
+
+-- Imported media. The bytes live on disk under DATA_DIR/assets; only the
+-- metadata is in SQLite, because a video does not belong in a database row.
+CREATE TABLE IF NOT EXISTS assets (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    project_id INTEGER,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL DEFAULT '',
+    bytes INTEGER NOT NULL DEFAULT 0,
+    path TEXT NOT NULL,                       -- relative to DATA_DIR
+    akey TEXT NOT NULL,                       -- capability for the blob route
+    meta TEXT NOT NULL DEFAULT '{}',          -- duration, dimensions, etc.
+    created INTEGER NOT NULL
+);
+
 -- Module 3. Saved lab parameter sets and edited source.
 CREATE TABLE IF NOT EXISTS lab_saves (
     id INTEGER PRIMARY KEY,

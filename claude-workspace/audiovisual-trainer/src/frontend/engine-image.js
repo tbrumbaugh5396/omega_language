@@ -655,6 +655,305 @@ export function detectGrid(img) {
   };
 }
 
+// ------------------------------------------------------------------ filters
+//
+// The studio's filter menu. Each is one entry from the Part 10 catalogue,
+// built from the primitives above rather than bolted on — which is the point
+// the roadmap makes about the catalogue in the first place.
+
+export function posterize(img, levels = 5) {
+  const out = cloneImage(img), d = out.data;
+  const n = Math.max(2, Math.round(levels)) - 1;
+  for (let i = 0; i < d.length; i += 4) {
+    for (let c = 0; c < 3; c++) d[i + c] = Math.round((d[i + c] / 255) * n) / n * 255;
+  }
+  return out;
+}
+
+export function threshold(img, level = 128) {
+  const out = cloneImage(img), d = out.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    const v = l >= level ? 255 : 0;
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  return out;
+}
+
+export function invert(img) {
+  const out = cloneImage(img), d = out.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = 255 - d[i]; d[i + 1] = 255 - d[i + 1]; d[i + 2] = 255 - d[i + 2];
+  }
+  return out;
+}
+
+export function pixelate(img, size = 8) {
+  const out = cloneImage(img), { width: w, height: h } = img;
+  const s = Math.max(2, Math.round(size));
+  for (let y = 0; y < h; y += s) {
+    for (let x = 0; x < w; x += s) {
+      let r = 0, g = 0, b = 0, a = 0, n = 0;
+      for (let dy = 0; dy < s && y + dy < h; dy++) {
+        for (let dx = 0; dx < s && x + dx < w; dx++) {
+          const i = ((y + dy) * w + (x + dx)) * 4;
+          r += img.data[i]; g += img.data[i + 1]; b += img.data[i + 2]; a += img.data[i + 3]; n++;
+        }
+      }
+      r /= n; g /= n; b /= n; a /= n;
+      for (let dy = 0; dy < s && y + dy < h; dy++) {
+        for (let dx = 0; dx < s && x + dx < w; dx++) {
+          const i = ((y + dy) * w + (x + dx)) * 4;
+          out.data[i] = r; out.data[i + 1] = g; out.data[i + 2] = b; out.data[i + 3] = a;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+const BAYER8 = [
+  [0, 32, 8, 40, 2, 34, 10, 42], [48, 16, 56, 24, 50, 18, 58, 26],
+  [12, 44, 4, 36, 14, 46, 6, 38], [60, 28, 52, 20, 62, 30, 54, 22],
+  [3, 35, 11, 43, 1, 33, 9, 41], [51, 19, 59, 27, 49, 17, 57, 25],
+  [15, 47, 7, 39, 13, 45, 5, 37], [63, 31, 55, 23, 61, 29, 53, 21],
+];
+
+/** Ordered dither: the error is arranged into a pattern you can see. */
+export function ditherOrdered(img, levels = 2) {
+  const out = cloneImage(img), { width: w, height: h } = img;
+  const n = Math.max(2, Math.round(levels)) - 1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const t = (BAYER8[y & 7][x & 7] / 64 - 0.5) * (255 / n);
+      for (let c = 0; c < 3; c++) {
+        out.data[i + c] = Math.round(((img.data[i + c] + t) / 255) * n) / n * 255;
+      }
+    }
+  }
+  return out;
+}
+
+/** Floyd-Steinberg: the error is diffused, so it looks like grain not pattern. */
+export function ditherDiffuse(img, levels = 2) {
+  const { width: w, height: h } = img;
+  const out = cloneImage(img);
+  const buf = new Float32Array(w * h * 3);
+  for (let i = 0, p = 0; i < buf.length; i += 3, p += 4) {
+    buf[i] = img.data[p]; buf[i + 1] = img.data[p + 1]; buf[i + 2] = img.data[p + 2];
+  }
+  const n = Math.max(2, Math.round(levels)) - 1;
+  const at = (x, y, c) => (y * w + x) * 3 + c;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 3; c++) {
+        const old = buf[at(x, y, c)];
+        const nv = Math.round((old / 255) * n) / n * 255;
+        buf[at(x, y, c)] = nv;
+        const err = old - nv;
+        if (x + 1 < w) buf[at(x + 1, y, c)] += (err * 7) / 16;
+        if (y + 1 < h) {
+          if (x > 0) buf[at(x - 1, y + 1, c)] += (err * 3) / 16;
+          buf[at(x, y + 1, c)] += (err * 5) / 16;
+          if (x + 1 < w) buf[at(x + 1, y + 1, c)] += (err * 1) / 16;
+        }
+      }
+    }
+  }
+  for (let i = 0, p = 0; i < buf.length; i += 3, p += 4) {
+    out.data[p] = buf[i]; out.data[p + 1] = buf[i + 1]; out.data[p + 2] = buf[i + 2];
+  }
+  return out;
+}
+
+/** Halftone: dot size carries tone, on a rotated screen like real print. */
+export function halftone(img, cell = 6, angleDeg = 15) {
+  const { width: w, height: h } = img;
+  const c = makeCanvas(w, h), g = ctx2d(c);
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, w, h);
+  const a = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const s = Math.max(2, cell);
+  const diag = Math.ceil(Math.hypot(w, h) / s) + 2;
+  g.fillStyle = "#000";
+  for (let v = -diag; v < diag; v++) {
+    for (let u = -diag; u < diag; u++) {
+      const cx = (u * s) * cos - (v * s) * sin + w / 2;
+      const cy = (u * s) * sin + (v * s) * cos + h / 2;
+      const px = Math.round(cx), py = Math.round(cy);
+      if (px < 0 || py < 0 || px >= w || py >= h) continue;
+      const i = (py * w + px) * 4;
+      const lum = (0.2126 * img.data[i] + 0.7152 * img.data[i + 1] + 0.0722 * img.data[i + 2]) / 255;
+      const r = (1 - lum) * s * 0.72;
+      if (r > 0.2) { g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill(); }
+    }
+  }
+  return getImage(c);
+}
+
+/** Hue rotation done on the opponent axes, so lightness survives it. */
+export function hueRotate(img, deg = 30) {
+  const out = cloneImage(img), d = out.data;
+  const a = (deg * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
+  for (let i = 0; i < d.length; i += 4) {
+    const [L, A, B] = rgbToOklab(d[i], d[i + 1], d[i + 2]);
+    const [r, g, b] = oklabToRgb(L, A * cos - B * sin, A * sin + B * cos);
+    d[i] = r; d[i + 1] = g; d[i + 2] = b;
+  }
+  return out;
+}
+
+/** Duotone by mapping lightness between two colours in OKLab. */
+export function duotone(img, hex1 = "#101828", hex2 = "#f0e6d2") {
+  const p = (hx) => rgbToOklab(parseInt(hx.slice(1, 3), 16),
+                               parseInt(hx.slice(3, 5), 16),
+                               parseInt(hx.slice(5, 7), 16));
+  const A = p(hex1), B = p(hex2);
+  const out = cloneImage(img), d = out.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const [L] = rgbToOklab(d[i], d[i + 1], d[i + 2]);
+    const [r, g, b] = oklabToRgb(A[0] + (B[0] - A[0]) * L,
+                                 A[1] + (B[1] - A[1]) * L,
+                                 A[2] + (B[2] - A[2]) * L);
+    d[i] = r; d[i + 1] = g; d[i + 2] = b;
+  }
+  return out;
+}
+
+/** Unsharp mask: image + k·(image − blur(image)). A high-pass boost. */
+export function unsharp(img, radius = 2, amount = 0.8) {
+  const b = blurFast(img, radius);
+  const out = cloneImage(img), d = out.data;
+  for (let i = 0; i < d.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      d[i + c] = Math.max(0, Math.min(255,
+        img.data[i + c] + amount * (img.data[i + c] - b.data[i + c])));
+    }
+  }
+  return out;
+}
+
+export function sobelEdges(img) {
+  const gx = convolve(img, KERNELS.sobelX, { divisor: 1, offset: 128 });
+  const gy = convolve(img, KERNELS.sobelY, { divisor: 1, offset: 128 });
+  const out = cloneImage(img), d = out.data;
+  for (let i = 0; i < d.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const a = gx.data[i + c] - 128, b = gy.data[i + c] - 128;
+      d[i + c] = Math.min(255, Math.hypot(a, b));
+    }
+  }
+  return out;
+}
+
+export function vignette(img, amount = 0.5, softness = 0.6) {
+  const out = cloneImage(img), { width: w, height: h } = img;
+  const cx = w / 2, cy = h / 2, max = Math.hypot(cx, cy);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const t = Math.hypot(x - cx, y - cy) / max;
+      const f = 1 - amount * Math.pow(Math.max(0, (t - (1 - softness)) / softness), 2);
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) out.data[i + c] = img.data[i + c] * f;
+    }
+  }
+  return out;
+}
+
+/** Channel-scaled fringing. Cheap to fake, easy to overdo. */
+export function chromatic(img, amount = 3) {
+  const out = cloneImage(img), { width: w, height: h } = img;
+  const cx = w / 2, cy = h / 2;
+  const sample = (x, y, c) => {
+    const sx = Math.max(0, Math.min(w - 1, Math.round(x)));
+    const sy = Math.max(0, Math.min(h - 1, Math.round(y)));
+    return img.data[(sy * w + sx) * 4 + c];
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const dx = (x - cx) / w, dy = (y - cy) / h;
+      out.data[i] = sample(x + dx * amount, y + dy * amount, 0);
+      out.data[i + 2] = sample(x - dx * amount, y - dy * amount, 2);
+    }
+  }
+  return out;
+}
+
+/** Bloom: threshold, blur, add back. An optical artefact used for legibility. */
+export function bloom(img, cut = 190, radius = 8, amount = 0.7) {
+  const bright = cloneImage(img);
+  for (let i = 0; i < bright.data.length; i += 4) {
+    const l = 0.2126 * img.data[i] + 0.7152 * img.data[i + 1] + 0.0722 * img.data[i + 2];
+    const k = l > cut ? 1 : 0;
+    for (let c = 0; c < 3; c++) bright.data[i + c] = img.data[i + c] * k;
+  }
+  const soft = blurFast(bright, radius);
+  const out = cloneImage(img);
+  for (let i = 0; i < out.data.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      out.data[i + c] = Math.min(255, img.data[i + c] + soft.data[i + c] * amount);
+    }
+  }
+  return out;
+}
+
+export function grain(img, amount = 12, seed = 1) {
+  const r = prng(seed);
+  const out = cloneImage(img), d = out.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (r() * 2 - 1) * amount;
+    d[i] += n; d[i + 1] += n; d[i + 2] += n;
+  }
+  return out;
+}
+
+/** The filter menu the studio renders, with the controls each one needs. */
+export const FILTERS = [
+  { id: "blur", name: "Gaussian blur", fn: (im, p) => blurFast(im, p.radius),
+    params: [["radius", 0, 40, 4]] },
+  { id: "motion", name: "Motion blur", fn: (im, p) => motionBlur(im, p.length, p.angle),
+    params: [["length", 2, 60, 16], ["angle", 0, 180, 0]] },
+  { id: "radial", name: "Radial blur", fn: (im, p) => radialBlur(im, p.strength, 14),
+    params: [["strength", 0.01, 0.3, 0.08]] },
+  { id: "lens", name: "Lens blur", fn: (im, p) => lensBlur(im, Math.round(p.radius)),
+    params: [["radius", 1, 12, 4]] },
+  { id: "unsharp", name: "Unsharp mask", fn: (im, p) => unsharp(im, p.radius, p.amount),
+    params: [["radius", 0.5, 10, 2], ["amount", 0, 3, 0.8]] },
+  { id: "edges", name: "Find edges", fn: (im) => sobelEdges(im), params: [] },
+  { id: "emboss", name: "Emboss", fn: (im) => convolve(im, KERNELS.emboss, { divisor: 1, offset: 128 }), params: [] },
+  { id: "grade", name: "Grade", fn: (im, p) => grade(im, p),
+    params: [["lift", -0.15, 0.3, 0], ["gamma", 0.3, 2.5, 1], ["gain", 0.3, 2.5, 1],
+             ["sat", 0, 2.5, 1], ["temp", -1, 1, 0]] },
+  { id: "hue", name: "Hue rotate", fn: (im, p) => hueRotate(im, p.degrees),
+    params: [["degrees", -180, 180, 30]] },
+  { id: "duotone", name: "Duotone", fn: (im, p) => duotone(im, p.dark, p.light),
+    params: [], colors: [["dark", "#141a2e"], ["light", "#f2e6cc"]] },
+  { id: "posterize", name: "Posterize", fn: (im, p) => posterize(im, p.levels),
+    params: [["levels", 2, 12, 5]] },
+  { id: "threshold", name: "Threshold", fn: (im, p) => threshold(im, p.level),
+    params: [["level", 0, 255, 128]] },
+  { id: "dither-ordered", name: "Dither — ordered", fn: (im, p) => ditherOrdered(im, p.levels),
+    params: [["levels", 2, 8, 2]] },
+  { id: "dither-diffuse", name: "Dither — diffusion", fn: (im, p) => ditherDiffuse(im, p.levels),
+    params: [["levels", 2, 8, 2]] },
+  { id: "halftone", name: "Halftone", fn: (im, p) => halftone(im, p.cell, p.angle),
+    params: [["cell", 3, 20, 6], ["angle", 0, 90, 15]] },
+  { id: "pixelate", name: "Pixelate", fn: (im, p) => pixelate(im, p.size),
+    params: [["size", 2, 40, 8]] },
+  { id: "bloom", name: "Bloom", fn: (im, p) => bloom(im, p.cut, p.radius, p.amount),
+    params: [["cut", 100, 250, 190], ["radius", 2, 30, 8], ["amount", 0, 2, 0.7]] },
+  { id: "chromatic", name: "Chromatic aberration", fn: (im, p) => chromatic(im, p.amount),
+    params: [["amount", 0, 20, 4]] },
+  { id: "vignette", name: "Vignette", fn: (im, p) => vignette(im, p.amount, p.softness),
+    params: [["amount", 0, 1, 0.5], ["softness", 0.1, 1, 0.6]] },
+  { id: "grain", name: "Film grain", fn: (im, p) => grain(im, p.amount, (Math.random() * 1e6) | 0),
+    params: [["amount", 0, 60, 14]] },
+  { id: "invert", name: "Invert", fn: (im) => invert(im), params: [] },
+];
+
 // ------------------------------------------------------------------ easing
 
 export const EASINGS = {

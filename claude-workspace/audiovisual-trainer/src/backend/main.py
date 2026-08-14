@@ -21,7 +21,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import auth, briefs, config, curriculum as cur, db, library, seeder
+from . import (ai, auth, briefs, config, curriculum as cur, db, library,
+               seeder, studio)
 
 app = FastAPI(title="AV Trainer")
 db.init()
@@ -32,9 +33,14 @@ PIECE_STATUS = ("briefed", "making", "shipped", "abandoned")
 ARTICULATION_IDS = {a["id"] for a in cur.ARTICULATION}
 
 # Tables carried in a backup, parents before children.
+#
+# studio_projects travels; `assets` does not. Asset rows are pointers to files
+# on disk, and a backup that restores the pointers without the bytes is worse
+# than one that admits the gap — canvas documents keep their pixels inline and
+# survive, music and video projects come back missing their imported media.
 BACKUP_TABLES = ["progress", "notes", "pieces", "drill_attempts", "vocab_srs",
                  "practice_log", "selections", "analyses", "articulation",
-                 "lab_saves"]
+                 "lab_saves", "studio_projects"]
 BACKUP_FORMAT = "av-trainer-backup/1"
 
 
@@ -882,6 +888,12 @@ def service_worker():
 def manifest():
     return FileResponse(config.FRONTEND_DIR / "manifest.webmanifest",
                         media_type="application/manifest+json")
+
+
+# The studio and AI routers take current_user as an argument rather than
+# importing it, so those modules never have to import main back.
+studio.register(app, current_user)
+ai.register(app, current_user)
 
 
 class RevalidatingStatics(StaticFiles):

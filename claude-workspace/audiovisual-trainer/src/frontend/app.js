@@ -6,6 +6,7 @@
 import { $, $$, el, clear, api, token, toast, modal, closeModal, relDay, today,
          hhmm, confirmDialog } from "./ui.js";
 import { makeView } from "./make.js";
+import { studioView } from "./studio.js";
 import { trainView } from "./train.js";
 import { labView } from "./labs.js";
 import { analyzeView } from "./analyze.js";
@@ -25,6 +26,7 @@ const state = {
 const VIEWS = [
   ["today", "Today", todayView],
   ["make", "Make", makeView],
+  ["studio", "Studio", studioView],
   ["train", "Train", trainView],
   ["lab", "Lab", labView],
   ["analyze", "Analyze", analyzeView],
@@ -43,7 +45,9 @@ const ctx = {
     current = view;
     ctx.sub = sub;
     ctx.arg = arg;
-    location.hash = view + (sub ? `/${sub}` : "");
+    // The third segment matters: #studio/canvas/12 has to survive a reload,
+    // because an open document is the thing you most want to come back to.
+    location.hash = view + (sub ? `/${sub}` : "") + (arg ? `/${arg}` : "");
     renderView();
   },
 };
@@ -88,9 +92,10 @@ function showApp() {
   $("#app").hidden = false;
   $("#who-btn").textContent = state.user.display_name || state.user.username;
   buildNav();
-  const [hash, sub] = (location.hash.replace("#", "") || "today").split("/");
+  const [hash, sub, arg] = (location.hash.replace("#", "") || "today").split("/");
   current = VIEWS.some((v) => v[0] === hash) ? hash : "today";
   ctx.sub = sub || null;
+  ctx.arg = arg || null;
   renderView();
 }
 
@@ -381,12 +386,13 @@ function profileDialog() {
 // ------------------------------------------------------------------ start
 
 window.addEventListener("hashchange", () => {
-  const [hash, sub] = (location.hash.replace("#", "") || "today").split("/");
-  if (VIEWS.some((v) => v[0] === hash) && (hash !== current || sub !== ctx.sub)) {
-    current = hash;
-    ctx.sub = sub || null;
-    renderView();
-  }
+  const [hash, sub, arg] = (location.hash.replace("#", "") || "today").split("/");
+  if (!VIEWS.some((v) => v[0] === hash)) return;
+  if (hash === current && (sub || null) === ctx.sub && (arg || null) === ctx.arg) return;
+  current = hash;
+  ctx.sub = sub || null;
+  ctx.arg = arg || null;
+  renderView();
 });
 
 if ("serviceWorker" in navigator) {

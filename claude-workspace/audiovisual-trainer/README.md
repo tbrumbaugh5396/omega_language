@@ -35,6 +35,44 @@ which is why selection is logged here as training data.
 Plus **Library** (Parts 3–8 and 10–12, searchable by symptom) and
 **Progress** (accuracy reported next to the level it was earned at).
 
+## The studio
+
+The trainer builds the eye and ear; the **Studio** tab is where the work
+actually gets made. Four document types, one asset store, one AI layer.
+
+| Document | What it is |
+|---|---|
+| **Canvas** | Layers with real blend modes, brush / eraser / shapes / type / bucket, and the whole Part 10 catalogue as a 21-entry filter menu running through `engine-image`. Imports images, exports PNG. |
+| **Music** | Tracks, piano roll and drum grid over six instruments (subtractive, FM, Karplus-Strong pluck, bass, drum synth, sampler), per-track EQ / drive / delay / convolution reverb, swing, master limiter. Imports audio, exports WAV. |
+| **Video** | Sequential timeline of clips, stills and titles with per-clip grading, dissolves and an audio track. Exports by recording the composed canvas. |
+| **Shader** | A GLSL sketchpad using **The Book of Shaders' uniform names** — `u_resolution`, `u_time`, `u_mouse` — so examples from that book paste in and run unchanged. Eleven chapter presets from *Hello world* to *Fractal Brownian Motion*. |
+
+Music playback renders the whole arrangement offline into one buffer and loops
+it, rather than running a live scheduler. Edits re-render in a fraction of a
+second, the result is sample-accurate, and export is the same code path as
+play — so what you hear is exactly what lands in the file.
+
+The video grade is the one place that deliberately does *not* use
+`engine-image`: it uses the canvas `filter` property, because a 30fps preview
+cannot afford a per-frame JS pass over half a million pixels, and a grade you
+cannot scrub against is not a grade you can judge.
+
+## AI
+
+Optional, off by default, and configured in the studio's AI panel. Three
+providers: the Anthropic API, a local Ollama, or any OpenAI-compatible
+endpoint. Requests go through the backend so the key never reaches the browser
+and there is no CORS to work around.
+
+The roadmap is specific about the limit (Part 13.5), and so is the
+implementation: the model drafts, implements and lists things you may have
+missed. It never ranks and it is never the selector — the critique prompt
+forbids it explicitly, because a critique prompt that does not forbid ranking
+will rank. There is no "which of these is best" button anywhere in the app.
+
+When a cloud provider is selected the settings panel says plainly that prompts
+leave the machine. With Ollama, or with AI off, nothing does.
+
 ## Everything perceptual runs in the browser
 
 The backend is deliberately thin — curriculum, schedule, record. Stimuli have

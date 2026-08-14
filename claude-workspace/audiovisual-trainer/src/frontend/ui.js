@@ -32,6 +32,17 @@ function add(node, kids) {
 
 export const clear = (node) => { node.replaceChildren(); return node; };
 
+/** Append children, skipping null/false/undefined.
+ *  Node.append() stringifies them, so a conditional child renders the word
+ *  "null" into the page — which is exactly the bug this exists to prevent. */
+export function append(node, ...kids) {
+  for (const k of kids.flat(4)) {
+    if (k === null || k === undefined || k === false) continue;
+    node.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  }
+  return node;
+}
+
 // ------------------------------------------------------------------ api
 
 const TOKEN_KEY = "av-trainer-token";
