@@ -557,4 +557,5 @@ export const MODULE_EXTRAS = {
   "04-color-organization": ["hsv-luminance"],
   "05-display": ["banding-dither", "zone-plate"],
   "07-shaders": ["sdf-antialias"],
+  "08-web-deliverable": ["banding-dither", "hsv-luminance"],
 };

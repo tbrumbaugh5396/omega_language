@@ -34,6 +34,7 @@ ORDER = [
     ("05-display", "Sampling theory, quantization, transfer functions"),
     ("06-gpu-pipeline", "Homogeneous coordinates, barycentrics, SIMD"),
     ("07-shaders", "Implicit surfaces, noise, filter widths"),
+    ("08-web-deliverable", "Budgets, transfer functions, provenance"),
 ]
 
 
