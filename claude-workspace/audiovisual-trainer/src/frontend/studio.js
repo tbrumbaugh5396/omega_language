@@ -1,8 +1,8 @@
 // The studio shell: project browser, document lifecycle, shared asset store.
 //
-// Three editors that have almost nothing in common internally, but share a
+// Five editors that have almost nothing in common internally, but share a
 // document row, an asset store, an AI panel, and a link back to the week's
-// piece — so this file owns all four and hands each editor a small context.
+// piece — so this file owns all of that and hands each editor a small context.
 
 import { el, clear, api, toast, confirmDialog, modal, closeModal, relTime } from "./ui.js";
 import { aiChip } from "./ai.js";
@@ -10,9 +10,10 @@ import { canvasEditor } from "./studio-canvas.js";
 import { musicEditor } from "./studio-music.js";
 import { videoEditor } from "./studio-video.js";
 import { shaderEditor, SHADER_PRESETS } from "./studio-shader.js";
+import { designEditor, newDesignDoc, FRAME_PRESETS } from "./studio-design.js";
 
 const EDITORS = { canvas: canvasEditor, music: musicEditor, video: videoEditor,
-                  shader: shaderEditor };
+                  shader: shaderEditor, design: designEditor };
 
 const KINDS = [
   { id: "canvas", title: "Canvas", blurb:
@@ -24,6 +25,9 @@ const KINDS = [
   { id: "video", title: "Video", blurb:
     "A timeline for clips, stills and audio, with per-clip grading, " +
     "transitions and titles. Exports a recording of the composed timeline." },
+  { id: "design", title: "Design", blurb:
+    "Vector shapes, type and layout on an infinite canvas. Frames, snapping, "
+    + "auto-layout, alignment and a column grid. Exports SVG and PNG." },
   { id: "shader", title: "Shader", blurb:
     "A GLSL sketchpad with The Book of Shaders' uniform names, so examples " +
     "from the book paste in and run unchanged. Chapter presets included." },
@@ -146,6 +150,12 @@ function presetsFor(kind) {
       { label: "8 bars at 140 (half-time)", data: () => blankMusic(140, 8) },
       { label: "4 bars at 174", data: () => blankMusic(174, 4) },
     ];
+  }
+  if (kind === "design") {
+    return FRAME_PRESETS.map(([name, w, h]) => ({
+      label: `${name} — ${w}×${h}`,
+      data: () => newDesignDoc(name),
+    }));
   }
   if (kind === "shader") {
     return SHADER_PRESETS.map((p) => ({

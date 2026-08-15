@@ -20,6 +20,12 @@ Use headphones. Half the drills are ear drills, and laptop speakers cannot
 reproduce anything below about 150 Hz — which is exactly where several of
 them live.
 
+A word on scope: the studio tools are sketchpads, not production suites.
+Canvas has layers and filters but no selections, transform or masks; Video
+has one track and no keyframes; Design has grids, snapping and auto-layout
+but no components or prototyping. They are here to make the weekly piece,
+not to replace Photoshop, Resolve or Figma.
+
 Want example content first?
   Profile menu → "Load starter content", or double-click
   command_utilities/Seed Starter Content.command
@@ -52,8 +58,8 @@ SUGGESTED FIRST SESSION
   · Train → Drills — ten minutes. Pick one ear drill and one eye drill.
     Every answer comes back with the mechanism, which is where the
     vocabulary gets built.
-  · Studio — make the thing. Four document types: Canvas, Music, Video and
-    Shader. Start one against this week's brief.
+  · Studio — make the thing. Five document types: Canvas, Design, Music,
+    Video and Shader. Start one against this week's brief.
   · Lab — open "SDF shapes" and drag the blend knob until the join reads as
     cast rather than cut. Then break it on purpose.
   · Analyze — drop in one reference you love. Describe before you judge.
@@ -71,6 +77,10 @@ THE STUDIO
   Video   Timeline of clips, stills and titles, per-clip grading and
           dissolves. Export records the composed timeline in real time, so
           leave the tab in front while it runs.
+  Design  Vector layout on an infinite canvas: frames, snapping with guides,
+          auto-layout, align and distribute, and a column grid you can put
+          every edge onto. Exports SVG and PNG. V/F/R/O/L/T pick tools,
+          ⌘G groups, ⌘D duplicates, ⌥drag pans, scroll zooms.
   Shader  A GLSL sketchpad using The Book of Shaders' uniform names, so
           examples from thebookofshaders.com paste in and run unchanged.
           Eleven chapter presets, from Hello world to Fractal Brownian

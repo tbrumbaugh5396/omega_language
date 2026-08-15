@@ -45,7 +45,28 @@ actually gets made. Four document types, one asset store, one AI layer.
 | **Canvas** | Layers with real blend modes, brush / eraser / shapes / type / bucket, and the whole Part 10 catalogue as a 21-entry filter menu running through `engine-image`. Imports images, exports PNG. |
 | **Music** | Tracks, piano roll and drum grid over six instruments (subtractive, FM, Karplus-Strong pluck, bass, drum synth, sampler), per-track EQ / drive / delay / convolution reverb, swing, master limiter. Imports audio, exports WAV. |
 | **Video** | Sequential timeline of clips, stills and titles with per-clip grading, dissolves and an audio track. Exports by recording the composed canvas. |
+| **Design** | Vector shapes, type and layout on an infinite canvas. Frames as artboards, edge/centre snapping with guides, auto-layout stacks, align and distribute, a Müller-Brockmann column grid overlay, grouping, and SVG / PNG@2x export. |
 | **Shader** | A GLSL sketchpad using **The Book of Shaders' uniform names** — `u_resolution`, `u_time`, `u_mouse` — so examples from that book paste in and run unchanged. Eleven chapter presets from *Hello world* to *Fractal Brownian Motion*. |
+
+### What this is not
+
+Worth being straight about, because the gap is real. These are sketchpad-tier
+tools, not production ones:
+
+- **Canvas is not Photoshop.** No selections, no transform, no layer masks or
+  adjustment layers, and text is rasterised the moment it is placed.
+- **Video is not an NLE.** One video track, no keyframes, no drag-trimming on
+  the timeline, and export is a real-time screen recording to webm rather
+  than a proper encode.
+- **Design is not Figma.** No components or variants, no constraints, no
+  prototyping, no shared styles, no pen tool or boolean ops, no multiplayer.
+  It has the parts that matter for learning layout — grid, snapping,
+  auto-layout, alignment, hierarchy — and stops there.
+
+The design editor renders as SVG rather than canvas on purpose: a layout tool
+needs crisp text at any zoom, hit-testing that does not mean re-implementing
+geometry, and an export that is genuinely vector. All three come free from the
+DOM.
 
 Music playback renders the whole arrangement offline into one buffer and loops
 it, rather than running a live scheduler. Edits re-render in a fraction of a

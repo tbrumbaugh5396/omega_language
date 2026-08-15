@@ -1,8 +1,8 @@
 """Studio: project documents and the imported-media store.
 
-The three editors (canvas, music, video) are completely different programs,
-but they share a document row, an asset store, the AI panel and the link back
-to a MAKE piece — so those live here once.
+The editors (canvas, design, music, video, shader) are completely different
+programs, but they share a document row, an asset store, the AI panel and the
+link back to a MAKE piece — so those live here once.
 
 Media bytes go on disk under DATA_DIR/assets, not in SQLite. A video in a
 database row is a mistake you only make once.
@@ -25,7 +25,7 @@ from . import config, db
 
 router = APIRouter(prefix="/api/studio")
 
-KINDS = ("canvas", "music", "video", "shader")
+KINDS = ("canvas", "music", "video", "shader", "design")
 MAX_UPLOAD = 512 * 1024 * 1024        # 512 MB — a short 4K clip fits
 ALLOWED_PREFIXES = ("image/", "audio/", "video/")
 
