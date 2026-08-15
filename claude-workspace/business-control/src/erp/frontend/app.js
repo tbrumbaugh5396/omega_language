@@ -204,27 +204,77 @@ function modalEsc(e) { if (e.key === "Escape") closeModal(); }
    No tiles: nothing is fetched from a map server, which keeps the ops app
    working offline in a warehouse and stops a third party learning the
    company's delivery pattern. */
-const US_EDGE = [
-  [49.0,-123.0],[48.4,-124.7],[46.2,-124.0],[44.6,-124.1],[42.0,-124.2],
-  [40.4,-124.4],[38.0,-123.0],[36.6,-121.9],[34.4,-120.5],[33.7,-118.3],
-  [32.5,-117.1],[32.5,-114.8],[31.3,-111.0],[31.8,-106.5],[29.8,-102.4],
-  [25.9,-97.4],[27.8,-97.4],[29.3,-94.8],[29.7,-93.3],[29.2,-90.0],
-  [30.2,-88.0],[30.4,-86.5],[29.7,-84.9],[28.0,-82.8],[25.1,-80.9],
-  [25.8,-80.2],[28.4,-80.6],[32.0,-80.8],[33.9,-78.0],[35.2,-75.5],
-  [37.0,-76.0],[38.8,-75.1],[40.5,-74.0],[41.4,-71.5],[42.0,-70.1],
-  [43.7,-70.0],[44.8,-67.0],[47.0,-69.2],[45.0,-71.5],[45.0,-74.7],
-  [43.3,-79.1],[42.3,-83.0],[46.0,-84.4],[46.8,-90.0],[47.4,-92.0],[49.0,-95.2],
-];
-const MAP_BOX = { w: -125, e: -66.5, n: 49.5, s: 24.5 };
-const MAP_W = 1000, MAP_H = 560;
+/* A world map in equirectangular projection, opened at the US.
+
+   Coastlines are a coarse polygon set — enough to place a pin in the right
+   country at continental zoom, which is what an ops map is for. Everything
+   (outline and pins) goes through one projection, so they can't disagree.
+   Still no tiles: nothing is fetched, so this works in a warehouse basement
+   and no third party learns the delivery pattern. */
+const MAP_W = 1000, MAP_H = 500;          // 360° x 180°, 2:1
 const mapProject = (lat, lng) => [
-  ((lng - MAP_BOX.w) / (MAP_BOX.e - MAP_BOX.w)) * MAP_W,
-  ((MAP_BOX.n - lat) / (MAP_BOX.n - MAP_BOX.s)) * MAP_H,
+  (lng + 180) / 360 * MAP_W,
+  (90 - lat) / 180 * MAP_H,
 ];
-const US_PATH = US_EDGE.map(([la, ln], i) => {
+
+// [lat, lng] rings. Coarse on purpose — this is an ops map, not an atlas.
+const WORLD = [
+  /* Each ring is a single closed loop that never crosses itself. A ring that
+     doubles back — one loop trying to cover both Americas, say — fills as a
+     wedge across the ocean under the nonzero rule, which is how you get a
+     "map" that puts land where the water is. */
+  // North America: Alaska → arctic → east coast → Gulf → Central America,
+  // then back up the Pacific side.
+  [[71,-156],[70,-141],[69,-131],[68,-110],[74,-95],[73,-80],[63,-78],[60,-65],
+   [55,-60],[52,-56],[47,-53],[45,-60],[41,-70],[38,-75],[35,-76],[31,-81],
+   [25,-80],[30,-84],[29,-95],[26,-97],[21,-97],[18,-95],[19,-91],[21,-87],
+   [18,-88],[16,-88],[15,-83],[11,-83],[9,-82],[8,-77],[8,-83],[11,-86],
+   [13,-88],[16,-95],[19,-104],[23,-106],[23,-110],[28,-114],[32,-117],
+   [34,-120],[37,-122],[42,-124],[46,-124],[49,-125],[52,-131],[57,-133],
+   [60,-140],[59,-145],[57,-153],[55,-162],[58,-158],[60,-165],[65,-166],
+   [71,-156]],
+  // South America
+  [[11,-72],[10,-64],[8,-60],[5,-52],[0,-50],[-5,-35],[-13,-38],[-23,-43],
+   [-33,-53],[-38,-58],[-42,-63],[-48,-66],[-52,-69],[-55,-67],[-52,-73],
+   [-46,-75],[-42,-74],[-33,-72],[-23,-70],[-18,-70],[-12,-77],[-5,-81],
+   [0,-80],[3,-77],[8,-77],[11,-74],[11,-72]],
+  // Europe + Africa + Asia (one coarse landmass ring)
+  [[71,25],[70,30],[66,42],[68,55],[73,70],[73,80],[76,100],[73,113],[71,130],
+   [70,160],[66,170],[62,179],[59,163],[54,142],[46,143],[43,135],[39,127],
+   [35,126],[31,122],[23,117],[22,110],[10,107],[9,100],[1,104],[7,98],
+   [16,95],[21,90],[22,88],[16,81],[8,77],[15,74],[23,68],[25,57],[22,59],
+   [26,50],[30,48],[24,38],[13,43],[11,51],[2,46],[-6,39],[-18,36],[-26,33],
+   [-34,26],[-34,18],[-23,14],[-12,13],[-6,12],[4,9],[6,-3],[5,-8],[10,-16],
+   [15,-17],[21,-17],[28,-13],[33,-8],[36,-6],[37,10],[33,11],[31,20],[31,32],
+   [36,36],[36,30],[41,29],[41,41],[45,38],[46,31],[45,29],[44,23],[41,20],
+   [43,15],[45,13],[44,12],[40,18],[38,16],[41,13],[44,10],[43,7],[43,3],
+   [39,0],[37,-6],[43,-9],[44,-2],[47,-2],[49,0],[51,2],[53,5],[55,9],
+   [57,11],[59,11],[63,8],[68,15],[71,25]],
+  // British Isles
+  [[58,-5],[57,-2],[54,0],[51,1],[50,-4],[52,-5],[55,-6],[58,-7],[58,-5]],
+  // Australia
+  [[-11,131],[-12,137],[-15,141],[-19,147],[-28,153],[-37,150],[-38,145],
+   [-35,138],[-32,133],[-34,123],[-35,117],[-32,116],[-26,113],[-22,114],
+   [-18,122],[-14,127],[-11,131]],
+  // New Zealand
+  [[-35,173],[-38,178],[-42,174],[-46,168],[-45,167],[-41,172],[-37,174],
+   [-35,173]],
+  // Japan
+  [[45,142],[43,145],[41,141],[38,141],[35,140],[34,136],[35,133],[34,131],
+   [37,137],[40,140],[43,141],[45,142]],
+  // Madagascar
+  [[-12,49],[-16,50],[-22,48],[-25,47],[-23,44],[-16,44],[-12,49]],
+  // Greenland
+  [[83,-32],[80,-20],[75,-20],[70,-22],[63,-42],[68,-53],[75,-58],[80,-60],
+   [83,-45],[83,-32]],
+];
+const WORLD_PATH = WORLD.map((ring) => ring.map(([la, ln], i) => {
   const [x, y] = mapProject(la, ln);
   return `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
-}).join(" ") + " Z";
+}).join(" ") + " Z").join(" ");
+
+// Opening view: the lower 48, so the map is useful the moment it appears.
+const HOME_VIEW = { lat: [24, 50], lng: [-126, -66] };
 
 let MAP_SEQ = 0;
 
@@ -240,17 +290,22 @@ function panZoomMap(opts) {
   }).join("");
   const dots = pins.map((p, i) => {
     const [x, y] = mapProject(p.lat, p.lng);
+    /* The inner group carries the counter-scale. Zoom multiplies everything
+       inside .map-vp, so without it a dot becomes a saucer at 6x — the pin
+       has to keep its screen size while its position keeps the map's. */
     return `<g class="map-pin" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
-      <circle class="halo" r="${(p.size || 7) + 9}" fill="${p.color || "#8a6ff0"}"/>
-      <circle class="dot" r="${p.size || 7}" fill="${p.color || "#8a6ff0"}"/>
-      ${p.n != null ? `<text class="pin-n" y="4">${p.n}</text>` : ""}
+      <g class="pin-s">
+        <circle class="halo" r="${(p.size || 7) + 9}" fill="${p.color || "#8a6ff0"}"/>
+        <circle class="dot" r="${p.size || 7}" fill="${p.color || "#8a6ff0"}"/>
+        ${p.n != null ? `<text class="pin-n" y="4">${p.n}</text>` : ""}
+      </g>
       <title>${esc(p.label || "")}${p.sub ? " — " + esc(p.sub) : ""}</title>
     </g>`;
   }).join("");
   return `<div class="map-wrap" id="${id}">
     <svg class="map" viewBox="0 0 ${MAP_W} ${MAP_H}">
       <g class="map-vp">
-        <path class="map-land" d="${US_PATH}"/>
+        <path class="map-land" d="${WORLD_PATH}"/>
         ${legs}${dots}
       </g>
     </svg>
@@ -270,13 +325,42 @@ function wireMap(id) {
   const svg = wrap.querySelector("svg");
   let k = 1, tx = 0, ty = 0, dragging = false, sx = 0, sy = 0;
 
+  /* Open on a region rather than the whole globe. Defaults to the US; if the
+     pins sit outside it — an international account, a European route — frame
+     those instead, because a map opening on the wrong continent is worse
+     than one opening on none. */
+  const homeView = () => {
+    const pins = [...vp.querySelectorAll(".map-pin")].map((g) => {
+      const t = g.getAttribute("transform").match(/-?[\d.]+/g);
+      return [parseFloat(t[0]), parseFloat(t[1])];
+    });
+    let [x1, y1] = mapProject(HOME_VIEW.lat[1], HOME_VIEW.lng[0]);
+    let [x2, y2] = mapProject(HOME_VIEW.lat[0], HOME_VIEW.lng[1]);
+    if (pins.length) {
+      const xs = pins.map((p) => p[0]), ys = pins.map((p) => p[1]);
+      const outside = Math.min(...xs) < x1 - 4 || Math.max(...xs) > x2 + 4 ||
+                      Math.min(...ys) < y1 - 4 || Math.max(...ys) > y2 + 4;
+      if (outside) {
+        const pad = 30;
+        x1 = Math.min(...xs) - pad; x2 = Math.max(...xs) + pad;
+        y1 = Math.min(...ys) - pad; y2 = Math.max(...ys) + pad;
+      }
+    }
+    const w = Math.max(1, x2 - x1), h = Math.max(1, y2 - y1);
+    k = Math.max(1, Math.min(12, Math.min(MAP_W / w, MAP_H / h)));
+    tx = -(x1 + x2) / 2 * k + MAP_W / 2;
+    ty = -(y1 + y2) / 2 * k + MAP_H / 2;
+    clamp(); apply();
+  };
+
   const apply = () => {
     vp.setAttribute("transform", `translate(${tx} ${ty}) scale(${k})`);
     // Counter-scale the pins so a dot stays a dot at every zoom level
-    // instead of becoming a blob.
-    vp.querySelectorAll(".map-pin").forEach((g) => {
-      g.style.setProperty("--k", 1 / k);
-    });
+    // instead of becoming a blob. Set as an attribute rather than a CSS
+    // variable: scaling about the pin's own origin is unambiguous here,
+    // where a CSS transform-origin on an SVG group is not.
+    const inv = `scale(${(1 / k).toFixed(4)})`;
+    vp.querySelectorAll(".pin-s").forEach((g) => g.setAttribute("transform", inv));
   };
   const clamp = () => {
     k = Math.max(1, Math.min(12, k));
@@ -351,11 +435,11 @@ function wireMap(id) {
   }, { passive: false });
   svg.addEventListener("touchend", () => { dragging = false; pinch = 0; });
 
+  homeView();
   wrap.querySelectorAll("[data-mz]").forEach((b) => b.onclick = () => {
-    if (b.dataset.mz === "fit") { k = 1; tx = 0; ty = 0; clamp(); apply(); }
+    if (b.dataset.mz === "fit") homeView();
     else zoomAt(b.dataset.mz === "in" ? 1.5 : 1 / 1.5, MAP_W / 2, MAP_H / 2);
   });
-  apply();
 }
 
 // ---------- chrome ----------
@@ -392,6 +476,7 @@ const OPS_ICONS = {
   bag: '<path d="M5 7.5h14l-1 13H6z"/><path d="M8.8 10V6.6a3.2 3.2 0 016.4 0V10"/>',
   tools: '<path d="M14.5 6a3.5 3.5 0 014.8 4.4l-9 9-3.2 1 1-3.2 9-9"/><path d="M4 8.5a3.5 3.5 0 004.9 3.2"/>',
   file: '<path d="M14 3H6.5A1.5 1.5 0 005 4.5v15A1.5 1.5 0 006.5 21h11a1.5 1.5 0 001.5-1.5V8z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 16.5h7"/>',
+  user: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0115 0"/>',
   pen: '<path d="M15.5 4.5l4 4L8 20l-4.5.5L4 16z"/><path d="M13.5 6.5l4 4"/>',
   shield2: '<path d="M12 3l7.5 3v6c0 5-3.3 8-7.5 9.5C7.8 20 4.5 17 4.5 12V6z"/>',
 };
@@ -406,6 +491,8 @@ const TABS = [
   { id: "promos", label: "Promos", icon: "megaphone", group: "Sell",
     roles: ["admin", "employee"] },
   { id: "clock", label: "Time Clock", icon: "clock", group: "Operate", roles: "*" },
+  { id: "stores", label: "Stores", icon: "pin", group: "Operate",
+    roles: ["admin", "employee", "distributor"] },
   { id: "inventory", label: "Inventory", icon: "store", group: "Operate",
     roles: ["admin", "employee", "distributor"] },
   { id: "routes", label: "Routes", icon: "truck", group: "Operate",
@@ -421,10 +508,16 @@ const TABS = [
     roles: ["admin"] },
   { id: "events", label: "Events", icon: "calendar", group: "Grow",
     roles: ["admin", "employee"] },
+  { id: "email", label: "Email", icon: "megaphone", group: "Grow",
+    roles: ["admin"] },
   { id: "docs", label: "Documents", icon: "file", group: "Company",
     roles: ["admin", "employee"] },
   { id: "staff", label: "Team & access", icon: "users", group: "Company",
     roles: ["admin"] },
+  { id: "discord", label: "Discord", icon: "chat", group: "Company",
+    roles: ["admin"] },
+  { id: "profile", label: "My profile", icon: "user", group: "Company",
+    roles: "*" },
   { id: "chat", label: "Chat", icon: "chat", group: "Company", roles: "*" },
   { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
   { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
@@ -511,6 +604,8 @@ async function render() {
     routes: renderRoutes, promos: renderPromos, outreach: renderOutreach,
     experiments: renderExperiments, analytics: renderAnalytics,
     docs: renderDocs, staff: renderStaff, events: renderEvents,
+    profile: renderProfile, stores: renderStores,
+    email: renderEmail, discord: renderDiscord,
     hq: renderHQ, admin: renderAdmin, login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
@@ -1444,6 +1539,20 @@ async function renderChat() {
 }
 
 // ---------- notifications ----------
+/* Where each kind of alert should take you. A notification is a prompt to do
+   something; landing on the screen where you do it is the whole point. */
+const NOTIF_TAB = {
+  order: "orders", inventory: "inventory", logistics: "routes",
+  affiliate: "affiliates", analytics: "analytics",
+  experiment: "experiments", achievement: "profile",
+  document: "docs", ticket: "chat", enquiry: "outreach",
+};
+const NOTIF_LABEL = {
+  order: "open orders", inventory: "open inventory", logistics: "open routes",
+  affiliate: "open affiliates", analytics: "open analytics",
+  experiment: "open experiments", achievement: "see your profile",
+  document: "open documents", ticket: "open chat", enquiry: "open outreach",
+};
 
 async function fetchNotifs() {
   if (!S.user) return;
@@ -1511,14 +1620,25 @@ async function toggleNotifPanel() {
         title="get these on this device even with the app closed">
         Enable push</button></h3>` +
     (items.length ? items.map((i) => `
-      <div class="notif ${i.is_read ? "" : "unread"}">
+      <div class="notif ${i.is_read ? "" : "unread"} ${
+        NOTIF_TAB[i.kind] ? "clickable" : ""}"
+        ${NOTIF_TAB[i.kind] ? `data-ngo="${i.kind}"` : ""}>
         <div>${esc(i.title)}</div>
         ${i.body ? `<div class="dim" style="font-size:12px">${esc(i.body)}</div>` : ""}
-        <div class="dim" style="font-size:11px">${timeAgo(i.created_at)}</div>
+        <div class="dim" style="font-size:11px">${timeAgo(i.created_at)}${
+          NOTIF_TAB[i.kind] ? " · " + NOTIF_LABEL[i.kind] : ""}</div>
       </div>`).join("")
     : '<div class="dim">nothing yet</div>');
   document.body.appendChild(panel);
   $("#push-btn").onclick = enablePush;
+  // A notification that tells you something happened but not where to deal
+  // with it makes you hunt for the tab. Each kind knows its own destination.
+  panel.querySelectorAll("[data-ngo]").forEach((el) => el.onclick = () => {
+    const tab = NOTIF_TAB[el.dataset.ngo];
+    panel.remove();
+    if (tab && tab !== S.tab) { S.tab = tab; render(); }
+    else if (tab) render();
+  });
   if (S.notifs && S.notifs.unread) {
     await api("/api/notifications/read", { body: {} }).catch(() => {});
     S.notifs.items.forEach((i) => { i.is_read = 1; });
@@ -1863,7 +1983,7 @@ async function renderHQ() {
     <h3>Achievements — ${earned.length}/${ach.length}</h3>
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(190px,1fr))">
       ${ach.map((a) => `<div class="card ach ${a.unlocked_at ? "" : "locked"}">
-        <div style="font-size:26px">${a.icon}</div>
+        <div class="ach-ic">${opsIcon(a.icon || "shield2")}</div>
         <b>${esc(a.name)}</b>
         <div class="dim" style="font-size:12px">${esc(a.desc)}</div>
         ${a.unlocked_at
@@ -2684,7 +2804,7 @@ async function renderDocs() {
       || '<div class="card empty"><span class="e-ic">' + opsIcon("file")
        + '</span><b>Nothing filed yet</b><p class="dim">Upload a contract or write one here, then send it for signature.</p></div>'}</div>`;
 
-  $("#doc-new").onclick = docForm;
+  $("#doc-new").onclick = () => docForm(null);
   let t;
   $("#doc-q").oninput = (e) => { clearTimeout(t);
     t = setTimeout(() => { S.docQ = e.target.value; renderDocs(); }, 250); };
@@ -2713,6 +2833,7 @@ function docRow(d) {
       ${state} ${exp}
       ${d.has_file ? `<a class="btn alt sm" href="/api/store/admin/documents/${d.id}/file"
         title="download">download</a>` : ""}
+      <button class="btn alt sm" data-docedit="${d.id}">Edit</button>
       <button class="btn alt sm" data-sign="${d.id}">${opsIcon("pen","btn-ic")} Sign</button>
     </div>
     ${sigs.length ? `<div class="sig-rows">${sigs.map((s) => `
@@ -2729,6 +2850,8 @@ function docRow(d) {
 }
 
 function wireDocRows() {
+  view().querySelectorAll("[data-docedit]").forEach((b) => b.onclick = () =>
+    docForm(DOCS.documents.find((x) => x.id === +b.dataset.docedit)));
   view().querySelectorAll("[data-sign]").forEach((b) => b.onclick = () =>
     signForm(+b.dataset.sign));
   view().querySelectorAll("[data-void]").forEach((b) => b.onclick = async () => {
@@ -2739,31 +2862,52 @@ function wireDocRows() {
   });
 }
 
-function docForm() {
+function docForm(d) {
   const cats = Object.entries(DOCS.categories).map(([k, v]) =>
-    `<option value="${k}">${v}</option>`).join("");
+    `<option value="${k}" ${d && d.category === k ? "selected" : ""}>${v}</option>`).join("");
   const kinds = Object.entries(DOCS.party_kinds).map(([k, v]) =>
-    `<option value="${k}">${v}</option>`).join("");
-  modal(`<h3>New document</h3>
-    <label>Title</label><input id="nd-title" placeholder="Supply agreement — Hudson DC">
+    `<option value="${k}" ${d && d.party_kind === k ? "selected" : ""}>${v}</option>`).join("");
+  const day = (t) => t ? new Date(t * 1000).toISOString().slice(0, 10) : "";
+  modal(`<h3>${d ? "Edit document" : "New document"}</h3>
+    <label>Title</label>
+    <input id="nd-title" value="${esc((d && d.title) || "")}"
+      placeholder="Supply agreement — Hudson DC">
     <div class="row2">
       <div><label>Category</label><select id="nd-cat">${cats}</select></div>
       <div><label>Concerns</label><select id="nd-kind">${kinds}</select></div>
     </div>
     <div class="row2">
-      <div><label>Party name</label><input id="nd-party"></div>
-      <div><label>Party email</label><input id="nd-email" type="email"></div>
+      <div><label>Party name</label>
+        <input id="nd-party" value="${esc((d && d.party_name) || "")}"></div>
+      <div><label>Party email</label>
+        <input id="nd-email" type="email" value="${esc((d && d.party_email) || "")}"></div>
     </div>
     <div class="row2">
-      <div><label>Effective</label><input id="nd-eff" type="date"></div>
+      <div><label>Effective</label>
+        <input id="nd-eff" type="date" value="${day(d && d.effective)}"></div>
       <div><label>Expires <span class="dim">(optional)</span></label>
-        <input id="nd-exp" type="date"></div>
+        <input id="nd-exp" type="date" value="${day(d && d.expires)}"></div>
     </div>
-    <label>File <span class="dim">(PDF, image or Office — or write the body below)</span></label>
+    <label>File ${d && d.has_file
+      ? `<span class="dim">— currently ${esc(d.filename || "attached")};
+         uploading replaces it</span>` : '<span class="dim">(PDF, image or Office)</span>'}</label>
     <input id="nd-file" type="file">
-    <label>Or write the document</label>
-    <textarea id="nd-body" rows="5" placeholder="Paste or write the agreement text. This is what a signer will see."></textarea>
-    <label>Internal notes</label><input id="nd-notes">
+    <label>${d && d.has_file ? "Notes for the reader" : "Or write the document"}</label>
+    <textarea id="nd-body" rows="5"
+      placeholder="Paste or write the agreement text. This is what a signer sees."
+      >${esc((d && d.body) || "")}</textarea>
+    <label>Internal notes</label>
+    <input id="nd-notes" value="${esc((d && d.notes) || "")}">
+    ${d ? `<label>Status</label><select id="nd-status">
+      ${["draft", "active", "superseded", "archived"].map((st) =>
+        `<option ${d.status === st ? "selected" : ""}>${st}</option>`).join("")}
+      </select>` : ""}
+    ${d && d.signatures && d.signatures.some((s) => s.status === "signed")
+      ? `<p class="dim" style="font-size:12px;margin-top:10px">This document
+         has been signed. Editing the text or replacing the file will make the
+         signing certificate report a fingerprint mismatch — which is the
+         point, but supersede it with a new document instead if you want a
+         clean record.</p>` : ""}
     <div class="modal-acts">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="nd-save">Save</button>
@@ -2771,18 +2915,25 @@ function docForm() {
   $("#nd-save").onclick = async () => {
     const title = $("#nd-title").value.trim();
     if (!title) return toast("a document needs a title");
-    const d = (v) => v ? new Date(v + "T12:00").getTime() / 1000 : 0;
+    const dt = (v) => v ? new Date(v + "T12:00").getTime() / 1000 : 0;
+    const payload = { title, category: $("#nd-cat").value,
+      party_kind: $("#nd-kind").value,
+      party_name: $("#nd-party").value.trim(),
+      party_email: $("#nd-email").value.trim(),
+      body: $("#nd-body").value, notes: $("#nd-notes").value.trim(),
+      effective: dt($("#nd-eff").value), expires: dt($("#nd-exp").value) };
     try {
-      const out = await api("/api/store/admin/documents", { body: {
-        title, category: $("#nd-cat").value, party_kind: $("#nd-kind").value,
-        party_name: $("#nd-party").value.trim(),
-        party_email: $("#nd-email").value.trim(),
-        body: $("#nd-body").value, notes: $("#nd-notes").value.trim(),
-        effective: d($("#nd-eff").value), expires: d($("#nd-exp").value) } });
+      let id = d && d.id;
+      if (d) await api(`/api/store/admin/documents/${d.id}`,
+        { method: "PATCH", body: payload });
+      else id = (await api("/api/store/admin/documents", { body: payload })).id;
+      if (d && $("#nd-status")) await api(
+        `/api/store/admin/documents/${d.id}/status`,
+        { body: { status: $("#nd-status").value } });
       const f = $("#nd-file").files[0];
       if (f) {
         const fd = new FormData(); fd.append("file", f);
-        const r = await fetch(`/api/store/admin/documents/${out.id}/file`, {
+        const r = await fetch(`/api/store/admin/documents/${id}/file`, {
           method: "POST", headers: { Authorization: "Bearer " + S.user.token },
           body: fd });
         if (!r.ok) toast("saved, but the file upload failed: "
@@ -3030,4 +3181,443 @@ function eventForm(e) {
     await api(`/api/store/admin/events/${e.id}`, { method: "DELETE" });
     closeModal(); renderEvents();
   };
+}
+
+// ---------- profile ----------
+async function renderProfile() {
+  const [me, ach, game] = await Promise.all([
+    api("/api/me"), api("/api/achievements"),
+    api("/api/game").catch(() => null)]);
+  const earned = ach.filter((a) => a.unlocked_at);
+  const locked = ach.filter((a) => !a.unlocked_at);
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>${esc(me.name)}</h2>
+        <p class="dim">${esc(me.role)}${me.is_admin ? " · owner" : ""}
+          ${me.job && me.job !== "general" ? " · " + esc(JOB_LABEL[me.job] || me.job) : ""}
+          ${me.region ? " · " + esc(me.region) : ""}</p></div>
+      <button class="btn" id="pf-edit">Edit profile</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="n">${earned.length}</div>
+        <div class="l">achievements</div>
+        <div class="d dim">of ${ach.length}</div></div>
+      ${game ? `<div class="stat"><div class="n">${esc(game.company.level)}</div>
+        <div class="l">company level</div></div>` : ""}
+      <div class="stat"><div class="n">${me.has_pin ? "set" : "—"}</div>
+        <div class="l">time-clock PIN</div>
+        <div class="d dim">${me.has_pin ? "ready to clock in" : "not set"}</div></div>
+    </div>
+
+    <div class="row">
+      <div class="card" style="flex:2;min-width:300px">
+        <h3 style="margin-top:0">Sign in on your phone</h3>
+        <p class="dim">Scan this and your phone lands signed in as you. Single
+          use, expires in a few minutes — quicker than typing a password on a
+          handset in a cold warehouse.</p>
+        <div id="pf-qr" style="text-align:center;padding:10px"></div>
+        <button class="btn alt" id="pf-qr-go">Generate a sign-in QR</button>
+      </div>
+      <div class="card" style="flex:1;min-width:220px">
+        <h3 style="margin-top:0">Account</h3>
+        <table>
+          <tr><td class="dim">Email</td><td>${esc(me.email || "—")}</td></tr>
+          <tr><td class="dim">Region</td><td>${esc(me.region || "—")}</td></tr>
+          <tr><td class="dim">Employment</td><td>${esc(me.employment || "—")}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <h3>Achievements</h3>
+    <div class="ach-grid">
+      ${earned.map((a) => `<div class="ach-card on">
+        <span class="ach-ic">${opsIcon(a.icon || "shield2")}</span>
+        <b>${esc(a.name)}</b><span class="dim">${esc(a.desc || "")}</span>
+        <span class="ach-when">${fmtDate(a.unlocked_at)}</span></div>`).join("")}
+      ${locked.map((a) => `<div class="ach-card">
+        <span class="ach-ic">${opsIcon(a.icon || "shield2")}</span>
+        <b>${esc(a.name)}</b><span class="dim">${esc(a.desc || "")}</span>
+        <span class="ach-when">${esc(a.progress || "locked")}</span></div>`)
+        .join("")}
+    </div>`;
+
+  $("#pf-edit").onclick = () => {
+    modal(`<h3>Edit profile</h3>
+      <label>Name</label><input id="me-name" value="${esc(me.name)}">
+      <label>Email</label><input id="me-email" type="email" value="${esc(me.email || "")}">
+      <div class="row2">
+        <div><label>Region</label><select id="me-region">
+          <option value="">—</option>
+          ${S.meta.regions.map((r) => `<option ${r === me.region ? "selected" : ""}>${r}</option>`).join("")}
+        </select></div>
+        <div><label>Time-clock PIN</label>
+          <input id="me-pin" inputmode="numeric" placeholder="${me.has_pin ? "leave blank to keep" : "4–8 digits"}"></div>
+      </div>
+      <p class="dim" style="font-size:12px;margin-top:10px">Role and
+        permissions aren't editable here — those are granted by an owner, not
+        chosen.</p>
+      <div class="modal-acts">
+        <button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="me-save">Save</button>
+      </div>`);
+    $("#me-save").onclick = async () => {
+      const payload = { name: $("#me-name").value, email: $("#me-email").value,
+        region: $("#me-region").value };
+      if ($("#me-pin").value.trim()) payload.pin = $("#me-pin").value.trim();
+      try {
+        await api("/api/me", { body: payload });
+        closeModal();
+        if (S.user) { S.user.name = payload.name;
+          localStorage.setItem("bc_user", JSON.stringify(S.user)); }
+        toast("Profile saved"); renderProfile(); renderChrome();
+      } catch (e) { toast(e.message); }
+    };
+  };
+  $("#pf-qr-go").onclick = async () => {
+    const out = await api("/api/me/qr", { method: "POST" });
+    $("#pf-qr").innerHTML = `${qrImg(out.url, 190)}
+      <div class="dim" style="font-size:12px;margin-top:6px">
+        expires in ${Math.round(out.expires_sec / 60)} minutes · single use</div>`;
+  };
+}
+
+// ---------- stores ----------
+async function renderStores() {
+  const stores = S._stores = await api("/api/stores");
+  const inv = await api("/api/inventory").catch(() => []);
+  const lowBy = {};
+  inv.forEach((i) => { if (i.low) lowBy[i.store_id] = (lowBy[i.store_id] || 0) + 1; });
+  const q = (S.storeQ || "").toLowerCase();
+  const shown = stores.filter((s) =>
+    !q || (s.name + " " + s.city + " " + s.region).toLowerCase().includes(q));
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Stores</h2>
+        <p class="dim">Every account, where it is, and what's low. Retail
+          shops and distribution centres.</p></div>
+      ${S.user && S.user.is_admin
+        ? `<button class="btn" id="st-new">${opsIcon("store","btn-ic")} Add store</button>` : ""}
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">${stores.length}</div><div class="l">accounts</div></div>
+      <div class="stat"><div class="n">${stores.filter((s) => s.kind === "distributor_dc").length}</div>
+        <div class="l">distribution centres</div></div>
+      <div class="stat"><div class="n">${Object.keys(lowBy).length}</div>
+        <div class="l">stores with low stock</div></div>
+    </div>
+    ${panZoomMap({ id: "stores-map", pins: stores.map((s) => ({
+      lat: s.lat, lng: s.lng, color: REGION_COLORS[s.region] || "#8b98a5",
+      size: s.kind === "distributor_dc" ? 10 : 6,
+      label: s.name, sub: s.city })) })}
+    <div class="filters">
+      <input id="st-q" placeholder="Filter stores" value="${esc(S.storeQ || "")}">
+    </div>
+    <div class="card"><table>
+      <thead><tr><th>store</th><th>city</th><th>region</th><th>kind</th>
+        <th class="num">low items</th><th>contact</th></tr></thead>
+      <tbody>${shown.map((s) => `<tr>
+        <td><b>${esc(s.name)}</b></td><td>${esc(s.city || "—")}</td>
+        <td>${esc(s.region)}</td>
+        <td>${s.kind === "distributor_dc" ? "DC" : "retail"}</td>
+        <td class="num ${lowBy[s.id] ? "low" : ""}">${lowBy[s.id] || 0}</td>
+        <td class="dim">${esc(s.contact || "—")}</td></tr>`).join("")}
+      </tbody></table></div>`;
+  let t;
+  $("#st-q").oninput = (e) => { clearTimeout(t);
+    t = setTimeout(() => { S.storeQ = e.target.value; renderStores(); }, 200); };
+  if ($("#st-new")) $("#st-new").onclick = () => {
+    modal(`<h3>Add store</h3>
+      <label>Name</label><input id="ns-name">
+      <div class="row2">
+        <div><label>City</label><input id="ns-city"></div>
+        <div><label>Region</label><select id="ns-region">
+          ${S.meta.regions.map((r) => `<option>${r}</option>`).join("")}</select></div>
+      </div>
+      <div class="row2">
+        <div><label>Latitude</label><input id="ns-lat" type="number" step="0.0001"></div>
+        <div><label>Longitude</label><input id="ns-lng" type="number" step="0.0001"></div>
+      </div>
+      <label>Kind</label><select id="ns-kind">
+        <option value="retail">Retail</option>
+        <option value="distributor_dc">Distribution centre</option></select>
+      <label>Contact</label><input id="ns-contact">
+      <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="ns-save">Add</button></div>`);
+    $("#ns-save").onclick = async () => {
+      if (!$("#ns-name").value.trim()) return toast("a store needs a name");
+      try {
+        await api("/api/admin/stores", { body: {
+          name: $("#ns-name").value.trim(), city: $("#ns-city").value.trim(),
+          region: $("#ns-region").value, kind: $("#ns-kind").value,
+          contact: $("#ns-contact").value.trim(),
+          lat: +$("#ns-lat").value || null, lng: +$("#ns-lng").value || null } });
+        closeModal(); S._stores = null; renderStores();
+      } catch (e) { toast(e.message); }
+    };
+  };
+}
+
+// ---------- email campaigns ----------
+async function renderEmail() {
+  const d = await api("/api/store/admin/email/campaigns");
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Email campaigns</h2>
+        <p class="dim">Write once, send to an audience that stays accurate on
+          its own. Orders are counted from the ledger via the campaign's
+          discount code, not from an open-tracking pixel.</p></div>
+      <button class="btn" id="em-new">${opsIcon("megaphone","btn-ic")} New campaign</button>
+    </div>
+    <div class="stats">
+      ${Object.entries(d.audiences).map(([k, label]) => `
+        <div class="stat"><div class="n">${d.sizes[k] ?? 0}</div>
+          <div class="l">${esc(label)}</div></div>`).join("")}
+      <div class="stat"><div class="n">${d.unsubscribed}</div>
+        <div class="l">unsubscribed</div></div>
+    </div>
+    ${d.campaigns.map((c) => {
+      const last = c.sends[0];
+      return `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main"><b>${esc(c.name)}</b>
+            <span class="dim">${esc(c.subject)} · ${esc(c.audience_label)}${
+              c.discount_code ? " · " + esc(c.discount_code) : ""}</span></div>
+          <span class="pill ${c.status === "sent" ? "ok" : ""}">${c.status}</span>
+          <button class="btn alt sm" data-emedit="${c.id}">Edit</button>
+          <button class="btn alt sm" data-emsend="${c.id}">Send…</button>
+        </div>
+        ${c.sends.length ? `<div class="cp-stats" style="margin-top:10px">
+          <span><b>${last.recipients}</b> recipients</span>
+          <span><b>${last.delivered}</b> delivered</span>
+          ${last.failed ? `<span class="low"><b>${last.failed}</b> failed</span>` : ""}
+          <span><b>${c.orders}</b> orders</span>
+          <span><b>${money(c.revenue_cents)}</b> revenue</span>
+          <span class="dim">last sent ${fmtDate(last.started_at)}</span>
+        </div>` : '<p class="dim" style="margin-top:8px">Never sent.</p>'}
+      </div>`;
+    }).join("") || `<div class="card empty"><span class="e-ic">${
+      opsIcon("megaphone")}</span><b>No campaigns yet</b>
+      <p class="dim">Write one, preview it, send a test to yourself, then
+        send it for real.</p></div>`}`;
+  $("#em-new").onclick = () => emailForm(null, d);
+  view().querySelectorAll("[data-emedit]").forEach((b) => b.onclick = () =>
+    emailForm(d.campaigns.find((c) => c.id === +b.dataset.emedit), d));
+  view().querySelectorAll("[data-emsend]").forEach((b) => b.onclick = () =>
+    emailSend(d.campaigns.find((c) => c.id === +b.dataset.emsend), d));
+}
+
+function emailForm(c, d) {
+  modal(`<h3>${c ? "Edit campaign" : "New campaign"}</h3>
+    <label>Name <span class="dim">(internal)</span></label>
+    <input id="ec-name" value="${esc((c && c.name) || "")}">
+    <div class="row2">
+      <div><label>Audience</label><select id="ec-aud">
+        ${Object.entries(d.audiences).map(([k, label]) =>
+          `<option value="${k}" ${c && c.audience === k ? "selected" : ""}>
+            ${esc(label)} (${d.sizes[k] ?? 0})</option>`).join("")}
+      </select></div>
+      <div><label>Discount code</label>
+        <input id="ec-code" value="${esc((c && c.discount_code) || "")}"
+          placeholder="optional"></div>
+    </div>
+    <label>Subject</label><input id="ec-subj" value="${esc((c && c.subject) || "")}">
+    <label>Body</label>
+    <textarea id="ec-body" rows="8">${esc((c && c.body) || "")}</textarea>
+    <p class="dim" style="font-size:12px;margin-top:8px">Placeholders:
+      <code>{name}</code> <code>{email}</code> <code>{code}</code>.
+      An unsubscribe link is appended to every send automatically.</p>
+    <div class="modal-acts">
+      ${c ? '<button class="btn alt" id="ec-del" style="margin-right:auto">Delete</button>' : ""}
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="ec-save">Save</button>
+    </div>`);
+  $("#ec-save").onclick = async () => {
+    const payload = { name: $("#ec-name").value, subject: $("#ec-subj").value,
+      body: $("#ec-body").value, audience: $("#ec-aud").value,
+      discount_code: $("#ec-code").value };
+    try {
+      if (c) await api(`/api/store/admin/email/campaigns/${c.id}`,
+        { method: "PATCH", body: payload });
+      else await api("/api/store/admin/email/campaigns", { body: payload });
+      closeModal(); renderEmail();
+    } catch (e) { toast(e.message); }
+  };
+  if (c && $("#ec-del")) $("#ec-del").onclick = async () => {
+    if (!confirm(`Delete "${c.name}"?`)) return;
+    await api(`/api/store/admin/email/campaigns/${c.id}`, { method: "DELETE" });
+    closeModal(); renderEmail();
+  };
+}
+
+async function emailSend(c) {
+  const p = await api(`/api/store/admin/email/campaigns/${c.id}/preview`);
+  modal(`<h3>Send "${esc(c.name)}"</h3>
+    <p class="dim">Going to <b>${p.recipients}</b> people
+      (${esc(c.audience_label)}). Unsubscribes are removed at send time.</p>
+    <div class="card" style="background:var(--bg)">
+      <div class="dim" style="font-size:11px">SUBJECT</div>
+      <b>${esc(p.subject)}</b>
+      <div class="dim" style="font-size:11px;margin-top:10px">BODY</div>
+      <div style="white-space:pre-wrap;font-size:13px">${esc(p.body)}</div>
+    </div>
+    <label>Send a test first</label>
+    <div class="row2">
+      <input id="es-test" type="email" placeholder="you@example.com">
+      <button class="btn alt" id="es-testgo">Send test</button>
+    </div>
+    <div class="modal-acts">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="es-go">Send to ${p.recipients} people</button>
+    </div>
+    <p class="msg" id="es-msg"></p>`);
+  $("#es-testgo").onclick = async () => {
+    try {
+      await api(`/api/store/admin/email/campaigns/${c.id}/send`,
+        { body: { test_to: $("#es-test").value.trim() } });
+      $("#es-msg").textContent = "Test sent.";
+    } catch (e) { $("#es-msg").textContent = e.message; }
+  };
+  $("#es-go").onclick = async () => {
+    if (!confirm(`Send to ${p.recipients} people? This can't be undone.`)) return;
+    try {
+      const out = await api(`/api/store/admin/email/campaigns/${c.id}/send`,
+        { body: {} });
+      closeModal();
+      toast(`Sending to ${out.recipients} people…`);
+      setTimeout(renderEmail, 2500);
+    } catch (e) { $("#es-msg").textContent = e.message; }
+  };
+}
+
+// ---------- discord ----------
+async function renderDiscord() {
+  const d = await api("/api/store/admin/discord");
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Discord</h2>
+        <p class="dim">Let the business talk to the room the team already
+          sits in. A webhook per channel, then rules deciding what goes where
+          — no bot to run and no server-wide token to leak.</p></div>
+      <button class="btn" id="dc-add">Add channel</button>
+    </div>
+
+    <h3>Channels</h3>
+    ${d.channels.map((c) => `<div class="card">
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(c.label)}</b>
+          <span class="dim">webhook stored · added ${fmtDate(c.created_at)}</span></div>
+        <span class="pill ${c.active ? "ok" : ""}">${c.active ? "active" : "off"}</span>
+        <button class="btn alt sm" data-dctest="${c.id}">Send test</button>
+        <button class="btn alt sm" data-dcdel="${c.id}">Remove</button>
+      </div></div>`).join("") || `<div class="card empty"><span class="e-ic">${
+        opsIcon("chat")}</span><b>No channels yet</b>
+        <p class="dim">In Discord: Server settings → Integrations → Webhooks →
+          New webhook, then paste the URL here.</p></div>`}
+
+    ${d.channels.length ? `
+      <div class="page-head" style="margin-top:22px">
+        <div><h3 style="margin:0">Rules</h3></div>
+        <button class="btn" id="dc-rule">Add rule</button>
+      </div>
+      ${d.rules.map((r) => `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main">
+            <b>${esc(d.events[r.event] || r.event)} → ${esc(r.channel_label)}</b>
+            <span class="dim">${r.condition_field
+              ? `only when ${esc(r.condition_field)} ${esc(r.condition_op)} ${esc(r.condition_value)}`
+              : "every time"} · fired ${r.fired}×${
+              r.last_fired ? " · last " + fmtDate(r.last_fired) : ""}</span>
+          </div>
+          <label class="perm" style="border:none;padding:0">
+            <input type="checkbox" data-dcon="${r.id}" ${r.active ? "checked" : ""}>
+            <span><b>on</b></span></label>
+          <button class="btn alt sm" data-dcruledel="${r.id}">Remove</button>
+        </div></div>`).join("") || '<p class="dim">No rules yet.</p>'}` : ""}
+
+    ${d.log.length ? `<h3>Recent deliveries</h3>
+      <div class="card"><table>
+        <thead><tr><th>when</th><th>event</th><th>result</th></tr></thead>
+        <tbody>${d.log.map((l) => `<tr>
+          <td class="dim">${fmtDate(l.created_at)}</td>
+          <td>${esc(l.event)}</td>
+          <td>${l.ok ? '<span class="pill ok">sent</span>'
+            : `<span class="pill bad">failed</span> <span class="dim">${esc(l.detail)}</span>`}</td>
+        </tr>`).join("")}</tbody></table></div>` : ""}`;
+
+  $("#dc-add").onclick = () => {
+    modal(`<h3>Add a Discord channel</h3>
+      <p class="dim">In Discord: <b>Server settings → Integrations → Webhooks
+        → New webhook</b>. Pick the channel, copy the URL, paste it here.</p>
+      <label>Label</label><input id="dc-label" placeholder="#orders">
+      <label>Webhook URL</label>
+      <input id="dc-url" placeholder="https://discord.com/api/webhooks/...">
+      <p class="dim" style="font-size:12px;margin-top:8px">Anyone with this URL
+        can post to the channel, so it's stored as a secret and never shown
+        again after saving.</p>
+      <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="dc-save">Add</button></div>`);
+    $("#dc-save").onclick = async () => {
+      try {
+        await api("/api/store/admin/discord/channels", { body: {
+          label: $("#dc-label").value, webhook: $("#dc-url").value } });
+        closeModal(); renderDiscord();
+      } catch (e) { toast(e.message); }
+    };
+  };
+  if ($("#dc-rule")) $("#dc-rule").onclick = () => {
+    modal(`<h3>Add a rule</h3>
+      <div class="row2">
+        <div><label>When this happens</label><select id="dr-event">
+          ${Object.entries(d.events).map(([k, v]) =>
+            `<option value="${k}">${esc(v)}</option>`).join("")}</select></div>
+        <div><label>Post to</label><select id="dr-chan">
+          ${d.channels.map((c) => `<option value="${c.id}">${esc(c.label)}</option>`).join("")}
+        </select></div>
+      </div>
+      <label>Only when <span class="dim">(optional)</span></label>
+      <div class="row2">
+        <input id="dr-field" placeholder="field, e.g. total_cents">
+        <select id="dr-op"><option value="">—</option>
+          ${d.ops.map((o) => `<option>${o}</option>`).join("")}</select>
+        <input id="dr-val" placeholder="value">
+      </div>
+      <label>Message <span class="dim">(blank uses the default)</span></label>
+      <input id="dr-tpl" placeholder="">
+      <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="dr-save">Add rule</button></div>`);
+    $("#dr-event").onchange = () => {
+      $("#dr-tpl").placeholder = d.defaults[$("#dr-event").value] || "";
+    };
+    $("#dr-event").onchange();
+    $("#dr-save").onclick = async () => {
+      try {
+        await api("/api/store/admin/discord/rules", { body: {
+          channel_id: +$("#dr-chan").value, event: $("#dr-event").value,
+          condition_field: $("#dr-field").value,
+          condition_op: $("#dr-op").value,
+          condition_value: $("#dr-val").value,
+          template: $("#dr-tpl").value } });
+        closeModal(); renderDiscord();
+      } catch (e) { toast(e.message); }
+    };
+  };
+  view().querySelectorAll("[data-dctest]").forEach((b) => b.onclick = async () => {
+    try { await api(`/api/store/admin/discord/channels/${b.dataset.dctest}/test`,
+      { method: "POST" }); toast("Test posted to Discord"); renderDiscord(); }
+    catch (e) { toast(e.message); }
+  });
+  view().querySelectorAll("[data-dcdel]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Remove this channel and its rules?")) return;
+    await api(`/api/store/admin/discord/channels/${b.dataset.dcdel}`,
+      { method: "DELETE" }); renderDiscord();
+  });
+  view().querySelectorAll("[data-dcruledel]").forEach((b) => b.onclick = async () => {
+    await api(`/api/store/admin/discord/rules/${b.dataset.dcruledel}`,
+      { method: "DELETE" }); renderDiscord();
+  });
+  view().querySelectorAll("[data-dcon]").forEach((c) => c.onchange = async () => {
+    await api(`/api/store/admin/discord/rules/${c.dataset.dcon}`,
+      { method: "PATCH", body: { active: c.checked } }); renderDiscord();
+  });
 }

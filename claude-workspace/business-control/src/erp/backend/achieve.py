@@ -26,58 +26,61 @@ def _golden(con, cfg):
     return best >= 0.75, f"best region {int(best * 100)}%/75% penetration"
 
 
+# The fourth field is a name in the shared ops icon sprite, not a picture.
+# An emoji renders as a different drawing on every platform and reads as a
+# toy; these are the same marks the rest of the back office uses.
 DEFS = [
-    ("first_sale", "First Sale", "Take your first order", "🧾",
+    ("first_sale", "First Sale", "Take your first order", "cart",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM orders WHERE"
                              " status!='cancelled'"), 1, "orders")),
-    ("century_club", "Century Club", "100 orders on the books", "💯",
+    ("century_club", "Century Club", "100 orders on the books", "box",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM orders WHERE"
                              " status!='cancelled'"), 100, "orders")),
-    ("grand", "First Grand", "$1,000 in lifetime revenue", "💵",
+    ("grand", "First Grand", "$1,000 in lifetime revenue", "card",
      lambda c, f: _prog(_n(c, "SELECT COALESCE(SUM(subtotal_cents),0) FROM"
                              " orders WHERE status!='cancelled'") // 100,
                         1000, "dollars")),
-    ("big_time", "Big Time", "$10,000 in lifetime revenue", "🏦",
+    ("big_time", "Big Time", "$10,000 in lifetime revenue", "bag",
      lambda c, f: _prog(_n(c, "SELECT COALESCE(SUM(subtotal_cents),0) FROM"
                              " orders WHERE status!='cancelled'") // 100,
                         10000, "dollars")),
-    ("ab_pioneer", "Lab Coat", "Launch your first A/B experiment", "🧪",
+    ("ab_pioneer", "Lab Coat", "Launch your first A/B experiment", "flask",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM experiments"), 1,
                         "experiments")),
     ("proven_winner", "Proven Winner", "Finish an experiment with a winner",
-     "🏁",
+     "shield2",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM experiments WHERE"
                              " status='done' AND winner_variant_id IS NOT"
                              " NULL"), 1, "winners")),
     ("influencer_army", "Influencer Army", "3 affiliates spreading the word",
-     "📣",
+     "megaphone",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM affiliates"), 3,
                         "affiliates")),
-    ("word_of_mouth", "Word of Mouth", "First affiliate-referred order", "🗣️",
+    ("word_of_mouth", "Word of Mouth", "First affiliate-referred order", "chat",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM referrals"), 1,
                         "referred orders")),
-    ("road_warrior", "Road Warrior", "Complete your first route", "🚚",
+    ("road_warrior", "Road Warrior", "Complete your first route", "truck",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM routes WHERE"
                              " status='done'"), 1, "routes")),
-    ("long_haul", "Long Haul", "1,000 km of completed routes", "🛣️",
+    ("long_haul", "Long Haul", "1,000 km of completed routes", "dsd",
      lambda c, f: _prog(int(_n(c, "SELECT COALESCE(SUM(total_km),0) FROM"
                                   " routes WHERE status='done'")), 1000, "km")),
-    ("shelf_space", "Shelf Space", "15 stores carrying the brand", "🏪",
+    ("shelf_space", "Shelf Space", "15 stores carrying the brand", "store",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM stores WHERE active=1"),
                         15, "stores")),
-    ("full_crew", "Full Crew", "3 employees on the time clock", "👥",
+    ("full_crew", "Full Crew", "3 employees on the time clock", "users",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM users WHERE"
                              " role='employee' AND active=1"), 3, "employees")),
     ("event_horizon", "Event Horizon", "Staff your first in-person event",
-     "🎪",
+     "calendar",
      lambda c, f: _prog(_n(c, "SELECT COUNT(*) FROM shifts WHERE event_id"
                              " IS NOT NULL"), 1, "event shifts")),
-    ("promo_hit", "Promo Hit", "One promo QR scanned 25 times", "🔥",
+    ("promo_hit", "Promo Hit", "One promo QR scanned 25 times", "tag",
      lambda c, f: _prog(_n(c, "SELECT COALESCE(MAX(n),0) FROM (SELECT"
                              " COUNT(*) n FROM promo_scans GROUP BY"
                              " promo_id)"), 25, "scans")),
     ("golden_region", "Golden Territory",
-     "Push any region to 75% market penetration", "🥇", _golden),
+     "Push any region to 75% market penetration", "pin", _golden),
 ]
 
 
@@ -94,7 +97,7 @@ def check(con, cfg) -> list[dict]:
             con.execute("INSERT OR IGNORE INTO achievements(key, unlocked_at)"
                         " VALUES(?,?)", (key, at))
             con.commit()
-            notify.push(con, f"🏆 Achievement unlocked: {name}", desc,
+            notify.push(con, f"Achievement unlocked: {name}", desc,
                         kind="achievement", dedup=f"ach:{key}")
         out.append({"key": key, "name": name, "desc": desc, "icon": icon,
                     "progress": "done" if at else progress,

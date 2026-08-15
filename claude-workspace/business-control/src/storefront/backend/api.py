@@ -502,8 +502,9 @@ def init_tables():
                 "INSERT INTO store_shipping_methods(name,price_cents,eta,"
                 " position) VALUES ('Standard',599,'3–5 business days',0),"
                 " ('Express',1499,'1–2 business days',1)")
-        from . import (affiliates, campaigns, content, crud, documents,
-                       governance, partners, pixels, promos, support)
+        from . import (affiliates, campaigns, content, crud, discord,
+                       documents, emailer, governance, partners,
+                       pixels, promos, support)
         promos.init_tables(con)
         content.init_tables(con)
         governance.init_tables(con)
@@ -514,6 +515,8 @@ def init_tables():
         campaigns.init_tables(con)
         documents.init_tables(con)
         crud.init_tables(con)
+        discord.init_tables(con)
+        emailer.init_tables(con)
         ensure_search_index(con)
         # Self-heal: a stale index from an older build makes any write to
         # products fail. Probe with a rolled-back no-op and rebuild if needed.
@@ -578,6 +581,13 @@ def rate_limit(request: Request):
 
 
 def fire_webhooks(event: str, payload: dict):
+    # Discord rules watch the same events as HTTP webhooks. Doing it here
+    # means every emitter gets Discord for free instead of each remembering.
+    try:
+        from . import discord as _dc
+        _dc.emit(event, payload)
+    except Exception:
+        pass
     """POST the payload to every active webhook for the event, off-thread.
     Bodies are HMAC-SHA256 signed (X-Store-Signature) with the store's
     webhook secret so receivers can verify authenticity."""

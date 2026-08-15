@@ -103,13 +103,13 @@ def sweep(con, cfg) -> None:
     for c in con.execute("SELECT * FROM box_cycles WHERE closed=0").fetchall():
         m = c["month"]
         checks = (
-            (c["bill_date"], "bill", f"📅 Cycle {m}: billing day — charges run"
+            (c["bill_date"], "bill", f"Cycle {m}: billing day — charges run"
              " today; watch dunning outcomes before allocating"),
-            (c["dunning_close"], "dun", f"📅 Cycle {m}: dunning window closes"
+            (c["dunning_close"], "dun", f"Cycle {m}: dunning window closes"
              " today — final billed count is now trustworthy"),
-            (c["curation_lock"], "lock", f"🔒 Cycle {m}: curation LOCKS today"
+            (c["curation_lock"], "lock", f"Cycle {m}: curation LOCKS today"
              " — subscriber skip/swap closes, allocate the box"),
-            (c["ship_date"], "ship", f"🚚 Cycle {m}: ship day"),
+            (c["ship_date"], "ship", f"Cycle {m}: ship day"),
         )
         for date, key, msg in checks:
             if date == tomorrow:
@@ -119,7 +119,7 @@ def sweep(con, cfg) -> None:
                 notify.push(con, msg, kind="cycle", dedup=f"cyc:{m}:{key}")
         if (t >= c["curation_lock"] and c["billed_count"] > 0
                 and c["allocated_count"] < c["billed_count"]):
-            notify.push(con, f"⚠️ Cycle {m}: allocation short — "
+            notify.push(con, f"Cycle {m}: allocation short — "
                         f"{c['allocated_count']}/{c['billed_count']} boxes"
                         " allocated after curation lock",
                         kind="cycle", dedup=f"cyc:{m}:short:{t}")

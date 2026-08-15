@@ -86,6 +86,8 @@ PATH_RULES = [
     ("/api/store/admin/signatures", "documents"),
     ("/api/store/admin/comments", "content"),
     ("/api/store/admin/page-funnel", "analytics"),
+    ("/api/store/admin/discord", "settings"),
+    ("/api/store/admin/email", "marketing"),
 ]
 
 

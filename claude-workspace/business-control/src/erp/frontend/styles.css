@@ -186,8 +186,6 @@ button.btn:disabled { opacity: .55; cursor: wait; transform: none; }
 .kanban .item { background: var(--panel2); border-radius: 8px; padding: 8px;
   margin-bottom: 8px; font-size: 13px; cursor: pointer; }
 
-.map { width: 100%; background: #0c1013; border: 1px solid var(--line);
-  border-radius: var(--r); }
 form.inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12px;
   color: var(--dim); }
@@ -441,11 +439,12 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
   margin: 10px 0; }
 .map { width: 100%; display: block; cursor: grab; touch-action: none; }
 .map.grab { cursor: grabbing; }
-.map-land { fill: #161b22; stroke: #2a333f; stroke-width: 1.6;
+/* Land has to read against the water at a glance — at low contrast the
+   coastline disappears under the pins and the map looks like scattered dots. */
+.map-land { fill: #1c242e; stroke: #46566a; stroke-width: 1.2;
   stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .map-leg { stroke: #8a6ff0; stroke-width: 2; stroke-opacity: .65;
   stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
-.map-pin { transform-box: fill-box; }
 .map-pin .halo { opacity: .16; }
 .map-pin .dot { stroke: #0b0e12; stroke-width: 1.5;
   vector-effect: non-scaling-stroke; }
@@ -507,3 +506,21 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .card.dim-card { opacity: .58; }
 
 @media (max-width: 1100px) { #store-rail { display: none; } }
+
+/* ---------- profile ---------- */
+.ach-grid { display: grid; gap: 10px; margin-top: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.ach-card { background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 13px 15px; opacity: .5; }
+.ach-card.on { opacity: 1; border-color: var(--accent); }
+.ach-card b { display: block; font-size: 14px; font-weight: 600; }
+.ach-ic { display: block; margin-bottom: 8px; color: var(--dim); }
+.ach-ic svg { width: 22px; height: 22px; }
+.ach-card.on .ach-ic { color: var(--accent); }
+.ach-card .dim { font-size: 12px; display: block; margin-top: 2px; }
+.ach-when { font-size: 11px; color: var(--dim); display: block; margin-top: 6px;
+  letter-spacing: .06em; text-transform: uppercase; }
+
+/* clickable notifications */
+.notif.clickable { cursor: pointer; }
+.notif.clickable:hover { background: var(--panel2); }

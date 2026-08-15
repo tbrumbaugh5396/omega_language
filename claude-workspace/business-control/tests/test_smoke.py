@@ -1,6 +1,7 @@
 """Script-style smoke test over a throwaway database: exercises login, orders
 (retail + wholesale pricing), time clock, A/B assignment + results, affiliates,
 inventory, route planning, funnel analytics, and outreach."""
+import json
 import os
 import sys
 import tempfile
@@ -1026,4 +1027,137 @@ ok("dm-name" in _ops, "chat can start a DM by typing a name")
 _acss = c.get("/store.css").text
 ok(".cmt-form" in _acss, "comment form is styled")
 
+# --- own profile ---
+_me = c.get("/api/me", headers=A).json()
+ok(_me["name"] == "Boss" and "permissions" not in _me, "profile reads back")
+ok(c.post("/api/me", headers=A, json={"name": "Boss Prime"}
+          ).status_code == 200, "own name is editable")
+ok(c.get("/api/me", headers=A).json()["name"] == "Boss Prime", "the edit stuck")
+ok(c.post("/api/me", headers=A, json={"name": "x"}).status_code == 400,
+   "a one-character name is refused")
+ok(c.post("/api/me", headers=A, json={"pin": "abc"}).status_code == 400,
+   "a non-numeric PIN is refused")
+ok(c.post("/api/me", headers=A, json={"pin": "9876"}).status_code == 400,
+   "a PIN already used by someone else is refused")
+_qr = c.post("/api/me/qr", headers=A).json()
+ok("/qr-login/" in _qr["url"] and _qr["expires_sec"] > 0,
+   "own sign-in QR issued, short-lived")
+ok(c.get(_qr["url"].split("://", 1)[-1].split("/", 1)[-1].join(("/", "")),
+         follow_redirects=False).status_code in (200, 307),
+   "the QR link resolves")
+
+# --- discord ---
+ok(c.get("/api/store/admin/discord").status_code == 403, "discord needs admin")
+_dc = c.get("/api/store/admin/discord", headers=A).json()
+ok(len(_dc["events"]) >= 8 and "webhook" not in json.dumps(_dc["channels"]),
+   "discord config never returns the webhook secret")
+for _bad in ("http://evil.example/api/webhooks/1/x",
+             "https://discord.com.evil.example/api/webhooks/1/x",
+             "https://192.168.1.1/api/webhooks/1/x", "not-a-url"):
+    ok(c.post("/api/store/admin/discord/channels", headers=A,
+              json={"label": "#x", "webhook": _bad}).status_code == 400,
+       f"non-Discord webhook rejected: {_bad[:34]}")
+_ch = c.post("/api/store/admin/discord/channels", headers=A, json={
+    "label": "#orders",
+    "webhook": "https://discord.com/api/webhooks/123456789/abcDEF-123_xyz"})
+ok(_ch.status_code == 200, "a real Discord webhook URL is accepted")
+_chid = _ch.json()["id"]
+ok(c.post("/api/store/admin/discord/rules", headers=A, json={
+    "channel_id": _chid, "event": "nope"}).status_code == 400,
+   "unknown discord event rejected")
+_r = c.post("/api/store/admin/discord/rules", headers=A, json={
+    "channel_id": _chid, "event": "order.created",
+    "condition_field": "total_cents", "condition_op": "gt",
+    "condition_value": "5000"})
+ok(_r.status_code == 200, "discord rule created with a condition")
+from storefront.backend import discord as _dcm  # noqa: E402
+_rule = {"condition_field": "total_cents", "condition_op": "gt",
+         "condition_value": "5000"}
+ok(_dcm._matches(_rule, {"total_cents": 9000}), "condition matches above")
+ok(not _dcm._matches(_rule, {"total_cents": 900}), "condition filters below")
+ok(not _dcm._matches(_rule, {}), "a missing field doesn't fire the rule")
+
+# --- email campaigns ---
+ok(c.get("/api/store/admin/email/campaigns").status_code == 403,
+   "email campaigns need the marketing permission")
+_ec = c.post("/api/store/admin/email/campaigns", headers=A, json={
+    "name": "Autumn", "subject": "Hello {name}", "body": "Use {code}",
+    "audience": "subscribers", "discount_code": "AUTUMN"})
+ok(_ec.status_code == 200, "campaign created")
+_ecid = _ec.json()["id"]
+ok(c.post("/api/store/admin/email/campaigns", headers=A, json={
+    "name": "x", "subject": "y", "body": "", "audience": "nope"}
+).status_code == 400, "unknown audience rejected")
+c.post("/api/store/subscribe", json={"email": "sub@example.com"})
+_prev = c.get(f"/api/store/admin/email/campaigns/{_ecid}/preview",
+              headers=A).json()
+ok("{name}" not in _prev["subject"] and "{code}" not in _prev["body"],
+   "preview fills the placeholders")
+ok(_prev["recipients"] >= 1, "the audience resolves to real recipients")
+_u = c.get("/unsubscribe?email=sub@example.com")
+ok(_u.status_code == 200 and "unsubscribed" in _u.text.lower(),
+   "one-click unsubscribe works without a login")
+_prev2 = c.get(f"/api/store/admin/email/campaigns/{_ecid}/preview",
+               headers=A).json()
+ok(_prev2["recipients"] == _prev["recipients"] - 1,
+   "an unsubscribe is removed from the audience")
+ok(any(x["email"] == "sub@example.com" for x in
+       c.get("/api/store/admin/email/unsubscribes", headers=A).json()),
+   "unsubscribes are listed")
+
+# --- ops app views ---
+_ops = c.get("/ops/app.js").text
+ok("renderProfile" in _ops and "renderStores" in _ops
+   and "renderEmail" in _ops and "renderDiscord" in _ops,
+   "ops app has profile, stores, email and discord views")
+ok("NOTIF_TAB" in _ops, "notifications map to a destination tab")
+ok("data-docedit" in _ops, "documents are editable")
+ok("WORLD_PATH" in _ops and "HOME_VIEW" in _ops,
+   "the map is a world projection opening on the US")
+
+ok(".pin-s" in _ops and "scale(${(1 / k)" in _ops,
+   "map pins counter-scale so a dot stays a dot when zoomed")
+
+# The achievement card reads the payload's own field names. Rendering
+# a.title against a payload keyed "name" fails silently — a grid of
+# correctly-styled blanks — so pin the contract rather than the markup.
+_ach = c.get("/api/achievements", headers=A).json()
+ok(_ach and {"name", "desc", "icon"} <= set(_ach[0]),
+   "achievements are keyed name/desc/icon")
+ok("esc(a.name)" in _ops and "opsIcon(a.icon" in _ops,
+   "the achievement card renders those field names")
+ok(all(a["icon"].isascii() and a["icon"].isalnum() for a in _ach),
+   "achievement icons are sprite names, not emoji")
+
+# --- no emoji in the back office ---
+# The ERP is meant to read as a tool, not a toy, and an emoji renders as a
+# different drawing on every platform. This covers the back-office chrome and
+# anything that lands in the notification bell. Customer-facing email and SMS
+# copy is a different voice and keeps its warmth; typographic marks (arrows,
+# ticks) are deliberate and stay.
+import pathlib as _pl, re as _re
+# The pictographic planes, plus the handful of legacy pictographs that read
+# as emoji. Ticks, crosses, arrows and stars are typography, not emoji.
+_EMOJI = _re.compile("[\U0001F000-\U0001FAFF\u2728\u26A0\u2753\u2705\u2B50]")
+_hits = []
+for _f in sorted(_pl.Path("src/erp").rglob("*")):
+    if not _f.is_file():
+        continue
+    _front = _f.suffix in (".js", ".css", ".html")
+    if not _front and _f.suffix != ".py":
+        continue
+    _lines = _f.read_text(errors="replace").splitlines()
+    for _i, _line in enumerate(_lines, 1):
+        if not _EMOJI.search(_line):
+            continue
+        # In backend Python only the notification titles are in scope — find
+        # the call this line belongs to by looking back a few lines.
+        if not _front:
+            _ctx = " ".join(_lines[max(0, _i - 4):_i])
+            if "notify.push(" not in _ctx and "push.send(" not in _ctx:
+                continue
+        _hits.append(f"{_f}:{_i}")
+ok(not _hits,
+   "no emoji in the back office chrome or notifications"
+   + (" — " + ", ".join(_hits[:4]) if _hits else ""))
 print(f"\nall {checks} checks passed")

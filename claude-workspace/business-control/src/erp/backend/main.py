@@ -230,6 +230,74 @@ def qr_svg(data: str):
                     headers={"Cache-Control": "no-store"})
 
 
+class MeBody(BaseModel):
+    name: str | None = None
+    email: str | None = None
+    region: str | None = None
+    pin: str | None = None
+
+
+@app.get("/api/me")
+def read_me(user=Depends(current_user), con=Depends(get_con)):
+    """Your own profile. Separate from the admin user endpoints, which
+    deliberately refuse to edit the caller's own account — that guard exists
+    to stop someone granting themselves a role, and it shouldn't also stop
+    them fixing a typo in their name."""
+    return {"id": user["id"], "name": user["name"], "email": user["email"],
+            "role": user["role"], "job": user["job"],
+            "region": user["region"], "is_admin": bool(user["is_admin"]),
+            "employment": user["employment"],
+            "has_pin": bool((user["pin"] or "").strip())}
+
+
+@app.post("/api/me")
+def update_me(body: MeBody, user=Depends(current_user), con=Depends(get_con)):
+    """Name, email, region and time-clock PIN only. Role, job and admin are
+    deliberately absent — those are grants, not preferences, and a user who
+    can change their own role can promote themselves."""
+    fields, args = [], []
+    if body.name is not None:
+        n = body.name.strip()
+        if len(n) < 2:
+            raise HTTPException(400, "name is too short")
+        fields.append("name=?"); args.append(n[:80])
+    if body.email is not None:
+        e = body.email.strip()
+        if e and "@" not in e:
+            raise HTTPException(400, "that email doesn't look right")
+        fields.append("email=?"); args.append(e[:120])
+    if body.region is not None:
+        fields.append("region=?"); args.append(body.region.strip()[:40])
+    if body.pin is not None:
+        pin = body.pin.strip()
+        if pin and (not pin.isdigit() or not 4 <= len(pin) <= 8):
+            raise HTTPException(400, "PIN must be 4–8 digits")
+        if pin and con.execute(
+                "SELECT 1 FROM users WHERE pin=? AND id!=?",
+                (pin, user["id"])).fetchone():
+            raise HTTPException(400, "that PIN is already taken")
+        fields.append("pin=?"); args.append(pin)
+    if not fields:
+        return {"ok": True}
+    args.append(user["id"])
+    con.execute(f"UPDATE users SET {', '.join(fields)} WHERE id=?", tuple(args))
+    con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/me/qr")
+def my_qr_login(user=Depends(current_user), con=Depends(get_con)):
+    """A sign-in QR for your own phone. Same single-use, short-lived token as
+    the admin-issued one — scanning it on a handset saves typing a password
+    into a cracked screen in a cold warehouse."""
+    token = secrets.token_urlsafe(24)
+    ttl = CFG.get("qr_login_ttl_sec", 600)
+    con.execute("INSERT INTO login_tokens(token,user_id,expires_at)"
+                " VALUES(?,?,?)", (token, user["id"], db.now() + ttl))
+    con.commit()
+    return {"url": f"{base_url()}/qr-login/{token}", "expires_sec": ttl}
+
+
 @app.post("/api/admin/users/{uid}/qr")
 def qr_login_link(uid: int, user=Depends(admin_user), con=Depends(get_con)):
     """One-time sign-in link for a user — render it as a QR, they scan it on
@@ -550,7 +618,7 @@ def confirm_payment(oid: int, body: ConfirmPayBody,
         raise HTTPException(402, "payment not confirmed yet")
     con.execute("UPDATE orders SET payment_status='paid' WHERE id=?", (oid,))
     con.commit()
-    notify.push(con, f"💳 Order #{oid} paid — "
+    notify.push(con, f"Order #{oid} paid — "
                      f"${o['total_cents'] / 100:,.2f}", kind="order")
     return {"ok": True, "status": "paid"}
 
@@ -660,7 +728,7 @@ def _consume_stock(con, o) -> None:
                 (sid, o["id"]))
     con.commit()
     if shorts:
-        notify.push(con, f"⚠️ Order #{o['id']} shipped short-stocked",
+        notify.push(con, f"Order #{o['id']} shipped short-stocked",
                     "; ".join(shorts), kind="inventory")
 
 
@@ -1549,7 +1617,7 @@ def shopify_bill_run(body: BillRunBody, user=Depends(admin_user),
     if c is None:
         raise HTTPException(404, "create the box cycle first")
     result = shopify_sub.bill_run(con, CFG, body.cycle_month)
-    notify.push(con, f"💳 Bill run {body.cycle_month}: "
+    notify.push(con, f"Bill run {body.cycle_month}: "
                      f"{result['attempted']} attempted, "
                      f"{result['billed_success']} succeeded"
                      f" ({result['mode']})", kind="cycle")
@@ -1676,7 +1744,7 @@ async def chat_send(cid: int, body: MessageBody, user=Depends(current_user),
     offline = [u for u in aud if u not in chat.online_ids()
                and u != user["id"]]
     if offline:
-        push.send(CFG, f"💬 {user['name']}: {text[:90]}", user_ids=offline)
+        push.send(CFG, f"{user['name']}: {text[:90]}", user_ids=offline)
     return m
 
 
@@ -1737,7 +1805,7 @@ async def ws_endpoint(websocket: WebSocket, token: str = ""):
                 offline = [u for u in aud if u not in chat.online_ids()
                            and u != user["id"]]
                 if offline:
-                    push.send(CFG, f"💬 {user['name']}: {text[:90]}",
+                    push.send(CFG, f"{user['name']}: {text[:90]}",
                               user_ids=offline)
             elif msg.get("type") == "signal":
                 # WebRTC call signaling: relay verbatim to the target user.
@@ -1906,7 +1974,7 @@ def update_outreach(oid: int, body: StageBody, user=Depends(current_user),
         " updated_at=? WHERE id=?",
         (body.stage, body.next_action, body.next_action_date, db.now(), oid))
     if prev and body.stage == "stocked" and prev["stage"] != "stocked":
-        notify.push(con, f"🎉 New account stocked: {prev['name']}"
+        notify.push(con, f"New account stocked: {prev['name']}"
                          f" ({prev['region']})", kind="outreach")
     if body.note:
         con.execute("INSERT INTO outreach_log(outreach_id,user_id,note,"
@@ -1936,6 +2004,8 @@ from storefront.backend import governance as store_gov  # noqa: E402
 from storefront.backend import partners as store_partners  # noqa: E402
 from storefront.backend import campaigns as store_campaigns  # noqa: E402
 from storefront.backend import crud as store_crud  # noqa: E402
+from storefront.backend import discord as store_discord  # noqa: E402
+from storefront.backend import emailer as store_email  # noqa: E402
 from storefront.backend import documents as store_docs  # noqa: E402
 from storefront.backend import pixels as store_pixels  # noqa: E402
 from storefront.backend import support as store_support  # noqa: E402
@@ -1954,6 +2024,8 @@ app.include_router(store_support.router)
 app.include_router(store_campaigns.router)
 app.include_router(store_docs.router)
 app.include_router(store_crud.router)
+app.include_router(store_discord.router)
+app.include_router(store_email.router)
 app.include_router(store_v1.router)
 
 
