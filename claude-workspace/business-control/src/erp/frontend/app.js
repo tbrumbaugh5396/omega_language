@@ -168,6 +168,32 @@ function logout() {
   render();
 }
 
+
+// ---------- small shared helpers ----------
+const fmtDate = (t) => t ? new Date(t * 1000).toLocaleDateString(undefined,
+  { day: "numeric", month: "short", year: "numeric" }) : "—";
+
+/* A modal. The ops app previously did every form inline in a view, which is
+   fine for a settings page and poor for anything you open from a list. */
+function modal(html) {
+  closeModal();
+  const o = document.createElement("div");
+  o.id = "ops-modal";
+  o.innerHTML = `<div class="ops-modal-card">${html}</div>`;
+  o.onclick = (e) => { if (e.target === o) closeModal(); };
+  document.body.appendChild(o);
+  o.querySelectorAll("[data-close]").forEach((b) => b.onclick = closeModal);
+  const first = o.querySelector("input,select,textarea");
+  if (first) setTimeout(() => first.focus(), 30);
+  document.addEventListener("keydown", modalEsc);
+}
+function closeModal() {
+  const o = $("#ops-modal");
+  if (o) o.remove();
+  document.removeEventListener("keydown", modalEsc);
+}
+function modalEsc(e) { if (e.key === "Escape") closeModal(); }
+
 // ---------- chrome ----------
 
 /* Inline stroked icons. The nav used emoji, which render differently on
@@ -201,6 +227,9 @@ const OPS_ICONS = {
   card: '<path d="M2.5 6h19v12h-19z"/><path d="M2.5 10h19"/>',
   bag: '<path d="M5 7.5h14l-1 13H6z"/><path d="M8.8 10V6.6a3.2 3.2 0 016.4 0V10"/>',
   tools: '<path d="M14.5 6a3.5 3.5 0 014.8 4.4l-9 9-3.2 1 1-3.2 9-9"/><path d="M4 8.5a3.5 3.5 0 004.9 3.2"/>',
+  file: '<path d="M14 3H6.5A1.5 1.5 0 005 4.5v15A1.5 1.5 0 006.5 21h11a1.5 1.5 0 001.5-1.5V8z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 16.5h7"/>',
+  pen: '<path d="M15.5 4.5l4 4L8 20l-4.5.5L4 16z"/><path d="M13.5 6.5l4 4"/>',
+  shield2: '<path d="M12 3l7.5 3v6c0 5-3.3 8-7.5 9.5C7.8 20 4.5 17 4.5 12V6z"/>',
 };
 const opsIcon = (n, cls = "") =>
   `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${
@@ -226,6 +255,8 @@ const TABS = [
     roles: ["admin"] },
   { id: "analytics", label: "Analytics", icon: "chart", group: "Grow",
     roles: ["admin"] },
+  { id: "docs", label: "Documents", icon: "file", group: "Company",
+    roles: ["admin", "employee"] },
   { id: "chat", label: "Chat", icon: "chat", group: "Company", roles: "*" },
   { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
   { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
@@ -311,6 +342,7 @@ async function render() {
     inventory: renderInventory,
     routes: renderRoutes, promos: renderPromos, outreach: renderOutreach,
     experiments: renderExperiments, analytics: renderAnalytics,
+    docs: renderDocs,
     hq: renderHQ, admin: renderAdmin, login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
@@ -2433,3 +2465,191 @@ async function boot() {
   render();
 }
 boot();
+
+// ---------- documents & signatures ----------
+let DOCS = null;
+
+async function renderDocs() {
+  const q = S.docQ || "";
+  const kind = S.docKind || "";
+  DOCS = await api("/api/store/admin/documents?party_kind="
+    + encodeURIComponent(kind) + "&q=" + encodeURIComponent(q));
+
+  const expiring = DOCS.expiring.filter((d) => !d.expired);
+  const expired = DOCS.expiring.filter((d) => d.expired);
+  const alert = (expired.length || expiring.length) ? `
+    <div class="card alert">
+      <b>${expired.length ? opsIcon("shield2", "inline-ic") + " " +
+        expired.length + " expired" : ""}${
+        expired.length && expiring.length ? " · " : ""}${
+        expiring.length ? expiring.length + " expiring within 45 days" : ""}</b>
+      <div class="doc-alerts">${DOCS.expiring.map((d) => `
+        <span class="pill ${d.expired ? "bad" : "warn"}">${esc(d.title)} —
+          ${d.expired ? "expired" : "expires"} ${fmtDate(d.expires)}</span>`).join("")}
+      </div>
+    </div>` : "";
+
+  const kinds = Object.entries(DOCS.party_kinds).map(([k, v]) =>
+    `<button class="chip ${kind === k ? "on" : ""}" data-kind="${k}">${v}</button>`).join("");
+
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Documents</h2>
+        <p class="dim">Contracts, policies and certificates for customers,
+          vendors, partners and staff — with signatures and an audit trail.</p></div>
+      <button class="btn" id="doc-new">${opsIcon("file","btn-ic")} New document</button>
+    </div>
+    ${alert}
+    <div class="filters">
+      <input id="doc-q" placeholder="Search titles, parties, notes" value="${esc(q)}">
+      <div class="chips"><button class="chip ${kind ? "" : "on"}" data-kind="">All</button>${kinds}</div>
+    </div>
+    <div id="doc-list">${DOCS.documents.map(docRow).join("")
+      || '<div class="card empty"><span class="e-ic">' + opsIcon("file")
+       + '</span><b>Nothing filed yet</b><p class="dim">Upload a contract or write one here, then send it for signature.</p></div>'}</div>`;
+
+  $("#doc-new").onclick = docForm;
+  let t;
+  $("#doc-q").oninput = (e) => { clearTimeout(t);
+    t = setTimeout(() => { S.docQ = e.target.value; renderDocs(); }, 250); };
+  view().querySelectorAll("[data-kind]").forEach((b) => b.onclick = () => {
+    S.docKind = b.dataset.kind; renderDocs(); });
+  wireDocRows();
+}
+
+function docRow(d) {
+  const sigs = d.signatures || [];
+  const state = d.fully_signed ? '<span class="pill ok">signed</span>'
+    : d.awaiting ? `<span class="pill warn">${d.awaiting} awaiting</span>`
+    : "";
+  const exp = d.expired ? '<span class="pill bad">expired</span>'
+    : d.expiring_soon ? `<span class="pill warn">expires ${fmtDate(d.expires)}</span>`
+    : d.expires ? `<span class="dim">expires ${fmtDate(d.expires)}</span>` : "";
+  return `<div class="doc-card" data-doc="${d.id}">
+    <div class="doc-top">
+      <span class="doc-ic">${opsIcon("file")}</span>
+      <div class="doc-main">
+        <b>${esc(d.title)}</b>
+        <span class="dim">${esc(d.category_label)}${
+          d.party_name ? " · " + esc(d.party_name) : ""} ·
+          <span class="tag">${esc(d.party_label)}</span></span>
+      </div>
+      ${state} ${exp}
+      ${d.has_file ? `<a class="btn alt sm" href="/api/store/admin/documents/${d.id}/file"
+        title="download">download</a>` : ""}
+      <button class="btn alt sm" data-sign="${d.id}">${opsIcon("pen","btn-ic")} Sign</button>
+    </div>
+    ${sigs.length ? `<div class="sig-rows">${sigs.map((s) => `
+      <div class="sig-row sig-${s.status}">
+        <b>${esc(s.signer_name)}</b>
+        <span class="dim">${esc(s.signer_email)} · ${esc(s.role)}</span>
+        <span class="pill ${s.status === "signed" ? "ok"
+          : s.status === "declined" ? "bad" : "warn"}">${s.status}</span>
+        ${s.status === "signed"
+          ? `<span class="dim">${fmtDate(s.signed_at)}</span>`
+          : `<button class="btn alt sm" data-void="${s.id}">void</button>`}
+      </div>`).join("")}</div>` : ""}
+  </div>`;
+}
+
+function wireDocRows() {
+  view().querySelectorAll("[data-sign]").forEach((b) => b.onclick = () =>
+    signForm(+b.dataset.sign));
+  view().querySelectorAll("[data-void]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Void this signature request?")) return;
+    try { await api(`/api/store/admin/signatures/${b.dataset.void}/void`,
+      { method: "POST" }); renderDocs(); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+function docForm() {
+  const cats = Object.entries(DOCS.categories).map(([k, v]) =>
+    `<option value="${k}">${v}</option>`).join("");
+  const kinds = Object.entries(DOCS.party_kinds).map(([k, v]) =>
+    `<option value="${k}">${v}</option>`).join("");
+  modal(`<h3>New document</h3>
+    <label>Title</label><input id="nd-title" placeholder="Supply agreement — Hudson DC">
+    <div class="row2">
+      <div><label>Category</label><select id="nd-cat">${cats}</select></div>
+      <div><label>Concerns</label><select id="nd-kind">${kinds}</select></div>
+    </div>
+    <div class="row2">
+      <div><label>Party name</label><input id="nd-party"></div>
+      <div><label>Party email</label><input id="nd-email" type="email"></div>
+    </div>
+    <div class="row2">
+      <div><label>Effective</label><input id="nd-eff" type="date"></div>
+      <div><label>Expires <span class="dim">(optional)</span></label>
+        <input id="nd-exp" type="date"></div>
+    </div>
+    <label>File <span class="dim">(PDF, image or Office — or write the body below)</span></label>
+    <input id="nd-file" type="file">
+    <label>Or write the document</label>
+    <textarea id="nd-body" rows="5" placeholder="Paste or write the agreement text. This is what a signer will see."></textarea>
+    <label>Internal notes</label><input id="nd-notes">
+    <div class="modal-acts">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="nd-save">Save</button>
+    </div>`);
+  $("#nd-save").onclick = async () => {
+    const title = $("#nd-title").value.trim();
+    if (!title) return toast("a document needs a title");
+    const d = (v) => v ? new Date(v + "T12:00").getTime() / 1000 : 0;
+    try {
+      const out = await api("/api/store/admin/documents", { body: {
+        title, category: $("#nd-cat").value, party_kind: $("#nd-kind").value,
+        party_name: $("#nd-party").value.trim(),
+        party_email: $("#nd-email").value.trim(),
+        body: $("#nd-body").value, notes: $("#nd-notes").value.trim(),
+        effective: d($("#nd-eff").value), expires: d($("#nd-exp").value) } });
+      const f = $("#nd-file").files[0];
+      if (f) {
+        const fd = new FormData(); fd.append("file", f);
+        const r = await fetch(`/api/store/admin/documents/${out.id}/file`, {
+          method: "POST", headers: { Authorization: "Bearer " + S.user.token },
+          body: fd });
+        if (!r.ok) toast("saved, but the file upload failed: "
+          + ((await r.json()).detail || r.status));
+      }
+      closeModal(); renderDocs();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function signForm(did) {
+  const d = DOCS.documents.find((x) => x.id === did);
+  modal(`<h3>Request a signature</h3>
+    <p class="dim">${esc(d.title)}</p>
+    <div class="row2">
+      <div><label>Signer name</label>
+        <input id="sr-name" value="${esc(d.party_name || "")}"></div>
+      <div><label>Signer email</label>
+        <input id="sr-email" type="email" value="${esc(d.party_email || "")}"></div>
+    </div>
+    <label>Role</label>
+    <select id="sr-role"><option value="signer">Signer</option>
+      <option value="approver">Approver</option>
+      <option value="witness">Witness</option></select>
+    <label>Message <span class="dim">(optional)</span></label>
+    <textarea id="sr-msg" rows="2"></textarea>
+    <p class="dim" style="font-size:12px;margin-top:10px">They'll get a unique
+      link. Signing records their name, time, IP and a fingerprint of the
+      document — a simple electronic signature valid under ESIGN and eIDAS.</p>
+    <div class="modal-acts">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="sr-send">Send request</button>
+    </div>`);
+  $("#sr-send").onclick = async () => {
+    try {
+      const out = await api(`/api/store/admin/documents/${did}/request-signature`,
+        { body: { signer_name: $("#sr-name").value.trim(),
+          signer_email: $("#sr-email").value.trim(),
+          role: $("#sr-role").value, message: $("#sr-msg").value } });
+      closeModal();
+      toast("Signing link sent");
+      prompt("Signing link (also emailed):", out.link);
+      renderDocs();
+    } catch (e) { toast(e.message); }
+  };
+}

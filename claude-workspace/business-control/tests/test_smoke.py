@@ -863,4 +863,71 @@ _shell = c.get("/ops/").text
 ok("app.js?v=" in _shell and "styles.css?v=" in _shell,
    "ops shell stamps its assets, so a deploy can't strand stale JS")
 
+# --- document vault & e-signature ---
+ok(c.get("/api/store/admin/documents").status_code == 403,
+   "the vault needs the documents permission")
+_d = c.post("/api/store/admin/documents", headers=A, json={
+    "title": "Supply agreement — Hudson DC", "category": "contract",
+    "party_kind": "vendor", "party_name": "Hudson DC",
+    "party_email": "ops@hudson.example",
+    "body": "The parties agree as follows. Term of twelve months.",
+    "expires": time.time() + 20 * 86400})
+ok(_d.status_code == 200, "document filed")
+_did = _d.json()["id"]
+ok(c.post("/api/store/admin/documents", headers=A,
+          json={"title": "x", "category": "nope"}).status_code == 400,
+   "unknown category rejected")
+_lib = c.get("/api/store/admin/documents", headers=A).json()
+ok(any(x["id"] == _did for x in _lib["documents"]), "document appears in the vault")
+ok(any(x["id"] == _did for x in _lib["expiring"]),
+   "an expiry inside 45 days is surfaced")
+ok(len(_lib["party_kinds"]) == 5,
+   "documents cover customers, vendors, partners, employees and internal")
+
+_sig = c.post(f"/api/store/admin/documents/{_did}/request-signature", headers=A,
+              json={"signer_name": "Dana", "signer_email": "dana@hudson.example"})
+ok(_sig.status_code == 200 and "/sign/" in _sig.json()["link"],
+   "signature request creates a signing link")
+_tok = _sig.json()["link"].rsplit("/", 1)[-1]
+ok(c.post(f"/api/store/admin/documents/{_did}/request-signature", headers=A,
+          json={"signer_name": "X", "signer_email": "nope"}).status_code == 400,
+   "a bad signer email is rejected")
+_page = c.get(f"/sign/{_tok}")
+ok(_page.status_code == 200 and "Sign this document" in _page.text,
+   "the signing page renders for the recipient")
+ok(c.get("/sign/not-a-real-token").status_code == 404,
+   "an unknown signing token 404s")
+ok(c.post(f"/sign/{_tok}", json={"typed_name": "D"}).status_code == 400,
+   "a one-character name is refused")
+_done = c.post(f"/sign/{_tok}", json={"typed_name": "Dana Whitfield"})
+ok(_done.status_code == 200 and _done.json()["remaining"] == 0,
+   "document signed, nothing outstanding")
+ok(c.post(f"/sign/{_tok}", json={"typed_name": "Dana Whitfield"}
+          ).status_code == 400, "a signed document can't be signed twice")
+_cert = c.get(f"/sign/{_tok}/certificate")
+ok(_cert.status_code == 200 and "Signing certificate" in _cert.text
+   and "unchanged since it was signed" in _cert.text,
+   "the certificate proves the document is unaltered")
+ok("simple electronic signature" in _cert.text,
+   "the certificate states plainly what kind of signature this is")
+ok("Dana Whitfield" in _cert.text and "<img src=\"data:" not in _cert.text,
+   "an empty signature pad falls back to the typed name, not a blank box")
+_sid = [s for s in c.get("/api/store/admin/documents", headers=A).json()
+        ["documents"] if s["id"] == _did][0]["signatures"][0]["id"]
+ok(c.post(f"/api/store/admin/signatures/{_sid}/void",
+          headers=A).status_code == 400,
+   "a completed signature cannot be voided away")
+_trail = c.get(f"/api/store/admin/documents/{_did}/trail", headers=A).json()
+ok({e["action"] for e in _trail} >= {"created", "signature requested",
+                                     "viewed", "signed"},
+   "the audit trail records the whole life of the document")
+
+# --- ops app modernisation ---
+_ops = c.get("/ops/app.js").text
+ok("renderDocs" in _ops and "ops-modal" in _ops,
+   "ops app has the documents view and a modal")
+_css = c.get("/ops/styles.css").text
+ok(".page-head" in _css and ".stat " in _css and "#ops-modal" in _css,
+   "ops stylesheet carries the modernised components")
+
 print(f"\nall {checks} checks passed")
