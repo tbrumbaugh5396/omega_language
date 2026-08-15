@@ -38,12 +38,12 @@ Plus **Library** (Parts 3–8 and 10–12, searchable by symptom) and
 ## The studio
 
 The trainer builds the eye and ear; the **Studio** tab is where the work
-actually gets made. Four document types, one asset store, one AI layer.
+actually gets made. Five document types, one asset store, one AI layer.
 
 | Document | What it is |
 |---|---|
 | **Canvas** | Layers with real blend modes and non-destructive **layer masks**; **selections** (rectangle, ellipse, lasso, magic wand) with add/subtract, feather and invert; **free transform** with scale and rotate; **editable text layers** that only become pixels when you rasterise them; brush / eraser / shapes / bucket; and the whole Part 10 catalogue as a 21-entry filter menu running through `engine-image`. Imports images, exports PNG. |
-| **Music** | Tracks, piano roll and drum grid over six instruments (subtractive, FM, Karplus-Strong pluck, bass, drum synth, sampler), per-track EQ / drive / delay / convolution reverb, swing, master limiter. Imports audio, exports WAV. |
+| **Music** | Three views of one document: **Arrange** (clips on a timeline with automation lanes), **Edit** (piano roll / drum grid per pattern), **Mix** (channel strips, meters, sends). Patterns are reusable and a clip repeats its pattern to fill its length. Six instruments, per-track EQ / filter / drive / delay / convolution reverb, swing, solo and mute, real AudioParam automation for volume and filter, master limiter. Imports audio, exports WAV. |
 | **Video** | Sequential timeline of clips, stills and titles with per-clip grading, dissolves and an audio track. Exports by recording the composed canvas. |
 | **Design** | Vector shapes, type and layout on an infinite canvas. Frames as artboards, edge/centre snapping with guides, auto-layout stacks, align and distribute, a Müller-Brockmann column grid overlay, grouping, and SVG / PNG@2x export. |
 | **Shader** | A GLSL sketchpad using **The Book of Shaders' uniform names** — `u_resolution`, `u_time`, `u_mouse` — so examples from that book paste in and run unchanged. Eleven chapter presets from *Hello world* to *Fractal Brownian Motion*. |
@@ -57,6 +57,10 @@ tools, not production ones:
   live text — but no adjustment layers, clipping masks, layer groups, paths
   or pen tool, clone/heal, gradients, guides and snapping, or non-destructive
   filter stacks. Undo is 18 deep and canvas size is fixed at creation.
+- **Music is not a DAW.** It has patterns, clips, automation, solo and a
+  mixer, but no audio clips on the timeline (samplers are played from the
+  roll), no per-note velocity, no time signatures other than 4/4, no
+  sidechain routing and no plugin format.
 - **Video is not an NLE.** One video track, no keyframes, no drag-trimming on
   the timeline, and export is a real-time screen recording to webm rather
   than a proper encode.
@@ -72,8 +76,11 @@ DOM.
 
 Music playback renders the whole arrangement offline into one buffer and loops
 it, rather than running a live scheduler. Edits re-render in a fraction of a
-second, the result is sample-accurate, and export is the same code path as
-play — so what you hear is exactly what lands in the file.
+second, the result is sample-accurate, automation is real AudioParam
+automation rather than a polled approximation, and export is the same code
+path as play — so what you hear is exactly what lands in the file. The cost is
+that a parameter cannot be nudged mid-note: it re-renders instead, which at
+sketch lengths is imperceptible.
 
 The video grade is the one place that deliberately does *not* use
 `engine-image`: it uses the canvas `filter` property, because a 30fps preview

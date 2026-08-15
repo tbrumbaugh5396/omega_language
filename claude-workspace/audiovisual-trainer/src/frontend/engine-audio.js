@@ -359,18 +359,20 @@ export function stopAll() {
   liveNodes = [];
 }
 
-/** Play an AudioBuffer. Returns a stop function; stops anything already going. */
-export function play(buffer, { loop = false, gain = 1, onended } = {}) {
+/** Play an AudioBuffer. Returns a stop function; stops anything already going.
+ *  `offset` starts partway in, which is what a transport playhead needs. */
+export function play(buffer, { loop = false, gain = 1, offset = 0, onended } = {}) {
   stopAll();
   const ctx = audioCtx();
   const src = ctx.createBufferSource();
   src.buffer = buffer;
   src.loop = loop;
+  if (loop) { src.loopStart = 0; src.loopEnd = buffer.duration; }
   const g = ctx.createGain();
   g.gain.value = gain;
   src.connect(g).connect(ctx.destination);
   src.onended = () => { liveNodes = liveNodes.filter((n) => n !== src); onended?.(); };
-  src.start();
+  src.start(0, Math.max(0, Math.min(offset, buffer.duration - 0.01)));
   liveNodes.push(src);
   return () => { try { src.stop(); } catch { /* already stopped */ } };
 }

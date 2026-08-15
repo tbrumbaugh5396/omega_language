@@ -22,7 +22,9 @@ them live.
 
 A word on scope: the studio tools are sketchpads, not production suites.
 Canvas has selections, transform, masks and live text, but no adjustment
-layers, paths or gradients; Video has one track and no keyframes; Design has
+layers, paths or gradients; Music has patterns, automation and a mixer but no
+audio clips on the timeline or velocity; Video has one track and no
+keyframes; Design has
 grids, snapping and auto-layout but no components or prototyping. They are
 here to make the weekly piece, not to replace Photoshop, Resolve or Figma.
 
@@ -76,8 +78,11 @@ THE STUDIO
           running the same code the drills generate their stimuli with.
           Shift adds to a selection, Alt subtracts. Cmd+A all, Cmd+D none,
           Cmd+I invert, Cmd+T transform, Backspace deletes inside.
-  Music   Piano roll and drum grid, six instruments, per-track EQ, drive,
-          delay and convolution reverb. Imports audio, exports WAV.
+  Music   Three views: Arrange (clips on a timeline, with automation lanes
+          for volume and filter), Edit (piano roll / drum grid for one
+          pattern), Mix (channel strips, meters, solo and mute). Patterns
+          are reusable; drag a clip's right edge to repeat it. Space plays,
+          Cmd+D duplicates a clip, Backspace deletes it. Exports WAV.
   Video   Timeline of clips, stills and titles, per-clip grading and
           dissolves. Export records the composed timeline in real time, so
           leave the tab in front while it runs.

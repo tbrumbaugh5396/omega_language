@@ -327,6 +327,22 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .design-num { font-size: .72rem; color: var(--ink-3); margin-bottom: 0; }
 .design-num input, .design-num select { padding: .25em .4em; font-size: .8rem; }
 
+/* ---------------------------------------------------------------- mixer */
+
+.mixer { display: flex; gap: .5rem; overflow-x: auto; padding: .2rem; }
+.strip {
+  flex: 0 0 108px; display: grid; gap: .35rem; align-content: start;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: .5rem .45rem;
+}
+.strip .fader { width: 100%; }
+.strip .design-num { font-size: .68rem; }
+.meter {
+  height: 74px; background: #06080e; border: 1px solid var(--line-soft);
+  border-radius: 4px; display: flex; align-items: flex-end; overflow: hidden;
+}
+.meter > i { width: 100%; display: block; min-height: 2px; }
+
 /* ---------------------------------------------------------------- library */
 
 .lib-nav { display: flex; gap: .3rem; flex-wrap: wrap; margin-bottom: .8rem; }
