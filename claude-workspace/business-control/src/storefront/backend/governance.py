@@ -84,6 +84,8 @@ PATH_RULES = [
     ("/api/store/admin/creatives", "marketing"),
     ("/api/store/admin/documents", "documents"),
     ("/api/store/admin/signatures", "documents"),
+    ("/api/store/admin/comments", "content"),
+    ("/api/store/admin/page-funnel", "analytics"),
 ]
 
 

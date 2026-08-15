@@ -59,6 +59,7 @@ const TAB_PERMS = {
   affiliates: "customers", enquiries: "customers",
   events: "content", heatmap: "analytics", pixels: "settings",
   campaigns: "marketing", tickets: "customers",
+  funnel: "analytics", comments: "content",
   nav: "content", intl: "settings", staff: "settings",
   analytics: "analytics",
 };
@@ -94,7 +95,8 @@ document.querySelectorAll("#adm-tabs .tab").forEach((b) => b.onclick = () => {
   const REFRESH = { analytics: () => drawAnalytics(),
     heatmap: () => drawHeatPages(), events: () => drawEvents(),
     enquiries: () => drawEnquiries(), pixels: () => drawPixels(),
-    campaigns: () => drawCampaigns(), tickets: () => drawTickets() };
+    campaigns: () => drawCampaigns(), tickets: () => drawTickets(),
+    funnel: () => drawPageFunnel(), comments: () => drawComments() };
   const fn = REFRESH[b.dataset.tab];
   if (fn) fn();
 });
@@ -106,7 +108,23 @@ async function drawProducts() {
   $("#pr-list").innerHTML = PRODUCTS.map((p) =>
     `<div class="adm-item"><b>${p.name}</b>
      <span class="dim">${p.sku} · ${p.category || "—"} ·
-     ${money(p.price_cents)} · ★${p.review_avg ?? "–"}</span></div>`).join("");
+     ${money(p.price_cents)} · ★${p.review_avg ?? "–"}</span>
+     <button class="btn-pill ghost mini" data-predit="${p.id}">edit</button>
+     <button class="btn-pill ghost mini" data-prdel="${p.id}">delete</button>
+     </div>`).join("");
+  $("#pr-list").querySelectorAll("[data-predit]").forEach((b) =>
+    b.onclick = () => productForm(PRODUCTS.find((x) => x.id === +b.dataset.predit)));
+  $("#pr-list").querySelectorAll("[data-prdel]").forEach((b) =>
+    b.onclick = async () => {
+      const p = PRODUCTS.find((x) => x.id === +b.dataset.prdel);
+      if (!confirm(`Delete "${p.name}"?`)) return;
+      try {
+        const out = await api(`/api/store/admin/products/${p.id}`,
+          { method: "DELETE" });
+        if (out.action === "retired") alert(out.detail);
+        drawProducts();
+      } catch (e) { alert(e.message); }
+    });
   $("#co-products").innerHTML = PRODUCTS.map((p) =>
     `<label style="display:flex;gap:8px;align-items:center;font-weight:500">
      <input type="checkbox" style="width:auto" value="${p.id}"
@@ -283,11 +301,14 @@ async function drawCollections() {
   $("#co-list").innerHTML = cols.map((c) =>
     `<div class="adm-item"><b>${c.name}</b>
      <span class="dim">${c.product_ids.length} products</span>
+     <button class="btn-pill ghost mini" data-coedit="${c.id}">edit</button>
      <button class="btn-pill ghost mini" data-del="${c.slug}">delete</button>
     </div>`).join("") || '<p class="dim">No collections yet.</p>';
   $("#co-list").querySelectorAll("[data-del]").forEach((b) => b.onclick =
     async () => { await api(`/api/store/admin/collections/${b.dataset.del}`,
       { method: "DELETE" }); drawCollections(); });
+  $("#co-list").querySelectorAll("[data-coedit]").forEach((b) => b.onclick =
+    () => collectionForm(cols.find((c) => c.id === +b.dataset.coedit)));
 }
 
 $("#co-save").onclick = async () => {
@@ -317,12 +338,30 @@ async function drawDiscounts() {
     return `<div class="adm-item"><b>${d.code}</b>
       <span class="dim">${(DKIND[d.kind || "percent"] || DKIND.percent)(d)}
       ${rules.length ? " · " + rules.join(" · ") : ""}
-      ${d.active ? "" : " · off"}</span></div>`;
+      ${d.batch ? " · batch" : ""}
+      ${d.active ? "" : " · off"}</span>
+      <button class="btn-pill ghost mini" data-diedit="${d.code}">edit</button>
+      <button class="btn-pill ghost mini" data-didel="${d.code}">delete</button>
+      </div>`;
   }).join("") || '<p class="dim">No codes yet.</p>';
   const sel = $("#di-bogo-product");
   if (sel && sel.options.length <= 1)
     sel.innerHTML = '<option value="">any product</option>' +
       PRODUCTS.map((p) => `<option value="${p.id}">${p.name}</option>`).join("");
+  $("#di-list").querySelectorAll("[data-diedit]").forEach((b) => b.onclick =
+    () => discountForm(rows.find((d) => d.code === b.dataset.diedit)));
+  $("#di-list").querySelectorAll("[data-didel]").forEach((b) => b.onclick =
+    async () => {
+      if (!confirm(`Delete code ${b.dataset.didel}?`)) return;
+      try {
+        const out = await api(`/api/store/admin/discounts/${b.dataset.didel}`,
+          { method: "DELETE" });
+        if (out.action === "deactivated") alert(out.detail);
+        drawDiscounts();
+      } catch (e) { alert(e.message); }
+    });
+  const mint = $("#di-mint");
+  if (mint) mint.onclick = uniqueBatchForm;
 }
 
 $("#di-save").onclick = async () => {
@@ -369,6 +408,246 @@ $("#gc-issue").onclick = async () => {
 };
 
 // ---------- affiliates ----------
+
+/* ---------- product editing ----------
+   The admin could create but never change, which is fine for a demo and
+   useless for a shop where a price moves. */
+function productForm(p) {
+  admModal(`<h3>Edit product</h3>
+    <div class="adm-row">
+      <div><label>Name</label><input id="pe-name" value="${escAttr(p.name)}"></div>
+      <div><label>SKU</label><input id="pe-sku" value="${escAttr(p.sku)}"></div>
+    </div>
+    <div class="adm-row">
+      <div><label>Category</label><input id="pe-cat" value="${escAttr(p.category || "")}"></div>
+      <div><label>Price (cents)</label><input id="pe-price" type="number" value="${p.price_cents}"></div>
+      <div><label>Case price (cents)</label><input id="pe-case" type="number" value="${p.case_price_cents || 0}"></div>
+    </div>
+    <label>Description</label>
+    <textarea id="pe-desc" rows="3">${escHtml(p.description || "")}</textarea>
+    <label style="display:flex;gap:8px;align-items:center">
+      <input type="checkbox" id="pe-active" style="width:auto"
+        ${p.active === 0 ? "" : "checked"}> Active — shown in the shop</label>
+    <div class="modal-actions">
+      <button class="btn-pill ghost sm" data-admclose>Cancel</button>
+      <button class="btn-pill primary sm" id="pe-save">Save</button>
+    </div>`);
+  $("#pe-save").onclick = async () => {
+    try {
+      await api(`/api/store/admin/products/${p.id}`, { method: "PATCH",
+        body: JSON.stringify({
+          name: $("#pe-name").value, sku: $("#pe-sku").value,
+          category: $("#pe-cat").value, description: $("#pe-desc").value,
+          price_cents: +$("#pe-price").value || 0,
+          case_price_cents: +$("#pe-case").value || 0,
+          case_size: p.case_size || 12,
+          active: $("#pe-active").checked }) });
+      admClose(); drawProducts();
+    } catch (e) { alert(e.message); }
+  };
+}
+
+/* A modal for the store admin, which had none — every form was inline. */
+function admModal(html) {
+  admClose();
+  const o = document.createElement("div");
+  o.id = "adm-modal";
+  o.innerHTML = `<div class="adm-modal-card">${html}</div>`;
+  o.onclick = (e) => { if (e.target === o) admClose(); };
+  document.body.appendChild(o);
+  o.querySelectorAll("[data-admclose]").forEach((b) => b.onclick = admClose);
+}
+function admClose() { const o = $("#adm-modal"); if (o) o.remove(); }
+const escAttr = (v) => String(v == null ? "" : v).replace(/"/g, "&quot;");
+const escHtml = (v) => String(v == null ? "" : v)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+
+/* ---------- collection & discount editing ---------- */
+function collectionForm(c) {
+  admModal(`<h3>Edit collection</h3>
+    <label>Name</label><input id="ce-name" value="${escAttr(c.name)}">
+    <label>Position</label>
+    <input id="ce-pos" type="number" value="${c.position || 0}">
+    <label>Products in this collection</label>
+    <div class="adm-list" style="max-height:280px;overflow-y:auto">
+      ${PRODUCTS.map((p) => `
+        <label style="display:flex;gap:8px;align-items:center;font-weight:500;
+          padding:6px 2px">
+          <input type="checkbox" style="width:auto" value="${p.id}"
+            class="ce-check" ${c.product_ids.includes(p.id) ? "checked" : ""}>
+          ${p.name}</label>`).join("")}
+    </div>
+    <div class="modal-actions">
+      <button class="btn-pill ghost sm" data-admclose>Cancel</button>
+      <button class="btn-pill primary sm" id="ce-save">Save</button>
+    </div>`);
+  $("#ce-save").onclick = async () => {
+    const ids = [...document.querySelectorAll(".ce-check")]
+      .filter((x) => x.checked).map((x) => +x.value);
+    try {
+      await api(`/api/store/admin/collections/${c.id}`, { method: "PATCH",
+        body: JSON.stringify({ name: $("#ce-name").value,
+          position: +$("#ce-pos").value || 0, product_ids: ids }) });
+      admClose(); drawCollections(); drawProducts();
+    } catch (e) { alert(e.message); }
+  };
+}
+
+function discountForm(d) {
+  const exp = d.expires_at
+    ? new Date(d.expires_at * 1000).toISOString().slice(0, 10) : "";
+  admModal(`<h3>Edit ${d.code}</h3>
+    <div class="adm-row">
+      <div><label>Percent off</label>
+        <input id="de-pct" type="number" min="1" max="100" value="${d.pct || 10}"></div>
+      <div><label>Minimum subtotal ($)</label>
+        <input id="de-min" type="number" min="0"
+          value="${((d.min_subtotal_cents || 0) / 100).toFixed(2)}"></div>
+    </div>
+    <div class="adm-row">
+      <div><label>Total uses (0 = unlimited)</label>
+        <input id="de-limit" type="number" min="0" value="${d.usage_limit || 0}"></div>
+      <div><label>Per customer (0 = unlimited)</label>
+        <input id="de-per" type="number" min="0" value="${d.per_customer_limit || 0}"></div>
+      <div><label>Expires</label><input id="de-exp" type="date" value="${exp}"></div>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center">
+      <input type="checkbox" id="de-active" style="width:auto"
+        ${d.active ? "checked" : ""}> Active</label>
+    <p class="dim" style="font-size:12px;margin-top:10px">Used
+      ${d.used_count || 0} time(s). A code that has been used is switched off
+      rather than deleted, so past orders keep their reference.</p>
+    <div class="modal-actions">
+      <button class="btn-pill ghost sm" data-admclose>Cancel</button>
+      <button class="btn-pill primary sm" id="de-save">Save</button>
+    </div>`);
+  $("#de-save").onclick = async () => {
+    try {
+      await api(`/api/store/admin/discounts/${d.code}`, { method: "PATCH",
+        body: JSON.stringify({ pct: +$("#de-pct").value || 0,
+          active: $("#de-active").checked,
+          usage_limit: +$("#de-limit").value || 0,
+          per_customer_limit: +$("#de-per").value || 0,
+          min_subtotal_cents: Math.round((+$("#de-min").value || 0) * 100),
+          expires_at: $("#de-exp").value
+            ? new Date($("#de-exp").value + "T23:59").getTime() / 1000 : 0 }) });
+      admClose(); drawDiscounts();
+    } catch (e) { alert(e.message); }
+  };
+}
+
+/* Single-use codes. A shared code posted to a deals site gets redeemed by
+   thousands who were never the audience; one code per recipient fixes that
+   and makes per-campaign redemption countable. */
+function uniqueBatchForm() {
+  admModal(`<h3>Mint unique codes</h3>
+    <p class="dim">Each code works once, for one customer. Hand them out
+      individually — in an email, on a card, per influencer.</p>
+    <div class="adm-row">
+      <div><label>Prefix</label><input id="ub-prefix" value="ZJ" maxlength="8"></div>
+      <div><label>How many</label>
+        <input id="ub-count" type="number" min="1" max="500" value="25"></div>
+      <div><label>Percent off</label>
+        <input id="ub-pct" type="number" min="1" max="100" value="15"></div>
+    </div>
+    <div class="adm-row">
+      <div><label>Minimum subtotal ($)</label>
+        <input id="ub-min" type="number" min="0" value="0"></div>
+      <div><label>Expires</label><input id="ub-exp" type="date"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-pill ghost sm" data-admclose>Cancel</button>
+      <button class="btn-pill primary sm" id="ub-go">Mint</button>
+    </div>
+    <div id="ub-out"></div>`);
+  $("#ub-go").onclick = async () => {
+    try {
+      const out = await api("/api/store/admin/discounts/unique", {
+        method: "POST", body: JSON.stringify({
+          prefix: $("#ub-prefix").value, count: +$("#ub-count").value || 25,
+          pct: +$("#ub-pct").value || 10,
+          min_subtotal_cents: Math.round((+$("#ub-min").value || 0) * 100),
+          expires_at: $("#ub-exp").value
+            ? new Date($("#ub-exp").value + "T23:59").getTime() / 1000 : 0 }) });
+      $("#ub-out").innerHTML = `<label>${out.count} codes — copy these now</label>
+        <textarea rows="6" readonly>${out.codes.join("\n")}</textarea>
+        <p class="dim">Batch <code>${out.batch}</code></p>`;
+      drawDiscounts();
+    } catch (e) { alert(e.message); }
+  };
+}
+
+
+/* ---------- page-to-page funnel ----------
+   The step funnel says how many reached checkout. This says which page
+   leaks, which is the one you can act on. */
+async function drawPageFunnel() {
+  const d = await api("/api/store/admin/page-funnel?days=30");
+  if (!d.sessions) {
+    $("#pf-out").innerHTML =
+      '<p class="dim">No sessions recorded in the last 30 days yet.</p>';
+    return;
+  }
+  const max = Math.max(...d.pages.map((p) => p.views), 1);
+  const rows = d.pages.map((p) => `
+    <div class="pf-row">
+      <code class="pf-page">${p.page}</code>
+      <span class="pf-bar">
+        <span class="pf-fill" style="width:${(p.views / max * 100).toFixed(1)}%"></span>
+        <span class="pf-exit" style="width:${(p.exits / max * 100).toFixed(1)}%"
+          title="${p.exits} left the site here"></span>
+      </span>
+      <span class="pf-n">${p.views}</span>
+      <span class="pf-drop ${p.exit_rate >= 60 ? "hot" : ""}">${p.exit_rate}% exit</span>
+    </div>`).join("");
+  const maxFlow = Math.max(...d.flow.map((f) => f.n), 1);
+  const flows = d.flow.slice(0, 14).map((f) => `
+    <div class="pf-flow">
+      <code>${f.from}</code>
+      <span class="pf-arrow" style="opacity:${(0.25 + 0.75 * f.n / maxFlow).toFixed(2)}">
+        →</span>
+      <code>${f.to}</code>
+      <b>${f.n}</b>
+    </div>`).join("");
+  $("#pf-out").innerHTML = `
+    <p class="dim"><b>${d.sessions}</b> sessions over ${d.days} days.
+      The bar is page views; the darker tail is where people left the site.</p>
+    <div class="pf-list">${rows}</div>
+    <h3 style="font-size:15px;margin-top:22px">Where people go next</h3>
+    <div class="pf-flows">${flows}</div>`;
+}
+
+/* ---------- blog comments ---------- */
+async function drawComments() {
+  const rows = await api("/api/store/admin/comments");
+  const pending = rows.filter((c) => !c.approved);
+  $("#cm-list").innerHTML = `
+    ${pending.length ? `<p class="dim"><b>${pending.length}</b> awaiting
+      moderation.</p>` : ""}
+    ${rows.map((c) => `
+      <div class="adm-item" style="flex-wrap:wrap;gap:8px;
+        ${c.approved ? "" : "background:var(--bg)"}">
+        <b style="flex:0 0 120px">${c.name}</b>
+        <span class="dim" style="flex:0 0 140px">${c.post_title}</span>
+        <span style="flex:1;min-width:200px">${c.body.slice(0, 140)}</span>
+        <span class="dim" style="flex:0 0 70px">${
+          c.approved ? "published" : "pending"}</span>
+        ${c.approved ? "" :
+          `<button class="btn-pill ghost mini" data-cmok="${c.id}">approve</button>`}
+        <button class="btn-pill ghost mini" data-cmdel="${c.id}">delete</button>
+      </div>`).join("") || '<p class="dim">No comments yet.</p>'}`;
+  $("#cm-list").querySelectorAll("[data-cmok]").forEach((b) => b.onclick =
+    async () => { await api(`/api/store/admin/comments/${b.dataset.cmok}`,
+      { method: "POST", body: JSON.stringify({ action: "approve" }) });
+      drawComments(); });
+  $("#cm-list").querySelectorAll("[data-cmdel]").forEach((b) => b.onclick =
+    async () => { if (!confirm("Delete this comment?")) return;
+      await api(`/api/store/admin/comments/${b.dataset.cmdel}`,
+        { method: "POST", body: JSON.stringify({ action: "delete" }) });
+      drawComments(); });
+}
+
 /* ---------- campaigns ---------- */
 let CP = null;
 
@@ -614,6 +893,7 @@ async function drawEvents() {
       <label style="font-size:11.5px;font-weight:600;display:flex;gap:4px">
         <input type="checkbox" style="width:auto" data-evon="${e.id}"
           ${e.active ? "checked" : ""}> live</label>
+      <button class="btn-pill ghost mini" data-evedit="${e.id}">edit</button>
       <button class="btn-pill ghost mini" data-evdel="${e.id}">delete</button>
     </div>`;
   }).join("") || '<p class="dim">No events yet.</p>';
@@ -625,6 +905,8 @@ async function drawEvents() {
         body: JSON.stringify({ ...e, active: c.checked ? 1 : 0 }) });
       drawEvents();
     });
+  $("#ev-list").querySelectorAll("[data-evedit]").forEach((b) =>
+    b.onclick = () => admEventForm(rows.find((x) => x.id === +b.dataset.evedit)));
   $("#ev-list").querySelectorAll("[data-evdel]").forEach((b) =>
     b.onclick = async () => {
       if (!confirm("Delete this event?")) return;
@@ -651,6 +933,48 @@ $("#ev-add").onclick = async () => {
     .forEach((id) => $("#" + id).value = "");
   drawEvents();
 };
+
+
+function admEventForm(e) {
+  const d = e.starts ? new Date(e.starts * 1000).toISOString().slice(0, 10) : "";
+  admModal(`<h3>Edit event</h3>
+    <label>Name</label><input id="ae-name" value="${escAttr(e.name)}">
+    <div class="adm-row">
+      <div><label>Kind</label><select id="ae-kind">${
+        Object.keys(EV_KINDS).map((k) =>
+          `<option ${e.kind === k ? "selected" : ""}>${k}</option>`).join("")}</select></div>
+      <div><label>Date</label><input id="ae-date" type="date" value="${d}"></div>
+    </div>
+    <div class="adm-row">
+      <div><label>Venue</label><input id="ae-venue" value="${escAttr(e.venue || "")}"></div>
+      <div><label>City</label><input id="ae-city" value="${escAttr(e.city || "")}"></div>
+      <div><label>Region</label><input id="ae-region" value="${escAttr(e.region || "")}"></div>
+    </div>
+    <label>Details</label>
+    <input id="ae-body" value="${escAttr(e.body || "")}">
+    <label>Link</label><input id="ae-url" value="${escAttr(e.url || "")}">
+    <label style="display:flex;gap:8px;align-items:center">
+      <input type="checkbox" id="ae-live" style="width:auto"
+        ${e.active ? "checked" : ""}> Live on the public events page</label>
+    <div class="modal-actions">
+      <button class="btn-pill ghost sm" data-admclose>Cancel</button>
+      <button class="btn-pill primary sm" id="ae-save">Save</button>
+    </div>`);
+  $("#ae-save").onclick = async () => {
+    try {
+      await api(`/api/store/admin/events/${e.id}`, { method: "PATCH",
+        body: JSON.stringify({ name: $("#ae-name").value,
+          kind: $("#ae-kind").value, venue: $("#ae-venue").value,
+          city: $("#ae-city").value, region: $("#ae-region").value,
+          body: $("#ae-body").value, url: $("#ae-url").value,
+          active: $("#ae-live").checked ? 1 : 0,
+          starts: $("#ae-date").value
+            ? new Date($("#ae-date").value + "T12:00").getTime() / 1000
+            : e.starts }) });
+      admClose(); drawEvents();
+    } catch (err) { alert(err.message); }
+  };
+}
 
 /* ---------- heatmap ---------- */
 async function drawHeatPages() {
@@ -687,8 +1011,9 @@ async function drawHeat() {
            r="4" class="hm-dot"/>`
       : `<circle cx="${(h.x * 100).toFixed(2)}%" cy="${(h.y * 100).toFixed(2)}%"
            r="28" class="hm-blob"/>`).join("");
+  const interactive = $("#hm-interact") && $("#hm-interact").checked;
   $("#hm-stage").innerHTML = `
-    <div class="hm-frame">
+    <div class="hm-frame ${interactive ? "interactive" : ""}">
       <div class="hm-doc" id="hm-doc">
         <iframe src="${page}${page.includes("?") ? "&" : "?"}__preview=1"
           title="Page preview" id="hm-iframe"></iframe>
@@ -701,6 +1026,8 @@ async function drawHeat() {
      internally — the outer frame does the scrolling, carrying the overlay
      with it. Recorded coordinates are fractions of the page box, so the
      overlay lines up at whatever width the admin panel happens to be. */
+  const ix = $("#hm-interact");
+  if (ix) ix.onchange = drawHeat;
   const frame = $("#hm-iframe"), doc = $("#hm-doc");
   const fit = () => {
     try {
@@ -802,9 +1129,16 @@ async function drawPosts() {
   $("#bp-list").innerHTML = rows.map((p) =>
     `<div class="adm-item"><b>${p.title}</b>
      <a class="dim" href="${p.url}" target="_blank">${p.url} ↗</a>
+     <label style="font-size:11.5px;font-weight:600;display:flex;gap:4px;
+       align-items:center;text-transform:none;letter-spacing:0;margin:0">
+       <input type="checkbox" style="width:auto" data-pcom="${p.id}"
+         ${p.comments_on ? "checked" : ""}> comments</label>
      <button class="btn-pill ghost mini" data-pedit="${p.slug}">edit</button>
      <button class="btn-pill ghost mini" data-pdel="${p.slug}">delete</button>
     </div>`).join("") || '<p class="dim">No posts yet.</p>';
+  $("#bp-list").querySelectorAll("[data-pcom]").forEach((c) => c.onchange =
+    async () => { await api(`/api/store/admin/posts/${c.dataset.pcom}/comments-toggle`,
+      { method: "POST", body: JSON.stringify({ comments_on: c.checked }) }); });
   $("#bp-list").querySelectorAll("[data-pdel]").forEach((b) => b.onclick =
     async () => { await api(`/api/store/admin/posts/${b.dataset.pdel}`,
       { method: "DELETE" }); drawPosts(); });
@@ -1136,6 +1470,7 @@ async function boot() {
   run("content", drawEvents); run("analytics", drawHeatPages);
   run("settings", drawPixels);
   run("marketing", drawCampaigns); run("customers", drawTickets);
+  run("analytics", drawPageFunnel); run("content", drawComments);
   run("content", drawPages); run("content", drawReviewQueue);
   run("content", drawPosts); run("content", drawMenus);
   run("content", drawRedirects);

@@ -194,6 +194,170 @@ function closeModal() {
 }
 function modalEsc(e) { if (e.key === "Escape") closeModal(); }
 
+
+/* ---------- pan & zoom map ----------
+   One component for HQ and for routes. Coordinates are real lat/lng projected
+   through a single function, so pins and the drawn coastline can't disagree —
+   the same lesson as the storefront locator, where a hand-drawn outline put
+   stores in the ocean.
+
+   No tiles: nothing is fetched from a map server, which keeps the ops app
+   working offline in a warehouse and stops a third party learning the
+   company's delivery pattern. */
+const US_EDGE = [
+  [49.0,-123.0],[48.4,-124.7],[46.2,-124.0],[44.6,-124.1],[42.0,-124.2],
+  [40.4,-124.4],[38.0,-123.0],[36.6,-121.9],[34.4,-120.5],[33.7,-118.3],
+  [32.5,-117.1],[32.5,-114.8],[31.3,-111.0],[31.8,-106.5],[29.8,-102.4],
+  [25.9,-97.4],[27.8,-97.4],[29.3,-94.8],[29.7,-93.3],[29.2,-90.0],
+  [30.2,-88.0],[30.4,-86.5],[29.7,-84.9],[28.0,-82.8],[25.1,-80.9],
+  [25.8,-80.2],[28.4,-80.6],[32.0,-80.8],[33.9,-78.0],[35.2,-75.5],
+  [37.0,-76.0],[38.8,-75.1],[40.5,-74.0],[41.4,-71.5],[42.0,-70.1],
+  [43.7,-70.0],[44.8,-67.0],[47.0,-69.2],[45.0,-71.5],[45.0,-74.7],
+  [43.3,-79.1],[42.3,-83.0],[46.0,-84.4],[46.8,-90.0],[47.4,-92.0],[49.0,-95.2],
+];
+const MAP_BOX = { w: -125, e: -66.5, n: 49.5, s: 24.5 };
+const MAP_W = 1000, MAP_H = 560;
+const mapProject = (lat, lng) => [
+  ((lng - MAP_BOX.w) / (MAP_BOX.e - MAP_BOX.w)) * MAP_W,
+  ((MAP_BOX.n - lat) / (MAP_BOX.n - MAP_BOX.s)) * MAP_H,
+];
+const US_PATH = US_EDGE.map(([la, ln], i) => {
+  const [x, y] = mapProject(la, ln);
+  return `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
+}).join(" ") + " Z";
+
+let MAP_SEQ = 0;
+
+/* opts: { pins:[{lat,lng,label,sub,color,size}], legs:[[from,to]], id }
+   Returns markup; call wireMap(id) after inserting it. */
+function panZoomMap(opts) {
+  const id = opts.id || ("map" + (++MAP_SEQ));
+  const pins = (opts.pins || []).filter((p) => p.lat && p.lng);
+  const legs = (opts.legs || []).map(([a, b]) => {
+    const [x1, y1] = mapProject(a.lat, a.lng), [x2, y2] = mapProject(b.lat, b.lng);
+    return `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}"
+      x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" class="map-leg"/>`;
+  }).join("");
+  const dots = pins.map((p, i) => {
+    const [x, y] = mapProject(p.lat, p.lng);
+    return `<g class="map-pin" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">
+      <circle class="halo" r="${(p.size || 7) + 9}" fill="${p.color || "#8a6ff0"}"/>
+      <circle class="dot" r="${p.size || 7}" fill="${p.color || "#8a6ff0"}"/>
+      ${p.n != null ? `<text class="pin-n" y="4">${p.n}</text>` : ""}
+      <title>${esc(p.label || "")}${p.sub ? " — " + esc(p.sub) : ""}</title>
+    </g>`;
+  }).join("");
+  return `<div class="map-wrap" id="${id}">
+    <svg class="map" viewBox="0 0 ${MAP_W} ${MAP_H}">
+      <g class="map-vp">
+        <path class="map-land" d="${US_PATH}"/>
+        ${legs}${dots}
+      </g>
+    </svg>
+    <div class="map-ctl">
+      <button class="btn alt sm" data-mz="in" title="zoom in">+</button>
+      <button class="btn alt sm" data-mz="out" title="zoom out">−</button>
+      <button class="btn alt sm" data-mz="fit" title="reset">reset</button>
+    </div>
+    <span class="map-hint">drag to pan · scroll to zoom</span>
+  </div>`;
+}
+
+function wireMap(id) {
+  const wrap = document.getElementById(id);
+  if (!wrap) return;
+  const vp = wrap.querySelector(".map-vp");
+  const svg = wrap.querySelector("svg");
+  let k = 1, tx = 0, ty = 0, dragging = false, sx = 0, sy = 0;
+
+  const apply = () => {
+    vp.setAttribute("transform", `translate(${tx} ${ty}) scale(${k})`);
+    // Counter-scale the pins so a dot stays a dot at every zoom level
+    // instead of becoming a blob.
+    vp.querySelectorAll(".map-pin").forEach((g) => {
+      g.style.setProperty("--k", 1 / k);
+    });
+  };
+  const clamp = () => {
+    k = Math.max(1, Math.min(12, k));
+    const span = MAP_W * (k - 1), spanY = MAP_H * (k - 1);
+    tx = Math.max(-span, Math.min(0, tx));
+    ty = Math.max(-spanY, Math.min(0, ty));
+  };
+  // Zoom about the cursor, so the thing under the pointer stays put.
+  const zoomAt = (factor, px, py) => {
+    const k0 = k;
+    k = Math.max(1, Math.min(12, k * factor));
+    tx = px - (px - tx) * (k / k0);
+    ty = py - (py - ty) * (k / k0);
+    clamp(); apply();
+  };
+  const svgPoint = (e) => {
+    const r = svg.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width * MAP_W,
+            (e.clientY - r.top) / r.height * MAP_H];
+  };
+
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const [px, py] = svgPoint(e);
+    zoomAt(e.deltaY < 0 ? 1.18 : 1 / 1.18, px, py);
+  }, { passive: false });
+
+  svg.addEventListener("mousedown", (e) => {
+    dragging = true; sx = e.clientX; sy = e.clientY; svg.classList.add("grab");
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const r = svg.getBoundingClientRect();
+    tx += (e.clientX - sx) / r.width * MAP_W;
+    ty += (e.clientY - sy) / r.height * MAP_H;
+    sx = e.clientX; sy = e.clientY;
+    clamp(); apply();
+  });
+  window.addEventListener("mouseup", () => {
+    dragging = false; svg.classList.remove("grab");
+  });
+
+  // Touch: one finger pans, two fingers pinch.
+  let pinch = 0;
+  svg.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 1) { dragging = true;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY; }
+    else if (e.touches.length === 2) {
+      dragging = false;
+      pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                         e.touches[0].clientY - e.touches[1].clientY);
+    }
+  }, { passive: true });
+  svg.addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2 && pinch) {
+      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                           e.touches[0].clientY - e.touches[1].clientY);
+      const r = svg.getBoundingClientRect();
+      const cx = ((e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left)
+        / r.width * MAP_W;
+      const cy = ((e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top)
+        / r.height * MAP_H;
+      zoomAt(d / pinch, cx, cy); pinch = d;
+      e.preventDefault();
+    } else if (dragging && e.touches.length === 1) {
+      const r = svg.getBoundingClientRect();
+      tx += (e.touches[0].clientX - sx) / r.width * MAP_W;
+      ty += (e.touches[0].clientY - sy) / r.height * MAP_H;
+      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+      clamp(); apply(); e.preventDefault();
+    }
+  }, { passive: false });
+  svg.addEventListener("touchend", () => { dragging = false; pinch = 0; });
+
+  wrap.querySelectorAll("[data-mz]").forEach((b) => b.onclick = () => {
+    if (b.dataset.mz === "fit") { k = 1; tx = 0; ty = 0; clamp(); apply(); }
+    else zoomAt(b.dataset.mz === "in" ? 1.5 : 1 / 1.5, MAP_W / 2, MAP_H / 2);
+  });
+  apply();
+}
+
 // ---------- chrome ----------
 
 /* Inline stroked icons. The nav used emoji, which render differently on
@@ -255,8 +419,12 @@ const TABS = [
     roles: ["admin"] },
   { id: "analytics", label: "Analytics", icon: "chart", group: "Grow",
     roles: ["admin"] },
+  { id: "events", label: "Events", icon: "calendar", group: "Grow",
+    roles: ["admin", "employee"] },
   { id: "docs", label: "Documents", icon: "file", group: "Company",
     roles: ["admin", "employee"] },
+  { id: "staff", label: "Team & access", icon: "users", group: "Company",
+    roles: ["admin"] },
   { id: "chat", label: "Chat", icon: "chat", group: "Company", roles: "*" },
   { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
   { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
@@ -342,11 +510,15 @@ async function render() {
     inventory: renderInventory,
     routes: renderRoutes, promos: renderPromos, outreach: renderOutreach,
     experiments: renderExperiments, analytics: renderAnalytics,
-    docs: renderDocs,
+    docs: renderDocs, staff: renderStaff, events: renderEvents,
     hq: renderHQ, admin: renderAdmin, login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
     `<div class="card">Error: ${esc(e.message)}</div>`; }
+  // Maps are inserted as markup by whichever view drew them; wiring happens
+  // here so every view gets pan/zoom without remembering to ask.
+  document.querySelectorAll(".map-wrap").forEach((m) => wireMap(m.id));
+  drawStoreRail();
 }
 
 // ---------- login ----------
@@ -1182,10 +1354,14 @@ async function renderChat() {
     <div class="chat-wrap">
       <div class="chat-side">
         ${isStaff && staff && staff.staff.length ? `
-          <select id="dm-pick"><option value="">+ direct message…</option>
-            ${staff.staff.map((u) => `<option value="${u.id}">${esc(u.name)}
-              ${staff.online.includes(u.id) ? " (online)" : ""}</option>`).join("")}
-          </select>` : ""}
+          <div class="dm-start">
+            <input id="dm-name" list="dm-names" placeholder="Message someone by name…"
+              autocomplete="off">
+            <datalist id="dm-names">${staff.staff.map((u) =>
+              `<option value="${esc(u.name)}">${
+                staff.online.includes(u.id) ? "online" : ""}</option>`).join("")}</datalist>
+            <button class="btn sm" id="dm-go">Start</button>
+          </div>` : ""}
         ${data.convs.map((c) => {
           const unread = c.last && c.last.user_id !== data.me &&
             c.last.id > (lr[c.id] || 0);
@@ -1222,13 +1398,30 @@ async function renderChat() {
   document.querySelectorAll("[data-conv]").forEach((el) => {
     el.onclick = () => { S.chatConv = +el.dataset.conv; render(); };
   });
-  if ($("#dm-pick")) $("#dm-pick").onchange = async () => {
-    const uid = +$("#dm-pick").value;
-    if (!uid) return;
-    const r = await api("/api/chat/dm", { body: { user_id: uid } });
-    S.chatConv = r.conv_id;
-    render();
-  };
+  if ($("#dm-go")) {
+    const startDm = async () => {
+      const typed = $("#dm-name").value.trim().toLowerCase();
+      if (!typed) return;
+      // Exact name first, then a unique partial — so "dev" finds Dev Patel
+      // but an ambiguous fragment asks rather than guessing.
+      const all = (staff && staff.staff) || [];
+      let hit = all.find((u) => u.name.toLowerCase() === typed);
+      if (!hit) {
+        const near = all.filter((u) => u.name.toLowerCase().includes(typed));
+        if (near.length === 1) hit = near[0];
+        else if (near.length > 1) {
+          return toast(`${near.length} people match "${typed}" — be more specific`);
+        }
+      }
+      if (!hit) return toast(`nobody on the team matches "${typed}"`);
+      const r = await api("/api/chat/dm", { body: { user_id: hit.id } });
+      S.chatConv = r.conv_id;
+      $("#dm-name").value = "";
+      render();
+    };
+    $("#dm-go").onclick = startDm;
+    $("#dm-name").onkeydown = (e) => { if (e.key === "Enter") startDm(); };
+  }
   if (!conv) return;
   const history = await api(`/api/chat/convs/${conv.id}/messages`);
   history.forEach(chatAppend);
@@ -1593,24 +1786,15 @@ const REGION_COLORS = { Northeast: "#4a9eda", Southeast: "#35b26b",
 function hqMap(stores) {
   const pts = stores.filter((s) => s.lat != null);
   if (!pts.length) return "";
-  const lats = pts.map((s) => s.lat), lngs = pts.map((s) => s.lng);
-  const pad = 1.5;
-  const minLa = Math.min(...lats) - pad, maxLa = Math.max(...lats) + pad;
-  const minLo = Math.min(...lngs) - pad, maxLo = Math.max(...lngs) + pad;
-  const W = 860, H = 380;
-  const x = (lo) => ((lo - minLo) / (maxLo - minLo || 1)) * (W - 40) + 20;
-  const y = (la) => H - (((la - minLa) / (maxLa - minLa || 1)) * (H - 40) + 20);
-  return `<svg class="map" viewBox="0 0 ${W} ${H}">
-    ${pts.map((s) => `
-      <circle cx="${x(s.lng).toFixed(1)}" cy="${y(s.lat).toFixed(1)}"
-        r="${s.kind === "distributor_dc" ? 11 : 7}"
-        fill="${REGION_COLORS[s.region] || "#8b98a5"}" fill-opacity="0.85"
-        stroke="#0c1013"><title>${esc(s.name)} — ${esc(s.city)}</title></circle>`).join("")}
-    ${Object.entries(REGION_COLORS).map(([r, c], i) => `
-      <circle cx="${30 + i * 150}" cy="${H - 14}" r="6" fill="${c}"/>
-      <text x="${42 + i * 150}" y="${H - 10}" font-size="12"
-        fill="#8b98a5">${r}</text>`).join("")}
-  </svg>`;
+  return panZoomMap({
+    id: "hq-map",
+    pins: pts.map((st) => ({
+      lat: st.lat, lng: st.lng,
+      color: REGION_COLORS[st.region] || "#8b98a5",
+      size: st.kind === "distributor_dc" ? 10 : 6,
+      label: st.name, sub: st.city })),
+  }) + `<div class="map-legend">${Object.entries(REGION_COLORS).map(([r, c]) =>
+      `<span><i style="background:${c}"></i>${r}</span>`).join("")}</div>`;
 }
 
 function pnlTable(p) {
@@ -1756,27 +1940,19 @@ async function renderInventory() {
 // ---------- routes ----------
 
 function routeMap(stops) {
-  if (!stops.length) return "";
-  const lats = stops.map((s) => s.lat), lngs = stops.map((s) => s.lng);
-  const pad = 0.6;
-  const minLa = Math.min(...lats) - pad, maxLa = Math.max(...lats) + pad;
-  const minLo = Math.min(...lngs) - pad, maxLo = Math.max(...lngs) + pad;
-  const W = 640, H = 300;
-  const x = (lo) => ((lo - minLo) / (maxLo - minLo || 1)) * (W - 40) + 20;
-  const y = (la) => H - (((la - minLa) / (maxLa - minLa || 1)) * (H - 40) + 20);
-  const pts = stops.map((s) => `${x(s.lng).toFixed(1)},${y(s.lat).toFixed(1)}`);
-  return `<svg class="map" viewBox="0 0 ${W} ${H}">
-    <polyline points="${pts.join(" ")}" fill="none" stroke="#4a9eda"
-      stroke-width="2" stroke-dasharray="5 4"/>
-    ${stops.map((s, i) => `
-      <circle cx="${x(s.lng)}" cy="${y(s.lat)}" r="9"
-        fill="${s.delivered ? "#35b26b" : i === 0 ? "#d4a017" : "#232b34"}"
-        stroke="#8b98a5"/>
-      <text x="${x(s.lng)}" y="${y(s.lat) + 4}" text-anchor="middle"
-        font-size="10" fill="#e6edf3">${i + 1}</text>
-      <text x="${x(s.lng)}" y="${y(s.lat) - 13}" text-anchor="middle"
-        font-size="10" fill="#8b98a5">${esc(s.city || s.name)}</text>`).join("")}
-  </svg>`;
+  const pts = (stops || []).filter((p) => p.lat && p.lng);
+  if (!pts.length) return "";
+  const legs = [];
+  for (let i = 0; i + 1 < pts.length; i++) legs.push([pts[i], pts[i + 1]]);
+  const id = "rmap" + (++MAP_SEQ);
+  return panZoomMap({
+    id,
+    legs,
+    pins: pts.map((p, i) => ({
+      lat: p.lat, lng: p.lng, n: i + 1,
+      color: p.delivered ? "#3fbd82" : "#8a6ff0",
+      size: 11, label: p.name, sub: p.city })),
+  });
 }
 
 async function renderRoutes() {
@@ -2651,5 +2827,207 @@ function signForm(did) {
       prompt("Signing link (also emailed):", out.link);
       renderDocs();
     } catch (e) { toast(e.message); }
+  };
+}
+
+// ---------- stores rail ----------
+/* A persistent list of accounts beside the work. Field staff spend the day
+   asking "which stores are in this region and what's low" — making them
+   change tab to find out was the wrong default. */
+async function drawStoreRail() {
+  const rail = $("#store-rail");
+  if (!rail || !S.user) return;
+  if (!["shop", "inventory", "routes", "outreach", "orders", "hq"]
+      .includes(S.tab)) { rail.innerHTML = ""; rail.hidden = true; return; }
+  rail.hidden = false;
+  let stores = S._stores;
+  if (!stores) { stores = S._stores = await api("/api/stores"); }
+  const q = (S.railQ || "").toLowerCase();
+  const shown = stores.filter((st) =>
+    !q || (st.name + " " + st.city + " " + st.region).toLowerCase().includes(q));
+  const byRegion = {};
+  shown.forEach((st) => (byRegion[st.region] = byRegion[st.region] || []).push(st));
+  rail.innerHTML = `
+    <div class="rail-head">
+      <b>Stores</b><span class="dim">${shown.length}</span>
+    </div>
+    <input id="rail-q" placeholder="Filter" value="${esc(S.railQ || "")}">
+    <div class="rail-list">
+      ${Object.entries(byRegion).map(([region, list]) => `
+        <div class="rail-group">
+          <span class="rail-region"><i style="background:${
+            REGION_COLORS[region] || "#8b98a5"}"></i>${esc(region)}</span>
+          ${list.map((st) => `
+            <button class="rail-item ${S.railPick === st.id ? "on" : ""}"
+              data-rail="${st.id}">
+              <b>${esc(st.name)}</b>
+              <span class="dim">${esc(st.city)}${
+                st.kind === "distributor_dc" ? " · DC" : ""}</span>
+            </button>`).join("")}
+        </div>`).join("") || '<p class="dim" style="padding:8px">No matches.</p>'}
+    </div>`;
+  let t;
+  $("#rail-q").oninput = (e) => { clearTimeout(t);
+    t = setTimeout(() => { S.railQ = e.target.value; drawStoreRail(); }, 200); };
+  rail.querySelectorAll("[data-rail]").forEach((b) => b.onclick = async () => {
+    S.railPick = +b.dataset.rail;
+    const st = stores.find((x) => x.id === S.railPick);
+    const inv = await api("/api/inventory").catch(() => []);
+    const mine = inv.filter((i) => i.store_id === st.id);
+    modal(`<h3>${esc(st.name)}</h3>
+      <p class="dim">${esc(st.city)} · ${esc(st.region)}${
+        st.kind === "distributor_dc" ? " · distribution centre" : ""}${
+        st.contact ? " · " + esc(st.contact) : ""}</p>
+      ${mine.length ? `<table><thead><tr><th>product</th><th class="num">on hand</th>
+        <th class="num">par</th></tr></thead><tbody>
+        ${mine.map((i) => `<tr class="${i.low ? "low" : ""}">
+          <td>${esc(i.product_name || i.product_id)}</td>
+          <td class="num">${i.qty}</td><td class="num">${i.par}</td></tr>`).join("")}
+        </tbody></table>` : '<p class="dim">No inventory recorded here yet.</p>'}
+      <div class="modal-acts"><button class="btn alt" data-close>Close</button></div>`);
+    drawStoreRail();
+  });
+}
+
+// ---------- staff permissions ----------
+async function renderStaff() {
+  const data = await api("/api/store/admin/staff");
+  const perms = Object.entries(data.permissions);
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Team & permissions</h2>
+        <p class="dim">Who can see what in the back office. Owners keep full
+          access; everyone else gets exactly what's ticked. Changes are
+          recorded in the audit log.</p></div>
+    </div>
+    ${data.staff.map((u) => `
+      <div class="card">
+        <div class="doc-top">
+          <div class="doc-main">
+            <b>${esc(u.name)}</b>
+            <span class="dim">${esc(u.role)}${u.is_admin ? " · owner" : ""}${
+              u.active ? "" : " · inactive"}</span>
+          </div>
+          ${u.effective.includes("*")
+            ? '<span class="pill ok">full access</span>'
+            : `<span class="pill">${u.effective.length} area(s)</span>`}
+        </div>
+        ${u.is_admin ? '<p class="dim" style="margin-top:8px">Owner accounts always have every permission.</p>' : `
+        <div class="perm-grid">
+          ${perms.map(([k, label]) => `
+            <label class="perm">
+              <input type="checkbox" data-perm="${u.id}:${k}"
+                ${u.effective.includes(k) ? "checked" : ""}>
+              <span><b>${k}</b><small>${esc(label)}</small></span>
+            </label>`).join("")}
+        </div>
+        <div style="margin-top:10px">
+          <button class="btn sm" data-saveperm="${u.id}">Save permissions</button>
+        </div>`}
+      </div>`).join("")}`;
+  view().querySelectorAll("[data-saveperm]").forEach((b) => b.onclick = async () => {
+    const uid = b.dataset.saveperm;
+    const picked = [...view().querySelectorAll(`[data-perm^="${uid}:"]`)]
+      .filter((c) => c.checked).map((c) => c.dataset.perm.split(":")[1]);
+    try {
+      await api(`/api/store/admin/staff/${uid}/permissions`,
+        { body: { permissions: picked } });
+      toast("Permissions saved");
+      renderStaff();
+    } catch (e) { toast(e.message); }
+  });
+}
+
+// ---------- events ----------
+async function renderEvents() {
+  const rows = await api("/api/store/admin/events");
+  const now = Date.now() / 1000;
+  const upcoming = rows.filter((e) => e.starts >= now);
+  const past = rows.filter((e) => e.starts < now);
+  const card = (e) => `
+    <div class="card ${e.starts < now ? "dim-card" : ""}">
+      <div class="doc-top">
+        <span class="ev-date"><b>${new Date(e.starts * 1000)
+          .getDate()}</b>${new Date(e.starts * 1000)
+          .toLocaleString(undefined, { month: "short" }).toUpperCase()}</span>
+        <div class="doc-main">
+          <b>${esc(e.name)}</b>
+          <span class="dim">${esc(e.kind)}${
+            e.venue ? " · " + esc(e.venue) : ""}${
+            e.city ? " · " + esc(e.city) : ""}${
+            e.region ? " · " + esc(e.region) : ""}</span>
+        </div>
+        <span class="pill ${e.active ? "ok" : ""}">${e.active ? "live" : "hidden"}</span>
+        <button class="btn alt sm" data-evedit="${e.id}">Edit</button>
+      </div>
+      ${e.body ? `<p class="dim" style="margin-top:8px">${esc(e.body)}</p>` : ""}
+    </div>`;
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Events</h2>
+        <p class="dim">Tastings, pop-ups and markets. These appear on
+          <a href="/events" target="_blank">the public events page</a>; past
+          events drop off it automatically.</p></div>
+      <button class="btn" id="ev-new">${opsIcon("calendar","btn-ic")} New event</button>
+    </div>
+    <h3>Upcoming (${upcoming.length})</h3>
+    ${upcoming.map(card).join("") || '<div class="card empty"><span class="e-ic">'
+      + opsIcon("calendar") + '</span><b>Nothing scheduled</b></div>'}
+    ${past.length ? `<h3>Past (${past.length})</h3>${past.map(card).join("")}` : ""}`;
+  $("#ev-new").onclick = () => eventForm(null);
+  view().querySelectorAll("[data-evedit]").forEach((b) => b.onclick = () =>
+    eventForm(rows.find((x) => x.id === +b.dataset.evedit)));
+}
+
+function eventForm(e) {
+  const kinds = ["tasting", "popup", "market", "class"];
+  const d = e && e.starts
+    ? new Date(e.starts * 1000).toISOString().slice(0, 10) : "";
+  modal(`<h3>${e ? "Edit event" : "New event"}</h3>
+    <label>Name</label><input id="ef-name" value="${esc((e && e.name) || "")}">
+    <div class="row2">
+      <div><label>Kind</label><select id="ef-kind">${kinds.map((k) =>
+        `<option ${e && e.kind === k ? "selected" : ""}>${k}</option>`).join("")}</select></div>
+      <div><label>Date</label><input id="ef-date" type="date" value="${d}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Venue</label><input id="ef-venue" value="${esc((e && e.venue) || "")}"></div>
+      <div><label>City</label><input id="ef-city" value="${esc((e && e.city) || "")}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Region</label><input id="ef-region" value="${esc((e && e.region) || "")}"></div>
+      <div><label>Link</label><input id="ef-url" value="${esc((e && e.url) || "")}"></div>
+    </div>
+    <label>Details</label><textarea id="ef-body" rows="3">${esc((e && e.body) || "")}</textarea>
+    <label class="perm" style="margin-top:14px">
+      <input type="checkbox" id="ef-live" ${!e || e.active ? "checked" : ""}>
+      <span><b>Live</b><small>Shown on the public events page</small></span></label>
+    <div class="modal-acts">
+      ${e ? '<button class="btn alt" id="ef-del" style="margin-right:auto">Delete</button>' : ""}
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="ef-save">Save</button>
+    </div>`);
+  $("#ef-save").onclick = async () => {
+    const name = $("#ef-name").value.trim();
+    if (!name) return toast("an event needs a name");
+    const dv = $("#ef-date").value;
+    const payload = { name, kind: $("#ef-kind").value,
+      venue: $("#ef-venue").value.trim(), city: $("#ef-city").value.trim(),
+      region: $("#ef-region").value.trim(), url: $("#ef-url").value.trim(),
+      body: $("#ef-body").value.trim(),
+      active: $("#ef-live").checked ? 1 : 0,
+      starts: dv ? new Date(dv + "T12:00").getTime() / 1000
+        : (e ? e.starts : Date.now() / 1000) };
+    try {
+      if (e) await api(`/api/store/admin/events/${e.id}`,
+        { method: "PATCH", body: payload });
+      else await api("/api/store/admin/events", { body: payload });
+      closeModal(); renderEvents();
+    } catch (err) { toast(err.message); }
+  };
+  if (e && $("#ef-del")) $("#ef-del").onclick = async () => {
+    if (!confirm(`Delete "${e.name}"?`)) return;
+    await api(`/api/store/admin/events/${e.id}`, { method: "DELETE" });
+    closeModal(); renderEvents();
   };
 }

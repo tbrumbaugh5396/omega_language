@@ -199,6 +199,27 @@ def blog_post(slug: str, request: Request, con=Depends(get_con)):
             f'<p class="dim">{sect.esc(p["author"])}</p>{hero}'
             f'<div class="post-content">{p["body"]}</div></article>'
             f'<script type="application/ld+json">{json.dumps(ld)}</script>')
+    if p["comments_on"]:
+        rows = con.execute(
+            "SELECT name, body, created_at FROM blog_comments"
+            " WHERE post_id=? AND approved=1 ORDER BY id",
+            (p["id"],)).fetchall()
+        posted = "".join(
+            f'<div class="cmt"><b>{sect.esc(r["name"])}</b>'
+            f'<p>{sect.esc(r["body"])}</p></div>' for r in rows)
+        body += (
+            f'<section class="section comments"><h2>Comments</h2>'
+            f'{posted or "<p class=dim>Be the first to comment.</p>"}'
+            f'<form class="cmt-form" data-slug="{sect.esc(p["slug"])}">'
+            f'<div class="cmt-row">'
+            f'<label>Name<input name="name" required></label>'
+            f'<label>Email <span class="dim">(not published)</span>'
+            f'<input name="email" type="email"></label></div>'
+            f'<label>Comment<textarea name="body" rows="3" required></textarea>'
+            f'</label>'
+            f'<button class="btn-pill primary" type="submit">Post comment</button>'
+            f'<p class="cmt-msg"></p></form></section>')
+
     return HTMLResponse(render_shell(
         con, body, title=f"{p['title']} — {get_theme(con)['brand']}",
         description=p["excerpt"] or p["title"]))

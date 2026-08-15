@@ -1657,6 +1657,31 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
   paint();
 })();
 
+/* ---------- blog comments ---------- */
+(function wireComments() {
+  const f = document.querySelector(".cmt-form");
+  if (!f) return;
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = f.querySelector(".cmt-msg");
+    const body = {};
+    for (const el of f.elements) if (el.name) body[el.name] = el.value.trim();
+    if (!body.name || !body.body) {
+      msg.textContent = "A name and a comment, please."; return; }
+    const btn = f.querySelector("button"); btn.disabled = true;
+    try {
+      const r = await fetch(`/api/store/blog/${f.dataset.slug}/comments`,
+        { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body) });
+      if (!r.ok) throw new Error((await r.json()).detail || "failed");
+      f.reset();
+      msg.textContent = "Thanks — your comment appears once it's approved.";
+    } catch (err) {
+      msg.textContent = String(err.message || err);
+    } finally { btn.disabled = false; }
+  };
+})();
+
 /* ---------- marketing pixels + consent ----------
    The snippet in <head> defines window.__pixelConfig and a __pixelLoad() that
    only runs once consent is given. This half translates the storefront's own

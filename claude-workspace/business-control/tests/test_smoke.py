@@ -930,4 +930,100 @@ _css = c.get("/ops/styles.css").text
 ok(".page-head" in _css and ".stat " in _css and "#ops-modal" in _css,
    "ops stylesheet carries the modernised components")
 
+# --- editing what could previously only be created ---
+_pid = c.get("/api/products").json()[0]["id"]
+ok(c.patch(f"/api/store/admin/products/{_pid}", headers=A, json={
+    "name": "Test Sauce Deluxe", "sku": "T-1", "price_cents": 950,
+    "case_price_cents": 8000}).status_code == 200, "product edited")
+ok(c.get("/api/products").json()[0]["price_cents"] == 950, "the edit stuck")
+c.post("/api/admin/products", headers=A, json={
+    "sku": "T-2", "name": "Second", "price_cents": 100,
+    "case_price_cents": 900})
+_p2id = [p for p in c.get("/api/products").json() if p["sku"] == "T-2"][0]["id"]
+ok(c.patch(f"/api/store/admin/products/{_pid}", headers=A,
+           json={"sku": "T-2"}).status_code == 400,
+   "a duplicate SKU is refused")
+_del = c.delete(f"/api/store/admin/products/{_pid}", headers=A).json()
+ok(_del["action"] == "retired",
+   "a product with order history is retired, not deleted")
+
+_cid = c.post("/api/store/admin/collections", headers=A,
+              json={"slug": "test-collection", "name": "Test collection",
+                    "product_ids": []}).json()["id"]
+ok(c.patch(f"/api/store/admin/collections/{_cid}", headers=A, json={
+    "name": "Renamed", "product_ids": [_p2id]}).status_code == 200,
+   "collection edited")
+_after = [x for x in c.get("/api/store/catalog").json()["collections"]
+          if x["id"] == _cid][0]
+ok(_after["name"] == "Renamed" and _after["product_ids"] == [_p2id],
+   "collection rename and membership both saved")
+
+c.post("/api/store/admin/discounts", headers=A,
+       json={"code": "EDITME", "pct": 10, "active": True})
+ok(c.patch("/api/store/admin/discounts/EDITME", headers=A,
+           json={"pct": 25, "usage_limit": 5}).status_code == 200,
+   "discount edited")
+ok(c.patch("/api/store/admin/discounts/EDITME", headers=A,
+           json={"pct": 0}).status_code == 400, "0% discount refused")
+ok(c.delete("/api/store/admin/discounts/EDITME",
+            headers=A).json()["action"] == "deleted", "unused discount deleted")
+_batch = c.post("/api/store/admin/discounts/unique", headers=A,
+                json={"prefix": "VIP", "count": 12, "pct": 20}).json()
+ok(_batch["count"] == 12 and len(set(_batch["codes"])) == 12,
+   "twelve distinct single-use codes minted")
+_one = c.get("/api/store/admin/discounts2", headers=A).json()
+_v = [d for d in _one if d["code"] == _batch["codes"][0]][0]
+ok(_v["usage_limit"] == 1 and _v["per_customer_limit"] == 1,
+   "a unique code is one use, one customer")
+ok(any(b["batch"] == _batch["batch"] for b in
+       c.get("/api/store/admin/discounts/batches", headers=A).json()),
+   "batches are listed")
+
+# --- blog comments ---
+_post = c.post("/api/store/admin/posts", headers=A, json={
+    "slug": "test-post", "title": "Test post", "body": "<p>Hi</p>"}).json()
+ok(c.post("/api/store/blog/test-post/comments",
+          json={"name": "Ann", "body": "Nice"}).status_code == 403,
+   "comments are closed by default")
+_pid2 = [p for p in c.get("/api/store/admin/posts", headers=A).json()
+         if p["slug"] == "test-post"][0]["id"]
+c.post(f"/api/store/admin/posts/{_pid2}/comments-toggle", headers=A,
+       json={"comments_on": True})
+ok(c.post("/api/store/blog/test-post/comments",
+          json={"name": "Ann", "body": "Nice"}).json()["held"],
+   "a comment is accepted but held for moderation")
+ok(c.get("/api/store/blog/test-post/comments").json()["comments"] == [],
+   "an unapproved comment is not published")
+_cmid = c.get("/api/store/admin/comments", headers=A).json()[0]["id"]
+c.post(f"/api/store/admin/comments/{_cmid}", headers=A,
+       json={"action": "approve"})
+ok(len(c.get("/api/store/blog/test-post/comments").json()["comments"]) == 1,
+   "approving publishes it")
+ok("Post comment" in c.get("/blog/test-post").text,
+   "the comment form renders on a post with comments on")
+
+# --- page-to-page funnel ---
+for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
+                   ("pf-3", ["/"])):
+    for _pg in _pages:
+        c.post("/api/store/track", json={"visitor_id": _v, "page": _pg})
+_pf = c.get("/api/store/admin/page-funnel?days=30", headers=A).json()
+ok(_pf["sessions"] >= 3, "funnel reconstructs sessions from the pageview log")
+ok(any(p["page"] == "/" for p in _pf["pages"]), "pages ranked by views")
+ok(any(f["from"] == "/" and f["to"] == "/find" for f in _pf["flow"]),
+   "page-to-page transitions are counted")
+ok(all("exit_rate" in p for p in _pf["pages"]), "each page reports an exit rate")
+ok(c.get("/api/store/admin/page-funnel").status_code == 403,
+   "the funnel needs the analytics permission")
+
+# --- ops app additions ---
+_ops = c.get("/ops/app.js").text
+ok("panZoomMap" in _ops and "wireMap" in _ops,
+   "ops app has a pan/zoom map component")
+ok("renderStaff" in _ops and "renderEvents" in _ops and "drawStoreRail" in _ops,
+   "ops app has team access, events and the store rail")
+ok("dm-name" in _ops, "chat can start a DM by typing a name")
+_acss = c.get("/store.css").text
+ok(".cmt-form" in _acss, "comment form is styled")
+
 print(f"\nall {checks} checks passed")

@@ -908,3 +908,21 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
   .menu-tiles { grid-template-columns: repeat(2, 1fr); }
   .buy-fab { right: 14px; bottom: 14px; padding: 12px 18px; }
 }
+
+/* ---------- blog comments ---------- */
+.comments { max-width: 720px; }
+.cmt { border-top: 1px solid var(--line); padding: 16px 0; }
+.cmt b { font-size: 14.5px; font-weight: 600; }
+.cmt p { font-size: 15px; color: var(--ink-2); margin-top: 4px; }
+.cmt-form { border-top: 1px solid var(--line); padding-top: 20px;
+  margin-top: 12px; display: grid; gap: 12px; }
+.cmt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cmt-form label { display: block; font-size: 12.5px; font-weight: 600;
+  color: var(--ink-2); }
+.cmt-form input, .cmt-form textarea { width: 100%; margin-top: 5px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 11px 13px; font-family: var(--ui); font-size: 14.5px;
+  background: var(--paper); color: var(--ink); }
+.cmt-form button { justify-self: start; }
+.cmt-msg { font-size: 14px; color: var(--ink-2); }
+@media (max-width: 620px) { .cmt-row { grid-template-columns: 1fr; } }

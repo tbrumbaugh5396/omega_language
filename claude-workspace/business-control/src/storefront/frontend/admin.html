@@ -85,6 +85,11 @@
     .hm-doc { position: relative; width: 100%; }
     .hm-frame iframe { width: 100%; border: none; display: block;
       pointer-events: none; }
+    /* With "click through" on, the page becomes usable and the overlay steps
+       aside. The storefront's ?__preview=1 guard already stops the preview
+       recording itself, so clicking around in here never pollutes the data. */
+    .hm-frame.interactive iframe { pointer-events: auto; }
+    .hm-frame.interactive .hm-overlay { opacity: .3; }
     .hm-overlay { position: absolute; top: 0; left: 0; width: 100%;
       height: 100%; pointer-events: none; }
     .hm-loading { padding: 40px; text-align: center; color: #8a82a0;
@@ -133,6 +138,38 @@
       padding-top: 10px; border-top: 1px dashed var(--line); }
     .cr-add select, .cr-add input { width: auto; flex: 1; min-width: 90px;
       font-size: 12px; padding: 6px 8px; }
+
+    /* page funnel */
+    .pf-list { display: grid; gap: 6px; margin-top: 12px; }
+    .pf-row { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+    .pf-page { flex: 0 0 190px; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; }
+    .pf-bar { flex: 1; height: 22px; background: var(--line-2);
+      border-radius: 6px; position: relative; overflow: hidden; }
+    .pf-fill { position: absolute; inset: 0 auto 0 0;
+      background: linear-gradient(90deg, #6c00bf, #8a77e1); border-radius: 6px; }
+    .pf-exit { position: absolute; inset: 0 auto 0 0; background: #ff6900;
+      opacity: .8; border-radius: 6px 0 0 6px; }
+    .pf-n { flex: 0 0 52px; text-align: right; font-variant-numeric: tabular-nums;
+      font-weight: 600; }
+    .pf-drop { flex: 0 0 78px; text-align: right; font-size: 12px;
+      color: var(--ink-2); }
+    .pf-drop.hot { color: #c01060; font-weight: 600; }
+    .pf-flows { display: grid; gap: 5px; margin-top: 10px; }
+    .pf-flow { display: flex; align-items: center; gap: 10px; font-size: 12.5px;
+      padding: 6px 10px; background: var(--bg); border-radius: var(--r-sm); }
+    .pf-flow code { flex: 0 0 auto; }
+    .pf-arrow { font-size: 16px; color: var(--purple); }
+    .pf-flow b { margin-left: auto; font-variant-numeric: tabular-nums; }
+
+    /* admin modal — the store admin had none; every form was inline */
+    #adm-modal { position: fixed; inset: 0; z-index: 90; display: flex;
+      align-items: center; justify-content: center; padding: 20px;
+      background: rgba(27,24,31,.5); backdrop-filter: blur(3px); }
+    .adm-modal-card { background: var(--paper); border-radius: var(--r-lg);
+      padding: 28px; width: 100%; max-width: 620px; max-height: 88vh;
+      overflow-y: auto; box-shadow: var(--sh-2); }
+    .adm-modal-card h3 { font-size: 21px; margin-bottom: 10px; }
   </style>
 </head>
 <body>
@@ -180,6 +217,8 @@
       <button class="tab" data-tab="pixels">Pixels</button>
       <button class="tab" data-tab="campaigns">Campaigns</button>
       <button class="tab" data-tab="tickets">Support</button>
+      <button class="tab" data-tab="funnel">Page funnel</button>
+      <button class="tab" data-tab="comments">Comments</button>
       <button class="tab" data-tab="blog">Blog</button>
       <button class="tab" data-tab="nav">Nav &amp; redirects</button>
       <button class="tab" data-tab="intl">Currency &amp; language</button>
@@ -352,6 +391,12 @@
         skipped entirely.</p>
       <div class="adm-row">
         <div><label>Page</label><select id="hm-page"></select></div>
+        <div><label>Interact</label>
+          <label style="display:flex;gap:8px;align-items:center;
+            text-transform:none;letter-spacing:0;font-weight:400;
+            font-size:14px;color:var(--ink);margin-top:5px">
+            <input type="checkbox" id="hm-interact" style="width:auto">
+            Click through the page</label></div>
         <div><label>Overlay</label>
           <select id="hm-mode">
             <option value="heat">Heat blobs</option>
@@ -370,6 +415,23 @@
           <div id="hm-reach"></div>
         </div>
       </div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="funnel">
+      <h3>Page funnel</h3>
+      <p class="dim">Which pages people land on, where they go next, and where
+        they leave. Reconstructed from the pageview log — the step funnel in
+        the ops app answers "how many bought"; this answers "which page
+        leaks".</p>
+      <div id="pf-out"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="comments">
+      <h3>Blog comments</h3>
+      <p class="dim">Comments are off by default and can be switched on per
+        post in the Blog tab. New comments are held until you approve them —
+        auto-publishing means you hear about spam from a customer.</p>
+      <div class="adm-list" id="cm-list"></div>
     </div>
 
     <div class="adm-panel hidden" data-panel="campaigns">
@@ -586,6 +648,9 @@
       </div>
       <div class="modal-actions">
         <button class="btn-pill primary sm" id="di-save">Save code</button>
+      </div>
+      <div class="modal-actions" style="justify-content:flex-start">
+        <button class="btn-pill ghost sm" id="di-mint">Mint unique codes…</button>
       </div>
       <div class="adm-list" id="di-list"></div>
 
