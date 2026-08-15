@@ -21,8 +21,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (ai, auth, briefs, config, curriculum as cur, db, library,
-               seeder, studio)
+from . import (ai, auth, briefs, config, course, curriculum as cur, db,
+               library, seeder, studio)
 
 app = FastAPI(title="AV Trainer")
 db.init()
@@ -894,6 +894,7 @@ def manifest():
 # importing it, so those modules never have to import main back.
 studio.register(app, current_user)
 ai.register(app, current_user)
+course.register(app, current_user)
 
 
 class RevalidatingStatics(StaticFiles):

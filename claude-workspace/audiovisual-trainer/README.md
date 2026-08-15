@@ -35,6 +35,39 @@ which is why selection is logged here as training data.
 Plus **Library** (Parts 3–8 and 10–12, searchable by symptom) and
 **Progress** (accuracy reported next to the level it was earned at).
 
+### The course
+
+**Library → Course** carries *The Mathematics Behind Graphics*: eight modules
+from radiometry to fragment shaders, served straight out of `docs/course` as
+ordinary markdown. The files stay the source of truth — edit one, reload, and
+the app shows it. They still render on GitHub or in any editor.
+
+What the app adds is that the figures come alive. A document that references
+`figures/gradient-triptych.png` gets an interactive canvas computed from the
+maths instead of a shipped image, and falls back to the generated file when
+there is no live version. The split follows the course's own rule:
+
+- **Plots of data or of a closed-form function** are drawn from the maths, so
+  they are reproducible and make no claim about your screen.
+- **Display artifacts** — banding, dither, the aliasing zone plate — render at
+  one canvas pixel per device pixel and are never CSS-scaled, because a
+  resampled artifact figure is a statement about the scaler rather than about
+  the signal.
+
+Twelve figures are live, including three the course lists as still to be
+generated because they need CIE tables the repo does not ship. Those are
+computed instead: the colour-matching functions use the Wyman–Sloan–Shirley
+analytic fit to the 1931 2° observer, labelled as a fit, and the **metameric
+pair is constructed rather than drawn** — a vector from the null space of the
+colour-matching matrix is added to a spectrum, so the two curves differ
+visibly while their XYZ agree to about 1e-13. That closes the gap Module 1
+admits to when it says a metameric pair is the central idea of the course and
+then does not show one.
+
+Maths is transliterated to Unicode rather than typeset — no dependency, and
+block equations are shown as source so nothing is mistaken for rendered
+output.
+
 ## The studio
 
 The trainer builds the eye and ear; the **Studio** tab is where the work

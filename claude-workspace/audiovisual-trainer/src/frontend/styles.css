@@ -327,6 +327,53 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .design-num { font-size: .72rem; color: var(--ink-3); margin-bottom: 0; }
 .design-num input, .design-num select { padding: .25em .4em; font-size: .8rem; }
 
+/* ---------------------------------------------------------------- course */
+
+.md { max-width: 74ch; font-size: .95rem; line-height: 1.65; }
+.md h2 { margin-top: 1.6rem; font-size: 1.18rem; }
+.md h3 { margin-top: 1.2rem; font-size: 1rem; color: var(--ink); }
+.md h4 { margin-top: 1rem; color: var(--ink-2); }
+.md p { color: var(--ink-2); }
+.md strong { color: var(--ink); font-weight: 620; }
+.md li { color: var(--ink-2); margin-bottom: .35em; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1.6rem 0; }
+.md blockquote {
+  margin: .8rem 0; padding: .5rem .8rem; color: var(--ink-2);
+  border-left: 2px solid var(--accent); background: var(--panel-2);
+  border-radius: 0 8px 8px 0;
+}
+.md code {
+  font-family: var(--mono); font-size: .85em; color: var(--cool);
+  background: var(--panel-2); padding: .1em .35em; border-radius: 5px;
+}
+.md-code {
+  background: #06080e; border: 1px solid var(--line); border-radius: 10px;
+  padding: .7rem .8rem; overflow-x: auto; font-size: .8rem; line-height: 1.5;
+  margin: .8rem 0;
+}
+.md-code code { background: none; color: #d7dcf0; padding: 0; }
+/* Maths is transliterated, not typeset — it reads as source, deliberately. */
+.mth { font-family: var(--mono); font-size: .92em; color: var(--warm); }
+.md-math {
+  font-family: var(--mono); font-size: .88rem; color: var(--warm);
+  background: var(--panel-2); border-left: 2px solid var(--warm);
+  border-radius: 0 8px 8px 0; padding: .55rem .8rem; margin: .8rem 0;
+  overflow-x: auto;
+}
+.md table { margin: .8rem 0; }
+.md a { color: var(--accent); }
+
+.course-figure {
+  margin: 1.2rem 0; padding: .6rem; background: var(--panel-2);
+  border: 1px solid var(--line-soft); border-radius: 12px;
+}
+.course-figure canvas, .course-figure img { margin: 0 auto; }
+.course-figure figcaption {
+  margin-top: .5rem; font-size: .8rem; color: var(--ink-2); line-height: 1.5;
+}
+.course-figure .knobs { margin-top: .5rem; }
+.course-figure .lab-log:empty { display: none; }
+
 /* ---------------------------------------------------------------- mixer */
 
 .mixer { display: flex; gap: .5rem; overflow-x: auto; padding: .2rem; }

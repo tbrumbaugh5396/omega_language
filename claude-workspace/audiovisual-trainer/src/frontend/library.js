@@ -6,10 +6,13 @@
 // the failure that sent you there attached to it.
 
 import { el, clear, api, toast, hhmm, relTime } from "./ui.js";
+import { renderMarkdown } from "./markdown.js";
+import { mountFigure } from "./figures.js";
+import { FIGURE_BY_ID, MODULE_EXTRAS } from "./figures-content.js";
 
 export async function libraryView(ctx) {
   const root = el("div");
-  const sections = ["Theory", "Effects", "Genres", "Systems", "Reading", "Tools", "Glossary"];
+  const sections = ["Course", "Theory", "Effects", "Genres", "Systems", "Reading", "Tools", "Glossary"];
   let active = ctx.sub && sections.includes(ctx.sub) ? ctx.sub : "Theory";
   const target = ctx.arg;
 
@@ -37,6 +40,7 @@ export async function libraryView(ctx) {
 
   async function render() {
     clear(body);
+    if (active === "Course") { await coursePane(ctx, body); return; }
     body.append(
       active === "Theory" ? theoryPane(ctx, progress, notes, target)
       : active === "Effects" ? catalogPane(ctx)
@@ -309,4 +313,102 @@ function searchResults(ctx, q, progress, notes) {
     wrap.append(el("div.card.empty", {}, `Nothing matches "${q}".`));
   }
   return wrap;
+}
+
+// ------------------------------------------------------------------ course
+//
+// The eight modules of "The Mathematics Behind Graphics", served from
+// docs/course as plain markdown. Figures the app has a live version of are
+// swapped in where the text already references them; anything else falls back
+// to the generated file, so the documents read identically outside the app.
+
+let courseTeardowns = [];
+
+async function coursePane(ctx, body) {
+  for (const t of courseTeardowns) t();
+  courseTeardowns = [];
+
+  const index = await api("/api/course");
+  if (index.missing || !index.modules.length) {
+    body.append(el("div.card.empty", {},
+      "No course documents found. Drop the module markdown into " +
+      "docs/course/ and reload."));
+    return;
+  }
+
+  const list = el("div.card", {},
+    el("h2", {}, "The Mathematics Behind Graphics"),
+    el("p.dim", {}, "From photons to fragment shaders. Almost everything here " +
+      "is either an integral of a signal against a basis, or a change of " +
+      "basis — if a module feels like arbitrary trivia, ask which of the two " +
+      "it is."),
+    el("div.stack", {}, ...index.modules.map((m, i) =>
+      el("button.drill-card", { onclick: () => openDoc(m.slug) },
+        el("b", {}, m.title),
+        el("div.row.tight", { style: { marginTop: ".3rem" } },
+          el("span.tag", {}, `Module ${i}`),
+          m.maths ? el("span.fine", {}, m.maths) : null,
+          el("span.fine", {}, `${m.words} words`),
+          liveCount(m.slug) ? el("span.tag.good", {}, `${liveCount(m.slug)} live figures`) : null)))),
+    index.readme ? el("button.ghost", { style: { marginTop: ".6rem" },
+      onclick: () => openDoc("README") }, "Course README") : null);
+  body.append(list);
+
+  function liveCount(slug) {
+    return (MODULE_EXTRAS[slug] || []).length;
+  }
+
+  async function openDoc(slug) {
+    for (const t of courseTeardowns) t();
+    courseTeardowns = [];
+    clear(body);
+    body.append(el("p.muted", {}, "Loading…"));
+
+    let text;
+    try { text = await api(`/api/course/doc/${slug}`, { raw: true }).then((r) => r.text()); }
+    catch (e) { clear(body); body.append(el("div.card", {}, el("p.err", {}, e.message))); return; }
+
+    // Figures are mounted only once the tree is in the document. Mounting
+    // into a detached node gives every canvas a width of zero, and an exact
+    // figure sized from nothing is not a figure.
+    const pending = [];
+    const rendered = renderMarkdown(text, {
+      onFigure: (path, alt) => {
+        const id = path.split("/").pop().replace(/\.(svg|png)$/, "");
+        const fig = FIGURE_BY_ID[id];
+        if (!fig) return null;
+        const holder = el("div");
+        pending.push([holder, fig]);
+        return holder;
+      },
+      onLink: (target) => openDoc(target),
+    });
+
+    // Figures the app can draw that this module's prose predates.
+    const extras = (MODULE_EXTRAS[slug] || []).filter((id) => !text.includes(id));
+    const extraBox = el("div");
+    if (extras.length) {
+      extraBox.append(el("div.card", {},
+        el("h2", {}, "Interactive figures for this module"),
+        el("p.fine", {}, "These are not referenced in the text — the documents " +
+          "list them as figures still to be generated. They are computed live " +
+          "here rather than shipped as images."),
+        ...extras.map((id) => {
+          const holder = el("div");
+          pending.push([holder, FIGURE_BY_ID[id]]);
+          return holder;
+        })));
+    }
+
+    clear(body);
+    body.append(
+      el("div.card.tight", {},
+        el("div.row.tight", {},
+          el("button.ghost", { onclick: () => coursePane(ctx, body) }, "‹ Modules"),
+          el("span.fine", {}, "maths is transliterated to Unicode, not typeset"))),
+      el("div.card", {}, rendered),
+      extraBox);
+    for (const [holder, fig] of pending) courseTeardowns.push(mountFigure(holder, fig));
+    window.scrollTo(0, 0);
+  }
 }
