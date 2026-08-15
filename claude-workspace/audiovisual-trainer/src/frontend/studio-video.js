@@ -1,73 +1,107 @@
-// The video editor: a sequential timeline of clips, stills and titles, with
-// per-clip grading, dissolves, an audio track, and export by recording the
-// composed canvas.
+// The video editor: a multi-track timeline with trimming, and an offline
+// export that encodes with WebCodecs and muxes to MP4.
 //
-// Grading uses the canvas `filter` property rather than engine-image. That is
-// a deliberate departure: the pixel-level code elsewhere in this app exists to
-// teach the mechanism, but a 30fps preview cannot afford a per-frame JS pass
-// over half a million pixels, and a grade you cannot scrub against is not a
-// grade you can judge.
+// Two things worth knowing about the design:
+//
+//   · Clips are positioned in absolute time on a track, not queued end to
+//     end. That is what makes overlaps, cutaways, titles over footage and
+//     separate audio possible at all — a sequential list cannot express any
+//     of them.
+//   · Export is offline and frame-exact: every frame is produced by seeking
+//     the source, compositing, and handing a VideoFrame to the encoder. It is
+//     slower than real time, but it cannot drop frames, and backgrounding the
+//     tab no longer corrupts the result. The old real-time recorder is kept
+//     only as a fallback for browsers without WebCodecs.
+//
+// Grading uses the canvas `filter` property rather than engine-image. A 30fps
+// preview cannot afford a per-frame JS pass over half a million pixels, and a
+// grade you cannot scrub against is not a grade you can judge.
 
-import { el, clear, append, toast, modal, closeModal, knob, confirmDialog,
-         clamp } from "./ui.js";
+import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, clamp } from "./ui.js";
+import { muxMp4 } from "./video-mux.js";
 import { aiButton } from "./ai.js";
 
-const PREVIEW_MAX = 960;
-
+const PREVIEW_MAX = 900;
 const DEFAULT_GRADE = { brightness: 1, contrast: 1, saturate: 1, hue: 0, blur: 0 };
+const RULER_H = 24, ROW_H = 54, GUTTER = 116;
+
+let uid = Date.now() % 1e5;
+const nid = () => ++uid;
 
 export async function videoEditor(host) {
   const doc = host.data;
-  doc.clips ||= [];
-  doc.audio ||= [];
+  migrate(doc);
 
   const W = doc.width, H = doc.height;
   const pw = Math.min(PREVIEW_MAX, W);
   const ph = Math.round((pw * H) / W);
 
-  const media = new Map();       // clipId -> HTMLVideoElement | HTMLImageElement
-  let playing = false, playhead = 0, rafId = null, lastFrameTime = 0;
+  const media = new Map();          // clipId -> HTMLVideoElement | HTMLImageElement
+  let playing = false, playhead = 0, rafId = null, lastTs = 0;
+  let selected = null, drag = null, pxPerSec = 40;
 
-  const clipDur = (c) => Math.max(0.1, (c.out ?? c.dur) - (c.in ?? 0));
-  const timeline = () => {
-    let t = 0;
-    return doc.clips.map((c) => {
-      const entry = { clip: c, start: t, dur: clipDur(c) };
-      t += entry.dur - (c.transition === "dissolve" ? Math.min(c.transDur || 0.5, entry.dur / 2) : 0);
-      return entry;
-    });
-  };
-  const totalDur = () => {
-    const t = timeline();
-    if (!t.length) return 0;
-    const last = t[t.length - 1];
-    return last.start + last.dur;
-  };
+  // ---------------------------------------------------------------- model
+
+  function migrate(d) {
+    d.fps ||= 30;
+    if (!d.tracks) {
+      // v1 was one sequential list. Lay it out in absolute time, honouring the
+      // dissolve overlap it implied, so nothing a user cut is lost.
+      const vclips = [];
+      let t = 0;
+      for (const c of (d.clips || [])) {
+        const dur = Math.max(0.1, (c.out ?? c.dur ?? 3) - (c.in ?? 0));
+        const trans = c.transition === "dissolve" ? Math.min(c.transDur || 0.5, dur / 2) : 0;
+        const start = Math.max(0, t - trans);
+        vclips.push({ id: nid(), assetId: c.assetId, kind: c.kind, name: c.name,
+          start, in: c.in || 0, dur, srcDur: c.dur || dur,
+          grade: { ...DEFAULT_GRADE, ...(c.grade || {}) }, opacity: 1,
+          fadeIn: trans, fadeOut: 0, audioOn: !!c.audioOn,
+          text: c.text, color: c.color, bg: c.bg, size: c.size });
+        t = start + dur;
+      }
+      d.tracks = [{ id: nid(), kind: "video", name: "V1", mute: false, clips: vclips }];
+      if ((d.audio || []).length) {
+        d.tracks.push({ id: nid(), kind: "audio", name: "A1", mute: false,
+          clips: d.audio.map((a) => ({ id: nid(), assetId: a.assetId, kind: "audio",
+            name: a.name || "audio", start: a.start || 0, in: 0,
+            dur: a.dur || 5, srcDur: a.dur || 5, gain: 1, fadeIn: 0, fadeOut: 0 })) });
+      }
+      delete d.clips; delete d.audio;
+    }
+    for (const tr of d.tracks) { tr.clips ||= []; tr.mute = !!tr.mute; }
+    if (!d.tracks.some((t) => t.kind === "audio")) {
+      d.tracks.push({ id: nid(), kind: "audio", name: "A1", mute: false, clips: [] });
+    }
+  }
+
+  const allClips = () => doc.tracks.flatMap((t) => t.clips.map((c) => ({ clip: c, track: t })));
+  const clipEnd = (c) => c.start + c.dur;
+  const duration = () => Math.max(1, ...allClips().map(({ clip }) => clipEnd(clip)));
+  const trackOf = (clip) => doc.tracks.find((t) => t.clips.includes(clip));
 
   // ---------------------------------------------------------------- media
 
   async function ensureMedia(clip) {
+    if (clip.kind === "title") return null;
     if (media.has(clip.id)) return media.get(clip.id);
     const asset = host.assets.find((a) => a.id === clip.assetId);
     if (!asset) return null;
-    if (clip.kind === "video") {
-      const v = document.createElement("video");
-      v.src = asset.url;
-      v.crossOrigin = "anonymous";
-      v.preload = "auto";
-      v.muted = !clip.audioOn;
-      await new Promise((res) => {
-        v.onloadedmetadata = res;
-        v.onerror = res;
-      });
-      media.set(clip.id, v);
-      return v;
+    if (clip.kind === "image") {
+      const img = new Image();
+      img.src = asset.url;
+      await new Promise((r) => { img.onload = r; img.onerror = r; });
+      media.set(clip.id, img);
+      return img;
     }
-    const img = new Image();
-    img.src = asset.url;
-    await new Promise((res) => { img.onload = res; img.onerror = res; });
-    media.set(clip.id, img);
-    return img;
+    const v = document.createElement("video");
+    v.src = asset.url;
+    v.preload = "auto";
+    v.muted = clip.kind === "audio" ? false : !clip.audioOn;
+    v.crossOrigin = "anonymous";
+    await new Promise((r) => { v.onloadedmetadata = r; v.onerror = r; });
+    media.set(clip.id, v);
+    return v;
   }
 
   // ---------------------------------------------------------------- preview
@@ -76,111 +110,99 @@ export async function videoEditor(host) {
     style: { width: "100%", height: "auto", background: "#000", borderRadius: "8px", display: "block" } });
   const cg = canvas.getContext("2d");
 
-  function filterFor(clip) {
+  const filterFor = (clip) => {
     const g = { ...DEFAULT_GRADE, ...(clip.grade || {}) };
-    return `brightness(${g.brightness}) contrast(${g.contrast}) ` +
-           `saturate(${g.saturate}) hue-rotate(${g.hue}deg)` +
-           (g.blur ? ` blur(${g.blur}px)` : "");
-  }
+    return `brightness(${g.brightness}) contrast(${g.contrast}) saturate(${g.saturate}) ` +
+           `hue-rotate(${g.hue}deg)` + (g.blur ? ` blur(${g.blur}px)` : "");
+  };
 
-  function drawSource(entry, localTime, alpha) {
-    const clip = entry.clip;
-    cg.save();
-    cg.globalAlpha = alpha;
-    cg.filter = filterFor(clip);
+  const fadeAlpha = (clip, local) => {
+    let a = clip.opacity ?? 1;
+    if (clip.fadeIn > 0) a *= clamp(local / clip.fadeIn, 0, 1);
+    if (clip.fadeOut > 0) a *= clamp((clip.dur - local) / clip.fadeOut, 0, 1);
+    return a;
+  };
+
+  function paintClip(g, clip, local, target = { w: pw, h: ph }) {
+    g.save();
+    g.globalAlpha = fadeAlpha(clip, local);
+    g.filter = filterFor(clip);
     if (clip.kind === "title") {
-      cg.fillStyle = clip.bg || "#000000";
-      cg.fillRect(0, 0, pw, ph);
-      cg.fillStyle = clip.color || "#ffffff";
-      cg.textAlign = "center";
-      cg.textBaseline = "middle";
-      const size = Math.round((clip.size || 64) * (pw / W));
-      cg.font = `600 ${size}px system-ui, sans-serif`;
+      if (clip.bg && clip.bg !== "none") { g.fillStyle = clip.bg; g.fillRect(0, 0, target.w, target.h); }
+      g.fillStyle = clip.color || "#ffffff";
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      const size = Math.round((clip.size || 64) * (target.w / W));
+      g.font = `600 ${size}px system-ui, sans-serif`;
       const lines = String(clip.text || "").split("\n");
       lines.forEach((line, i) => {
-        cg.fillText(line, pw / 2, ph / 2 + (i - (lines.length - 1) / 2) * size * 1.2);
+        g.fillText(line, target.w / 2, target.h / 2 + (i - (lines.length - 1) / 2) * size * 1.2);
       });
     } else {
       const m = media.get(clip.id);
-      if (m) {
-        // Fit inside the frame, letterboxed — never silently crop the shot.
-        const mw = m.videoWidth || m.width, mh = m.videoHeight || m.height;
-        if (mw && mh) {
-          const s = Math.min(pw / mw, ph / mh);
-          cg.drawImage(m, (pw - mw * s) / 2, (ph - mh * s) / 2, mw * s, mh * s);
-        }
+      const mw = m?.videoWidth || m?.width, mh = m?.videoHeight || m?.height;
+      if (m && mw && mh) {
+        const s = Math.min(target.w / mw, target.h / mh);
+        g.drawImage(m, (target.w - mw * s) / 2, (target.h - mh * s) / 2, mw * s, mh * s);
       }
     }
-    cg.restore();
+    g.restore();
   }
 
-  function renderAt(t) {
-    cg.save();
-    cg.filter = "none";
-    cg.globalAlpha = 1;
-    cg.fillStyle = "#000";
-    cg.fillRect(0, 0, pw, ph);
-    cg.restore();
-
-    const tl = timeline();
-    for (let i = 0; i < tl.length; i++) {
-      const e = tl[i];
-      if (t < e.start || t > e.start + e.dur) continue;
-      const local = t - e.start;
-      let alpha = 1;
-      // A dissolve is the previous clip still on screen underneath.
-      const trans = e.clip.transition === "dissolve"
-        ? Math.min(e.clip.transDur || 0.5, e.dur / 2) : 0;
-      if (trans && local < trans && i > 0) alpha = local / trans;
-      drawSource(e, local, alpha);
+  /** Composite every video track at time t. Later tracks draw on top. */
+  function renderAt(t, g = cg, target = { w: pw, h: ph }) {
+    g.save();
+    g.filter = "none";
+    g.globalAlpha = 1;
+    g.fillStyle = "#000";
+    g.fillRect(0, 0, target.w, target.h);
+    g.restore();
+    for (const tr of doc.tracks) {
+      if (tr.kind !== "video" || tr.mute) continue;
+      for (const clip of tr.clips) {
+        if (t < clip.start || t >= clipEnd(clip)) continue;
+        paintClip(g, clip, t - clip.start, target);
+      }
     }
   }
 
   async function seekTo(t) {
-    playhead = clamp(t, 0, Math.max(0, totalDur()));
-    const tl = timeline();
-    for (const e of tl) {
-      if (e.clip.kind !== "video") continue;
-      const m = media.get(e.clip.id);
-      if (!m) continue;
-      const inside = playhead >= e.start && playhead <= e.start + e.dur;
+    playhead = clamp(t, 0, duration());
+    for (const { clip } of allClips()) {
+      const m = media.get(clip.id);
+      if (!m || clip.kind === "image" || clip.kind === "title") continue;
+      const inside = playhead >= clip.start && playhead < clipEnd(clip);
       if (inside) {
-        const want = (e.clip.in || 0) + (playhead - e.start);
-        if (Math.abs(m.currentTime - want) > 0.15) m.currentTime = want;
+        const want = (clip.in || 0) + (playhead - clip.start);
+        if (Math.abs(m.currentTime - want) > 0.12) m.currentTime = want;
       } else if (!m.paused) m.pause();
     }
     renderAt(playhead);
-    drawRuler();
+    drawTimeline();
   }
 
   function tick(ts) {
     if (!playing) return;
-    const dt = lastFrameTime ? (ts - lastFrameTime) / 1000 : 0;
-    lastFrameTime = ts;
+    const dt = lastTs ? (ts - lastTs) / 1000 : 0;
+    lastTs = ts;
     playhead += dt;
-    const end = totalDur();
-    if (playhead >= end) { stop(); seekTo(0); return; }
-
-    const tl = timeline();
-    for (const e of tl) {
-      if (e.clip.kind !== "video") continue;
-      const m = media.get(e.clip.id);
-      if (!m) continue;
-      const inside = playhead >= e.start && playhead <= e.start + e.dur;
-      if (inside && m.paused) {
-        m.currentTime = (e.clip.in || 0) + (playhead - e.start);
+    if (playhead >= duration()) { stop(); seekTo(0); return; }
+    for (const { clip, track } of allClips()) {
+      const m = media.get(clip.id);
+      if (!m || clip.kind === "image" || clip.kind === "title") continue;
+      const inside = playhead >= clip.start && playhead < clipEnd(clip);
+      if (inside && m.paused && !track.mute) {
+        m.currentTime = (clip.in || 0) + (playhead - clip.start);
         m.play().catch(() => {});
-      } else if (!inside && !m.paused) m.pause();
+      } else if ((!inside || track.mute) && !m.paused) m.pause();
     }
     renderAt(playhead);
-    drawRuler();
+    drawTimeline();
     rafId = requestAnimationFrame(tick);
   }
-
-  async function play() {
-    if (!doc.clips.length) { toast("Import something first"); return; }
-    playing = true;
-    lastFrameTime = 0;
+  function play() {
+    if (!allClips().length) { toast("Import something first"); return; }
+    playing = true; lastTs = 0;
     playBtn.textContent = "Pause";
     rafId = requestAnimationFrame(tick);
   }
@@ -188,355 +210,643 @@ export async function videoEditor(host) {
     playing = false;
     cancelAnimationFrame(rafId);
     playBtn.textContent = "Play";
-    for (const m of media.values()) if (m.pause) m.pause();
+    for (const m of media.values()) m.pause?.();
   }
 
-  // ---------------------------------------------------------------- timeline UI
+  // ---------------------------------------------------------------- timeline
 
-  const ruler = el("canvas", { height: 74, style: { width: "100%", height: "74px", display: "block", cursor: "pointer" } });
-  const rg = ruler.getContext("2d");
+  const timeline = el("canvas", { style: { display: "block", cursor: "default" } });
+  const tg = timeline.getContext("2d");
+  const rowTop = (i) => RULER_H + i * ROW_H;
+  const timelineH = () => RULER_H + doc.tracks.length * ROW_H + 6;
 
-  function drawRuler() {
-    const wCss = ruler.clientWidth || 700;
-    if (ruler.width !== wCss) ruler.width = wCss;
-    const dur = Math.max(1, totalDur());
-    rg.fillStyle = "#0b0e16";
-    rg.fillRect(0, 0, ruler.width, ruler.height);
+  function drawTimeline() {
+    const dur = Math.max(duration() + 4, 12);
+    const w = Math.max(700, GUTTER + dur * pxPerSec + 40);
+    const h = timelineH();
+    if (timeline.width !== w || timeline.height !== h) { timeline.width = w; timeline.height = h; }
+    tg.fillStyle = "#0b0e16";
+    tg.fillRect(0, 0, w, h);
 
-    const tl = timeline();
-    tl.forEach((e, i) => {
-      const x = (e.start / dur) * ruler.width;
-      const w = (e.dur / dur) * ruler.width;
-      const selected = doc.clips[selected_i] === e.clip;
-      rg.fillStyle = e.clip.kind === "title" ? "#3b3560"
-        : e.clip.kind === "image" ? "#274d3f" : "#2c4a63";
-      rg.fillRect(x + 1, 16, Math.max(2, w - 2), 40);
-      if (selected) {
-        rg.strokeStyle = "#7c9cff";
-        rg.lineWidth = 2;
-        rg.strokeRect(x + 1, 16, Math.max(2, w - 2), 40);
-      }
-      rg.fillStyle = "#e8ebf5";
-      rg.font = "10px system-ui";
-      const label = e.clip.name || e.clip.kind;
-      rg.fillText(label.slice(0, Math.max(1, Math.floor(w / 6))), x + 5, 34);
-      rg.fillStyle = "#a8b0c8";
-      rg.fillText(`${e.dur.toFixed(1)}s`, x + 5, 50);
-      if (e.clip.transition === "dissolve" && i > 0) {
-        rg.fillStyle = "rgba(240,163,94,.8)";
-        rg.fillRect(x, 16, 3, 40);
+    tg.fillStyle = "#141a2a";
+    tg.fillRect(GUTTER, 0, dur * pxPerSec, RULER_H);
+    tg.font = "9px ui-monospace, monospace";
+    const step = pxPerSec > 60 ? 1 : pxPerSec > 25 ? 2 : 5;
+    for (let s = 0; s <= dur; s += step) {
+      const x = GUTTER + s * pxPerSec;
+      tg.fillStyle = "#2a3350";
+      tg.fillRect(x, 0, 1, h);
+      tg.fillStyle = "#a8b0c8";
+      tg.fillText(`${s}s`, x + 3, 15);
+    }
+
+    doc.tracks.forEach((tr, i) => {
+      const y = rowTop(i);
+      tg.fillStyle = i % 2 ? "#10141f" : "#0e121c";
+      tg.fillRect(0, y, w, ROW_H - 2);
+      tg.fillStyle = "#e8ebf5";
+      tg.font = "12px system-ui";
+      tg.fillText(tr.name, 8, y + 18);
+      tg.fillStyle = "#6e7794";
+      tg.font = "9px system-ui";
+      tg.fillText(tr.kind, 8, y + 32);
+      tg.fillStyle = tr.mute ? "#f2708a" : "#232a40";
+      tg.fillRect(84, y + 10, 16, 13);
+      tg.fillStyle = "#0b0e16";
+      tg.font = "8px system-ui";
+      tg.fillText("M", 88, y + 20);
+
+      for (const clip of tr.clips) {
+        const x = GUTTER + clip.start * pxPerSec;
+        const cw = Math.max(6, clip.dur * pxPerSec);
+        const isSel = selected === clip;
+        tg.fillStyle = clip.kind === "title" ? "#3b3560"
+          : clip.kind === "audio" ? "#1f4a44"
+          : clip.kind === "image" ? "#274d3f" : "#2c4a63";
+        tg.fillRect(x, y + 5, cw, ROW_H - 14);
+        tg.strokeStyle = isSel ? "#7c9cff" : "#44548a";
+        tg.lineWidth = isSel ? 2 : 1;
+        tg.strokeRect(x + 0.5, y + 5.5, cw - 1, ROW_H - 15);
+        tg.fillStyle = "#e8ebf5";
+        tg.font = "10px system-ui";
+        tg.save();
+        tg.beginPath(); tg.rect(x, y + 5, cw, ROW_H - 14); tg.clip();
+        tg.fillText(clip.name || clip.kind, x + 5, y + 20);
+        tg.fillStyle = "#a8b0c8";
+        tg.fillText(`${clip.dur.toFixed(1)}s`, x + 5, y + 33);
+        tg.restore();
+        // fade ramps, drawn as the triangles they are
+        if (clip.fadeIn > 0) {
+          tg.strokeStyle = "rgba(240,163,94,.9)";
+          tg.beginPath(); tg.moveTo(x, y + ROW_H - 10);
+          tg.lineTo(x + clip.fadeIn * pxPerSec, y + 6); tg.stroke();
+        }
+        if (clip.fadeOut > 0) {
+          tg.strokeStyle = "rgba(240,163,94,.9)";
+          tg.beginPath(); tg.moveTo(x + cw - clip.fadeOut * pxPerSec, y + 6);
+          tg.lineTo(x + cw, y + ROW_H - 10); tg.stroke();
+        }
       }
     });
 
-    rg.fillStyle = "#3a4260";
-    rg.fillRect(0, 60, ruler.width, 1);
-    for (let s = 0; s <= dur; s += Math.max(1, Math.round(dur / 10))) {
-      const x = (s / dur) * ruler.width;
-      rg.fillStyle = "#6e7794";
-      rg.font = "9px ui-monospace, monospace";
-      rg.fillText(`${s}s`, x + 2, 70);
-      rg.fillRect(x, 60, 1, 6);
+    if (drag?.snapX !== undefined && drag.snapX !== null) {
+      tg.fillStyle = "#f0a35e";
+      tg.fillRect(GUTTER + drag.snapX * pxPerSec, 0, 1, h);
     }
-    const px = (playhead / dur) * ruler.width;
-    rg.fillStyle = "#6ee7c8";
-    rg.fillRect(px, 8, 2, 56);
+    tg.fillStyle = "#6ee7c8";
+    tg.fillRect(GUTTER + playhead * pxPerSec, 0, 2, h);
   }
 
-  ruler.addEventListener("pointerdown", (e) => {
-    const r = ruler.getBoundingClientRect();
-    const frac = (e.clientX - r.left) / r.width;
-    const t = frac * Math.max(1, totalDur());
-    const tl = timeline();
-    const hit = tl.findIndex((x) => t >= x.start && t <= x.start + x.dur);
-    if (hit >= 0 && e.clientY - r.top < 60) {
-      selected_i = doc.clips.indexOf(tl[hit].clip);
-      renderInspector();
+  const timeAt = (clientX) => {
+    const r = timeline.getBoundingClientRect();
+    const x = ((clientX - r.left) / r.width) * timeline.width;
+    return (x - GUTTER) / pxPerSec;
+  };
+  const rowAt = (clientY) => {
+    const r = timeline.getBoundingClientRect();
+    const y = ((clientY - r.top) / r.height) * timeline.height;
+    if (y < RULER_H) return -1;
+    return Math.floor((y - RULER_H) / ROW_H);
+  };
+
+  /** Snap candidates: every other clip edge, the playhead, and zero. */
+  function snapTime(t, exclude) {
+    const cands = [0, playhead];
+    for (const { clip } of allClips()) {
+      if (clip === exclude) continue;
+      cands.push(clip.start, clipEnd(clip));
     }
-    seekTo(t);
+    const tol = 7 / pxPerSec;
+    let best = null, bestD = tol;
+    for (const c of cands) {
+      const d = Math.abs(c - t);
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    return best;
+  }
+
+  timeline.addEventListener("pointerdown", (e) => {
+    const t = timeAt(e.clientX);
+    const row = rowAt(e.clientY);
+    if (row < 0) { seekTo(Math.max(0, t)); return; }
+    const tr = doc.tracks[row];
+    if (!tr) return;
+
+    const r = timeline.getBoundingClientRect();
+    const x = ((e.clientX - r.left) / r.width) * timeline.width;
+    if (x < GUTTER) {
+      if (x >= 84 && x < 100) { tr.mute = !tr.mute; host.save(); drawTimeline(); }
+      return;
+    }
+
+    const tol = 7 / pxPerSec;
+    let clip = tr.clips.find((c) => Math.abs(t - c.start) < tol);
+    let mode = "trimIn";
+    if (!clip) { clip = tr.clips.find((c) => Math.abs(t - clipEnd(c)) < tol); mode = "trimOut"; }
+    if (!clip) { clip = tr.clips.find((c) => t >= c.start && t < clipEnd(c)); mode = "move"; }
+    if (!clip) { selected = null; drawTimeline(); renderInspector(); return; }
+
+    selected = clip;
+    drag = { mode, clip, track: tr, grabT: t, start: clip.start, dur: clip.dur,
+             inPoint: clip.in || 0, snapX: null };
+    drawTimeline(); renderInspector();
   });
 
-  let selected_i = 0;
+  timeline.addEventListener("pointermove", (e) => {
+    if (!drag) {
+      const t = timeAt(e.clientX), row = rowAt(e.clientY);
+      const tr = doc.tracks[row];
+      const tol = 7 / pxPerSec;
+      const onEdge = tr?.clips.some((c) => Math.abs(t - c.start) < tol || Math.abs(t - clipEnd(c)) < tol);
+      timeline.style.cursor = onEdge ? "ew-resize" : "default";
+      return;
+    }
+    const t = timeAt(e.clientX);
+    const dt = t - drag.grabT;
+    const c = drag.clip;
+
+    if (drag.mode === "move") {
+      let want = Math.max(0, drag.start + dt);
+      const snapped = snapTime(want, c) ?? snapTime(want + c.dur, c);
+      if (snapped !== null && snapped !== undefined) {
+        // Snap whichever edge is closer to a candidate.
+        const byStart = snapTime(want, c);
+        const byEnd = snapTime(want + c.dur, c);
+        if (byStart !== null) { want = byStart; drag.snapX = byStart; }
+        else if (byEnd !== null) { want = byEnd - c.dur; drag.snapX = byEnd; }
+      } else drag.snapX = null;
+      c.start = Math.max(0, want);
+    } else if (drag.mode === "trimIn") {
+      // Trimming the head moves the in-point too, so the frame under the
+      // cursor is the frame that stays.
+      const maxShift = c.dur - 0.1;
+      let shift = clamp(dt, -(drag.inPoint), maxShift);
+      const snapped = snapTime(drag.start + shift, c);
+      if (snapped !== null) { shift = snapped - drag.start; drag.snapX = snapped; } else drag.snapX = null;
+      shift = clamp(shift, -(drag.inPoint), maxShift);
+      c.start = Math.max(0, drag.start + shift);
+      c.in = Math.max(0, drag.inPoint + shift);
+      c.dur = Math.max(0.1, drag.dur - shift);
+    } else {
+      let end = drag.start + drag.dur + dt;
+      const snapped = snapTime(end, c);
+      if (snapped !== null) { end = snapped; drag.snapX = snapped; } else drag.snapX = null;
+      const maxDur = c.srcDur ? c.srcDur - (c.in || 0) : Infinity;
+      c.dur = clamp(end - c.start, 0.1, maxDur);
+    }
+    drawTimeline();
+  });
+
+  timeline.addEventListener("pointerup", () => {
+    if (!drag) return;
+    drag = null;
+    host.save(thumbnail());
+    drawTimeline(); renderInspector(); seekTo(playhead);
+  });
+
+  function splitAtPlayhead() {
+    const c = selected;
+    if (!c || playhead <= c.start + 0.05 || playhead >= clipEnd(c) - 0.05) {
+      toast("Put the playhead inside the selected clip");
+      return;
+    }
+    const tr = trackOf(c);
+    const offset = playhead - c.start;
+    const right = { ...c, id: nid(), start: playhead, in: (c.in || 0) + offset,
+                    dur: c.dur - offset, fadeIn: 0 };
+    c.dur = offset;
+    c.fadeOut = Math.min(c.fadeOut || 0, c.dur);
+    tr.clips.push(right);
+    selected = right;
+    host.save(); drawTimeline(); renderInspector();
+  }
+
+  function onKey(e) {
+    if (!root.isConnected) { document.removeEventListener("keydown", onKey); return; }
+    if (/input|textarea|select/i.test(e.target.tagName)) return;
+    if (e.key === " ") { e.preventDefault(); playing ? stop() : play(); return; }
+    if (e.key.toLowerCase() === "s" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); splitAtPlayhead(); return; }
+    if ((e.key === "Delete" || e.key === "Backspace") && selected) {
+      e.preventDefault(); removeClip(); return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d" && selected) {
+      e.preventDefault();
+      const tr = trackOf(selected);
+      const copy = { ...selected, id: nid(), start: clipEnd(selected) };
+      tr.clips.push(copy);
+      selected = copy;
+      ensureMedia(copy).then(() => { host.save(); drawTimeline(); renderInspector(); });
+    }
+  }
+  document.addEventListener("keydown", onKey);
+
+  async function removeClip() {
+    if (!selected) return;
+    const tr = trackOf(selected);
+    tr.clips.splice(tr.clips.indexOf(selected), 1);
+    media.delete(selected.id);
+    selected = null;
+    host.save(); drawTimeline(); renderInspector(); seekTo(playhead);
+  }
 
   // ---------------------------------------------------------------- inspector
 
   const inspector = el("div.stack");
   function renderInspector() {
     clear(inspector);
-    const clip = doc.clips[selected_i];
-    if (!clip) {
-      inspector.append(el("p.fine", {}, "Import a clip, or add a title."));
-      drawRuler();
+    const c = selected;
+    if (!c) {
+      append(inspector, el("p.fine", {}, "Nothing selected. Import footage, or " +
+        "add a title, then click a clip on the timeline."),
+        el("p.fine", {}, "Drag a clip to move it, drag its edges to trim, " +
+          "S splits at the playhead, ⌘D duplicates, ⌫ deletes. Space plays."));
       return;
     }
-    const g = { ...DEFAULT_GRADE, ...(clip.grade || {}) };
-    clip.grade = g;
+    const g = { ...DEFAULT_GRADE, ...(c.grade || {}) };
+    c.grade = g;
 
     append(inspector,
       el("div.spread", {},
-        el("b", {}, clip.name || clip.kind),
-        el("div.row.tight", {},
-          el("button.ghost", { onclick: () => moveClip(-1) }, "‹"),
-          el("button.ghost", { onclick: () => moveClip(1) }, "›"),
-          el("button.ghost.danger", { onclick: removeClip }, "×"))),
-      el("div.row.tight", {},
-        el("span.tag", {}, clip.kind),
-        clip.kind === "video" ? el("label.row.tight", { style: { marginBottom: 0, fontSize: ".75rem" } },
-          el("input", { type: "checkbox", checked: !!clip.audioOn, style: { width: "auto" },
-            onchange: (e) => { clip.audioOn = e.target.checked;
-              const m = media.get(clip.id); if (m) m.muted = !clip.audioOn; host.save(); } }),
-          "keep audio") : null));
+        el("input", { value: c.name || c.kind, style: { width: "62%" },
+          onchange: (e) => { c.name = e.target.value; drawTimeline(); host.save(); } }),
+        el("span.tag", {}, c.kind)),
+      el("div.design-grid2", {},
+        el("label.design-num", {}, "start", el("input", { type: "number", step: 0.1, value: +c.start.toFixed(2),
+          onchange: (e) => { c.start = Math.max(0, +e.target.value); drawTimeline(); host.save(); } })),
+        el("label.design-num", {}, "length", el("input", { type: "number", step: 0.1, value: +c.dur.toFixed(2),
+          onchange: (e) => { c.dur = Math.max(0.1, +e.target.value); drawTimeline(); host.save(); } })),
+        c.kind === "video" || c.kind === "audio"
+          ? el("label.design-num", {}, "in", el("input", { type: "number", step: 0.1, value: +(c.in || 0).toFixed(2),
+              onchange: (e) => { c.in = Math.max(0, +e.target.value); seekTo(playhead); host.save(); } }))
+          : el("span"),
+        el("label.design-num", {}, "opacity", el("input", { type: "number", step: 0.05, min: 0, max: 1,
+          value: c.opacity ?? 1,
+          onchange: (e) => { c.opacity = clamp(+e.target.value, 0, 1); renderAt(playhead); host.save(); } }))),
+      el("div.design-grid2", {},
+        el("label.design-num", {}, "fade in", el("input", { type: "number", step: 0.1, min: 0, value: c.fadeIn || 0,
+          onchange: (e) => { c.fadeIn = Math.max(0, +e.target.value); drawTimeline(); renderAt(playhead); host.save(); } })),
+        el("label.design-num", {}, "fade out", el("input", { type: "number", step: 0.1, min: 0, value: c.fadeOut || 0,
+          onchange: (e) => { c.fadeOut = Math.max(0, +e.target.value); drawTimeline(); renderAt(playhead); host.save(); } }))),
+      c.kind === "video" ? el("label.row.tight", { style: { marginBottom: 0, fontSize: ".75rem" } },
+        el("input", { type: "checkbox", checked: !!c.audioOn, style: { width: "auto" },
+          onchange: (e) => { c.audioOn = e.target.checked; const m = media.get(c.id); if (m) m.muted = !c.audioOn; host.save(); } }),
+        "keep this clip's audio") : null);
 
-    if (clip.kind === "title") {
-      const text = el("textarea", { value: clip.text || "", placeholder: "title text",
-        oninput: (e) => { clip.text = e.target.value; renderAt(playhead); host.save(); } });
-      append(inspector, el("label", {}, "Text", text),
+    if (c.kind === "title") {
+      append(inspector,
+        el("label", {}, "Text", el("textarea", { value: c.text || "",
+          oninput: (e) => { c.text = e.target.value; renderAt(playhead); host.save(); } })),
         el("div.row.tight", {},
-          el("label", {}, "Colour", el("input", { type: "color", value: clip.color || "#ffffff",
-            oninput: (e) => { clip.color = e.target.value; renderAt(playhead); host.save(); } })),
-          el("label", {}, "Background", el("input", { type: "color", value: clip.bg || "#000000",
-            oninput: (e) => { clip.bg = e.target.value; renderAt(playhead); host.save(); } }))),
-        knob("size", { min: 16, max: 240, step: 1, value: clip.size || 64,
-          format: (v) => v.toFixed(0),
-          oninput: (v) => { clip.size = v; renderAt(playhead); host.save(); } }));
+          el("label.design-num", {}, "colour", el("input", { type: "color", value: c.color || "#ffffff",
+            oninput: (e) => { c.color = e.target.value; renderAt(playhead); host.save(); } })),
+          el("label.design-num", {}, "background", el("input", { type: "color", value: c.bg || "#000000",
+            oninput: (e) => { c.bg = e.target.value; renderAt(playhead); host.save(); } })),
+          el("button.ghost", { onclick: () => { c.bg = "none"; renderAt(playhead); host.save(); renderInspector(); } }, "no bg")),
+        knob("size", { min: 16, max: 240, step: 1, value: c.size || 64,
+          format: (v) => v.toFixed(0), oninput: (v) => { c.size = v; renderAt(playhead); host.save(); } }));
     }
 
     append(inspector,
-      knob("duration", { min: 0.2, max: 30, step: 0.1, value: clipDur(clip),
-        format: (v) => `${v.toFixed(1)}s`,
-        oninput: (v) => { clip.out = (clip.in || 0) + v; drawRuler(); host.save(); } }),
-      clip.kind === "video"
-        ? knob("in point", { min: 0, max: Math.max(0.1, clip.dur || 10), step: 0.1,
-            value: clip.in || 0, format: (v) => `${v.toFixed(1)}s`,
-            oninput: (v) => { clip.in = v; seekTo(playhead); host.save(); } })
-        : null,
-      el("label", {}, "Transition in",
-        el("select", {
-          onchange: (e) => { clip.transition = e.target.value; drawRuler(); host.save(); },
-        }, ...[["none", "Cut"], ["dissolve", "Dissolve"]].map(([v, l]) =>
-          el("option", { value: v, selected: v === (clip.transition || "none") }, l)))),
       el("h4", { style: { marginTop: ".5rem" } }, "Grade"),
-      knob("brightness", { min: 0.2, max: 2, step: 0.01, value: g.brightness,
-        format: (v) => v.toFixed(2), oninput: (v) => { g.brightness = v; renderAt(playhead); host.save(); } }),
-      knob("contrast", { min: 0.2, max: 2.5, step: 0.01, value: g.contrast,
-        format: (v) => v.toFixed(2), oninput: (v) => { g.contrast = v; renderAt(playhead); host.save(); } }),
-      knob("saturation", { min: 0, max: 2.5, step: 0.01, value: g.saturate,
-        format: (v) => v.toFixed(2), oninput: (v) => { g.saturate = v; renderAt(playhead); host.save(); } }),
-      knob("hue", { min: -180, max: 180, step: 1, value: g.hue,
-        format: (v) => `${v.toFixed(0)}°`, oninput: (v) => { g.hue = v; renderAt(playhead); host.save(); } }),
-      knob("blur", { min: 0, max: 20, step: 0.5, value: g.blur,
-        format: (v) => v.toFixed(1), oninput: (v) => { g.blur = v; renderAt(playhead); host.save(); } }),
+      ...[["brightness", 0.2, 2, 0.01], ["contrast", 0.2, 2.5, 0.01],
+          ["saturate", 0, 2.5, 0.01], ["hue", -180, 180, 1], ["blur", 0, 20, 0.5]]
+        .map(([key, min, max, step]) => knob(key, {
+          min, max, step, value: g[key],
+          format: (v) => (key === "hue" ? `${v.toFixed(0)}°` : v.toFixed(2)),
+          oninput: (v) => { g[key] = v; renderAt(playhead); host.save(); },
+        })),
       el("div.row.tight", {},
-        el("button.ghost", {
-          onclick: () => { clip.grade = { ...DEFAULT_GRADE }; renderInspector(); renderAt(playhead); host.save(); },
-        }, "Reset grade"),
+        el("button.ghost", { onclick: () => { c.grade = { ...DEFAULT_GRADE }; renderInspector(); renderAt(playhead); host.save(); } }, "Reset"),
         el("button.ghost", {
           onclick: () => {
-            for (const c of doc.clips) c.grade = { ...clip.grade };
+            for (const { clip } of allClips()) if (clip.kind !== "audio") clip.grade = { ...c.grade };
             toast("Grade copied to every clip — this is what unifies them");
             renderAt(playhead); host.save();
           },
-        }, "Apply to all")));
-    drawRuler();
-  }
-
-  function moveClip(dir) {
-    const j = selected_i + dir;
-    if (j < 0 || j >= doc.clips.length) return;
-    [doc.clips[selected_i], doc.clips[j]] = [doc.clips[j], doc.clips[selected_i]];
-    selected_i = j;
-    renderInspector(); seekTo(playhead); host.save();
-  }
-  async function removeClip() {
-    const clip = doc.clips[selected_i];
-    if (!clip) return;
-    if (!(await confirmDialog(`Remove "${clip.name || clip.kind}"?`))) return;
-    media.delete(clip.id);
-    doc.clips.splice(selected_i, 1);
-    selected_i = Math.max(0, selected_i - 1);
-    renderInspector(); seekTo(0); host.save();
+        }, "Apply to all"),
+        el("button.ghost.danger", { onclick: removeClip }, "Delete")));
   }
 
   // ---------------------------------------------------------------- import
 
-  const nextId = () => Math.max(0, ...doc.clips.map((c) => c.id)) + 1;
-
   const fileInput = el("input", {
-    type: "file", accept: "video/*,image/*", multiple: true, hidden: true,
+    type: "file", accept: "video/*,image/*,audio/*", multiple: true, hidden: true,
     onchange: async (e) => {
       for (const file of [...e.target.files]) {
         try {
           const isVideo = file.type.startsWith("video");
-          let meta = {};
-          if (isVideo) {
-            meta = await probeVideo(file);
-          }
+          const isAudio = file.type.startsWith("audio");
+          const meta = (isVideo || isAudio) ? await probe(file, isVideo) : {};
           toast(`Importing ${file.name}…`);
           const asset = await host.upload(file, meta);
-          const clip = {
-            id: nextId(),
-            assetId: asset.id,
-            name: file.name.slice(0, 22),
-            kind: isVideo ? "video" : "image",
-            in: 0,
-            out: isVideo ? Math.min(meta.duration || 5, 10) : 4,
-            dur: isVideo ? (meta.duration || 5) : 4,
-            transition: "none",
-            transDur: 0.5,
-            audioOn: isVideo,
-            grade: { ...DEFAULT_GRADE },
-          };
-          doc.clips.push(clip);
+          const kind = isVideo ? "video" : isAudio ? "audio" : "image";
+          const track = doc.tracks.find((t) => t.kind === (kind === "audio" ? "audio" : "video"))
+            || doc.tracks[0];
+          const srcDur = meta.duration || (kind === "image" ? 4 : 5);
+          const start = track.clips.length
+            ? Math.max(...track.clips.map(clipEnd)) : 0;
+          const clip = { id: nid(), assetId: asset.id, kind, name: file.name.slice(0, 22),
+            start, in: 0, dur: Math.min(srcDur, kind === "image" ? 4 : srcDur),
+            srcDur, opacity: 1, fadeIn: 0, fadeOut: 0, audioOn: isVideo,
+            grade: { ...DEFAULT_GRADE } };
+          track.clips.push(clip);
           await ensureMedia(clip);
-          selected_i = doc.clips.length - 1;
-        } catch (err) {
-          toast(`${file.name}: ${err.message}`);
-        }
+          selected = clip;
+        } catch (err) { toast(`${file.name}: ${err.message}`); }
       }
-      renderInspector();
-      seekTo(playhead);
+      drawTimeline(); renderInspector(); seekTo(playhead);
       host.save(thumbnail());
       e.target.value = "";
     },
   });
 
-  function probeVideo(file) {
+  function probe(file, isVideo) {
     return new Promise((res) => {
-      const v = document.createElement("video");
-      v.preload = "metadata";
-      v.onloadedmetadata = () => {
-        res({ duration: v.duration, width: v.videoWidth, height: v.videoHeight });
-        URL.revokeObjectURL(v.src);
+      const m = document.createElement(isVideo ? "video" : "audio");
+      m.preload = "metadata";
+      m.onloadedmetadata = () => {
+        res({ duration: m.duration, width: m.videoWidth, height: m.videoHeight });
+        URL.revokeObjectURL(m.src);
       };
-      v.onerror = () => res({});
-      v.src = URL.createObjectURL(file);
+      m.onerror = () => res({});
+      m.src = URL.createObjectURL(file);
     });
   }
 
   function addTitle() {
-    const clip = {
-      id: nextId(), kind: "title", name: "Title", text: "Title",
-      in: 0, out: 3, dur: 3, transition: "none", transDur: 0.5,
-      color: "#ffffff", bg: "#000000", size: 72, grade: { ...DEFAULT_GRADE },
-    };
-    doc.clips.push(clip);
-    selected_i = doc.clips.length - 1;
-    renderInspector(); seekTo(playhead); host.save();
+    const track = doc.tracks.find((t) => t.kind === "video");
+    const clip = { id: nid(), kind: "title", name: "Title", text: "Title",
+      start: playhead, in: 0, dur: 3, srcDur: 3, opacity: 1, fadeIn: 0.3, fadeOut: 0.3,
+      color: "#ffffff", bg: "#000000", size: 72, grade: { ...DEFAULT_GRADE } };
+    track.clips.push(clip);
+    selected = clip;
+    drawTimeline(); renderInspector(); host.save();
+  }
+
+  function addTrack(kind) {
+    const n = doc.tracks.filter((t) => t.kind === kind).length + 1;
+    doc.tracks.push({ id: nid(), kind, name: `${kind === "video" ? "V" : "A"}${n}`,
+      mute: false, clips: [] });
+    drawTimeline(); host.save();
   }
 
   function thumbnail() {
-    const t = document.createElement("canvas");
-    t.width = 240; t.height = Math.round((240 * ph) / pw);
-    t.getContext("2d").drawImage(canvas, 0, 0, t.width, t.height);
-    return t.toDataURL("image/jpeg", 0.7);
+    try {
+      const t = document.createElement("canvas");
+      t.width = 240; t.height = Math.round((240 * ph) / pw);
+      t.getContext("2d").drawImage(canvas, 0, 0, t.width, t.height);
+      return t.toDataURL("image/jpeg", 0.7);
+    } catch { return ""; }
   }
 
   // ---------------------------------------------------------------- export
 
-  async function exportVideo() {
-    if (!doc.clips.length) { toast("Nothing on the timeline"); return; }
-    if (!window.MediaRecorder) { toast("This browser has no MediaRecorder"); return; }
+  const seekExact = (v, t) => new Promise((res) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; v.onseeked = null; res(); } };
+    v.onseeked = finish;
+    // A seek to a time the browser considers current fires nothing at all.
+    if (Math.abs(v.currentTime - t) < 0.001) return finish();
+    v.currentTime = t;
+    setTimeout(finish, 900);
+  });
 
-    const dur = totalDur();
-    const stream = canvas.captureStream(doc.fps || 30);
-
-    // Route any clip audio into the recording. Each element can only have one
-    // MediaElementSource for the lifetime of the page, so they are cached.
-    try {
-      const ac = new (window.AudioContext || window.webkitAudioContext)();
-      const dest = ac.createMediaStreamDestination();
-      let any = false;
-      for (const clip of doc.clips) {
-        if (clip.kind !== "video" || !clip.audioOn) continue;
-        const m = media.get(clip.id);
-        if (!m) continue;
-        if (!m._srcNode) m._srcNode = ac.createMediaElementSource(m);
-        m._srcNode.connect(dest);
-        m._srcNode.connect(ac.destination);
+  /** Mix every audio-bearing clip offline into one buffer. */
+  async function mixAudio(dur) {
+    const SR = 48000;
+    const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const ctx = new OC(2, Math.ceil(dur * SR), SR);
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    let any = false;
+    for (const { clip, track } of allClips()) {
+      if (track.mute) continue;
+      const wantsAudio = clip.kind === "audio" || (clip.kind === "video" && clip.audioOn);
+      if (!wantsAudio) continue;
+      const asset = host.assets.find((a) => a.id === clip.assetId);
+      if (!asset) continue;
+      try {
+        const bytes = await (await fetch(asset.url)).arrayBuffer();
+        const buf = await ac.decodeAudioData(bytes);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        const gain = ctx.createGain();
+        const g0 = clip.gain ?? 1;
+        gain.gain.setValueAtTime(clip.fadeIn > 0 ? 0.0001 : g0, clip.start);
+        if (clip.fadeIn > 0) gain.gain.linearRampToValueAtTime(g0, clip.start + clip.fadeIn);
+        if (clip.fadeOut > 0) {
+          gain.gain.setValueAtTime(g0, Math.max(clip.start, clipEnd(clip) - clip.fadeOut));
+          gain.gain.linearRampToValueAtTime(0.0001, clipEnd(clip));
+        }
+        src.connect(gain).connect(ctx.destination);
+        src.start(clip.start, clip.in || 0, clip.dur);
         any = true;
-      }
-      if (any) for (const tr of dest.stream.getAudioTracks()) stream.addTrack(tr);
-    } catch (e) {
-      toast(`Audio could not be captured: ${e.message}. Recording picture only.`);
+      } catch { /* this source has no decodable audio; carry on */ }
     }
+    ac.close();
+    if (!any) return null;
+    return ctx.startRendering();
+  }
 
-    const mime = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]
+  async function exportVideo() {
+    if (!allClips().length) { toast("Nothing on the timeline"); return; }
+    if (!("VideoEncoder" in window)) return exportRealtime();
+
+    stop();
+    const fps = doc.fps || 30;
+    const dur = duration();
+    const frames = Math.ceil(dur * fps);
+    const status = el("p.dim", {}, "Preparing…");
+    const bar = el("div.bar", {}, el("i", { style: { width: "0%" } }));
+    let cancelled = false;
+    modal(el("h2", {}, "Exporting MP4"),
+      el("p.fine", {}, `${W}×${H}, ${fps} fps, ${dur.toFixed(1)}s — ${frames} frames. ` +
+        `Every frame is composited and encoded in turn rather than recorded as ` +
+        `it plays, so it cannot drop a frame and backgrounding the tab is safe. ` +
+        `Stills and titles export quickly; video sources have to be seeked ` +
+        `frame by frame, which is slower than real time.`),
+      status, bar,
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: () => { cancelled = true; closeModal(); } }, "Cancel")));
+
+    try {
+      const out = document.createElement("canvas");
+      out.width = W; out.height = H;
+      const og = out.getContext("2d");
+
+      const vsamples = [];
+      let vdesc = null;
+      const encoder = new VideoEncoder({
+        output: (chunk, meta) => {
+          if (meta?.decoderConfig?.description && !vdesc) {
+            vdesc = new Uint8Array(meta.decoderConfig.description);
+          }
+          const data = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(data);
+          vsamples.push({ data, timestamp: chunk.timestamp,
+                          duration: chunk.duration || 1e6 / fps, type: chunk.type });
+        },
+        error: (e) => { throw e; },
+      });
+      // Level is chosen from the frame size; 4d0028 covers 1080p comfortably.
+      const codec = (W * H > 1280 * 720) ? "avc1.4d0028" : "avc1.42001f";
+      encoder.configure({ codec, width: W, height: H, framerate: fps,
+        bitrate: Math.round(W * H * fps * 0.12), avc: { format: "avc" } });
+
+      for (let f = 0; f < frames; f++) {
+        if (cancelled) { encoder.close(); return; }
+        const t = f / fps;
+        // Seek only the sources actually on screen at this instant.
+        for (const { clip } of allClips()) {
+          if (clip.kind !== "video") continue;
+          if (t < clip.start || t >= clipEnd(clip)) continue;
+          const m = media.get(clip.id);
+          if (m) { m.pause(); await seekExact(m, (clip.in || 0) + (t - clip.start)); }
+        }
+        renderAt(t, og, { w: W, h: H });
+        const frame = new VideoFrame(out, { timestamp: Math.round(t * 1e6),
+                                            duration: Math.round(1e6 / fps) });
+        encoder.encode(frame, { keyFrame: f % (fps * 2) === 0 });
+        frame.close();
+        if (encoder.encodeQueueSize > 8) {
+          await new Promise((r) => setTimeout(r, 8));
+        }
+        if (f % 3 === 0) {
+          bar.firstChild.style.width = `${((f / frames) * 90).toFixed(1)}%`;
+          status.textContent = `Frame ${f + 1} of ${frames}`;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+      await encoder.flush();
+      encoder.close();
+
+      status.textContent = "Mixing audio…";
+      bar.firstChild.style.width = "92%";
+      let asamples = [], adesc = null;
+      const mixed = await mixAudio(dur);
+      if (mixed && "AudioEncoder" in window) {
+        const aenc = new AudioEncoder({
+          output: (chunk, meta) => {
+            if (meta?.decoderConfig?.description && !adesc) {
+              adesc = new Uint8Array(meta.decoderConfig.description);
+            }
+            const data = new Uint8Array(chunk.byteLength);
+            chunk.copyTo(data);
+            asamples.push({ data, timestamp: chunk.timestamp, duration: chunk.duration || 0, type: chunk.type });
+          },
+          error: () => {},
+        });
+        aenc.configure({ codec: "mp4a.40.2", sampleRate: mixed.sampleRate,
+                         numberOfChannels: 2, bitrate: 160000 });
+        const L = mixed.getChannelData(0);
+        const R = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : L;
+        const CH = 1024;
+        for (let off = 0; off + CH <= L.length; off += CH) {
+          const inter = new Float32Array(CH * 2);
+          inter.set(L.subarray(off, off + CH), 0);
+          inter.set(R.subarray(off, off + CH), CH);
+          const ad = new AudioData({ format: "f32-planar", sampleRate: mixed.sampleRate,
+            numberOfFrames: CH, numberOfChannels: 2,
+            timestamp: Math.round((off / mixed.sampleRate) * 1e6), data: inter });
+          aenc.encode(ad);
+          ad.close();
+        }
+        await aenc.flush();
+        aenc.close();
+      }
+
+      status.textContent = "Writing the file…";
+      bar.firstChild.style.width = "98%";
+      const tracks = [{ kind: "video", samples: vsamples, description: vdesc,
+                        width: W, height: H, timescale: 1_000_000 }];
+      if (asamples.length && adesc) {
+        tracks.push({ kind: "audio", samples: asamples, description: adesc,
+                      channels: 2, timescale: mixed.sampleRate });
+      }
+      const blob = muxMp4(tracks);
+      closeModal();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${host.doc.name || "cut"}.mp4`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast(`Exported ${(blob.size / 1e6).toFixed(1)} MB` +
+            (asamples.length ? " with audio" : " (no audio track)"));
+    } catch (err) {
+      closeModal();
+      toast(`Export failed: ${err.message}. Falling back to a screen recording.`);
+      exportRealtime();
+    }
+    await seekTo(playhead);
+  }
+
+  /** The old path, kept for browsers with no WebCodecs. */
+  async function exportRealtime() {
+    if (!window.MediaRecorder) { toast("This browser cannot export"); return; }
+    const dur = duration();
+    const stream = canvas.captureStream(doc.fps || 30);
+    const mime = ["video/webm;codecs=vp9", "video/webm"]
       .find((m) => MediaRecorder.isTypeSupported(m)) || "video/webm";
-    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8e6 });
     const chunks = [];
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-
-    const done = new Promise((res) => { rec.onstop = res; });
-    const status = el("p.dim", {}, "Recording in real time…");
-    const bar = el("div.bar", {}, el("i", { style: { width: "0%" } }));
-    modal(el("h2", {}, "Exporting"),
-      el("p.fine", {}, `The timeline is recorded as it plays, so this takes ` +
-        `about ${dur.toFixed(0)} seconds. Leave this tab in front — a ` +
-        `backgrounded tab throttles animation and drops frames.`),
-      status, bar);
-
+    const done = new Promise((r) => { rec.onstop = r; });
     await seekTo(0);
     rec.start();
-    await play();
-    await new Promise((res) => {
-      const check = setInterval(() => {
-        bar.firstChild.style.width = `${Math.min(100, (playhead / dur) * 100)}%`;
-        if (!playing || playhead >= dur) { clearInterval(check); res(); }
-      }, 120);
+    play();
+    await new Promise((r) => {
+      const iv = setInterval(() => { if (!playing || playhead >= dur) { clearInterval(iv); r(); } }, 120);
     });
     rec.stop();
     await done;
     stop();
-
     const blob = new Blob(chunks, { type: mime });
-    closeModal();
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${host.doc.name || "cut"}.webm`;
     a.click();
     URL.revokeObjectURL(a.href);
-    toast(`Exported ${(blob.size / 1e6).toFixed(1)} MB`);
   }
 
   // ---------------------------------------------------------------- layout
 
-  const playBtn = el("button.primary", {
-    onclick: () => (playing ? stop() : play()),
-  }, "Play");
+  const playBtn = el("button.primary", { onclick: () => (playing ? stop() : play()) }, "Play");
 
   const root = el("div.stack", {},
     el("div.card.tight", {},
       el("div.row.tight", {},
         playBtn,
         el("button", { onclick: () => seekTo(0) }, "⏮"),
-        el("button", { onclick: () => fileInput.click() }, "Import video / stills"),
+        el("button", { onclick: () => fileInput.click() }, "Import"),
         el("button", { onclick: addTitle }, "+ Title"),
-        el("button", { onclick: exportVideo }, "Export"),
+        el("button", { onclick: splitAtPlayhead }, "Split (S)"),
+        el("button.ghost", { onclick: () => addTrack("video") }, "+ V track"),
+        el("button.ghost", { onclick: () => addTrack("audio") }, "+ A track"),
+        el("button.primary", { onclick: exportVideo }, "Export MP4"),
         fileInput,
+        el("label.row.tight", { style: { marginBottom: 0, fontSize: ".78rem" } }, "zoom",
+          el("input", { type: "range", min: 10, max: 180, step: 2, value: pxPerSec,
+            oninput: (e) => { pxPerSec = +e.target.value; drawTimeline(); } })),
         aiButton("Shot list…", {
           task: "brief",
           describe: "Turns an idea into a shot list you can shoot against. It " +
             "writes the plan; the cutting is yours.",
-          placeholder: "e.g. 10-second spot, one product, gamelan-ish rhythm, " +
-            "must survive muted playback",
-          onResult: (res) => {
-            modal(el("h2", {}, "Shot list"),
-              el("p.dim", { style: { whiteSpace: "pre-wrap" } }, res.text),
-              el("div.row", { style: { justifyContent: "flex-end" } },
-                el("button.primary", { onclick: closeModal }, "Close")));
-          },
+          placeholder: "e.g. 10-second spot, one product, must survive muted playback",
+          onResult: (res) => modal(el("h2", {}, "Shot list"),
+            el("p.dim", { style: { whiteSpace: "pre-wrap" } }, res.text),
+            el("div.row", { style: { justifyContent: "flex-end" } },
+              el("button.primary", { onclick: closeModal }, "Close"))),
         }))),
 
-    el("div.lab-split", { style: { gridTemplateColumns: "minmax(0,1fr) 300px" } },
-      el("div.stack", {},
-        canvas,
-        el("div.card.tight", {}, ruler)),
-      el("div.card.tight", {},
-        el("h4", {}, "Clip"),
-        inspector)));
+    el("div.lab-split", { style: { gridTemplateColumns: "minmax(0,1fr) 290px" } },
+      el("div.stack", {}, canvas, el("div.card.tight", { style: { overflow: "auto" } }, timeline)),
+      el("div.card.tight", {}, el("h4", {}, "Clip"), inspector)));
 
-  for (const clip of doc.clips) await ensureMedia(clip);
+  root._cleanup = () => { stop(); document.removeEventListener("keydown", onKey); };
+
+  for (const { clip } of allClips()) await ensureMedia(clip);
   renderInspector();
   await seekTo(0);
-  setTimeout(drawRuler, 60);
+  drawTimeline();
+  setTimeout(drawTimeline, 60);
   return root;
 }

@@ -44,7 +44,7 @@ actually gets made. Five document types, one asset store, one AI layer.
 |---|---|
 | **Canvas** | Layers with real blend modes and non-destructive **layer masks**; **selections** (rectangle, ellipse, lasso, magic wand) with add/subtract, feather and invert; **free transform** with scale and rotate; **editable text layers** that only become pixels when you rasterise them; brush / eraser / shapes / bucket; and the whole Part 10 catalogue as a 21-entry filter menu running through `engine-image`. Imports images, exports PNG. |
 | **Music** | Three views of one document: **Arrange** (clips on a timeline with automation lanes), **Edit** (piano roll / drum grid per pattern), **Mix** (channel strips, meters, sends). Patterns are reusable and a clip repeats its pattern to fill its length. Six instruments, per-track EQ / filter / drive / delay / convolution reverb, swing, solo and mute, real AudioParam automation for volume and filter, master limiter. Imports audio, exports WAV. |
-| **Video** | Sequential timeline of clips, stills and titles with per-clip grading, dissolves and an audio track. Exports by recording the composed canvas. |
+| **Video** | A **multi-track timeline** — video tracks composite in order, audio tracks mix — with drag-to-move, edge trimming that carries the in-point, split at the playhead, snapping, per-clip fades, opacity and grading. **Exports MP4 offline** via WebCodecs (H.264 + AAC) through a hand-written muxer, so it cannot drop frames; falls back to a real-time webm recording where WebCodecs is missing. |
 | **Design** | Vector shapes, type and layout on an infinite canvas. Frames as artboards, edge/centre snapping with guides, auto-layout stacks, align and distribute, a Müller-Brockmann column grid overlay, grouping, and SVG / PNG@2x export. |
 | **Shader** | A GLSL sketchpad using **The Book of Shaders' uniform names** — `u_resolution`, `u_time`, `u_mouse` — so examples from that book paste in and run unchanged. Eleven chapter presets from *Hello world* to *Fractal Brownian Motion*. |
 
@@ -61,9 +61,11 @@ tools, not production ones:
   mixer, but no audio clips on the timeline (samplers are played from the
   roll), no per-note velocity, no time signatures other than 4/4, no
   sidechain routing and no plugin format.
-- **Video is not an NLE.** One video track, no keyframes, no drag-trimming on
-  the timeline, and export is a real-time screen recording to webm rather
-  than a proper encode.
+- **Video is not an NLE.** It has multiple tracks, trimming, splitting,
+  snapping and a frame-exact MP4 export, but no keyframed effects, no speed
+  or time remapping, no transitions beyond fades, no waveform display on
+  audio clips, and no nested sequences. Export seeks each source frame by
+  frame, so long timelines with video sources take a while.
 - **Design is not Figma.** No components or variants, no constraints, no
   prototyping, no shared styles, no pen tool or boolean ops, no multiplayer.
   It has the parts that matter for learning layout — grid, snapping,
@@ -86,6 +88,12 @@ The video grade is the one place that deliberately does *not* use
 `engine-image`: it uses the canvas `filter` property, because a 30fps preview
 cannot afford a per-frame JS pass over half a million pixels, and a grade you
 cannot scrub against is not a grade you can judge.
+
+`video-mux.js` is a minimal MP4 muxer. Browsers will encode H.264 and AAC
+through WebCodecs but ship no container writer, so the encoded chunks have to
+be written into `ftyp`/`mdat`/`moov` by hand. It writes moov last, which is
+legal and avoids patching sample offsets, and gives each track a single chunk
+so the sample-to-chunk table stays trivial.
 
 ## AI
 

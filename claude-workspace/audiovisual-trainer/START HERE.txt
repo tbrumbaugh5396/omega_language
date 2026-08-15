@@ -23,8 +23,8 @@ them live.
 A word on scope: the studio tools are sketchpads, not production suites.
 Canvas has selections, transform, masks and live text, but no adjustment
 layers, paths or gradients; Music has patterns, automation and a mixer but no
-audio clips on the timeline or velocity; Video has one track and no
-keyframes; Design has
+audio clips on the timeline or velocity; Video has multiple tracks, trimming
+and a real MP4 export but no keyframed effects or time remapping; Design has
 grids, snapping and auto-layout but no components or prototyping. They are
 here to make the weekly piece, not to replace Photoshop, Resolve or Figma.
 
@@ -83,9 +83,12 @@ THE STUDIO
           pattern), Mix (channel strips, meters, solo and mute). Patterns
           are reusable; drag a clip's right edge to repeat it. Space plays,
           Cmd+D duplicates a clip, Backspace deletes it. Exports WAV.
-  Video   Timeline of clips, stills and titles, per-clip grading and
-          dissolves. Export records the composed timeline in real time, so
-          leave the tab in front while it runs.
+  Video   A multi-track timeline: video tracks composite in order, audio
+          tracks mix. Drag clips to move, drag their edges to trim, S splits
+          at the playhead, Cmd+D duplicates, Backspace deletes, space plays.
+          Per-clip fades, opacity and grading. Export writes a real MP4
+          frame by frame, so it cannot drop frames and you can leave the tab
+          in the background.
   Design  Vector layout on an infinite canvas: frames, snapping with guides,
           auto-layout, align and distribute, and a column grid you can put
           every edge onto. Exports SVG and PNG. V/F/R/O/L/T pick tools,
