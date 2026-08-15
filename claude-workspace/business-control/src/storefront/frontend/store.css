@@ -752,6 +752,41 @@ svg.can { display: block; width: 100%; height: auto; }
 .loc-card .dist { font-size: 12.5px; font-weight: 600; color: var(--purple);
   margin-top: 8px; display: block; }
 
+/* ---------- support hub ---------- */
+.sup-options { display: grid; gap: 10px; margin-top: 16px; }
+.sup-opt { display: flex; align-items: center; gap: 14px; width: 100%;
+  text-align: left; padding: 15px 16px; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: var(--paper); cursor: pointer;
+  font-family: var(--ui); font-size: 15px; color: var(--ink);
+  transition: border-color .18s, transform .18s; }
+.sup-opt:hover { border-color: var(--purple); transform: translateY(-1px); }
+.sup-opt .ico { color: var(--purple); flex: none; }
+.sup-opt span { flex: 1; min-width: 0; }
+.sup-opt b { display: block; font-weight: 600; }
+.sup-opt small { display: block; font-size: 12.5px; color: var(--ink-2);
+  margin-top: 2px; }
+.sup-live { flex: none; font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: #00714f; background: #e6f6f0;
+  border-radius: var(--r-pill); padding: 3px 10px; }
+
+/* call overlay — audio is a small bar, video takes the screen */
+.sf-call { position: fixed; inset: auto 20px 20px auto; z-index: 80;
+  width: 320px; background: var(--ink); border-radius: var(--r-lg);
+  overflow: hidden; box-shadow: var(--sh-2); }
+.sf-call.video { inset: 0; width: auto; border-radius: 0; }
+.sf-call video { width: 100%; display: none; background: #000; }
+.sf-call.video #sf-call-remote { display: block; height: 100%;
+  object-fit: cover; }
+.sf-call.video #sf-call-local { display: block; position: absolute;
+  right: 18px; top: 18px; width: 160px; height: auto;
+  border-radius: var(--r-md); border: 2px solid rgba(255,255,255,.5); }
+.sf-call-bar { display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; color: #fff; font-size: 14px; }
+.sf-call.video .sf-call-bar { position: absolute; left: 50%; bottom: 26px;
+  transform: translateX(-50%); background: rgba(27,24,31,.82);
+  border-radius: var(--r-pill); backdrop-filter: blur(10px); }
+.sf-call-bar span { flex: 1; }
+
 /* ---------- measurement consent ---------- */
 .consent-bar { position: fixed; left: 20px; right: 20px; bottom: 20px;
   z-index: 55; max-width: 620px; margin: 0 auto; display: flex;

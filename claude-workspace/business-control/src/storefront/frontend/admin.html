@@ -99,6 +99,40 @@
       background: #efe9f8; overflow: hidden; }
     .hm-bar > span { display: block; height: 100%; border-radius: 999px;
       background: linear-gradient(90deg, #6c00bf, #8a77e1); }
+
+    /* campaigns: status lanes, each holding cards of per-platform cuts */
+    .cp-board { display: grid; gap: 16px; margin-top: 18px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .cp-lane-head { display: flex; justify-content: space-between;
+      font-size: 11px; font-weight: 700; letter-spacing: .12em;
+      text-transform: uppercase; color: var(--ink-3); margin-bottom: 8px;
+      padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+    .cp-card { background: var(--bg); border: 1px solid var(--line);
+      border-radius: var(--r-md); padding: 14px; margin-bottom: 12px; }
+    .cp-top { display: flex; gap: 10px; align-items: center; }
+    .cp-top b { flex: 1; font-size: 15px; }
+    .cp-top select { width: auto; padding: 5px 8px; font-size: 12px; }
+    .cp-stats { display: flex; gap: 14px; flex-wrap: wrap; margin: 10px 0 6px;
+      font-size: 12px; color: var(--ink-2); }
+    .cp-stats b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .cr-list { display: grid; gap: 6px; margin: 10px 0; }
+    .cr-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+      font-size: 12.5px; padding: 8px 10px; background: var(--paper);
+      border: 1px solid var(--line); border-radius: var(--r-sm);
+      border-left: 3px solid var(--line); }
+    .cr-row.cr-live { border-left-color: #00a878; }
+    .cr-row.cr-review { border-left-color: var(--orange); }
+    .cr-row.cr-paused { border-left-color: var(--ink-3); }
+    .cr-row b { flex: 0 0 auto; font-weight: 600; }
+    .cr-row .dim { flex: 1; min-width: 60px; }
+    .cr-row select { width: auto; padding: 3px 6px; font-size: 11.5px; }
+    .cr-kind { font-size: 10px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; background: var(--lav-soft);
+      color: var(--purple); border-radius: 999px; padding: 2px 8px; }
+    .cr-add { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px;
+      padding-top: 10px; border-top: 1px dashed var(--line); }
+    .cr-add select, .cr-add input { width: auto; flex: 1; min-width: 90px;
+      font-size: 12px; padding: 6px 8px; }
   </style>
 </head>
 <body>
@@ -144,6 +178,8 @@
       <button class="tab" data-tab="events">Events</button>
       <button class="tab" data-tab="heatmap">Heatmap</button>
       <button class="tab" data-tab="pixels">Pixels</button>
+      <button class="tab" data-tab="campaigns">Campaigns</button>
+      <button class="tab" data-tab="tickets">Support</button>
       <button class="tab" data-tab="blog">Blog</button>
       <button class="tab" data-tab="nav">Nav &amp; redirects</button>
       <button class="tab" data-tab="intl">Currency &amp; language</button>
@@ -334,6 +370,52 @@
           <div id="hm-reach"></div>
         </div>
       </div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="campaigns">
+      <h3>Campaigns</h3>
+      <p class="dim">One brief, running everywhere. Each campaign holds the
+        cuts you're running per platform, a tracked <code>/c/</code> link, and
+        the orders its discount code actually brought in — read from your own
+        ledger, not a platform's dashboard.</p>
+      <div class="adm-row">
+        <div style="flex:2"><label>Name</label>
+          <input id="cp-name" placeholder="Autumn — Some days come at you in waves"></div>
+        <div><label>Objective</label><select id="cp-objective"></select></div>
+        <div><label>Discount code</label>
+          <input id="cp-discount" placeholder="WAVES15"></div>
+      </div>
+      <div class="adm-row">
+        <div><label>Budget ($)</label><input id="cp-budget" type="number" min="0"></div>
+        <div><label>Starts</label><input id="cp-starts" type="date"></div>
+        <div><label>Landing path</label><input id="cp-landing" placeholder="/"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="cp-add">Add campaign</button>
+      </div>
+      <div id="cp-board"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="tickets">
+      <h3>Support</h3>
+      <p class="dim">Messages left when nobody was on the chat. Replying here
+        emails the customer and moves the ticket to <b>waiting</b>.</p>
+      <div class="adm-row">
+        <div><label>Phone number</label>
+          <input id="sc-phone" placeholder="+1 555 010 2030"></div>
+        <div><label>Phone hours</label>
+          <input id="sc-hours" placeholder="Mon–Fri, 9am–5pm ET"></div>
+        <div><label>Reply target</label>
+          <input id="sc-target" placeholder="within one working day"></div>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="sc-calls" style="width:auto">
+        Offer voice and video calls while staff are online</label>
+      <div class="modal-actions">
+        <span class="dim" id="sc-msg" style="margin-right:auto"></span>
+        <button class="btn-pill primary sm" id="sc-save">Save contact details</button>
+      </div>
+      <div class="adm-list" id="tk-list"></div>
     </div>
 
     <div class="adm-panel hidden" data-panel="pixels">

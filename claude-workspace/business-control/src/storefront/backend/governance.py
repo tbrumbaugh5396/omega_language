@@ -38,6 +38,7 @@ PERMISSIONS = {
     "customers": "Customer and subscriber lists",
     "analytics": "Store analytics",
     "settings": "Shipping, webhooks, API keys, staff, translations",
+    "marketing": "Campaigns and ad creatives",
 }
 
 # What each role gets when no explicit grant is recorded.
@@ -76,6 +77,10 @@ PATH_RULES = [
     ("/api/store/admin/enquiries", "customers"),
     ("/api/store/admin/events", "content"),
     ("/api/store/admin/heatmap", "analytics"),
+    ("/api/store/admin/tickets", "customers"),
+    ("/api/store/admin/support-contact", "settings"),
+    ("/api/store/admin/campaigns", "marketing"),
+    ("/api/store/admin/creatives", "marketing"),
 ]
 
 

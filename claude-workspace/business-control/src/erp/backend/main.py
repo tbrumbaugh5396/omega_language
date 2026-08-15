@@ -1934,7 +1934,9 @@ from storefront.backend import api as store_api  # noqa: E402
 from storefront.backend import content as store_content  # noqa: E402
 from storefront.backend import governance as store_gov  # noqa: E402
 from storefront.backend import partners as store_partners  # noqa: E402
+from storefront.backend import campaigns as store_campaigns  # noqa: E402
 from storefront.backend import pixels as store_pixels  # noqa: E402
+from storefront.backend import support as store_support  # noqa: E402
 from storefront.backend import promos as store_promos  # noqa: E402
 from storefront.backend import public_api as store_v1  # noqa: E402
 
@@ -1946,6 +1948,8 @@ app.include_router(store_aff.router)
 app.include_router(store_gov.router)
 app.include_router(store_partners.router)
 app.include_router(store_pixels.router)
+app.include_router(store_support.router)
+app.include_router(store_campaigns.router)
 app.include_router(store_v1.router)
 
 
@@ -1969,6 +1973,26 @@ async def maybe_redirect(request: Request, exc):
 @app.get("/ops")
 def ops_redirect():
     return RedirectResponse("/ops/")
+
+
+@app.get("/ops/")
+def ops_index():
+    """Serve the shell with mtime-stamped asset URLs.
+
+    StaticFiles alone left ops staff on the previous app.js after a deploy —
+    the service worker is network-first, so the stale copy came from ordinary
+    HTTP caching. Same fix as the storefront's asset_version()."""
+    shell = (config.FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    newest = 0.0
+    for name in ("app.js", "styles.css", "index.html"):
+        try:
+            newest = max(newest, (config.FRONTEND_DIR / name).stat().st_mtime)
+        except OSError:
+            pass
+    v = str(int(newest))
+    shell = (shell.replace('href="/ops/styles.css"', f'href="/ops/styles.css?v={v}"')
+                  .replace('src="/ops/app.js"', f'src="/ops/app.js?v={v}"'))
+    return HTMLResponse(shell)
 
 
 app.mount("/ops", StaticFiles(directory=config.FRONTEND_DIR, html=True),

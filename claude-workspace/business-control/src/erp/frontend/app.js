@@ -170,28 +170,65 @@ function logout() {
 
 // ---------- chrome ----------
 
+/* Inline stroked icons. The nav used emoji, which render differently on
+   every OS, can't take the accent colour, and read as placeholder art in a
+   tool people stare at all day. */
+const OPS_ICONS = {
+  cart: '<path d="M3 4h2.2l2 11.2a2 2 0 002 1.6h7.9a2 2 0 002-1.6L20 7H6.4"/><circle cx="10" cy="20" r="1.3"/><circle cx="17.5" cy="20" r="1.3"/>',
+  box: '<path d="M3 7.5L12 3l9 4.5v9L12 21l-9-4.5z"/><path d="M3 7.5l9 4.5 9-4.5M12 12v9"/>',
+  megaphone: '<path d="M3 10v4a1 1 0 001 1h2l5 4V5L6 9H4a1 1 0 00-1 1z"/><path d="M16 8.5a5 5 0 010 7"/><path d="M19 6a9 9 0 010 12"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.3l3.3 2"/>',
+  store: '<path d="M4 9.5V20h16V9.5"/><path d="M3 5h18l1 4.5a3 3 0 01-5.6 1.6 3 3 0 01-5.4 0 3 3 0 01-5.4 0A3 3 0 012 9.5z"/><path d="M9.5 20v-5h5v5"/>',
+  truck: '<path d="M2.5 6.5h11v10h-11zM13.5 10h4l3 3v3.5h-7z"/><circle cx="7" cy="18.5" r="1.8"/><circle cx="17" cy="18.5" r="1.8"/>',
+  handshake: '<path d="M8 12l3-3 2.5 2.5a1.6 1.6 0 002.3-2.2L13 6H9.5L6 8.5"/><path d="M12 15l2 2M14.5 12.5l2.2 2.2M6 8.5L2.5 11l4 4.5 2.5-1"/><path d="M18 8.5l3.5 2.5-3.5 4"/>',
+  camera: '<path d="M3 8h4l1.5-2.5h7L17 8h4v12H3z"/><circle cx="12" cy="13.5" r="3.5"/>',
+  feed: '<path d="M4 5h16v14H4z"/><path d="M7.5 9h5M7.5 12.5h9M7.5 16h9"/>',
+  link: '<path d="M10.5 13.5a4 4 0 005.7 0l2.6-2.6a4 4 0 10-5.7-5.7L11.6 6.7"/><path d="M13.5 10.5a4 4 0 00-5.7 0l-2.6 2.6a4 4 0 105.7 5.7l1.4-1.4"/>',
+  flask: '<path d="M10 3v6.2L4.8 18a2 2 0 001.7 3h11a2 2 0 001.7-3L14 9.2V3"/><path d="M8.5 3h7M7.4 14.5h9.2"/>',
+  chart: '<path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16v-4M12.5 16V8M17 16v-6"/>',
+  chat: '<path d="M21 12a7.5 7.5 0 01-11 6.6L4 20l1.4-4.2A7.5 7.5 0 1121 12z"/>',
+  hq: '<path d="M3 21V9l5-3 5 3v12"/><path d="M13 21V12h8v9"/><path d="M6.5 12h3M6.5 15.5h3M16 15.5h2M16 18.5h2"/>',
+  gear: '<circle cx="12" cy="12" r="3.2"/><path d="M19.4 14a1.6 1.6 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.6 1.6 0 00-1.8-.3 1.6 1.6 0 00-1 1.5V20a2 2 0 11-4 0v-.1a1.6 1.6 0 00-1-1.5 1.6 1.6 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.6 1.6 0 00.3-1.8 1.6 1.6 0 00-1.5-1H4a2 2 0 110-4h.1a1.6 1.6 0 001.5-1 1.6 1.6 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.6 1.6 0 001.8.3H12a1.6 1.6 0 001-1.5V4a2 2 0 114 0v.1a1.6 1.6 0 001 1.5 1.6 1.6 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.6 1.6 0 00-.3 1.8V12a1.6 1.6 0 001.5 1H20a2 2 0 110 4h-.1a1.6 1.6 0 00-1.5 1z"/>',
+  bell: '<path d="M18 8.5a6 6 0 10-12 0c0 5-2 6.5-2 6.5h16s-2-1.5-2-6.5z"/><path d="M13.7 19a2 2 0 01-3.4 0"/>',
+  phone: '<path d="M6.5 3.5h3l1.5 4-2 1.4a12 12 0 006 6l1.4-2 4 1.5v3a2 2 0 01-2.2 2A17 17 0 014.5 5.7 2 2 0 016.5 3.5z"/>',
+  video: '<path d="M3.5 6.5h11v11h-11z"/><path d="M14.5 10.5l6-3v9l-6-3z"/>',
+  pin: '<path d="M12 21s7-6.1 7-11a7 7 0 10-14 0c0 4.9 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
+  users: '<circle cx="9" cy="8" r="3.4"/><path d="M2.5 20a6.5 6.5 0 0113 0"/><path d="M16 5.2a3.4 3.4 0 010 5.6M17.5 20a6.6 6.6 0 00-2-4.7"/>',
+  palette: '<path d="M12 3a9 9 0 000 18c1.4 0 2-1 2-1.8 0-1.6-1.6-1.7-1.6-3 0-1 .8-1.7 1.9-1.7H16a5 5 0 005-5c0-3.6-4-6.5-9-6.5z"/><circle cx="8" cy="10" r="1.1"/><circle cx="12" cy="7.5" r="1.1"/><circle cx="16" cy="10" r="1.1"/>',
+  tag: '<path d="M3.5 11.5V4h7.5l9 9-7.5 7.5z"/><circle cx="7.5" cy="8" r="1.4"/>',
+  calendar: '<path d="M3.5 6.5h17v14h-17z"/><path d="M3.5 10.5h17M8 3.5v4M16 3.5v4"/>',
+  card: '<path d="M2.5 6h19v12h-19z"/><path d="M2.5 10h19"/>',
+  bag: '<path d="M5 7.5h14l-1 13H6z"/><path d="M8.8 10V6.6a3.2 3.2 0 016.4 0V10"/>',
+  tools: '<path d="M14.5 6a3.5 3.5 0 014.8 4.4l-9 9-3.2 1 1-3.2 9-9"/><path d="M4 8.5a3.5 3.5 0 004.9 3.2"/>',
+};
+const opsIcon = (n, cls = "") =>
+  `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${
+    OPS_ICONS[n] || ""}</svg>`;
+
+
 const TABS = [
-  { id: "shop", label: "Shop", icon: "🛒", group: "Sell", roles: "*" },
-  { id: "orders", label: "Orders", icon: "📦", group: "Sell", roles: "*" },
-  { id: "promos", label: "Promos", icon: "📣", group: "Sell",
+  { id: "shop", label: "Shop", icon: "cart", group: "Sell", roles: "*" },
+  { id: "orders", label: "Orders", icon: "box", group: "Sell", roles: "*" },
+  { id: "promos", label: "Promos", icon: "megaphone", group: "Sell",
     roles: ["admin", "employee"] },
-  { id: "clock", label: "Time Clock", icon: "⏱️", group: "Operate", roles: "*" },
-  { id: "inventory", label: "Inventory", icon: "🏪", group: "Operate",
+  { id: "clock", label: "Time Clock", icon: "clock", group: "Operate", roles: "*" },
+  { id: "inventory", label: "Inventory", icon: "store", group: "Operate",
     roles: ["admin", "employee", "distributor"] },
-  { id: "routes", label: "Routes", icon: "🚚", group: "Operate",
+  { id: "routes", label: "Routes", icon: "truck", group: "Operate",
     roles: ["admin", "employee"] },
-  { id: "outreach", label: "Outreach", icon: "🤝", group: "Operate",
+  { id: "outreach", label: "Outreach", icon: "handshake", group: "Operate",
     roles: ["admin", "employee"] },
-  { id: "scan", label: "Scan", icon: "📷", group: "Operate", roles: "*" },
-  { id: "feed", label: "Feed", icon: "📰", group: "Grow", roles: "*" },
-  { id: "affiliates", label: "Affiliates", icon: "🔗", group: "Grow", roles: "*" },
-  { id: "experiments", label: "Experiments", icon: "🧪", group: "Grow",
+  { id: "scan", label: "Scan", icon: "camera", group: "Operate", roles: "*" },
+  { id: "feed", label: "Feed", icon: "feed", group: "Grow", roles: "*" },
+  { id: "affiliates", label: "Affiliates", icon: "link", group: "Grow", roles: "*" },
+  { id: "experiments", label: "Experiments", icon: "flask", group: "Grow",
     roles: ["admin"] },
-  { id: "analytics", label: "Analytics", icon: "📈", group: "Grow",
+  { id: "analytics", label: "Analytics", icon: "chart", group: "Grow",
     roles: ["admin"] },
-  { id: "chat", label: "Chat", icon: "💬", group: "Company", roles: "*" },
-  { id: "hq", label: "HQ", icon: "🏰", group: "Company", roles: ["admin"] },
-  { id: "admin", label: "Admin", icon: "⚙️", group: "Company", roles: ["admin"] },
+  { id: "chat", label: "Chat", icon: "chat", group: "Company", roles: "*" },
+  { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
+  { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
 ];
 const NAV_GROUPS = ["Sell", "Operate", "Grow", "Company"];
 // Where each staff job lands after sign-in.
@@ -219,7 +256,7 @@ function renderChrome() {
     const unread = S.notifs ? S.notifs.unread : 0;
     const roleLabel = S.user.role === "employee" && S.user.job !== "general"
       ? JOB_LABEL[S.user.job] || S.user.role : S.user.role;
-    who.innerHTML = `<a id="bell" title="notifications">🔔${unread
+    who.innerHTML = `<a id="bell" title="notifications">${opsIcon("bell","bell-ic")}${unread
       ? `<span class="bell-n">${unread}</span>` : ""}</a> ·
       ${esc(S.user.name)} · ${esc(roleLabel)}` +
       (S.user.is_admin ? " · admin" : "") + ` · <a id="logout">sign out</a>`;
@@ -233,7 +270,7 @@ function renderChrome() {
   if (S.tab !== "login" && !tabs.find((t) => t.id === S.tab)) S.tab = tabs[0].id;
   const btn = (t) =>
     `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}">
-      <span class="ic">${t.icon}</span><span>${t.label}</span></button>`;
+      <span class="ic">${opsIcon(t.icon)}</span><span>${t.label}</span></button>`;
   $("#tabs").innerHTML = NAV_GROUPS.map((g) => {
     const group = tabs.filter((t) => t.group === g);
     if (!group.length) return "";
@@ -258,7 +295,7 @@ const SKELETON = '<div class="skel"></div><div class="skel" style="height:180px"
   + '</div><div class="skel"></div>';
 
 function emptyState(icon, title, hint) {
-  return `<div class="card empty"><span class="e-ic">${icon}</span>
+  return `<div class="card empty"><span class="e-ic">${opsIcon(icon)}</span>
     <b>${title}</b><br>${hint}</div>`;
 }
 
@@ -338,12 +375,11 @@ function renderLogin() {
 
 // ---------- shop ----------
 
-const CATEGORY_ART = { sauces: "🌶️", snacks: "🌮", spices: "🧂",
-  drinks: "🍹" };
+
 
 function productArt(p) {
   if (p.image) return `<img src="/media/product/${p.id}" alt="" loading="lazy">`;
-  return CATEGORY_ART[p.category] || "🛍️";
+  return opsIcon("bag", "art-ic");
 }
 
 async function renderShop() {
@@ -568,7 +604,7 @@ async function renderOrders() {
         ${statuses.map((s) => `<option ${s === o.status ? "selected" : ""}>${s}</option>`).join("")}
       </select></td>` : ""}
     </tr>`).join("")}</tbody></table>
-    ${orders.length ? "" : emptyState("📦", "No orders yet",
+    ${orders.length ? "" : emptyState("box", "No orders yet",
       isAdmin ? "They'll appear here the moment a customer checks out."
       : "Head to the Shop, add something to your cart, and check out.")}</div>`;
   document.querySelectorAll("[data-o]").forEach((sel) => {
@@ -889,7 +925,7 @@ function onChatMessage(d) {
     if (!document.querySelector(`[data-mid="${m.id}"]`)) chatAppend(m);
     setLastRead(d.conv_id, m.id);
   } else if (m.user_id !== S.user.id) {
-    toast(`💬 ${m.name}: ${m.body.slice(0, 60)}`);
+    toast(`${m.name}: ${m.body.slice(0, 60)}`);
   }
 }
 
@@ -1045,7 +1081,7 @@ function showRing(name, media) {
   }
   o.innerHTML = `
     <div class="call-box">
-      <div style="font-size:17px">${media === "video" ? "📹" : "📞"}
+      <div style="font-size:17px">${opsIcon(media === "video" ? "video" : "phone","call-ic")}
         <b>${esc(name)}</b> is calling…</div>
       <div style="margin-top:12px">
         <button class="btn" id="call-accept">Accept</button>
@@ -1116,7 +1152,7 @@ async function renderChat() {
         ${isStaff && staff && staff.staff.length ? `
           <select id="dm-pick"><option value="">+ direct message…</option>
             ${staff.staff.map((u) => `<option value="${u.id}">${esc(u.name)}
-              ${staff.online.includes(u.id) ? "🟢" : ""}</option>`).join("")}
+              ${staff.online.includes(u.id) ? " (online)" : ""}</option>`).join("")}
           </select>` : ""}
         ${data.convs.map((c) => {
           const unread = c.last && c.last.user_id !== data.me &&
@@ -1126,7 +1162,7 @@ async function renderChat() {
             ${unread ? '<span class="unread-dot"></span>' : ""}
             <b>${esc(c.name || c.kind)}</b>
             ${c.call_target && data.online.includes(c.call_target)
-              ? '<span title="online">🟢</span>' : ""}
+              ? '<span class="dot-online" title="online"></span>' : ""}
             ${c.last ? `<div class="dim" style="font-size:11px">
               ${esc(c.last.name)}: ${esc(c.last.body.slice(0, 26))}</div>` : ""}
           </div>`;
@@ -1138,8 +1174,8 @@ async function renderChat() {
             <b>${esc(conv.name || conv.kind)}</b>
             ${conv.call_target ? `
               <span style="float:right">
-                <button class="btn alt" id="call-audio" title="voice call">📞</button>
-                <button class="btn alt" id="call-video" title="video call">📹</button>
+                <button class="btn alt" id="call-audio" title="voice call">${opsIcon("phone","btn-ic")}</button>
+                <button class="btn alt" id="call-video" title="video call">${opsIcon("video","btn-ic")}</button>
               </span>` : ""}
           </div>
           <div id="chat-msgs"></div>
@@ -1201,7 +1237,7 @@ async function fetchNotifs() {
       }
     }
     const bell = $("#bell");
-    if (bell) bell.innerHTML = "🔔" + (d.unread
+    if (bell) bell.innerHTML = opsIcon("bell","bell-ic") + (d.unread
       ? `<span class="bell-n">${d.unread}</span>` : "");
   } catch {}
 }
@@ -1226,7 +1262,7 @@ async function enablePush() {
     const sub = await reg.pushManager.subscribe(
       { userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
     await api("/api/push/subscribe", { body: { subscription: sub.toJSON() } });
-    toast("📲 push enabled on this device");
+    toast("push enabled on this device");
   } catch (e) { toast("push failed: " + e.message); }
 }
 
@@ -1248,7 +1284,7 @@ async function toggleNotifPanel() {
   panel.innerHTML = `<h3 style="margin:4px 0 8px">Notifications
       <button class="btn alt" id="push-btn" style="float:right;padding:3px 9px"
         title="get these on this device even with the app closed">
-        📲 enable push</button></h3>` +
+        Enable push</button></h3>` +
     (items.length ? items.map((i) => `
       <div class="notif ${i.is_read ? "" : "unread"}">
         <div>${esc(i.title)}</div>
@@ -1263,7 +1299,7 @@ async function toggleNotifPanel() {
     S.notifs.items.forEach((i) => { i.is_read = 1; });
     S.notifs.unread = 0;
     const bell = $("#bell");
-    if (bell) bell.innerHTML = "🔔";
+    if (bell) bell.innerHTML = opsIcon("bell","bell-ic");
   }
 }
 
@@ -1433,7 +1469,7 @@ async function renderPromos() {
           <span class="pill">${p.scans} scan(s) · ${p.unique_scans} unique</span>
           ${p.kind === "event" ? `<span class="pill">${p.staff_hours}h staffed</span>` : ""}
           ${p.active ? `<button class="btn alt" data-pm-blast="${p.id}"
-            title="email this promo to every customer">✉️ blast</button>` : ""}
+            title="email this promo to every customer">Email blast</button>` : ""}
           <button class="btn alt" data-pm-toggle="${p.id}">
             ${p.active ? "turn off" : "turn on"}</button></span>` : ""}
         ${p.body ? `<div style="margin:8px 0">${esc(p.body)}</div>` : ""}
@@ -1500,7 +1536,7 @@ async function renderPromoLanding() {
       <button class="btn" id="promo-shop">Shop now</button>
     </div>
     ${p.video_url ? `<div class="card">${videoEmbed(p.video_url)}</div>` : ""}
-    ${p.kind === "event" ? `<div class="card">📍 ${esc(p.city)} ·
+    ${p.kind === "event" ? `<div class="card">${opsIcon("pin","inline-ic")} ${esc(p.city)} ·
       ${esc(p.region)} ${p.starts ? "· " + esc(p.starts).replace("T", " ") : ""}</div>` : ""}
     <div class="card"><b>Get the app:</b> on iPhone open the Share menu →
       <b>Add to Home Screen</b>; on Android/desktop Chrome use menu →
@@ -1657,7 +1693,7 @@ async function renderInventory() {
   view().innerHTML = `
     <h2>Inventory — all stores</h2>
     ${picks.length ? `<div class="card">
-      <h3 style="margin-top:0">📋 Pick list — ${picks.length} order(s) to pack</h3>
+      <h3 style="margin-top:0">Pick list — ${picks.length} order(s) to pack</h3>
       <div class="tablewrap"><table><thead><tr><th>#</th><th>kind</th><th>items</th>
         <th>ship to</th><th>status</th></tr></thead><tbody>
       ${picks.map((o) => `<tr><td>${o.id}</td><td>${o.kind}</td>
@@ -1981,7 +2017,7 @@ async function renderAdmin() {
       api("/api/admin/email/log"), api("/api/cycles")]);
   view().innerHTML = `
     <h2>Admin</h2>
-    <details class="sect" open><summary>👥 All users (${users.length})</summary>
+    <details class="sect" open><summary>All users (${users.length})</summary>
     <div class="inner"><div class="tablewrap"><table><thead><tr><th>name</th><th>role</th>
       <th>job</th><th>region</th><th>admin</th><th>active</th><th>sign-in</th></tr></thead><tbody>
       ${users.map((u) => {
@@ -2017,7 +2053,7 @@ async function renderAdmin() {
         <b>QR</b> issues a one-time sign-in link (10&nbsp;min, single use) —
         the user scans it and lands signed in on their phone.</div>
     </div></details>
-    <details class="sect"><summary>🎨 Branding</summary><div class="inner">
+    <details class="sect"><summary>Branding</summary><div class="inner">
       <form class="inline" id="brand-form">
         <label class="f">brand name <input id="br-name"
           value="${esc(S.meta.brand || "")}"></label>
@@ -2033,7 +2069,7 @@ async function renderAdmin() {
         bar and PWA; the accent recolors buttons, highlights, and charts
         across the whole app.</div>
     </div></details>
-    <details class="sect"><summary>📈 Analytics pixels</summary><div class="inner">
+    <details class="sect"><summary>Analytics pixels</summary><div class="inner">
       <form class="inline" id="trk-form">
         <label class="f">Google Analytics 4 (G-…)
           <input id="trk-ga" value="${esc(S.meta.tracking?.ga_measurement_id || "")}"
@@ -2052,7 +2088,7 @@ async function renderAdmin() {
         begin_checkout / purchase (with order value) to every configured
         platform, matching the internal funnel.</div>
     </div></details>
-    <details class="sect"><summary>🏷️ Catalog, stores & team</summary>
+    <details class="sect"><summary>Catalog, stores &amp; team</summary>
     <div class="inner">
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));margin-bottom:12px">
       ${products.map((p) => `<div class="product">
@@ -2109,7 +2145,7 @@ async function renderAdmin() {
     </div>
     </div></details>
     <details class="sect" ${cyclesList.length ? "open" : ""}>
-    <summary>📅 Box cycles (cutoff orchestration)</summary><div class="inner">
+    <summary>Box cycles (cutoff orchestration)</summary><div class="inner">
       <form class="inline" id="cyc-form">
         <label class="f">month <input id="cy-month" type="month" required></label>
         <button class="btn">Generate from template</button>
@@ -2148,7 +2184,7 @@ async function renderAdmin() {
         shortfalls after curation lock. <code>/api/cycles/current</code> →
         <code>changes_open</code> is the flag the subscriber portal must obey.</div>
     </div></details>
-    <details class="sect"><summary>✉️ Email marketing</summary><div class="inner">
+    <details class="sect"><summary>Email marketing</summary><div class="inner">
       <form class="inline" id="email-form">
         <label class="f">SMTP host <input id="em-host"
           value="${esc(emailCfg.host)}" placeholder="smtp.gmail.com"></label>
@@ -2189,7 +2225,7 @@ async function renderAdmin() {
             : l.status === "dry" ? "" : "bad"}">${esc(l.status)}</span></td>
         </tr>`).join("")}</tbody></table>` : ""}
     </div></details>
-    <details class="sect"><summary>📦 Set inventory</summary><div class="inner">
+    <details class="sect"><summary>Set inventory</summary><div class="inner">
     <form class="inline" id="inv-form">
       <select id="iv-store">${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select>
       <select id="iv-prod">${products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
@@ -2385,7 +2421,7 @@ async function boot() {
     try {
       await api(`/api/orders/${S._confirmPay.order_id}/confirm-payment`,
         { body: { session_id: S._confirmPay.session_id } });
-      toast(`💳 payment confirmed for order #${S._confirmPay.order_id}`);
+      toast(`Payment confirmed for order #${S._confirmPay.order_id}`);
       S.tab = "orders";
     } catch (e) { toast("payment not confirmed: " + e.message); }
     S._confirmPay = null;

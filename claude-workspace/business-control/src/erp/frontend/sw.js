@@ -1,6 +1,6 @@
 /* Service worker: cache the app shell (network-first for /api), and surface
    Web Push notifications. */
-const CACHE = "business-control-ops-v3";
+const CACHE = "business-control-ops-v4";
 
 self.addEventListener("push", (e) => {
   let d = {};

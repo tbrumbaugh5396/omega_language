@@ -1017,12 +1017,267 @@ $("#account-btn").onclick = openAccount;
 // ---------- live support chat (rides the ERP Comms module) ----------
 let SUPPORT = { token: "", conv: null, ws: null, lastId: 0, me: null };
 
-function openSupport() {
-  const saved = JSON.parse(localStorage.getItem("sf_support") || "null");
-  if (saved && saved.token) { SUPPORT.token = saved.token;
-    SUPPORT.me = saved.me; startSupportChat(); return; }
-  signIn("Real humans on the other end — the same system the team runs on.",
-    startSupportChat);
+/* Voice and video to the support desk.
+   The ops app already implements the calling half of this over /ws, and the
+   support conversation already names a `call_target` (whichever staff member
+   is on). So the storefront speaks the same signaling protocol rather than
+   growing a second one — a call placed here rings in the ops app exactly as a
+   staff-to-staff call does. */
+const CALL = { pc: null, stream: null, peer: null, state: "idle",
+  media: "audio", pendingIce: [] };
+
+/* One socket for both chat and calls. Chat used to open its own, so calling
+   from the hub would have raced a second connection against it. */
+function ensureSupportSocket() {
+  if (SUPPORT.ws && SUPPORT.ws.readyState <= 1) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      SUPPORT.ws = new WebSocket(
+        `${proto}://${location.host}/ws?token=${SUPPORT.token}`);
+      SUPPORT.ws.onopen = () => resolve();
+      SUPPORT.ws.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.type === "signal") { onCallSignal(d); return; }
+        if (SUPPORT.onMessage) SUPPORT.onMessage(d);
+      };
+      SUPPORT.ws.onclose = () => { SUPPORT.ws = null; };
+      setTimeout(resolve, 1200);        // don't hang if the socket is slow
+    } catch { resolve(); }
+  });
+}
+
+function callSignal(payload) {
+  if (SUPPORT.ws && SUPPORT.ws.readyState === 1) {
+    SUPPORT.ws.send(JSON.stringify({ type: "signal", to: CALL.peer, payload }));
+  }
+}
+
+function endCall(notify) {
+  if (notify) callSignal({ call: "hangup" });
+  if (CALL.pc) { try { CALL.pc.close(); } catch {} }
+  if (CALL.stream) CALL.stream.getTracks().forEach((t) => t.stop());
+  CALL.pc = null; CALL.stream = null; CALL.peer = null;
+  CALL.state = "idle"; CALL.pendingIce = [];
+  const o = $("#sf-call");
+  if (o) o.remove();
+}
+
+function callOverlay(status) {
+  let o = $("#sf-call");
+  if (!o) {
+    o = document.createElement("div");
+    o.id = "sf-call";
+    o.className = "sf-call";
+    o.innerHTML = `
+      <video id="sf-call-remote" autoplay playsinline></video>
+      <video id="sf-call-local" autoplay playsinline muted></video>
+      <div class="sf-call-bar">
+        <span id="sf-call-status"></span>
+        <button class="btn-pill primary sm" id="sf-call-end">End call</button>
+      </div>`;
+    document.body.appendChild(o);
+    $("#sf-call-end").onclick = () => endCall(true);
+  }
+  o.classList.toggle("video", CALL.media === "video");
+  $("#sf-call-status").textContent = status;
+  return o;
+}
+
+async function startSupportCall(media) {
+  if (CALL.state !== "idle") return toast("already in a call");
+  const H = { Authorization: "Bearer " + SUPPORT.token };
+  const convs = await (await fetch("/api/chat/convs", { headers: H })).json();
+  const conv = convs.convs.find((c) => c.kind === "support");
+  if (!conv || !conv.call_target) {
+    toast("nobody's free to take a call — try chat or leave a message");
+    return openSupport();
+  }
+  await ensureSupportSocket();
+  CALL.peer = conv.call_target; CALL.media = media; CALL.state = "calling";
+  closeModal();
+  try {
+    CALL.stream = await navigator.mediaDevices.getUserMedia(
+      { audio: true, video: media === "video" });
+  } catch (e) {
+    toast("mic/camera unavailable: " + e.message);
+    return endCall(false);
+  }
+  const pc = new RTCPeerConnection(
+    { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  CALL.pc = pc;
+  CALL.stream.getTracks().forEach((t) => pc.addTrack(t, CALL.stream));
+  pc.onicecandidate = (e) => {
+    if (e.candidate) callSignal({ call: "ice", ice: e.candidate });
+  };
+  pc.ontrack = (e) => {
+    const v = $("#sf-call-remote");
+    if (v && v.srcObject !== e.streams[0]) v.srcObject = e.streams[0];
+  };
+  pc.onconnectionstatechange = () => {
+    if (["failed", "disconnected", "closed"].includes(pc.connectionState)
+        && CALL.state !== "idle") { toast("call ended"); endCall(false); }
+  };
+  callOverlay("calling the team…");
+  const lv = $("#sf-call-local");
+  if (lv) lv.srcObject = CALL.stream;
+  await pc.setLocalDescription(await pc.createOffer());
+  callSignal({ call: "offer", sdp: pc.localDescription, media });
+}
+
+async function onCallSignal(d) {
+  const p = d.payload || {};
+  if (p.call === "answer" && CALL.pc) {
+    await CALL.pc.setRemoteDescription(p.sdp);
+    for (const ice of CALL.pendingIce) {
+      await CALL.pc.addIceCandidate(ice).catch(() => {});
+    }
+    CALL.pendingIce = [];
+    CALL.state = "active";
+    callOverlay("connected");
+  } else if (p.call === "ice") {
+    if (CALL.pc && CALL.pc.remoteDescription) {
+      await CALL.pc.addIceCandidate(p.ice).catch(() => {});
+    } else CALL.pendingIce.push(p.ice);
+  } else if (["hangup", "decline", "busy"].includes(p.call)) {
+    toast(p.call === "busy" ? "the desk is on another call" : "call ended");
+    endCall(false);
+  }
+}
+
+/* The support hub. Four ways to reach a person, offered in the order that
+   suits the moment rather than the order that suits us: live chat and a call
+   while someone is on, a ticket and a phone number when nobody is. */
+let SUPPORT_CFG = null;
+
+async function openSupport() {
+  try {
+    SUPPORT_CFG = await (await fetch("/api/store/support/config")).json();
+  } catch { SUPPORT_CFG = null; }
+  const c = SUPPORT_CFG || { topics: {}, staff_online: 0 };
+  const live = c.staff_online > 0;
+  openModal(`<h3>Support</h3>
+    <p class="dim">${live
+      ? "Someone's on right now — chat or call and you'll get a human."
+      : `Nobody's on the desk this minute. Leave a message and we'll reply
+         ${c.reply_target || "within one working day"}.`}</p>
+    <div class="sup-options">
+      <button class="sup-opt" data-sup="chat">
+        ${ico("chat", "ico ico-lg")}
+        <span><b>Live chat</b><small>${live
+          ? "Usually answered in a few minutes" : "Leaves a message if nobody replies"}</small></span>
+        ${live ? '<span class="sup-live">online</span>' : ""}</button>
+      ${c.calls_enabled ? `
+      <button class="sup-opt" data-sup="voice">
+        ${ico("chat", "ico ico-lg")}
+        <span><b>Voice call</b><small>Talk to whoever's on the desk</small></span></button>
+      <button class="sup-opt" data-sup="video">
+        ${ico("play", "ico ico-lg")}
+        <span><b>Video call</b><small>Useful for showing us a damaged box</small></span></button>` : ""}
+      <button class="sup-opt" data-sup="ticket">
+        ${ico("box", "ico ico-lg")}
+        <span><b>Send a message</b><small>We reply by email, ${
+          c.reply_target || "within one working day"}</small></span></button>
+      ${c.phone ? `
+      <a class="sup-opt" href="tel:${c.phone.replace(/[^+\d]/g, "")}">
+        ${ico("user", "ico ico-lg")}
+        <span><b>${c.phone}</b><small>${c.phone_hours || ""}</small></span></a>` : ""}
+      <button class="sup-opt" data-sup="lookup">
+        ${ico("search", "ico ico-lg")}
+        <span><b>Check on a message</b><small>Look it up by reference</small></span></button>
+    </div>`);
+  document.querySelectorAll("[data-sup]").forEach((b) => b.onclick = () => {
+    const what = b.dataset.sup;
+    if (what === "ticket") return openTicketForm();
+    if (what === "lookup") return openTicketLookup();
+    // chat and calls both need an account, so they share the one door
+    const go = what === "chat" ? startSupportChat
+      : () => startSupportCall(what);
+    const saved = JSON.parse(localStorage.getItem("sf_support") || "null");
+    if (saved && saved.token) {
+      SUPPORT.token = saved.token; SUPPORT.me = saved.me; go(); return;
+    }
+    signIn("Real humans on the other end — the same system the team runs on.",
+      go);
+  });
+}
+
+function openTicketForm() {
+  const topics = (SUPPORT_CFG && SUPPORT_CFG.topics) || { other: "Something else" };
+  openModal(`<h3>Send us a message</h3>
+    <p class="dim">A person reads these. You'll get a reference straight away
+      and a reply by email.</p>
+    <label>What's it about</label>
+    <select id="tk-topic">${Object.entries(topics)
+      .map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+    <div class="row">
+      <div><label>Your name</label><input id="tk-name" autocomplete="name"></div>
+      <div><label>Email</label><input id="tk-email" type="email"
+        autocomplete="email"></div>
+    </div>
+    <label>Order reference <span class="dim">(if it's about an order)</span></label>
+    <input id="tk-order" placeholder="#1234">
+    <label>Message</label><textarea id="tk-body" rows="4"></textarea>
+    <div class="modal-actions">
+      <span class="dim" id="tk-msg" style="margin-right:auto"></span>
+      <button class="btn-pill ghost sm" data-close-modal>Cancel</button>
+      <button class="btn-pill primary sm" id="tk-send">Send</button>
+    </div>`);
+  $("#tk-send").onclick = async () => {
+    const name = $("#tk-name").value.trim(), body = $("#tk-body").value.trim();
+    if (!name || !body) { $("#tk-msg").textContent =
+      "We need a name and a message."; return; }
+    const btn = $("#tk-send"); btn.disabled = true;
+    try {
+      const H = { "Content-Type": "application/json" };
+      if (acctToken()) H.Authorization = "Bearer " + acctToken();
+      const r = await fetch("/api/store/support/ticket", { method: "POST",
+        headers: H, body: JSON.stringify({ name,
+          email: $("#tk-email").value.trim(), topic: $("#tk-topic").value,
+          order_ref: $("#tk-order").value.trim(), body }) });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.detail || "failed");
+      openModal(`<h3>Got it</h3>
+        <p>Your reference is <b>${out.ref}</b> — keep it and you can check
+          back any time. We'll reply by email
+          ${(SUPPORT_CFG || {}).reply_target || "within one working day"}.</p>
+        <div class="modal-actions">
+          <button class="btn-pill primary sm" data-close-modal>Done</button>
+        </div>`);
+    } catch (e) {
+      $("#tk-msg").textContent = String(e.message || e);
+      btn.disabled = false;
+    }
+  };
+}
+
+function openTicketLookup() {
+  openModal(`<h3>Check on a message</h3>
+    <label>Reference</label><input id="tl-ref" placeholder="ZJ-4F2A">
+    <div class="modal-actions">
+      <button class="btn-pill ghost sm" data-close-modal>Close</button>
+      <button class="btn-pill primary sm" id="tl-go">Look it up</button>
+    </div>
+    <div id="tl-out"></div>`);
+  $("#tl-go").onclick = async () => {
+    const ref = $("#tl-ref").value.trim();
+    if (!ref) return;
+    const r = await fetch("/api/store/support/ticket/"
+      + encodeURIComponent(ref));
+    if (!r.ok) { $("#tl-out").innerHTML =
+      '<p class="dim" style="margin-top:12px">No message with that reference.</p>';
+      return; }
+    const t = await r.json();
+    $("#tl-out").innerHTML = `<div style="margin-top:14px;padding-top:14px;
+      border-top:1px solid var(--line)">
+      <span class="event-kind">${t.status}</span>
+      <p style="margin:8px 0">${t.body}</p>
+      ${t.replies.map((rp) => `<div class="review-card"
+        style="margin-top:10px;padding:14px">
+        <b style="font-size:13px">${rp.staff ? rp.author : "You"}</b>
+        <p style="font-size:14px;margin:4px 0 0">${rp.body}</p></div>`).join("")
+        || '<p class="dim">No reply yet.</p>'}</div>`;
+  };
 }
 
 async function startSupportChat() {
@@ -1065,18 +1320,11 @@ async function startSupportChat() {
   SUPPORT.lastId = 0; draw(hist);
   if (!hist.length) draw([{ id: 0.5, user_id: -1, name: "Zenjoy",
     body: "Hey — how can we help?" }]);
-  // realtime: the same /ws the team uses
-  try {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    SUPPORT.ws?.close();
-    SUPPORT.ws = new WebSocket(
-      `${proto}://${location.host}/ws?token=${SUPPORT.token}`);
-    SUPPORT.ws.onmessage = (e) => {
-      const d = JSON.parse(e.data);
-      if (d.type === "msg" && d.conv_id === SUPPORT.conv)
-        draw([d.message]);
-    };
-  } catch {}
+  // realtime: the same /ws the team uses, shared with call signaling
+  SUPPORT.onMessage = (d) => {
+    if (d.type === "msg" && d.conv_id === SUPPORT.conv) draw([d.message]);
+  };
+  ensureSupportSocket();
   const send = async () => {
     const text = $("#sp-input").value.trim();
     if (!text) return;

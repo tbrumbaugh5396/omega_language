@@ -58,6 +58,7 @@ const TAB_PERMS = {
   webhooks: "settings", api: "settings", blog: "content",
   affiliates: "customers", enquiries: "customers",
   events: "content", heatmap: "analytics", pixels: "settings",
+  campaigns: "marketing", tickets: "customers",
   nav: "content", intl: "settings", staff: "settings",
   analytics: "analytics",
 };
@@ -92,7 +93,8 @@ document.querySelectorAll("#adm-tabs .tab").forEach((b) => b.onclick = () => {
   // at boot meant a tab opened an hour later showed the state at sign-in.
   const REFRESH = { analytics: () => drawAnalytics(),
     heatmap: () => drawHeatPages(), events: () => drawEvents(),
-    enquiries: () => drawEnquiries(), pixels: () => drawPixels() };
+    enquiries: () => drawEnquiries(), pixels: () => drawPixels(),
+    campaigns: () => drawCampaigns(), tickets: () => drawTickets() };
   const fn = REFRESH[b.dataset.tab];
   if (fn) fn();
 });
@@ -367,6 +369,172 @@ $("#gc-issue").onclick = async () => {
 };
 
 // ---------- affiliates ----------
+/* ---------- campaigns ---------- */
+let CP = null;
+
+async function drawCampaigns() {
+  CP = await api("/api/store/admin/campaigns");
+  const sel = $("#cp-objective");
+  if (sel && !sel.options.length) {
+    sel.innerHTML = CP.objectives.map((o) =>
+      `<option value="${o}">${o}</option>`).join("");
+  }
+  // Status lanes: what's running, what's queued, what's finished. A flat
+  // list buries the two live campaigns under twenty dead ones.
+  const lanes = CP.statuses.map((st) => {
+    const items = CP.campaigns.filter((c) => c.status === st);
+    return `<div class="cp-lane">
+      <div class="cp-lane-head"><b>${st}</b>
+        <span class="dim">${items.length}</span></div>
+      ${items.map(campaignCard).join("") ||
+        '<p class="dim" style="padding:8px 2px">Nothing here.</p>'}
+    </div>`;
+  }).join("");
+  $("#cp-board").innerHTML = `<div class="cp-board">${lanes}</div>`;
+  wireCampaigns();
+}
+
+function campaignCard(c) {
+  const money2 = (v) => "$" + (v / 100).toFixed(0);
+  const plats = c.creatives.map((cr) => {
+    const p = CP.platforms[cr.platform] || { label: cr.platform };
+    return `<div class="cr-row cr-${cr.status}">
+      <span class="cr-kind">${cr.kind}</span>
+      <b>${p.label}</b>
+      <span class="dim">${cr.title || "untitled"}</span>
+      ${cr.url ? `<a class="text-link" href="${cr.url}" target="_blank"
+        rel="noopener">open</a>` : ""}
+      <span class="dim">${cr.clicks || 0} clicks</span>
+      <select data-crst="${cr.id}">${CP.creative_statuses.map((s) =>
+        `<option ${s === cr.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+      <button class="btn-pill ghost mini" data-crdel="${cr.id}">remove</button>
+    </div>`;
+  }).join("");
+  return `<div class="cp-card">
+    <div class="cp-top">
+      <b>${c.name}</b>
+      <select data-cpst="${c.id}">${CP.statuses.map((s) =>
+        `<option ${s === c.status ? "selected" : ""}>${s}</option>`).join("")}</select>
+    </div>
+    <div class="cp-stats">
+      <span><b>${c.clicks}</b> link clicks</span>
+      <span><b>${c.orders}</b> orders</span>
+      <span><b>${money2(c.revenue_cents)}</b> revenue</span>
+      ${c.spend_cents ? `<span><b>${money2(c.spend_cents)}</b> spend</span>
+        <span><b>${c.cpo_cents ? money2(c.cpo_cents) : "—"}</b> per order</span>
+        <span><b>${c.roas || "—"}×</b> ROAS</span>` : ""}
+    </div>
+    <p class="dim" style="font-size:12.5px">
+      <code>/c/${c.code}</code>${c.discount_code
+        ? ` · attributed by <code>${c.discount_code}</code>` : ""}
+      · ${c.creatives.length} creative(s), ${c.live_creatives} live</p>
+    <div class="cr-list">${plats}</div>
+    <div class="cr-add">
+      <select data-newplat="${c.id}">${Object.entries(CP.platforms).map(
+        ([k, p]) => `<option value="${k}">${p.label} — ${p.shape}</option>`).join("")}</select>
+      <select data-newkind="${c.id}">
+        <option value="video">video</option><option value="image">image</option>
+        <option value="carousel">carousel</option><option value="text">text</option>
+      </select>
+      <input data-newtitle="${c.id}" placeholder="Cut name">
+      <input data-newurl="${c.id}" placeholder="Asset link (https://…)">
+      <button class="btn-pill ghost mini" data-newcr="${c.id}">Add creative</button>
+      <button class="btn-pill ghost mini" data-cpdel="${c.id}">Delete campaign</button>
+    </div>
+  </div>`;
+}
+
+function wireCampaigns() {
+  document.querySelectorAll("[data-cpst]").forEach((s) => s.onchange = async () => {
+    const c = CP.campaigns.find((x) => x.id === +s.dataset.cpst);
+    await api(`/api/store/admin/campaigns/${c.id}`, { method: "PATCH",
+      body: JSON.stringify({ ...c, status: s.value }) });
+    drawCampaigns();
+  });
+  document.querySelectorAll("[data-crst]").forEach((s) => s.onchange = async () => {
+    const cr = CP.campaigns.flatMap((c) => c.creatives)
+      .find((x) => x.id === +s.dataset.crst);
+    await api(`/api/store/admin/creatives/${cr.id}`, { method: "PATCH",
+      body: JSON.stringify({ ...cr, status: s.value }) });
+    drawCampaigns();
+  });
+  document.querySelectorAll("[data-crdel]").forEach((b) => b.onclick = async () => {
+    await api(`/api/store/admin/creatives/${b.dataset.crdel}`,
+      { method: "DELETE" });
+    drawCampaigns();
+  });
+  document.querySelectorAll("[data-cpdel]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Delete this campaign and its creatives?")) return;
+    await api(`/api/store/admin/campaigns/${b.dataset.cpdel}`,
+      { method: "DELETE" });
+    drawCampaigns();
+  });
+  document.querySelectorAll("[data-newcr]").forEach((b) => b.onclick = async () => {
+    const id = b.dataset.newcr;
+    try {
+      await api("/api/store/admin/creatives", { method: "POST",
+        body: JSON.stringify({ campaign_id: +id,
+          platform: document.querySelector(`[data-newplat="${id}"]`).value,
+          kind: document.querySelector(`[data-newkind="${id}"]`).value,
+          title: document.querySelector(`[data-newtitle="${id}"]`).value,
+          url: document.querySelector(`[data-newurl="${id}"]`).value }) });
+      drawCampaigns();
+    } catch (e) { alert(e.message); }
+  });
+}
+
+$("#cp-add").onclick = async () => {
+  const name = $("#cp-name").value.trim();
+  if (!name) { alert("A campaign needs a name."); return; }
+  const d = $("#cp-starts").value;
+  await api("/api/store/admin/campaigns", { method: "POST",
+    body: JSON.stringify({ name, objective: $("#cp-objective").value,
+      discount_code: $("#cp-discount").value.trim(),
+      budget_cents: Math.round((+$("#cp-budget").value || 0) * 100),
+      landing: $("#cp-landing").value.trim() || "/",
+      starts: d ? new Date(d + "T12:00").getTime() / 1000 : Date.now() / 1000 }) });
+  ["cp-name", "cp-discount", "cp-budget", "cp-landing"]
+    .forEach((i) => $("#" + i).value = "");
+  drawCampaigns();
+};
+
+/* ---------- support tickets ---------- */
+async function drawTickets() {
+  const [rows, contact] = await Promise.all([
+    api("/api/store/admin/tickets"),
+    api("/api/store/admin/support-contact")]);
+  $("#sc-phone").value = contact.phone || "";
+  $("#sc-hours").value = contact.phone_hours || "";
+  $("#sc-target").value = contact.reply_target || "";
+  $("#sc-calls").checked = !!contact.calls_enabled;
+  $("#tk-list").innerHTML = rows.map((t) => `
+    <div class="adm-item" style="flex-wrap:wrap;gap:8px;
+      ${t.status === "closed" ? "opacity:.55" : ""}">
+      <code style="flex:0 0 82px">${t.ref}</code>
+      <b style="flex:0 0 130px">${t.name}</b>
+      <span class="dim" style="flex:0 0 150px">${t.topic_label}</span>
+      <span class="dim" style="flex:1;min-width:180px">${t.body.slice(0, 90)}</span>
+      <span class="dim" style="flex:0 0 70px">${t.status}</span>
+      <button class="btn-pill ghost mini" data-tkr="${t.id}">reply</button>
+    </div>`).join("") || '<p class="dim">No messages yet.</p>';
+  $("#tk-list").querySelectorAll("[data-tkr]").forEach((b) => b.onclick = () => {
+    const t = rows.find((x) => x.id === +b.dataset.tkr);
+    const reply = prompt(`Reply to ${t.name} (${t.ref}).`
+      + (t.email ? ` This emails ${t.email}.` : " No email on file."));
+    if (reply == null || !reply.trim()) return;
+    api(`/api/store/admin/tickets/${t.id}`, { method: "POST",
+      body: JSON.stringify({ body: reply }) }).then(drawTickets);
+  });
+}
+
+$("#sc-save").onclick = async () => {
+  await api("/api/store/admin/support-contact", { method: "POST",
+    body: JSON.stringify({ phone: $("#sc-phone").value,
+      phone_hours: $("#sc-hours").value, reply_target: $("#sc-target").value,
+      calls_enabled: $("#sc-calls").checked }) });
+  $("#sc-msg").textContent = "Saved.";
+};
+
 /* ---------- marketing pixels ---------- */
 let PX = null;
 
@@ -967,6 +1135,7 @@ async function boot() {
   run("customers", drawAffiliates); run("customers", drawEnquiries);
   run("content", drawEvents); run("analytics", drawHeatPages);
   run("settings", drawPixels);
+  run("marketing", drawCampaigns); run("customers", drawTickets);
   run("content", drawPages); run("content", drawReviewQueue);
   run("content", drawPosts); run("content", drawMenus);
   run("content", drawRedirects);

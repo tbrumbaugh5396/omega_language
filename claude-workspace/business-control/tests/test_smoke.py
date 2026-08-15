@@ -777,4 +777,90 @@ ok("Custom words scripthere" in _home2,
    "custom consent wording reaches the page, tags stripped")
 c.post("/api/store/admin/pixels", headers=A, json={"enabled": False})
 
+# --- support hub ---
+_sc = c.get("/api/store/support/config").json()
+ok("topics" in _sc and "reply_target" in _sc, "support config is public")
+r = c.post("/api/store/support/ticket", json={
+    "name": "Ada", "email": "ada@example.com", "topic": "delivery",
+    "body": "My box hasn't arrived."})
+ok(r.status_code == 200 and r.json()["ref"].startswith("ZJ-"),
+   "ticket accepted with a reference")
+_ref = r.json()["ref"]
+ok(c.post("/api/store/support/ticket",
+          json={"name": "", "body": "x"}).status_code == 400,
+   "ticket needs a name")
+ok(c.post("/api/store/support/ticket", json={
+    "name": "A", "body": "x", "email": "not-an-email"}).status_code == 400,
+   "bad email rejected")
+ok(c.post("/api/store/support/ticket", json={
+    "name": "A", "body": "x", "topic": "nope"}).status_code == 400,
+   "unknown topic rejected")
+_look = c.get(f"/api/store/support/ticket/{_ref}").json()
+ok(_look["status"] == "open" and "email" not in _look,
+   "public lookup shows status but never the contact details")
+ok(c.get("/api/store/support/ticket/ZJ-NOPE").status_code == 404,
+   "unknown reference 404s")
+_tid = [t for t in c.get("/api/store/admin/tickets", headers=A).json()
+        if t["ref"] == _ref][0]["id"]
+ok(c.post(f"/api/store/admin/tickets/{_tid}", headers=A,
+          json={"body": "On its way."}).json()["status"] == "waiting",
+   "replying moves the ticket to waiting")
+ok(c.get(f"/api/store/support/ticket/{_ref}").json()["replies"],
+   "the reply is visible to the customer")
+c.post("/api/store/admin/support-contact", headers=A,
+       json={"phone": "+1 555 010 2030", "calls_enabled": True})
+ok(c.get("/api/store/support/config").json()["phone"] == "+1 555 010 2030",
+   "merchant phone number reaches the storefront")
+
+# --- campaigns ---
+r = c.post("/api/store/admin/campaigns", headers=A, json={
+    "name": "Autumn waves", "objective": "sales", "status": "live",
+    "discount_code": "WAVES15", "landing": "/", "spend_cents": 40000})
+ok(r.status_code == 200, "campaign created")
+_cid = r.json()["id"]
+_cp = [x for x in c.get("/api/store/admin/campaigns",
+                        headers=A).json()["campaigns"] if x["id"] == _cid][0]
+ok(_cp["code"] and _cp["link"] == f"/c/{_cp['code']}", "campaign gets a link")
+_r = c.get(f"/c/{_cp['code']}", follow_redirects=False)
+ok(_r.status_code == 307 and "discount=WAVES15" in _r.headers["location"],
+   "tracked link forwards with the discount applied")
+ok([x for x in c.get("/api/store/admin/campaigns", headers=A).json()
+    ["campaigns"] if x["id"] == _cid][0]["clicks"] == 1,
+   "the click was counted")
+ok(c.post("/api/store/admin/campaigns", headers=A, json={
+    "name": "Evil", "landing": "https://evil.example"}).status_code == 200
+   and all(x["landing"].startswith("/") for x in
+           c.get("/api/store/admin/campaigns", headers=A).json()["campaigns"]),
+   "off-site landing pages are refused — no open redirect")
+r = c.post("/api/store/admin/creatives", headers=A, json={
+    "campaign_id": _cid, "platform": "tiktok", "kind": "video",
+    "title": "9:16 hero cut", "url": "https://cdn.example/a.mp4",
+    "status": "live"})
+ok(r.status_code == 200, "creative added to a campaign")
+ok(c.post("/api/store/admin/creatives", headers=A, json={
+    "campaign_id": _cid, "platform": "myspace"}).status_code == 400,
+   "unknown platform rejected")
+ok(c.post("/api/store/admin/creatives", headers=A, json={
+    "campaign_id": _cid, "platform": "meta",
+    "url": "javascript:alert(1)"}).status_code == 400,
+   "javascript: asset links rejected")
+_cp = [x for x in c.get("/api/store/admin/campaigns",
+                        headers=A).json()["campaigns"] if x["id"] == _cid][0]
+ok(_cp["platforms"] == ["tiktok"] and _cp["live_creatives"] == 1,
+   "campaign reports which platforms it runs on")
+ok(c.get("/api/store/admin/campaigns").status_code == 403,
+   "campaigns need the marketing permission")
+
+# --- ERP polish ---
+_ops = c.get("/ops/app.js").text
+import re as _re
+ok(not _re.search(r"[\U0001F300-\U0001FAFF]", _ops),
+   "no emoji left in the ops app")
+ok("OPS_ICONS" in _ops, "ops app uses an inline icon set")
+_css = c.get("/ops/styles.css").text
+ok("--accent: #8a6ff0" in _css, "ops palette re-toned to the brand accent")
+_shell = c.get("/ops/").text
+ok("app.js?v=" in _shell and "styles.css?v=" in _shell,
+   "ops shell stamps its assets, so a deploy can't strand stale JS")
+
 print(f"\nall {checks} checks passed")
