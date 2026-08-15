@@ -7,7 +7,7 @@ const SHELL = ["/", "/static/styles.css", "/static/app.js", "/static/ui.js",
                "/static/train.js", "/static/labs.js", "/static/labs-content.js",
                "/static/make.js", "/static/analyze.js", "/static/sandbox.js",
                "/static/library.js", "/static/progress.js", "/static/ai.js",
-               "/static/studio.js", "/static/studio-canvas.js",
+               "/static/studio.js", "/static/studio-canvas.js", "/static/canvas-selection.js",
                "/static/studio-music.js", "/static/studio-video.js", "/static/studio-shader.js", "/static/studio-design.js",
                "/static/icons/icon-192.png", "/static/icons/icon-512.png"];
 

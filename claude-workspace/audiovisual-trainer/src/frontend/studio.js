@@ -288,6 +288,10 @@ async function openEditor(ctx, kind, id) {
     body);
 
   clear(body);
-  body.append(await editor(host));
+  const editorNode = await editor(host);
+  body.append(editorNode);
+  // The shell tears down whatever it replaces, but the editor is nested a
+  // level deeper than the node the shell sees, so carry its teardown up.
+  root._cleanup = () => editorNode._cleanup?.();
   return root;
 }

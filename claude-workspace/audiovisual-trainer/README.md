@@ -42,7 +42,7 @@ actually gets made. Four document types, one asset store, one AI layer.
 
 | Document | What it is |
 |---|---|
-| **Canvas** | Layers with real blend modes, brush / eraser / shapes / type / bucket, and the whole Part 10 catalogue as a 21-entry filter menu running through `engine-image`. Imports images, exports PNG. |
+| **Canvas** | Layers with real blend modes and non-destructive **layer masks**; **selections** (rectangle, ellipse, lasso, magic wand) with add/subtract, feather and invert; **free transform** with scale and rotate; **editable text layers** that only become pixels when you rasterise them; brush / eraser / shapes / bucket; and the whole Part 10 catalogue as a 21-entry filter menu running through `engine-image`. Imports images, exports PNG. |
 | **Music** | Tracks, piano roll and drum grid over six instruments (subtractive, FM, Karplus-Strong pluck, bass, drum synth, sampler), per-track EQ / drive / delay / convolution reverb, swing, master limiter. Imports audio, exports WAV. |
 | **Video** | Sequential timeline of clips, stills and titles with per-clip grading, dissolves and an audio track. Exports by recording the composed canvas. |
 | **Design** | Vector shapes, type and layout on an infinite canvas. Frames as artboards, edge/centre snapping with guides, auto-layout stacks, align and distribute, a Müller-Brockmann column grid overlay, grouping, and SVG / PNG@2x export. |
@@ -53,8 +53,10 @@ actually gets made. Four document types, one asset store, one AI layer.
 Worth being straight about, because the gap is real. These are sketchpad-tier
 tools, not production ones:
 
-- **Canvas is not Photoshop.** No selections, no transform, no layer masks or
-  adjustment layers, and text is rasterised the moment it is placed.
+- **Canvas is not Photoshop.** It now has selections, transform, masks and
+  live text — but no adjustment layers, clipping masks, layer groups, paths
+  or pen tool, clone/heal, gradients, guides and snapping, or non-destructive
+  filter stacks. Undo is 18 deep and canvas size is fixed at creation.
 - **Video is not an NLE.** One video track, no keyframes, no drag-trimming on
   the timeline, and export is a real-time screen recording to webm rather
   than a proper encode.

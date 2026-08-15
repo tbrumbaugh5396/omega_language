@@ -114,6 +114,12 @@ function buildNav() {
 async function renderView() {
   const view = $("#view");
   $$("#nav button").forEach((b) => b.classList.toggle("on", b.dataset.view === current));
+  // Editors register a _cleanup to drop window listeners and timers. Without
+  // this call a replaced editor keeps handling pointer events against its own
+  // detached canvas, and two instances fight over the same input.
+  for (const node of view.children) {
+    try { node._cleanup?.(); } catch { /* teardown must not block navigation */ }
+  }
   clear(view);
   view.append(el("p.muted", {}, "Loading…"));
   const fn = VIEWS.find((v) => v[0] === current)?.[2] || todayView;
