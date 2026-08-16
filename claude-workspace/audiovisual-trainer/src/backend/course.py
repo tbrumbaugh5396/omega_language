@@ -93,8 +93,12 @@ def register(app, current_user):
         return _safe(slug).read_text(errors="replace")
 
     @router.get("/figure/{name}")
-    def figure(name: str, uid: int = Depends(current_user)):
-        """Fall back to the generated file when there is no live version."""
+    def figure(name: str):
+        """Fall back to the generated file when there is no live version.
+
+        Deliberately unauthenticated: an <img> cannot send a bearer header, and
+        these are static course assets from the repo, not user data.
+        """
         if not SLUG_RE.match(name or ""):
             raise HTTPException(400, "bad figure name")
         path = (FIG_DIR / name).resolve()
