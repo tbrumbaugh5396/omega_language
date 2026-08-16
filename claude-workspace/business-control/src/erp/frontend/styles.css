@@ -117,7 +117,12 @@ button.btn.alt { background: var(--panel2); color: var(--text);
 button.btn.danger { background: var(--bad); color: #fff; }
 button.btn:hover { filter: brightness(1.12); }
 button.btn:active { transform: scale(.97); }
-button.btn:disabled { opacity: .55; cursor: wait; transform: none; }
+/* A disabled button is unavailable, not busy. `wait` says "the system is
+   working, hold on", so hovering the signed-out Checkout button gave a
+   spinning cursor over something that was never going to finish. Busy is a
+   separate state, marked where a request is genuinely in flight. */
+button.btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+button.btn[aria-busy="true"] { cursor: progress; }
 .pill { display: inline-block; padding: 2px 9px; border-radius: 20px;
   font-size: 12px; background: var(--panel2); color: var(--dim); }
 .pill.ok { background: rgba(63,189,130,.16); color: var(--good); }

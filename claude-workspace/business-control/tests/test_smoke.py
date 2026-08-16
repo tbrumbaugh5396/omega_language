@@ -1963,6 +1963,26 @@ ok(_sfapi.asset_version() != _v1,
    "touching any asset moves the version, not only the ones once listed")
 ok("si-scan" in _store_js, "and so does the storefront")
 
+# --- a disabled button is unavailable, not busy ---
+# `cursor: wait` on :disabled meant hovering the signed-out Checkout button
+# gave a spinning wait cursor over something that was never going to finish.
+ok("cursor: not-allowed" in _css and
+   "button.btn:disabled { opacity: .55; cursor: wait" not in _css,
+   "a disabled button shows not-allowed, not a wait spinner")
+ok('button.btn[aria-busy="true"]' in _css,
+   "and busy is a state of its own, for a request actually in flight")
+ok('setAttribute("aria-busy", "true")' in _ops,
+   "which is set where a button is disabled during a request")
+
+# The signed-out cart used to be a dead end: a disabled button beside a line
+# of grey text that wasn't a link.
+ok("Sign in to check out" in _ops,
+   "signed out, the checkout button says what it will do")
+ok("sign in to order" not in _ops,
+   "and the inert label beside it is gone")
+ok('S.afterLogin = "shop"' in _ops and "S.afterLogin\n        ||" in _ops,
+   "signing in from the cart returns to the cart, not an employee job home")
+
 # --- the side nav scrolls on its own and keeps its place ---
 ok("overflow-y: auto" in _css.split("#tabs {")[1][:400]
    and "position: sticky" in _css.split("#tabs {")[1][:400],

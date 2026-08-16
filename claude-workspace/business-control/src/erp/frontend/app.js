@@ -1028,7 +1028,11 @@ function renderLogin() {
         email: $("#li-email").value, password: $("#li-pass").value } });
       S.user = u;
       localStorage.setItem("bc_user", JSON.stringify(u));
-      S.tab = (u.role === "employee" && JOB_HOME[u.job]) || "shop";
+      // Somewhere in particular if they were sent here mid-task; otherwise
+      // an employee's job home, or the shop.
+      S.tab = S.afterLogin
+        || (u.role === "employee" && JOB_HOME[u.job]) || "shop";
+      S.afterLogin = null;
       startNotifPoll();
       connectWS();
       render();
@@ -1111,9 +1115,8 @@ async function renderShop() {
           <span>
             ${localStorage.getItem("bc_ref") ? `<span class="pill ok">referred
               by ${esc(localStorage.getItem("bc_ref"))}</span>` : ""}
-            <button class="btn" id="checkout" ${S.user ? "" : "disabled"}>
-              Checkout</button>
-            ${S.user ? "" : '<span class="dim">sign in to order</span>'}
+            <button class="btn" id="checkout">${S.user
+              ? "Checkout" : "Sign in to check out"}</button>
           </span>
         </div>`;
     $("#cart-card").querySelectorAll("[data-cinc]").forEach((b) => {
@@ -1126,7 +1129,17 @@ async function renderShop() {
       b.onclick = () => setQty(+b.dataset.cdel, 0);
     });
     const co = $("#checkout");
-    if (co) co.onclick = onCheckout;
+    /* Signed out, this is still the button you press — it just goes to the
+       sign-in first. Disabling it left someone with a full cart and no
+       affordance except a line of grey text that wasn't a link. The cart is
+       held in memory and survives the tab change, so they come back to it. */
+    if (co) {
+      co.onclick = S.user ? onCheckout : () => {
+        S.afterLogin = "shop";     // come back to the cart, not a job home
+        S.tab = "login";
+        render();
+      };
+    }
   };
 
   document.querySelectorAll("[data-inc]").forEach((b) => {
@@ -1216,7 +1229,7 @@ async function renderShop() {
     $("#ship-form").onsubmit = (e) => {
       e.preventDefault();
       const btn = e.target.querySelector("button.btn");
-      btn.disabled = true;
+      btn.disabled = true; btn.setAttribute("aria-busy", "true");
       const paySel = $("#sh-pay");
       placeOrder({
         ship_name: $("#sh-name").value, address: $("#sh-addr").value,
@@ -1504,7 +1517,7 @@ async function renderFeed() {
   if ($("#post-form")) $("#post-form").onsubmit = async (e) => {
     e.preventDefault();
     const btn = $("#pf-btn");
-    btn.disabled = true;
+    btn.disabled = true; btn.setAttribute("aria-busy", "true");
     btn.textContent = "Posting…";
     try {
       await api("/api/feed", { body: {
@@ -4918,7 +4931,8 @@ function connectBotModal() {
       <button class="btn" id="dc-bot-save">Connect</button></div>`);
   $("#dc-bot-save").onclick = async () => {
     const b = $("#dc-bot-save");
-    b.disabled = true; b.textContent = "checking…";
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    b.textContent = "checking…";
     try {
       const r = await api("/api/store/admin/discord/bot", { body: {
         token: $("#dc-token").value, guild_id: $("#dc-guild").value } });
