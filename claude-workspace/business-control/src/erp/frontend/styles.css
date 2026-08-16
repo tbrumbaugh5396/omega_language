@@ -443,6 +443,11 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
    coastline disappears under the pins and the map looks like scattered dots. */
 .map-land { fill: #1c242e; stroke: #46566a; stroke-width: 1.2;
   stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+/* Borders sit between the land and the water in weight: visible enough to
+   separate two countries, quiet enough not to compete with the pins. */
+.map-border { fill: none; stroke: #46566a; stroke-width: .9;
+  stroke-opacity: .8; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke; }
 .map-leg { stroke: #8a6ff0; stroke-width: 2; stroke-opacity: .65;
   stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
 .map-pin .halo { opacity: .16; }
@@ -524,3 +529,37 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 /* clickable notifications */
 .notif.clickable { cursor: pointer; }
 .notif.clickable:hover { background: var(--panel2); }
+
+/* ---------- Discord chat ---------- */
+.dc-bot { margin-bottom: 14px; }
+.dc-wrap { display: flex; gap: 12px; align-items: stretch;
+  margin-bottom: 18px; flex-wrap: wrap; }
+.dc-list { flex: 0 0 190px; display: flex; flex-direction: column; gap: 4px;
+  max-height: 420px; overflow-y: auto; }
+.dc-c { text-align: left; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+  cursor: pointer; display: block; }
+.dc-c b { display: block; font-size: 13px; font-weight: 600; }
+.dc-c .dim { display: block; font-size: 11px; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dc-c.on { border-color: var(--accent); background: var(--panel2); }
+.dc-room { flex: 1; min-width: 280px; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); overflow: hidden; }
+.dc-msgs { flex: 1; min-height: 240px; max-height: 420px; overflow-y: auto;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+.dc-m { font-size: 13px; }
+.dc-who { font-size: 12px; font-weight: 600; display: flex; gap: 7px;
+  align-items: center; margin-bottom: 3px; }
+.dc-who .dim { font-weight: 400; font-size: 11px; }
+.dc-m.bot .dc-who { color: var(--accent); }
+.dc-body { color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.dc-say { display: flex; gap: 8px; padding: 10px;
+  border-top: 1px solid var(--line); background: var(--panel2); }
+.dc-say input { flex: 1; margin: 0; }
+@media (max-width: 700px) {
+  .dc-list { flex-basis: 100%; flex-direction: row; max-height: none;
+    overflow-x: auto; }
+  .dc-c { flex: 0 0 auto; }
+  .dc-c .dim { display: none; }
+}

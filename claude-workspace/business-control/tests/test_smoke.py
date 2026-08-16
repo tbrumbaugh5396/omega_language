@@ -1077,6 +1077,37 @@ ok(_dcm._matches(_rule, {"total_cents": 9000}), "condition matches above")
 ok(not _dcm._matches(_rule, {"total_cents": 900}), "condition filters below")
 ok(not _dcm._matches(_rule, {}), "a missing field doesn't fire the rule")
 
+# The bot half — reading and replying. No token is connected in the test DB,
+# so every chat route should say so rather than fall over.
+ok(c.get("/api/store/admin/discord", headers=A).json()["bot"] is None,
+   "no bot connected reports as such")
+for _p in ("/api/store/admin/discord/chat/channels",
+           "/api/store/admin/discord/chat/123/messages"):
+    ok(c.get(_p, headers=A).status_code == 400,
+       f"{_p.split('/')[-1]} needs a connected bot")
+ok("no Discord bot connected" in
+   c.get("/api/store/admin/discord/chat/channels", headers=A).json()["detail"],
+   "and says how to fix it")
+ok(c.post("/api/store/admin/discord/bot", headers=A,
+          json={"token": "x", "guild_id": ""}).status_code == 400,
+   "connecting a bot needs a server ID")
+ok(c.post("/api/store/admin/discord/bot", headers=A,
+          json={"token": "", "guild_id": "123"}).status_code == 400,
+   "connecting a bot needs a token")
+# The token is a credential: it must never come back out of the API.
+_con_d = _db.connect()
+_con_d.execute("INSERT OR REPLACE INTO discord_bot(id,token,guild_id,bot_name,"
+               " guild_name,created_at) VALUES(1,'super-secret','9','zenbot',"
+               "'Zenjoy',1)")
+_con_d.commit()
+_cfg = c.get("/api/store/admin/discord", headers=A).json()
+ok(_cfg["bot"] and _cfg["bot"]["bot_name"] == "zenbot",
+   "a connected bot is reported")
+ok("super-secret" not in json.dumps(_cfg), "the bot token is never returned")
+_con_d.execute("DELETE FROM discord_bot")
+_con_d.commit()
+_con_d.close()
+
 # --- email campaigns ---
 ok(c.get("/api/store/admin/email/campaigns").status_code == 403,
    "email campaigns need the marketing permission")
@@ -1111,6 +1142,12 @@ ok("renderProfile" in _ops and "renderStores" in _ops
    and "renderEmail" in _ops and "renderDiscord" in _ops,
    "ops app has profile, stores, email and discord views")
 ok("NOTIF_TAB" in _ops, "notifications map to a destination tab")
+ok('id="me-link"' in _ops and 'S.tab = "profile"' in _ops,
+   "your name in the header opens your profile")
+ok("dc-msgs" in _ops and "loadDiscordMsgs" in _ops,
+   "the ops app can read and reply to Discord channels")
+ok("BORDER_PATH" in _ops and "map-border" in _ops,
+   "the map separates countries")
 ok("data-docedit" in _ops, "documents are editable")
 ok("WORLD_PATH" in _ops and "HOME_VIEW" in _ops,
    "the map is a world projection opening on the US")
@@ -1129,35 +1166,37 @@ ok("esc(a.name)" in _ops and "opsIcon(a.icon" in _ops,
 ok(all(a["icon"].isascii() and a["icon"].isalnum() for a in _ach),
    "achievement icons are sprite names, not emoji")
 
-# --- no emoji in the back office ---
-# The ERP is meant to read as a tool, not a toy, and an emoji renders as a
-# different drawing on every platform. This covers the back-office chrome and
-# anything that lands in the notification bell. Customer-facing email and SMS
-# copy is a different voice and keeps its warmth; typographic marks (arrows,
-# ticks) are deliberate and stay.
+# --- no emoji in the product ---
+# The store and the back office are meant to read as one professional
+# product, and an emoji renders as a different drawing on every platform.
+# Everything that appears on a screen goes through the icon sprite instead.
+# The one exception is the copy in customer emails and order texts, which is
+# a different voice — that stays warm on purpose.
 import pathlib as _pl, re as _re
-# The pictographic planes, plus the handful of legacy pictographs that read
-# as emoji. Ticks, crosses, arrows and stars are typography, not emoji.
 _EMOJI = _re.compile("[\U0001F000-\U0001FAFF\u2728\u26A0\u2753\u2705\u2B50]")
+_MAIL = _re.compile(r"log_and_send|sms\.|mailer\.send|verb = |has arrived")
 _hits = []
-for _f in sorted(_pl.Path("src/erp").rglob("*")):
-    if not _f.is_file():
+for _f in sorted(_pl.Path("src").rglob("*")):
+    if _f.suffix not in (".py", ".js", ".css", ".html", ".svg"):
         continue
-    _front = _f.suffix in (".js", ".css", ".html")
-    if not _front and _f.suffix != ".py":
+    if not _f.is_file():
         continue
     _lines = _f.read_text(errors="replace").splitlines()
     for _i, _line in enumerate(_lines, 1):
         if not _EMOJI.search(_line):
             continue
-        # In backend Python only the notification titles are in scope — find
-        # the call this line belongs to by looking back a few lines.
-        if not _front:
-            _ctx = " ".join(_lines[max(0, _i - 4):_i])
-            if "notify.push(" not in _ctx and "push.send(" not in _ctx:
-                continue
+        # Is this line part of a message going to a customer? Look back for
+        # the call it belongs to — these are long multi-line sends.
+        if _MAIL.search(" ".join(_lines[max(0, _i - 14):_i + 1])):
+            continue
         _hits.append(f"{_f}:{_i}")
 ok(not _hits,
-   "no emoji in the back office chrome or notifications"
-   + (" — " + ", ".join(_hits[:4]) if _hits else ""))
+   "no emoji in the store or the back office"
+   + (" — " + ", ".join(_hits[:5]) if _hits else ""))
+
+# The page builder and the affiliate page draw from the same sprite the
+# storefront uses, which only works if the sprite is actually on the page.
+for _p in ("/admin", "/admin/theme"):
+    _html = c.get(_p, headers=A).text
+    ok("<symbol id=\"i-" in _html, f"{_p} carries the icon sprite")
 print(f"\nall {checks} checks passed")

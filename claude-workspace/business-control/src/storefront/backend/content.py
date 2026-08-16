@@ -61,8 +61,8 @@ CREATE TABLE IF NOT EXISTS translations (
 UI_KEYS = {
     "shop": "Shop", "reviews": "Reviews", "faq": "FAQ",
     "cart": "Your cart", "checkout": "Checkout →", "add_to_cart": "Add to cart",
-    "search": "🔍 Search…", "account": "My account", "track": "Track my order",
-    "support": "Support", "empty_cart": "Cart's empty — fix that ✨",
+    "search": "Search…", "account": "My account", "track": "Track my order",
+    "support": "Support", "empty_cart": "Your cart is empty",
     "discount_code": "Discount code", "apply": "Apply", "total": "Total",
     "free_shipping_at": "free shipping at $40", "sold_out": "Sold out",
 }

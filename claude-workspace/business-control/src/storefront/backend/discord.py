@@ -5,7 +5,7 @@ answers questions — it's the business talking to the room it's already in:
 an order lands, stock drops below par, a contract gets signed, and the
 channel knows before anyone opens a dashboard.
 
-Two halves:
+Three parts:
 
   Channels — an incoming webhook per Discord channel, so #orders gets orders
   and #alerts gets the things that need someone. Webhooks need no bot token,
@@ -16,15 +16,23 @@ Two halves:
   deck describes, scoped to one destination: pick an event, optionally filter
   it, choose where it lands.
 
-The webhook URL is a secret: anyone holding it can post to the channel. It is
-stored, never returned to the browser after saving, and validated against
-Discord's own host so a typo can't turn this into a generic request forwarder
-pointed at an internal address.
+  Chat — reading channels and replying in them, which webhooks can't do at
+  all: they are a one-way pipe. That needs a bot token, so it's optional and
+  separate. Connect one and Discord becomes another place the back office
+  works from rather than somewhere alerts disappear into.
+
+Both the webhook URL and the bot token are secrets: anyone holding one can
+post as the business. They are stored, never returned to the browser after
+saving, and the webhook is validated against Discord's own host so a typo
+can't turn this into a generic request forwarder pointed at an internal
+address. Reads and replies go through Discord's REST API — still no gateway
+connection to keep alive.
 """
 import json
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -54,6 +62,18 @@ CREATE TABLE IF NOT EXISTS discord_rules (
   active INTEGER DEFAULT 1,
   fired INTEGER DEFAULT 0,
   last_fired REAL DEFAULT 0,
+  created_at REAL NOT NULL
+);
+
+/* One row. A bot token is what turns this from a megaphone into a
+   conversation: webhooks only push out, so reading a channel — or replying
+   in it as the business — needs an identity Discord will authenticate. */
+CREATE TABLE IF NOT EXISTS discord_bot (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  token TEXT NOT NULL,                     -- secret; never returned
+  guild_id TEXT NOT NULL,
+  bot_name TEXT DEFAULT '',
+  guild_name TEXT DEFAULT '',
   created_at REAL NOT NULL
 );
 
@@ -124,6 +144,164 @@ def _post(url: str, payload: dict) -> tuple:
             return True, str(r.status)
     except Exception as e:                      # noqa: BLE001
         return False, str(e)[:200]
+
+
+# ---------- the bot: reading and replying ----------
+
+API = "https://discord.com/api/v10"
+
+
+def _bot(con):
+    row = con.execute("SELECT * FROM discord_bot WHERE id=1").fetchone()
+    if row is None:
+        raise HTTPException(
+            400, "no Discord bot connected — add a bot token to read and "
+                 "reply to channels from here")
+    return row
+
+
+def _call(token: str, path: str, method: str = "GET", payload=None):
+    """One place for every authenticated Discord call.
+
+    Discord's errors are the useful part: a 401 means the token is wrong, a
+    403 means the bot is in the server but lacks a permission on that
+    channel, and a 429 means slow down. Collapsing those into "request
+    failed" would leave someone guessing which of three different fixes
+    they need, so each is translated on the way out.
+    """
+    req = urllib.request.Request(
+        API + path,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        method=method,
+        headers={"Authorization": f"Bot {token}",
+                 "Content-Type": "application/json",
+                 "User-Agent": "business-control/1.0 (+local)"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            body = r.read().decode() or "null"
+            return json.loads(body)
+    except urllib.error.HTTPError as e:                 # noqa: PERF203
+        detail = ""
+        try:
+            detail = json.loads(e.read().decode()).get("message", "")
+        except Exception:
+            pass
+        if e.code == 401:
+            raise HTTPException(400, "Discord rejected the bot token")
+        if e.code == 403:
+            raise HTTPException(
+                403, "the bot is connected but not allowed to do that — check "
+                     "its channel permissions in Discord (View Channel, Read "
+                     "Message History, Send Messages)")
+        if e.code == 404:
+            raise HTTPException(404, "Discord doesn't know that channel — is "
+                                     "the bot in this server?")
+        if e.code == 429:
+            raise HTTPException(429, "Discord is rate-limiting us; try again "
+                                     "in a moment")
+        raise HTTPException(400, f"Discord said: {detail or e.code}")
+    except Exception as e:                              # noqa: BLE001
+        raise HTTPException(502, f"couldn't reach Discord: {str(e)[:120]}")
+
+
+class BotBody(BaseModel):
+    token: str
+    guild_id: str
+
+
+@router.post("/api/store/admin/discord/bot")
+def connect_bot(body: BotBody, u=Depends(admin_user), con=Depends(get_con)):
+    token = body.token.strip()
+    guild = re.sub(r"\D", "", body.guild_id)
+    if not token:
+        raise HTTPException(400, "paste the bot token")
+    if not guild:
+        raise HTTPException(
+            400, "paste the server ID — in Discord, right-click the server "
+                 "and Copy Server ID (Developer Mode must be on)")
+    me = _call(token, "/users/@me")
+    guilds = _call(token, "/users/@me/guilds")
+    match = next((g for g in guilds if str(g["id"]) == guild), None)
+    if match is None:
+        raise HTTPException(
+            400, "the bot isn't in that server yet — invite it first, then "
+                 "connect it here")
+    con.execute("DELETE FROM discord_bot")
+    con.execute(
+        "INSERT INTO discord_bot(id,token,guild_id,bot_name,guild_name,"
+        " created_at) VALUES(1,?,?,?,?,?)",
+        (token, guild, me.get("username", "bot"), match.get("name", ""),
+         time.time()))
+    con.commit()
+    return {"bot_name": me.get("username", "bot"),
+            "guild_name": match.get("name", "")}
+
+
+@router.delete("/api/store/admin/discord/bot")
+def disconnect_bot(u=Depends(admin_user), con=Depends(get_con)):
+    con.execute("DELETE FROM discord_bot")
+    con.commit()
+    return {"ok": True}
+
+
+@router.get("/api/store/admin/discord/chat/channels")
+def guild_channels(u=Depends(admin_user), con=Depends(get_con)):
+    b = _bot(con)
+    chans = _call(b["token"], f"/guilds/{b['guild_id']}/channels")
+    # 0 = text, 5 = announcement. Voice and category rows aren't places you
+    # can hold a conversation from a back office.
+    out = [{"id": str(c["id"]), "name": c.get("name", ""),
+            "topic": (c.get("topic") or "")[:200],
+            "position": c.get("position", 0)}
+           for c in chans if c.get("type") in (0, 5)]
+    out.sort(key=lambda c: c["position"])
+    return {"channels": out, "guild_name": b["guild_name"],
+            "bot_name": b["bot_name"]}
+
+
+@router.get("/api/store/admin/discord/chat/{channel_id}/messages")
+def read_messages(channel_id: str, limit: int = 40, u=Depends(admin_user),
+                  con=Depends(get_con)):
+    b = _bot(con)
+    cid = re.sub(r"\D", "", channel_id)
+    msgs = _call(b["token"],
+                 f"/channels/{cid}/messages?limit={min(max(limit, 1), 100)}")
+    out = []
+    for m in reversed(msgs):                    # Discord returns newest first
+        a = m.get("author") or {}
+        out.append({
+            "id": str(m.get("id", "")),
+            "author": a.get("global_name") or a.get("username", "someone"),
+            "bot": bool(a.get("bot")),
+            "content": m.get("content", ""),
+            "at": m.get("timestamp", ""),
+            "attachments": [x.get("filename", "file")
+                            for x in m.get("attachments", [])],
+        })
+    return {"messages": out}
+
+
+class SayBody(BaseModel):
+    content: str
+
+
+@router.post("/api/store/admin/discord/chat/{channel_id}/messages")
+def send_message(channel_id: str, body: SayBody, u=Depends(admin_user),
+                 con=Depends(get_con)):
+    b = _bot(con)
+    text = body.content.strip()
+    if not text:
+        raise HTTPException(400, "nothing to send")
+    cid = re.sub(r"\D", "", channel_id)
+    # Attributed to the person, not to a faceless bot: a message from "the
+    # business" that nobody can trace back is worse than no message.
+    m = _call(b["token"], f"/channels/{cid}/messages", "POST",
+              {"content": f"**{u['name']}:** {text[:1900]}"})
+    con.execute(
+        "INSERT INTO discord_log(rule_id,event,ok,detail,created_at)"
+        " VALUES(0,'chat.sent',1,?,?)", (f"#{cid}", time.time()))
+    con.commit()
+    return {"id": str(m.get("id", ""))}
 
 
 def _fmt(template: str, data: dict) -> str:
@@ -199,9 +377,13 @@ def read_config(u=Depends(admin_user), con=Depends(get_con)):
         ).fetchall()
     log = con.execute(
         "SELECT * FROM discord_log ORDER BY id DESC LIMIT 40").fetchall()
+    bot = con.execute("SELECT bot_name, guild_name, guild_id FROM discord_bot"
+                      " WHERE id=1").fetchone()
     return {
-        # webhook deliberately absent — it's a credential, and a UI that can
-        # display it is a UI that can leak it over someone's shoulder
+        # webhook and bot token deliberately absent — they're credentials,
+        # and a UI that can display one is a UI that can leak it over
+        # someone's shoulder
+        "bot": dict(bot) if bot else None,
         "channels": [dict(c) for c in chans],
         "rules": [dict(r) for r in rules],
         "log": [dict(l) for l in log],

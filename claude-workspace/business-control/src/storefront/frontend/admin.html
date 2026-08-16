@@ -8,6 +8,16 @@
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/store.css">
   <style>
+    /* Sprite icons — one set shared with the storefront. */
+    .ico-s { width: 17px; height: 17px; stroke: currentColor; fill: none;
+      stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+      vertical-align: -3px; }
+    .ico-s.big { width: 34px; height: 34px; }
+    .sec-head .ico { display: inline-flex; align-items: center;
+      color: var(--dim, #8a8f98); }
+    .story-card .ic { display: block; margin-bottom: 6px; }
+    .story-card .ic .ico-s { width: 22px; height: 22px; }
+
     /* The admin borrows the storefront's design system rather than keeping
        its own: same paper background, same type pairing, same radii. What
        makes a back office feel sleek is mostly restraint — one accent, flat
@@ -173,6 +183,7 @@
   </style>
 </head>
 <body>
+<!--ICONS-->
 <header class="topbar">
   <a class="brand" href="/">zenjoy<span class="brand-dot">.</span></a>
   <b style="color:var(--ink-3);font-weight:600;font-size:14px">Store admin</b>

@@ -18,7 +18,7 @@ def esc(v) -> str:
 # t: text | textarea | richtext | select | number | checkbox | media | color | list
 SECTION_TYPES = {
     "hero": {
-        "label": "Hero banner", "icon": "🌊",
+        "label": "Hero banner", "icon": "wave",
         "help": "Opener with headline, one button and the product beside it.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -49,7 +49,7 @@ SECTION_TYPES = {
             {"k": "media_id", "t": "media", "label": "Background image"},
         ]},
     "benefits": {
-        "label": "Benefit strip", "icon": "✅",
+        "label": "Benefit strip", "icon": "check",
         "help": "The nutrition and claims row — the numbers that sell a "
                 "functional drink. Keep to four or five.",
         "fields": [
@@ -66,7 +66,7 @@ SECTION_TYPES = {
              ]},
         ]},
     "product_grid": {
-        "label": "Product grid", "icon": "🛍",
+        "label": "Product grid", "icon": "bag",
         "help": "The shoppable collection, with search and collection tabs.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -81,7 +81,7 @@ SECTION_TYPES = {
              "default": True},
         ]},
     "rich_text": {
-        "label": "Text block", "icon": "📝",
+        "label": "Text block", "icon": "text",
         "help": "Headline plus paragraph. Simple formatting allowed.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -92,7 +92,7 @@ SECTION_TYPES = {
              "options": ["left", "center"], "default": "left"},
         ]},
     "feature_columns": {
-        "label": "Feature columns", "icon": "🧱",
+        "label": "Feature columns", "icon": "columns",
         "help": "Three (or more) icon + text cards.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -116,7 +116,7 @@ SECTION_TYPES = {
                   "text": "Small batches, shipped fast, tracked all the way."}]},
         ]},
     "image_banner": {
-        "label": "Image banner", "icon": "🖼",
+        "label": "Image banner", "icon": "image",
         "help": "Large image with optional overlay text.",
         "fields": [
             {"k": "media_id", "t": "media", "label": "Image"},
@@ -127,7 +127,7 @@ SECTION_TYPES = {
              "options": ["short", "medium", "tall"], "default": "medium"},
         ]},
     "video": {
-        "label": "Video", "icon": "🎬",
+        "label": "Video", "icon": "video",
         "help": "Embedded or uploaded video.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading", "default": ""},
@@ -136,7 +136,7 @@ SECTION_TYPES = {
             {"k": "media_id", "t": "media", "label": "…or uploaded video"},
         ]},
     "reviews": {
-        "label": "Reviews wall", "icon": "⭐",
+        "label": "Reviews wall", "icon": "star",
         "help": "Approved customer reviews.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -144,7 +144,7 @@ SECTION_TYPES = {
             {"k": "limit", "t": "number", "label": "How many", "default": 6},
         ]},
     "faq": {
-        "label": "FAQ", "icon": "❓",
+        "label": "FAQ", "icon": "question",
         "help": "Expandable question list.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -162,7 +162,7 @@ SECTION_TYPES = {
                   "a": "Tell support — we make it right, every time."}]},
         ]},
     "newsletter": {
-        "label": "Email signup", "icon": "💌",
+        "label": "Email signup", "icon": "mail",
         "help": "Rewards / newsletter capture.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -174,7 +174,7 @@ SECTION_TYPES = {
              "default": "Become a member"},
         ]},
     "social": {
-        "label": "Social row", "icon": "📸",
+        "label": "Social row", "icon": "camera",
         "help": "Links to your social profiles.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -197,7 +197,7 @@ SECTION_TYPES = {
                   "link": "#"}]},
         ]},
     "latest_posts": {
-        "label": "Latest journal posts", "icon": "📰",
+        "label": "Latest journal posts", "icon": "news",
         "help": "Newest blog posts — the organic-traffic engine.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
@@ -205,7 +205,7 @@ SECTION_TYPES = {
             {"k": "limit", "t": "number", "label": "How many", "default": 3},
         ]},
     "custom_html": {
-        "label": "Custom code", "icon": "⌨️",
+        "label": "Custom code", "icon": "code",
         "help": "Raw HTML/CSS/JS and Liquid — the escape hatch.",
         "fields": [
             {"k": "html", "t": "textarea", "label": "HTML", "default": ""},

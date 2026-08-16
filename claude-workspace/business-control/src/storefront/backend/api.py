@@ -1592,7 +1592,7 @@ def write_theme(body: dict, u=Depends(admin_user), con=Depends(get_con)):
 
 @router.get("/admin/theme")
 def theme_editor_page():
-    return FileResponse(config.STOREFRONT_DIR / "theme.html")
+    return HTMLResponse(_admin_html("theme.html"))
 
 
 # ---------- admin: API keys (the app platform) ----------
@@ -1904,6 +1904,17 @@ def page_analytics(u=Depends(admin_user), con=Depends(get_con)):
 
 # ---------- static frontend ----------
 
+def _admin_html(name: str) -> str:
+    """The back-office pages get the same icon sprite as the storefront.
+
+    They used to be served straight off disk, which is why they still had
+    emoji in them: there was no way to draw an icon. One sprite for every
+    surface means the page builder and the store look like the same product.
+    """
+    html = (config.STOREFRONT_DIR / name).read_text(encoding="utf-8")
+    return html.replace("<!--ICONS-->", icon_sprite())
+
+
 @router.get("/admin")
 def store_admin_page():
-    return FileResponse(config.STOREFRONT_DIR / "admin.html")
+    return HTMLResponse(_admin_html("admin.html"))

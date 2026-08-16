@@ -1,3 +1,8 @@
+/* Icons come from the shared sprite the storefront uses, so the page
+   builder and the store it edits look like one product. */
+const icon = (n) =>
+  `<svg class="ico-s" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+
 /* Theme & page editor — section list, schema-driven settings form, and a
    live preview iframe. Section types come from the server, so new types
    appear here with no changes to this file. */
@@ -54,8 +59,8 @@ $("#vp-reload").onclick = () => refresh(0);
 async function loadPages() {
   PAGES = await api("/api/store/admin/pages");
   $("#page-select").innerHTML =
-    `<option value="home">🏠 Home page</option>` +
-    PAGES.map((p) => `<option value="${p.slug}">📄 ${p.title}</option>`).join("");
+    `<option value="home">Home page</option>` +
+    PAGES.map((p) => `<option value="${p.slug}">${p.title}</option>`).join("");
   $("#page-select").value = SLUG;
   $("#page-url").textContent = SLUG === "home" ? "/" : `/p/${SLUG}`;
 }
@@ -93,13 +98,13 @@ function drawSections() {
     <div class="sec ${SEL === s.id ? "on" : ""} ${s.enabled ? "" : "off"}"
          data-sec="${s.id}">
       <div class="sec-head">
-        <span class="ico">${s.icon}</span>
+        <span class="ico">${icon(s.icon)}</span>
         <span>${s.label}</span><span class="sp"></span>
         <span class="sec-acts">
           <button data-mv="${s.id}:up" title="move up" ${i === 0 ? "disabled" : ""}>▲</button>
           <button data-mv="${s.id}:down" title="move down" ${i === SECTIONS.length - 1 ? "disabled" : ""}>▼</button>
-          <button data-tog="${s.id}" title="${s.enabled ? "hide" : "show"}">${s.enabled ? "👁" : "🚫"}</button>
-          <button data-del="${s.id}" title="delete">✕</button>
+          <button data-tog="${s.id}" title="${s.enabled ? "hide" : "show"}">${icon(s.enabled ? "eye" : "eye-off")}</button>
+          <button data-del="${s.id}" title="delete">${icon("trash")}</button>
         </span>
       </div>
     </div>`).join("") ||
@@ -165,7 +170,7 @@ function field(f, val, path) {
           <option value="">— none —</option>
           ${MEDIA.map((m) => `<option value="${m.id}"
             ${String(m.id) === String(v) ? "selected" : ""}>
-            ${m.kind === "video" ? "🎬" : "🖼"} ${m.alt || "media #" + m.id}
+            ${icon(m.kind === "video" ? "video" : "image")} ${m.alt || "media #" + m.id}
             </option>`).join("")}
         </select>`;
     case "collection":
@@ -196,7 +201,7 @@ function drawForm() {
       const items = s.settings[f.k] || [];
       html += `<label>${f.label}</label><div id="list_${f.k}">` +
         items.map((it, i) => `<div class="list-item">
-          <span class="del" data-lrm="${f.k}:${i}">✕</span>` +
+          <span class="del" data-lrm="${f.k}:${i}">${icon("trash")}</span>` +
           f.item_fields.map((sf) =>
             field(sf, it[sf.k], `${f.k}.${i}.${sf.k}`)).join("") +
           `</div>`).join("") +
@@ -314,7 +319,7 @@ async function boot() {
   $("#app").classList.remove("hidden");
   SCHEMA = await api("/api/store/admin/section-schema");
   $("#add-type").innerHTML = Object.entries(SCHEMA).map(([k, v]) =>
-    `<option value="${k}">${v.icon} ${v.label}</option>`).join("");
+    `<option value="${k}">${v.label}</option>`).join("");
   const cat = await (await fetch("/api/store/catalog")).json();
   COLLECTIONS = cat.collections;
   MEDIA = cat.products.flatMap((p) =>

@@ -18,6 +18,11 @@ from . import sections as sect
 
 router = APIRouter()
 
+
+# The storefront sprite is already on the page; this just references it.
+def _ic(name: str) -> str:
+    return f'<svg class="ico-s" aria-hidden="true"><use href="#i-{name}"/></svg>'
+
 MIGRATIONS = (
     "ALTER TABLE affiliates ADD COLUMN headline TEXT DEFAULT ''",
     "ALTER TABLE affiliates ADD COLUMN bio TEXT DEFAULT ''",
@@ -91,7 +96,7 @@ def default_landing(con, a) -> str:
         f'{photo}'
         f'<section class="section" id="shop">'
         f'<div class="shop-head"><h2>Shop {sect.esc(a["name"])}\'s picks</h2>'
-        f'<input id="search-input" type="search" placeholder="🔍 Search…">'
+        f'<input id="search-input" type="search" placeholder="Search…">'
         f'</div>'
         f'<div class="collection-tabs" id="collection-tabs"></div>'
         f'<div class="grid" id="product-grid" data-collection=""'
@@ -140,11 +145,11 @@ def affiliate_pitch(con=Depends(get_con)):
         f'<p>Share what you love, earn on every order you send our way.</p>'
         f'</div></section>'
         f'<section class="section"><div class="story-grid">'
-        f'<div class="story-card"><span>🔗</span><b>Your own link</b>'
+        f'<div class="story-card"><span class="ic">{_ic("link")}</span><b>Your own link</b>'
         f'<p>Get a personal link and landing page in seconds.</p></div>'
-        f'<div class="story-card"><span>💸</span><b>{rate}% commission</b>'
+        f'<div class="story-card"><span class="ic">{_ic("gift")}</span><b>{rate}% commission</b>'
         f'<p>Earned on every order placed through your link.</p></div>'
-        f'<div class="story-card"><span>📊</span><b>Live stats</b>'
+        f'<div class="story-card"><span class="ic">{_ic("chart")}</span><b>Live stats</b>'
         f'<p>Clicks, orders and earnings, updated as they happen.</p></div>'
         f'</div></section>'
         f'<section class="section rewards"><div class="rewards-card">'
@@ -174,7 +179,7 @@ document.getElementById('aff-form').onsubmit = async (e) => {
     '<p style="user-select:all"><b>' + location.origin + out.link + '</b></p>' +
     '<p class="dim">Landing page: <a href="' + out.landing +
     '" style="color:inherit"><b>' + out.landing + '</b></a> · ' +
-    'track earnings any time from 👤 My account.</p>';
+    'track earnings any time from My account.</p>';
 };
 </script>"""
     return HTMLResponse(html.replace("</body>", script + "</body>"))
@@ -222,7 +227,7 @@ def public_join(body: JoinBody, con=Depends(get_con), _rl=Depends(rate_limit)):
 
 @router.get("/api/store/affiliate/stats")
 def my_affiliate(user=Depends(current_customer), con=Depends(get_con)):
-    """Affiliate stats for the storefront's 👤 account panel."""
+    """Affiliate stats for the storefront's account panel."""
     a = con.execute("SELECT * FROM affiliates WHERE user_id=?",
                     (user["id"],)).fetchone()
     if a is None:

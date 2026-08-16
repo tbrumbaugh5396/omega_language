@@ -268,10 +268,56 @@ const WORLD = [
   [[83,-32],[80,-20],[75,-20],[70,-22],[63,-42],[68,-53],[75,-58],[80,-60],
    [83,-45],[83,-32]],
 ];
-const WORLD_PATH = WORLD.map((ring) => ring.map(([la, ln], i) => {
+/* National borders, as open lines rather than rings — a border is a
+   separation, not a shape, and drawing it as a polygon would fill it.
+   Densest where the business operates and coarser elsewhere: the job is to
+   tell you which country a pin is in, not to settle a boundary dispute. */
+const BORDERS = [
+  // Canada / United States: the 49th parallel, the Lakes, then Maine
+  [[49,-123],[49,-95],[48.5,-93],[48,-89.5],[46.5,-84.5],[43,-82.5],
+   [42,-83],[42.3,-81],[43.3,-79],[44.5,-76.5],[45,-74.5],[45,-71.5],
+   [47.3,-69],[46,-67.8],[45,-67]],
+  // United States / Mexico: the border fence west, then the Rio Grande
+  [[32.5,-117.1],[32.5,-114.7],[31.3,-111],[31.3,-108.2],[31.8,-106.5],
+   [29.8,-102.3],[29.3,-100.9],[26.4,-99],[25.9,-97.1]],
+  // Central America
+  [[17.8,-91.4],[17.8,-89.1],[15.9,-89.2],[14.5,-92.2]],   // MX / GT-BZ
+  [[15.9,-88.2],[14.9,-88.2],[13.8,-87.7],[13.2,-87.8]],   // HN / GT-SV
+  [[15,-83.2],[14.1,-85.7],[13,-86.7],[12.9,-87.7]],       // HN / NI
+  [[11,-83.7],[10.9,-85.6]],                               // NI / CR
+  [[9.6,-82.6],[8.1,-82.9]],                               // CR / PA
+  // South America
+  [[12.2,-71.3],[9,-71],[7.1,-70.1],[1.4,-66.9],[0.7,-69.8]],   // CO / VE
+  [[-4.2,-70],[-2,-70],[1.8,-67.2],[3.8,-63],[5.2,-60.7],
+   [1.2,-56.5],[2.2,-52.6],[4.5,-51.6]],                        // BR north
+  [[-9.4,-73],[-11,-68.8],[-16,-58.4],[-20,-58],[-22.1,-57.9],
+   [-25.6,-54.6],[-27,-54.5],[-30,-57.6],[-33.7,-53.4]],        // BR south
+  [[-18.3,-70.3],[-17.5,-69.5],[-22.9,-68.2],[-27,-68.8],
+   [-35,-70.4],[-41,-71.9],[-46,-71.9],[-52,-72],[-52.4,-68.6]],// CL / AR
+  [[-22.9,-62.8],[-22,-62.6],[-21.8,-60],[-22,-57.9]],          // PY / BO-AR
+  // Europe (coarse — enough to separate the big markets)
+  [[43.4,-1.8],[42.6,0.7],[42.5,3.2]],                     // ES / FR
+  [[51.1,2.5],[50.8,4],[50.7,6.1],[49.5,6.4],[47.5,7.6]],  // FR / BE-DE
+  [[47.5,7.6],[46.5,10.1],[46.6,12.4],[46.9,16],[48.6,17.2],
+   [50.8,15],[51.1,12],[53.6,8.5]],                        // DE / south-east
+  [[46.4,6.8],[45.9,7.6],[46.5,10.5],[46.6,13.6]],         // IT north
+  [[55,14.5],[54.8,19],[54.4,23.5],[52.1,23.6],[50.3,24],
+   [48.4,22.9],[47.9,18.8],[48.7,16.9]],                   // PL / east
+  // Asia and Africa (coarsest — one line where a continent divides)
+  [[42,80],[45,83],[47,85],[49,87],[50,106],[46,119],[42,131]],  // RU / CN-MN
+  [[35,71],[35,77],[30,79],[28,84],[27.9,89],[27,92],[24,97],
+   [21,99],[14,109]],                                            // CN south
+  [[31,25],[22,25],[22,36]],                                     // EG / LY-SD
+  [[19,-17],[21,-13],[27,-8.7],[27,-4.8],[22,0],[19,4],[19,12],
+   [15,15],[12,22],[10,24],[4,30],[-1,30],[-1,34],[-4.7,39.2]],  // Sahel / east
+  [[-17.8,11.7],[-17.8,25.2],[-22,29],[-26,31.5]],               // southern
+];
+const linePath = (pts) => pts.map(([la, ln], i) => {
   const [x, y] = mapProject(la, ln);
   return `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
-}).join(" ") + " Z").join(" ");
+}).join(" ");
+const BORDER_PATH = BORDERS.map(linePath).join(" ");
+const WORLD_PATH = WORLD.map((ring) => linePath(ring) + " Z").join(" ");
 
 // Opening view: the lower 48, so the map is useful the moment it appears.
 const HOME_VIEW = { lat: [24, 50], lng: [-126, -66] };
@@ -306,6 +352,7 @@ function panZoomMap(opts) {
     <svg class="map" viewBox="0 0 ${MAP_W} ${MAP_H}">
       <g class="map-vp">
         <path class="map-land" d="${WORLD_PATH}"/>
+        <path class="map-border" d="${BORDER_PATH}"/>
         ${legs}${dots}
       </g>
     </svg>
@@ -548,12 +595,16 @@ function renderChrome() {
     const unread = S.notifs ? S.notifs.unread : 0;
     const roleLabel = S.user.role === "employee" && S.user.job !== "general"
       ? JOB_LABEL[S.user.job] || S.user.role : S.user.role;
+    // Your own name is the obvious way in to your own record — it's where
+    // everyone reaches for it.
     who.innerHTML = `<a id="bell" title="notifications">${opsIcon("bell","bell-ic")}${unread
       ? `<span class="bell-n">${unread}</span>` : ""}</a> ·
-      ${esc(S.user.name)} · ${esc(roleLabel)}` +
+      <a id="me-link" title="your profile">${esc(S.user.name)}</a> ·
+      ${esc(roleLabel)}` +
       (S.user.is_admin ? " · admin" : "") + ` · <a id="logout">sign out</a>`;
     $("#logout").onclick = logout;
     $("#bell").onclick = toggleNotifPanel;
+    $("#me-link").onclick = () => { S.tab = "profile"; render(); };
   } else {
     who.innerHTML = `<a id="login-link">sign in</a>`;
     $("#login-link").onclick = () => { S.tab = "login"; render(); };
@@ -593,6 +644,7 @@ function emptyState(icon, title, hint) {
 
 async function render() {
   renderChrome();
+  clearInterval(S._dcTimer);        // stop polling Discord once you leave it
   if (S.promoLanding) return renderPromoLanding();
   if (!S.user && S.tab === "login") return renderLogin();
   view().innerHTML = SKELETON;
@@ -3497,12 +3549,26 @@ async function renderDiscord() {
     <div class="page-head">
       <div><h2>Discord</h2>
         <p class="dim">Let the business talk to the room the team already
-          sits in. A webhook per channel, then rules deciding what goes where
-          — no bot to run and no server-wide token to leak.</p></div>
+          sits in — and answer from here. Webhooks push alerts out; connect a
+          bot and you can read the channels and reply without leaving.</p></div>
       <button class="btn" id="dc-add">Add channel</button>
     </div>
 
-    <h3>Channels</h3>
+    <div class="card dc-bot">
+      <div class="doc-top">
+        <div class="doc-main">
+          <b>${d.bot ? esc(d.bot.guild_name || "Discord server") : "Read and reply"}</b>
+          <span class="dim">${d.bot
+            ? `connected as ${esc(d.bot.bot_name)} — channels below are live`
+            : "connect a bot to read channels and reply from here"}</span>
+        </div>
+        <button class="btn ${d.bot ? "alt" : ""} sm" id="dc-bot">${
+          d.bot ? "Disconnect" : "Connect a bot"}</button>
+      </div>
+    </div>
+    ${d.bot ? '<div id="dc-chat"></div>' : ""}
+
+    <h3>Alert channels</h3>
     ${d.channels.map((c) => `<div class="card">
       <div class="doc-top">
         <div class="doc-main"><b>${esc(c.label)}</b>
@@ -3620,4 +3686,137 @@ async function renderDiscord() {
     await api(`/api/store/admin/discord/rules/${c.dataset.dcon}`,
       { method: "PATCH", body: { active: c.checked } }); renderDiscord();
   });
+
+  $("#dc-bot").onclick = () => d.bot ? disconnectBot() : connectBotModal();
+  if (d.bot) drawDiscordChat();
+}
+
+function connectBotModal() {
+  modal(`<h3>Connect a Discord bot</h3>
+    <p class="dim">A webhook can only push messages out. Reading a channel or
+      replying in it needs a bot, so this step is separate — skip it and the
+      alerts still work.</p>
+    <ol class="dim" style="font-size:13px;padding-left:18px;line-height:1.7">
+      <li>At <b>discord.com/developers/applications</b>, make an application
+        and add a bot.</li>
+      <li>Under <b>Bot</b>, reset and copy the token.</li>
+      <li>Invite it to your server with <b>View Channels</b>,
+        <b>Read Message History</b> and <b>Send Messages</b>.</li>
+      <li>Right-click the server name → <b>Copy Server ID</b>.</li>
+    </ol>
+    <label>Bot token</label><input id="dc-token" type="password"
+      placeholder="paste the token">
+    <label>Server ID</label><input id="dc-guild" placeholder="e.g. 913…">
+    <p class="dim" style="font-size:12px;margin-top:8px">The token can post as
+      the bot anywhere it's a member, so it's stored as a secret and never
+      shown again.</p>
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="dc-bot-save">Connect</button></div>`);
+  $("#dc-bot-save").onclick = async () => {
+    const b = $("#dc-bot-save");
+    b.disabled = true; b.textContent = "checking…";
+    try {
+      const r = await api("/api/store/admin/discord/bot", { body: {
+        token: $("#dc-token").value, guild_id: $("#dc-guild").value } });
+      closeModal();
+      toast(`Connected as ${r.bot_name} in ${r.guild_name}`);
+      renderDiscord();
+    } catch (e) {
+      toast(e.message); b.disabled = false; b.textContent = "Connect";
+    }
+  };
+}
+
+async function disconnectBot() {
+  if (!confirm("Disconnect the bot? Alert webhooks keep working.")) return;
+  await api("/api/store/admin/discord/bot", { method: "DELETE" });
+  renderDiscord();
+}
+
+/* The channel reader. Kept deliberately plain: this is for seeing what the
+   room is saying and answering it, not for reimplementing Discord. */
+async function drawDiscordChat() {
+  const box = $("#dc-chat");
+  if (!box) return;
+  let list;
+  try {
+    list = await api("/api/store/admin/discord/chat/channels");
+  } catch (e) {
+    box.innerHTML = `<div class="card"><p class="dim">${esc(e.message)}</p></div>`;
+    return;
+  }
+  if (!list.channels.length) {
+    box.innerHTML = `<div class="card"><p class="dim">The bot can't see any
+      text channels — give it <b>View Channel</b> on the ones you want
+      here.</p></div>`;
+    return;
+  }
+  if (!S.dcChan || !list.channels.some((c) => c.id === S.dcChan)) {
+    S.dcChan = list.channels[0].id;
+  }
+  box.innerHTML = `
+    <div class="dc-wrap">
+      <div class="dc-list">${list.channels.map((c) => `
+        <button class="dc-c ${c.id === S.dcChan ? "on" : ""}" data-dcc="${c.id}">
+          <b>#${esc(c.name)}</b>${c.topic
+            ? `<span class="dim">${esc(c.topic)}</span>` : ""}</button>`).join("")}
+      </div>
+      <div class="dc-room">
+        <div class="dc-msgs" id="dc-msgs"><p class="dim">Loading…</p></div>
+        <form class="dc-say" id="dc-say">
+          <input id="dc-text" placeholder="Message #${esc(
+            (list.channels.find((c) => c.id === S.dcChan) || {}).name || "")}"
+            autocomplete="off">
+          <button class="btn">Send</button>
+        </form>
+      </div>
+    </div>`;
+  box.querySelectorAll("[data-dcc]").forEach((b) => b.onclick = () => {
+    S.dcChan = b.dataset.dcc; drawDiscordChat();
+  });
+  $("#dc-say").onsubmit = async (e) => {
+    e.preventDefault();
+    const input = $("#dc-text");
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    try {
+      await api(`/api/store/admin/discord/chat/${S.dcChan}/messages`,
+                { body: { content: text } });
+      loadDiscordMsgs();
+    } catch (err) { toast(err.message); input.value = text; }
+  };
+  loadDiscordMsgs();
+  // Poll while the tab is open. Cleared on any tab change by render().
+  clearInterval(S._dcTimer);
+  S._dcTimer = setInterval(() => {
+    if (S.tab === "discord" && $("#dc-msgs")) loadDiscordMsgs();
+    else clearInterval(S._dcTimer);
+  }, 15000);
+}
+
+async function loadDiscordMsgs() {
+  const el = $("#dc-msgs");
+  if (!el) return;
+  try {
+    const d = await api(
+      `/api/store/admin/discord/chat/${S.dcChan}/messages`);
+    // Only redraw when something changed, so a poll doesn't yank the
+    // scroll position out from under someone reading.
+    const sig = d.messages.map((m) => m.id).join(",");
+    if (sig === el.dataset.sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = d.messages.map((m) => `
+      <div class="dc-m${m.bot ? " bot" : ""}">
+        <div class="dc-who">${esc(m.author)}${m.bot
+          ? '<span class="pill">bot</span>' : ""}
+          <span class="dim">${fmtDate(Date.parse(m.at) / 1000)}</span></div>
+        <div class="dc-body">${esc(m.content) || '<i class="dim">—</i>'}${
+          m.attachments.map((a) =>
+            `<span class="pill">${esc(a)}</span>`).join("")}</div>
+      </div>`).join("") || '<p class="dim">Nothing here yet.</p>';
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.innerHTML = `<p class="dim">${esc(e.message)}</p>`;
+  }
 }

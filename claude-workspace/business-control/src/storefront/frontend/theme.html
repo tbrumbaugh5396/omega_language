@@ -6,6 +6,16 @@
   <title>Theme &amp; page editor — Zenjoy</title>
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    /* Sprite icons — one set shared with the storefront. */
+    .ico-s { width: 17px; height: 17px; stroke: currentColor; fill: none;
+      stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+      vertical-align: -3px; }
+    .ico-s.big { width: 34px; height: 34px; }
+    .sec-head .ico { display: inline-flex; align-items: center;
+      color: var(--dim, #8a8f98); }
+    .story-card .ic { display: block; margin-bottom: 6px; }
+    .story-card .ic .ico-s { width: 22px; height: 22px; }
+
     :root { --purple:#6c00bf; --lavender:#8a77e1; --orange:#ff6900;
       --ink:#3a3a3a; --line:#e8e2f4; }
     * { box-sizing: border-box; margin: 0; }
@@ -85,6 +95,7 @@
   </style>
 </head>
 <body>
+<!--ICONS-->
 
 <div id="login">
   <h2 style="color:var(--purple);margin-bottom:6px">Theme editor</h2>
@@ -132,9 +143,9 @@
 
   <div class="preview">
     <div class="toolbar">
-      <button id="vp-desktop" class="on">🖥 Desktop</button>
-      <button id="vp-mobile">📱 Mobile</button>
-      <button id="vp-reload">↻</button>
+      <button id="vp-desktop" class="on">Desktop</button>
+      <button id="vp-mobile">Mobile</button>
+      <button id="vp-reload" title="reload preview">Reload</button>
     </div>
     <div class="frame-wrap" id="frame-wrap">
       <iframe id="preview" src="/"></iframe>

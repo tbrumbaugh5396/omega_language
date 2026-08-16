@@ -159,7 +159,7 @@ async function drawMedia() {
     <div class="md-card ${i === 0 ? "primary" : ""}">
       <div class="md-thumb">
         ${m.kind === "video" && m.video_url
-          ? '<span style="font-size:34px">🎬</span>'
+          ? '<svg class="ico-s big" aria-hidden="true"><use href="#i-video"/></svg>'
           : `<img src="${m.thumb}?v=${m.id}" alt="">`}
         ${i === 0 ? '<span class="md-tag">PRIMARY</span>' : ""}
         ${m.kind === "video" ? '<span class="md-tag" style="left:auto;right:6px;background:#282828">VIDEO</span>' : ""}
@@ -207,7 +207,7 @@ $("#md-add").onclick = async () => {
   try {
     await api("/api/store/admin/media", { method: "POST",
       body: JSON.stringify(payload) });
-    msg.textContent = "added ✔";
+    msg.textContent = "added";
     $("#md-file").value = ""; $("#md-url").value = ""; $("#md-alt").value = "";
     drawMedia(); drawProducts();
   } catch (e) { msg.textContent = String(e.message || e); }
@@ -1360,7 +1360,7 @@ async function drawReviewQueue() {
      "${(r.body || "").slice(0, 90)}"</span>
      <button class="btn-pill ghost mini" data-ok="${r.id}">approve</button>
      <button class="btn-pill ghost mini" data-del="${r.id}">delete</button>
-    </div>`).join("") || '<p class="dim">Queue is clear ✨</p>';
+    </div>`).join("") || '<p class="dim">Queue is clear.</p>';
   $("#rv-queue").querySelectorAll("[data-ok]").forEach((b) => b.onclick =
     async () => { await api(`/api/store/admin/reviews/${b.dataset.ok}/approve`,
       { method: "POST" }); drawReviewQueue(); });
@@ -1385,7 +1385,7 @@ async function drawWebhooks() {
       { method: "DELETE" }); drawWebhooks(); });
   $("#wh-list").querySelectorAll("[data-test]").forEach((b) => b.onclick =
     async () => { await api(`/api/store/admin/webhooks/${b.dataset.test}/test`,
-      { method: "POST" }); b.textContent = "fired ✔"; });
+      { method: "POST" }); b.textContent = "fired"; });
 }
 
 $("#wh-add").onclick = async () => {
