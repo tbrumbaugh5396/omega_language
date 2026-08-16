@@ -2914,14 +2914,21 @@ def ops_index():
     HTTP caching. Same fix as the storefront's asset_version()."""
     shell = (config.FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
     newest = 0.0
-    for name in ("app.js", "styles.css", "index.html"):
+    for f in (list(config.FRONTEND_DIR.glob("*.js"))
+              + list(config.FRONTEND_DIR.glob("*.css"))
+              + list(config.FRONTEND_DIR.glob("*.html"))
+              # the QR scanner is shared and lives with the storefront, so a
+              # change to it has to move this version too
+              + [config.STOREFRONT_DIR / "qr-scan.js",
+                 config.STOREFRONT_DIR / "qr-scan.css"]):
         try:
-            newest = max(newest, (config.FRONTEND_DIR / name).stat().st_mtime)
+            newest = max(newest, f.stat().st_mtime)
         except OSError:
             pass
     v = str(int(newest))
-    shell = (shell.replace('href="/ops/styles.css"', f'href="/ops/styles.css?v={v}"')
-                  .replace('src="/ops/app.js"', f'src="/ops/app.js?v={v}"'))
+    for asset in ("/ops/styles.css", "/ops/app.js", "/qr-scan.js",
+                  "/qr-scan.css"):
+        shell = shell.replace(f'"{asset}"', f'"{asset}?v={v}"')
     return HTMLResponse(shell)
 
 

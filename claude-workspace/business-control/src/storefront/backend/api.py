@@ -361,17 +361,26 @@ def product_meta(con, pid: int) -> dict:
 
 
 def asset_version() -> str:
-    """Newest mtime across the storefront's static assets, as a cache key.
+    """Newest mtime across every storefront script and stylesheet.
 
-    Without this a deploy leaves every returning customer on the previous
-    CSS/JS until they hard-reload — the service worker is network-first, so
-    the stale copy comes from ordinary HTTP caching rather than the SW."""
+    Without this a deploy leaves people on the previous CSS/JS until they
+    hard-reload. The service worker is network-first, so the stale copy
+    doesn't come from the SW — it comes from ordinary HTTP caching, where a
+    file served with no explicit Cache-Control gets a heuristic freshness
+    lifetime and isn't revalidated at all.
+
+    It used to list three filenames, which meant a change to admin.js or a
+    shared script didn't move the version and the back office kept running
+    yesterday's code. Globbing is the fix: a new asset is covered the day
+    it's added rather than the day someone remembers this function.
+    """
     newest = 0.0
-    for name in ("store.css", "store.js", "index.html"):
-        try:
-            newest = max(newest, (config.STOREFRONT_DIR / name).stat().st_mtime)
-        except OSError:
-            pass
+    for pattern in ("*.js", "*.css", "*.html"):
+        for f in config.STOREFRONT_DIR.glob(pattern):
+            try:
+                newest = max(newest, f.stat().st_mtime)
+            except OSError:
+                pass
     return str(int(newest))
 
 
@@ -389,8 +398,8 @@ def render_shell(con, body_html: str, *, title=None, description=None) -> str:
     t = get_theme(con)
     shell = (config.STOREFRONT_DIR / "index.html").read_text(encoding="utf-8")
     v = asset_version()
-    shell = (shell.replace('href="/store.css"', f'href="/store.css?v={v}"')
-                  .replace('src="/store.js"', f'src="/store.js?v={v}"'))
+    for asset in ("/store.css", "/store.js", "/qr-scan.js", "/qr-scan.css"):
+        shell = shell.replace(f'"{asset}"', f'"{asset}?v={v}"')
     announce = "".join(f"<span>{sect.esc(a)}</span>"
                        for a in (t.get("announce") or []) * 2)
     nav = content_mod.menus(con)
@@ -1910,6 +1919,12 @@ def _admin_html(name: str) -> str:
     surface means the page builder and the store look like the same product.
     """
     html = (config.STOREFRONT_DIR / name).read_text(encoding="utf-8")
+    # Same cache-busting the shop and the ops app get. Without it the back
+    # office silently runs the previous deploy's JavaScript, which is how a
+    # button ends up on the page with nothing wired to it.
+    v = asset_version()
+    for asset in ("/admin.js", "/theme.js", "/qr-scan.js", "/qr-scan.css"):
+        html = html.replace(f'"{asset}"', f'"{asset}?v={v}"')
     return html.replace("<!--ICONS-->", icon_sprite())
 
 

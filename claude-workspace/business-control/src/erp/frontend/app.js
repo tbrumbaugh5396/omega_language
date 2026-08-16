@@ -868,12 +868,45 @@ function renderChrome() {
   const btn = (t) =>
     `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}">
       <span class="ic">${opsIcon(t.icon)}</span><span>${t.label}</span></button>`;
-  $("#tabs").innerHTML = NAV_GROUPS.map((g) => {
+  /* Rewriting the nav resets its scroll to the top, so a tab picked from the
+     bottom of the list would jump the menu back up and hide where you just
+     were. Keep the offset across the rewrite. */
+  const nav = $("#tabs");
+  const navScroll = nav.scrollTop;
+  nav.innerHTML = NAV_GROUPS.map((g) => {
     const group = tabs.filter((t) => t.group === g);
     if (!group.length) return "";
     return (tabs.length > 5 ? `<div class="nav-group">${g}</div>` : "") +
       group.map(btn).join("");
   }).join("");
+  nav.scrollTop = navScroll;
+  // And remember it across reloads, so a refresh doesn't lose your place
+  // either. Written on scroll rather than on navigation, because the nav can
+  // be scrolled without anything being clicked.
+  if (!nav.dataset.wired) {
+    nav.dataset.wired = "1";
+    let save;
+    nav.addEventListener("scroll", () => {
+      clearTimeout(save);
+      save = setTimeout(
+        () => sessionStorage.setItem("bc_nav_scroll", nav.scrollTop), 150);
+    }, { passive: true });
+    const saved = +sessionStorage.getItem("bc_nav_scroll") || 0;
+    if (saved) requestAnimationFrame(() => { nav.scrollTop = saved; });
+  }
+  /* Continuity is the point, but not at the cost of pointing somewhere else:
+     a reload lands on the default tab, and restoring a scroll position from
+     the previous session would leave the menu parked away from the tab
+     you're actually on. So the remembered offset is honoured only while the
+     current tab is still in view. */
+  requestAnimationFrame(() => {
+    const here = nav.querySelector("button.on");
+    if (!here) return;
+    const b = here.getBoundingClientRect(), n = nav.getBoundingClientRect();
+    if (b.top < n.top || b.bottom > n.bottom) {
+      here.scrollIntoView({ block: "nearest" });
+    }
+  });
   let bottom = $("#bottomnav");
   if (!bottom) {
     bottom = document.createElement("nav");

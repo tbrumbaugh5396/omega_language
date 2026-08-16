@@ -1940,7 +1940,37 @@ for _surface, _path in (("ops app", "/ops/"), ("store admin", "/admin"),
     ok("/qr-scan.js" in c.get(_path).text, f"{_surface} loads the scanner")
 ok("li-scan" in _ops, "the ops sign-in offers a scan")
 ok("li-scan" in c.get("/admin").text, "so does the store admin")
+
+# The admin scan button shipped with nothing behind it, because /admin had no
+# cache-busting: the server had the new admin.js and the browser kept running
+# the previous deploy's copy. Every surface has to version its own scripts.
+_adm = c.get("/admin").text
+ok('/admin.js?v=' in _adm and '/qr-scan.js?v=' in _adm,
+   "the store admin versions its scripts")
+ok('/store.js?v=' in c.get("/").text and '/qr-scan.js?v=' in c.get("/").text,
+   "so does the storefront")
+ok('/ops/app.js?v=' in c.get("/ops/").text
+   and '/qr-scan.js?v=' in c.get("/ops/").text,
+   "and so does the ops app")
+ok('/theme.js?v=' in c.get("/admin/theme").text,
+   "and the page builder")
+# The version has to move when any asset changes, not just three named ones.
+from storefront.backend import api as _sfapi  # noqa: E402
+_v1 = _sfapi.asset_version()
+_scan = Path(_sfapi.config.STOREFRONT_DIR) / "qr-scan.js"
+os.utime(_scan, (_t.time() + 60, _t.time() + 60))
+ok(_sfapi.asset_version() != _v1,
+   "touching any asset moves the version, not only the ones once listed")
 ok("si-scan" in _store_js, "and so does the storefront")
+
+# --- the side nav scrolls on its own and keeps its place ---
+ok("overflow-y: auto" in _css.split("#tabs {")[1][:400]
+   and "position: sticky" in _css.split("#tabs {")[1][:400],
+   "the nav scrolls independently of the page")
+ok("bc_nav_scroll" in _ops,
+   "and remembers where it was scrolled to")
+ok("scrollIntoView" in _ops.split("bc_nav_scroll")[-1][:900],
+   "unless that would leave the current tab out of view")
 
 # A scanned QR is a string a stranger can print, so only a sign-in link for
 # this origin is ever followed.
