@@ -25,7 +25,13 @@ screen in any admin tool:
   input. There is no free-text SQL box: the value of one is a query tool,
   and the cost is a DROP TABLE one paste away.
 """
+import csv
+import io
+import json
+import pathlib
 import re
+import sqlite3
+import tempfile
 
 from fastapi import HTTPException
 
@@ -177,3 +183,93 @@ def delete(con, table: str, row_id) -> dict:
     if not cur.rowcount:
         raise HTTPException(404, "no row with that id")
     return {"ok": True}
+
+
+# ---------- getting the data out ----------
+#
+# Every business system needs an exit. A database you can only read through
+# someone else's screens is a database you don't own, and the moment that
+# matters — an accountant wants the ledger, a new tool needs the customer
+# list, the company is being sold — is never the moment to start writing an
+# export.
+#
+# The same redaction applies as to the viewer. That is the point worth
+# stating: an export is the easiest way to walk a table of password hashes
+# out of the building, and a file is far more portable than a screen. So
+# secret columns leave as the marker, not the value, and the whole-database
+# dump is offered as a *backup* — restorable, but plainly labelled as
+# containing everything, so nobody mails it to a contractor by accident.
+
+
+def export_csv(con, table: str) -> str:
+    """One table, as CSV, with secrets redacted the same way the viewer
+    redacts them. Rows come out oldest-first: an export is usually read as a
+    history, not as a screen."""
+    table = _check_table(con, table)
+    cols = _columns(con, table)
+    names = [c["name"] for c in cols]
+    secret = {c["name"] for c in cols if c["secret"]}
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(names)
+    order = _pk(cols) if any(c["pk"] for c in cols) else names[0]
+    for r in con.execute(f"SELECT * FROM {table} ORDER BY {order}"):
+        row = []
+        for k in names:
+            v = r[k]
+            if k in secret and v not in (None, ""):
+                row.append(REDACTED)
+            elif isinstance(v, (bytes, bytearray)):
+                row.append(f"<{len(v)} bytes>")
+            else:
+                row.append("" if v is None else v)
+        w.writerow(row)
+    return out.getvalue()
+
+
+def export_json(con, tables=None) -> str:
+    """Several tables at once, for feeding another system. Same redaction."""
+    names = list(tables) if tables else _tables(con)
+    doc = {}
+    for t in names:
+        t = _check_table(con, t)
+        cols = _columns(con, t)
+        secret = {c["name"] for c in cols if c["secret"]}
+        rows = []
+        for r in con.execute(f"SELECT * FROM {t}"):
+            row = {}
+            for k in r.keys():
+                v = r[k]
+                if k in secret and v not in (None, ""):
+                    row[k] = REDACTED
+                elif isinstance(v, (bytes, bytearray)):
+                    row[k] = f"<{len(v)} bytes>"
+                else:
+                    row[k] = v
+            rows.append(row)
+        doc[t] = rows
+    return json.dumps(doc, indent=1, default=str)
+
+
+def backup_bytes(con) -> bytes:
+    """The whole database, as a file you could put back.
+
+    Nothing is redacted here, and that is deliberate — a backup with the
+    credentials stripped out is not a backup, it's a file that looks like one
+    right up until you need it. It is a separate, clearly-labelled action for
+    exactly that reason.
+
+    Uses SQLite's own backup API into a real database file rather than
+    copying bytes off disk: the live database runs in WAL mode, so the main
+    file is only part of the story and copying it mid-write yields something
+    subtly wrong. What comes back is a consistent .db anyone can open.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = pathlib.Path(tmp) / "backup.db"
+        out = sqlite3.connect(dest)
+        try:
+            con.backup(out)
+        finally:
+            out.close()
+        return dest.read_bytes()

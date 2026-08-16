@@ -1840,10 +1840,21 @@ def supply_forecast(days: int = 30, user=Depends(permitted("supply")),
     return supply.forecast(con, max(7, min(days, 180)))
 
 
+class PortalLinkBody(BaseModel):
+    rotate: bool = False
+
+
 @app.post("/api/supply/purchase-orders/{pid}/portal-link")
-def supply_portal_link(pid: int, user=Depends(permitted("supply")),
+def supply_portal_link(pid: int, body: PortalLinkBody = PortalLinkBody(),
+                       user=Depends(permitted("supply")),
                        con=Depends(get_con)):
-    return {"url": supply.portal_link(con, pid, base_url())}
+    return {"url": supply.portal_link(con, pid, base_url(), body.rotate)}
+
+
+@app.delete("/api/supply/purchase-orders/{pid}/portal-link")
+def supply_revoke_link(pid: int, user=Depends(permitted("supply")),
+                       con=Depends(get_con)):
+    return supply.revoke_portal(con, pid)
 
 
 # --- the supplier's side: no account, just the link they were sent ---
@@ -1993,6 +2004,39 @@ def db_overview(user=Depends(admin_user), con=Depends(get_con)):
     return dbview.overview(con)
 
 
+# These two sit above /api/admin/db/{table} on purpose: routes match in
+# registration order, so a path parameter declared first would swallow
+# "export.json" and "backup.db" as though they were table names.
+@app.get("/api/admin/db/export.json")
+def db_export_json(tables: str = "", request: Request = None,
+                   user=Depends(admin_user), con=Depends(get_con)):
+    names = [t for t in tables.split(",") if t.strip()] or None
+    body = dbview.export_json(con, names)
+    audit.record(con, user, "GET", "/api/admin/db/export.json",
+                 f"exported {len(names) if names else 'all'} table(s) as JSON",
+                 200)
+    return Response(
+        body, media_type="application/json",
+        headers={"Content-Disposition":
+                 'attachment; filename="business-control-export.json"'})
+
+
+@app.get("/api/admin/db/backup.db")
+def db_backup(user=Depends(admin_user), con=Depends(get_con)):
+    """The unredacted file. Owners only — the database permission is for
+    fixing a row, not for walking out with every credential in the
+    business."""
+    if not user["is_admin"]:
+        raise HTTPException(403, "owners only")
+    blob = dbview.backup_bytes(con)
+    audit.record(con, user, "GET", "/api/admin/db/backup.db",
+                 f"downloaded a full backup ({len(blob) // 1024} KB)", 200)
+    return Response(
+        blob, media_type="application/vnd.sqlite3",
+        headers={"Content-Disposition":
+                 'attachment; filename="business-control-backup.db"'})
+
+
 @app.get("/api/admin/db/{table}")
 def db_rows(table: str, q: str = "", limit: int = 50, offset: int = 0,
             user=Depends(admin_user), con=Depends(get_con)):
@@ -2013,6 +2057,26 @@ def db_update(table: str, row_id: str, body: RowEdit,
 def db_delete(table: str, row_id: str, user=Depends(admin_user),
               con=Depends(get_con)):
     return dbview.delete(con, table, row_id)
+
+
+# --- getting the data out ---
+# These are GETs so a browser can download them directly, which means they
+# don't pass through the audit middleware. Each records itself: an export is
+# a copy of the business leaving the building, and it is exactly the sort of
+# thing you want to be able to look up afterwards.
+
+@app.get("/api/admin/db/{table}/export.csv")
+def db_export_csv(table: str, request: Request, user=Depends(admin_user),
+                  con=Depends(get_con)):
+    body = dbview.export_csv(con, table)
+    audit.record(con, user, "GET", f"/api/admin/db/{table}/export.csv",
+                 f"exported {table} as CSV", 200)
+    return Response(
+        body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{table}.csv"'})
+
+
 
 
 # ---------- trucks & routes ----------

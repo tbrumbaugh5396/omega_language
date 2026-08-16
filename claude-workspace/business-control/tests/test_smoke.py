@@ -1786,4 +1786,116 @@ ok("covered_by_order" in _fm2,
 ok("days_cover_with_incoming" in _ops and "covered_by_order" in _ops,
    "the sourcing page shows both covers and what to do about it")
 
+
+# --- revoking a supplier link ---
+_rsup = c.post("/api/supply/suppliers", headers=A,
+               json={"name": "Revoke Co"}).json()
+_rmat = c.post("/api/supply/materials", headers=A, json={
+    "name": "Revoke input", "unit": "kg", "supplier_id": _rsup["id"]}).json()
+_rpo = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _rsup["id"], "reference": "PO-REV",
+    "lines": [{"material_id": _rmat["id"], "qty": 10}]}).json()
+_u1 = c.post(f"/api/supply/purchase-orders/{_rpo['id']}/portal-link",
+             headers=A, json={}).json()["url"]
+_t1 = _u1.rsplit("/", 1)[1]
+ok(c.get(f"/api/supplier/{_t1}").status_code == 200, "a fresh link works")
+
+# Rotating: the old one has to stop working in the same step, or "I sent it
+# to the wrong address" is only half solved.
+_u2 = c.post(f"/api/supply/purchase-orders/{_rpo['id']}/portal-link",
+             headers=A, json={"rotate": True}).json()["url"]
+_t2 = _u2.rsplit("/", 1)[1]
+ok(_t2 != _t1, "rotating issues a different link")
+ok(c.get(f"/api/supplier/{_t2}").status_code == 200, "the new one works")
+ok(c.get(f"/api/supplier/{_t1}").status_code == 404,
+   "and the old one stops immediately")
+
+ok(c.delete(f"/api/supply/purchase-orders/{_rpo['id']}/portal-link",
+            headers=A).status_code == 200, "a link can be revoked outright")
+ok(c.get(f"/api/supplier/{_t2}").status_code == 404,
+   "after which nobody can answer the order")
+ok(c.delete(f"/api/supply/purchase-orders/{_rpo['id']}/portal-link",
+            headers=A).status_code == 400,
+   "revoking twice says there is nothing to revoke")
+# A blank stored token must not match a blank request, or every order
+# without a link would answer to an empty string.
+ok(c.get("/api/supplier/").status_code in (404, 405),
+   "an empty token matches no order")
+_after = [p for p in c.get("/api/supply", headers=A).json()["purchase_orders"]
+          if p["id"] == _rpo["id"]][0]
+ok(_after["has_link"] is False, "the order reports that it has no link")
+ok("portal_token" not in json.dumps(_after),
+   "and the token itself never reaches the browser")
+_u3 = c.post(f"/api/supply/purchase-orders/{_rpo['id']}/portal-link",
+             headers=A, json={}).json()["url"]
+ok(c.get(f"/api/supplier/{_u3.rsplit('/', 1)[1]}").status_code == 200,
+   "a revoked order can be given a new link later")
+ok("po-revoke" in _ops and "po-rotate" in _ops,
+   "the link dialog offers both replacing and revoking")
+
+# --- exporting ---
+_csv = c.get("/api/admin/db/users/export.csv", headers=A)
+ok(_csv.status_code == 200 and "text/csv" in _csv.headers["content-type"],
+   "a table exports as CSV")
+ok("users.csv" in _csv.headers.get("content-disposition", ""),
+   "with a filename the browser will use")
+ok("token" in _csv.text.splitlines()[0], "the column is present")
+ok("••• hidden" in _csv.text, "but its values are redacted")
+# The real proof: this session's own token must not be in the file.
+_mytoken = A["Authorization"].split()[1]
+ok(_mytoken not in _csv.text, "no live token appears in an export")
+
+_js = c.get("/api/admin/db/export.json?tables=users,products", headers=A)
+ok(_js.status_code == 200, "several tables export as JSON")
+_jd = json.loads(_js.text)
+ok(set(_jd) == {"users", "products"}, "and only the ones asked for")
+ok(all(u["token"] in ("", None, "••• hidden") for u in _jd["users"]),
+   "with the same redaction")
+ok(c.get("/api/admin/db/export.json?tables=users;DROP",
+         headers=A).status_code == 404,
+   "a table name that isn't a table is refused here too")
+
+# Literal paths have to beat the {table} parameter, which is registration
+# order — "export.json" would otherwise be read as a table name.
+ok(c.get("/api/admin/db/export.json", headers=A).status_code == 200,
+   "the export path isn't swallowed by the table route")
+ok(c.get("/api/admin/db/backup.db", headers=A).status_code == 200,
+   "nor is the backup path")
+
+_bak = c.get("/api/admin/db/backup.db", headers=A)
+ok(_bak.content[:15] == b"SQLite format 3",
+   "the backup is a real SQLite file, not a dump that might not restore")
+import sqlite3 as _sq  # noqa: E402
+_bp = Path(tempfile.mkdtemp()) / "b.db"
+_bp.write_bytes(_bak.content)
+_bcon = _sq.connect(_bp)
+ok(_bcon.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0,
+   "it opens and has the data in it")
+ok(_bcon.execute("SELECT COUNT(*) FROM users WHERE token=?",
+                 (_mytoken,)).fetchone()[0] == 1,
+   "and it keeps the credentials — a redacted backup is not a backup")
+_bcon.close()
+
+ok(c.get("/api/admin/db/users/export.csv", headers=CU).status_code
+   in (401, 403), "exporting needs an admin")
+# Exports are GETs, so the middleware skips them; each records itself.
+_ex = c.get("/api/admin/audit?entity=export", headers=A).json()
+ok(any("export" in e["action"] for e in _ex["entries"]),
+   "an export records itself in the audit log even though it is a GET")
+ok(any("backup" in (e["detail"] or "") for e in
+       c.get("/api/admin/audit", headers=A).json()["entries"]),
+   "and so does a full backup")
+ok("db-csv" in _ops and "db-backup" in _ops,
+   "the database screen offers both exports and a backup")
+
+# --- the two layout fixes ---
+_css = c.get("/ops/styles.css").text
+ok(".dm-start" in _css and "display: flex" in
+   _css.split(".dm-start")[1][:60],
+   "the chat name box and its button are laid out as one row")
+ok(".punch-card" in _css and "max-width:380px" not in _ops,
+   "the punch card fills the page rather than floating in a narrow box")
+ok(".punch-card select { width: 100%" in _css,
+   "and its event dropdown can't outgrow the card")
+
 print(f"\nall {checks} checks passed")

@@ -311,6 +311,9 @@ def overview(con) -> dict:
             d["confirmation"] = None
             for ln in d["lines"]:
                 ln["confirmed"] = None
+        # The token itself never leaves the server — only whether one exists.
+        d["has_link"] = bool(r["portal_token"])
+        d.pop("portal_token", None)
         pos.append(d)
 
     runs = []
@@ -556,20 +559,48 @@ def finish_run(con, run_id: int, actual_cases: int, actor: str) -> dict:
 # the signature links do: a supplier will not create a login to answer one
 # question, and an integration nobody uses tells you nothing.
 
-def portal_link(con, po_id: int, base: str) -> str:
+def portal_link(con, po_id: int, base: str, rotate: bool = False) -> str:
     """A stable per-order link. Stable rather than single-use, because a
-    supplier may come back to it when the ETA changes."""
+    supplier may come back to it when the ETA changes.
+
+    Which is exactly why it needs revoking: the link *is* the credential, so
+    anyone it gets forwarded to can answer as the supplier. `rotate` mints a
+    new one, which invalidates the old in the same motion — the two are the
+    same act, and separating them would leave an order briefly unreachable
+    or, worse, leave someone thinking they'd revoked when they'd only issued.
+    """
     po = con.execute("SELECT * FROM purchase_orders WHERE id=?",
                      (po_id,)).fetchone()
     if po is None:
         raise HTTPException(404, "no such purchase order")
     token = po["portal_token"]
-    if not token:
+    if rotate or not token:
         token = secrets.token_urlsafe(24)
         con.execute("UPDATE purchase_orders SET portal_token=? WHERE id=?",
                     (token, po_id))
         con.commit()
     return f"{base}/supplier/{token}"
+
+
+def revoke_portal(con, po_id: int) -> dict:
+    """Turn the link off entirely.
+
+    Distinct from rotating: rotating says "this went to the wrong person,
+    here's a new one for the right one", revoking says "nobody should be
+    answering this any more". A blank token matches no lookup, because
+    portal_view requires the stored token to be non-empty — otherwise every
+    unlinked order would answer to an empty string.
+    """
+    po = con.execute("SELECT * FROM purchase_orders WHERE id=?",
+                     (po_id,)).fetchone()
+    if po is None:
+        raise HTTPException(404, "no such purchase order")
+    if not po["portal_token"]:
+        raise HTTPException(400, "that order has no link to revoke")
+    con.execute("UPDATE purchase_orders SET portal_token='' WHERE id=?",
+                (po_id,))
+    con.commit()
+    return {"ok": True}
 
 
 def portal_view(con, token: str) -> dict:

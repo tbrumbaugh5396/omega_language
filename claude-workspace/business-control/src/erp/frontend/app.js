@@ -175,6 +175,34 @@ const fmtDate = (t) => t ? new Date(t * 1000).toLocaleDateString(undefined,
 
 /* A modal. The ops app previously did every form inline in a view, which is
    fine for a settings page and poor for anything you open from a list. */
+/* Downloads have to go through fetch rather than a plain link: auth here is
+   a bearer token in localStorage, and an <a href> sends no headers, so the
+   server would answer 401. The file is therefore held in memory once before
+   being handed to the browser — fine at this scale, and the alternative is a
+   second, signed URL scheme existing only to make links work. */
+async function download(path) {
+  try {
+    const r = await fetch(path, { headers: S.user
+      ? { Authorization: "Bearer " + S.user.token } : {} });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      return toast(e.detail || `Download failed (${r.status})`);
+    }
+    const name = (r.headers.get("content-disposition") || "")
+      .match(/filename="([^"]+)"/);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name ? name[1] : "export";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // Revoked on the next tick; too soon and the download never starts.
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast("Downloaded");
+  } catch (e) { toast(e.message); }
+}
+
 function modal(html) {
   closeModal();
   const o = document.createElement("div");
@@ -1199,21 +1227,21 @@ async function renderClock() {
     month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   view().innerHTML = `
     <h2>Time Clock</h2>
-    <div class="card" style="max-width:380px;text-align:center">
-      <div class="dim">Enter your PIN to clock in or out</div>
-      <div style="margin:12px 0">
-        <input id="pin" type="password" inputmode="numeric" placeholder="PIN"
-          style="font-size:22px;text-align:center;width:160px">
+    <div class="card punch-card">
+      <label class="dim" for="pin">Enter your PIN to clock in or out</label>
+      <input id="pin" type="password" inputmode="numeric" placeholder="••••"
+        autocomplete="off">
+      ${events.length ? `<select id="clock-event">
+        <option value="">Regular shift</option>
+        ${events.map((ev) => `<option value="${ev.id}">Event: ${esc(ev.name)}${
+          ev.city ? " (" + esc(ev.city) + ")" : ""}</option>`).join("")}
+        </select>` : ""}
+      <div class="punch-acts">
+        <button class="btn" id="punch">Punch</button>
+        <button class="btn alt" id="kiosk-btn"
+          title="full-screen keypad for the store tablet">Kiosk mode</button>
       </div>
-      ${events.length ? `<div style="margin-bottom:10px">
-        <select id="clock-event"><option value="">regular shift</option>
-        ${events.map((ev) => `<option value="${ev.id}">event: ${esc(ev.name)}
-          ${ev.city ? "(" + esc(ev.city) + ")" : ""}</option>`).join("")}
-        </select></div>` : ""}
-      <button class="btn" id="punch" style="font-size:17px">Punch</button>
-      <button class="btn alt" id="kiosk-btn" style="margin-left:6px"
-        title="full-screen keypad for the store tablet">Kiosk mode</button>
-      <div id="punch-msg" style="margin-top:10px"></div>
+      <div id="punch-msg"></div>
     </div>
     ${S.user && mine.length ? `<h3>My shifts</h3>
       <div class="card"><table><thead><tr><th>in</th><th>out</th><th>hours</th></tr></thead>
@@ -1527,7 +1555,8 @@ async function renderSupply() {
           data-posend="${p.id}">Mark sent</button>` : ""}
         ${["sent", "part"].includes(p.status) ? `<button class="btn sm"
           data-porecv="${p.id}">Receive</button>` : ""}
-        <button class="btn alt sm" data-polink="${p.id}">Supplier link</button>
+        <button class="btn alt sm" data-polink="${p.id}">${
+          p.has_link ? "Supplier link" : "Get supplier link"}</button>
         <button class="btn alt sm" data-rowdel="po:${p.id}">Delete</button>
       </div>
       ${p.confirmed_at ? `<div class="warn-line" style="color:var(--good);
@@ -1614,24 +1643,8 @@ async function renderSupply() {
   });
   view().querySelectorAll("[data-porecv]").forEach((b) => b.onclick = () =>
     receiveForm(+b.dataset.porecv, refresh));
-  view().querySelectorAll("[data-polink]").forEach((b) => b.onclick = async () => {
-    const { url } = await api(
-      `/api/supply/purchase-orders/${b.dataset.polink}/portal-link`,
-      { method: "POST" });
-    modal(`<h3>Send this to your supplier</h3>
-      <p class="dim">They confirm what they can ship and when — no account,
-        no sign-in. Finding out about a short shipment now beats finding out
-        on the loading dock.</p>
-      <input id="po-url" value="${esc(url)}" readonly>
-      <div style="text-align:center;padding:14px">${qrImg(url, 150)}</div>
-      <div class="modal-acts"><button class="btn alt" data-close>Close</button>
-        <button class="btn" id="po-copy">Copy link</button></div>`);
-    $("#po-copy").onclick = () => {
-      $("#po-url").select();
-      navigator.clipboard.writeText(url).then(() => toast("Copied"),
-        () => toast("Select the link and copy it"));
-    };
-  });
+  view().querySelectorAll("[data-polink]").forEach((b) => b.onclick = () =>
+    portalLinkForm(+b.dataset.polink, refresh));
   view().querySelectorAll("[data-runfin]").forEach((b) => b.onclick = () =>
     finishForm(+b.dataset.runfin, refresh));
   view().querySelectorAll("[data-adj]").forEach((b) => b.onclick = () =>
@@ -1679,6 +1692,50 @@ async function renderSupply() {
   };
   $("#sp-bomprod").onchange = drawBom;
   if (products.length) drawBom();
+}
+
+async function portalLinkForm(pid, refresh, rotate = false) {
+  const { url } = await api(
+    `/api/supply/purchase-orders/${pid}/portal-link`,
+    { body: { rotate } });
+  modal(`<h3>Send this to your supplier</h3>
+    <p class="dim">They confirm what they can ship and when — no account, no
+      sign-in. Finding out about a short shipment now beats finding out on
+      the loading dock.</p>
+    <input id="po-url" value="${esc(url)}" readonly>
+    <div style="text-align:center;padding:14px">${qrImg(url, 150)}</div>
+    <p class="dim" style="font-size:12px">This link is the credential —
+      anyone it reaches can answer as the supplier. Sent to the wrong
+      address, replace it: that issues a new link and stops the old one in
+      the same step. Revoke turns it off with nothing in its place.</p>
+    <div class="modal-acts">
+      <button class="btn alt" data-close>Close</button>
+      <button class="btn alt" id="po-rotate">Replace link</button>
+      <button class="btn alt danger-hint" id="po-revoke">Revoke</button>
+      <button class="btn" id="po-copy">Copy link</button>
+    </div>`);
+  $("#po-copy").onclick = () => {
+    $("#po-url").select();
+    navigator.clipboard.writeText(url).then(() => toast("Copied"),
+      () => toast("Select the link and copy it"));
+  };
+  $("#po-rotate").onclick = async () => {
+    if (!confirm("Issue a new link? The current one stops working "
+      + "immediately — including for the supplier, if they already have it."))
+      return;
+    closeModal();
+    await portalLinkForm(pid, refresh, true);
+    toast("New link issued — the old one no longer works");
+  };
+  $("#po-revoke").onclick = async () => {
+    if (!confirm("Revoke this link? Nobody will be able to confirm this "
+      + "order until you issue a new one.")) return;
+    try {
+      await api(`/api/supply/purchase-orders/${pid}/portal-link`,
+                { method: "DELETE" });
+      closeModal(); toast("Link revoked"); refresh();
+    } catch (e) { toast(e.message); }
+  };
 }
 
 // Purchase orders, runs and shipments delete through the same path as rows.
@@ -2055,6 +2112,14 @@ async function renderDb() {
       are read-only, and there's no free-text SQL box — the value of one is a
       query tool and the cost is a dropped table one paste away. Every change
       lands in the audit log.</p>
+    <div class="db-exports">
+      <button class="btn alt sm" id="db-json">Export all tables (JSON)</button>
+      <button class="btn alt sm" id="db-backup">Download a full backup</button>
+      <span class="dim">Exports redact anything credential-shaped, the same
+        as the screen. The backup doesn't — a backup with the credentials
+        stripped out only looks like one until you need it, so keep it
+        somewhere you'd keep the database itself.</span>
+    </div>
     <div class="db-wrap">
       <div class="db-tables">${ov.tables.map((t) => `
         <button class="db-t ${t.name === S.dbTable ? "on" : ""}"
@@ -2066,6 +2131,13 @@ async function renderDb() {
   view().querySelectorAll("[data-dbt]").forEach((b) => b.onclick = () => {
     S.dbTable = b.dataset.dbt; S.dbOffset = 0; S.dbQ = ""; renderDb();
   });
+  $("#db-json").onclick = () => download("/api/admin/db/export.json");
+  $("#db-backup").onclick = () => {
+    if (!confirm("Download a full backup?\n\n"
+      + "It contains everything, credentials included — treat the file the "
+      + "way you'd treat the database.")) return;
+    download("/api/admin/db/backup.db");
+  };
   drawDbTable();
 }
 
@@ -2086,6 +2158,7 @@ async function drawDbTable() {
     <div class="filters">
       <input id="db-q" placeholder="Search ${esc(d.table)}" value="${esc(S.dbQ || "")}">
       <span class="dim">${d.total.toLocaleString()} row(s)</span>
+      <button class="btn alt sm" id="db-csv">Export ${esc(d.table)} (CSV)</button>
       ${d.total > d.limit ? `<span class="pager">
         <button class="btn alt sm" id="db-prev" ${off ? "" : "disabled"}>←</button>
         <span class="dim">${off + 1}–${Math.min(off + d.limit, d.total)}</span>
@@ -2108,6 +2181,8 @@ async function drawDbTable() {
   $("#db-q").oninput = (e) => { clearTimeout(t);
     t = setTimeout(() => { S.dbQ = e.target.value; S.dbOffset = 0;
       drawDbTable(); }, 250); };
+  $("#db-csv").onclick = () =>
+    download(`/api/admin/db/${encodeURIComponent(d.table)}/export.csv`);
   if ($("#db-prev")) $("#db-prev").onclick = () => {
     S.dbOffset = Math.max(0, off - d.limit); drawDbTable(); };
   if ($("#db-next")) $("#db-next").onclick = () => {

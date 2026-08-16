@@ -237,6 +237,12 @@ details.sect > .inner { padding: 0 14px 14px; }
 .chat-wrap { display: flex; gap: 12px; min-height: 420px; }
 .chat-side { width: 210px; flex-shrink: 0; }
 .chat-side select { width: 100%; margin-bottom: 8px; }
+/* The name box and its button are one control, so they sit on one line.
+   Left unstyled they stacked, and the button read as a stray pill floating
+   between the search box and the conversation list. */
+.dm-start { display: flex; gap: 6px; margin-bottom: 10px; }
+.dm-start input { flex: 1; min-width: 0; }
+.dm-start .btn { flex: none; align-self: stretch; padding: 0 12px; }
 .conv { background: var(--panel); border: 1px solid var(--line);
   border-radius: 8px; padding: 8px; margin-bottom: 6px; cursor: pointer;
   font-size: 13px; position: relative; }
@@ -618,3 +624,26 @@ code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
   font-size: 12.5px; padding-left: 22px; }
+
+/* ---------- the punch card ---------- */
+/* Full width, like everything else on the page. It used to be a 380px box
+   floating above full-width tables, with a 160px PIN field inside it and an
+   event dropdown wide enough to spill past the card's own edge. */
+.punch-card { display: flex; flex-direction: column; gap: 10px;
+  align-items: stretch; text-align: center; }
+.punch-card label { font-size: 13px; }
+.punch-card #pin { font-size: 26px; letter-spacing: .5em; text-align: center;
+  padding: 14px 10px; width: 100%; }
+.punch-card #pin::placeholder { letter-spacing: .4em; opacity: .35; }
+/* The select is a block in the flex column, so it can't outgrow the card. */
+.punch-card select { width: 100%; }
+.punch-acts { display: flex; gap: 8px; justify-content: center;
+  flex-wrap: wrap; }
+.punch-acts .btn { flex: 1 1 150px; max-width: 260px; font-size: 16px;
+  padding: 12px 16px; }
+#punch-msg:empty { display: none; }
+#punch-msg { font-size: 14px; }
+
+.db-exports { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 14px; }
+.db-exports .dim { font-size: 12px; flex: 1 1 260px; min-width: 0; }
