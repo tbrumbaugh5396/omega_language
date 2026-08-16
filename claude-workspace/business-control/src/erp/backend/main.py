@@ -263,6 +263,51 @@ def set_tracking(body: TrackingBody, user=Depends(admin_user)):
     return {"ok": True, "tracking": CFG["tracking"]}
 
 
+class PaymentsBody(BaseModel):
+    secret_key: str = ""
+
+
+@app.get("/api/admin/payments")
+def payments_config(user=Depends(admin_user)):
+    """Whether card payments are on, and never the key itself."""
+    key = CFG.get("stripe_secret_key", "")
+    return {"enabled": payments.enabled(CFG),
+            "key_set": bool(key),
+            # Enough to tell a live key from a test one at a glance, without
+            # putting a working credential on a screen.
+            "mode": ("live" if key.startswith("sk_live") else
+                     "test" if key.startswith("sk_test") else ""),
+            "tail": key[-4:] if key else ""}
+
+
+@app.post("/api/admin/payments")
+def set_payments(body: PaymentsBody, user=Depends(admin_user)):
+    """Turn card payments on by pasting a Stripe secret key.
+
+    The key is checked against Stripe before it's saved — a mistyped key that
+    only fails at checkout means a customer meets the error, not the person
+    who typed it. Sending an empty string turns card payments off, which
+    falls the shop back to pay-on-delivery rather than breaking it.
+    """
+    key = body.secret_key.strip()
+    if not key:
+        CFG["stripe_secret_key"] = ""
+        config.save(CFG)
+        return {"ok": True, "enabled": False}
+    if not key.startswith(("sk_test_", "sk_live_", "rk_test_", "rk_live_")):
+        raise HTTPException(
+            400, "that doesn't look like a Stripe secret key — it starts "
+                 "sk_test_ or sk_live_. The publishable key (pk_) is the "
+                 "wrong one; this side needs the secret.")
+    ok, detail = payments.verify_key(key)
+    if not ok:
+        raise HTTPException(400, f"Stripe rejected that key: {detail}")
+    CFG["stripe_secret_key"] = key
+    config.save(CFG)
+    return {"ok": True, "enabled": True,
+            "mode": "live" if key.startswith(("sk_live", "rk_live")) else "test"}
+
+
 # ---------- QR codes & QR sign-in ----------
 
 def lan_url() -> str:
@@ -517,17 +562,155 @@ def customer_for_order(con, authorization: str, body):
 @app.post("/api/orders")
 def place_order(body: OrderBody, authorization: str = Header(default=""),
                 con=Depends(get_con)):
+    """Place it, or hold it until the email is confirmed.
+
+    Pay-on-delivery is the one route where nothing is verified at the moment
+    of ordering: no card is charged and, for a guest, nobody has proved they
+    own the address. So a first pay-on-delivery order from an unconfirmed
+    email is held rather than placed, and a link makes it real. Once an
+    address has confirmed once it isn't asked again — the check is there to
+    stop orders being sent to people who never asked for them, not to make
+    regulars click a link every time.
+    """
     if not body.items:
         raise HTTPException(400, "empty order")
     user, as_guest = customer_for_order(con, authorization, body)
-    # A guest is a customer, whatever the matched account happens to be.
-    kind = ("customer" if as_guest
-            else ("distributor" if user["role"] == "distributor"
-                  else "customer"))
+    # Check the order is well-formed before holding it. Emailing someone a
+    # confirmation link for an order that can never be placed wastes their
+    # time and hides the real problem behind a click.
+    _check_order_shape(order_kind(user, as_guest), body)
+    cod = (body.pay_method or "").lower() != "card"
+    if cod and user["role"] != "distributor" and not user["email_verified_at"]:
+        # Nothing is charged and nothing is proven at this point, so there
+        # has to be a reachable address to confirm against. An account with
+        # no email on it can't be sent goods on trust.
+        email = (user["email"] or "").strip() or (body.email or "").strip()
+        if not email:
+            raise HTTPException(
+                400, "paying on delivery needs an email address to confirm "
+                     "the order — add one, or pay by card")
+        if not (user["email"] or "").strip():
+            con.execute("UPDATE users SET email=? WHERE id=?",
+                        (email[:120], user["id"]))
+            con.commit()
+            user = con.execute("SELECT * FROM users WHERE id=?",
+                               (user["id"],)).fetchone()
+        return hold_for_confirmation(con, user, body)
+    return _place(con, user, body, as_guest)
+
+
+CONFIRM_TTL = 3 * 86400
+
+
+def hold_for_confirmation(con, user, body):
+    """Park the order and email a link that makes it real.
+
+    The order isn't priced or reserved here — it is re-placed from scratch on
+    confirmation, through the same function a direct order goes through. That
+    keeps one code path for what an order *is*, and it means stock and prices
+    are read when the order actually becomes one rather than days earlier.
+    """
+    token = secrets.token_urlsafe(24)
+    con.execute(
+        "INSERT INTO pending_orders(token,user_id,email,payload,as_guest,"
+        " created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
+        (token, user["id"], user["email"], body.model_dump_json(),
+         1 if not user["password_hash"] else 0,
+         db.now(), db.now() + CONFIRM_TTL))
+    con.commit()
+    link = f"{base_url()}/confirm-order/{token}"
+    try:
+        mailer.log_and_send(
+            con, CFG, user["id"], user["email"], "order-confirm",
+            "Confirm your order",
+            f"Hi {user['name']},\n\nYou asked to pay on delivery, so we need "
+            "to know this address is yours before we send anything.\n\n"
+            f"Confirm the order: {link}\n\n"
+            "The link works for three days. If you didn't order anything, "
+            "ignore this — nothing has been placed and nobody will call.",
+            f"confirm-{token[:12]}")
+        con.commit()
+    except Exception:
+        pass          # a mail failure must not lose the order
+    return {"awaiting_confirmation": True, "email": user["email"],
+            "expires_in_days": CONFIRM_TTL // 86400}
+
+
+@app.get("/confirm-order/{token}")
+def confirm_order_page(token: str, con=Depends(get_con)):
+    row = con.execute("SELECT * FROM pending_orders WHERE token=?",
+                      (token,)).fetchone()
+
+    def page(title: str, body: str) -> HTMLResponse:
+        return HTMLResponse(f"""<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title>
+<style>body{{margin:0;background:#f7f6f3;color:#1c1a17;padding:40px 18px;
+ font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif}}
+ .c{{max-width:520px;margin:0 auto;background:#fff;border:1px solid #e3e0d9;
+ border-radius:14px;padding:26px}} h1{{font-size:22px;margin:0 0 10px}}
+ a{{color:#6d55d6}}</style>
+<div class="c"><h1>{title}</h1>{body}</div>""")
+
+    if row is None:
+        return page("Link not valid",
+                    "<p>This confirmation link has already been used or was "
+                    "mistyped. Nothing has been placed.</p>")
+    if row["placed_order_id"]:
+        return page("Already confirmed",
+                    f"<p>Order #{row['placed_order_id']} is confirmed and on "
+                    "its way through.</p>")
+    if row["expires_at"] < db.now():
+        return page("Link expired",
+                    "<p>This link was only good for a few days. Nothing was "
+                    'placed — please <a href="/">order again</a>.</p>')
+
+    user = con.execute("SELECT * FROM users WHERE id=?",
+                       (row["user_id"],)).fetchone()
+    try:
+        body = OrderBody(**json.loads(row["payload"]))
+        o = _place(con, user, body, bool(row["as_guest"]))
+    except HTTPException as e:
+        return page("Couldn't place that order",
+                    f"<p>{esc_html(str(e.detail))}</p>"
+                    '<p><a href="/">Start again</a></p>')
+    con.execute("UPDATE pending_orders SET placed_order_id=? WHERE id=?",
+                (o["id"], row["id"]))
+    # Confirming proves the address. Ask once, not on every future order.
+    con.execute("UPDATE users SET email_verified_at=? WHERE id=?",
+                (db.now(), user["id"]))
+    con.commit()
+    return page("Order confirmed",
+                f"<p>Thank you — order #{o['id']} is placed, paying on "
+                "delivery. A receipt is on its way.</p>"
+                '<p><a href="/">Back to the shop</a></p>')
+
+
+def esc_html(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def order_kind(user, as_guest: bool) -> str:
+    """A guest is a customer, whatever the matched account happens to be."""
+    if as_guest:
+        return "customer"
+    return "distributor" if user["role"] == "distributor" else "customer"
+
+
+def _check_order_shape(kind: str, body) -> None:
+    """What every order needs, wherever it is being checked from. One
+    function so the version that runs before a hold and the version that
+    runs when it is finally placed can't disagree."""
     if kind == "customer" and not (body.ship_name.strip()
                                    and body.address.strip()
                                    and body.city.strip()):
         raise HTTPException(400, "shipping name, address, and city required")
+
+
+def _place(con, user, body, as_guest):
+    kind = order_kind(user, as_guest)
+    _check_order_shape(kind, body)
     subtotal = 0
     lines = []
     stripe_items = []

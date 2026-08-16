@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   pin TEXT DEFAULT '',                     -- legacy plaintext; migrated away
   pin_hash TEXT DEFAULT '',                -- time-clock PIN, peppered HMAC
   clock_token TEXT DEFAULT '',             -- badge QR; identifies, never logs in
+  email_verified_at REAL DEFAULT 0,        -- proved they own the address
   job TEXT DEFAULT 'general',              -- staff job: driver|dsd|warehouse|sales_rep|ambassador|event_staff|general
   employment TEXT DEFAULT 'employee',      -- employee (hourly) | contractor (per-route)
   password_hash TEXT DEFAULT '',           -- salt$pbkdf2; empty = no password
@@ -311,6 +312,26 @@ CREATE TABLE IF NOT EXISTS login_tokens (
   used INTEGER DEFAULT 0
 );
 
+/* A pay-on-delivery order waiting on its email confirmation.
+
+   Deliberately not a row in `orders` with a different status: thirteen
+   queries across analytics, the P&L and the supply forecast count anything
+   that isn't 'cancelled', so an unconfirmed order stored there would show up
+   as revenue the moment it was created. Keeping it outside means it cannot
+   be counted by construction, rather than by remembering to exclude it in
+   every one of those places. */
+CREATE TABLE IF NOT EXISTS pending_orders (
+  id INTEGER PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL,
+  email TEXT NOT NULL,
+  payload TEXT NOT NULL,                   -- the OrderBody, as JSON
+  as_guest INTEGER DEFAULT 0,
+  created_at REAL NOT NULL,
+  expires_at REAL NOT NULL,
+  placed_order_id INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -345,6 +366,7 @@ def connect() -> sqlite3.Connection:
 
 # Columns added after first release; applied to pre-existing databases.
 MIGRATIONS = (
+    "ALTER TABLE users ADD COLUMN email_verified_at REAL DEFAULT 0",
     "ALTER TABLE shifts ADD COLUMN event_id INTEGER",
     "ALTER TABLE trucks ADD COLUMN driver_user_id INTEGER",
     "ALTER TABLE routes ADD COLUMN total_min REAL DEFAULT 0",

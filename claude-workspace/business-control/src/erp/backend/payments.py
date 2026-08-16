@@ -11,6 +11,25 @@ def enabled(cfg: dict) -> bool:
     return bool(cfg.get("stripe_secret_key"))
 
 
+def verify_key(key: str) -> tuple[bool, str]:
+    """Ask Stripe whether this key works, before anyone relies on it.
+
+    Saving an unverified key means the first person to find out it's wrong is
+    a customer at the checkout, which is the worst possible place to discover
+    a typo.
+    """
+    try:
+        r = httpx.get(f"{API}/balance", auth=(key, ""), timeout=15)
+    except Exception as e:                      # noqa: BLE001
+        return False, f"couldn't reach Stripe ({str(e)[:80]})"
+    if r.status_code == 200:
+        return True, "ok"
+    try:
+        return False, r.json().get("error", {}).get("message", r.text[:120])
+    except Exception:
+        return False, r.text[:120]
+
+
 def create_checkout(cfg: dict, order_id: int, items: list[dict],
                     extra_cents: int, base_url: str) -> dict | None:
     """items: [{name, unit_cents, qty}]; extra_cents covers tax+shipping.

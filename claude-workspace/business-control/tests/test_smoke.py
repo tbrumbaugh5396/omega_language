@@ -33,6 +33,27 @@ ok(admin["is_admin"], "admin login via admin key")
 A = {"Authorization": f"Bearer {admin['token']}"}
 cust = c.post("/api/login", json={"name": "Carl Customer", "region": "West"}).json()
 CU = {"Authorization": f"Bearer {cust['token']}"}
+
+
+def verified_customer(headers, addr):
+    """Mark a fixture's email as already confirmed.
+
+    Pay-on-delivery holds the first order from an unconfirmed address, which
+    is the point of it — but most tests here are about what happens *after*
+    someone is an established customer, so they start as one. The holding
+    behaviour has its own tests.
+    """
+    from erp.backend import db as _d
+    con = _d.connect()
+    uid = c.get("/api/me", headers=headers).json()["id"]
+    con.execute("UPDATE users SET email=?, email_verified_at=?"
+                " WHERE id=?", (addr, _t0.time(), uid))
+    con.commit()
+    con.close()
+
+
+import time as _t0  # noqa: E402
+verified_customer(CU, "carl@example.com")
 dist = c.post("/api/login", json={"name": "Dana Dist", "role": "distributor"}).json()
 DI = {"Authorization": f"Bearer {dist['token']}"}
 
@@ -320,6 +341,7 @@ chatty = c.post("/api/login", json={"name": "Chatty Customer",
                                     "email": "chatty@example.com"}).json()
 ok(chatty["email"] == "chatty@example.com", "login captures email")
 CH = {"Authorization": f"Bearer {chatty['token']}"}
+verified_customer(CH, "chatty@example.com")
 cc = c.get("/api/chat/convs", headers=CH).json()
 ok(len(cc["convs"]) == 1 and cc["convs"][0]["kind"] == "support",
    "customer auto-gets a support conversation")
@@ -2108,5 +2130,141 @@ ok("badge-btn" in _ops and "/api/clock/badge" in _ops,
    "the time clock offers a badge scan")
 ok("pf-badge-go" in _ops, "your profile shows your own badge")
 ok("data-badge=" in _ops, "and an owner can issue one from Team & access")
+
+
+# --- pay on delivery waits for a confirmed email ---
+import re as _re2  # noqa: E402
+_cod = {"items": [{"product_id": _gpid, "qty": 2}], "ship_name": "COD Buyer",
+        "address": "3 Oak St", "city": "Chicago", "email": "cod@example.com",
+        "pay_method": "cod"}
+_before_orders = _db.connect().execute(
+    "SELECT COUNT(*) n FROM orders").fetchone()["n"]
+_held = c.post("/api/orders", json=_cod)
+ok(_held.json().get("awaiting_confirmation"),
+   "a first pay-on-delivery order is held, not placed")
+ok("id" not in _held.json(), "and isn't given an order number yet")
+_con_c = _db.connect()
+ok(_con_c.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"]
+   == _before_orders,
+   "nothing lands in orders, so nothing can be counted as revenue")
+# The reason it lives outside `orders`: thirteen queries count anything that
+# isn't cancelled, and an unconfirmed order must not be one of them.
+_pnl_before = c.get("/api/analytics/pnl", headers=A).json()["revenue_cents"]
+
+_tok_c = _con_c.execute(
+    "SELECT token FROM pending_orders ORDER BY id DESC LIMIT 1"
+).fetchone()["token"]
+ok(c.get("/confirm-order/not-a-token").status_code == 200
+   and "Link not valid" in c.get("/confirm-order/not-a-token").text,
+   "a wrong link says so rather than erroring")
+_conf = c.get(f"/confirm-order/{_tok_c}")
+ok("Order confirmed" in _conf.text, "the link places the order")
+ok(_con_c.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"]
+   == _before_orders + 1, "and now there is exactly one more order")
+ok(c.get("/api/analytics/pnl", headers=A).json()["revenue_cents"]
+   > _pnl_before, "which only now counts towards revenue")
+ok("Already confirmed" in c.get(f"/confirm-order/{_tok_c}").text,
+   "the link can't be used twice to place two orders")
+ok(_con_c.execute("SELECT email_verified_at FROM users WHERE"
+                  " lower(email)='cod@example.com'").fetchone()[0] > 0,
+   "confirming proves the address")
+_again = c.post("/api/orders", json=_cod)
+ok("id" in _again.json(),
+   "so the next pay-on-delivery order from it places outright")
+
+# An expired link places nothing.
+_exp = c.post("/api/orders", json={**_cod, "email": "expired@example.com"})
+_con_c.execute("UPDATE pending_orders SET expires_at=1 WHERE placed_order_id=0")
+_con_c.commit()
+_etok = _con_c.execute("SELECT token FROM pending_orders WHERE"
+                       " placed_order_id=0 ORDER BY id DESC LIMIT 1"
+                       ).fetchone()["token"]
+ok("expired" in c.get(f"/confirm-order/{_etok}").text.lower(),
+   "an old link is refused")
+_con_c.close()
+
+# Card orders skip the hold — the payment itself is the proof.
+ok("awaiting_confirmation" not in c.post("/api/orders", json={
+    **_cod, "email": "card@example.com", "pay_method": "card"}).text,
+   "paying by card doesn't wait on an email")
+# And an order is checked before it's held, so nobody is emailed a link for
+# something that could never have been placed.
+ok(c.post("/api/orders", json={**_cod, "email": "shape@example.com",
+                               "city": ""}).status_code == 400,
+   "a malformed order is refused up front, not after a click")
+ok(_db.connect().execute(
+    "SELECT COUNT(*) n FROM pending_orders WHERE email='shape@example.com'"
+   ).fetchone()["n"] == 0, "and nothing is held for it")
+
+# --- card payments are configurable ---
+_pc = c.get("/api/admin/payments", headers=A).json()
+ok("enabled" in _pc and "key_set" in _pc, "the payment settings read back")
+ok("secret_key" not in json.dumps(_pc) and not _pc.get("key"),
+   "and never include the key itself")
+ok(c.post("/api/admin/payments", headers=A,
+          json={"secret_key": "pk_test_wrong"}).status_code == 400,
+   "a publishable key is rejected — this side needs the secret")
+ok("secret" in c.post("/api/admin/payments", headers=A,
+                      json={"secret_key": "pk_test_wrong"}).json()["detail"],
+   "and says which one to use")
+ok(c.post("/api/admin/payments", headers=A,
+          json={"secret_key": "nonsense"}).status_code == 400,
+   "so is anything that isn't a Stripe key")
+ok(c.get("/api/admin/payments", headers=CU).status_code in (401, 403),
+   "payment settings need an owner")
+ok(c.post("/api/admin/payments", headers=A,
+          json={"secret_key": ""}).json()["enabled"] is False,
+   "an empty key turns card payments off rather than breaking the shop")
+ok(c.get("/api/meta").json()["stripe_enabled"] is False,
+   "which the checkout form can see")
+ok("pay-key" in _ops and "pay-save" in _ops,
+   "and there's a screen to paste a key into")
+
+# Twice now a button has shipped with nothing behind it, because the code
+# that would have wired it was inserted against an anchor that never matched
+# and str.replace returns the string unchanged rather than complaining. So:
+# every id the ops app renders a button for must actually be *given* a
+# handler somewhere, not merely mentioned — the id appears inside its own
+# handler body too, which is why "is it referenced" isn't the question.
+import re as _re3  # noqa: E402
+_rendered = set(_re3.findall(r'<button[^>]*\bid="([\w-]+)"', _ops))
+# A button inside a form is wired by that form's submit handler.
+_in_form = set()
+for _f in _re3.finditer(r"<form\b.*?</form>", _ops, _re3.S):
+    _in_form |= set(_re3.findall(r'<button[^>]*\bid="([\w-]+)"', _f.group()))
+
+
+def _is_wired(bid: str) -> bool:
+    """Is a handler attached to *this* button, rather than merely near it?
+
+    Proximity was tried both ways and neither works: a tight window flags
+    buttons whose handler sits past a comment, and a loose one is satisfied
+    by the next button's handler, which is worse — it reports success for the
+    exact bug this exists to catch. So the attachment is matched directly,
+    including the local-variable form the app uses in a few places
+    (`const co = $("#checkout"); co.onclick = ...`).
+    """
+    sel = r'(?:\$|document\.getElementById|\w+\.querySelector)\(\s*"#' \
+        + _re3.escape(bid) + r'"\s*\)'
+    if _re3.search(sel + r'\s*\.on(click|submit|change)\s*=', _ops):
+        return True
+    for m in _re3.finditer(r'(?:const|let|var)\s+(\w+)\s*=\s*' + sel, _ops):
+        # Only where the local is actually used, not anywhere in the file: a
+        # variable called `b` is declared a hundred times, and searching
+        # globally for `b.onclick` reports every button as wired.
+        near = _ops[m.end():m.end() + 700]
+        if _re3.search(r'\b' + m.group(1) + r'\.on(click|submit|change)\s*=',
+                       near):
+            return True
+    return False
+
+
+_unwired = sorted(i for i in _rendered
+                  if i not in _in_form and not _is_wired(i))
+ok(not _unwired,
+   "every button the ops app renders is given a handler"
+   + (" — " + ", ".join(_unwired[:5]) if _unwired else ""))
+ok("verify_key" in Path("src/erp/backend/payments.py").read_text(),
+   "the key is checked with Stripe before it is saved")
 
 print(f"\nall {checks} checks passed")

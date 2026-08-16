@@ -1180,6 +1180,27 @@ async function renderShop() {
       const o = await api("/api/orders", { body: {
         items, visitor_id: visitorId(),
         affiliate_code: localStorage.getItem("bc_ref") || "", ...extra } });
+
+      /* Paying on delivery holds the first order from an unconfirmed
+         address, so there is no order number to report yet — saying one was
+         placed would be a lie, and the customer would sit waiting for goods
+         that were never ordered. */
+      if (o.awaiting_confirmation) {
+        S.cart = {};
+        $("#checkout-box").innerHTML = `<div class="card">
+          <h3 style="margin-top:0">Check your email</h3>
+          <p>We've sent a link to <b>${esc(o.email)}</b>. Because you're
+            paying on delivery, we confirm the address before sending
+            anything — one click and the order is placed.</p>
+          <p class="dim">The link works for ${o.expires_in_days} days.
+            Nothing has been ordered until you use it. Prefer not to wait?
+            Paying by card skips this step.</p>
+        </div>`;
+        $("#checkout-box").scrollIntoView({ behavior: "smooth" });
+        renderCartCard();
+        return;
+      }
+
       track("purchase", { value_cents: o.total_cents || o.subtotal_cents });
       S.cart = {};
       if (o.checkout_url) {
@@ -3627,13 +3648,40 @@ async function renderAnalytics() {
 const ROLES = ["customer", "distributor", "influencer", "employee", "owner"];
 
 async function renderAdmin() {
-  const [products, stores, employees, users, emailCfg, emailLog, cyclesList] =
-    await Promise.all([
+  const [products, stores, employees, users, emailCfg, emailLog, cyclesList,
+         pay] = await Promise.all([
       api("/api/products"), api("/api/stores"), api("/api/admin/employees"),
       api("/api/admin/users"), api("/api/admin/email/config"),
-      api("/api/admin/email/log"), api("/api/cycles")]);
+      api("/api/admin/email/log"), api("/api/cycles"),
+      api("/api/admin/payments")]);
   view().innerHTML = `
     <h2>Admin</h2>
+
+    <details class="sect" ${pay.enabled ? "" : "open"}><summary>Card payments
+      ${pay.enabled ? `<span class="pill ok">on · ${esc(pay.mode)} key
+        ····${esc(pay.tail)}</span>`
+        : '<span class="pill warn">off — pay on delivery only</span>'}
+    </summary>
+    <div class="inner">
+      <p class="dim">Card payments run on Stripe's own hosted checkout, so no
+        card number ever reaches this server. Paste the <b>secret</b> key from
+        your Stripe dashboard (Developers → API keys) — the one starting
+        <code>sk_</code>, not the publishable <code>pk_</code>.</p>
+      <p class="dim">It's checked against Stripe before it's saved, so a typo
+        surfaces here rather than at someone's checkout. Start with a
+        <code>sk_test_</code> key if you want to try it first — test cards
+        won't charge anyone.</p>
+      <label class="f">Stripe secret key
+        <input id="pay-key" type="password" autocomplete="off"
+          placeholder="${pay.key_set ? "saved — paste a new one to replace it"
+            : "sk_test_… or sk_live_…"}"></label>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" id="pay-save">Save key</button>
+        ${pay.key_set ? `<button class="btn alt danger-hint" id="pay-off"
+          >Turn card payments off</button>` : ""}
+      </div>
+      <p class="dim" id="pay-msg"></p>
+    </div></details>
     <details class="sect" open><summary>All users (${users.length})</summary>
     <div class="inner"><div class="tablewrap"><table><thead><tr><th>name</th><th>role</th>
       <th>job</th><th>region</th><th>admin</th><th>active</th><th>sign-in</th></tr></thead><tbody>
@@ -3915,6 +3963,29 @@ async function renderAdmin() {
       toast("user updated");
     } catch (err) { toast(err.message); }
     render();
+  };
+  $("#pay-save").onclick = async () => {
+    const b = $("#pay-save"), msg = $("#pay-msg");
+    const key = $("#pay-key").value.trim();
+    if (!key) return toast("paste a key first");
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    msg.textContent = "checking the key with Stripe…";
+    try {
+      const r = await api("/api/admin/payments", { body: { secret_key: key } });
+      $("#pay-key").value = "";
+      toast(`Card payments on — ${r.mode} mode`);
+      S.meta = await api("/api/meta");     // the checkout form reads this
+      renderAdmin();
+    } catch (e) {
+      msg.innerHTML = `<span class="low">${esc(e.message)}</span>`;
+    } finally { b.disabled = false; b.removeAttribute("aria-busy"); }
+  };
+  if ($("#pay-off")) $("#pay-off").onclick = async () => {
+    if (!confirm("Turn card payments off? Orders fall back to paying on "
+      + "delivery.")) return;
+    await api("/api/admin/payments", { body: { secret_key: "" } });
+    S.meta = await api("/api/meta");
+    renderAdmin();
   };
   document.querySelectorAll("[data-ur]").forEach((sel) => {
     sel.onchange = () => updateUser(+sel.dataset.ur, { role: sel.value });
