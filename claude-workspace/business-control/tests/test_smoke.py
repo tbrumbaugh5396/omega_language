@@ -2267,4 +2267,38 @@ ok(not _unwired,
 ok("verify_key" in Path("src/erp/backend/payments.py").read_text(),
    "the key is checked with Stripe before it is saved")
 
+# With a key configured, the checkout offers the choice.
+_CFG["stripe_secret_key"] = "sk_test_pretend_not_real"
+ok(c.get("/api/meta").json()["stripe_enabled"],
+   "a configured key turns card payments on")
+ok("stripe_enabled ?" in _ops,
+   "and the checkout form offers card or pay-on-delivery accordingly")
+
+# A card payment that can't be started must leave nothing behind. It used to
+# keep the order and quietly mark it pay-on-delivery — so the customer
+# believed they had paid, and it was the one route that skipped the
+# confirmation the other pay-on-delivery orders now go through.
+_con_k = _db.connect()
+_before_k = _con_k.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"]
+_kr = c.post("/api/orders", json={"items": [{"product_id": _gpid, "qty": 1}],
+             "ship_name": "Card Buyer", "address": "1 St", "city": "Chicago",
+             "email": "cardfail@example.com", "pay_method": "card"})
+ok(_kr.status_code == 502, "an unreachable Stripe fails the order outright")
+ok("nothing has been charged" in _kr.json()["detail"],
+   "and says plainly that nothing was charged")
+ok(_con_k.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"] == _before_k,
+   "no half-made order is left behind")
+ok(_con_k.execute("SELECT COUNT(*) n FROM orders WHERE"
+                  " payment_status='cod' AND ship_name='Card Buyer'"
+                  ).fetchone()["n"] == 0,
+   "and none of it silently became pay-on-delivery")
+# Choosing pay-on-delivery deliberately still goes through confirmation.
+ok(c.post("/api/orders", json={"items": [{"product_id": _gpid, "qty": 1}],
+          "ship_name": "Card Buyer", "address": "1 St", "city": "Chicago",
+          "email": "cardfail@example.com", "pay_method": "cod"}
+          ).json().get("awaiting_confirmation"),
+   "the deliberate fallback is still held for confirmation")
+_con_k.close()
+_CFG["stripe_secret_key"] = ""
+
 print(f"\nall {checks} checks passed")

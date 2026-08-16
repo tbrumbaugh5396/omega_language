@@ -708,6 +708,26 @@ def _check_order_shape(kind: str, body) -> None:
         raise HTTPException(400, "shipping name, address, and city required")
 
 
+def _card_failed(con, oid: int, err: Exception) -> HTTPException:
+    """A card payment that couldn't be started leaves no order behind.
+
+    This used to keep the order and quietly mark it pay-on-delivery. Two
+    things wrong with that: the customer believes they have paid when they
+    haven't, and — since pay-on-delivery now waits on a confirmed email — it
+    was also the one route that skipped that check. An order nobody agreed to
+    the terms of is worse than no order, so it is rolled back and the person
+    is told, which leaves them able to retry or choose pay-on-delivery
+    themselves.
+    """
+    con.execute("DELETE FROM order_items WHERE order_id=?", (oid,))
+    con.execute("DELETE FROM orders WHERE id=?", (oid,))
+    con.commit()
+    return HTTPException(
+        502, "we couldn't start the card payment just now, so nothing has "
+             "been ordered and nothing has been charged. Try again, or "
+             "choose pay on delivery.")
+
+
 def _place(con, user, body, as_guest):
     kind = order_kind(user, as_guest)
     _check_order_shape(kind, body)
@@ -805,10 +825,8 @@ def _place(con, user, body, as_guest):
                 con.execute("UPDATE orders SET payment_ref=? WHERE id=?",
                             (sess["id"], oid))
                 checkout_url = sess["url"]
-        except Exception:
-            # Stripe unreachable: keep the order, fall back to pay-on-delivery.
-            con.execute("UPDATE orders SET payment_status='cod' WHERE id=?",
-                        (oid,))
+        except Exception as e:                          # noqa: BLE001
+            raise _card_failed(con, oid, e)
     for pid, qty, unit, vid, vname in lines:
         con.execute("INSERT INTO order_items(order_id,product_id,qty,"
                     " unit_price_cents,variant_id,variant_name)"
