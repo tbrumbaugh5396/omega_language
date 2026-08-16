@@ -557,10 +557,8 @@ def admin_user(request: Request, authorization: str = Header(default=""),
     if not user["is_admin"] and not perms:
         raise HTTPException(403, "admin only")
     governance.check(user, request.url.path)
-    if request.method in ("POST", "PATCH", "PUT", "DELETE"):
-        governance.audit(con, user,
-                         f"{request.method} {request.url.path}",
-                         governance.permission_for(request.url.path) or "")
+    # No audit call here any more: the middleware records every mutating
+    # request, so this one only produced a second row saying the same thing.
     return user
 
 

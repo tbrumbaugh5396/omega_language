@@ -156,7 +156,7 @@ ok(post["body"] == "trying the new rub" and post["code"], "affiliate posts to fe
 ok(post["week_orders"] >= 1, "weekly referred-order chip on post")
 feed_items = c.get("/api/feed", headers=DI).json()
 ok(feed_items and feed_items[0]["id"] == post["id"], "feed lists newest first")
-r = c.post(f"/api/admin/feed/{post['id']}/delete", headers=A, json={})
+r = c.delete(f"/api/admin/feed/{post['id']}", headers=A)
 ok(r.status_code == 200 and not any(
     p["id"] == post["id"] for p in c.get("/api/feed", headers=A).json()),
    "admin deletes post")
@@ -1391,11 +1391,12 @@ ok(c.get("/api/admin/audit", headers={"Authorization": "Bearer nope"}
          ).status_code == 401, "the audit log needs an admin")
 
 # --- the database viewer ---
-_db = c.get("/api/admin/db", headers=A).json()
-ok(_db["tables"], "the database lists its tables")
-ok(not any(t["name"].startswith("sqlite_") for t in _db["tables"]),
+# Not _db: that name is the database module, imported at the top.
+_dbov = c.get("/api/admin/db", headers=A).json()
+ok(_dbov["tables"], "the database lists its tables")
+ok(not any(t["name"].startswith("sqlite_") for t in _dbov["tables"]),
    "internal tables are not listed")
-ok(not any(t["name"] == "login_tokens" for t in _db["tables"]),
+ok(not any(t["name"] == "login_tokens" for t in _dbov["tables"]),
    "and neither is the table of live sign-in tokens")
 _users = c.get("/api/admin/db/users", headers=A).json()
 _ucols = {col["name"]: col for col in _users["columns"]}
@@ -1454,5 +1455,225 @@ ok('"#modal ' not in _ops and "'#modal " not in _ops,
    "modal field selectors use the id the modal actually has")
 ok('id: "supply"' in _ops and 'id: "audit"' in _ops and 'id: "dbview"' in _ops,
    "and each has a tab")
+
+
+# --- PINs are hashed ---
+# The threat is a stolen copy of the database. The pepper lives in the config
+# file, so the four-digit space can't be enumerated from the dump alone.
+c.post("/api/me", headers=A, json={"pin": "8342"})
+_con_p = _db.connect()
+_row = _con_p.execute(
+    "SELECT pin, pin_hash FROM users WHERE id=?",
+    (c.get("/api/me", headers=A).json()["id"],)).fetchone()
+ok(not (_row["pin"] or "").strip(), "no PIN is stored in plaintext")
+ok(len(_row["pin_hash"]) == 64, "a PIN is stored as a hash")
+ok("8342" not in _row["pin_hash"], "and the digits are not in it")
+ok(_con_p.execute("SELECT COUNT(*) n FROM users WHERE pin LIKE '%8342%'"
+                  ).fetchone()["n"] == 0,
+   "the PIN appears nowhere in the users table")
+ok(c.post("/api/clock", json={"pin": "8342"}).json()["action"] == "clock_in",
+   "the clock still finds someone by their PIN alone")
+c.post("/api/clock", json={"pin": "8342"})
+
+# The hash must depend on the pepper, or the dump would be enough.
+from erp.backend import auth as _auth  # noqa: E402
+ok(_auth.hash_pin("8342", "pepper-a") != _auth.hash_pin("8342", "pepper-b"),
+   "the hash depends on a secret the database doesn't hold")
+ok(_auth.hash_pin("8342", CFG["pin_pepper"]) == _row["pin_hash"],
+   "and it is the pepper from the config file")
+
+# An old install with plaintext PINs converts on the next boot.
+_con_p.execute("UPDATE users SET pin='7777', pin_hash='' WHERE id=?",
+               (_row_id := c.get("/api/me", headers=A).json()["id"],))
+_con_p.commit()
+ok(_auth.migrate_pins(_con_p, CFG["pin_pepper"]) >= 1,
+   "an old plaintext PIN is migrated")
+ok(not _con_p.execute("SELECT pin FROM users WHERE id=?",
+                      (_row_id,)).fetchone()["pin"],
+   "and the plaintext is cleared")
+ok(c.post("/api/clock", json={"pin": "7777"}).status_code == 200,
+   "the migrated PIN still works")
+c.post("/api/clock", json={"pin": "7777"})
+
+# --- admin PIN reset ---
+# An active account: the clock only recognises active staff, which is the
+# point — a PIN outliving someone's employment is the bug, not the test.
+_staff_id = [u["id"] for u in c.get("/api/admin/users", headers=A).json()
+             if u["id"] != _row_id and u["active"]][0]
+ok(c.post(f"/api/admin/users/{_staff_id}/pin", headers=A,
+          json={"pin": "5150"}).status_code == 200, "an admin sets a PIN")
+ok(c.post("/api/clock", json={"pin": "5150"}).status_code == 200,
+   "and that PIN works immediately")
+c.post("/api/clock", json={"pin": "5150"})
+ok(c.post(f"/api/admin/users/{_staff_id}/pin", headers=A,
+          json={"pin": "7777"}).status_code == 400,
+   "a PIN already in use is refused")
+ok(c.post(f"/api/admin/users/{_staff_id}/pin", headers=A,
+          json={"pin": "12"}).status_code == 400, "a short PIN is refused")
+ok(c.post(f"/api/admin/users/{_staff_id}/pin", headers=A,
+          json={"pin": ""}).json()["cleared"], "and a PIN can be removed")
+ok(c.post("/api/clock", json={"pin": "5150"}).status_code == 404,
+   "after which it no longer clocks in")
+ok(c.post(f"/api/admin/users/{_staff_id}/pin", headers=CU,
+          json={"pin": "1212"}).status_code in (401, 403),
+   "resetting a PIN needs an admin")
+# The list an admin works from must not be a list of PINs.
+_emps = c.get("/api/admin/employees", headers=A).json()
+ok(_emps and "has_pin" in _emps[0] and "pin" not in _emps[0],
+   "the employee list says whether a PIN is set, never what it is")
+_con_p.close()
+
+# --- COGS from the recipe ---
+_pnl0 = c.get("/api/analytics/pnl", headers=A).json()
+ok("cogs_measured_cents" in _pnl0,
+   "the P&L separates measured cost from estimated")
+# A product actually sold inside the P&L window, or there is nothing for the
+# recipe to price and the test would pass or fail on seed data ordering.
+_con_c = _db.connect()
+_pid_c = _con_c.execute(
+    "SELECT oi.product_id FROM order_items oi JOIN orders o ON o.id=oi.order_id"
+    " WHERE o.status!='cancelled' AND o.created_at >= strftime('%s','now')-2592000"
+    " GROUP BY oi.product_id ORDER BY SUM(oi.qty) DESC LIMIT 1").fetchone()
+_con_c.close()
+ok(_pid_c is not None, "something was sold in the P&L window")
+_pid_c = _pid_c["product_id"]
+_matc = c.post("/api/supply/materials", headers=A, json={
+    "name": "Costed input", "unit": "each", "unit_cost_cents": 50}).json()
+c.post(f"/api/supply/bom/{_pid_c}", headers=A,
+       json={"material_id": _matc["id"], "qty_per_case": 24})
+_pnl1 = c.get("/api/analytics/pnl", headers=A).json()
+ok(_pnl1["assumptions"]["recipes_priced"] >= 1,
+   "a priced recipe is counted")
+ok(_pnl1["cogs_measured_cents"] > 0,
+   "and its cost is measured rather than assumed")
+ok(_pnl1["cogs_cents"] == _pnl1["cogs_measured_cents"]
+   + _pnl1["cogs_estimated_cents"],
+   "total COGS is the measured part plus the estimate on the rest")
+ok(0 < _pnl1["cogs_measured_pct"] <= 100,
+   "the share of revenue that was actually measured is reported")
+ok(_pnl1["gross_cents"] == _pnl1["revenue_cents"] - _pnl1["cogs_cents"],
+   "gross profit still follows from revenue minus COGS")
+# A product with no recipe must not be treated as free.
+from erp.backend import supply as _sup  # noqa: E402
+_con_u = _db.connect()
+_costs = _sup.unit_costs(_con_u)
+ok(_pid_c in _costs, "a product with a recipe has a unit cost")
+_con_u.execute(
+    "INSERT INTO products(sku,name,price_cents,case_size,case_price_cents)"
+    " VALUES('NO-BOM','Unpriced',300,12,3000)")
+_con_u.commit()
+_costs2 = _sup.unit_costs(_con_u)
+_bare = _con_u.execute("SELECT id FROM products WHERE sku='NO-BOM'"
+                       ).fetchone()["id"]
+ok(_bare not in _costs2,
+   "a product with no recipe is absent from the cost table, not zero-cost")
+_con_u.close()
+
+# --- the supply permission ---
+_wh = c.post("/api/login", json={"name": "Warehouse Lead",
+                                 "role": "employee"}).json()
+_WH = {"Authorization": "Bearer " + _wh["token"]}
+ok(c.get("/api/supply", headers=_WH).status_code == 403,
+   "sourcing is closed to staff without the grant")
+c.post(f"/api/store/admin/staff/{_wh['id']}/permissions", headers=A,
+       json={"permissions": ["supply"]})
+ok(c.get("/api/supply", headers=_WH).status_code == 200,
+   "and open to staff who have it, without making them an owner")
+ok(c.get("/api/admin/db", headers=_WH).status_code == 403,
+   "the grant doesn't leak into anything else")
+
+# --- one audit row per request ---
+_before_n = c.get("/api/admin/audit", headers=A).json()["total"]
+c.post(f"/api/store/admin/staff/{_wh['id']}/permissions", headers=A,
+       json={"permissions": ["supply", "orders"]})
+_after = c.get("/api/admin/audit", headers=A).json()
+ok(_after["total"] == _before_n + 1,
+   "a store-admin action leaves exactly one audit entry, not two")
+ok("set permissions" in _after["entries"][0]["detail"],
+   "and it carries the handler's own description, not the raw body")
+
+# --- migrations reach an existing database ---
+# A fresh test database gets every column from CREATE TABLE, so the only way
+# to catch a missing migration is to build the old shape on purpose. This
+# one bit for real: the dev database had purchase_orders without
+# portal_token, and CREATE TABLE IF NOT EXISTS left it that way.
+# On its own in-memory database — the live one has orders in it.
+import sqlite3 as _sq3  # noqa: E402
+_con_m = _sq3.connect(":memory:")
+_con_m.execute("CREATE TABLE purchase_orders (id INTEGER PRIMARY KEY,"
+               " supplier_id INTEGER NOT NULL, reference TEXT DEFAULT '',"
+               " status TEXT DEFAULT 'draft', expected REAL DEFAULT 0,"
+               " notes TEXT DEFAULT '', created_at REAL NOT NULL,"
+               " received_at REAL DEFAULT 0)")
+_con_m.commit()
+_sup.init_tables(_con_m)
+_pocols = {r[1] for r in _con_m.execute("PRAGMA table_info(purchase_orders)")}
+ok("portal_token" in _pocols and "confirmed_at" in _pocols,
+   "an older purchase_orders table gains the columns added since")
+_con_m.close()
+
+# --- the supplier portal ---
+_psup = c.post("/api/supply/suppliers", headers=A,
+               json={"name": "Portal Farms", "lead_days": 21}).json()
+_pmat = c.post("/api/supply/materials", headers=A, json={
+    "name": "Portal input", "unit": "kg", "supplier_id": _psup["id"],
+    "unit_cost_cents": 400}).json()
+_ppo = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _psup["id"], "reference": "PO-PORTAL", "expected": 1790000000,
+    "lines": [{"material_id": _pmat["id"], "qty": 100,
+               "unit_cost_cents": 400}]}).json()
+_url = c.post(f"/api/supply/purchase-orders/{_ppo['id']}/portal-link",
+              headers=A).json()["url"]
+_tok = _url.rsplit("/", 1)[1]
+ok(len(_tok) > 20, "a purchase order gets a supplier link")
+ok(c.post(f"/api/supply/purchase-orders/{_ppo['id']}/portal-link",
+          headers=A).json()["url"] == _url,
+   "and the link is stable, so a supplier can come back to it")
+_pv = c.get(f"/api/supplier/{_tok}").json()
+ok(_pv["reference"] == "PO-PORTAL", "the supplier can open it with no login")
+# What they must not see.
+_dump = json.dumps(_pv)
+ok("unit_cost_cents" not in _dump and "400" not in _dump,
+   "the portal never shows the supplier what we pay")
+ok("suppliers" not in _dump and "on_hand" not in _dump,
+   "nor our stock or our other suppliers")
+ok(c.get("/api/supplier/not-a-real-token").status_code == 404,
+   "a wrong token gets nothing")
+_lid = _pv["lines"][0]["id"]
+ok(c.post(f"/api/supplier/{_tok}/confirm",
+          json={"lines": {str(_lid): 90}}).status_code == 400,
+   "a confirmation without a name is refused")
+_conf = c.post(f"/api/supplier/{_tok}/confirm", json={
+    "confirmed_by": "Aiko", "confirmed_eta": 1791000000,
+    "lines": {str(_lid): 80}, "message": "short crop"}).json()
+ok(_conf["short"] and _conf["short"][0]["said"] == 80,
+   "a short confirmation is reported back as a shortfall")
+ok(_conf["later"], "and a later date is flagged as a slip")
+# A line id from someone else's order must not be writable through this link.
+ok(c.post(f"/api/supplier/{_tok}/confirm", json={
+    "confirmed_by": "Aiko", "lines": {"999999": 5}}).status_code == 200,
+   "an unknown line id is ignored rather than accepted")
+_conf2 = _db.connect().execute(
+    "SELECT lines FROM po_confirmations ORDER BY id DESC LIMIT 1").fetchone()
+ok("999999" not in _conf2["lines"], "and is not recorded")
+
+# --- days of cover ---
+_fc = c.get("/api/supply/forecast", headers=A).json()
+ok("materials" in _fc and "products" in _fc, "the forecast covers both")
+ok(all(m["per_day"] > 0 for m in _fc["materials"]),
+   "a material that has not moved gets no forecast, rather than a fake one")
+for _m in _fc["materials"]:
+    ok(_m["order_by_days"] == _m["days_cover"] - _m["lead_days"],
+       f"{_m['name']}: the order-by date accounts for the lead time")
+    break
+ok(c.get("/api/supply/forecast", headers=CU).status_code in (401, 403),
+   "the forecast needs the supply permission")
+
+# --- the ops app carries all of it ---
+ok("data-setpin" in _ops, "an admin can reset a PIN from Team & access")
+ok("data-polink" in _ops, "a purchase order offers its supplier link")
+ok("days_cover" in _ops, "and the sourcing page shows days of cover")
+ok("cogs_measured_cents" in _ops,
+   "the P&L shows which part of COGS was measured")
 
 print(f"\nall {checks} checks passed")

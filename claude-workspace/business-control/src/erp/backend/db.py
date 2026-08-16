@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT DEFAULT '',
   role TEXT NOT NULL DEFAULT 'customer',   -- customer|distributor|employee|influencer|admin
   token TEXT UNIQUE NOT NULL,
-  pin TEXT DEFAULT '',                     -- employees: time-clock PIN
+  pin TEXT DEFAULT '',                     -- legacy plaintext; migrated away
+  pin_hash TEXT DEFAULT '',                -- time-clock PIN, peppered HMAC
   job TEXT DEFAULT 'general',              -- staff job: driver|dsd|warehouse|sales_rep|ambassador|event_staff|general
   employment TEXT DEFAULT 'employee',      -- employee (hourly) | contractor (per-route)
   password_hash TEXT DEFAULT '',           -- salt$pbkdf2; empty = no password

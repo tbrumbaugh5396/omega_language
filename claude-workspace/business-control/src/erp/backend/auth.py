@@ -24,6 +24,60 @@ def verify_password(stored: str, pw: str) -> bool:
     return hmac.compare_digest(calc, h)
 
 
+# ---------- time-clock PINs ----------
+#
+# A PIN is looked up *by the PIN itself*: someone walks up to a tablet in a
+# warehouse and types four digits, with no username. That rules out the
+# per-user salt used for passwords — verifying would mean running a slow KDF
+# against every employee on every punch.
+#
+# So the PIN is hashed with a secret the database doesn't contain. A dump of
+# users.db no longer reveals anybody's PIN, and the four-digit space can't be
+# enumerated without also stealing the config file. That is the threat this
+# is actually defending against; it is deliberately weaker than the password
+# path, and the short input is why.
+
+
+def hash_pin(pin: str, pepper: str) -> str:
+    return hmac.new(pepper.encode(), pin.strip().encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def check_pin(con, pin: str, pepper: str):
+    """The employee with this PIN, or None. Compared as a hash, so the
+    lookup is still a single indexed equality."""
+    pin = (pin or "").strip()
+    if not pin:
+        return None
+    return con.execute(
+        "SELECT * FROM users WHERE pin_hash=? AND pin_hash!='' AND active=1",
+        (hash_pin(pin, pepper),)).fetchone()
+
+
+def migrate_pins(con, pepper: str) -> int:
+    """Hash any PINs still sitting in the old plaintext column, then clear it.
+
+    Runs at boot and is a no-op once done. Left in place rather than made a
+    one-off script: an install that was never upgraded is exactly the one
+    still holding plaintext PINs.
+    """
+    try:
+        con.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        rows = con.execute(
+            "SELECT id, pin FROM users WHERE pin IS NOT NULL AND pin!=''"
+        ).fetchall()
+    except Exception:
+        return 0                      # column already gone
+    for r in rows:
+        con.execute("UPDATE users SET pin_hash=?, pin='' WHERE id=?",
+                    (hash_pin(r["pin"], pepper), r["id"]))
+    con.commit()
+    return len(rows)
+
+
 def user_for_token(con, token: str):
     if not token:
         return None

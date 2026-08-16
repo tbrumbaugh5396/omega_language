@@ -5,10 +5,10 @@ already passes through it, so permission checks and audit records are applied
 uniformly instead of being sprinkled across a hundred endpoints (and forgotten
 on the hundred-and-first).
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from erp.backend import db
+from erp.backend import audit as erp_audit
 from .api import admin_user, get_con
 
 router = APIRouter()
@@ -40,6 +40,7 @@ PERMISSIONS = {
     "settings": "Shipping, webhooks, API keys, staff, translations",
     "marketing": "Campaigns and ad creatives",
     "documents": "Contracts, policies and signatures",
+    "supply": "Suppliers, materials, purchase orders and production",
 }
 
 # What each role gets when no explicit grant is recorded.
@@ -88,6 +89,10 @@ PATH_RULES = [
     ("/api/store/admin/page-funnel", "analytics"),
     ("/api/store/admin/discord", "settings"),
     ("/api/store/admin/email", "marketing"),
+    # The ERP's own paths. Sourcing was admin-only, which meant a warehouse
+    # lead couldn't book in a delivery without being made an owner — the
+    # blunt kind of permission that gets granted once and never revoked.
+    ("/api/supply", "supply"),
 ]
 
 
@@ -133,16 +138,15 @@ def check(user, path: str) -> None:
              f"({PERMISSIONS.get(perm, perm)})")
 
 
-def audit(con, user, action: str, entity: str = "", detail: str = "") -> None:
-    try:
-        con.execute(
-            "INSERT INTO audit_log(user_id,actor,action,entity,detail,"
-            " created_at) VALUES(?,?,?,?,?,?)",
-            (user["id"] if user else None, user["name"] if user else "",
-             action[:120], entity[:80], detail[:400], db.now()))
-        con.commit()
-    except Exception:
-        pass          # auditing must never break the action it records
+def audit(request, action: str, entity: str = "", detail: str = "") -> None:
+    """Describe what just happened, in business terms.
+
+    This used to insert its own row. Since every request already produces one
+    from the middleware, that meant two entries for the same action — so it
+    now annotates that row instead. The handler knows what it did; the
+    middleware knows the outcome; the log gets one line with both.
+    """
+    erp_audit.note(request, f"{action}: {detail}" if detail else action)
 
 
 # ---------- endpoints ----------
@@ -174,8 +178,8 @@ class PermBody(BaseModel):
 
 
 @router.post("/api/store/admin/staff/{uid}/permissions")
-def set_permissions(uid: int, body: PermBody, u=Depends(admin_user),
-                    con=Depends(get_con)):
+def set_permissions(uid: int, body: PermBody, request: Request,
+                    u=Depends(admin_user), con=Depends(get_con)):
     target = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if target is None:
         raise HTTPException(404, "no such user")
@@ -185,7 +189,7 @@ def set_permissions(uid: int, body: PermBody, u=Depends(admin_user),
     con.execute("UPDATE users SET permissions=? WHERE id=?",
                 (",".join(clean), uid))
     con.commit()
-    audit(con, u, "set permissions", f"user:{uid}",
+    audit(request, "set permissions", f"user:{uid}",
           f"{target['name']} → {','.join(clean) or 'role default'}")
     return {"ok": True, "permissions": clean}
 

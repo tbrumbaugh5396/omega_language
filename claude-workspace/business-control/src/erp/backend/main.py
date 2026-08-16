@@ -20,6 +20,8 @@ CFG = config.load()
 db.init()
 audit.init_tables()
 _boot = db.connect()
+# Any PIN still in plaintext from before hashing gets converted here.
+auth.migrate_pins(_boot, CFG["pin_pepper"])
 supply.init_tables(_boot)
 _boot.commit()
 _boot.close()
@@ -56,13 +58,15 @@ async def audit_edits(request: Request, call_next):
 
     response = await call_next(request)
 
+    # A handler that described what it did in business terms wins over the
+    # middleware's read of the raw body.
+    detail = getattr(request.state, "audit_note", None) or audit.summarise(body)
     token = request.headers.get("authorization", "")
     token = token.removeprefix("Bearer ").strip()
     con = db.connect()
     try:
         user = auth.user_for_token(con, token) if token else None
-        audit.record(con, user, method, path, audit.summarise(body),
-                     response.status_code)
+        audit.record(con, user, method, path, detail, response.status_code)
     finally:
         con.close()
     return response
@@ -95,6 +99,26 @@ def admin_user(user=Depends(current_user)):
     if not user["is_admin"]:
         raise HTTPException(403, "admin only")
     return user
+
+
+def permitted(perm: str):
+    """Admin, or anyone explicitly granted this permission.
+
+    The admin bit is all-or-nothing, so gating a screen on it means the only
+    way to let a warehouse lead book in a delivery is to make them an owner
+    — a grant that gets handed out once and never taken back. Permissions
+    are the finer instrument, and they already exist for the store side.
+    """
+    def dep(user=Depends(current_user)):
+        if user["is_admin"]:
+            return user
+        from storefront.backend import governance      # avoids a cycle
+        if perm in governance.granted(user):
+            return user
+        raise HTTPException(
+            403, f"your account lacks the '{perm}' permission — an owner can "
+                 "grant it under Team & access")
+    return dep
 
 
 def order_json(con, o) -> dict:
@@ -297,7 +321,7 @@ def read_me(user=Depends(current_user), con=Depends(get_con)):
             # The token is deliberately absent. The caller sent it to get
             # here, so echoing it back adds nothing and puts a credential in
             # one more response body.
-            "has_pin": bool((user["pin"] or "").strip())}
+            "has_pin": bool((user["pin_hash"] or "").strip())}
 
 
 @app.post("/api/me")
@@ -322,11 +346,15 @@ def update_me(body: MeBody, user=Depends(current_user), con=Depends(get_con)):
         pin = body.pin.strip()
         if pin and (not pin.isdigit() or not 4 <= len(pin) <= 8):
             raise HTTPException(400, "PIN must be 4–8 digits")
-        if pin and con.execute(
-                "SELECT 1 FROM users WHERE pin=? AND id!=?",
-                (pin, user["id"])).fetchone():
+        # Uniqueness is checked on the hash, since the clock identifies
+        # someone by their PIN alone and two people sharing one would mean
+        # the wrong person's timesheet.
+        h = auth.hash_pin(pin, CFG["pin_pepper"]) if pin else ""
+        if h and con.execute(
+                "SELECT 1 FROM users WHERE pin_hash=? AND id!=?",
+                (h, user["id"])).fetchone():
             raise HTTPException(400, "that PIN is already taken")
-        fields.append("pin=?"); args.append(pin)
+        fields.append("pin_hash=?"); args.append(h)
     if not fields:
         return {"ok": True}
     args.append(user["id"])
@@ -791,9 +819,7 @@ class ClockBody(BaseModel):
 @app.post("/api/clock")
 def clock(body: ClockBody, con=Depends(get_con)):
     """PIN-based toggle so the store tablet needs no login."""
-    emp = con.execute(
-        "SELECT * FROM users WHERE pin=? AND pin!='' AND active=1",
-        (body.pin.strip(),)).fetchone()
+    emp = auth.check_pin(con, body.pin, CFG["pin_pepper"])
     if emp is None:
         raise HTTPException(404, "no employee with that PIN")
     open_shift = con.execute(
@@ -864,16 +890,20 @@ def _ensure_affiliate(con, u) -> None:
 @app.post("/api/admin/employees")
 def add_employee(body: EmployeeBody, user=Depends(admin_user),
                  con=Depends(get_con)):
-    if con.execute("SELECT 1 FROM users WHERE pin=? AND pin!=''",
-                   (body.pin,)).fetchone():
+    pin = (body.pin or "").strip()
+    if pin and (not pin.isdigit() or not 4 <= len(pin) <= 8):
+        raise HTTPException(400, "PIN must be 4–8 digits")
+    pin_hash = auth.hash_pin(pin, CFG["pin_pepper"]) if pin else ""
+    if pin_hash and con.execute(
+            "SELECT 1 FROM users WHERE pin_hash=?", (pin_hash,)).fetchone():
         raise HTTPException(400, "PIN already in use")
     if body.job not in JOBS or body.employment not in ("employee",
                                                        "contractor"):
         raise HTTPException(400, "bad job or employment type")
     cur = con.execute(
-        "INSERT INTO users(name,role,token,pin,region,job,employment,"
+        "INSERT INTO users(name,role,token,pin_hash,region,job,employment,"
         " created_at) VALUES(?,?,?,?,?,?,?,?)",
-        (body.name, "employee", secrets.token_urlsafe(24), body.pin,
+        (body.name, "employee", secrets.token_urlsafe(24), pin_hash,
          body.region, body.job, body.employment, db.now()))
     con.commit()
     if body.job == "ambassador":     # ambassadors get an affiliate code
@@ -941,12 +971,50 @@ def update_user(uid: int, body: UserUpdateBody, user=Depends(admin_user),
     return {"ok": True}
 
 
+class PinResetBody(BaseModel):
+    pin: str = ""            # blank clears it
+
+
+@app.post("/api/admin/users/{uid}/pin")
+def reset_pin(uid: int, body: PinResetBody, user=Depends(admin_user),
+              con=Depends(get_con)):
+    """Set or clear someone's time-clock PIN.
+
+    An admin can't look one up — they're hashed, and the employee list only
+    reports whether a PIN exists. So "I've forgotten my PIN" is answered by
+    issuing a new one, which is the right answer anyway: a PIN a manager can
+    read is a PIN a manager can use to clock someone else in.
+    """
+    target = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if target is None:
+        raise HTTPException(404, "no such user")
+    pin = (body.pin or "").strip()
+    if pin and (not pin.isdigit() or not 4 <= len(pin) <= 8):
+        raise HTTPException(400, "PIN must be 4–8 digits")
+    h = auth.hash_pin(pin, CFG["pin_pepper"]) if pin else ""
+    if h and con.execute("SELECT 1 FROM users WHERE pin_hash=? AND id!=?",
+                         (h, uid)).fetchone():
+        raise HTTPException(400, "that PIN is already taken")
+    con.execute("UPDATE users SET pin_hash=? WHERE id=?", (h, uid))
+    con.commit()
+    if pin:
+        notify.push(con, "Your time-clock PIN was changed",
+                    f"{user['name']} set a new PIN for you.",
+                    kind="achievement", user_id=uid,
+                    dedup=f"pin:{uid}:{db.now()}")
+    return {"ok": True, "cleared": not pin}
+
+
 @app.get("/api/admin/employees")
 def list_employees(user=Depends(admin_user), con=Depends(get_con)):
     rows = con.execute(
-        "SELECT id,name,region,pin,active FROM users WHERE role='employee'"
-        " ORDER BY name").fetchall()
-    return [dict(r) for r in rows]
+        "SELECT id,name,region,active,pin_hash FROM users"
+        " WHERE role='employee' ORDER BY name").fetchall()
+    # Whether a PIN exists, never what it is — an admin who needs to change
+    # one sets a new one rather than reading the old.
+    return [{"id": r["id"], "name": r["name"], "region": r["region"],
+             "active": r["active"], "has_pin": bool(r["pin_hash"])}
+            for r in rows]
 
 
 # ---------- A/B testing & funnel events ----------
@@ -1164,13 +1232,6 @@ def feed(user=Depends(current_user), con=Depends(get_con)):
     rows = con.execute(
         "SELECT id FROM posts ORDER BY id DESC LIMIT 100").fetchall()
     return [feed_post_json(con, r["id"]) for r in rows]
-
-
-@app.post("/api/admin/feed/{pid}/delete")
-def delete_post(pid: int, user=Depends(admin_user), con=Depends(get_con)):
-    con.execute("DELETE FROM posts WHERE id=?", (pid,))
-    con.commit()
-    return {"ok": True}
 
 
 # ---------- stores & inventory ----------
@@ -1495,7 +1556,6 @@ def edit_post(pid: int, body: PostEdit, user=Depends(admin_user),
 def remove_post(pid: int, user=Depends(admin_user), con=Depends(get_con)):
     """The POST /delete form of this already existed; this is the same thing
     under the verb that describes it, so the feed matches every other screen."""
-    con.execute("DELETE FROM post_likes WHERE post_id=?", (pid,))
     con.execute("DELETE FROM posts WHERE id=?", (pid,))
     con.commit()
     return {"ok": True}
@@ -1504,26 +1564,26 @@ def remove_post(pid: int, user=Depends(admin_user), con=Depends(get_con)):
 # ---------- sourcing, supply and manufacturing ----------
 
 @app.get("/api/supply")
-def supply_overview(user=Depends(admin_user), con=Depends(get_con)):
+def supply_overview(user=Depends(permitted("supply")), con=Depends(get_con)):
     return supply.overview(con)
 
 
 @app.post("/api/supply/suppliers")
-def supply_add_supplier(body: supply.SupplierBody, user=Depends(admin_user),
+def supply_add_supplier(body: supply.SupplierBody, user=Depends(permitted("supply")),
                         con=Depends(get_con)):
     return supply.add_supplier(con, body)
 
 
 @app.patch("/api/supply/suppliers/{sid}")
 def supply_edit_supplier(sid: int, body: supply.SupplierBody,
-                         user=Depends(admin_user), con=Depends(get_con)):
+                         user=Depends(permitted("supply")), con=Depends(get_con)):
     return _patch(con, "suppliers", sid, body.model_dump(),
                   ("name", "kind", "contact", "email", "phone", "country",
                    "lead_days", "terms", "notes", "active"))
 
 
 @app.delete("/api/supply/suppliers/{sid}")
-def supply_del_supplier(sid: int, user=Depends(admin_user),
+def supply_del_supplier(sid: int, user=Depends(permitted("supply")),
                         con=Depends(get_con)):
     """A supplier with history is deactivated: purchase orders name them, and
     an order from nobody isn't a record of anything."""
@@ -1541,14 +1601,14 @@ def supply_del_supplier(sid: int, user=Depends(admin_user),
 
 
 @app.post("/api/supply/materials")
-def supply_add_material(body: supply.MaterialBody, user=Depends(admin_user),
+def supply_add_material(body: supply.MaterialBody, user=Depends(permitted("supply")),
                         con=Depends(get_con)):
     return supply.add_material(con, body)
 
 
 @app.patch("/api/supply/materials/{mid}")
 def supply_edit_material(mid: int, body: supply.MaterialBody,
-                         user=Depends(admin_user), con=Depends(get_con)):
+                         user=Depends(permitted("supply")), con=Depends(get_con)):
     """Note what is absent: on_hand. Stock moves only through a receipt, a
     production run or an explicit adjustment that records a reason."""
     return _patch(con, "materials", mid, body.model_dump(),
@@ -1557,7 +1617,7 @@ def supply_edit_material(mid: int, body: supply.MaterialBody,
 
 
 @app.delete("/api/supply/materials/{mid}")
-def supply_del_material(mid: int, user=Depends(admin_user),
+def supply_del_material(mid: int, user=Depends(permitted("supply")),
                         con=Depends(get_con)):
     moves = con.execute("SELECT COUNT(*) n FROM material_moves"
                         " WHERE material_id=?", (mid,)).fetchone()["n"]
@@ -1577,7 +1637,7 @@ class AdjustBody(BaseModel):
 
 
 @app.post("/api/supply/materials/{mid}/adjust")
-def supply_adjust(mid: int, body: AdjustBody, user=Depends(admin_user),
+def supply_adjust(mid: int, body: AdjustBody, user=Depends(permitted("supply")),
                   con=Depends(get_con)):
     """A stock correction, with a reason attached. This is the one way to
     change a level by hand, and it still leaves a row behind saying who did
@@ -1594,14 +1654,14 @@ def supply_adjust(mid: int, body: AdjustBody, user=Depends(admin_user),
 
 
 @app.get("/api/supply/materials/{mid}/moves")
-def supply_moves(mid: int, user=Depends(admin_user), con=Depends(get_con)):
+def supply_moves(mid: int, user=Depends(permitted("supply")), con=Depends(get_con)):
     return [dict(r) for r in con.execute(
         "SELECT * FROM material_moves WHERE material_id=?"
         " ORDER BY id DESC LIMIT 100", (mid,)).fetchall()]
 
 
 @app.post("/api/supply/purchase-orders")
-def supply_add_po(body: supply.POBody, user=Depends(admin_user),
+def supply_add_po(body: supply.POBody, user=Depends(permitted("supply")),
                   con=Depends(get_con)):
     return supply.add_po(con, body)
 
@@ -1611,7 +1671,7 @@ class POStatusBody(BaseModel):
 
 
 @app.post("/api/supply/purchase-orders/{pid}/status")
-def supply_po_status(pid: int, body: POStatusBody, user=Depends(admin_user),
+def supply_po_status(pid: int, body: POStatusBody, user=Depends(permitted("supply")),
                      con=Depends(get_con)):
     if body.status not in supply.PO_STATUS:
         raise HTTPException(400, f"status must be one of {supply.PO_STATUS}")
@@ -1626,13 +1686,13 @@ class ReceiveBody(BaseModel):
 
 
 @app.post("/api/supply/purchase-orders/{pid}/receive")
-def supply_receive(pid: int, body: ReceiveBody, user=Depends(admin_user),
+def supply_receive(pid: int, body: ReceiveBody, user=Depends(permitted("supply")),
                    con=Depends(get_con)):
     return supply.receive_po(con, pid, body.lines, user["name"])
 
 
 @app.delete("/api/supply/purchase-orders/{pid}")
-def supply_del_po(pid: int, user=Depends(admin_user), con=Depends(get_con)):
+def supply_del_po(pid: int, user=Depends(permitted("supply")), con=Depends(get_con)):
     po = con.execute("SELECT * FROM purchase_orders WHERE id=?",
                      (pid,)).fetchone()
     if po is None:
@@ -1654,7 +1714,7 @@ def supply_del_po(pid: int, user=Depends(admin_user), con=Depends(get_con)):
 
 
 @app.get("/api/supply/bom/{product_id}")
-def supply_bom(product_id: int, user=Depends(admin_user),
+def supply_bom(product_id: int, user=Depends(permitted("supply")),
                con=Depends(get_con)):
     return {"lines": supply.bom(con, product_id)}
 
@@ -1665,7 +1725,7 @@ class BomBody(BaseModel):
 
 
 @app.post("/api/supply/bom/{product_id}")
-def supply_set_bom(product_id: int, body: BomBody, user=Depends(admin_user),
+def supply_set_bom(product_id: int, body: BomBody, user=Depends(permitted("supply")),
                    con=Depends(get_con)):
     if body.qty_per_case <= 0:
         con.execute("DELETE FROM bill_of_materials WHERE product_id=?"
@@ -1681,7 +1741,7 @@ def supply_set_bom(product_id: int, body: BomBody, user=Depends(admin_user),
 
 
 @app.post("/api/supply/runs")
-def supply_add_run(body: supply.RunBody, user=Depends(admin_user),
+def supply_add_run(body: supply.RunBody, user=Depends(permitted("supply")),
                    con=Depends(get_con)):
     if not con.execute("SELECT 1 FROM products WHERE id=?",
                        (body.product_id,)).fetchone():
@@ -1704,13 +1764,13 @@ class RunFinishBody(BaseModel):
 
 
 @app.post("/api/supply/runs/{rid}/finish")
-def supply_finish_run(rid: int, body: RunFinishBody, user=Depends(admin_user),
+def supply_finish_run(rid: int, body: RunFinishBody, user=Depends(permitted("supply")),
                       con=Depends(get_con)):
     return supply.finish_run(con, rid, body.actual_cases, user["name"])
 
 
 @app.patch("/api/supply/runs/{rid}")
-def supply_edit_run(rid: int, body: supply.RunBody, user=Depends(admin_user),
+def supply_edit_run(rid: int, body: supply.RunBody, user=Depends(permitted("supply")),
                     con=Depends(get_con)):
     return _patch(con, "production_runs", rid, body.model_dump(),
                   ("product_id", "facility", "planned_cases", "scheduled",
@@ -1718,7 +1778,7 @@ def supply_edit_run(rid: int, body: supply.RunBody, user=Depends(admin_user),
 
 
 @app.delete("/api/supply/runs/{rid}")
-def supply_del_run(rid: int, user=Depends(admin_user), con=Depends(get_con)):
+def supply_del_run(rid: int, user=Depends(permitted("supply")), con=Depends(get_con)):
     r = con.execute("SELECT * FROM production_runs WHERE id=?",
                     (rid,)).fetchone()
     if r is None:
@@ -1734,7 +1794,7 @@ def supply_del_run(rid: int, user=Depends(admin_user), con=Depends(get_con)):
 
 
 @app.post("/api/supply/shipments")
-def supply_add_shipment(body: supply.ShipmentBody, user=Depends(admin_user),
+def supply_add_shipment(body: supply.ShipmentBody, user=Depends(permitted("supply")),
                         con=Depends(get_con)):
     cur = con.execute(
         "INSERT INTO inbound_shipments(po_id,carrier,tracking,status,origin,"
@@ -1752,7 +1812,7 @@ class ShipStatusBody(BaseModel):
 
 @app.post("/api/supply/shipments/{sid}/status")
 def supply_ship_status(sid: int, body: ShipStatusBody,
-                       user=Depends(admin_user), con=Depends(get_con)):
+                       user=Depends(permitted("supply")), con=Depends(get_con)):
     if body.status not in supply.SHIP_STATUS:
         raise HTTPException(400, f"status must be one of {supply.SHIP_STATUS}")
     con.execute(
@@ -1763,11 +1823,155 @@ def supply_ship_status(sid: int, body: ShipStatusBody,
 
 
 @app.delete("/api/supply/shipments/{sid}")
-def supply_del_shipment(sid: int, user=Depends(admin_user),
+def supply_del_shipment(sid: int, user=Depends(permitted("supply")),
                         con=Depends(get_con)):
     con.execute("DELETE FROM inbound_shipments WHERE id=?", (sid,))
     con.commit()
     return {"ok": True}
+
+
+@app.get("/api/supply/forecast")
+def supply_forecast(days: int = 30, user=Depends(permitted("supply")),
+                    con=Depends(get_con)):
+    return supply.forecast(con, max(7, min(days, 180)))
+
+
+@app.post("/api/supply/purchase-orders/{pid}/portal-link")
+def supply_portal_link(pid: int, user=Depends(permitted("supply")),
+                       con=Depends(get_con)):
+    return {"url": supply.portal_link(con, pid, base_url())}
+
+
+# --- the supplier's side: no account, just the link they were sent ---
+
+@app.get("/api/supplier/{token}")
+def supplier_view(token: str, con=Depends(get_con)):
+    return supply.portal_view(con, token)
+
+
+@app.post("/api/supplier/{token}/confirm")
+def supplier_confirm(token: str, body: dict, con=Depends(get_con)):
+    r = supply.portal_confirm(con, token, body)
+    if r["short"] or r["later"]:
+        bits = [f"{s['name']} {s['said']} of {s['asked']}" for s in r["short"]]
+        notify.push(
+            con, "A supplier confirmed less than we ordered"
+            if r["short"] else "A supplier pushed back a delivery date",
+            "; ".join(bits) or "new ETA is later than expected",
+            kind="inventory", dedup=f"poconf:{token[:8]}:{db.now()}")
+    return r
+
+
+@app.get("/supplier/{token}")
+def supplier_page(token: str):
+    """A page rather than a redirect into the app: the recipient is somebody
+    else's staff, on somebody else's device, and the ops PWA would ask them
+    to sign in to a business that isn't theirs."""
+    return HTMLResponse(SUPPLIER_PAGE)
+
+
+SUPPLIER_PAGE = """<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Confirm your order</title>
+<style>
+ :root { --bg:#f7f6f3; --card:#fff; --line:#e3e0d9; --text:#1c1a17;
+   --dim:#6f6a62; --accent:#6d55d6; --bad:#c0483f; }
+ * { box-sizing:border-box }
+ body { margin:0; background:var(--bg); color:var(--text); padding:24px 16px;
+   font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif }
+ .wrap { max-width:660px; margin:0 auto }
+ .card { background:var(--card); border:1px solid var(--line);
+   border-radius:14px; padding:22px; margin-bottom:16px }
+ h1 { font-size:22px; margin:0 0 4px }
+ .dim { color:var(--dim) }
+ table { width:100%; border-collapse:collapse; margin:12px 0 }
+ th { text-align:left; font-size:11px; text-transform:uppercase;
+   letter-spacing:.06em; color:var(--dim); padding:6px 8px }
+ td { padding:8px; border-top:1px solid var(--line) }
+ input { width:100%; padding:9px 11px; border:1px solid var(--line);
+   border-radius:8px; font-size:15px; background:#fff; color:var(--text) }
+ label { display:block; font-size:13px; color:var(--dim); margin:12px 0 4px }
+ button { background:var(--accent); color:#fff; border:none; border-radius:8px;
+   padding:12px 20px; font-size:16px; font-weight:600; cursor:pointer;
+   width:100%; margin-top:18px }
+ .num { width:110px }
+ .ok { color:#2b7a55 } .bad { color:var(--bad) }
+</style></head><body><div class="wrap" id="app">
+<div class="card dim">Loading…</div></div>
+<script>
+const token = location.pathname.split("/").pop();
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
+  (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const day = (t) => t ? new Date(t*1000).toLocaleDateString([], {
+  year:"numeric", month:"short", day:"numeric" }) : "—";
+
+async function load() {
+  const r = await fetch(`/api/supplier/${token}`);
+  const app = document.getElementById("app");
+  if (!r.ok) {
+    app.innerHTML = `<div class="card"><h1>Link not valid</h1>
+      <p class="dim">This link has expired or was mistyped. Ask your contact
+      to send a new one.</p></div>`;
+    return;
+  }
+  const d = await r.json();
+  app.innerHTML = `
+    <div class="card">
+      <h1>${esc(d.reference)}</h1>
+      <p class="dim">For ${esc(d.supplier_name)}${d.expected
+        ? ` &middot; we asked for ${day(d.expected)}` : ""}</p>
+      ${d.notes ? `<p>${esc(d.notes)}</p>` : ""}
+      ${d.confirmed ? `<p class="ok">Confirmed by
+        ${esc(d.confirmed.confirmed_by)} on
+        ${day(d.confirmed.created_at)}. You can send an update below if
+        anything has changed.</p>` : ""}
+      ${d.closed ? '<p class="bad">This order is closed.</p>' : ""}
+    </div>
+    ${d.closed ? "" : `<div class="card">
+      <p>Please confirm what you can ship and when. If a quantity or the
+      date has changed, say so here — knowing now is far more useful to us
+      than finding out on the loading dock.</p>
+      <table><thead><tr><th>Item</th><th>We asked for</th>
+        <th>You'll ship</th></tr></thead><tbody>
+        ${d.lines.map((l) => `<tr>
+          <td>${esc(l.material_name)}</td>
+          <td class="dim">${l.qty} ${esc(l.unit)}</td>
+          <td><input class="num" type="number" step="any" data-line="${l.id}"
+            value="${l.qty}"></td></tr>`).join("")}
+      </tbody></table>
+      <label>Your name</label><input id="who">
+      <label>Ship date you can meet</label><input id="eta" type="date">
+      <label>Anything else we should know</label><input id="msg">
+      <button id="go">Confirm this order</button>
+      <p class="dim" id="msg-out" style="margin-top:12px"></p>
+    </div>`}`;
+  if (d.closed) return;
+  document.getElementById("go").onclick = async () => {
+    const lines = {};
+    document.querySelectorAll("[data-line]").forEach((el) => {
+      if (el.value !== "") lines[el.dataset.line] = Number(el.value);
+    });
+    const eta = document.getElementById("eta").value;
+    const res = await fetch(`/api/supplier/${token}/confirm`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirmed_by: document.getElementById("who").value,
+        confirmed_eta: eta ? Date.parse(eta) / 1000 : 0,
+        message: document.getElementById("msg").value, lines }) });
+    const out = document.getElementById("msg-out");
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      out.className = "bad";
+      out.textContent = e.detail || "Something went wrong — please try again.";
+      return;
+    }
+    document.getElementById("app").innerHTML = `<div class="card">
+      <h1>Thank you</h1><p>We've recorded your confirmation. If anything
+      changes, come back to this link and send an update.</p></div>`;
+  };
+}
+load();
+</script></body></html>"""
 
 
 # ---------- the audit log ----------

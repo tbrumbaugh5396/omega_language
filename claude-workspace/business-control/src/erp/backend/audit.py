@@ -19,6 +19,23 @@ import time
 
 from . import db
 
+def note(request, detail: str) -> None:
+    """Describe the current request in the log, in the handler's own words.
+
+    The middleware prefers this over its own summary of the request body, so
+    a permission change reads "set permissions: Dana → orders,products"
+    rather than "permissions[2]" — and there is still one row per request.
+
+    It hangs off the request rather than a context variable: sync endpoints
+    run in a worker thread, and a contextvar set there never reaches the
+    middleware, which runs back on the event loop. The request object is the
+    thing both of them genuinely share.
+    """
+    try:
+        request.state.audit_note = detail[:400]
+    except Exception:
+        pass
+
 TABLES = """
 CREATE TABLE IF NOT EXISTS audit_log (
   id INTEGER PRIMARY KEY,

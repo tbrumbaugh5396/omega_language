@@ -743,7 +743,7 @@ const TABS = [
   { id: "routes", label: "Routes", icon: "truck", group: "Operate",
     roles: ["admin", "employee"] },
   { id: "supply", label: "Sourcing", icon: "tools", group: "Operate",
-    roles: ["admin"] },
+    roles: ["admin"], perm: "supply" },
   { id: "outreach", label: "Outreach", icon: "handshake", group: "Operate",
     roles: ["admin", "employee"] },
   { id: "scan", label: "Scan", icon: "camera", group: "Operate", roles: "*" },
@@ -786,9 +786,13 @@ const MOBILE_PRIORITY = ["shop", "orders", "clock", "chat", "scan", "routes",
 
 function allowedTabs() {
   if (!S.user) return TABS.filter((t) => ["shop", "clock", "scan"].includes(t.id));
+  const perms = (S.user.permissions || "").split(",").map((p) => p.trim());
   return TABS.filter((t) => {
     if (t.roles === "*") return true;
     if (S.user.is_admin) return true;
+    // A tab can also be opened by an explicit grant, so a screen doesn't
+    // have to be admin-or-nothing.
+    if (t.perm && perms.includes(t.perm)) return true;
     return t.roles.includes(S.user.role);
   });
 }
@@ -1415,7 +1419,8 @@ let SUP = null;
 
 async function renderSupply() {
   SUP = await api("/api/supply");
-  const products = await api("/api/products");
+  const [products, fc] = await Promise.all([
+    api("/api/products"), api("/api/supply/forecast").catch(() => null)]);
   const st = SUP.stats;
   const money0 = (c) => money(c);
   const day = (t) => t ? fmtDate(t) : "—";
@@ -1445,6 +1450,37 @@ async function renderSupply() {
       <div class="stat"><div class="n">${st.runs_planned}</div>
         <div class="l">runs planned</div></div>
     </div>
+
+    ${fc && (fc.materials.length || fc.products.length) ? `
+      <h3>Days of cover</h3>
+      <div class="card">
+        <p class="dim" style="margin-top:0">At the rate things have actually
+          moved over the last ${fc.window_days} days. Anything that hasn't
+          moved at all is left out — "we have plenty" and "nobody has touched
+          it in a month" look identical in a number and aren't the same
+          situation.</p>
+        ${fc.materials.length ? `<table>
+          <thead><tr><th>material</th><th class="num">on hand</th>
+            <th class="num">per day</th><th class="num">cover</th>
+            <th>order by</th></tr></thead>
+          <tbody>${fc.materials.map((m) => `<tr>
+            <td>${esc(m.name)}</td>
+            <td class="num">${m.on_hand} ${esc(m.unit)}</td>
+            <td class="num dim">${m.per_day}</td>
+            <td class="num ${m.urgent ? "low" : ""}">${m.days_cover} days</td>
+            <td>${m.order_by_days <= 0
+              ? `<span class="pill bad">order now — ${m.lead_days}-day lead</span>`
+              : `<span class="dim">within ${m.order_by_days} days</span>`}</td>
+          </tr>`).join("")}</tbody></table>` : ""}
+        ${fc.products.length ? `<table style="margin-top:12px">
+          <thead><tr><th>product</th><th class="num">in stores</th>
+            <th class="num">sold/day</th><th class="num">cover</th></tr></thead>
+          <tbody>${fc.products.map((p) => `<tr>
+            <td>${esc(p.name)}</td><td class="num">${p.on_hand}</td>
+            <td class="num dim">${p.per_day}</td>
+            <td class="num ${p.urgent ? "low" : ""}">${p.days_cover} days</td>
+          </tr>`).join("")}</tbody></table>` : ""}
+      </div>` : ""}
 
     <h3>Materials</h3>
     <div class="card"><div class="tablewrap"><table>
@@ -1483,8 +1519,12 @@ async function renderSupply() {
           data-posend="${p.id}">Mark sent</button>` : ""}
         ${["sent", "part"].includes(p.status) ? `<button class="btn sm"
           data-porecv="${p.id}">Receive</button>` : ""}
+        <button class="btn alt sm" data-polink="${p.id}">Supplier link</button>
         <button class="btn alt sm" data-rowdel="po:${p.id}">Delete</button>
       </div>
+      ${p.confirmed_at ? `<div class="warn-line" style="color:var(--good);
+        background:rgba(63,189,130,.1)">Supplier confirmed
+        ${fmtDate(p.confirmed_at)}</div>` : ""}
       <table style="margin-top:6px"><tbody>${p.lines.map((l) => `<tr>
         <td>${esc(l.material_name)}</td>
         <td class="num">${l.received}/${l.qty} ${esc(l.unit)}</td>
@@ -1566,6 +1606,24 @@ async function renderSupply() {
   });
   view().querySelectorAll("[data-porecv]").forEach((b) => b.onclick = () =>
     receiveForm(+b.dataset.porecv, refresh));
+  view().querySelectorAll("[data-polink]").forEach((b) => b.onclick = async () => {
+    const { url } = await api(
+      `/api/supply/purchase-orders/${b.dataset.polink}/portal-link`,
+      { method: "POST" });
+    modal(`<h3>Send this to your supplier</h3>
+      <p class="dim">They confirm what they can ship and when — no account,
+        no sign-in. Finding out about a short shipment now beats finding out
+        on the loading dock.</p>
+      <input id="po-url" value="${esc(url)}" readonly>
+      <div style="text-align:center;padding:14px">${qrImg(url, 150)}</div>
+      <div class="modal-acts"><button class="btn alt" data-close>Close</button>
+        <button class="btn" id="po-copy">Copy link</button></div>`);
+    $("#po-copy").onclick = () => {
+      $("#po-url").select();
+      navigator.clipboard.writeText(url).then(() => toast("Copied"),
+        () => toast("Select the link and copy it"));
+    };
+  });
   view().querySelectorAll("[data-runfin]").forEach((b) => b.onclick = () =>
     finishForm(+b.dataset.runfin, refresh));
   view().querySelectorAll("[data-adj]").forEach((b) => b.onclick = () =>
@@ -2818,7 +2876,15 @@ function pnlTable(p) {
     <td style="text-align:right">${neg ? "−" : ""}${money(v)}</td></tr>`;
   return `<table>
     ${row("Revenue", p.revenue_cents)}
-    ${row(`COGS (${p.assumptions.cogs_bps / 100}%)`, p.cogs_cents, 1)}
+    ${row(`COGS${p.cogs_measured_pct
+      ? ` — ${p.cogs_measured_pct}% from recipes` : ""}`, p.cogs_cents, 1)}
+    ${p.cogs_measured_cents ? `<tr class="sub"><td class="dim">from recipes
+        and material costs</td>
+      <td style="text-align:right" class="dim">−${money(p.cogs_measured_cents)}</td></tr>
+      <tr class="sub"><td class="dim">estimated at
+        ${p.assumptions.cogs_bps / 100}% on the rest</td>
+      <td style="text-align:right" class="dim">−${money(p.cogs_estimated_cents)}</td></tr>`
+      : ""}
     ${row("<b>Gross profit</b>", p.gross_cents)}
     ${row("Affiliate commissions", p.commissions_cents, 1)}
     ${row(`Labor (${p.labor_hours}h)`, p.labor_cents, 1)}
@@ -2829,8 +2895,16 @@ function pnlTable(p) {
       class="${p.net_cents < 0 ? "low" : ""}"><b>${money(p.net_cents)}</b>
       (${p.margin_pct}%)</td></tr>
   </table>
-  <div class="dim" style="font-size:12px;margin-top:6px">COGS %, wage, and
-    per-km cost are assumptions — edit them in data/config.json.</div>`;
+  <div class="dim" style="font-size:12px;margin-top:6px">${
+    p.assumptions.recipes_priced
+      ? `${p.assumptions.recipes_priced} product(s) have a priced recipe, so
+         their cost is measured rather than assumed. Anything without one
+         falls back to ${p.assumptions.cogs_bps / 100}% of revenue — add a
+         recipe under Sourcing to replace the guess.`
+      : `COGS is an assumption at ${p.assumptions.cogs_bps / 100}% of revenue.
+         Give a product a recipe under Sourcing and its real cost is used
+         instead.`}
+    Wage and per-km cost are assumptions — edit them in data/config.json.</div>`;
 }
 
 async function renderHQ() {
@@ -4000,6 +4074,8 @@ async function renderStaff() {
           ${u.effective.includes("*")
             ? '<span class="pill ok">full access</span>'
             : `<span class="pill">${u.effective.length} area(s)</span>`}
+          <button class="btn alt sm" data-setpin="${u.id}:${esc(u.name)}"
+            >Time-clock PIN</button>
         </div>
         ${u.is_admin ? '<p class="dim" style="margin-top:8px">Owner accounts always have every permission.</p>' : `
         <div class="perm-grid">
@@ -4014,6 +4090,32 @@ async function renderStaff() {
           <button class="btn sm" data-saveperm="${u.id}">Save permissions</button>
         </div>`}
       </div>`).join("")}`;
+  view().querySelectorAll("[data-setpin]").forEach((b) => b.onclick = () => {
+    const [uid, name] = b.dataset.setpin.split(":");
+    modal(`<h3>Time-clock PIN — ${esc(name)}</h3>
+      <p class="dim">PINs are stored hashed, so nobody — including you — can
+        look one up. Forgotten means issued again, which is the right answer
+        anyway: a PIN a manager can read is a PIN a manager can use to clock
+        someone in.</p>
+      <label>New PIN <span class="dim">(4–8 digits)</span></label>
+      <input id="pin-new" inputmode="numeric" autocomplete="off">
+      <div class="modal-acts">
+        <button class="btn alt" data-close>Cancel</button>
+        <button class="btn alt" id="pin-clear">Remove their PIN</button>
+        <button class="btn" id="pin-save">Set PIN</button>
+      </div>`);
+    const send = async (pin) => {
+      try {
+        const r = await api(`/api/admin/users/${uid}/pin`, { body: { pin } });
+        closeModal();
+        toast(r.cleared ? `${name} can no longer clock in with a PIN`
+                        : `New PIN set for ${name} — tell them in person`);
+        renderStaff();
+      } catch (e) { toast(e.message); }
+    };
+    $("#pin-save").onclick = () => send($("#pin-new").value.trim());
+    $("#pin-clear").onclick = () => send("");
+  });
   view().querySelectorAll("[data-saveperm]").forEach((b) => b.onclick = async () => {
     const uid = b.dataset.saveperm;
     const picked = [...view().querySelectorAll(`[data-perm^="${uid}:"]`)]

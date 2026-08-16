@@ -33,6 +33,8 @@ event that explains them — receiving a PO, completing a run — never by
 typing a new number into a stock field. A stock level you can overwrite is a
 stock level nobody trusts by the second month.
 """
+import json
+import secrets
 import time
 
 from fastapi import HTTPException
@@ -76,7 +78,23 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   expected REAL DEFAULT 0,
   notes TEXT DEFAULT '',
   created_at REAL NOT NULL,
-  received_at REAL DEFAULT 0
+  received_at REAL DEFAULT 0,
+  portal_token TEXT DEFAULT '',       -- the supplier's login-free link
+  confirmed_at REAL DEFAULT 0
+);
+
+/* What the supplier said back, against what we asked for. Kept separate
+   from the order itself: "we ordered 100 for the 14th" and "they confirmed
+   80 for the 21st" are two different facts, and collapsing them into one
+   row loses the discrepancy that is the whole reason to ask. */
+CREATE TABLE IF NOT EXISTS po_confirmations (
+  id INTEGER PRIMARY KEY,
+  po_id INTEGER NOT NULL,
+  confirmed_by TEXT DEFAULT '',
+  confirmed_eta REAL DEFAULT 0,
+  message TEXT DEFAULT '',
+  lines TEXT DEFAULT '',              -- JSON: line id -> qty they'll ship
+  created_at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS purchase_order_lines (
@@ -146,8 +164,24 @@ RUN_STATUS = ("planned", "running", "done", "scrapped")
 SHIP_STATUS = ("booked", "in_transit", "customs", "arrived")
 
 
+# Columns added after the tables first shipped. CREATE TABLE IF NOT EXISTS
+# leaves an existing table exactly as it was, so a database created before
+# these existed needs them added explicitly — and only a real install has
+# that shape, which is why a fresh test database can't catch it.
+MIGRATIONS = (
+    "ALTER TABLE purchase_orders ADD COLUMN portal_token TEXT DEFAULT ''",
+    "ALTER TABLE purchase_orders ADD COLUMN confirmed_at REAL DEFAULT 0",
+)
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    for stmt in MIGRATIONS:
+        try:
+            con.execute(stmt)
+        except Exception:
+            pass            # already there
+    con.commit()
 
 
 def move(con, material_id: int, qty: float, reason: str, actor: str,
@@ -310,6 +344,38 @@ def shortfall(con, product_id: int, cases: int) -> list:
     return out
 
 
+def unit_costs(con) -> dict:
+    """Material cost per *unit* of each product, from its recipe.
+
+    The recipe is per case, orders are in units, so the case size does the
+    conversion. Products with no recipe are absent rather than zero — the
+    difference between "costs nothing" and "we haven't said" matters when
+    this feeds a margin, and a zero would quietly flatter it.
+    """
+    rows = con.execute(
+        "SELECT b.product_id, SUM(b.qty_per_case * m.unit_cost_cents) cents,"
+        " p.case_size FROM bill_of_materials b"
+        " JOIN materials m ON m.id=b.material_id"
+        " JOIN products p ON p.id=b.product_id"
+        " GROUP BY b.product_id").fetchall()
+    out = {}
+    for r in rows:
+        case = max(1, r["case_size"] or 1)
+        out[r["product_id"]] = {"per_case_cents": int(r["cents"]),
+                                "per_unit_cents": int(r["cents"] / case)}
+    return out
+
+
+def consumption(con, material_id: int, days: int = 30) -> float:
+    """How much of a material has been used per day lately, from the
+    movements. Only outward moves count: receiving stock is not demand."""
+    row = con.execute(
+        "SELECT COALESCE(SUM(-qty),0) used FROM material_moves"
+        " WHERE material_id=? AND qty<0 AND created_at >= ?",
+        (material_id, time.time() - days * 86400)).fetchone()
+    return (row["used"] or 0) / max(1, days)
+
+
 def bom(con, product_id: int) -> list:
     return [dict(r) for r in con.execute(
         "SELECT b.*, m.name material_name, m.unit, m.on_hand"
@@ -454,3 +520,164 @@ def finish_run(con, run_id: int, actual_cases: int, actor: str) -> dict:
     # the recipe or the counts are wrong, and hiding it hides the problem.
     return {"ok": True, "cases": actual_cases, "materials": used,
             "went_negative": [u["name"] for u in used if u["negative"]]}
+
+
+# ---------- the supplier's side ----------
+#
+# Receiving currently means someone here types in what turned up. That is
+# the last fact in the chain and the least useful one: by the time a pallet
+# is on the dock, a short shipment is a problem you're absorbing rather than
+# planning around. Asking the supplier to confirm the order moves that
+# discovery weeks earlier.
+#
+# The link carries its own token and needs no account, for the same reason
+# the signature links do: a supplier will not create a login to answer one
+# question, and an integration nobody uses tells you nothing.
+
+def portal_link(con, po_id: int, base: str) -> str:
+    """A stable per-order link. Stable rather than single-use, because a
+    supplier may come back to it when the ETA changes."""
+    po = con.execute("SELECT * FROM purchase_orders WHERE id=?",
+                     (po_id,)).fetchone()
+    if po is None:
+        raise HTTPException(404, "no such purchase order")
+    token = po["portal_token"]
+    if not token:
+        token = secrets.token_urlsafe(24)
+        con.execute("UPDATE purchase_orders SET portal_token=? WHERE id=?",
+                    (token, po_id))
+        con.commit()
+    return f"{base}/supplier/{token}"
+
+
+def portal_view(con, token: str) -> dict:
+    """What the supplier sees. Deliberately narrow: their order, and nothing
+    else about the business — not our stock, not our other suppliers, not
+    what we paid anyone else."""
+    po = con.execute(
+        "SELECT p.*, s.name supplier_name FROM purchase_orders p"
+        " JOIN suppliers s ON s.id=p.supplier_id"
+        " WHERE p.portal_token=? AND p.portal_token!=''", (token,)).fetchone()
+    if po is None:
+        raise HTTPException(404, "that link isn't valid")
+    lines = con.execute(
+        "SELECT l.id, l.qty, l.received, m.name material_name, m.unit"
+        " FROM purchase_order_lines l JOIN materials m ON m.id=l.material_id"
+        " WHERE l.po_id=?", (po["id"],)).fetchall()
+    conf = con.execute(
+        "SELECT * FROM po_confirmations WHERE po_id=?"
+        " ORDER BY id DESC LIMIT 1", (po["id"],)).fetchone()
+    return {
+        "reference": po["reference"] or f"PO #{po['id']}",
+        "supplier_name": po["supplier_name"],
+        "status": po["status"],
+        "expected": po["expected"],
+        "notes": po["notes"],
+        "lines": [dict(r) for r in lines],
+        "confirmed": dict(conf) if conf else None,
+        "closed": po["status"] in ("received", "cancelled"),
+    }
+
+
+def portal_confirm(con, token: str, body: dict) -> dict:
+    po = con.execute(
+        "SELECT * FROM purchase_orders WHERE portal_token=?"
+        " AND portal_token!=''", (token,)).fetchone()
+    if po is None:
+        raise HTTPException(404, "that link isn't valid")
+    if po["status"] in ("received", "cancelled"):
+        raise HTTPException(400, "this order is already closed")
+    who = str(body.get("confirmed_by", "")).strip()
+    if not who:
+        raise HTTPException(400, "please give your name")
+
+    valid = {str(r["id"]) for r in con.execute(
+        "SELECT id FROM purchase_order_lines WHERE po_id=?",
+        (po["id"],)).fetchall()}
+    lines = {k: float(v) for k, v in (body.get("lines") or {}).items()
+             if str(k) in valid and str(v).strip() != ""}
+    eta = float(body.get("confirmed_eta") or 0)
+    con.execute(
+        "INSERT INTO po_confirmations(po_id,confirmed_by,confirmed_eta,"
+        " message,lines,created_at) VALUES(?,?,?,?,?,?)",
+        (po["id"], who[:120], eta, str(body.get("message", ""))[:800],
+         json.dumps(lines), time.time()))
+    con.execute("UPDATE purchase_orders SET confirmed_at=? WHERE id=?",
+                (time.time(), po["id"]))
+    con.commit()
+    # Shortfalls and slips are the point of asking, so name them back rather
+    # than just saying "thanks".
+    short = []
+    for r in con.execute(
+            "SELECT l.id, l.qty, m.name FROM purchase_order_lines l"
+            " JOIN materials m ON m.id=l.material_id WHERE l.po_id=?",
+            (po["id"],)).fetchall():
+        said = lines.get(str(r["id"]))
+        if said is not None and said < r["qty"]:
+            short.append({"name": r["name"], "asked": r["qty"], "said": said})
+    return {"ok": True, "short": short,
+            "later": bool(eta and po["expected"] and eta > po["expected"])}
+
+
+# ---------- days of cover ----------
+
+def forecast(con, days: int = 30) -> dict:
+    """How long the stock lasts at the rate it's actually going.
+
+    Two different questions with the same shape. For materials the rate
+    comes from consumption; for finished product it comes from sales. Both
+    are measured over a recent window rather than assumed, and a thing with
+    no movement gets no forecast at all — "infinite cover" and "we haven't
+    touched it in a month" look identical in a number and are not the same
+    situation.
+    """
+    since = time.time() - days * 86400
+    mats = []
+    for m in con.execute(
+            "SELECT m.*, s.lead_days FROM materials m"
+            " LEFT JOIN suppliers s ON s.id=m.supplier_id"
+            " WHERE m.active=1").fetchall():
+        rate = consumption(con, m["id"], days)
+        if rate <= 0:
+            continue
+        # Round once. Deriving the order-by date from the same whole number
+        # the screen shows keeps the two consistent — int() truncates toward
+        # zero, so computing them separately makes them disagree by a day
+        # exactly when the answer is negative and someone is reading closely.
+        cover = int(m["on_hand"] / rate)
+        lead = m["lead_days"] if m["lead_days"] is not None else 14
+        mats.append({
+            "id": m["id"], "name": m["name"], "unit": m["unit"],
+            "on_hand": round(m["on_hand"], 2),
+            "per_day": round(rate, 2),
+            "days_cover": cover,
+            "lead_days": lead,
+            # The number that matters isn't "when do we run out" but "have we
+            # already missed the moment to order".
+            "order_by_days": cover - lead,
+            "urgent": cover <= lead,
+        })
+    mats.sort(key=lambda m: m["days_cover"])
+
+    prods = []
+    rows = con.execute(
+        "SELECT oi.product_id, p.name, p.case_size, SUM(oi.qty) sold"
+        " FROM order_items oi JOIN orders o ON o.id=oi.order_id"
+        " JOIN products p ON p.id=oi.product_id"
+        " WHERE o.created_at>=? AND o.status!='cancelled'"
+        " GROUP BY oi.product_id", (since,)).fetchall()
+    for r in rows:
+        rate = r["sold"] / days
+        if rate <= 0:
+            continue
+        stock = con.execute(
+            "SELECT COALESCE(SUM(qty),0) q FROM inventory WHERE product_id=?",
+            (r["product_id"],)).fetchone()["q"]
+        cover = int(stock / rate)
+        prods.append({
+            "id": r["product_id"], "name": r["name"],
+            "on_hand": stock, "per_day": round(rate, 2),
+            "days_cover": cover, "urgent": cover <= 14,
+        })
+    prods.sort(key=lambda p: p["days_cover"])
+    return {"window_days": days, "materials": mats, "products": prods}

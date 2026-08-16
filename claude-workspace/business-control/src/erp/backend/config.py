@@ -20,6 +20,7 @@ DEFAULTS = {
     "port": 8860,
     # Auth
     "admin_key": "",                 # set on first run; grants admin on login
+    "pin_pepper": "",                # set on first run; hashes time-clock PINs
     # Affiliates
     "default_commission_bps": 1000,  # 10% of order subtotal
     # A/B testing
@@ -96,6 +97,12 @@ def load() -> dict:
             pass
     if not cfg.get("admin_key"):
         cfg["admin_key"] = secrets.token_urlsafe(24)
+        save(cfg)
+    # The pepper for time-clock PINs. It lives here rather than in the
+    # database on purpose: that separation is the whole point — a stolen
+    # copy of the database has to be useless on its own.
+    if not cfg.get("pin_pepper"):
+        cfg["pin_pepper"] = secrets.token_urlsafe(32)
         save(cfg)
     return cfg
 

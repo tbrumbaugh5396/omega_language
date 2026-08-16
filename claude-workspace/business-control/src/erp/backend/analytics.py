@@ -1,7 +1,7 @@
 """Regional rollups, funnel with drop-off detection, engagement fall-off."""
 import time
 
-from . import config
+from . import config, supply
 
 DAY = 86400.0
 
@@ -99,7 +99,27 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
     km = con.execute(
         "SELECT COALESCE(SUM(total_km),0) k FROM routes WHERE created_at>=?"
         " AND status!='planned'", (since,)).fetchone()["k"]
-    cogs = revenue * cfg.get("cogs_bps", 4500) // 10000
+    # Cost of goods, measured where the recipe says what a unit costs and
+    # estimated where it doesn't. Reporting the split rather than one number
+    # matters: a flat percentage of revenue is an assumption wearing a
+    # result's clothes, and it can't tell you a product is sold at a loss.
+    measured_cogs, measured_rev = 0, 0
+    costs = supply.unit_costs(con)
+    if costs:
+        rows = con.execute(
+            "SELECT oi.product_id, SUM(oi.qty) qty,"
+            " SUM(oi.qty * oi.unit_price_cents) rev FROM order_items oi"
+            " JOIN orders o ON o.id=oi.order_id"
+            " WHERE o.created_at>=? AND o.status!='cancelled'"
+            " GROUP BY oi.product_id", (since,)).fetchall()
+        for r in rows:
+            c = costs.get(r["product_id"])
+            if not c:
+                continue
+            measured_cogs += int(r["qty"] * c["per_unit_cents"])
+            measured_rev += r["rev"]
+    est_rev = max(0, revenue - measured_rev)
+    cogs = measured_cogs + est_rev * cfg.get("cogs_bps", 4500) // 10000
     labor = int(hours * cfg.get("hourly_wage_cents", 1800))
     logistics_cost = int(km * cfg.get("cost_per_km_cents", 85))
     gross = revenue - cogs
@@ -109,6 +129,10 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
         " FROM orders WHERE created_at>=? AND status!='cancelled'"
         " GROUP BY region ORDER BY revenue_cents DESC", (since,)).fetchall()
     return {"days": days, "revenue_cents": revenue, "cogs_cents": cogs,
+            "cogs_measured_cents": measured_cogs,
+            "cogs_estimated_cents": cogs - measured_cogs,
+            "cogs_measured_pct": round(measured_rev / revenue * 100)
+            if revenue else 0,
             "gross_cents": gross, "commissions_cents": commissions,
             "labor_hours": round(hours, 1), "labor_cents": labor,
             "contractor_routes": len(crows), "contractor_cents": contractor,
@@ -117,6 +141,7 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
             "margin_pct": round(net / revenue * 100, 1) if revenue else 0.0,
             "by_region": [dict(r) for r in by_region],
             "assumptions": {"cogs_bps": cfg.get("cogs_bps"),
+                            "recipes_priced": len(costs),
                             "hourly_wage_cents": cfg.get("hourly_wage_cents"),
                             "cost_per_km_cents": cfg.get("cost_per_km_cents")}}
 
