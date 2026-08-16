@@ -1676,4 +1676,114 @@ ok("days_cover" in _ops, "and the sourcing page shows days of cover")
 ok("cogs_measured_cents" in _ops,
    "the P&L shows which part of COGS was measured")
 
+
+# --- audit retention ---
+from erp.backend import audit as _aud  # noqa: E402
+_con_r = _db.connect()
+_now_r = _t.time()
+for _t_off, _act in (
+        (400, "POST /api/admin/products"),                    # old, ordinary
+        (400, "POST /api/store/admin/staff/3/permissions"),   # old, sensitive
+        (400, "POST /api/admin/users/2/pin"),                 # old, sensitive
+        (400, "GET /api/admin/db/users"),                     # old, sensitive
+        (1200, "POST /api/admin/users/9/pin"),                # past every window
+        (5, "POST /api/admin/orders/5")):                     # recent
+    _con_r.execute(
+        "INSERT INTO audit_log(actor,action,detail,status,created_at)"
+        " VALUES('retention-test',?,'',200,?)",
+        (_act, _now_r - _t_off * 86400))
+_con_r.commit()
+_aud._last_prune = 0
+_removed = _aud.prune(_con_r, _now_r)
+_left = [r["action"] for r in _con_r.execute(
+    "SELECT action FROM audit_log WHERE actor='retention-test'").fetchall()]
+ok(_removed >= 2, "pruning removes entries past their window")
+ok("POST /api/admin/products" not in _left,
+   "an ordinary entry is dropped after the short window")
+ok("POST /api/store/admin/staff/3/permissions" in _left
+   and "POST /api/admin/users/2/pin" in _left,
+   "but anything touching access is kept longer")
+ok("GET /api/admin/db/users" in _left,
+   "including a look at the raw tables")
+ok("POST /api/admin/users/9/pin" not in _left,
+   "and even those go once past the long window")
+ok("POST /api/admin/orders/5" in _left, "recent entries are untouched")
+# Pruning on every request would be a delete over the whole table per write.
+ok(_aud.prune(_con_r, _now_r) == 0,
+   "and it does nothing again within the hour")
+ok(_aud.prune(_con_r, _now_r + _aud.PRUNE_EVERY + 1) == 0,
+   "with nothing left to remove, the next run is still a no-op")
+_con_r.close()
+_aud._last_prune = 0
+_ret = c.get("/api/admin/audit", headers=A).json()
+ok(_ret["retention"]["days"] == _aud.KEEP_DAYS
+   and _ret["retention"]["sensitive_days"] > _aud.KEEP_DAYS,
+   "the viewer is told the policy, both windows")
+ok("retention" in _ops and "sensitive_days" in _ops,
+   "and shows it, rather than silently deleting history")
+
+# --- a confirmation reaches receiving ---
+_csup = c.post("/api/supply/suppliers", headers=A,
+               json={"name": "Confirm Co"}).json()
+_cmat = c.post("/api/supply/materials", headers=A, json={
+    "name": "Confirmed input", "unit": "kg",
+    "supplier_id": _csup["id"], "unit_cost_cents": 100}).json()
+_cpo = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _csup["id"], "reference": "PO-CONF",
+    "lines": [{"material_id": _cmat["id"], "qty": 50,
+               "unit_cost_cents": 100}]}).json()
+_ctok = c.post(f"/api/supply/purchase-orders/{_cpo['id']}/portal-link",
+               headers=A).json()["url"].rsplit("/", 1)[1]
+_cline = c.get(f"/api/supplier/{_ctok}").json()["lines"][0]["id"]
+c.post(f"/api/supplier/{_ctok}/confirm", json={
+    "confirmed_by": "Sam", "lines": {str(_cline): 40}})
+_cpo_row = [p for p in c.get("/api/supply", headers=A).json()["purchase_orders"]
+            if p["id"] == _cpo["id"]][0]
+ok(_cpo_row["confirmation"] and _cpo_row["confirmation"]["by"] == "Sam",
+   "the latest confirmation rides along with the purchase order")
+ok(_cpo_row["lines"][0]["confirmed"] == 40,
+   "and is attached to the line it refers to")
+ok(_cpo_row["lines"][0]["qty"] == 50,
+   "so ordered and promised are both on the row, and differ")
+_nopo = [p for p in c.get("/api/supply", headers=A).json()["purchase_orders"]
+         if p["confirmation"] is None]
+ok(_nopo and _nopo[0]["lines"][0]["confirmed"] is None,
+   "an unconfirmed order says so rather than implying agreement")
+ok("promised" in _ops and "data-said" in _ops,
+   "the receive dialog shows ordered, promised and arrived together")
+
+# --- the forecast counts stock already on order ---
+c.post(f"/api/supply/purchase-orders/{_cpo['id']}/status", headers=A,
+       json={"status": "sent"})
+# Give it consumption, or there is nothing to forecast against.
+c.post(f"/api/supply/materials/{_cmat['id']}/adjust", headers=A,
+       json={"qty": 30, "note": "opening count"})
+c.post(f"/api/supply/materials/{_cmat['id']}/adjust", headers=A,
+       json={"qty": -20, "note": "used in production"})
+_fm = [m for m in c.get("/api/supply/forecast", headers=A).json()["materials"]
+       if m["id"] == _cmat["id"]]
+ok(_fm, "a material with consumption appears in the forecast")
+_fm = _fm[0]
+ok(_fm["incoming"] == 50, "the outstanding purchase order counts as incoming")
+ok(_fm["days_cover_with_incoming"] > _fm["days_cover"],
+   "cover with it on order is longer than cover on hand")
+ok(_fm["on_hand"] == 10, "and on-hand still reflects only what is here")
+# Without a date, an order in transit is assumed to arrive in time; the
+# useful case is when it demonstrably doesn't.
+_late = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _csup["id"], "reference": "PO-LATE",
+    "expected": _t.time() + 400 * 86400,
+    "lines": [{"material_id": _cmat["id"], "qty": 5,
+               "unit_cost_cents": 100}]}).json()
+c.post(f"/api/supply/purchase-orders/{_late['id']}/status", headers=A,
+       json={"status": "sent"})
+_fm2 = [m for m in c.get("/api/supply/forecast", headers=A).json()["materials"]
+        if m["id"] == _cmat["id"]][0]
+ok(_fm2["eta_days"] is not None,
+   "the soonest expected date is reported in days")
+ok("covered_by_order" in _fm2,
+   "and whether that order lands before the shelf empties is stated")
+ok("days_cover_with_incoming" in _ops and "covered_by_order" in _ops,
+   "the sourcing page shows both covers and what to do about it")
+
 print(f"\nall {checks} checks passed")

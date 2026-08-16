@@ -55,6 +55,27 @@ CREATE INDEX IF NOT EXISTS audit_log_time ON audit_log(created_at DESC);
 SECRET = re.compile(
     r"pin|pass|token|secret|webhook|key|hash|signature|cvv|card", re.I)
 
+# How long entries are kept. Two windows, because these are not the same
+# kind of record: most rows answer "what changed last week" and stop being
+# useful quickly, while the handful that touch access — who was granted what,
+# whose PIN was reset, who opened the raw tables — are the ones you go
+# looking for long after the fact, often precisely because something went
+# wrong. Deleting those on the same schedule as a product rename would throw
+# away the only rows anyone ever needs a year later.
+KEEP_DAYS = 180
+KEEP_DAYS_SENSITIVE = 1095            # three years
+SENSITIVE = re.compile(
+    r"/permissions|/pin|/staff|/keys|/admin/db|/discord|/webhooks|"
+    r"/users/\d+/update|/login", re.I)
+
+# A backstop against the window being useless — a burst of writes inside the
+# retention period shouldn't be able to fill the disk before it expires.
+MAX_ROWS = 200_000
+
+# Pruning is bookkeeping, not something to do on every request.
+PRUNE_EVERY = 3600
+_last_prune = 0.0
+
 # Requests that change nothing worth recording. Clocking in is already its own
 # durable record in `shifts`, and the read-tracking endpoints would bury the
 # real edits under thousands of rows.
@@ -124,6 +145,51 @@ def record(con, user, method: str, path: str, detail: str,
         pass        # auditing must never break the action it records
 
 
+def prune(con, now: float | None = None) -> int:
+    """Drop entries past their window. Called at most hourly.
+
+    The sensitive/ordinary split is decided in Python rather than SQL:
+    SQLite has no REGEXP built in, and one pattern applied in one place
+    beats a WHERE clause listing paths that will drift from the pattern.
+    """
+    global _last_prune
+    now = now or time.time()
+    if now - _last_prune < PRUNE_EVERY:
+        return 0
+    _last_prune = now
+    removed = 0
+
+    # Ordinary entries past the short window.
+    old = con.execute(
+        "SELECT id, action FROM audit_log WHERE created_at < ?",
+        (now - KEEP_DAYS * 86400,)).fetchall()
+    doomed = [r["id"] for r in old if not SENSITIVE.search(r["action"] or "")]
+    for i in range(0, len(doomed), 500):
+        chunk = doomed[i:i + 500]
+        con.execute(
+            f"DELETE FROM audit_log WHERE id IN"
+            f" ({','.join('?' * len(chunk))})", chunk)
+        removed += len(chunk)
+
+    # The long window applies to everything, sensitive rows included.
+    removed += con.execute(
+        "DELETE FROM audit_log WHERE created_at < ?",
+        (now - KEEP_DAYS_SENSITIVE * 86400,)).rowcount
+
+    # Backstop: keep the newest MAX_ROWS whatever the dates say, so a burst
+    # inside the window can't fill the disk before the window expires.
+    n = con.execute("SELECT COUNT(*) n FROM audit_log").fetchone()["n"]
+    if n > MAX_ROWS:
+        cut = con.execute(
+            "SELECT id FROM audit_log ORDER BY id DESC LIMIT 1 OFFSET ?",
+            (MAX_ROWS,)).fetchone()
+        if cut:
+            removed += con.execute("DELETE FROM audit_log WHERE id<=?",
+                                   (cut["id"],)).rowcount
+    con.commit()
+    return removed
+
+
 def should_log(method: str, path: str) -> bool:
     if method in ("GET", "HEAD", "OPTIONS"):
         return False
@@ -148,7 +214,13 @@ def read(con, limit: int = 200, actor: str = "", entity: str = "") -> dict:
     actors = con.execute(
         "SELECT actor, COUNT(*) n FROM audit_log WHERE actor!=''"
         " GROUP BY actor ORDER BY n DESC LIMIT 20").fetchall()
+    oldest = con.execute(
+        "SELECT MIN(created_at) t FROM audit_log").fetchone()["t"]
     return {"entries": [dict(r) for r in rows],
             "actors": [dict(a) for a in actors],
             "total": con.execute(
-                "SELECT COUNT(*) n FROM audit_log").fetchone()["n"]}
+                "SELECT COUNT(*) n FROM audit_log").fetchone()["n"],
+            "oldest": oldest,
+            "retention": {"days": KEEP_DAYS,
+                          "sensitive_days": KEEP_DAYS_SENSITIVE,
+                          "max_rows": MAX_ROWS}}

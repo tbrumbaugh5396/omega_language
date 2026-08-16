@@ -67,6 +67,10 @@ async def audit_edits(request: Request, call_next):
     try:
         user = auth.user_for_token(con, token) if token else None
         audit.record(con, user, method, path, detail, response.status_code)
+        # Bookkeeping, rate-limited inside prune() to once an hour. Done on
+        # the write path so the log can't grow unbounded on an install where
+        # nobody ever opens the audit tab.
+        audit.prune(con)
     finally:
         con.close()
     return response

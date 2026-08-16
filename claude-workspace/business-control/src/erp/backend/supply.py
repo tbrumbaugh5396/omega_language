@@ -289,6 +289,28 @@ def overview(con) -> dict:
             " ON m.id=l.material_id WHERE l.po_id=?", (r["id"],)).fetchall()]
         d["value_cents"] = sum(int(x["qty"] * x["unit_cost_cents"])
                                for x in d["lines"])
+        # What the supplier said back, attached to the lines it refers to.
+        # Receiving is where the three numbers finally meet — ordered,
+        # promised, arrived — and the discrepancy is only visible if all
+        # three are on the same screen.
+        conf = con.execute(
+            "SELECT * FROM po_confirmations WHERE po_id=?"
+            " ORDER BY id DESC LIMIT 1", (r["id"],)).fetchone()
+        if conf:
+            try:
+                said = json.loads(conf["lines"] or "{}")
+            except Exception:
+                said = {}
+            d["confirmation"] = {
+                "by": conf["confirmed_by"], "at": conf["created_at"],
+                "eta": conf["confirmed_eta"], "message": conf["message"]}
+            for ln in d["lines"]:
+                v = said.get(str(ln["id"]))
+                ln["confirmed"] = float(v) if v is not None else None
+        else:
+            d["confirmation"] = None
+            for ln in d["lines"]:
+                ln["confirmed"] = None
         pos.append(d)
 
     runs = []
@@ -646,16 +668,42 @@ def forecast(con, days: int = 30) -> dict:
         # exactly when the answer is negative and someone is reading closely.
         cover = int(m["on_hand"] / rate)
         lead = m["lead_days"] if m["lead_days"] is not None else 14
+
+        # Stock already bought but not yet here. Counting it is the
+        # difference between "we're short" and "we're short and nobody has
+        # done anything about it" — the first needs a purchase order, the
+        # second needs a phone call, and they look identical without this.
+        inc = con.execute(
+            "SELECT COALESCE(SUM(l.qty - l.received),0) qty,"
+            " MIN(NULLIF(p.expected,0)) soonest"
+            " FROM purchase_order_lines l JOIN purchase_orders p"
+            " ON p.id=l.po_id WHERE l.material_id=?"
+            " AND p.status IN ('sent','part')", (m["id"],)).fetchone()
+        incoming = inc["qty"] or 0
+        cover_inc = int((m["on_hand"] + incoming) / rate)
+
+        # Incoming only helps if it lands before the shelf empties. A pallet
+        # that arrives the week after you run out is not cover.
+        eta_days = None
+        if incoming and inc["soonest"]:
+            eta_days = int((inc["soonest"] - time.time()) / 86400)
+        arrives_in_time = bool(incoming) and (
+            eta_days is None or eta_days <= cover)
+
         mats.append({
             "id": m["id"], "name": m["name"], "unit": m["unit"],
             "on_hand": round(m["on_hand"], 2),
+            "incoming": round(incoming, 2),
+            "eta_days": eta_days,
             "per_day": round(rate, 2),
             "days_cover": cover,
+            "days_cover_with_incoming": cover_inc,
             "lead_days": lead,
             # The number that matters isn't "when do we run out" but "have we
             # already missed the moment to order".
             "order_by_days": cover - lead,
-            "urgent": cover <= lead,
+            "covered_by_order": arrives_in_time,
+            "urgent": cover <= lead and not arrives_in_time,
         })
     mats.sort(key=lambda m: m["days_cover"])
 

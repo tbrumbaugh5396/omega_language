@@ -1461,16 +1461,24 @@ async function renderSupply() {
           situation.</p>
         ${fc.materials.length ? `<table>
           <thead><tr><th>material</th><th class="num">on hand</th>
-            <th class="num">per day</th><th class="num">cover</th>
-            <th>order by</th></tr></thead>
+            <th class="num">on order</th><th class="num">per day</th>
+            <th class="num">cover</th><th>what to do</th></tr></thead>
           <tbody>${fc.materials.map((m) => `<tr>
             <td>${esc(m.name)}</td>
             <td class="num">${m.on_hand} ${esc(m.unit)}</td>
+            <td class="num dim">${m.incoming
+              ? `${m.incoming}${m.eta_days != null
+                  ? ` <span class="${m.covered_by_order ? "" : "low"}">in ${
+                      m.eta_days}d</span>` : ""}` : "—"}</td>
             <td class="num dim">${m.per_day}</td>
-            <td class="num ${m.urgent ? "low" : ""}">${m.days_cover} days</td>
-            <td>${m.order_by_days <= 0
-              ? `<span class="pill bad">order now — ${m.lead_days}-day lead</span>`
-              : `<span class="dim">within ${m.order_by_days} days</span>`}</td>
+            <td class="num ${m.urgent ? "low" : ""}">${m.days_cover} days${
+              m.incoming ? `<span class="dim"> → ${
+                m.days_cover_with_incoming}</span>` : ""}</td>
+            <td>${m.covered_by_order
+              ? '<span class="pill ok">covered by an order in transit</span>'
+              : m.order_by_days <= 0
+                ? `<span class="pill bad">order now — ${m.lead_days}-day lead</span>`
+                : `<span class="dim">order within ${m.order_by_days} days</span>`}</td>
           </tr>`).join("")}</tbody></table>` : ""}
         ${fc.products.length ? `<table style="margin-top:12px">
           <thead><tr><th>product</th><th class="num">in stores</th>
@@ -1802,17 +1810,52 @@ function poForm(refresh) {
 
 function receiveForm(pid, refresh) {
   const po = SUP.purchase_orders.find((p) => p.id === pid);
+  const c = po.confirmation;
+  /* Three numbers belong on this screen: what we ordered, what they promised,
+     and what turned up. Any two of them can agree while the third doesn't,
+     and the gap is the whole reason to ask a supplier to confirm. */
   modal(`<h3>Receive ${esc(po.reference || "PO #" + po.id)}</h3>
     <p class="dim">What actually turned up. Partial deliveries are normal —
       the order stays open until every line is satisfied.</p>
-    ${po.lines.map((l) => `<div class="row2">
-      <div><label>${esc(l.material_name)}
-        <span class="dim">${l.received}/${l.qty} ${esc(l.unit)} so far</span></label>
-        <input type="number" step="any" data-recv="${l.id}"
-          max="${l.qty - l.received}" placeholder="0"></div>
-    </div>`).join("")}
+    ${c ? `<p class="dim" style="font-size:12px">${esc(c.by)} confirmed this
+      on ${fmtDate(c.at)}${c.eta ? `, for ${fmtDate(c.eta)}` : ""}.${
+      c.message ? ` “${esc(c.message)}”` : ""}</p>` : ""}
+    <table style="margin:8px 0"><thead><tr><th>item</th>
+      <th class="num">ordered</th>${c ? '<th class="num">promised</th>' : ""}
+      <th class="num">arrived</th></tr></thead>
+      <tbody>${po.lines.map((l) => `<tr>
+        <td>${esc(l.material_name)}
+          <span class="dim">${l.received}/${l.qty} ${esc(l.unit)} so far</span></td>
+        <td class="num dim">${l.qty}</td>
+        ${c ? `<td class="num ${l.confirmed != null && l.confirmed < l.qty
+          ? "low" : "dim"}">${l.confirmed == null ? "—" : l.confirmed}</td>` : ""}
+        <td class="num"><input class="inv-n" type="number" step="any"
+          data-recv="${l.id}" data-said="${l.confirmed == null ? "" : l.confirmed}"
+          max="${l.qty - l.received}" placeholder="0"></td>
+      </tr>`).join("")}</tbody></table>
+    <div id="recv-gap"></div>
     <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="recv-save">Book in</button></div>`);
+
+  // Say so as it's typed, rather than after the stock has already moved.
+  const check = () => {
+    const gaps = [];
+    document.querySelectorAll("[data-recv]").forEach((el) => {
+      const said = el.dataset.said;
+      const got = Number(el.value);
+      if (said === "" || !got) return;
+      if (Math.abs(got - Number(said)) > 1e-9) {
+        const row = po.lines.find((l) => String(l.id) === el.dataset.recv);
+        gaps.push(`${row.material_name}: ${got} arrived against ${said} promised`);
+      }
+    });
+    $("#recv-gap").innerHTML = gaps.length
+      ? `<div class="warn-line">Different from what was confirmed —
+         ${gaps.map(esc).join("; ")}. Book what actually arrived; the gap is
+         worth raising with them.</div>` : "";
+  };
+  document.querySelectorAll("[data-recv]").forEach((el) => el.oninput = check);
+
   $("#recv-save").onclick = async () => {
     const lines = {};
     document.querySelectorAll("[data-recv]").forEach((el) => {
@@ -1964,6 +2007,13 @@ async function renderAudit() {
       construction rather than by everyone remembering. Values that look like
       credentials are replaced with a marker; the field names stay, which is
       what you need to reconstruct what happened.</p>
+    <p class="dim" style="font-size:12px;margin-top:-4px">Kept for
+      ${d.retention.days} days. Anything touching access — permissions, PINs,
+      staff, keys, the raw tables — is kept for
+      ${Math.round(d.retention.sensitive_days / 365)} years instead: those are
+      the rows you go looking for long after the fact, usually because
+      something went wrong.${d.oldest
+        ? ` Oldest entry here is from ${fmtDate(d.oldest)}.` : ""}</p>
 
     <div class="filters">
       <input id="au-q" placeholder="Filter by what changed" value="${esc(S.auditQ || "")}">
