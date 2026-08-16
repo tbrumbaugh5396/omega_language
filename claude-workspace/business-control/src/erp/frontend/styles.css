@@ -693,3 +693,10 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
 #li-scan-msg:empty { display: none; }
 .btn-ic { width: 15px; height: 15px; stroke: currentColor; fill: none;
   stroke-width: 1.8; vertical-align: -2px; margin-right: 5px; }
+
+/* ---------- checkout ---------- */
+.checkout-card { max-width: 460px; }
+.checkout-card form { display: flex; flex-direction: column; gap: 10px; }
+.checkout-card input, .checkout-card select { width: 100%; }
+.checkout-card .row2 { display: flex; gap: 8px; }
+.checkout-card a { color: var(--accent2); cursor: pointer; }

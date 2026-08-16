@@ -1115,8 +1115,7 @@ async function renderShop() {
           <span>
             ${localStorage.getItem("bc_ref") ? `<span class="pill ok">referred
               by ${esc(localStorage.getItem("bc_ref"))}</span>` : ""}
-            <button class="btn" id="checkout">${S.user
-              ? "Checkout" : "Sign in to check out"}</button>
+            <button class="btn" id="checkout">Checkout</button>
           </span>
         </div>`;
     $("#cart-card").querySelectorAll("[data-cinc]").forEach((b) => {
@@ -1133,13 +1132,10 @@ async function renderShop() {
        sign-in first. Disabling it left someone with a full cart and no
        affordance except a line of grey text that wasn't a link. The cart is
        held in memory and survives the tab change, so they come back to it. */
-    if (co) {
-      co.onclick = S.user ? onCheckout : () => {
-        S.afterLogin = "shop";     // come back to the cart, not a job home
-        S.tab = "login";
-        render();
-      };
-    }
+    // Signed in or not — an account is offered at the delivery step, not
+    // demanded before it. Making someone register before they can see what
+    // shipping costs is how a full cart becomes an abandoned one.
+    if (co) co.onclick = onCheckout;
   };
 
   document.querySelectorAll("[data-inc]").forEach((b) => {
@@ -1193,6 +1189,25 @@ async function renderShop() {
       }
       toast(`Order #${o.id} placed — ${money(o.total_cents)}`
         + (o.payment_status === "cod" ? " (pay on delivery)" : ""));
+      if (!S.user) {
+        /* A guest has no order history to send them to — the Orders tab
+           would bounce them to a sign-in, which is a poor thing to meet
+           immediately after paying. Confirm it here instead. */
+        renderShop().then(() => {
+          $("#checkout-box").innerHTML = `<div class="card">
+            <h3 style="margin-top:0">Order #${o.id} placed</h3>
+            <p>Thank you. A receipt is on its way to
+              <b>${esc(extra.email || "your email")}</b>, and tracking follows
+              when it ships.</p>
+            <p class="dim">Want to see it later? Sign in with that email and
+              this order will be waiting.</p>
+            <button class="btn alt" id="ok-signin">Sign in</button>
+          </div>`;
+          $("#checkout-box").scrollIntoView({ behavior: "smooth" });
+          $("#ok-signin").onclick = () => { S.tab = "login"; render(); };
+        });
+        return;
+      }
       S.tab = "orders";
       render();
     } catch (e) { toast(e.message); }
@@ -1203,12 +1218,18 @@ async function renderShop() {
     if (isDistributor) return placeOrder({});     // wholesale ships on terms
     const t = cartTotals();
     $("#checkout-box").innerHTML = `
-      <div class="card" style="max-width:440px">
+      <div class="card checkout-card">
         <h3 style="margin-top:0">Delivery details</h3>
-        <form class="inline" id="ship-form"
-          style="flex-direction:column;align-items:stretch">
+        ${S.user ? "" : `<p class="dim">No account needed — the email is
+          where the receipt and tracking go. You can
+          <a id="sh-signin">sign in</a> instead if you'd rather see this
+          order in your history.</p>`}
+        <form id="ship-form">
           <input id="sh-name" placeholder="full name"
-            value="${esc(S.user.name)}" required>
+            value="${esc(S.user ? S.user.name : "")}" required>
+          ${S.user ? "" : `<input id="sh-email" type="email" required
+            placeholder="email — for the receipt and tracking"
+            autocomplete="email">`}
           <input id="sh-addr" placeholder="street address" required>
           <div style="display:flex;gap:8px">
             <input id="sh-city" placeholder="city" required style="flex:1">
@@ -1226,17 +1247,26 @@ async function renderShop() {
         </form>
       </div>`;
     $("#checkout-box").scrollIntoView({ behavior: "smooth" });
+    if ($("#sh-signin")) {
+      $("#sh-signin").onclick = () => {
+        S.afterLogin = "shop"; S.tab = "login"; render();
+      };
+    }
     $("#ship-form").onsubmit = (e) => {
       e.preventDefault();
       const btn = e.target.querySelector("button.btn");
       btn.disabled = true; btn.setAttribute("aria-busy", "true");
       const paySel = $("#sh-pay");
+      const email = $("#sh-email");
       placeOrder({
         ship_name: $("#sh-name").value, address: $("#sh-addr").value,
         city: $("#sh-city").value, postal: $("#sh-postal").value,
         phone: $("#sh-phone").value,
+        email: email ? email.value : "",
         pay_method: paySel ? paySel.value : "cod" })
-        .finally(() => { btn.disabled = false; });
+        .finally(() => {
+          btn.disabled = false; btn.removeAttribute("aria-busy");
+        });
     };
   };
   renderCartCard();
@@ -1326,6 +1356,9 @@ async function renderClock() {
         </select>` : ""}
       <div class="punch-acts">
         <button class="btn" id="punch">Punch</button>
+        <button class="btn alt" id="badge-btn"
+          title="scan an employee badge instead of typing a PIN">${
+          opsIcon("camera", "btn-ic")} Scan a badge</button>
         <button class="btn alt" id="kiosk-btn"
           title="full-screen keypad for the store tablet">Kiosk mode</button>
       </div>
@@ -1347,6 +1380,27 @@ async function renderClock() {
         <td>${s.clock_out ? fmt(s.clock_out) : '<span class="pill ok">on shift</span>'}</td>
         <td>${s.hours}</td>
         <td class="dim">${esc(s.event_name || "")}</td></tr>`).join("")}</tbody></table></div></div>` : ""}`;
+  /* The badge is the other way in. On a tablet by the door, holding a
+     lanyard up to the camera beats typing four digits with cold hands, and
+     the badge identifies without authenticating — the worst a stolen one can
+     do is clock its owner in, which a supervisor can see and undo. */
+  $("#badge-btn").onclick = async () => {
+    const code = await QRScan.scan({ title: "Scan your badge" });
+    if (!code) return;
+    const evSel = $("#clock-event");
+    try {
+      const r = await api("/api/clock/badge", { body: {
+        token: code, event_id: evSel && evSel.value ? +evSel.value : null } });
+      $("#punch-msg").innerHTML = r.action === "clock_in"
+        ? `<b>${esc(r.name)}</b> clocked in${r.event
+            ? " at " + esc(r.event) : ""}. Have a good one.`
+        : `<b>${esc(r.name)}</b> clocked out — ${r.hours}h.`;
+      renderClock();
+    } catch (e) {
+      $("#punch-msg").innerHTML = `<span class="low">${esc(e.message)}</span>`;
+    }
+  };
+
   const punch = async () => {
     try {
       const evSel = $("#clock-event");
@@ -4301,6 +4355,8 @@ async function renderStaff() {
             : `<span class="pill">${u.effective.length} area(s)</span>`}
           <button class="btn alt sm" data-setpin="${u.id}:${esc(u.name)}"
             >Time-clock PIN</button>
+          <button class="btn alt sm" data-badge="${u.id}:${esc(u.name)}"
+            >Badge</button>
         </div>
         ${u.is_admin ? '<p class="dim" style="margin-top:8px">Owner accounts always have every permission.</p>' : `
         <div class="perm-grid">
@@ -4315,6 +4371,30 @@ async function renderStaff() {
           <button class="btn sm" data-saveperm="${u.id}">Save permissions</button>
         </div>`}
       </div>`).join("")}`;
+  view().querySelectorAll("[data-badge]").forEach((b) => b.onclick = async () => {
+    const [uid, name] = b.dataset.badge.split(":");
+    const { token } = await api(`/api/admin/users/${uid}/badge`,
+                                { method: "POST" });
+    modal(`<h3>${esc(name)}'s clock badge</h3>
+      <p class="dim">Print it, or let them photograph it. Holding it up to
+        the clock tablet punches them in or out. It is not a sign-in: a copy
+        can only clock them in, which you would see on the timesheet.</p>
+      <div style="text-align:center;padding:12px">${qrImg(token, 170)}</div>
+      <div class="modal-acts">
+        <button class="btn alt" data-close>Close</button>
+        <button class="btn alt danger-hint" id="badge-reset">Issue a new one</button>
+        <button class="btn" onclick="window.print()">Print</button>
+      </div>`);
+    $("#badge-reset").onclick = async () => {
+      if (!confirm("Issue a new badge? Anything already printed stops "
+        + "working.")) return;
+      const r = await api(`/api/admin/users/${uid}/badge?reset=1`,
+                          { method: "POST" });
+      $("#ops-modal").querySelector("div[style*='text-align:center']")
+        .innerHTML = qrImg(r.token, 170);
+      toast("New badge issued");
+    };
+  });
   view().querySelectorAll("[data-setpin]").forEach((b) => b.onclick = () => {
     const [uid, name] = b.dataset.setpin.split(":");
     modal(`<h3>Time-clock PIN — ${esc(name)}</h3>
@@ -4452,8 +4532,15 @@ function eventForm(e) {
 
 // ---------- profile ----------
 async function renderProfile() {
+  /* Your own record is the one screen that has to work for everyone signed
+     in. Achievements and company level are the business's scoreboard, and
+     both endpoints are owner-only — awaiting them alongside /api/me meant a
+     customer or an employee opening their own profile got nothing at all,
+     because one rejected promise fails the whole batch. They're optional
+     now, and the sections they feed simply aren't drawn without them. */
   const [me, ach, game] = await Promise.all([
-    api("/api/me"), api("/api/achievements"),
+    api("/api/me"),
+    api("/api/achievements").catch(() => []),
     api("/api/game").catch(() => null)]);
   const earned = ach.filter((a) => a.unlocked_at);
   const locked = ach.filter((a) => !a.unlocked_at);
@@ -4467,14 +4554,17 @@ async function renderProfile() {
     </div>
 
     <div class="stats">
-      <div class="stat"><div class="n">${earned.length}</div>
+      ${ach.length ? `<div class="stat"><div class="n">${earned.length}</div>
         <div class="l">achievements</div>
-        <div class="d dim">of ${ach.length}</div></div>
+        <div class="d dim">of ${ach.length}</div></div>` : ""}
       ${game ? `<div class="stat"><div class="n">${esc(game.company.level)}</div>
         <div class="l">company level</div></div>` : ""}
       <div class="stat"><div class="n">${me.has_pin ? "set" : "—"}</div>
         <div class="l">time-clock PIN</div>
         <div class="d dim">${me.has_pin ? "ready to clock in" : "not set"}</div></div>
+      <div class="stat"><div class="n">${me.member_since
+        ? fmtDate(me.member_since) : "—"}</div>
+        <div class="l">member since</div></div>
     </div>
 
     <div class="row">
@@ -4486,6 +4576,16 @@ async function renderProfile() {
         <div id="pf-qr" style="text-align:center;padding:10px"></div>
         <button class="btn alt" id="pf-qr-go">Generate a sign-in QR</button>
       </div>
+      <div class="card" style="flex:1;min-width:240px">
+        <h3 style="margin-top:0">Your time-clock badge</h3>
+        <p class="dim">Hold this up to the clock tablet to punch in or out.
+          It identifies you, but it isn't a sign-in — someone who copies it
+          can only clock you in, not open your account. Print it, or keep it
+          on your phone.</p>
+        <div id="pf-badge" style="text-align:center;padding:10px"></div>
+        <button class="btn alt" id="pf-badge-go">Show my badge</button>
+        <button class="btn alt" id="pf-badge-reset">Issue a new one</button>
+      </div>
       <div class="card" style="flex:1;min-width:220px">
         <h3 style="margin-top:0">Account</h3>
         <table>
@@ -4496,7 +4596,7 @@ async function renderProfile() {
       </div>
     </div>
 
-    <h3>Achievements</h3>
+    ${ach.length ? `<h3>Achievements</h3>
     <div class="ach-grid">
       ${earned.map((a) => `<div class="ach-card on">
         <span class="ach-ic">${opsIcon(a.icon || "shield2")}</span>
@@ -4507,7 +4607,17 @@ async function renderProfile() {
         <b>${esc(a.name)}</b><span class="dim">${esc(a.desc || "")}</span>
         <span class="ach-when">${esc(a.progress || "locked")}</span></div>`)
         .join("")}
-    </div>`;
+    </div>` : ""}`;
+
+  const showBadge = async (reset) => {
+    if (reset && !confirm("Issue a new badge? The old one stops working, so "
+      + "anything printed with it needs replacing.")) return;
+    const { token } = await api(
+      `/api/me/badge${reset ? "?reset=1" : ""}`, { method: "POST" });
+    $("#pf-badge").innerHTML = qrImg(token, 150);
+  };
+  $("#pf-badge-go").onclick = () => showBadge(false);
+  $("#pf-badge-reset").onclick = () => showBadge(true);
 
   $("#pf-edit").onclick = () => {
     modal(`<h3>Edit profile</h3>

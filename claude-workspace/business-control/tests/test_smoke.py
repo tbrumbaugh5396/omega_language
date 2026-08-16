@@ -1975,13 +1975,14 @@ ok('setAttribute("aria-busy", "true")' in _ops,
    "which is set where a button is disabled during a request")
 
 # The signed-out cart used to be a dead end: a disabled button beside a line
-# of grey text that wasn't a link.
-ok("Sign in to check out" in _ops,
-   "signed out, the checkout button says what it will do")
+# of grey text that wasn't a link. It now goes straight to checkout, because
+# an account is offered at the delivery step rather than demanded before it.
 ok("sign in to order" not in _ops,
-   "and the inert label beside it is gone")
+   "the inert label beside the checkout button is gone")
+ok("if (co) co.onclick = onCheckout;" in _ops,
+   "and the button checks out whether or not you're signed in")
 ok('S.afterLogin = "shop"' in _ops and "S.afterLogin\n        ||" in _ops,
-   "signing in from the cart returns to the cart, not an employee job home")
+   "signing in mid-cart returns to the cart, not an employee job home")
 
 # --- the side nav scrolls on its own and keeps its place ---
 ok("overflow-y: auto" in _css.split("#tabs {")[1][:400]
@@ -2006,5 +2007,106 @@ ok(".signin input, .signin select { width: 100%" in _css,
    "its fields fill whatever width the card has")
 ok("max-width: 720px" in _css and ".signin { grid-template-columns: 1fr" in _css,
    "and it collapses to one column on a narrow window")
+
+
+# --- your own profile works whoever you are ---
+_cust = c.post("/api/login", json={"name": "Cart Tester",
+                                   "role": "customer"}).json()
+_CT = {"Authorization": "Bearer " + _cust["token"]}
+_meq = c.get("/api/me", headers=_CT)
+ok(_meq.status_code == 200, "a customer can read their own profile")
+ok("member_since" in _meq.json(), "which now says how long they've been one")
+# The two the page also wants stay owner-only, so the page must not need them.
+ok(c.get("/api/achievements", headers=_CT).status_code == 403
+   and c.get("/api/game", headers=_CT).status_code == 403,
+   "the company scoreboard is still the owner's")
+ok('api("/api/achievements").catch' in _ops
+   and 'api("/api/game").catch' in _ops,
+   "so the profile treats both as optional rather than failing the batch")
+ok("${ach.length ? `<h3>Achievements" in _ops,
+   "and simply omits the section when there is nothing to show")
+
+# --- ordering without an account ---
+_gp = c.post("/api/admin/products", headers=A, json={
+    "sku": "GUEST-1", "name": "Guest Item", "price_cents": 500,
+    "case_size": 12, "case_price_cents": 4800})
+_gpid = [p for p in c.get("/api/products").json()
+         if p["sku"] == "GUEST-1"][0]["id"]
+_gbase = {"items": [{"product_id": _gpid, "qty": 2}],
+          "ship_name": "Guest Buyer", "address": "1 Main St",
+          "city": "Chicago", "postal": "60601"}
+ok(c.post("/api/orders", json=_gbase).status_code == 400,
+   "ordering without an account still needs an email")
+ok("email" in c.post("/api/orders", json=_gbase).json()["detail"],
+   "and says why")
+ok(c.post("/api/orders", json={**_gbase, "email": "g@example.com",
+                               "ship_name": ""}).status_code == 400,
+   "and a name for the delivery")
+_go = c.post("/api/orders", json={**_gbase, "email": "guest@example.com"})
+ok(_go.status_code == 200, "a guest can order")
+ok("token" not in _go.text,
+   "and is never handed a session token for doing so")
+_con_g = _db.connect()
+_ga = _con_g.execute(
+    "SELECT * FROM users WHERE lower(email)='guest@example.com'").fetchall()
+ok(len(_ga) == 1, "one account is created for the email")
+ok(not _ga[0]["password_hash"],
+   "with no password, so it isn't a credential anyone now holds")
+c.post("/api/orders", json={**_gbase, "email": "guest@example.com"})
+ok(_con_g.execute("SELECT COUNT(*) n FROM users WHERE"
+                  " lower(email)='guest@example.com'").fetchone()["n"] == 1,
+   "and a second order attaches to it rather than making another")
+
+# The guard that matters: a guest is priced as a customer even when the
+# email belongs to a distributor, or the guest form would be a wholesale
+# discount anyone could type their way into.
+_dist = c.post("/api/login", json={"name": "Wholesale Co",
+                                   "role": "distributor",
+                                   "email": "buyer@wholesale.example"}).json()
+_dr = c.post("/api/orders", headers={"Authorization": "Bearer " + _dist["token"]},
+             json={"items": [{"product_id": _gpid, "qty": 1}]})
+ok(_dr.json()["kind"] == "distributor" and _dr.json()["subtotal_cents"] == 4800,
+   "a signed-in distributor is billed at case price")
+_gr = c.post("/api/orders", json={**_gbase, "items": [{"product_id": _gpid,
+             "qty": 1}], "email": "buyer@wholesale.example"})
+ok(_gr.json()["kind"] == "customer" and _gr.json()["subtotal_cents"] == 500,
+   "but a guest using that same email pays retail")
+_con_g.close()
+ok("sh-email" in _ops, "the checkout form asks a guest for an email")
+ok("Order #${o.id} placed" in _ops,
+   "and confirms the order in place, rather than sending them to a sign-in")
+
+# --- clocking in with a badge ---
+_badge = c.post("/api/me/badge", headers=A).json()["token"]
+ok(_badge.startswith("bc:clock:"), "a badge is issued")
+ok(c.post("/api/me/badge", headers=A).json()["token"] == _badge,
+   "and is stable — a badge you must reissue every shift is one nobody uses")
+_bin = c.post("/api/clock/badge", json={"token": _badge})
+ok(_bin.status_code == 200 and _bin.json()["action"] == "clock_in",
+   "scanning it clocks in")
+ok(c.post("/api/clock/badge", json={"token": _badge}).json()["action"]
+   == "clock_out", "and scanning again clocks out")
+ok(c.post("/api/clock/badge", json={"token": "bc:clock:invented"}
+          ).status_code == 404, "an unknown badge is refused")
+# The separation is the point: a badge is not a login, and a login is not a
+# badge. Either direction working would make a photographed lanyard an
+# account.
+ok(c.post("/api/clock/badge",
+          json={"token": A["Authorization"].split()[1]}).status_code == 404,
+   "a sign-in token is not accepted as a badge")
+_notlogin = c.get("/api/me", headers={"Authorization": "Bearer " + _badge})
+ok(_notlogin.status_code == 401, "and a badge is not accepted as a sign-in")
+_badge2 = c.post("/api/me/badge?reset=1", headers=A).json()["token"]
+ok(_badge2 != _badge, "a lost badge can be replaced")
+ok(c.post("/api/clock/badge", json={"token": _badge}).status_code == 404,
+   "which stops the old one")
+ok(c.post("/api/admin/users/999999/badge", headers=A).status_code == 404,
+   "issuing a badge for nobody is a 404")
+ok(c.post("/api/me/badge", headers=CU).status_code == 401,
+   "and getting a badge needs a sign-in")
+ok("badge-btn" in _ops and "/api/clock/badge" in _ops,
+   "the time clock offers a badge scan")
+ok("pf-badge-go" in _ops, "your profile shows your own badge")
+ok("data-badge=" in _ops, "and an owner can issue one from Team & access")
 
 print(f"\nall {checks} checks passed")

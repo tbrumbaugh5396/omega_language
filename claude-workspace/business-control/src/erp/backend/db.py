@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   token TEXT UNIQUE NOT NULL,
   pin TEXT DEFAULT '',                     -- legacy plaintext; migrated away
   pin_hash TEXT DEFAULT '',                -- time-clock PIN, peppered HMAC
+  clock_token TEXT DEFAULT '',             -- badge QR; identifies, never logs in
   job TEXT DEFAULT 'general',              -- staff job: driver|dsd|warehouse|sales_rep|ambassador|event_staff|general
   employment TEXT DEFAULT 'employee',      -- employee (hourly) | contractor (per-route)
   password_hash TEXT DEFAULT '',           -- salt$pbkdf2; empty = no password

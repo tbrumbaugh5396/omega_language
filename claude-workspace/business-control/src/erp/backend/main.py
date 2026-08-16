@@ -322,6 +322,7 @@ def read_me(user=Depends(current_user), con=Depends(get_con)):
             "region": user["region"], "is_admin": bool(user["is_admin"]),
             "employment": user["employment"],
             "has_password": bool(user["password_hash"]),
+            "member_since": user["created_at"],
             # The token is deliberately absent. The caller sent it to get
             # here, so echoing it back adds nothing and puts a credential in
             # one more response body.
@@ -455,6 +456,7 @@ class OrderItemBody(BaseModel):
 
 class OrderBody(BaseModel):
     items: list[OrderItemBody]
+    email: str = ""             # required when ordering without an account
     store_id: int | None = None
     affiliate_code: str = ""
     visitor_id: str = ""
@@ -470,11 +472,58 @@ class OrderBody(BaseModel):
     shipping_method_id: int | None = None  # store_shipping_methods row
 
 
+def customer_for_order(con, authorization: str, body):
+    """Who this order belongs to — signed in, or a guest identified by email.
+
+    Guest checkout goes through the same endpoint rather than a parallel one,
+    because the interesting parts of placing an order (pricing, stock,
+    discounts, payment, the notifications that follow) are exactly the parts
+    you must not end up with two copies of.
+
+    Two rules make the guest path safe. It never returns a token, so ordering
+    to an address is not a way into the account that owns it. And a guest is
+    always priced as a customer even when the email belongs to a distributor
+    — otherwise typing a wholesaler's address into the guest form would be a
+    way to buy at wholesale.
+    """
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    if token:
+        u = auth.user_for_token(con, token)
+        if u is not None:
+            return u, False
+    email = (body.email or "").strip().lower()
+    name = body.ship_name.strip()
+    if not email or "@" not in email:
+        raise HTTPException(
+            400, "an email address is needed to order without signing in — "
+                 "it's where the receipt and tracking go")
+    if not name:
+        raise HTTPException(400, "a name is needed for the delivery")
+    existing = con.execute(
+        "SELECT * FROM users WHERE lower(email)=? AND active=1",
+        (email,)).fetchone()
+    if existing is not None:
+        return existing, True
+    cur = con.execute(
+        "INSERT INTO users(name,email,role,token,region,created_at)"
+        " VALUES(?,?,'customer',?,?,?)",
+        (name[:80], email[:120], secrets.token_urlsafe(24),
+         body.region or "", db.now()))
+    con.commit()
+    return con.execute("SELECT * FROM users WHERE id=?",
+                       (cur.lastrowid,)).fetchone(), True
+
+
 @app.post("/api/orders")
-def place_order(body: OrderBody, user=Depends(current_user), con=Depends(get_con)):
+def place_order(body: OrderBody, authorization: str = Header(default=""),
+                con=Depends(get_con)):
     if not body.items:
         raise HTTPException(400, "empty order")
-    kind = "distributor" if user["role"] == "distributor" else "customer"
+    user, as_guest = customer_for_order(con, authorization, body)
+    # A guest is a customer, whatever the matched account happens to be.
+    kind = ("customer" if as_guest
+            else ("distributor" if user["role"] == "distributor"
+                  else "customer"))
     if kind == "customer" and not (body.ship_name.strip()
                                    and body.address.strip()
                                    and body.city.strip()):
@@ -826,6 +875,12 @@ def clock(body: ClockBody, con=Depends(get_con)):
     emp = auth.check_pin(con, body.pin, CFG["pin_pepper"])
     if emp is None:
         raise HTTPException(404, "no employee with that PIN")
+    return _punch(con, emp, body.event_id)
+
+
+def _punch(con, emp, event_id):
+    """Toggle a shift for this employee. Shared by the PIN keypad and the
+    badge scanner, so the two can't drift into behaving differently."""
     open_shift = con.execute(
         "SELECT * FROM shifts WHERE user_id=? AND clock_out IS NULL",
         (emp["id"],)).fetchone()
@@ -837,17 +892,47 @@ def clock(body: ClockBody, con=Depends(get_con)):
                 "shift_id": open_shift["id"],
                 "hours": round((db.now() - open_shift["clock_in"]) / 3600, 2)}
     event_name = ""
-    if body.event_id:
+    if event_id:
         ev = con.execute("SELECT * FROM promos WHERE id=? AND kind='event'"
-                         " AND active=1", (body.event_id,)).fetchone()
+                         " AND active=1", (event_id,)).fetchone()
         if ev is None:
             raise HTTPException(400, "no such active event")
         event_name = ev["name"]
     cur = con.execute("INSERT INTO shifts(user_id, clock_in, event_id)"
-                      " VALUES(?,?,?)", (emp["id"], db.now(), body.event_id))
+                      " VALUES(?,?,?)", (emp["id"], db.now(), event_id))
     con.commit()
     return {"name": emp["name"], "action": "clock_in",
             "shift_id": cur.lastrowid, "event": event_name}
+
+
+class BadgeBody(BaseModel):
+    token: str
+    event_id: int | None = None
+
+
+@app.post("/api/clock/badge")
+def clock_badge_punch(body: BadgeBody, con=Depends(get_con)):
+    """Punch by scanning a badge. Unauthenticated for the same reason the
+    PIN keypad is: it runs on a shared tablet by the door, and requiring a
+    login to record that you arrived defeats the point."""
+    emp = auth.user_for_badge(con, body.token)
+    if emp is None:
+        raise HTTPException(404, "that badge isn't recognised")
+    return _punch(con, emp, body.event_id)
+
+
+@app.post("/api/me/badge")
+def my_badge(reset: int = 0, user=Depends(current_user), con=Depends(get_con)):
+    """Your own badge. Reset it if the old one is on a lanyard you lost."""
+    return {"token": auth.clock_badge(con, user["id"], bool(reset))}
+
+
+@app.post("/api/admin/users/{uid}/badge")
+def issue_badge(uid: int, reset: int = 0, user=Depends(admin_user),
+                con=Depends(get_con)):
+    if not con.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone():
+        raise HTTPException(404, "no such user")
+    return {"token": auth.clock_badge(con, uid, bool(reset))}
 
 
 @app.get("/api/shifts")

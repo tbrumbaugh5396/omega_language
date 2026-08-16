@@ -61,10 +61,12 @@ def migrate_pins(con, pepper: str) -> int:
     one-off script: an install that was never upgraded is exactly the one
     still holding plaintext PINs.
     """
-    try:
-        con.execute("ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT ''")
-    except Exception:
-        pass
+    for stmt in ("ALTER TABLE users ADD COLUMN pin_hash TEXT DEFAULT ''",
+                 "ALTER TABLE users ADD COLUMN clock_token TEXT DEFAULT ''"):
+        try:
+            con.execute(stmt)
+        except Exception:
+            pass
     try:
         rows = con.execute(
             "SELECT id, pin FROM users WHERE pin IS NOT NULL AND pin!=''"
@@ -76,6 +78,41 @@ def migrate_pins(con, pepper: str) -> int:
                     (hash_pin(r["pin"], pepper), r["id"]))
     con.commit()
     return len(rows)
+
+
+# ---------- clock badges ----------
+#
+# A badge identifies someone at the time clock. It deliberately is not a
+# login: the worst a stolen badge can do is clock its owner in or out, which
+# a supervisor can see and correct, whereas a stolen sign-in QR would be an
+# account. Keeping them separate is the whole point — a badge gets left on a
+# lanyard, photographed, and pinned to a noticeboard, and none of that should
+# be a way into the business.
+#
+# It is stable rather than single-use, because a badge you have to reissue
+# after every shift is a badge nobody uses.
+
+def clock_badge(con, user_id: int, reset: bool = False) -> str:
+    row = con.execute("SELECT clock_token FROM users WHERE id=?",
+                      (user_id,)).fetchone()
+    if row is None:
+        raise ValueError("no such user")
+    token = row["clock_token"]
+    if reset or not token:
+        token = "bc:clock:" + secrets.token_urlsafe(18)
+        con.execute("UPDATE users SET clock_token=? WHERE id=?",
+                    (token, user_id))
+        con.commit()
+    return token
+
+
+def user_for_badge(con, token: str):
+    token = (token or "").strip()
+    if not token.startswith("bc:clock:"):
+        return None
+    return con.execute(
+        "SELECT * FROM users WHERE clock_token=? AND clock_token!=''"
+        " AND active=1", (token,)).fetchone()
 
 
 def user_for_token(con, token: str):
