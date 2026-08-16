@@ -342,11 +342,10 @@ async function coursePane(ctx, body) {
       "is either an integral of a signal against a basis, or a change of " +
       "basis — if a module feels like arbitrary trivia, ask which of the two " +
       "it is."),
-    el("div.stack", {}, ...index.modules.map((m, i) =>
+    el("div.stack", {}, ...index.modules.map((m) =>
       el("button.drill-card", { onclick: () => openDoc(m.slug) },
         el("b", {}, m.title),
         el("div.row.tight", { style: { marginTop: ".3rem" } },
-          el("span.tag", {}, `Module ${i}`),
           m.maths ? el("span.fine", {}, m.maths) : null,
           el("span.fine", {}, `${m.words} words`),
           liveCount(m.slug) ? el("span.tag.good", {}, `${liveCount(m.slug)} live figures`) : null)))),
@@ -374,8 +373,11 @@ async function coursePane(ctx, body) {
     const pending = [];
     const rendered = renderMarkdown(text, {
       onFigure: (path, alt) => {
-        const id = path.split("/").pop().replace(/\.(svg|png)$/, "");
-        const fig = FIGURE_BY_ID[id];
+        // Assets ship as light/dark pairs; the live version is one figure that
+        // suits either, so the theme suffix is not part of its identity.
+        const file = path.split("/").pop().replace(/\.(svg|png)$/, "");
+        const id = file.replace(/-(dark|light)$/, "");
+        const fig = FIGURE_BY_ID[id] || FIGURE_BY_ID[file];
         if (!fig) return null;
         const holder = el("div");
         pending.push([holder, fig]);

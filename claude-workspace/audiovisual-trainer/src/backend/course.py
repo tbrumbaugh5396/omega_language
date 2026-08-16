@@ -26,6 +26,7 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 # Title and one-line summary come from the file itself; this is only the order
 # and the "core maths" column the course README publishes.
 ORDER = [
+    ("00-em-field", "Fields, the wave equation, the Fourier basis"),
     ("00-radiometry", "Solid angles, hemisphere integrals"),
     ("01-the-eye", "Inner products, null spaces, linear maps"),
     ("02-colorimetry", "Change of basis, projective geometry, convex hulls"),

@@ -539,18 +539,132 @@ const hsvLuminance = {
   },
 };
 
+// ------------------------------------------------------------------ Prequel
+
+const planeWave = {
+  id: "em-plane-wave",
+  caption: "The same plane wave twice: as a graph of field strength against position, and as the field actually standing in space.",
+  note: "Watch a single marked position. The arrow there grows, shrinks and " +
+        "flips in place — it never moves sideways. The pattern travels; nothing " +
+        "material does. The lower panel is the honest picture: slabs of uniform " +
+        "field sweeping past, not a rope being shaken.",
+  runtime: "canvas2d",
+  animated: true,
+  aspect: 0.56,
+  knobs: [["speed", 0, 2, 0.7, (v) => v.toFixed(2)],
+          ["wavelength", 90, 300, 170, (v) => `${v.toFixed(0)} px`]],
+  draw(g, w, h, t, k, s) {
+    const speed = k[0], lambda = k[1];
+    const phase = t * speed * lambda;
+    g.clearRect(0, 0, w, h);
+
+    const arrow = (x, y0, y1, col) => {
+      const dir = Math.sign(y1 - y0) || 1;
+      g.strokeStyle = col;
+      g.lineWidth = 1.6 * s;
+      g.lineCap = "round";
+      g.beginPath(); g.moveTo(x, y0); g.lineTo(x, y1); g.stroke();
+      if (Math.abs(y1 - y0) > 4 * s) {
+        g.beginPath();
+        g.moveTo(x - 3.5 * s, y1 - dir * 5 * s);
+        g.lineTo(x, y1);
+        g.lineTo(x + 3.5 * s, y1 - dir * 5 * s);
+        g.stroke();
+      }
+    };
+
+    const WARM = "#EE8A62", COOL = "#6FB0EC";
+    const field = (x) => Math.sin((2 * Math.PI * (x - phase)) / lambda);
+
+    // ---- top: the graph
+    const axisY = h * 0.27, amp = h * 0.16;
+    g.strokeStyle = F.AX;
+    g.lineWidth = 1 * s;
+    g.beginPath(); g.moveTo(20 * s, axisY); g.lineTo(w - 14 * s, axisY); g.stroke();
+    g.strokeStyle = WARM;
+    g.lineWidth = 1.8 * s;
+    g.beginPath();
+    for (let x = 20 * s; x <= w - 14 * s; x++) {
+      const y = axisY - field(x) * amp;
+      x === 20 * s ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    g.stroke();
+
+    // Arrows at fixed positions: the point of the whole figure.
+    const stops = [];
+    for (let x = 60 * s; x < w - 40 * s; x += lambda / 4) stops.push(x);
+    for (const x of stops) {
+      const v = field(x);
+      arrow(x, axisY, axisY - v * amp, v >= 0 ? WARM : COOL);
+    }
+
+    g.fillStyle = F.AX;
+    g.font = `${11 * s}px system-ui`;
+    g.textAlign = "center";
+    g.fillText("a graph — arrow length is field strength, not sideways motion",
+               w / 2, axisY + amp + 26 * s);
+
+    // ---- bottom: the field in space, as sheets
+    const baseY = h * 0.74, sheetH = h * 0.2, skew = 14 * s;
+    g.strokeStyle = F.AX;
+    g.lineWidth = 1 * s;
+    g.beginPath(); g.moveTo(20 * s, baseY); g.lineTo(w - 14 * s, baseY); g.stroke();
+
+    for (const x of stops) {
+      const v = field(x);
+      const col = v >= 0 ? WARM : COOL;
+      const strength = Math.abs(v);
+      g.save();
+      g.beginPath();
+      g.moveTo(x - 14 * s, baseY - sheetH);
+      g.lineTo(x + 14 * s, baseY - sheetH - skew);
+      g.lineTo(x + 14 * s, baseY + sheetH - skew);
+      g.lineTo(x - 14 * s, baseY + sheetH);
+      g.closePath();
+      g.fillStyle = col;
+      g.globalAlpha = 0.06 + strength * 0.16;
+      g.fill();
+      g.globalAlpha = 1;
+      g.strokeStyle = F.AX;
+      g.lineWidth = 0.9 * s;
+      g.setLineDash(strength < 0.12 ? [3 * s, 3 * s] : []);
+      g.stroke();
+      g.restore();
+
+      // Every arrow on one sheet is identical — that is what "plane" means.
+      for (let i = -1; i <= 1; i++) {
+        const ax = x + i * 9 * s;
+        const ay = baseY - i * skew * 0.32;
+        if (strength < 0.12) {
+          g.fillStyle = F.AX;
+          g.beginPath(); g.arc(ax, ay, 2 * s, 0, Math.PI * 2); g.fill();
+        } else {
+          arrow(ax, ay, ay - v * sheetH * 0.8, col);
+        }
+      }
+    }
+
+    g.fillStyle = F.AX;
+    g.font = `${11 * s}px system-ui`;
+    g.fillText("in space — each sheet carries one uniform field value, flipping every half wavelength",
+               w / 2, baseY + sheetH + 26 * s);
+    g.textAlign = "left";
+  },
+};
+
 // ------------------------------------------------------------------ registry
 
 export const FIGURES = [
   gradientTriptych, gradientLuminance, srgbTransfer, bandingDither, zonePlate,
   smoothstepContinuity, sdfAntialias, metamericPair, coneOverlap, chromaticity,
-  wienPeaks, hsvLuminance,
+  wienPeaks, hsvLuminance, planeWave,
 ];
 
 export const FIGURE_BY_ID = Object.fromEntries(FIGURES.map((f) => [f.id, f]));
 
 /** Extra figures a module should offer even though its prose predates them. */
 export const MODULE_EXTRAS = {
+  "00-em-field": ["metameric-pair"],
   "00-radiometry": ["planck-peaks"],
   "01-the-eye": ["metameric-pair", "colour-matching-functions"],
   "02-colorimetry": ["chromaticity-diagram"],
