@@ -1157,7 +1157,7 @@ async function renderShop() {
     window.scrollTo({ top: 300, behavior: "smooth" });
   const isDistributor = S.user && S.user.role === "distributor";
 
-  const cartTotals = () => {
+  const cartTotals = (method) => {
     let subtotal = 0;
     for (const [pid, qty] of Object.entries(S.cart)) {
       const p = S.products.find((x) => x.id === +pid);
@@ -1166,9 +1166,17 @@ async function renderShop() {
     }
     const tax = isDistributor ? 0
       : Math.floor(subtotal * (S.meta.tax_bps || 0) / 10000);
-    const shipping = (isDistributor || !subtotal
-      || subtotal >= (S.meta.free_shipping_over_cents || 0))
-      ? 0 : (S.meta.shipping_flat_cents || 0);
+    /* Delivery is priced for whichever option is selected, by the same rule
+       the server applies: standard (position 0) is free over the threshold,
+       anything faster is paid for however big the order. A checkout that
+       quotes one number and charges another is worse than one quoting
+       nothing. */
+    const free = subtotal >= (S.meta.free_shipping_over_cents || 0);
+    let shipping;
+    if (isDistributor || !subtotal) shipping = 0;
+    else if (method) shipping = (method.position === 0 && free)
+      ? 0 : method.price_cents;
+    else shipping = free ? 0 : (S.meta.shipping_flat_cents || 0);
     return { subtotal, tax, shipping, total: subtotal + tax + shipping };
   };
 
@@ -1234,11 +1242,28 @@ async function renderShop() {
     } catch (e) { toast(e.message); }
   };
 
-  const onCheckout = () => {
+  const onCheckout = async () => {
     if (!Object.keys(S.cart).length) return toast("cart is empty");
     if (isDistributor) return placeOrder({});     // wholesale ships on terms
-    const t = cartTotals();
-    $("#checkout-box").innerHTML = `
+
+    const methods = await api("/api/store/shipping").catch(() => []);
+    /* Whether an email is still needed depends on the account, not on
+       whether someone is signed in. An owner, or a customer whose address
+       was never confirmed, has to give one too — otherwise the form offers
+       no way to supply what the server is about to insist on, and
+       pay-on-delivery dead-ends on an error with nothing to type into. */
+    const me = S.user ? await api("/api/me").catch(() => null) : null;
+    const needEmail = !me || !me.email || !me.email_confirmed;
+
+    const chosen = () => methods.find((m) => String(m.id) === S.shipMethod)
+      || methods[0];
+
+    const draw = () => {
+      const m = chosen();
+      const t = cartTotals(m);
+      const paying = ($("#sh-pay") || {}).value
+        || (S.meta.stripe_enabled ? "card" : "cod");
+      $("#checkout-box").innerHTML = `
       <div class="card checkout-card">
         <h3 style="margin-top:0">Delivery details</h3>
         ${S.user ? "" : `<p class="dim">No account needed — the email is
@@ -1248,48 +1273,91 @@ async function renderShop() {
         <form id="ship-form">
           <input id="sh-name" placeholder="full name"
             value="${esc(S.user ? S.user.name : "")}" required>
-          ${S.user ? "" : `<input id="sh-email" type="email" required
+          ${needEmail ? `<input id="sh-email" type="email" required
+            value="${esc(me && me.email ? me.email : "")}"
             placeholder="email — for the receipt and tracking"
-            autocomplete="email">`}
+            autocomplete="email">` : ""}
           <input id="sh-addr" placeholder="street address" required>
-          <div style="display:flex;gap:8px">
+          <div class="row2">
             <input id="sh-city" placeholder="city" required style="flex:1">
             <input id="sh-postal" placeholder="ZIP" style="width:90px">
           </div>
           <input id="sh-phone" placeholder="phone (optional)">
-          ${S.meta.stripe_enabled ? `<label class="f">payment
-            <select id="sh-pay"><option value="card">card (secure checkout)</option>
-            <option value="cod">pay on delivery</option></select></label>`
-          : '<div class="dim">payment: on delivery (card payments not enabled)</div>'}
+
+          ${methods.length ? `<div class="ship-opts">
+            <div class="dim">Delivery</div>
+            ${methods.map((x) => {
+              const price = (x.position === 0
+                && t.subtotal >= (S.meta.free_shipping_over_cents || 0))
+                ? 0 : x.price_cents;
+              return `<label class="ship-opt ${
+                m && x.id === m.id ? "on" : ""}">
+                <input type="radio" name="shipm" value="${x.id}"
+                  ${m && x.id === m.id ? "checked" : ""}>
+                <span class="s-n"><b>${esc(x.name)}</b>
+                  ${x.eta ? `<span class="dim">${esc(x.eta)}</span>` : ""}</span>
+                <span class="s-p">${price ? money(price) : "FREE"}</span>
+              </label>`;
+            }).join("")}
+          </div>` : ""}
+
+          ${S.meta.stripe_enabled ? `<label class="f">Payment
+            <select id="sh-pay">
+              <option value="card" ${paying === "card" ? "selected" : ""}
+                >Card — pay now</option>
+              <option value="cod" ${paying === "cod" ? "selected" : ""}
+                >Pay on delivery</option></select></label>`
+          : `<div class="dim">Payment: on delivery (card payments aren't
+             set up)</div>`}
+
+          ${paying === "cod" ? `<div class="cod-note">Paying on delivery, so
+            the email gets confirmed before anything is dispatched — you'll
+            get a link, and nothing is delivered until it's used.</div>` : ""}
+
           <div class="dim">subtotal ${money(t.subtotal)} · tax ${money(t.tax)}
-            · shipping ${t.shipping ? money(t.shipping) : "FREE"} ·
+            · delivery ${t.shipping ? money(t.shipping) : "FREE"} ·
             <b style="color:var(--text)">total ${money(t.total)}</b></div>
           <button class="btn">Place order — ${money(t.total)}</button>
         </form>
       </div>`;
-    $("#checkout-box").scrollIntoView({ behavior: "smooth" });
-    if ($("#sh-signin")) {
-      $("#sh-signin").onclick = () => {
-        S.afterLogin = "shop"; S.tab = "login"; render();
-      };
-    }
-    $("#ship-form").onsubmit = (e) => {
+
+      // Re-draw on either choice: both move the total, and a total that only
+      // updates when you submit is a total nobody believes.
+      $("#checkout-box").querySelectorAll('[name="shipm"]').forEach((r) => {
+        r.onchange = () => { S.shipMethod = r.value; draw(); };
+      });
+      if ($("#sh-pay")) $("#sh-pay").onchange = draw;
+      if ($("#sh-signin")) {
+        $("#sh-signin").onclick = () => {
+          S.afterLogin = "shop"; S.tab = "login"; render();
+        };
+      }
+      $("#ship-form").onsubmit = submit;
+    };
+
+    const submit = (e) => {
       e.preventDefault();
       const btn = e.target.querySelector("button.btn");
       btn.disabled = true; btn.setAttribute("aria-busy", "true");
       const paySel = $("#sh-pay");
       const email = $("#sh-email");
+      const m = chosen();
       placeOrder({
         ship_name: $("#sh-name").value, address: $("#sh-addr").value,
         city: $("#sh-city").value, postal: $("#sh-postal").value,
         phone: $("#sh-phone").value,
         email: email ? email.value : "",
+        shipping_method_id: m ? m.id : null,
         pay_method: paySel ? paySel.value : "cod" })
         .finally(() => {
           btn.disabled = false; btn.removeAttribute("aria-busy");
         });
     };
+
+    draw();
+    $("#checkout-box").scrollIntoView({ behavior: "smooth" });
   };
+
   renderCartCard();
   wireRows({ product: S.products }, renderShop);
 }
@@ -1334,9 +1402,43 @@ async function renderOrders() {
       </select></td>
       <td>${rowActions("order", o)}</td>` : ""}
     </tr>`).join("")}</tbody></table>
+    <div id="awaiting"></div>
     ${orders.length ? "" : emptyState("box", "No orders yet",
       isAdmin ? "They'll appear here the moment a customer checks out."
       : "Head to the Shop, add something to your cart, and check out.")}</div>`;
+  /* Orders held for email confirmation. They aren't in the orders table —
+     that is what keeps them out of revenue — but staff still have to see
+     that someone asked for them, or the demand is invisible. */
+  if (isAdmin) {
+    api("/api/admin/orders/awaiting").then((waiting) => {
+      if (!waiting.length || !$("#awaiting")) return;
+      $("#awaiting").innerHTML = `<h3>Waiting on email confirmation
+        (${waiting.length})</h3>
+        <div class="card"><p class="dim" style="margin-top:0">Paying on
+          delivery, so nothing is dispatched until the address is confirmed.
+          These aren't orders yet and aren't counted anywhere.</p>
+        <table><thead><tr><th>who</th><th>email</th><th>where</th>
+          <th class="num">items</th><th>asked</th><th></th></tr></thead>
+        <tbody>${waiting.map((w) => `<tr>
+          <td>${esc(w.name)}</td><td class="dim">${esc(w.email)}</td>
+          <td class="dim">${esc(w.city || "—")}</td>
+          <td class="num">${w.items}</td>
+          <td class="dim">${timeAgo(w.created_at)}</td>
+          <td><button class="btn alt sm" data-resend="${w.id}"
+            >Resend link</button></td></tr>`).join("")}
+        </tbody></table></div>`;
+      $("#awaiting").querySelectorAll("[data-resend]").forEach((b) => {
+        b.onclick = async () => {
+          try {
+            const r = await api(
+              `/api/admin/orders/awaiting/${b.dataset.resend}/resend`,
+              { method: "POST" });
+            toast(`Link sent again to ${r.email}`);
+          } catch (e) { toast(e.message); }
+        };
+      });
+    }).catch(() => {});
+  }
   document.querySelectorAll("[data-o]").forEach((sel) => {
     sel.onchange = async () => {
       await api(`/api/admin/orders/${sel.dataset.o}/status`,

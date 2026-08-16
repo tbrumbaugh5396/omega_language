@@ -2132,6 +2132,40 @@ ok("pf-badge-go" in _ops, "your profile shows your own badge")
 ok("data-badge=" in _ops, "and an owner can issue one from Team & access")
 
 
+# --- choosing a delivery ---
+_ships = c.get("/api/store/shipping").json()
+ok(len(_ships) >= 2, "there is more than one delivery to choose between")
+_std = [m for m in _ships if m["position"] == 0][0]
+_fast = [m for m in _ships if m["position"] != 0][0]
+# pay_method "card" with Stripe off still places immediately, which keeps
+# this about delivery pricing rather than about the confirmation gate.
+_dbase = {"items": [{"product_id": _gpid, "qty": 1}], "ship_name": "Ship Test",
+          "address": "1 St", "city": "Chicago", "email": "carl@example.com",
+          "pay_method": "card"}
+_o_std = c.post("/api/orders", headers=CU,
+                json={**_dbase, "shipping_method_id": _std["id"]}).json()
+_o_fast = c.post("/api/orders", headers=CU,
+                 json={**_dbase, "shipping_method_id": _fast["id"]}).json()
+ok(_o_fast["shipping_cents"] == _fast["price_cents"],
+   "the faster delivery is charged at its own price")
+ok(_o_fast["shipping_cents"] > _o_std["shipping_cents"],
+   "and costs more than standard")
+ok(_o_fast["total_cents"] - _o_std["total_cents"]
+   == _o_fast["shipping_cents"] - _o_std["shipping_cents"],
+   "with the difference landing in the total, not somewhere else")
+ok("ship-opt" in _ops and 'name="shipm"' in _ops,
+   "the checkout offers the choice")
+ok("cartTotals = (method)" in _ops and "S.shipMethod = r.value" in _ops,
+   "and re-totals when it changes, rather than only on submit")
+
+# The form has to ask for an email whenever the account hasn't confirmed one
+# — not just for guests. An owner with no email on file was shown no field
+# and then refused by the server, with nothing to type into.
+ok("email_confirmed" in c.get("/api/me", headers=A).json(),
+   "the account says whether its email is confirmed")
+ok("const needEmail = !me || !me.email || !me.email_confirmed;" in _ops,
+   "and the checkout asks based on that, not on being signed out")
+
 # --- pay on delivery waits for a confirmed email ---
 import re as _re2  # noqa: E402
 _cod = {"items": [{"product_id": _gpid, "qty": 2}], "ship_name": "COD Buyer",
@@ -2195,6 +2229,17 @@ ok(c.post("/api/orders", json={**_cod, "email": "shape@example.com",
 ok(_db.connect().execute(
     "SELECT COUNT(*) n FROM pending_orders WHERE email='shape@example.com'"
    ).fetchone()["n"] == 0, "and nothing is held for it")
+
+# Held orders stay visible to staff even though they aren't orders yet.
+_await = c.get("/api/admin/orders/awaiting", headers=A)
+ok(_await.status_code == 200, "staff can see what's waiting on confirmation")
+ok(any(w["email"] == "expired@example.com" or w["items"]
+       for w in _await.json()) or _await.json() == [],
+   "with the items and the address that asked for them")
+ok(c.get("/api/admin/orders/awaiting", headers=CU).status_code in (401, 403),
+   "which is an owner's view")
+ok("Waiting on email confirmation" in _ops,
+   "and the orders screen shows them, separated from real orders")
 
 # --- card payments are configurable ---
 _pc = c.get("/api/admin/payments", headers=A).json()

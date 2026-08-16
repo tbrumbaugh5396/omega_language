@@ -368,6 +368,9 @@ def read_me(user=Depends(current_user), con=Depends(get_con)):
             "employment": user["employment"],
             "has_password": bool(user["password_hash"]),
             "member_since": user["created_at"],
+            # The checkout needs to know whether to ask for an email, and
+            # asking the account is the only way to tell.
+            "email_confirmed": bool(user["email_verified_at"]),
             # The token is deliberately absent. The caller sent it to get
             # here, so echoing it back adds nothing and puts a credential in
             # one more response body.
@@ -1134,6 +1137,51 @@ def issue_badge(uid: int, reset: int = 0, user=Depends(admin_user),
     if not con.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone():
         raise HTTPException(404, "no such user")
     return {"token": auth.clock_badge(con, uid, bool(reset))}
+
+
+@app.get("/api/admin/orders/awaiting")
+def orders_awaiting(user=Depends(admin_user), con=Depends(get_con)):
+    """Pay-on-delivery orders still waiting on their email confirmation.
+
+    They aren't in `orders` yet — that's what stops them counting as revenue
+    — but the business still needs to see them, or demand that has been asked
+    for simply isn't visible anywhere.
+    """
+    rows = con.execute(
+        "SELECT p.*, u.name FROM pending_orders p"
+        " JOIN users u ON u.id=p.user_id"
+        " WHERE p.placed_order_id=0 AND p.expires_at > ?"
+        " ORDER BY p.created_at DESC LIMIT 50", (db.now(),)).fetchall()
+    out = []
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"])
+        except Exception:
+            payload = {}
+        out.append({"id": r["id"], "name": r["name"], "email": r["email"],
+                    "created_at": r["created_at"],
+                    "expires_at": r["expires_at"],
+                    "items": len(payload.get("items") or []),
+                    "city": payload.get("city", "")})
+    return out
+
+
+@app.post("/api/admin/orders/awaiting/{pid}/resend")
+def resend_confirmation(pid: int, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    r = con.execute("SELECT * FROM pending_orders WHERE id=? AND"
+                    " placed_order_id=0", (pid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "nothing waiting under that id")
+    link = f"{base_url()}/confirm-order/{r['token']}"
+    mailer.log_and_send(
+        con, CFG, r["user_id"], r["email"], "order-confirm",
+        "Confirm your order",
+        f"Just a reminder — your order isn't placed until you confirm this "
+        f"address.\n\n{link}\n\nIf you didn't order anything, ignore this.",
+        f"confirm-resend-{r['id']}-{int(db.now())}")
+    con.commit()
+    return {"ok": True, "email": r["email"]}
 
 
 @app.get("/api/shifts")
