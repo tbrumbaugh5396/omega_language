@@ -181,6 +181,7 @@
       overflow-y: auto; box-shadow: var(--sh-2); }
     .adm-modal-card h3 { font-size: 21px; margin-bottom: 10px; }
   </style>
+  <link rel="stylesheet" href="/qr-scan.css">
 </head>
 <body>
 <!--ICONS-->
@@ -207,6 +208,7 @@
     <label>Password (if set)</label><input id="li-pass" type="password">
     <label>Admin key (first sign-in)</label><input id="li-key" placeholder="optional if already admin">
     <div class="modal-actions">
+      <button class="btn-pill ghost" id="li-scan">Scan a sign-in QR</button>
       <button class="btn-pill primary" id="li-go">Sign in</button>
     </div>
     <p class="dim" id="li-msg"></p>
@@ -727,6 +729,7 @@
   </div>
 </div>
 
+<script src="/qr-scan.js"></script>
 <script src="/admin.js"></script>
 </body>
 </html>

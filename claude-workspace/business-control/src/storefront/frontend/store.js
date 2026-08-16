@@ -119,12 +119,25 @@ addEventListener("DOMContentLoaded", () => {
 });
 
 // ---------- shader hero (fragment-shader gradient flow) ----------
+/* Only drawn when the "shader" hero style is chosen in the page builder.
+
+   It repaints a full-screen fragment shader, so it is gated three ways:
+   it stops when the hero scrolls out of view, stops when the tab is hidden,
+   and never starts at all if the visitor asked for reduced motion. An
+   animation that keeps running behind a background tab is how a marketing
+   site ends up holding a laptop fan open all afternoon — the loop used to
+   be unconditional, which was fine only because nothing on the live site
+   selected this hero. */
 (function shaderHero() {
   const canvas = $("#shader-bg");
   if (!canvas) return;            // hero may use a gradient/image background
+  const still = "linear-gradient(135deg,#6c00bf,#8a77e1)";
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    canvas.style.background = still;
+    return;
+  }
   const gl = canvas.getContext("webgl");
-  if (!gl) { canvas.style.background =
-    "linear-gradient(135deg,#6c00bf,#8a77e1)"; return; }
+  if (!gl) { canvas.style.background = still; return; }
   const vs = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
   const fs = `precision mediump float;uniform float t;uniform vec2 r;
     // simplex-ish flowing gradient, Book of Shaders style
@@ -153,6 +166,9 @@ addEventListener("DOMContentLoaded", () => {
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
   const uT = gl.getUniformLocation(prog, "t");
   const uR = gl.getUniformLocation(prog, "r");
+
+  let raf = 0, onScreen = true;
+  const running = () => onScreen && !document.hidden;
   function frame(ms) {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     if (canvas.width !== w || canvas.height !== h) {
@@ -161,9 +177,17 @@ addEventListener("DOMContentLoaded", () => {
     gl.uniform1f(uT, ms / 1000);
     gl.uniform2f(uR, w, h);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    requestAnimationFrame(frame);
+    raf = running() ? requestAnimationFrame(frame) : 0;
   }
-  requestAnimationFrame(frame);
+  const start = () => { if (!raf && running()) raf = requestAnimationFrame(frame); };
+  const stop = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
+  new IntersectionObserver(([e]) => {
+    onScreen = e.isIntersecting;
+    onScreen ? start() : stop();
+  }).observe(canvas);
+  document.addEventListener("visibilitychange", () =>
+    document.hidden ? stop() : start());
+  start();
 })();
 
 // ---------- catalog ----------
@@ -919,11 +943,19 @@ function signIn(intro, onDone) {
     <input id="si-email" type="email" autocomplete="email">
     <div class="modal-actions">
       <button class="btn-pill ghost sm" data-close-modal>Later</button>
+      <button class="btn-pill ghost sm" id="si-scan">Scan a QR</button>
       <button class="btn-pill primary sm" id="si-go">Sign in</button>
     </div>
+    <p class="dim" id="si-msg"></p>
     <p class="dim" style="margin-top:14px;padding-top:12px;
       border-top:1px solid var(--line)">On the team?
       <a class="text-link" href="/admin">Back-office sign-in →</a></p>`);
+  on("#si-scan", async () => {
+    const msg = $("#si-msg");
+    if (msg) msg.textContent = "";
+    const r = await QRScan.signIn("Scan your sign-in QR");
+    if (!r.ok && r.error && msg) msg.textContent = r.error;
+  });
   const go = async () => {
     const name = $("#si-name").value.trim();
     if (!name) { $("#si-name").focus(); return; }

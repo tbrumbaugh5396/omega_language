@@ -51,6 +51,15 @@ $("#li-go").onclick = async () => {
   } catch (e) { $("#li-msg").textContent = String(e.message || e); }
 };
 
+/* Scanning beats typing a password on a phone in a stockroom, and the QR is
+   single-use and short-lived, so a photo of it is worth nothing by the time
+   anyone else sees it. */
+$("#li-scan").onclick = async () => {
+  $("#li-msg").textContent = "";
+  const r = await QRScan.signIn("Scan your sign-in QR");
+  if (!r.ok && r.error) $("#li-msg").textContent = r.error;
+};
+
 // Which permission each tab needs; tabs you can't use are hidden.
 const TAB_PERMS = {
   products: "products", orders: "orders", reviews: "content",

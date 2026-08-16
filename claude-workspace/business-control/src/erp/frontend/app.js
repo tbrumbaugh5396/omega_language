@@ -163,6 +163,8 @@ function logout() {
   clearInterval(S._notifTimer);
   endCall(true);
   if (S._ws) { S._ws.onclose = null; S._ws.close(); S._ws = null; }
+  clearTimeout(S._wsRetry);          // a pending reconnect outlives the session
+  clearInterval(S._dcTimer);
   const panel = $("#notif-panel");
   if (panel) panel.remove();
   render();
@@ -463,52 +465,68 @@ function wireMap(id) {
     zoomAt(e.deltaY < 0 ? 1.18 : 1 / 1.18, px, py);
   }, { passive: false });
 
-  svg.addEventListener("mousedown", (e) => {
-    dragging = true; sx = e.clientX; sy = e.clientY; svg.classList.add("grab");
-  });
-  window.addEventListener("mousemove", (e) => {
-    if (!dragging) return;
-    const r = svg.getBoundingClientRect();
-    tx += (e.clientX - sx) / r.width * MAP_W;
-    ty += (e.clientY - sy) / r.height * MAP_H;
-    sx = e.clientX; sy = e.clientY;
-    clamp(); apply();
-  });
-  window.addEventListener("mouseup", () => {
-    dragging = false; svg.classList.remove("grab");
+  /* Pointer events with capture, rather than mousedown on the SVG plus
+     mousemove/mouseup on window.
+
+     That older pairing leaked: every map render added two window listeners
+     that were never removed, and each closed over the map's SVG — so a
+     session that visited Stores or Routes a few dozen times ended up with
+     hundreds of live handlers firing on every mouse movement, each pinning
+     a whole detached map in memory. Nothing ever released them, because
+     there was no teardown hook to release them from.
+
+     Capture fixes the reason window was used in the first place: a drag has
+     to keep tracking after the pointer leaves the element. With
+     setPointerCapture the events keep coming to the SVG itself, so every
+     listener now lives and dies with the node it is attached to, and the
+     leak cannot come back by inspection. It also covers touch, which is why
+     the separate touchstart/touchmove/touchend handling is gone. */
+  const pointers = new Map();       // active pointers, for pinch
+  let pinchDist = 0;
+
+  svg.addEventListener("pointerdown", (e) => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    svg.setPointerCapture(e.pointerId);
+    if (pointers.size === 1) {
+      dragging = true; sx = e.clientX; sy = e.clientY;
+      svg.classList.add("grab");
+    } else if (pointers.size === 2) {
+      dragging = false;
+      const [p1, p2] = [...pointers.values()];
+      pinchDist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    }
   });
 
-  // Touch: one finger pans, two fingers pinch.
-  let pinch = 0;
-  svg.addEventListener("touchstart", (e) => {
-    if (e.touches.length === 1) { dragging = true;
-      sx = e.touches[0].clientX; sy = e.touches[0].clientY; }
-    else if (e.touches.length === 2) {
-      dragging = false;
-      pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
-                         e.touches[0].clientY - e.touches[1].clientY);
-    }
-  }, { passive: true });
-  svg.addEventListener("touchmove", (e) => {
-    if (e.touches.length === 2 && pinch) {
-      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
-                           e.touches[0].clientY - e.touches[1].clientY);
-      const r = svg.getBoundingClientRect();
-      const cx = ((e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left)
-        / r.width * MAP_W;
-      const cy = ((e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top)
-        / r.height * MAP_H;
-      zoomAt(d / pinch, cx, cy); pinch = d;
+  svg.addEventListener("pointermove", (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const r = svg.getBoundingClientRect();
+    if (pointers.size === 2 && pinchDist) {
+      const [p1, p2] = [...pointers.values()];
+      const d = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+      const cx = ((p1.x + p2.x) / 2 - r.left) / r.width * MAP_W;
+      const cy = ((p1.y + p2.y) / 2 - r.top) / r.height * MAP_H;
+      zoomAt(d / pinchDist, cx, cy);
+      pinchDist = d;
       e.preventDefault();
-    } else if (dragging && e.touches.length === 1) {
-      const r = svg.getBoundingClientRect();
-      tx += (e.touches[0].clientX - sx) / r.width * MAP_W;
-      ty += (e.touches[0].clientY - sy) / r.height * MAP_H;
-      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-      clamp(); apply(); e.preventDefault();
+    } else if (dragging) {
+      tx += (e.clientX - sx) / r.width * MAP_W;
+      ty += (e.clientY - sy) / r.height * MAP_H;
+      sx = e.clientX; sy = e.clientY;
+      clamp(); apply();
     }
-  }, { passive: false });
-  svg.addEventListener("touchend", () => { dragging = false; pinch = 0; });
+  });
+
+  const release = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchDist = 0;
+    if (!pointers.size) { dragging = false; svg.classList.remove("grab"); }
+    try { svg.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+  };
+  svg.addEventListener("pointerup", release);
+  svg.addEventListener("pointercancel", release);
+  // A drag has to end even if the pointer is lost some other way.
+  svg.addEventListener("lostpointercapture", release);
 
   homeView();
   wrap.querySelectorAll("[data-mz]").forEach((b) => b.onclick = () => {
@@ -909,37 +927,61 @@ async function render() {
 
 function renderLogin() {
   const regions = S.meta.regions.map((r) => `<option>${r}</option>`).join("");
+  /* Widths come from the grid, not from inline max-widths on each card. The
+     old version pinned the form at 420px and the QR panel at 280px, so on a
+     half-width window the two sat as narrow columns with the inputs at
+     whatever width the browser felt like, and on a wide one they hugged the
+     left edge. */
   view().innerHTML = `
     <h2>Sign in</h2>
-    <div class="row" style="max-width:760px">
-    <div class="card" style="max-width:420px">
-      <form class="inline" id="login-form" style="flex-direction:column;align-items:stretch">
-        <label class="f">name <input id="li-name" required></label>
-        <label class="f">I am a
-          <select id="li-role">
-            <option value="customer">customer</option>
-            <option value="distributor">distributor</option>
-            <option value="influencer">influencer</option>
-            <option value="employee">employee</option>
-            <option value="owner">founder / owner (needs admin key)</option>
-          </select></label>
-        <label class="f">region <select id="li-region"><option value=""></option>${regions}</select></label>
-        <label class="f">email (for order updates & offers)
-          <input id="li-email" type="email" placeholder="optional"></label>
-        <label class="f">password <input id="li-pass" type="password"
-          placeholder="sets on first sign-in, then required"></label>
-        <label class="f">admin key (optional) <input id="li-admin" type="password"></label>
-        <button class="btn">Sign in</button>
-      </form>
-    </div>
-    <div class="card" style="max-width:280px;text-align:center">
-      <h3 style="margin-top:0">Open on your phone</h3>
-      <div id="lan-qr" class="dim">loading…</div>
-      <div class="dim" style="margin-top:8px;font-size:12px">Scan from a phone
-        on the same wifi. Admins can also issue one-tap sign-in QRs per user
-        from the Admin tab.</div>
-    </div>
+    <div class="signin">
+      <div class="card signin-form">
+        <form id="login-form">
+          <label>Name<input id="li-name" required autocomplete="name"></label>
+          <div class="signin-two">
+            <label>I am a
+              <select id="li-role">
+                <option value="customer">customer</option>
+                <option value="distributor">distributor</option>
+                <option value="influencer">influencer</option>
+                <option value="employee">employee</option>
+                <option value="owner">founder / owner (needs admin key)</option>
+              </select></label>
+            <label>Region
+              <select id="li-region"><option value=""></option>${regions}</select></label>
+          </div>
+          <label>Email <span class="dim">for order updates &amp; offers</span>
+            <input id="li-email" type="email" placeholder="optional"
+              autocomplete="email"></label>
+          <label>Password<input id="li-pass" type="password"
+            autocomplete="current-password"
+            placeholder="sets on first sign-in, then required"></label>
+          <label>Admin key <span class="dim">optional</span>
+            <input id="li-admin" type="password" autocomplete="off"></label>
+          <button class="btn">Sign in</button>
+        </form>
+      </div>
+
+      <div class="card signin-qr">
+        <h3>Sign in with a QR</h3>
+        <p class="dim">If someone has issued you a sign-in QR — from a
+          profile page or the Admin tab — scan it here instead of typing
+          anything.</p>
+        <button class="btn alt" id="li-scan">${opsIcon("camera", "btn-ic")}
+          Scan a sign-in QR</button>
+        <div id="li-scan-msg" class="dim"></div>
+        <h3>Open on your phone</h3>
+        <div id="lan-qr" class="dim">loading…</div>
+        <p class="dim">Scan from a phone on the same wifi.</p>
+      </div>
     </div>`;
+
+  $("#li-scan").onclick = async () => {
+    const msg = $("#li-scan-msg");
+    msg.textContent = "";
+    const r = await QRScan.signIn("Scan your sign-in QR");
+    if (!r.ok && r.error) msg.textContent = r.error;
+  };
   api("/api/net").then((n) => {
     $("#lan-qr").innerHTML = qrImg(n.lan_url) +
       `<div class="dim" style="font-size:12px;margin-top:6px">${esc(n.lan_url)}</div>`;
@@ -2274,17 +2316,29 @@ function confetti() {
 
 function connectWS() {
   if (!S.user || S._ws) return;
+  clearTimeout(S._wsRetry);
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(
     `${proto}://${location.host}/ws?token=${encodeURIComponent(S.user.token)}`);
   S._ws = ws;
+  ws.onopen = () => { S._wsWait = 0; };
   ws.onmessage = (e) => {
     let d;
     try { d = JSON.parse(e.data); } catch { return; }
     if (d.type === "msg") onChatMessage(d);
     else if (d.type === "signal") onSignal(d);
   };
-  ws.onclose = () => { S._ws = null; if (S.user) setTimeout(connectWS, 3000); };
+  /* Back off rather than retrying on a fixed timer. A socket the server
+     keeps refusing — a stale token, an old tab left open overnight — used to
+     mean a reconnect every three seconds forever, which is a connection
+     storm nobody is watching and which multiplies by the number of open
+     tabs. Doubling to a minute makes a broken tab cheap. */
+  ws.onclose = () => {
+    S._ws = null;
+    if (!S.user) return;
+    S._wsWait = Math.min((S._wsWait || 2000) * 2, 60000);
+    S._wsRetry = setTimeout(connectWS, S._wsWait);
+  };
 }
 
 function wsSend(obj) {

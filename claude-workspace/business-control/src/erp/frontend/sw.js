@@ -1,6 +1,6 @@
 /* Service worker: cache the app shell (network-first for /api), and surface
    Web Push notifications. */
-const CACHE = "business-control-ops-v4";
+const CACHE = "business-control-ops-v5";
 
 self.addEventListener("push", (e) => {
   let d = {};
@@ -32,14 +32,26 @@ self.addEventListener("activate", (e) => {
       .map((k) => caches.delete(k)))));
 });
 
+/* Only the shell is worth keeping offline. Caching every GET meant uploaded
+   media and one-off downloads accumulated on disk with no ceiling and no
+   reason — the point of this cache is that the app still opens in a
+   warehouse with no signal, not that it hoards every file it has ever
+   seen. */
+const CACHEABLE = /^\/ops\/(?!.*\bexport\b)|^\/manifest|\.(css|js|png|svg|webmanifest)$/;
+
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (url.pathname.startsWith("/api") || e.request.method !== "GET") return;
+  if (!CACHEABLE.test(url.pathname)) return;
   e.respondWith(
     fetch(e.request)
       .then((r) => {
-        const copy = r.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        // Opaque and error responses are not worth storing, and storing a
+        // 404 is how a deploy leaves someone stuck on a broken shell.
+        if (r.ok && r.type === "basic") {
+          const copy = r.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+        }
         return r;
       })
       .catch(() => caches.match(e.request))

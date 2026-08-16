@@ -1898,4 +1898,63 @@ ok(".punch-card" in _css and "max-width:380px" not in _ops,
 ok(".punch-card select { width: 100%" in _css,
    "and its event dropdown can't outgrow the card")
 
+
+# --- no window listeners per map render ---
+# This one had teeth: every map attached mousemove and mouseup to window and
+# never removed them, so each visit to Stores or Routes left two more live
+# handlers holding a whole detached SVG. Measured at 194 listeners and
+# ~20ms per 200 mouse moves before the fix, rising linearly.
+ok("window.addEventListener" not in _ops,
+   "nothing in the ops app attaches a listener to window")
+ok("setPointerCapture" in _ops,
+   "the map drags with pointer capture, so its listeners die with the node")
+ok('addEventListener("touchstart"' not in _ops,
+   "and the separate touch handling is gone, since pointer events cover it")
+
+# --- the socket backs off ---
+ok("_wsWait" in _ops and "60000" in _ops,
+   "a refused socket backs off instead of retrying forever on a fixed timer")
+ok(_ops.count("clearTimeout(S._wsRetry)") >= 2,
+   "and a pending reconnect is cancelled on sign-out as well as on connect")
+
+# --- the service worker caches the shell, not everything ---
+_sw = c.get("/ops/sw.js").text
+ok("CACHEABLE" in _sw, "the worker decides what is worth caching")
+ok("r.ok && r.type" in _sw,
+   "and never stores an error response, which would strand a broken shell")
+
+# --- the hero shader can't run unattended ---
+_store_js = c.get("/store.js").text
+ok("IntersectionObserver" in _store_js and "visibilitychange" in _store_js,
+   "the hero shader stops when off-screen or hidden")
+ok("prefers-reduced-motion" in _store_js,
+   "and never starts if the visitor asked for less motion")
+
+# --- the QR sign-in scanner ---
+_qr = c.get("/qr-scan.js")
+ok(_qr.status_code == 200, "the shared scanner is served")
+ok("getTracks().forEach((t) => t.stop())" in _qr.text,
+   "and stops the camera on every exit path")
+for _surface, _path in (("ops app", "/ops/"), ("store admin", "/admin"),
+                        ("storefront", "/")):
+    ok("/qr-scan.js" in c.get(_path).text, f"{_surface} loads the scanner")
+ok("li-scan" in _ops, "the ops sign-in offers a scan")
+ok("li-scan" in c.get("/admin").text, "so does the store admin")
+ok("si-scan" in _store_js, "and so does the storefront")
+
+# A scanned QR is a string a stranger can print, so only a sign-in link for
+# this origin is ever followed.
+ok("u.origin !== location.origin" in _qr.text,
+   "a code pointing at another origin is refused")
+ok("/^\\/qr-login\\/[\\w-]+$/" in _qr.text,
+   "and only the sign-in path shape is accepted")
+
+# --- the sign-in page sizes itself ---
+ok("max-width:420px" not in _ops and "max-width:280px" not in _ops,
+   "the sign-in cards no longer carry fixed pixel widths")
+ok(".signin input, .signin select { width: 100%" in _css,
+   "its fields fill whatever width the card has")
+ok("max-width: 720px" in _css and ".signin { grid-template-columns: 1fr" in _css,
+   "and it collapses to one column on a narrow window")
+
 print(f"\nall {checks} checks passed")
