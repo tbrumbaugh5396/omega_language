@@ -563,3 +563,56 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
   .dc-c { flex: 0 0 auto; }
   .dc-c .dim { display: none; }
 }
+
+/* ---------- row actions, sourcing, audit, database ---------- */
+.row-acts { display: inline-flex; gap: 5px; margin-left: 6px;
+  vertical-align: middle; }
+.btn.sm { padding: 3px 10px; font-size: 12.5px; font-weight: 500; }
+.btn.alt.danger-hint:hover { border-color: var(--bad); color: var(--bad); }
+.product .row-acts { margin: 8px 0 0; }
+.head-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px;
+  align-items: end; }
+.edit-grid label { grid-column: span 1; }
+.edit-grid textarea, .edit-grid label:has(+ textarea) { grid-column: 1 / -1; }
+.edit-grid .perm { grid-column: 1 / -1; }
+@media (max-width: 560px) { .edit-grid { grid-template-columns: 1fr; } }
+
+tr.off { opacity: .5; }
+.inv-n { width: 78px; padding: 4px 7px; font-size: 13px;
+  font-variant-numeric: tabular-nums; }
+.inv-n.saved { border-color: var(--good); }
+.inv-n.low { color: var(--bad); font-weight: 700; }
+.warn-line { margin-top: 8px; font-size: 13px; color: var(--warn);
+  background: rgba(224,161,50,.1); border-radius: var(--r-sm);
+  padding: 7px 10px; }
+.po-line { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 6px;
+  margin-bottom: 6px; }
+
+.filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin: 10px 0; }
+.filters input, .filters select { min-width: 160px; }
+.pager { display: inline-flex; gap: 6px; align-items: center; }
+tr.au-fail td { background: rgba(224,96,90,.07); }
+code { font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--panel2); padding: 1px 6px; border-radius: 5px; }
+
+.db-wrap { display: flex; gap: 12px; align-items: flex-start; }
+.db-tables { flex: 0 0 190px; display: flex; flex-direction: column; gap: 3px;
+  max-height: 72vh; overflow-y: auto; }
+.db-t { display: flex; justify-content: space-between; gap: 8px;
+  text-align: left; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 6px 10px; font-size: 12.5px; cursor: pointer; }
+.db-t b { font-weight: 500; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.db-t.on { border-color: var(--accent); background: var(--panel2); }
+.db-main { flex: 1; min-width: 0; }
+.db-main td { max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 13px; }
+@media (max-width: 760px) {
+  .db-wrap { flex-direction: column; }
+  .db-tables { flex-basis: auto; width: 100%; flex-direction: row;
+    overflow-x: auto; max-height: none; }
+  .db-t { flex: 0 0 auto; }
+}

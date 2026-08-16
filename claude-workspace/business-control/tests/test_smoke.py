@@ -1199,4 +1199,260 @@ ok(not _hits,
 for _p in ("/admin", "/admin/theme"):
     _html = c.get(_p, headers=A).text
     ok("<symbol id=\"i-" in _html, f"{_p} carries the icon sprite")
+
+# --- one route per path ---
+# A second @app.get on the same path silently shadows the first, and the
+# older one wins. That is how /api/me lost has_pin: two handlers, and the
+# profile read the one without it. Nothing about it looks wrong at the call
+# site, so it needs a test rather than a careful reader.
+_seen, _dupes = {}, []
+for _r in app.routes:
+    for _m in getattr(_r, "methods", ()) or ():
+        if _m in ("HEAD", "OPTIONS"):
+            continue
+        _k = (_m, getattr(_r, "path", ""))
+        if _k in _seen:
+            _dupes.append(f"{_m} {_k[1]}")
+        _seen[_k] = 1
+ok(not _dupes, "no route is registered twice"
+   + (" — " + ", ".join(_dupes[:4]) if _dupes else ""))
+
+# --- the time clock ---
+ok(c.post("/api/me", headers=A, json={"pin": "4417"}).status_code == 200,
+   "a PIN can be set from your own profile")
+ok(c.get("/api/me", headers=A).json()["has_pin"],
+   "and the profile then says the PIN is set")
+_in = c.post("/api/clock", json={"pin": "4417"})
+ok(_in.status_code == 200 and _in.json()["action"] == "clock_in",
+   "that PIN clocks in")
+_out = c.post("/api/clock", json={"pin": "4417"})
+ok(_out.json()["action"] == "clock_out", "and clocks out again")
+ok(c.post("/api/clock", json={"pin": "0000"}).status_code == 404,
+   "an unknown PIN is refused")
+
+# --- edit and delete across the ERP ---
+_p = c.post("/api/admin/products", headers=A, json={
+    "sku": "EDIT-1", "name": "Editable", "price_cents": 400,
+    "case_price_cents": 4000}).status_code
+_pid = c.get("/api/products").json()[-1]["id"]
+_pid = [p["id"] for p in c.get("/api/products").json()
+        if p["sku"] == "EDIT-1"][0]
+ok(c.patch(f"/api/admin/products/{_pid}", headers=A,
+           json={"name": "Renamed"}).status_code == 200, "a product edits")
+ok(any(p["name"] == "Renamed" for p in c.get("/api/products").json()),
+   "and the change is visible")
+ok(c.patch(f"/api/admin/products/{_pid}", headers=A,
+           json={}).status_code == 400, "an empty edit is refused")
+ok(c.delete(f"/api/admin/products/{_pid}", headers=A).json()["retired"]
+   is False, "an unsold product deletes outright")
+
+# A product with order history is retired instead, so past orders keep
+# describing something that exists.
+_con_s = _db.connect()
+_sold_row = _con_s.execute(
+    "SELECT product_id FROM order_items LIMIT 1").fetchone()
+_con_s.close()
+ok(_sold_row is not None, "some product has been ordered by now")
+_sold = _sold_row["product_id"]
+_before = c.get("/api/admin/db/products", headers=A).json()["total"]
+_del = c.delete(f"/api/admin/products/{_sold}", headers=A).json()
+ok(_del["retired"], "a product with orders is retired, not deleted")
+ok(c.get("/api/admin/db/products", headers=A).json()["total"] == _before,
+   "and its row is still there")
+
+_st = c.post("/api/admin/stores", headers=A, json={
+    "name": "Editable Store", "region": "Midwest", "lat": 41.0, "lng": -87.0})
+_sid = [s["id"] for s in c.get("/api/stores").json()
+        if s["name"] == "Editable Store"][0]
+ok(c.patch(f"/api/admin/stores/{_sid}", headers=A,
+           json={"city": "Gary"}).status_code == 200, "a store edits")
+ok(c.delete(f"/api/admin/stores/{_sid}", headers=A).status_code == 200,
+   "and deletes")
+
+_pr = c.post("/api/admin/promos", headers=A,
+             json={"kind": "promo", "name": "Editable promo"}).json()
+ok(c.patch(f"/api/admin/promos/{_pr['id']}", headers=A,
+           json={"discount_pct": 15}).status_code == 200, "a promo edits")
+ok(c.delete(f"/api/admin/promos/{_pr['id']}", headers=A).status_code == 200,
+   "and deletes")
+
+_ords = c.get("/api/orders", headers=A).json()
+if _ords:
+    _oid = _ords[0]["id"]
+    ok(c.patch(f"/api/admin/orders/{_oid}", headers=A,
+               json={"city": "Elsewhere"}).status_code == 200, "an order edits")
+    ok(c.patch(f"/api/admin/orders/{_oid}", headers=A,
+               json={"status": "teleported"}).status_code == 400,
+       "an invented order status is refused")
+    ok(c.delete(f"/api/admin/orders/{_oid}", headers=A).json()["cancelled"],
+       "deleting an order cancels it rather than erasing the record")
+
+ok(c.delete("/api/admin/inventory/999999/999999",
+            headers=A).status_code == 404,
+   "clearing stock a store never had is a 404, not a silent success")
+
+# --- sourcing and supply ---
+_sup = c.post("/api/supply/suppliers", headers=A,
+              json={"name": "Test Farms", "lead_days": 30}).json()
+ok(_sup.get("id"), "a supplier is created")
+ok(c.post("/api/supply/suppliers", headers=A,
+          json={"name": "", "kind": "ingredient"}).status_code == 400,
+   "a nameless supplier is refused")
+ok(c.post("/api/supply/suppliers", headers=A,
+          json={"name": "x", "kind": "invented"}).status_code == 400,
+   "an unknown supplier kind is refused")
+_mat = c.post("/api/supply/materials", headers=A, json={
+    "name": "Test concentrate", "unit": "L", "supplier_id": _sup["id"],
+    "unit_cost_cents": 800, "reorder_point": 20}).json()
+_po = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _sup["id"], "reference": "PO-T1",
+    "lines": [{"material_id": _mat["id"], "qty": 50,
+               "unit_cost_cents": 800}]}).json()
+ok(_po.get("id"), "a purchase order is created")
+ok(c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _sup["id"], "lines": []}).status_code == 400,
+   "a purchase order with no lines is refused")
+c.post(f"/api/supply/purchase-orders/{_po['id']}/status", headers=A,
+       json={"status": "sent"})
+_ovv = c.get("/api/supply", headers=A).json()
+_line = [ln for p in _ovv["purchase_orders"] if p["id"] == _po["id"]
+         for ln in p["lines"]][0]
+_rec = c.post(f"/api/supply/purchase-orders/{_po['id']}/receive", headers=A,
+              json={"lines": {str(_line["id"]): 20}}).json()
+ok(_rec["complete"] is False, "a partial delivery leaves the order open")
+ok(c.post(f"/api/supply/purchase-orders/{_po['id']}/receive", headers=A,
+          json={"lines": {str(_line["id"]): 500}}).status_code == 400,
+   "receiving more than was ordered is refused")
+_m2 = [m for m in c.get("/api/supply", headers=A).json()["materials"]
+       if m["id"] == _mat["id"]][0]
+ok(_m2["on_hand"] == 20, "stock moved by exactly what was received")
+ok(_m2["incoming"] == 30, "the rest still counts as incoming")
+
+# Stock only moves with a reason attached.
+ok(c.patch(f"/api/supply/materials/{_mat['id']}", headers=A,
+           json={"name": "Renamed", "on_hand": 9999}).status_code == 200,
+   "a material edits")
+_m3 = [m for m in c.get("/api/supply", headers=A).json()["materials"]
+       if m["id"] == _mat["id"]][0]
+ok(_m3["on_hand"] == 20,
+   "but on_hand is not writable through the edit endpoint")
+ok(c.post(f"/api/supply/materials/{_mat['id']}/adjust", headers=A,
+          json={"qty": -5, "note": ""}).status_code == 400,
+   "an adjustment without a reason is refused")
+c.post(f"/api/supply/materials/{_mat['id']}/adjust", headers=A,
+       json={"qty": -5, "note": "stocktake"})
+_moves = c.get(f"/api/supply/materials/{_mat['id']}/moves", headers=A).json()
+ok(len(_moves) == 2 and _moves[0]["note"] == "stocktake",
+   "every movement is recorded with who and why")
+ok(sum(m["qty"] for m in _moves) == 15,
+   "and the level is the sum of the movements")
+
+# A run consumes its recipe and produces cases.
+_prod = c.get("/api/products").json()[0]["id"]
+c.post(f"/api/supply/bom/{_prod}", headers=A,
+       json={"material_id": _mat["id"], "qty_per_case": 2})
+_run = c.post("/api/supply/runs", headers=A,
+              json={"product_id": _prod, "planned_cases": 5}).json()
+ok(not _run["shortfall"], "a run with enough materials reports no shortfall")
+_big = c.post("/api/supply/runs", headers=A,
+              json={"product_id": _prod, "planned_cases": 500}).json()
+ok(_big["shortfall"], "a run beyond stock says what it is short of")
+_fin = c.post(f"/api/supply/runs/{_run['id']}/finish", headers=A,
+              json={"actual_cases": 4}).json()
+ok(_fin["cases"] == 4, "finishing a run records what was actually made")
+_m4 = [m for m in c.get("/api/supply", headers=A).json()["materials"]
+       if m["id"] == _mat["id"]][0]
+ok(_m4["on_hand"] == 7, "and consumes materials for the real number, not the plan")
+ok(c.post(f"/api/supply/runs/{_run['id']}/finish", headers=A,
+          json={"actual_cases": 1}).status_code == 400,
+   "a finished run can't be finished twice")
+ok(c.delete(f"/api/supply/runs/{_run['id']}", headers=A).status_code == 400,
+   "and can't be deleted, because its movements point at it")
+ok(c.get("/api/supply", headers={"Authorization": "Bearer nope"}
+         ).status_code == 401, "sourcing needs an admin")
+
+# --- the audit log ---
+_au = c.get("/api/admin/audit", headers=A).json()
+ok(_au["total"] > 0, "the audit log has entries")
+ok(any("/api/supply/suppliers" in e["action"] for e in _au["entries"]),
+   "including the ones nobody added an audit call for")
+ok(all(e["actor"] for e in _au["entries"] if e["user_id"]),
+   "each entry names who did it")
+ok(any(e["status"] >= 400 for e in _au["entries"]),
+   "refused requests are recorded too, not just successful ones")
+# The whole point of summarising rather than storing bodies.
+c.post("/api/me", headers=A, json={"pin": "5511"})
+_au2 = c.get("/api/admin/audit?entity=me", headers=A).json()
+ok(any("pin=***" in e["detail"] for e in _au2["entries"]),
+   "a PIN in a request body is recorded as a name, never a value")
+ok(not any("5511" in (e["detail"] or "") for e in _au2["entries"]),
+   "and the value itself is nowhere in the log")
+ok(c.get("/api/admin/audit", headers={"Authorization": "Bearer nope"}
+         ).status_code == 401, "the audit log needs an admin")
+
+# --- the database viewer ---
+_db = c.get("/api/admin/db", headers=A).json()
+ok(_db["tables"], "the database lists its tables")
+ok(not any(t["name"].startswith("sqlite_") for t in _db["tables"]),
+   "internal tables are not listed")
+ok(not any(t["name"] == "login_tokens" for t in _db["tables"]),
+   "and neither is the table of live sign-in tokens")
+_users = c.get("/api/admin/db/users", headers=A).json()
+_ucols = {col["name"]: col for col in _users["columns"]}
+ok(_ucols["token"]["secret"] and _ucols["token"]["locked"],
+   "the token column is marked secret and locked")
+ok(all(r["token"] == "••• hidden" for r in _users["rows"] if r["token"]),
+   "and no token value is ever sent to the browser")
+ok(all(r["pin"] == "••• hidden" for r in _users["rows"] if r["pin"]),
+   "nor a PIN")
+_uid = _users["rows"][0]["id"]
+for _bad, _why in (("token", "a credential"), ("is_admin", "a grant"),
+                   ("id", "an identity"), ("password_hash", "a hash")):
+    ok(c.patch(f"/api/admin/db/users/{_uid}", headers=A,
+               json={"values": {_bad: "1"}}).status_code == 400,
+       f"the table editor refuses to write {_bad} — {_why}")
+ok(c.patch(f"/api/admin/db/users/{_uid}", headers=A,
+           json={"values": {"region": "Midwest"}}).status_code == 200,
+   "but an ordinary column edits")
+ok(c.patch(f"/api/admin/db/users/{_uid}", headers=A,
+           json={"values": {"nonexistent": "x"}}).status_code == 400,
+   "a column that doesn't exist is refused")
+# The table name reaches SQL, so it must only ever be a name from the schema.
+for _inj in ("users; DROP TABLE users", "users' OR '1", "../etc/passwd"):
+    ok(c.get(f"/api/admin/db/{_inj}", headers=A).status_code == 404,
+       f"a table name that isn't a table is refused: {_inj[:22]}")
+ok(c.get("/api/admin/db/users", headers=A).json()["total"] > 0,
+   "and users is still there afterwards")
+ok(c.get("/api/admin/db", headers={"Authorization": "Bearer nope"}
+         ).status_code == 401, "the database viewer needs an admin")
+
+# --- documents delete ---
+_docs = c.get("/api/store/admin/documents", headers=A).json()["documents"]
+_sigcount = lambda d: sum(  # noqa: E731
+    1 for s in d.get("signatures", []) if s["status"] == "signed")
+_signed = next((d for d in _docs if _sigcount(d)), None)
+_unsigned = next((d for d in _docs if not _sigcount(d)), None)
+if _unsigned:
+    ok(c.delete(f"/api/store/admin/documents/{_unsigned['id']}",
+                headers=A).json()["archived"] is False,
+       "an unsigned document deletes")
+if _signed:
+    ok(c.delete(f"/api/store/admin/documents/{_signed['id']}",
+                headers=A).json()["archived"],
+       "a signed one is archived, because the signature has to keep "
+       "pointing at something")
+
+# --- the ops app carries the new screens ---
+ok("renderSupply" in _ops and "renderAudit" in _ops and "renderDb" in _ops,
+   "the ops app has sourcing, audit and database views")
+ok("rowActions" in _ops and "ROW_KINDS" in _ops,
+   "edit and delete are declared once and shared, not per screen")
+# The dialog element is #ops-modal. A selector written as "#modal ..." matches
+# nothing, so the form collects no fields and saves an empty body — which
+# fails as "nothing to change" rather than as a broken selector.
+ok('"#modal ' not in _ops and "'#modal " not in _ops,
+   "modal field selectors use the id the modal actually has")
+ok('id: "supply"' in _ops and 'id: "audit"' in _ops and 'id: "dbview"' in _ops,
+   "and each has a tab")
+
 print(f"\nall {checks} checks passed")

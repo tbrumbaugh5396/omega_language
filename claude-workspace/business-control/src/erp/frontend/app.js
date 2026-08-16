@@ -489,6 +489,204 @@ function wireMap(id) {
   });
 }
 
+// ---------- editing and removing rows, in one place ----------
+/* Eight screens grew a "create" form and stopped. Rather than eight
+   hand-written edit dialogs that drift apart, each screen declares what its
+   record looks like and this builds the form, the PATCH and the DELETE from
+   that. A new editable thing is a table entry, not a new dialog. */
+const ROW_KINDS = {
+  product: {
+    title: "product", label: (r) => r.name,
+    path: (id) => `/api/admin/products/${id}`,
+    fields: [
+      { k: "name", label: "Name" },
+      { k: "sku", label: "SKU" },
+      { k: "category", label: "Category" },
+      { k: "description", label: "Description", type: "textarea" },
+      { k: "price_cents", label: "Unit price (cents)", type: "number" },
+      { k: "case_size", label: "Case size", type: "number" },
+      { k: "case_price_cents", label: "Case price (cents)", type: "number" },
+      { k: "active", label: "Listed", type: "check" },
+    ],
+  },
+  order: {
+    title: "order", label: (r) => "#" + r.id,
+    path: (id) => `/api/admin/orders/${id}`,
+    delVerb: "Cancel",
+    delAsk: "Cancel this order? It stays on the books as cancelled.",
+    fields: [
+      { k: "status", label: "Status", type: "select",
+        options: ["pending", "confirmed", "shipped", "delivered", "cancelled"] },
+      { k: "ship_name", label: "Ship to" },
+      { k: "address", label: "Address" },
+      { k: "city", label: "City" },
+      { k: "postal", label: "Postcode" },
+      { k: "phone", label: "Phone" },
+      { k: "note", label: "Note", type: "textarea" },
+    ],
+    note: "Totals aren't editable — they come from the line items and the "
+      + "discounts applied at the time. Use Refund to move money.",
+  },
+  promo: {
+    title: "promo", label: (r) => r.name,
+    path: (id) => `/api/admin/promos/${id}`,
+    fields: [
+      { k: "name", label: "Name" },
+      { k: "body", label: "Body", type: "textarea" },
+      { k: "discount_pct", label: "Discount %", type: "number" },
+      { k: "region", label: "Region" },
+      { k: "city", label: "City" },
+      { k: "starts", label: "Starts" },
+      { k: "video_url", label: "Video URL" },
+      { k: "active", label: "Running", type: "check" },
+    ],
+  },
+  store: {
+    title: "store", label: (r) => r.name,
+    path: (id) => `/api/admin/stores/${id}`,
+    fields: [
+      { k: "name", label: "Name" },
+      { k: "kind", label: "Kind", type: "select",
+        options: ["retail", "distribution", "partner"] },
+      { k: "region", label: "Region" },
+      { k: "city", label: "City" },
+      { k: "lat", label: "Latitude", type: "number", step: "any" },
+      { k: "lng", label: "Longitude", type: "number", step: "any" },
+      { k: "contact", label: "Contact" },
+      { k: "active", label: "Open", type: "check" },
+    ],
+  },
+  post: {
+    title: "post", label: (r) => (r.body || "").slice(0, 40),
+    path: (id) => `/api/admin/feed/${id}`,
+    fields: [{ k: "body", label: "Post", type: "textarea" }],
+  },
+  supplier: {
+    title: "supplier", label: (r) => r.name,
+    path: (id) => `/api/supply/suppliers/${id}`,
+    fields: [
+      { k: "name", label: "Name" },
+      { k: "kind", label: "Kind", type: "select",
+        options: ["ingredient", "packaging", "co-packer", "logistics", "service"] },
+      { k: "contact", label: "Contact" },
+      { k: "email", label: "Email" },
+      { k: "phone", label: "Phone" },
+      { k: "country", label: "Country" },
+      { k: "lead_days", label: "Lead time (days)", type: "number" },
+      { k: "terms", label: "Terms" },
+      { k: "notes", label: "Notes", type: "textarea" },
+      { k: "active", label: "In use", type: "check" },
+    ],
+  },
+  material: {
+    title: "material", label: (r) => r.name,
+    path: (id) => `/api/supply/materials/${id}`,
+    fields: [
+      { k: "name", label: "Name" },
+      { k: "code", label: "Code" },
+      { k: "kind", label: "Kind", type: "select",
+        options: ["ingredient", "packaging", "co-packer", "logistics", "service"] },
+      { k: "unit", label: "Unit", type: "select",
+        options: ["kg", "L", "each", "case", "roll", "pallet"] },
+      { k: "unit_cost_cents", label: "Unit cost (cents)", type: "number" },
+      { k: "reorder_point", label: "Reorder at", type: "number", step: "any" },
+      { k: "active", label: "In use", type: "check" },
+    ],
+    note: "Stock on hand isn't here — it only moves by receiving a purchase "
+      + "order, finishing a run, or a recorded adjustment.",
+  },
+};
+
+/* The buttons. Admin only: everyone else sees the row without them rather
+   than seeing them and being refused. */
+function rowActions(kind, row) {
+  if (!S.user || !S.user.is_admin) return "";
+  const k = ROW_KINDS[kind];
+  return `<span class="row-acts">
+    ${k ? `<button class="btn alt sm" data-rowedit="${kind}:${row.id}"
+      >Edit</button>` : ""}
+    <button class="btn alt sm danger-hint" data-rowdel="${kind}:${row.id}"
+      >${(k && k.delVerb) || "Delete"}</button></span>`;
+}
+
+/* Call once after painting a view. `rows` maps kind -> array, so the dialog
+   can be filled from data already on the page instead of refetching. */
+function wireRows(rows, refresh) {
+  view().querySelectorAll("[data-rowedit]").forEach((b) => b.onclick = () => {
+    const [kind, id] = b.dataset.rowedit.split(":");
+    const row = (rows[kind] || []).find((r) => String(r.id) === id);
+    if (row) editRow(kind, row, refresh);
+  });
+  view().querySelectorAll("[data-rowdel]").forEach((b) => b.onclick = async () => {
+    const [kind, id] = b.dataset.rowdel.split(":");
+    const k = ROW_KINDS[kind] || DELETE_ONLY[kind];
+    if (!k) return;
+    if (!confirm(k.delAsk || `Delete this ${k.title}?`)) return;
+    try {
+      const r = await api(k.path(id), { method: "DELETE" });
+      // The server decides between removing and retiring, because only it
+      // knows what still points at the row. Say which happened.
+      if (r && (r.retired || r.closed || r.cancelled || r.archived)) {
+        toast(`Kept and hidden — other records still reference this ${k.title}`);
+      } else {
+        toast(`${k.title} deleted`);
+      }
+      refresh();
+    } catch (e) { toast(e.message); }
+  });
+}
+
+// Things you can remove but not edit here — they have their own edit screens.
+const DELETE_ONLY = {
+  event: { title: "event", path: (id) => `/api/store/admin/events/${id}` },
+  doc: { title: "document", path: (id) => `/api/store/admin/documents/${id}`,
+         delAsk: "Delete this document? A signed one is archived instead, "
+           + "because the signature has to keep pointing at something." },
+};
+
+function editRow(kind, row, refresh) {
+  const k = ROW_KINDS[kind];
+  const input = (f) => {
+    const v = row[f.k];
+    if (f.type === "check") {
+      return `<label class="perm"><input type="checkbox" data-f="${f.k}"
+        ${v ? "checked" : ""}><span><b>${esc(f.label)}</b></span></label>`;
+    }
+    if (f.type === "select") {
+      return `<label>${esc(f.label)}</label><select data-f="${f.k}">
+        ${f.options.map((o) => `<option ${o === v ? "selected" : ""}
+          >${esc(o)}</option>`).join("")}</select>`;
+    }
+    if (f.type === "textarea") {
+      return `<label>${esc(f.label)}</label>
+        <textarea data-f="${f.k}" rows="3">${esc(v == null ? "" : v)}</textarea>`;
+    }
+    return `<label>${esc(f.label)}</label><input data-f="${f.k}"
+      type="${f.type || "text"}" ${f.step ? `step="${f.step}"` : ""}
+      value="${esc(v == null ? "" : String(v))}">`;
+  };
+  modal(`<h3>Edit ${esc(k.title)} — ${esc(k.label(row) || "")}</h3>
+    <div class="edit-grid">${k.fields.map(input).join("")}</div>
+    ${k.note ? `<p class="dim" style="font-size:12px;margin-top:10px">${
+      esc(k.note)}</p>` : ""}
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="row-save">Save</button></div>`);
+  $("#row-save").onclick = async () => {
+    const payload = {};
+    document.querySelectorAll("#ops-modal [data-f]").forEach((el) => {
+      const f = k.fields.find((x) => x.k === el.dataset.f);
+      if (f.type === "check") payload[f.k] = el.checked ? 1 : 0;
+      else if (f.type === "number") {
+        payload[f.k] = el.value === "" ? null : Number(el.value);
+      } else payload[f.k] = el.value;
+    });
+    try {
+      await api(k.path(row.id), { method: "PATCH", body: payload });
+      closeModal(); toast("Saved"); refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
 // ---------- chrome ----------
 
 /* Inline stroked icons. The nav used emoji, which render differently on
@@ -544,6 +742,8 @@ const TABS = [
     roles: ["admin", "employee", "distributor"] },
   { id: "routes", label: "Routes", icon: "truck", group: "Operate",
     roles: ["admin", "employee"] },
+  { id: "supply", label: "Sourcing", icon: "tools", group: "Operate",
+    roles: ["admin"] },
   { id: "outreach", label: "Outreach", icon: "handshake", group: "Operate",
     roles: ["admin", "employee"] },
   { id: "scan", label: "Scan", icon: "camera", group: "Operate", roles: "*" },
@@ -562,6 +762,10 @@ const TABS = [
   { id: "staff", label: "Team & access", icon: "users", group: "Company",
     roles: ["admin"] },
   { id: "discord", label: "Discord", icon: "chat", group: "Company",
+    roles: ["admin"] },
+  { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
+    roles: ["admin"] },
+  { id: "dbview", label: "Database", icon: "list", group: "Company",
     roles: ["admin"] },
   { id: "profile", label: "My profile", icon: "user", group: "Company",
     roles: "*" },
@@ -658,6 +862,7 @@ async function render() {
     docs: renderDocs, staff: renderStaff, events: renderEvents,
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
+    supply: renderSupply, audit: renderAudit, dbview: renderDb,
     hq: renderHQ, admin: renderAdmin, login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
@@ -758,6 +963,7 @@ async function renderShop() {
             <span class="q" data-q="${p.id}">${S.cart[p.id] || 0}</span>
             <button data-inc="${p.id}" aria-label="add one">+</button>
           </div>
+          ${rowActions("product", p)}
         </div>
       </div>`).join("")}
     </div>
@@ -914,6 +1120,7 @@ async function renderShop() {
     };
   };
   renderCartCard();
+  wireRows({ product: S.products }, renderShop);
 }
 
 // ---------- orders ----------
@@ -933,7 +1140,7 @@ async function renderOrders() {
     <div class="card"><table><thead><tr>
       <th>#</th>${isAdmin ? "<th>who</th>" : ""}<th>kind</th><th>items</th>
       <th>total</th><th>payment</th>${isAdmin ? "<th>ship to</th>" : ""}
-      <th>region</th><th>status</th>${isAdmin ? "<th></th>" : ""}
+      <th>region</th><th>status</th>${isAdmin ? "<th></th><th></th>" : ""}
     </tr></thead><tbody>
     ${orders.map((o) => `<tr>
       <td>${o.id}</td>${isAdmin ? `<td>${esc(o.user_name)}</td>` : ""}
@@ -953,7 +1160,8 @@ async function renderOrders() {
         o.status === "cancelled" ? "bad" : ""}">${o.status}</span></td>
       ${isAdmin ? `<td><select data-o="${o.id}">
         ${statuses.map((s) => `<option ${s === o.status ? "selected" : ""}>${s}</option>`).join("")}
-      </select></td>` : ""}
+      </select></td>
+      <td>${rowActions("order", o)}</td>` : ""}
     </tr>`).join("")}</tbody></table>
     ${orders.length ? "" : emptyState("box", "No orders yet",
       isAdmin ? "They'll appear here the moment a customer checks out."
@@ -973,6 +1181,7 @@ async function renderOrders() {
       render();
     };
   });
+  wireRows({ order: orders }, renderOrders);
 }
 
 // ---------- time clock ----------
@@ -1172,8 +1381,8 @@ async function renderFeed() {
           ${p.week_orders !== undefined && p.code ? `<span class="pill"
             title="orders via ${esc(p.code)} in the last 7 days">
             ${p.week_orders} order(s) this week</span>` : ""}
-          ${S.user.is_admin ? `<button class="btn danger" data-del="${p.id}"
-            style="float:right;padding:3px 9px">delete</button>` : ""}
+          ${S.user.is_admin ? `<span style="float:right">${
+            rowActions("post", p)}</span>` : ""}
         </div>
         ${p.body ? `<div style="margin:8px 0">${esc(p.body)}</div>` : ""}
         ${p.url ? `<a class="preview" href="${esc(p.url)}" target="_blank" rel="noopener">
@@ -1197,12 +1406,645 @@ async function renderFeed() {
     } catch (err) { toast(err.message); btn.disabled = false;
       btn.textContent = "Post"; }
   };
-  document.querySelectorAll("[data-del]").forEach((b) => {
-    b.onclick = async () => {
-      await api(`/api/admin/feed/${b.dataset.del}/delete`, { body: {} });
-      render();
-    };
+  wireRows({ post: posts }, renderFeed);
+}
+
+// ---------- sourcing, supply and manufacturing ----------
+
+let SUP = null;
+
+async function renderSupply() {
+  SUP = await api("/api/supply");
+  const products = await api("/api/products");
+  const st = SUP.stats;
+  const money0 = (c) => money(c);
+  const day = (t) => t ? fmtDate(t) : "—";
+
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Sourcing &amp; supply</h2>
+        <p class="dim">Where the product comes from before it's a product:
+          who supplies it, what's on hand, what's on order, and what's being
+          made. Stock here moves by receipt, run or a recorded adjustment —
+          never by typing a new number.</p></div>
+      <span class="head-acts">
+        <button class="btn alt" id="sp-supplier">Supplier</button>
+        <button class="btn alt" id="sp-material">Material</button>
+        <button class="btn" id="sp-po">Purchase order</button>
+      </span>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="n">${st.suppliers}</div>
+        <div class="l">suppliers</div></div>
+      <div class="stat"><div class="n ${st.low ? "low" : ""}">${st.low}</div>
+        <div class="l">below reorder</div></div>
+      <div class="stat"><div class="n">${st.open_pos}</div>
+        <div class="l">open orders</div>
+        <div class="d dim">${money0(st.on_order_cents)} committed</div></div>
+      <div class="stat"><div class="n">${st.runs_planned}</div>
+        <div class="l">runs planned</div></div>
+    </div>
+
+    <h3>Materials</h3>
+    <div class="card"><div class="tablewrap"><table>
+      <thead><tr><th>material</th><th>supplier</th><th class="num">on hand</th>
+        <th class="num">incoming</th><th class="num">reorder at</th>
+        <th class="num">unit cost</th><th></th></tr></thead>
+      <tbody>${SUP.materials.map((m) => `<tr class="${m.active ? "" : "off"}">
+        <td><b>${esc(m.name)}</b>${m.code
+          ? ` <span class="dim">${esc(m.code)}</span>` : ""}
+          ${m.low ? '<span class="pill bad">low</span>' : ""}</td>
+        <td class="dim">${esc(m.supplier_name || "—")}</td>
+        <td class="num ${m.low ? "low" : ""}">${m.on_hand} ${esc(m.unit)}</td>
+        <td class="num dim">${m.incoming ? m.incoming + " " + esc(m.unit) : "—"}</td>
+        <td class="num dim">${m.reorder_point}</td>
+        <td class="num">${money0(m.unit_cost_cents)}</td>
+        <td><button class="btn alt sm" data-adj="${m.id}">Adjust</button>
+          <button class="btn alt sm" data-moves="${m.id}">History</button>
+          ${rowActions("material", m)}</td>
+      </tr>`).join("") || `<tr><td colspan="7" class="dim">
+        No materials yet — add the things you buy, then order some.</td></tr>`}
+      </tbody></table></div></div>
+
+    <h3>Purchase orders</h3>
+    ${SUP.purchase_orders.map((p) => `<div class="card">
+      <div class="doc-top">
+        <div class="doc-main">
+          <b>${esc(p.reference || "PO #" + p.id)}</b>
+          <span class="dim">${esc(p.supplier_name)} · ${p.lines.length} line(s)
+            · ${money0(p.value_cents)}${p.expected
+              ? " · expected " + day(p.expected) : ""}</span>
+        </div>
+        <span class="pill ${p.status === "received" ? "ok"
+          : p.status === "cancelled" ? "bad"
+          : p.status === "part" ? "warn" : ""}">${esc(p.status)}</span>
+        ${p.status === "draft" ? `<button class="btn alt sm"
+          data-posend="${p.id}">Mark sent</button>` : ""}
+        ${["sent", "part"].includes(p.status) ? `<button class="btn sm"
+          data-porecv="${p.id}">Receive</button>` : ""}
+        <button class="btn alt sm" data-rowdel="po:${p.id}">Delete</button>
+      </div>
+      <table style="margin-top:6px"><tbody>${p.lines.map((l) => `<tr>
+        <td>${esc(l.material_name)}</td>
+        <td class="num">${l.received}/${l.qty} ${esc(l.unit)}</td>
+        <td class="num dim">${money0(l.unit_cost_cents)} each</td>
+      </tr>`).join("")}</tbody></table>
+    </div>`).join("") || `<div class="card empty"><span class="e-ic">${
+      opsIcon("box")}</span><b>Nothing on order</b>
+      <p class="dim">A purchase order records what you asked for, so
+        receiving it can record what actually turned up.</p></div>`}
+
+    <div class="page-head" style="margin-top:22px">
+      <div><h3 style="margin:0">Production runs</h3></div>
+      <button class="btn alt" id="sp-run">Schedule a run</button>
+    </div>
+    ${SUP.runs.map((r) => `<div class="card">
+      <div class="doc-top">
+        <div class="doc-main">
+          <b>${esc(r.product_name || "product #" + r.product_id)}</b>
+          <span class="dim">${r.planned_cases} cases planned${
+            r.actual_cases ? ` · ${r.actual_cases} made` : ""}${
+            r.facility ? " · " + esc(r.facility) : ""}${
+            r.scheduled ? " · " + day(r.scheduled) : ""}</span>
+        </div>
+        <span class="pill ${r.status === "done" ? "ok"
+          : r.status === "scrapped" ? "bad" : ""}">${esc(r.status)}</span>
+        ${r.status !== "done" && r.status !== "scrapped"
+          ? `<button class="btn sm" data-runfin="${r.id}">Finish</button>
+             <button class="btn alt sm" data-rowdel="run:${r.id}">Delete</button>`
+          : ""}
+      </div>
+      ${(r.needs || []).length ? `<div class="warn-line">Short for this run:
+        ${r.needs.map((n) => `${esc(n.name)} — need ${n.need} ${esc(n.unit)},
+          have ${n.have}`).join(" · ")}</div>` : ""}
+    </div>`).join("") || '<p class="dim">No runs scheduled.</p>'}
+
+    <div class="page-head" style="margin-top:22px">
+      <div><h3 style="margin:0">Inbound freight</h3></div>
+      <button class="btn alt" id="sp-ship">Add shipment</button>
+    </div>
+    ${SUP.shipments.length ? `<div class="card"><table>
+      <thead><tr><th>carrier</th><th>tracking</th><th>from</th><th>ETA</th>
+        <th>status</th><th></th></tr></thead>
+      <tbody>${SUP.shipments.map((sh) => `<tr>
+        <td>${esc(sh.carrier || "—")}</td>
+        <td class="dim">${esc(sh.tracking || "—")}</td>
+        <td class="dim">${esc(sh.origin || "—")}</td>
+        <td>${day(sh.eta)}</td>
+        <td><select data-shst="${sh.id}">${SUP.ship_status.map((x) =>
+          `<option ${x === sh.status ? "selected" : ""}>${x}</option>`).join("")}
+        </select></td>
+        <td><button class="btn alt sm" data-rowdel="ship:${sh.id}">Delete</button></td>
+      </tr>`).join("")}</tbody></table></div>`
+      : '<p class="dim">Nothing in transit.</p>'}
+
+    <h3>Recipes</h3>
+    <div class="card">
+      <p class="dim" style="margin-top:0">What one case consumes. A run uses
+        this to work out what it needs and what it used, which is how
+        finishing a run can move materials on its own.</p>
+      <label>Product</label>
+      <select id="sp-bomprod">${products.map((p) =>
+        `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+      <div id="sp-bom" style="margin-top:10px"></div>
+    </div>`;
+
+  const refresh = () => renderSupply();
+  wireRows({ material: SUP.materials, supplier: SUP.suppliers }, refresh);
+
+  $("#sp-supplier").onclick = () => supplierForm(refresh);
+  $("#sp-material").onclick = () => materialForm(refresh);
+  $("#sp-po").onclick = () => poForm(refresh);
+  $("#sp-run").onclick = () => runForm(products, refresh);
+  $("#sp-ship").onclick = () => shipForm(refresh);
+
+  view().querySelectorAll("[data-posend]").forEach((b) => b.onclick = async () => {
+    await api(`/api/supply/purchase-orders/${b.dataset.posend}/status`,
+              { body: { status: "sent" } });
+    refresh();
   });
+  view().querySelectorAll("[data-porecv]").forEach((b) => b.onclick = () =>
+    receiveForm(+b.dataset.porecv, refresh));
+  view().querySelectorAll("[data-runfin]").forEach((b) => b.onclick = () =>
+    finishForm(+b.dataset.runfin, refresh));
+  view().querySelectorAll("[data-adj]").forEach((b) => b.onclick = () =>
+    adjustForm(+b.dataset.adj, refresh));
+  view().querySelectorAll("[data-moves]").forEach((b) => b.onclick = () =>
+    movesFor(+b.dataset.moves));
+  view().querySelectorAll("[data-shst]").forEach((sel) => sel.onchange = async () => {
+    await api(`/api/supply/shipments/${sel.dataset.shst}/status`,
+              { body: { status: sel.value } });
+    refresh();
+  });
+
+  // Suppliers live under the materials they supply; a separate list of names
+  // with nothing next to them isn't worth a section of its own.
+  const drawBom = async () => {
+    const pid = $("#sp-bomprod").value;
+    const { lines } = await api(`/api/supply/bom/${pid}`);
+    $("#sp-bom").innerHTML = `
+      <table><thead><tr><th>material</th><th class="num">per case</th>
+        <th></th></tr></thead><tbody>
+        ${lines.map((l) => `<tr><td>${esc(l.material_name)}</td>
+          <td class="num">${l.qty_per_case} ${esc(l.unit)}</td>
+          <td><button class="btn alt sm" data-bomrm="${l.material_id}"
+            >Remove</button></td></tr>`).join("")
+          || '<tr><td colspan="3" class="dim">No recipe yet.</td></tr>'}
+      </tbody></table>
+      <div class="row2" style="margin-top:10px">
+        <select id="bom-mat">${SUP.materials.filter((m) => m.active).map((m) =>
+          `<option value="${m.id}">${esc(m.name)} (${esc(m.unit)})</option>`).join("")}</select>
+        <input id="bom-qty" type="number" step="any" placeholder="qty per case">
+        <button class="btn alt" id="bom-add">Add</button>
+      </div>`;
+    $("#bom-add").onclick = async () => {
+      const qty = Number($("#bom-qty").value);
+      if (!qty) return toast("how much per case?");
+      await api(`/api/supply/bom/${pid}`, { body: {
+        material_id: +$("#bom-mat").value, qty_per_case: qty } });
+      drawBom();
+    };
+    $("#sp-bom").querySelectorAll("[data-bomrm]").forEach((b) => b.onclick = async () => {
+      await api(`/api/supply/bom/${pid}`, { body: {
+        material_id: +b.dataset.bomrm, qty_per_case: 0 } });
+      drawBom();
+    });
+  };
+  $("#sp-bomprod").onchange = drawBom;
+  if (products.length) drawBom();
+}
+
+// Purchase orders, runs and shipments delete through the same path as rows.
+DELETE_ONLY.po = { title: "purchase order",
+  path: (id) => `/api/supply/purchase-orders/${id}`,
+  delAsk: "Delete this purchase order? One that has already received stock "
+    + "is cancelled instead, so the paperwork still matches the warehouse." };
+DELETE_ONLY.run = { title: "run",
+  path: (id) => `/api/supply/runs/${id}` };
+DELETE_ONLY.ship = { title: "shipment",
+  path: (id) => `/api/supply/shipments/${id}` };
+
+function supplierForm(refresh) {
+  modal(`<h3>Add a supplier</h3>
+    <label>Name</label><input id="su-name">
+    <div class="row2">
+      <div><label>Kind</label><select id="su-kind">${SUP.kinds.map((k) =>
+        `<option>${k}</option>`).join("")}</select></div>
+      <div><label>Lead time (days)</label>
+        <input id="su-lead" type="number" value="14"></div>
+    </div>
+    <div class="row2">
+      <div><label>Contact</label><input id="su-contact"></div>
+      <div><label>Email</label><input id="su-email" type="email"></div>
+    </div>
+    <div class="row2">
+      <div><label>Country</label><input id="su-country"></div>
+      <div><label>Terms</label><input id="su-terms" placeholder="net 30"></div>
+    </div>
+    <p class="dim" style="font-size:12px;margin-top:8px">Lead time is a field
+      rather than folklore: most shortages come down to someone assuming a
+      shorter one.</p>
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="su-save">Add</button></div>`);
+  $("#su-save").onclick = async () => {
+    try {
+      await api("/api/supply/suppliers", { body: {
+        name: $("#su-name").value, kind: $("#su-kind").value,
+        lead_days: +$("#su-lead").value || 0,
+        contact: $("#su-contact").value, email: $("#su-email").value,
+        country: $("#su-country").value, terms: $("#su-terms").value } });
+      closeModal(); refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function materialForm(refresh) {
+  modal(`<h3>Add a material</h3>
+    <div class="row2">
+      <div><label>Name</label><input id="ma-name"></div>
+      <div><label>Code</label><input id="ma-code"></div>
+    </div>
+    <div class="row2">
+      <div><label>Kind</label><select id="ma-kind">${SUP.kinds.map((k) =>
+        `<option>${k}</option>`).join("")}</select></div>
+      <div><label>Unit</label><select id="ma-unit">${SUP.units.map((u) =>
+        `<option>${u}</option>`).join("")}</select></div>
+    </div>
+    <label>Supplier</label><select id="ma-sup"><option value="">—</option>
+      ${SUP.suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}
+    </select>
+    <div class="row2">
+      <div><label>Unit cost (cents)</label>
+        <input id="ma-cost" type="number" value="0"></div>
+      <div><label>Reorder at</label>
+        <input id="ma-reorder" type="number" step="any" value="0"></div>
+    </div>
+    <p class="dim" style="font-size:12px;margin-top:8px">Stock starts at zero.
+      Book it in with a purchase order, or use Adjust to record a count.</p>
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="ma-save">Add</button></div>`);
+  $("#ma-save").onclick = async () => {
+    try {
+      await api("/api/supply/materials", { body: {
+        name: $("#ma-name").value, code: $("#ma-code").value,
+        kind: $("#ma-kind").value, unit: $("#ma-unit").value,
+        supplier_id: $("#ma-sup").value ? +$("#ma-sup").value : null,
+        unit_cost_cents: +$("#ma-cost").value || 0,
+        reorder_point: +$("#ma-reorder").value || 0 } });
+      closeModal(); refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function poForm(refresh) {
+  if (!SUP.suppliers.length) return toast("add a supplier first");
+  if (!SUP.materials.length) return toast("add a material first");
+  const line = (i) => `<div class="po-line" data-i="${i}">
+    <select class="po-mat">${SUP.materials.filter((m) => m.active).map((m) =>
+      `<option value="${m.id}" data-cost="${m.unit_cost_cents}"
+        >${esc(m.name)} (${esc(m.unit)})</option>`).join("")}</select>
+    <input class="po-qty" type="number" step="any" placeholder="qty">
+    <input class="po-cost" type="number" placeholder="cents each">
+  </div>`;
+  modal(`<h3>New purchase order</h3>
+    <div class="row2">
+      <div><label>Supplier</label><select id="po-sup">${SUP.suppliers
+        .filter((s) => s.active).map((s) =>
+        `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></div>
+      <div><label>Reference</label><input id="po-ref" placeholder="PO-2026-014"></div>
+    </div>
+    <label>Expected</label><input id="po-eta" type="date">
+    <label>Lines</label>
+    <div id="po-lines">${line(0)}</div>
+    <button class="btn alt sm" id="po-addline">Add a line</button>
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="po-save">Create</button></div>`);
+  let n = 1;
+  $("#po-addline").onclick = () => {
+    $("#po-lines").insertAdjacentHTML("beforeend", line(n++));
+  };
+  $("#po-save").onclick = async () => {
+    const lines = [...document.querySelectorAll("#po-lines .po-line")]
+      .map((el) => ({
+        material_id: +el.querySelector(".po-mat").value,
+        qty: Number(el.querySelector(".po-qty").value),
+        unit_cost_cents: +el.querySelector(".po-cost").value || 0,
+      })).filter((l) => l.qty > 0);
+    if (!lines.length) return toast("add at least one line with a quantity");
+    const eta = $("#po-eta").value;
+    try {
+      await api("/api/supply/purchase-orders", { body: {
+        supplier_id: +$("#po-sup").value, reference: $("#po-ref").value,
+        expected: eta ? Date.parse(eta) / 1000 : 0, lines } });
+      closeModal(); refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function receiveForm(pid, refresh) {
+  const po = SUP.purchase_orders.find((p) => p.id === pid);
+  modal(`<h3>Receive ${esc(po.reference || "PO #" + po.id)}</h3>
+    <p class="dim">What actually turned up. Partial deliveries are normal —
+      the order stays open until every line is satisfied.</p>
+    ${po.lines.map((l) => `<div class="row2">
+      <div><label>${esc(l.material_name)}
+        <span class="dim">${l.received}/${l.qty} ${esc(l.unit)} so far</span></label>
+        <input type="number" step="any" data-recv="${l.id}"
+          max="${l.qty - l.received}" placeholder="0"></div>
+    </div>`).join("")}
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="recv-save">Book in</button></div>`);
+  $("#recv-save").onclick = async () => {
+    const lines = {};
+    document.querySelectorAll("[data-recv]").forEach((el) => {
+      if (Number(el.value) > 0) lines[el.dataset.recv] = Number(el.value);
+    });
+    try {
+      const r = await api(`/api/supply/purchase-orders/${pid}/receive`,
+                          { body: { lines } });
+      closeModal();
+      toast(r.complete ? "Received in full" : "Partly received — order stays open");
+      refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function runForm(products, refresh) {
+  modal(`<h3>Schedule a production run</h3>
+    <label>Product</label><select id="rn-prod">${products.map((p) =>
+      `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+    <div class="row2">
+      <div><label>Cases planned</label><input id="rn-cases" type="number" value="0"></div>
+      <div><label>When</label><input id="rn-when" type="date"></div>
+    </div>
+    <label>Facility</label><input id="rn-fac" placeholder="co-packer or your own line">
+    <label>Notes</label><textarea id="rn-notes" rows="2"></textarea>
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="rn-save">Schedule</button></div>`);
+  $("#rn-save").onclick = async () => {
+    const when = $("#rn-when").value;
+    try {
+      const r = await api("/api/supply/runs", { body: {
+        product_id: +$("#rn-prod").value,
+        planned_cases: +$("#rn-cases").value || 0,
+        scheduled: when ? Date.parse(when) / 1000 : 0,
+        facility: $("#rn-fac").value, notes: $("#rn-notes").value } });
+      closeModal();
+      if (r.shortfall && r.shortfall.length) {
+        toast(`Scheduled — short of ${r.shortfall.map((s) => s.name).join(", ")}`);
+      }
+      refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function finishForm(rid, refresh) {
+  const run = SUP.runs.find((r) => r.id === rid);
+  modal(`<h3>Finish this run</h3>
+    <p class="dim">Materials are consumed against what was actually made, not
+      what was planned — those differ, and the materials followed the real
+      number.</p>
+    <label>Cases produced</label>
+    <input id="fin-cases" type="number" value="${run.planned_cases}">
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="fin-save">Finish</button></div>`);
+  $("#fin-save").onclick = async () => {
+    try {
+      const r = await api(`/api/supply/runs/${rid}/finish`,
+        { body: { actual_cases: +$("#fin-cases").value || 0 } });
+      closeModal();
+      toast(r.went_negative.length
+        ? `Done — but ${r.went_negative.join(", ")} went negative, so the `
+          + "recipe or the counts need a look"
+        : `Done — ${r.cases} cases, materials consumed`);
+      refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function adjustForm(mid, refresh) {
+  const m = SUP.materials.find((x) => x.id === mid);
+  modal(`<h3>Adjust ${esc(m.name)}</h3>
+    <p class="dim">On hand: <b>${m.on_hand} ${esc(m.unit)}</b>. Enter the
+      change, not the new total — a count that moves without a reason is the
+      thing this screen exists to prevent.</p>
+    <label>Change (+ or −)</label>
+    <input id="adj-qty" type="number" step="any" placeholder="e.g. -4.5">
+    <label>Reason</label>
+    <input id="adj-note" placeholder="stocktake, spoilage, breakage…">
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="adj-save">Record</button></div>`);
+  $("#adj-save").onclick = async () => {
+    try {
+      await api(`/api/supply/materials/${mid}/adjust`, { body: {
+        qty: Number($("#adj-qty").value), note: $("#adj-note").value } });
+      closeModal(); refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+async function movesFor(mid) {
+  const m = SUP.materials.find((x) => x.id === mid);
+  const rows = await api(`/api/supply/materials/${mid}/moves`);
+  modal(`<h3>${esc(m.name)} — every movement</h3>
+    <p class="dim">The stock number is the sum of this, not a field someone
+      typed.</p>
+    <div class="tablewrap" style="max-height:50vh;overflow:auto"><table>
+      <thead><tr><th>when</th><th class="num">change</th><th>reason</th>
+        <th>who</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td class="dim">${fmtDate(r.created_at)}</td>
+        <td class="num ${r.qty < 0 ? "low" : ""}">${r.qty > 0 ? "+" : ""}${r.qty}</td>
+        <td>${esc(r.reason)}${r.note ? ` <span class="dim">${esc(r.note)}</span>` : ""}</td>
+        <td class="dim">${esc(r.actor || "—")}</td></tr>`).join("")
+        || '<tr><td colspan="4" class="dim">No movements yet.</td></tr>'}
+      </tbody></table></div>
+    <div class="modal-acts"><button class="btn" data-close>Close</button></div>`);
+}
+
+function shipForm(refresh) {
+  modal(`<h3>Add an inbound shipment</h3>
+    <label>Against a purchase order</label>
+    <select id="sh-po"><option value="">—</option>
+      ${SUP.purchase_orders.map((p) => `<option value="${p.id}"
+        >${esc(p.reference || "PO #" + p.id)} — ${esc(p.supplier_name)}</option>`).join("")}
+    </select>
+    <div class="row2">
+      <div><label>Carrier</label><input id="sh-carrier"></div>
+      <div><label>Tracking</label><input id="sh-track"></div>
+    </div>
+    <div class="row2">
+      <div><label>From</label><input id="sh-origin"></div>
+      <div><label>ETA</label><input id="sh-eta" type="date"></div>
+    </div>
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="sh-save">Add</button></div>`);
+  $("#sh-save").onclick = async () => {
+    const eta = $("#sh-eta").value;
+    try {
+      await api("/api/supply/shipments", { body: {
+        po_id: $("#sh-po").value ? +$("#sh-po").value : null,
+        carrier: $("#sh-carrier").value, tracking: $("#sh-track").value,
+        origin: $("#sh-origin").value,
+        eta: eta ? Date.parse(eta) / 1000 : 0 } });
+      closeModal(); refresh();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+// ---------- the audit log ----------
+
+async function renderAudit() {
+  const d = await api(`/api/admin/audit?limit=300${
+    S.auditActor ? "&actor=" + encodeURIComponent(S.auditActor) : ""}${
+    S.auditQ ? "&entity=" + encodeURIComponent(S.auditQ) : ""}`);
+  view().innerHTML = `
+    <h2>Audit log</h2>
+    <p class="dim">Every change anyone made, recorded where the changes go
+      through rather than inside each screen — so it's complete by
+      construction rather than by everyone remembering. Values that look like
+      credentials are replaced with a marker; the field names stay, which is
+      what you need to reconstruct what happened.</p>
+
+    <div class="filters">
+      <input id="au-q" placeholder="Filter by what changed" value="${esc(S.auditQ || "")}">
+      <select id="au-actor"><option value="">everyone</option>
+        ${d.actors.map((a) => `<option ${a.actor === S.auditActor ? "selected" : ""}
+          >${esc(a.actor)}</option>`).join("")}</select>
+      <span class="dim">${d.total.toLocaleString()} entries</span>
+    </div>
+
+    <div class="card"><div class="tablewrap"><table>
+      <thead><tr><th>when</th><th>who</th><th>what</th><th>detail</th>
+        <th class="num">result</th></tr></thead>
+      <tbody>${d.entries.map((e) => `<tr class="${
+        e.status >= 400 ? "au-fail" : ""}">
+        <td class="dim">${fmtDate(e.created_at)}</td>
+        <td>${esc(e.actor || "—")}</td>
+        <td><code>${esc(e.action)}</code></td>
+        <td class="dim">${esc(e.detail || "")}</td>
+        <td class="num"><span class="pill ${e.status >= 400 ? "bad"
+          : e.status ? "ok" : ""}">${e.status || "—"}</span></td>
+      </tr>`).join("") || `<tr><td colspan="5" class="dim">
+        Nothing recorded yet.</td></tr>`}
+      </tbody></table></div></div>`;
+  let t;
+  $("#au-q").oninput = (e) => { clearTimeout(t);
+    t = setTimeout(() => { S.auditQ = e.target.value; renderAudit(); }, 250); };
+  $("#au-actor").onchange = (e) => { S.auditActor = e.target.value; renderAudit(); };
+}
+
+// ---------- the database, directly ----------
+
+async function renderDb() {
+  const ov = await api("/api/admin/db");
+  if (!S.dbTable) S.dbTable = ov.tables[0] && ov.tables[0].name;
+  view().innerHTML = `
+    <h2>Database</h2>
+    <p class="dim">For the rows no screen covers. Anything that looks like a
+      credential is hidden and can't be written from here, identity columns
+      are read-only, and there's no free-text SQL box — the value of one is a
+      query tool and the cost is a dropped table one paste away. Every change
+      lands in the audit log.</p>
+    <div class="db-wrap">
+      <div class="db-tables">${ov.tables.map((t) => `
+        <button class="db-t ${t.name === S.dbTable ? "on" : ""}"
+          data-dbt="${esc(t.name)}"><b>${esc(t.name)}</b>
+          <span class="dim">${t.rows.toLocaleString()}</span></button>`).join("")}
+      </div>
+      <div class="db-main" id="db-main"></div>
+    </div>`;
+  view().querySelectorAll("[data-dbt]").forEach((b) => b.onclick = () => {
+    S.dbTable = b.dataset.dbt; S.dbOffset = 0; S.dbQ = ""; renderDb();
+  });
+  drawDbTable();
+}
+
+async function drawDbTable() {
+  const box = $("#db-main");
+  if (!box || !S.dbTable) return;
+  const off = S.dbOffset || 0;
+  let d;
+  try {
+    d = await api(`/api/admin/db/${encodeURIComponent(S.dbTable)}?limit=50`
+      + `&offset=${off}&q=${encodeURIComponent(S.dbQ || "")}`);
+  } catch (e) {
+    box.innerHTML = `<div class="card dim">${esc(e.message)}</div>`;
+    return;
+  }
+  const cols = d.columns;
+  box.innerHTML = `
+    <div class="filters">
+      <input id="db-q" placeholder="Search ${esc(d.table)}" value="${esc(S.dbQ || "")}">
+      <span class="dim">${d.total.toLocaleString()} row(s)</span>
+      ${d.total > d.limit ? `<span class="pager">
+        <button class="btn alt sm" id="db-prev" ${off ? "" : "disabled"}>←</button>
+        <span class="dim">${off + 1}–${Math.min(off + d.limit, d.total)}</span>
+        <button class="btn alt sm" id="db-next"
+          ${off + d.limit >= d.total ? "disabled" : ""}>→</button></span>` : ""}
+    </div>
+    <div class="card"><div class="tablewrap"><table>
+      <thead><tr>${cols.map((c) => `<th title="${esc(c.type)}${
+        c.locked ? " · read-only" : ""}">${esc(c.name)}${
+        c.secret ? " ●" : ""}</th>`).join("")}<th></th></tr></thead>
+      <tbody>${d.rows.map((r, i) => `<tr>
+        ${cols.map((c) => `<td class="${c.secret ? "dim" : ""}">${
+          esc(r[c.name] == null ? "" : String(r[c.name]))}</td>`).join("")}
+        <td><button class="btn alt sm" data-dbedit="${i}">Edit</button>
+          <button class="btn alt sm" data-dbdel="${i}">Delete</button></td>
+      </tr>`).join("") || `<tr><td colspan="${cols.length + 1}" class="dim">
+        No rows.</td></tr>`}
+      </tbody></table></div></div>`;
+  let t;
+  $("#db-q").oninput = (e) => { clearTimeout(t);
+    t = setTimeout(() => { S.dbQ = e.target.value; S.dbOffset = 0;
+      drawDbTable(); }, 250); };
+  if ($("#db-prev")) $("#db-prev").onclick = () => {
+    S.dbOffset = Math.max(0, off - d.limit); drawDbTable(); };
+  if ($("#db-next")) $("#db-next").onclick = () => {
+    S.dbOffset = off + d.limit; drawDbTable(); };
+
+  const pk = (cols.find((c) => c.pk) || {}).name;
+  box.querySelectorAll("[data-dbedit]").forEach((b) => b.onclick = () =>
+    dbEdit(d, cols, d.rows[+b.dataset.dbedit], pk));
+  box.querySelectorAll("[data-dbdel]").forEach((b) => b.onclick = async () => {
+    const row = d.rows[+b.dataset.dbdel];
+    if (!confirm(`Delete row ${row[pk]} from ${d.table}?\n\n`
+      + "Nothing here checks what else points at this row — that's what the "
+      + "proper screens are for. This is the raw table.")) return;
+    try {
+      await api(`/api/admin/db/${encodeURIComponent(d.table)}/${row[pk]}`,
+                { method: "DELETE" });
+      drawDbTable();
+    } catch (e) { toast(e.message); }
+  });
+}
+
+function dbEdit(d, cols, row, pk) {
+  modal(`<h3>${esc(d.table)} · row ${esc(String(row[pk]))}</h3>
+    <div class="edit-grid">${cols.map((c) => c.locked
+      ? `<label>${esc(c.name)} <span class="dim">${c.secret
+          ? "hidden" : "read-only"}</span></label>
+         <input value="${esc(row[c.name] == null ? "" : String(row[c.name]))}"
+           disabled>`
+      : `<label>${esc(c.name)} <span class="dim">${esc(c.type)}</span></label>
+         <input data-dbf="${esc(c.name)}"
+           value="${esc(row[c.name] == null ? "" : String(row[c.name]))}">`
+    ).join("")}</div>
+    <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="db-save">Save</button></div>`);
+  $("#db-save").onclick = async () => {
+    const values = {};
+    document.querySelectorAll("#ops-modal [data-dbf]").forEach((el) => {
+      values[el.dataset.dbf] = el.value;
+    });
+    try {
+      await api(`/api/admin/db/${encodeURIComponent(d.table)}/${row[pk]}`,
+                { method: "PATCH", body: { values } });
+      closeModal(); toast("Saved"); drawDbTable();
+    } catch (e) { toast(e.message); }
+  };
 }
 
 // ---------- confetti (achievement unlocks) ----------
@@ -1868,7 +2710,8 @@ async function renderPromos() {
           ${p.active ? `<button class="btn alt" data-pm-blast="${p.id}"
             title="email this promo to every customer">Email blast</button>` : ""}
           <button class="btn alt" data-pm-toggle="${p.id}">
-            ${p.active ? "turn off" : "turn on"}</button></span>` : ""}
+            ${p.active ? "turn off" : "turn on"}</button>
+          ${rowActions("promo", p)}</span>` : ""}
         ${p.body ? `<div style="margin:8px 0">${esc(p.body)}</div>` : ""}
         <div class="row">
           ${net ? `<div>${qrImg(`${net.lan_url}/?promo=${p.id}`, 120)}
@@ -1891,6 +2734,7 @@ async function renderPromos() {
     toast("created — QR is ready below");
     render();
   };
+  wireRows({ promo: list }, renderPromos);
   document.querySelectorAll("[data-pm-toggle]").forEach((b) => {
     b.onclick = async () => {
       await api(`/api/admin/promos/${b.dataset.pmToggle}/toggle`, { body: {} });
@@ -2069,6 +2913,7 @@ async function renderHQ() {
 async function renderInventory() {
   const isStaff = S.user && (S.user.is_admin ||
     ["employee", "owner"].includes(S.user.role));
+  const isAdmin = S.user && S.user.is_admin;
   const [inv, stores, picks] = await Promise.all([
     api("/api/inventory"), api("/api/stores"),
     isStaff ? api("/api/warehouse/picklist").catch(() => []) : []]);
@@ -2101,12 +2946,51 @@ async function renderInventory() {
       return `<div class="card"><b>${esc(s.name)}</b>
         <span class="dim">· ${esc(s.city)} · ${esc(s.region)}</span>
         <table style="margin-top:6px"><thead><tr><th>product</th><th>qty</th>
-        <th>par</th></tr></thead><tbody>
-        ${d.rows.map((r) => `<tr><td>${esc(r.product_name)}</td>
-          <td class="${r.low ? "low" : ""}">${r.qty}</td>
-          <td class="dim">${r.par}</td></tr>`).join("")}
+        <th>par</th>${isAdmin ? "<th></th>" : ""}</tr></thead><tbody>
+        ${d.rows.map((r) => `<tr>
+          <td>${esc(r.product_name)}</td>
+          ${isAdmin ? `<td><input class="inv-n ${r.low ? "low" : ""}"
+              type="number" data-invq="${s.id}:${r.product_id}"
+              value="${r.qty}"></td>
+            <td><input class="inv-n" type="number"
+              data-invp="${s.id}:${r.product_id}" value="${r.par}"></td>
+            <td><button class="btn alt sm"
+              data-invdel="${s.id}:${r.product_id}">Remove</button></td>`
+          : `<td class="${r.low ? "low" : ""}">${r.qty}</td>
+             <td class="dim">${r.par}</td>`}
+        </tr>`).join("")}
         </tbody></table></div>`;
     }).join("")}`;
+
+  /* Stock is edited in place rather than through a dialog: correcting a
+     count is something you do to a whole shelf at once, and a modal per row
+     turns twenty corrections into sixty clicks. */
+  const saveCell = async (el) => {
+    const [store, product] = (el.dataset.invq || el.dataset.invp).split(":");
+    const row = view().querySelector(`[data-invq="${store}:${product}"]`);
+    const par = view().querySelector(`[data-invp="${store}:${product}"]`);
+    try {
+      await api("/api/admin/inventory", { body: {
+        store_id: +store, product_id: +product,
+        qty: +row.value, par: +par.value } });
+      el.classList.add("saved");
+      setTimeout(() => el.classList.remove("saved"), 900);
+    } catch (e) { toast(e.message); }
+  };
+  view().querySelectorAll("[data-invq],[data-invp]").forEach((el) => {
+    el.onchange = () => saveCell(el);
+  });
+  view().querySelectorAll("[data-invdel]").forEach((b) => b.onclick = async () => {
+    const [store, product] = b.dataset.invdel.split(":");
+    if (!confirm("Remove this product from this store's list?\n\n"
+      + "That says the store doesn't carry it — different from having none "
+      + "left, which is a quantity of zero.")) return;
+    try {
+      await api(`/api/admin/inventory/${store}/${product}`,
+                { method: "DELETE" });
+      renderInventory();
+    } catch (e) { toast(e.message); }
+  });
 }
 
 // ---------- routes ----------
@@ -2887,6 +3771,7 @@ function docRow(d) {
         title="download">download</a>` : ""}
       <button class="btn alt sm" data-docedit="${d.id}">Edit</button>
       <button class="btn alt sm" data-sign="${d.id}">${opsIcon("pen","btn-ic")} Sign</button>
+      <button class="btn alt sm" data-rowdel="doc:${d.id}">Delete</button>
     </div>
     ${sigs.length ? `<div class="sig-rows">${sigs.map((s) => `
       <div class="sig-row sig-${s.status}">
@@ -2902,6 +3787,7 @@ function docRow(d) {
 }
 
 function wireDocRows() {
+  wireRows({}, renderDocs);
   view().querySelectorAll("[data-docedit]").forEach((b) => b.onclick = () =>
     docForm(DOCS.documents.find((x) => x.id === +b.dataset.docedit)));
   view().querySelectorAll("[data-sign]").forEach((b) => b.onclick = () =>
@@ -3162,6 +4048,7 @@ async function renderEvents() {
         </div>
         <span class="pill ${e.active ? "ok" : ""}">${e.active ? "live" : "hidden"}</span>
         <button class="btn alt sm" data-evedit="${e.id}">Edit</button>
+        <button class="btn alt sm" data-rowdel="event:${e.id}">Delete</button>
       </div>
       ${e.body ? `<p class="dim" style="margin-top:8px">${esc(e.body)}</p>` : ""}
     </div>`;
@@ -3180,6 +4067,7 @@ async function renderEvents() {
   $("#ev-new").onclick = () => eventForm(null);
   view().querySelectorAll("[data-evedit]").forEach((b) => b.onclick = () =>
     eventForm(rows.find((x) => x.id === +b.dataset.evedit)));
+  wireRows({}, renderEvents);
 }
 
 function eventForm(e) {
@@ -3367,14 +4255,16 @@ async function renderStores() {
     </div>
     <div class="card"><table>
       <thead><tr><th>store</th><th>city</th><th>region</th><th>kind</th>
-        <th class="num">low items</th><th>contact</th></tr></thead>
+        <th class="num">low items</th><th>contact</th><th></th></tr></thead>
       <tbody>${shown.map((s) => `<tr>
         <td><b>${esc(s.name)}</b></td><td>${esc(s.city || "—")}</td>
         <td>${esc(s.region)}</td>
         <td>${s.kind === "distributor_dc" ? "DC" : "retail"}</td>
         <td class="num ${lowBy[s.id] ? "low" : ""}">${lowBy[s.id] || 0}</td>
-        <td class="dim">${esc(s.contact || "—")}</td></tr>`).join("")}
+        <td class="dim">${esc(s.contact || "—")}</td>
+        <td>${rowActions("store", s)}</td></tr>`).join("")}
       </tbody></table></div>`;
+  wireRows({ store: stores }, renderStores);
   let t;
   $("#st-q").oninput = (e) => { clearTimeout(t);
     t = setTimeout(() => { S.storeQ = e.target.value; renderStores(); }, 200); };

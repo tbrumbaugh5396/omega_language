@@ -333,6 +333,43 @@ def edit_document(did: int, body: DocBody, u=Depends(admin_user),
     return {"ok": True}
 
 
+@router.delete("/api/store/admin/documents/{did}")
+def delete_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
+    """Signed documents are archived, not deleted.
+
+    A signature is evidence that a named person agreed to a specific text on
+    a specific date, and the fingerprint in the trail is what ties the two
+    together. Deleting the document leaves the signature attesting to
+    nothing, which is worse than useless — it looks like a record.
+    Unsigned drafts are just drafts, and those go properly.
+    """
+    d = con.execute("SELECT * FROM documents WHERE id=?", (did,)).fetchone()
+    if d is None:
+        raise HTTPException(404, "no such document")
+    signed = con.execute(
+        "SELECT COUNT(*) n FROM document_signatures WHERE document_id=?"
+        " AND status='signed'",
+        (did,)).fetchone()["n"]
+    if signed:
+        con.execute("UPDATE documents SET status='archived' WHERE id=?",
+                    (did,))
+        log(con, did, u["name"], "archived",
+            f"{signed} signature(s) — kept as evidence")
+        con.commit()
+        return {"ok": True, "archived": True, "signatures": signed}
+    try:
+        f = doc_path(d)
+        if f.exists():
+            f.unlink()
+    except Exception:
+        pass                # a missing file must not block the delete
+    con.execute("DELETE FROM document_signatures WHERE document_id=?", (did,))
+    con.execute("DELETE FROM document_log WHERE document_id=?", (did,))
+    con.execute("DELETE FROM documents WHERE id=?", (did,))
+    con.commit()
+    return {"ok": True, "archived": False}
+
+
 @router.post("/api/store/admin/documents/{did}/status")
 def set_status(did: int, body: dict, u=Depends(admin_user),
                con=Depends(get_con)):

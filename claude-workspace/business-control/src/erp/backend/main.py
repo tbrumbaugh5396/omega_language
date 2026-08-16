@@ -11,15 +11,66 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import (abtest, achieve, analytics, auth, chat, config, cycles, db,
-               logistics, mailer, notify, payments, push, shopify_sub, social)
+from . import (abtest, achieve, analytics, audit, auth, chat, config, cycles,
+               db, dbview, logistics, mailer, notify, payments, push,
+               shopify_sub, social, supply)
 
 app = FastAPI(title="Business Control")
 CFG = config.load()
 db.init()
+audit.init_tables()
+_boot = db.connect()
+supply.init_tables(_boot)
+_boot.commit()
+_boot.close()
+
+
+@app.middleware("http")
+async def audit_edits(request: Request, call_next):
+    """Record every change, at the one place every change goes through.
+
+    Doing this per-endpoint would mean remembering on each new one; doing it
+    here means the log is complete by construction. The body has to be read
+    before the route sees it, so it is put back on the receive channel
+    afterwards — otherwise the handler would find an empty request.
+    """
+    method = request.method
+    path = request.url.path
+    if not audit.should_log(method, path):
+        return await call_next(request)
+
+    body = b""
+    ctype = request.headers.get("content-type", "")
+    if ctype.startswith("application/json"):
+        try:
+            length = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            length = 0
+        if 0 < length <= 100_000:
+            body = await request.body()
+
+            async def receive():
+                return {"type": "http.request", "body": body,
+                        "more_body": False}
+            request._receive = receive
+
+    response = await call_next(request)
+
+    token = request.headers.get("authorization", "")
+    token = token.removeprefix("Bearer ").strip()
+    con = db.connect()
+    try:
+        user = auth.user_for_token(con, token) if token else None
+        audit.record(con, user, method, path, audit.summarise(body),
+                     response.status_code)
+    finally:
+        con.close()
+    return response
 
 JOBS = ["general", "driver", "dsd", "warehouse", "sales_rep", "ambassador",
         "event_staff"]
+# One list, so the status-change endpoint and the order editor can't drift.
+ORDER_STATUSES = ("pending", "confirmed", "shipped", "delivered", "cancelled")
 
 
 # ---------- helpers ----------
@@ -88,11 +139,6 @@ def login(body: LoginBody, con=Depends(get_con)):
             "id": u["id"], "name": u["name"], "role": u["role"],
             "email": u["email"] or ""})
     return auth.user_json(u)
-
-
-@app.get("/api/me")
-def me(user=Depends(current_user)):
-    return auth.user_json(user)
 
 
 @app.get("/api/meta")
@@ -247,6 +293,10 @@ def read_me(user=Depends(current_user), con=Depends(get_con)):
             "role": user["role"], "job": user["job"],
             "region": user["region"], "is_admin": bool(user["is_admin"]),
             "employment": user["employment"],
+            "has_password": bool(user["password_hash"]),
+            # The token is deliberately absent. The caller sent it to get
+            # here, so echoing it back adds nothing and puts a credential in
+            # one more response body.
             "has_pin": bool((user["pin"] or "").strip())}
 
 
@@ -655,8 +705,7 @@ class StatusBody(BaseModel):
 @app.post("/api/admin/orders/{oid}/status")
 def order_status(oid: int, body: StatusBody, user=Depends(admin_user),
                  con=Depends(get_con)):
-    if body.status not in ("pending", "confirmed", "shipped", "delivered",
-                           "cancelled"):
+    if body.status not in ORDER_STATUSES:
         raise HTTPException(400, "bad status")
     o = con.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
     if o is None:
@@ -1223,6 +1272,539 @@ def set_inventory(body: InventoryBody, user=Depends(admin_user),
         (body.store_id, body.product_id, body.qty, body.par, db.now()))
     con.commit()
     return {"ok": True}
+
+
+# ---------- editing and removing what's already here ----------
+#
+# These sit together on purpose. Each screen grew a "create" endpoint first
+# and stopped there, which left the ERP able to make a mess but not tidy one
+# up. The pattern is the same throughout: PATCH takes a partial body and only
+# touches the fields present, DELETE deactivates when the row is referenced by
+# history and removes it when it isn't. Nothing here hard-deletes a row that
+# an order, shift or ledger entry still points at — that would turn a report
+# into a lie.
+
+
+def _patch(con, table: str, row_id: int, fields: dict, allowed: tuple) -> dict:
+    """Apply the fields that were sent, ignore the ones that weren't.
+
+    Column names are checked against `allowed` rather than taken from the
+    request, so a caller can't name a column the endpoint never meant to
+    expose.
+    """
+    sets, args = [], []
+    for k, v in fields.items():
+        if v is None or k not in allowed:
+            continue
+        sets.append(f"{k}=?")
+        args.append(v)
+    if not sets:
+        raise HTTPException(400, "nothing to change")
+    args.append(row_id)
+    cur = con.execute(f"UPDATE {table} SET {', '.join(sets)} WHERE id=?",
+                      tuple(args))
+    con.commit()
+    if not cur.rowcount:
+        raise HTTPException(404, "no such row")
+    return {"ok": True}
+
+
+class ProductEdit(BaseModel):
+    sku: str | None = None
+    name: str | None = None
+    description: str | None = None
+    category: str | None = None
+    price_cents: int | None = None
+    case_size: int | None = None
+    case_price_cents: int | None = None
+    active: int | None = None
+
+
+@app.patch("/api/admin/products/{pid}")
+def edit_product(pid: int, body: ProductEdit, user=Depends(admin_user),
+                 con=Depends(get_con)):
+    return _patch(con, "products", pid, body.model_dump(),
+                  ("sku", "name", "description", "category", "price_cents",
+                   "case_size", "case_price_cents", "active"))
+
+
+@app.delete("/api/admin/products/{pid}")
+def delete_product(pid: int, user=Depends(admin_user), con=Depends(get_con)):
+    """Retire, don't erase, once a product has been sold.
+
+    An order line points at a product row; deleting it would leave past
+    orders describing something that no longer exists, and every revenue
+    figure derived from them would quietly change.
+    """
+    sold = con.execute("SELECT COUNT(*) n FROM order_items WHERE product_id=?",
+                       (pid,)).fetchone()["n"]
+    if sold:
+        con.execute("UPDATE products SET active=0 WHERE id=?", (pid,))
+        con.commit()
+        return {"ok": True, "retired": True, "orders": sold,
+                "note": f"kept and hidden — {sold} order lines reference it"}
+    con.execute("DELETE FROM inventory WHERE product_id=?", (pid,))
+    con.execute("DELETE FROM products WHERE id=?", (pid,))
+    con.commit()
+    return {"ok": True, "retired": False}
+
+
+class OrderEdit(BaseModel):
+    status: str | None = None
+    ship_name: str | None = None
+    address: str | None = None
+    city: str | None = None
+    postal: str | None = None
+    phone: str | None = None
+    region: str | None = None
+    note: str | None = None
+
+
+@app.patch("/api/admin/orders/{oid}")
+def edit_order(oid: int, body: OrderEdit, user=Depends(admin_user),
+               con=Depends(get_con)):
+    """Shipping details and status. Money is deliberately not editable here.
+
+    Totals come from the line items and the discounts that were applied at
+    the time; letting someone type a new total would break the arithmetic
+    between an order, its refunds and the P&L. Refunds have their own
+    endpoint, which writes a ledger entry.
+    """
+    if body.status is not None and body.status not in ORDER_STATUSES:
+        raise HTTPException(400, f"status must be one of {ORDER_STATUSES}")
+    return _patch(con, "orders", oid, body.model_dump(),
+                  ("status", "ship_name", "address", "city", "postal",
+                   "phone", "region", "note"))
+
+
+@app.delete("/api/admin/orders/{oid}")
+def delete_order(oid: int, user=Depends(admin_user), con=Depends(get_con)):
+    """Cancel rather than delete. An order is a financial record; the honest
+    way to undo one is to mark it cancelled, which the P&L already excludes."""
+    o = con.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+    if o is None:
+        raise HTTPException(404, "no such order")
+    if o["status"] == "cancelled":
+        raise HTTPException(400, "that order is already cancelled")
+    con.execute("UPDATE orders SET status='cancelled' WHERE id=?", (oid,))
+    con.commit()
+    return {"ok": True, "cancelled": True}
+
+
+class PromoEdit(BaseModel):
+    name: str | None = None
+    body: str | None = None
+    product_id: int | None = None
+    discount_pct: int | None = None
+    region: str | None = None
+    city: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    starts: str | None = None
+    video_url: str | None = None
+    active: int | None = None
+
+
+@app.patch("/api/admin/promos/{pid}")
+def edit_promo(pid: int, body: PromoEdit, user=Depends(admin_user),
+               con=Depends(get_con)):
+    return _patch(con, "promos", pid, body.model_dump(),
+                  ("name", "body", "product_id", "discount_pct", "region",
+                   "city", "lat", "lng", "starts", "video_url", "active"))
+
+
+@app.delete("/api/admin/promos/{pid}")
+def delete_promo(pid: int, user=Depends(admin_user), con=Depends(get_con)):
+    """Promos and events share a table. Scans and shifts point at them, so a
+    promo people actually used is deactivated rather than removed."""
+    used = con.execute("SELECT COUNT(*) n FROM promo_scans WHERE promo_id=?",
+                       (pid,)).fetchone()["n"]
+    worked = con.execute("SELECT COUNT(*) n FROM shifts WHERE event_id=?",
+                         (pid,)).fetchone()["n"]
+    if used or worked:
+        con.execute("UPDATE promos SET active=0 WHERE id=?", (pid,))
+        con.commit()
+        return {"ok": True, "retired": True, "scans": used, "shifts": worked}
+    con.execute("DELETE FROM promos WHERE id=?", (pid,))
+    con.commit()
+    return {"ok": True, "retired": False}
+
+
+class StoreEdit(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    region: str | None = None
+    city: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    contact: str | None = None
+    active: int | None = None
+
+
+@app.patch("/api/admin/stores/{sid}")
+def edit_store(sid: int, body: StoreEdit, user=Depends(admin_user),
+               con=Depends(get_con)):
+    return _patch(con, "stores", sid, body.model_dump(),
+                  ("name", "kind", "region", "city", "lat", "lng", "contact",
+                   "active"))
+
+
+@app.delete("/api/admin/stores/{sid}")
+def delete_store(sid: int, user=Depends(admin_user), con=Depends(get_con)):
+    """A store that has ordered stays on the books, closed. Its inventory
+    rows go either way — they describe stock on a shelf that no longer
+    exists."""
+    ordered = con.execute("SELECT COUNT(*) n FROM orders WHERE store_id=?",
+                          (sid,)).fetchone()["n"]
+    con.execute("DELETE FROM inventory WHERE store_id=?", (sid,))
+    if ordered:
+        con.execute("UPDATE stores SET active=0 WHERE id=?", (sid,))
+        con.commit()
+        return {"ok": True, "closed": True, "orders": ordered}
+    con.execute("DELETE FROM stores WHERE id=?", (sid,))
+    con.commit()
+    return {"ok": True, "closed": False}
+
+
+@app.delete("/api/admin/inventory/{store_id}/{product_id}")
+def clear_inventory(store_id: int, product_id: int, user=Depends(admin_user),
+                    con=Depends(get_con)):
+    """Remove the line entirely — "this store doesn't carry this" is a
+    different statement from "this store has none left", and a zero row keeps
+    showing up in low-stock reports as if it were the latter."""
+    cur = con.execute(
+        "DELETE FROM inventory WHERE store_id=? AND product_id=?",
+        (store_id, product_id))
+    con.commit()
+    if not cur.rowcount:
+        raise HTTPException(404, "that store doesn't stock that product")
+    return {"ok": True}
+
+
+class PostEdit(BaseModel):
+    body: str | None = None
+
+
+@app.patch("/api/admin/feed/{pid}")
+def edit_post(pid: int, body: PostEdit, user=Depends(admin_user),
+              con=Depends(get_con)):
+    return _patch(con, "posts", pid, body.model_dump(), ("body",))
+
+
+@app.delete("/api/admin/feed/{pid}")
+def remove_post(pid: int, user=Depends(admin_user), con=Depends(get_con)):
+    """The POST /delete form of this already existed; this is the same thing
+    under the verb that describes it, so the feed matches every other screen."""
+    con.execute("DELETE FROM post_likes WHERE post_id=?", (pid,))
+    con.execute("DELETE FROM posts WHERE id=?", (pid,))
+    con.commit()
+    return {"ok": True}
+
+
+# ---------- sourcing, supply and manufacturing ----------
+
+@app.get("/api/supply")
+def supply_overview(user=Depends(admin_user), con=Depends(get_con)):
+    return supply.overview(con)
+
+
+@app.post("/api/supply/suppliers")
+def supply_add_supplier(body: supply.SupplierBody, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    return supply.add_supplier(con, body)
+
+
+@app.patch("/api/supply/suppliers/{sid}")
+def supply_edit_supplier(sid: int, body: supply.SupplierBody,
+                         user=Depends(admin_user), con=Depends(get_con)):
+    return _patch(con, "suppliers", sid, body.model_dump(),
+                  ("name", "kind", "contact", "email", "phone", "country",
+                   "lead_days", "terms", "notes", "active"))
+
+
+@app.delete("/api/supply/suppliers/{sid}")
+def supply_del_supplier(sid: int, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    """A supplier with history is deactivated: purchase orders name them, and
+    an order from nobody isn't a record of anything."""
+    used = con.execute("SELECT COUNT(*) n FROM purchase_orders"
+                       " WHERE supplier_id=?", (sid,)).fetchone()["n"]
+    if used:
+        con.execute("UPDATE suppliers SET active=0 WHERE id=?", (sid,))
+        con.commit()
+        return {"ok": True, "retired": True, "purchase_orders": used}
+    con.execute("UPDATE materials SET supplier_id=NULL WHERE supplier_id=?",
+                (sid,))
+    con.execute("DELETE FROM suppliers WHERE id=?", (sid,))
+    con.commit()
+    return {"ok": True, "retired": False}
+
+
+@app.post("/api/supply/materials")
+def supply_add_material(body: supply.MaterialBody, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    return supply.add_material(con, body)
+
+
+@app.patch("/api/supply/materials/{mid}")
+def supply_edit_material(mid: int, body: supply.MaterialBody,
+                         user=Depends(admin_user), con=Depends(get_con)):
+    """Note what is absent: on_hand. Stock moves only through a receipt, a
+    production run or an explicit adjustment that records a reason."""
+    return _patch(con, "materials", mid, body.model_dump(),
+                  ("name", "code", "kind", "unit", "supplier_id",
+                   "unit_cost_cents", "reorder_point", "active"))
+
+
+@app.delete("/api/supply/materials/{mid}")
+def supply_del_material(mid: int, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    moves = con.execute("SELECT COUNT(*) n FROM material_moves"
+                        " WHERE material_id=?", (mid,)).fetchone()["n"]
+    if moves:
+        con.execute("UPDATE materials SET active=0 WHERE id=?", (mid,))
+        con.commit()
+        return {"ok": True, "retired": True, "moves": moves}
+    con.execute("DELETE FROM bill_of_materials WHERE material_id=?", (mid,))
+    con.execute("DELETE FROM materials WHERE id=?", (mid,))
+    con.commit()
+    return {"ok": True, "retired": False}
+
+
+class AdjustBody(BaseModel):
+    qty: float
+    note: str = ""
+
+
+@app.post("/api/supply/materials/{mid}/adjust")
+def supply_adjust(mid: int, body: AdjustBody, user=Depends(admin_user),
+                  con=Depends(get_con)):
+    """A stock correction, with a reason attached. This is the one way to
+    change a level by hand, and it still leaves a row behind saying who did
+    it and why — a count that changes with no explanation is the thing this
+    module exists to avoid."""
+    if not body.note.strip():
+        raise HTTPException(400, "an adjustment needs a reason")
+    if not con.execute("SELECT 1 FROM materials WHERE id=?", (mid,)).fetchone():
+        raise HTTPException(404, "no such material")
+    supply.move(con, mid, body.qty, "adjust", user["name"],
+                body.note.strip()[:200])
+    con.commit()
+    return {"ok": True}
+
+
+@app.get("/api/supply/materials/{mid}/moves")
+def supply_moves(mid: int, user=Depends(admin_user), con=Depends(get_con)):
+    return [dict(r) for r in con.execute(
+        "SELECT * FROM material_moves WHERE material_id=?"
+        " ORDER BY id DESC LIMIT 100", (mid,)).fetchall()]
+
+
+@app.post("/api/supply/purchase-orders")
+def supply_add_po(body: supply.POBody, user=Depends(admin_user),
+                  con=Depends(get_con)):
+    return supply.add_po(con, body)
+
+
+class POStatusBody(BaseModel):
+    status: str
+
+
+@app.post("/api/supply/purchase-orders/{pid}/status")
+def supply_po_status(pid: int, body: POStatusBody, user=Depends(admin_user),
+                     con=Depends(get_con)):
+    if body.status not in supply.PO_STATUS:
+        raise HTTPException(400, f"status must be one of {supply.PO_STATUS}")
+    con.execute("UPDATE purchase_orders SET status=? WHERE id=?",
+                (body.status, pid))
+    con.commit()
+    return {"ok": True}
+
+
+class ReceiveBody(BaseModel):
+    lines: dict = {}
+
+
+@app.post("/api/supply/purchase-orders/{pid}/receive")
+def supply_receive(pid: int, body: ReceiveBody, user=Depends(admin_user),
+                   con=Depends(get_con)):
+    return supply.receive_po(con, pid, body.lines, user["name"])
+
+
+@app.delete("/api/supply/purchase-orders/{pid}")
+def supply_del_po(pid: int, user=Depends(admin_user), con=Depends(get_con)):
+    po = con.execute("SELECT * FROM purchase_orders WHERE id=?",
+                     (pid,)).fetchone()
+    if po is None:
+        raise HTTPException(404, "no such purchase order")
+    got = con.execute("SELECT COALESCE(SUM(received),0) n FROM"
+                      " purchase_order_lines WHERE po_id=?",
+                      (pid,)).fetchone()["n"]
+    if got:
+        # Stock already moved against it; cancelling keeps the paperwork
+        # matching the warehouse.
+        con.execute("UPDATE purchase_orders SET status='cancelled'"
+                    " WHERE id=?", (pid,))
+        con.commit()
+        return {"ok": True, "cancelled": True, "received": got}
+    con.execute("DELETE FROM purchase_order_lines WHERE po_id=?", (pid,))
+    con.execute("DELETE FROM purchase_orders WHERE id=?", (pid,))
+    con.commit()
+    return {"ok": True, "cancelled": False}
+
+
+@app.get("/api/supply/bom/{product_id}")
+def supply_bom(product_id: int, user=Depends(admin_user),
+               con=Depends(get_con)):
+    return {"lines": supply.bom(con, product_id)}
+
+
+class BomBody(BaseModel):
+    material_id: int
+    qty_per_case: float
+
+
+@app.post("/api/supply/bom/{product_id}")
+def supply_set_bom(product_id: int, body: BomBody, user=Depends(admin_user),
+                   con=Depends(get_con)):
+    if body.qty_per_case <= 0:
+        con.execute("DELETE FROM bill_of_materials WHERE product_id=?"
+                    " AND material_id=?", (product_id, body.material_id))
+    else:
+        con.execute(
+            "INSERT INTO bill_of_materials(product_id,material_id,"
+            " qty_per_case) VALUES(?,?,?) ON CONFLICT(product_id,material_id)"
+            " DO UPDATE SET qty_per_case=excluded.qty_per_case",
+            (product_id, body.material_id, body.qty_per_case))
+    con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/supply/runs")
+def supply_add_run(body: supply.RunBody, user=Depends(admin_user),
+                   con=Depends(get_con)):
+    if not con.execute("SELECT 1 FROM products WHERE id=?",
+                       (body.product_id,)).fetchone():
+        raise HTTPException(404, "no such product")
+    cur = con.execute(
+        "INSERT INTO production_runs(product_id,facility,status,"
+        " planned_cases,scheduled,notes,created_at)"
+        " VALUES(?,?,'planned',?,?,?,?)",
+        (body.product_id, body.facility.strip()[:120],
+         max(0, body.planned_cases), body.scheduled,
+         body.notes.strip()[:500], db.now()))
+    con.commit()
+    return {"id": cur.lastrowid,
+            "shortfall": supply.shortfall(con, body.product_id,
+                                          body.planned_cases)}
+
+
+class RunFinishBody(BaseModel):
+    actual_cases: int
+
+
+@app.post("/api/supply/runs/{rid}/finish")
+def supply_finish_run(rid: int, body: RunFinishBody, user=Depends(admin_user),
+                      con=Depends(get_con)):
+    return supply.finish_run(con, rid, body.actual_cases, user["name"])
+
+
+@app.patch("/api/supply/runs/{rid}")
+def supply_edit_run(rid: int, body: supply.RunBody, user=Depends(admin_user),
+                    con=Depends(get_con)):
+    return _patch(con, "production_runs", rid, body.model_dump(),
+                  ("product_id", "facility", "planned_cases", "scheduled",
+                   "notes"))
+
+
+@app.delete("/api/supply/runs/{rid}")
+def supply_del_run(rid: int, user=Depends(admin_user), con=Depends(get_con)):
+    r = con.execute("SELECT * FROM production_runs WHERE id=?",
+                    (rid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such run")
+    if r["status"] == "done":
+        raise HTTPException(
+            400, "a finished run has already moved stock — scrap it instead "
+                 "of deleting it, so the movements still have something to "
+                 "point at")
+    con.execute("DELETE FROM production_runs WHERE id=?", (rid,))
+    con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/supply/shipments")
+def supply_add_shipment(body: supply.ShipmentBody, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    cur = con.execute(
+        "INSERT INTO inbound_shipments(po_id,carrier,tracking,status,origin,"
+        " eta,notes,created_at) VALUES(?,?,?,'booked',?,?,?,?)",
+        (body.po_id, body.carrier.strip()[:80], body.tracking.strip()[:120],
+         body.origin.strip()[:120], body.eta, body.notes.strip()[:400],
+         db.now()))
+    con.commit()
+    return {"id": cur.lastrowid}
+
+
+class ShipStatusBody(BaseModel):
+    status: str
+
+
+@app.post("/api/supply/shipments/{sid}/status")
+def supply_ship_status(sid: int, body: ShipStatusBody,
+                       user=Depends(admin_user), con=Depends(get_con)):
+    if body.status not in supply.SHIP_STATUS:
+        raise HTTPException(400, f"status must be one of {supply.SHIP_STATUS}")
+    con.execute(
+        "UPDATE inbound_shipments SET status=?, arrived_at=? WHERE id=?",
+        (body.status, db.now() if body.status == "arrived" else 0, sid))
+    con.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/supply/shipments/{sid}")
+def supply_del_shipment(sid: int, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    con.execute("DELETE FROM inbound_shipments WHERE id=?", (sid,))
+    con.commit()
+    return {"ok": True}
+
+
+# ---------- the audit log ----------
+
+@app.get("/api/admin/audit")
+def read_audit(limit: int = 200, actor: str = "", entity: str = "",
+               user=Depends(admin_user), con=Depends(get_con)):
+    return audit.read(con, limit, actor, entity)
+
+
+# ---------- the database, directly ----------
+
+@app.get("/api/admin/db")
+def db_overview(user=Depends(admin_user), con=Depends(get_con)):
+    return dbview.overview(con)
+
+
+@app.get("/api/admin/db/{table}")
+def db_rows(table: str, q: str = "", limit: int = 50, offset: int = 0,
+            user=Depends(admin_user), con=Depends(get_con)):
+    return dbview.rows(con, table, q, limit, offset)
+
+
+class RowEdit(BaseModel):
+    values: dict
+
+
+@app.patch("/api/admin/db/{table}/{row_id}")
+def db_update(table: str, row_id: str, body: RowEdit,
+              user=Depends(admin_user), con=Depends(get_con)):
+    return dbview.update(con, table, row_id, body.values)
+
+
+@app.delete("/api/admin/db/{table}/{row_id}")
+def db_delete(table: str, row_id: str, user=Depends(admin_user),
+              con=Depends(get_con)):
+    return dbview.delete(con, table, row_id)
 
 
 # ---------- trucks & routes ----------
