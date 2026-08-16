@@ -324,9 +324,20 @@ function searchResults(ctx, q, progress, notes) {
 
 let courseTeardowns = [];
 
+/** Swapping the pane's contents leaves the window where it was, which lands you
+    in the middle of whatever replaced it. */
+function scrollTop() {
+  window.scrollTo(0, 0);
+}
+
 async function coursePane(ctx, body) {
   for (const t of courseTeardowns) t();
   courseTeardowns = [];
+  // Owns its own clearing: the tab switch clears before calling, but "‹ Modules"
+  // calls straight back in, and appending there put the list below the still
+  // open document — thousands of pixels down, so the button looked dead.
+  clear(body);
+  scrollTop();
 
   const index = await api("/api/course");
   if (index.missing || !index.modules.length) {
@@ -361,6 +372,7 @@ async function coursePane(ctx, body) {
     for (const t of courseTeardowns) t();
     courseTeardowns = [];
     clear(body);
+    scrollTop();
     body.append(el("p.muted", {}, "Loading…"));
 
     let text;

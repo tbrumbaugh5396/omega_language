@@ -21,7 +21,10 @@ router = APIRouter(prefix="/api/course")
 
 COURSE_DIR = config.APP_ROOT / "docs" / "course"
 FIG_DIR = COURSE_DIR / "figures"
-SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# Uppercase is allowed because real filenames use it — README.md and the
+# supplied Desktop.svg both 400'd under a lowercase-only pattern. Traversal is
+# stopped by the resolve()/parents check below, not by this.
+SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 # Title and one-line summary come from the file itself; this is only the order
 # and the "core maths" column the course README publishes.
