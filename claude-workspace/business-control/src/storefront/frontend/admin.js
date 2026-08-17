@@ -1100,6 +1100,12 @@ async function drawEnquiries() {
       ${e.outreach_id
         ? `<a class="btn-pill ghost mini" href="/ops/" target="_blank">
              lead #${e.outreach_id}</a>` : ""}
+      ${(e.links || []).map((l) => l.url
+        ? `<a class="btn-pill ghost mini" href="${l.url}" target="_blank"
+             rel="noopener" title="last read ${l.synced_at
+               ? new Date(l.synced_at * 1000).toLocaleString() : "never"}"
+           >${l.provider}${l.state ? ": " + l.state : ""} &#8599;</a>`
+        : "").join("")}
     </div>`;
   }).join("");
 }

@@ -196,7 +196,9 @@ def create_ticket(body: TicketBody, request: Request, con=Depends(get_con),
         except Exception:
             pass          # a mail outage must not lose the ticket
     from .api import fire_webhooks
-    fire_webhooks("ticket.created", {"ref": ref, "topic": body.topic})
+    fire_webhooks("ticket.created", {
+        "id": tid, "ref": ref, "topic": body.topic,
+        "name": name, "email": body.email.strip()})
     return {"ok": True, "ref": ref, "id": tid}
 
 

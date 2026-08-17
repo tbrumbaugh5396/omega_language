@@ -2588,6 +2588,9 @@ async function renderIntegrations() {
         <div class="doc-main"><b>${esc(p.label)}</b>
           <span class="dim">${esc(p.blurb)}</span></div>
         ${status}
+        ${p.connected && p.syncs
+          ? `<button class="btn alt sm" data-igsync="${p.name}"
+             >Sync state back</button>` : ""}
         ${p.connected ? `<button class="btn alt sm" data-igtest="${p.name}"
           >Test</button>` : ""}
         ${p.connected || p.inbound_ready
@@ -2631,6 +2634,19 @@ async function renderIntegrations() {
   d.providers.forEach((p) => drawForm(p, () => renderIntegrations()));
   if ($("#slack-chat")) drawSlackChat();
 
+  view().querySelectorAll("[data-igsync]").forEach((b) => b.onclick = async () => {
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    try {
+      const r = await api(`/api/admin/integrations/${b.dataset.igsync}/sync`,
+                          { method: "POST" });
+      toast(r.changed.length
+        ? `${r.changed.length} of ${r.checked} moved on over there — `
+          + r.changed.map((x) => `${x.kind} #${x.id} ${x.applied}`).join(", ")
+        : `${r.checked} checked, nothing has changed`);
+      renderIntegrations();
+    } catch (e) { toast(e.message); }
+    finally { b.disabled = false; b.removeAttribute("aria-busy"); }
+  });
   view().querySelectorAll("[data-igtest]").forEach((b) => b.onclick = async () => {
     b.disabled = true; b.setAttribute("aria-busy", "true");
     try {

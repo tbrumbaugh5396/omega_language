@@ -287,7 +287,7 @@ def create_enquiry(body: EnquiryBody, con=Depends(get_con),
          f"Follow up: {PATHS[body.kind]['nav']}",
          time.time() + 86400, time.time()))
     oid = cur.lastrowid
-    con.execute(
+    ecur = con.execute(
         "INSERT INTO store_enquiries(kind,name,email,phone,company,city,"
         " region,detail,message,outreach_id,created_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -296,7 +296,13 @@ def create_enquiry(body: EnquiryBody, con=Depends(get_con),
          body.detail.strip(), body.message.strip(), oid, time.time()))
     con.commit()
     from .api import fire_webhooks
-    fire_webhooks("enquiry.created", {"kind": body.kind, "company": label})
+    # The id travels with the event. Without it an integration can raise a
+    # card or a deal but can never say which enquiry it belongs to, so
+    # nothing it learns later can find its way back.
+    fire_webhooks("enquiry.created", {
+        "id": ecur.lastrowid, "kind": body.kind, "company": label,
+        "name": name, "email": body.email.strip(),
+        "message": body.message.strip()[:400]})
     return {"ok": True, "outreach_id": oid}
 
 
@@ -452,10 +458,25 @@ def admin_enquiries(limit: int = 100, u=Depends(admin_user),
     rows = con.execute(
         "SELECT * FROM store_enquiries ORDER BY created_at DESC LIMIT ?",
         (min(limit, 300),)).fetchall()
+    # Where else this enquiry lives, and what it looks like over there. Shown
+    # beside the enquiry rather than only on the integrations screen: the
+    # question "has anyone dealt with this" is asked here, not there.
+    try:
+        from erp.backend import integrations as _ig
+        links = {}
+        for lk in con.execute(
+                "SELECT * FROM integration_links WHERE kind='enquiry'"
+        ).fetchall():
+            links.setdefault(lk["local_id"], []).append(
+                {"provider": lk["provider"], "url": lk["remote_url"],
+                 "state": lk["remote_state"], "synced_at": lk["synced_at"]})
+    except Exception:
+        links = {}
     out = []
     for r in rows:
         d = dict(r)
         d["nav"] = PATHS.get(r["kind"], {}).get("nav", r["kind"])
+        d["links"] = links.get(r["id"], [])
         out.append(d)
     return out
 

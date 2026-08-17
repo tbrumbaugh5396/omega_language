@@ -2492,6 +2492,19 @@ def slack_send(channel: str, body: SlackSayBody, user=Depends(admin_user),
     return integrations.slack_send(con, channel, text, user["name"])
 
 
+@app.post("/api/admin/integrations/{name}/sync")
+def integrations_sync(name: str, user=Depends(admin_user),
+                      con=Depends(get_con)):
+    """Pull back what happened to the cards and deals we made."""
+    return integrations.sync(con, name)
+
+
+@app.get("/api/admin/integrations/links/{kind}/{local_id}")
+def integrations_links(kind: str, local_id: int, user=Depends(admin_user),
+                       con=Depends(get_con)):
+    return {"links": integrations.links_for(con, kind, local_id)}
+
+
 @app.post("/api/admin/integrations/{name}/inbound-key")
 def integrations_inbound_key(name: str, rotate: int = 0,
                              user=Depends(admin_user), con=Depends(get_con)):

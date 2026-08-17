@@ -2529,16 +2529,16 @@ ok(_mainsrc.count("_order_paid(con, oid)") >= 2,
 _slack = [p for p in _ist["providers"] if p["name"] == "slack"][0]
 ok(any(f.get("optional") for f in _slack["fields"]),
    "the Slack bot token is optional — the alerts work without it")
-ok(c.post("/api/admin/integrations/slack/connect", headers=A,
-          json={"fields": {"webhook_url": "https://hooks.slack.com/x",
-                           "bot_token": "xoxp-user-token"}}
-          ).status_code == 400,
-   "a user token is refused where a bot token is needed")
-ok("xoxb" in c.post("/api/admin/integrations/slack/connect", headers=A,
-                    json={"fields": {"webhook_url": "https://hooks.slack.com/x",
-                                     "bot_token": "xoxp-nope"}}
-                    ).json()["detail"],
-   "and says which one to use")
+# Checked against the rule rather than through a live Slack call: the
+# webhook POST would fail first on a made-up URL, so a network test here
+# proves nothing about the token rule it claims to be about.
+_real_json = _ig._json_req
+_ig._json_req = lambda *a, **k: (True, {"ok": True})
+_bad_tok = _ig.check("slack", {"webhook_url": "https://hooks.slack.com/x",
+                               "bot_token": "xoxp-user-token"})
+_ig._json_req = _real_json
+ok(_bad_tok[0] is False, "a user token is refused where a bot token is needed")
+ok("xoxb" in _bad_tok[1], "and says which one to use")
 ok(c.get("/api/admin/integrations/slack/channels",
          headers=A).status_code == 400,
    "reading channels without a bot token is refused")
@@ -2570,5 +2570,111 @@ ok("data-igtest" in _ops, "and there's a button for it")
 # in the token — losing it leaves a connection that can't post anywhere.
 ok("realm_id" in _src_ig and "dict(request.query_params)" in _mainsrc,
    "the QuickBooks company id is captured from the callback and kept")
+
+
+# --- reading state back from Trello and Pipedrive ---
+# A one-way integration becomes a stale copy: cards get done over there and
+# the enquiry list here still shows them waiting.
+_con_l = _db.connect()
+_con_l.execute(
+    "INSERT INTO store_enquiries(kind,name,email,company,status,created_at)"
+    " VALUES('wholesale','Ann','ann@example.com','Corner Shop','new',?)",
+    (_t.time(),))
+_con_l.commit()
+_eid = _con_l.execute(
+    "SELECT id FROM store_enquiries ORDER BY id DESC LIMIT 1").fetchone()["id"]
+
+# An event has to carry the id, or a card can be raised that nothing here can
+# ever match back to the thing that caused it.
+_psrc = Path("src/storefront/backend/partners.py").read_text()
+_tsrc = Path("src/storefront/backend/support.py").read_text()
+ok('"id": ecur.lastrowid' in _psrc, "an enquiry event carries its id")
+ok('"id": tid' in _tsrc, "and so does a ticket event")
+
+_ig.link(_con_l, "trello", "enquiry", _eid, "card-1", "https://trello.com/c/x")
+_lk = _con_l.execute("SELECT * FROM integration_links WHERE local_id=?",
+                     (_eid,)).fetchone()
+ok(_lk and _lk["remote_id"] == "card-1",
+   "creating a card records which enquiry it belongs to")
+_ig.link(_con_l, "trello", "enquiry", _eid, "card-2", "u")
+ok(_con_l.execute("SELECT COUNT(*) n FROM integration_links WHERE local_id=?"
+                  " AND provider='trello'", (_eid,)).fetchone()["n"] == 1,
+   "and re-linking replaces rather than duplicating")
+
+# The reconciling rule: forward only. A sync that can move a record backwards
+# resurrects work somebody already finished.
+ok(_ig._advance(_con_l, "enquiry", _eid, "contacted") == "new → contacted",
+   "the remote can move an enquiry forward")
+ok(_ig._advance(_con_l, "enquiry", _eid, "closed") == "contacted → closed",
+   "and forward again")
+ok(_ig._advance(_con_l, "enquiry", _eid, "contacted") == "",
+   "but never back once it is closed here")
+ok(_ig._advance(_con_l, "enquiry", _eid, "closed") == "",
+   "and says nothing happened when it is already there")
+ok(_con_l.execute("SELECT status FROM store_enquiries WHERE id=?",
+                  (_eid,)).fetchone()["status"] == "closed",
+   "so the local record ends where it should")
+ok(_ig._advance(_con_l, "enquiry", 999999, "closed") == "gone",
+   "a record deleted here is reported, not resurrected")
+ok(_ig._advance(_con_l, "enquiry", _eid, "invented") == "",
+   "and a state we don't have is ignored rather than written")
+
+# How a board and a pipeline are read.
+_real_req = _ig._req
+_stub = {}
+_ig._req = lambda url, method="GET", headers=None, body=None, timeout=15: (
+    (True, _stub["card"]) if "/cards/" in url
+    else (True, {"name": _stub.get("list", "")}) if "/lists/" in url
+    else (True, {"data": _stub["deal"]}) if "/deals/" in url
+    else (False, "?"))
+_c = {"api_key": "k", "token": "t"}
+for _card, _list, _want in (
+        ({"closed": True, "idList": "L"}, "Backlog", "closed"),
+        ({"dueComplete": True, "idList": "L"}, "Backlog", "closed"),
+        ({"idList": "L"}, "Done", "closed"),
+        ({"idList": "L"}, "Shipped", "closed"),
+        ({"idList": "L"}, "In Progress", "contacted"),
+        ({"idList": "L"}, "Backlog", "")):
+    _stub.update(card=_card, list=_list)
+    _st, _to = _ig._trello_state(_c, "c")
+    ok(_to == _want,
+       f"a Trello card in {_list!r}"
+       + (f" means {_want}" if _want else " changes nothing here"))
+_ig._req = lambda url, method="GET", headers=None, body=None, timeout=15: (
+    False, "404")
+ok(_ig._trello_state(_c, "gone") == (None, ""),
+   "a card that has been deleted is reported unreachable, not closed")
+
+_ig.save(_con_l, "pipedrive", {"api_token": "t"}, "Acme", {"domain": "acme"})
+for _deal, _want in (({"status": "open", "stage_order_nr": 1}, ""),
+                     ({"status": "open", "stage_order_nr": 3}, "contacted"),
+                     ({"status": "won", "stage_order_nr": 5}, "closed"),
+                     ({"status": "lost", "stage_order_nr": 2}, "closed")):
+    _stub["deal"] = _deal
+    _ig._req = lambda url, method="GET", headers=None, body=None, timeout=15: (
+        True, {"data": _stub["deal"]})
+    _st, _to = _ig._pipedrive_state(_con_l, {"api_token": "t"}, "1")
+    ok(_to == _want,
+       f"a {_deal['status']} deal at stage {_deal['stage_order_nr']}"
+       + (f" means {_want}" if _want else " changes nothing here"))
+_ig._req = _real_req
+_con_l.close()
+
+ok(c.post("/api/admin/integrations/trello/sync",
+          headers=A).status_code == 400,
+   "syncing something unconnected says so")
+ok(c.post("/api/admin/integrations/trello/sync",
+          headers=CU).status_code in (401, 403), "and syncing needs an owner")
+_lks = c.get(f"/api/admin/integrations/links/enquiry/{_eid}", headers=A)
+ok(_lks.status_code == 200 and _lks.json()["links"],
+   "an enquiry can say where else it lives")
+ok(_ig.PROVIDERS["trello"].get("syncs")
+   and _ig.PROVIDERS["pipedrive"].get("syncs"),
+   "both declare that they read state back")
+ok(not _ig.PROVIDERS["slack"].get("syncs"),
+   "and one that doesn't, doesn't claim to")
+ok("data-igsync" in _ops, "the screen offers the sync")
+ok("links" in c.get("/api/store/admin/enquiries", headers=A).text,
+   "and the enquiry list carries the remote state with it")
 
 print(f"\nall {checks} checks passed")

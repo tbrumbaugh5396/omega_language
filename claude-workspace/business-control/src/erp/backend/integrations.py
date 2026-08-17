@@ -72,6 +72,27 @@ CREATE INDEX IF NOT EXISTS integration_log_time
    round. Separate from the outbound credential because it is the opposite
    direction of trust: this one we issue, and we can rotate it without
    asking anybody. */
+/* What we made over there, and for what over here.
+
+   Without this row an integration is write-only by construction: a card
+   exists in Trello and a deal in Pipedrive, and nothing in this database
+   knows which enquiry either belongs to, so whatever happens to them later
+   can never come back. It is the whole difference between pushing and
+   syncing. */
+CREATE TABLE IF NOT EXISTS integration_links (
+  id INTEGER PRIMARY KEY,
+  provider TEXT NOT NULL,
+  kind TEXT NOT NULL,                       -- enquiry | ticket
+  local_id INTEGER NOT NULL,
+  remote_id TEXT NOT NULL,
+  remote_url TEXT DEFAULT '',
+  remote_state TEXT DEFAULT '',             -- as last seen over there
+  applied TEXT DEFAULT '',                  -- what we did about it
+  created_at REAL NOT NULL,
+  synced_at REAL DEFAULT 0,
+  UNIQUE(provider, kind, local_id)
+);
+
 CREATE TABLE IF NOT EXISTS integration_inbound (
   provider TEXT PRIMARY KEY,
   key TEXT NOT NULL,
@@ -134,8 +155,11 @@ PROVIDERS = {
                      "the URL, and find the id of the list you want."},
         ],
         "events": ["enquiry.created", "ticket.created", "inventory.low"],
+        "syncs": True,
         "does": "Creates a card for each new enquiry, support ticket or "
-                "low-stock warning, so the work sits where the team looks.",
+                "low-stock warning, so the work sits where the team looks — "
+                "and reads back where each card has got to, so a thing done "
+                "on the board stops sitting in the list here.",
     },
     "pipedrive": {
         "label": "Pipedrive",
@@ -148,9 +172,11 @@ PROVIDERS = {
              "hint": "The bit before .pipedrive.com in your URL."},
         ],
         "events": ["enquiry.created"],
+        "syncs": True,
         "does": "Creates a person and a deal for every wholesale, "
                 "distribution or partnership enquiry, so nothing sits in an "
-                "inbox.",
+                "inbox — and reads the deal back, so one won or lost in the "
+                "pipeline closes here too.",
     },
     "dropbox": {
         "label": "Dropbox",
@@ -293,6 +319,22 @@ def save(con, name: str, credentials: dict, account: str = "",
     con.commit()
 
 
+KIND_FOR_EVENT = {"enquiry.created": "enquiry", "ticket.created": "ticket"}
+
+
+def link(con, provider_name: str, kind: str, local_id, remote_id: str,
+         url: str = "") -> None:
+    if not local_id or not remote_id:
+        return
+    con.execute(
+        "INSERT INTO integration_links(provider,kind,local_id,remote_id,"
+        " remote_url,created_at) VALUES(?,?,?,?,?,?)"
+        " ON CONFLICT(provider,kind,local_id) DO UPDATE SET"
+        " remote_id=excluded.remote_id, remote_url=excluded.remote_url",
+        (provider_name, kind, int(local_id), str(remote_id), url, time.time()))
+    con.commit()
+
+
 def log(con, name: str, event: str, ok: bool, detail: str = "") -> None:
     try:
         con.execute(
@@ -321,6 +363,7 @@ def status(con) -> dict:
             "auth": p["auth"], "does": p["does"],
             "fields": [{k: v for k, v in f.items()} for f in p["fields"]],
             "events": [EVENT_LABELS.get(e, e) for e in p["events"]],
+            "syncs": bool(p.get("syncs")),
             "connected": bool(r and r["active"]),
             "account": r["account"] if r else "",
             "connected_at": r["connected_at"] if r else 0,
@@ -670,7 +713,11 @@ def _deliver(con, name: str, event: str, d: dict, c: dict) -> tuple:
             "key": c.get("api_key", ""), "token": c.get("token", ""),
             "idList": s.get("list_id", ""), "name": text[:200],
             "desc": json.dumps(d, indent=1)[:2000]})
-        return _req(f"https://api.trello.com/1/cards?{q}", "POST")
+        ok, card = _req(f"https://api.trello.com/1/cards?{q}", "POST")
+        if ok and isinstance(card, dict):
+            link(con, name, KIND_FOR_EVENT.get(event, event), d.get("id"),
+                 card.get("id", ""), card.get("shortUrl", ""))
+        return ok, card
 
     if name == "pipedrive":
         s = settings(con, name)
@@ -686,7 +733,13 @@ def _deliver(con, name: str, event: str, d: dict, c: dict) -> tuple:
         deal = {"title": text[:200]}
         if pid:
             deal["person_id"] = pid
-        return _json_req(f"{base}/deals?api_token={tok}", "POST", payload=deal)
+        ok, dd = _json_req(f"{base}/deals?api_token={tok}", "POST",
+                           payload=deal)
+        if ok and isinstance(dd, dict):
+            did = (dd.get("data", {}) or {}).get("id")
+            link(con, name, KIND_FOR_EVENT.get(event, event), d.get("id"),
+                 did, f"https://{dom}.pipedrive.com/deal/{did}" if did else "")
+        return ok, dd
 
     if name == "quickbooks":
         # A sales receipt rather than an invoice: the money has already been
@@ -847,3 +900,123 @@ def slack_send(con, channel: str, text: str, who: str) -> dict:
     if not ok:
         raise HTTPException(400, f"Slack refused that: {d}")
     return {"ok": True, "ts": d.get("ts", "")}
+
+
+# ---------- reading state back ----------
+#
+# A one-way integration becomes a stale copy: cards get done and deals get
+# won over there, and nothing here ever hears. Six weeks in, the enquiry list
+# is full of things somebody dealt with a month ago.
+#
+# The rule for reconciling the two is deliberately narrow. The remote may
+# *advance* a record — say it has been picked up, or that it is finished —
+# and may never reopen one that was closed here. Anything else needs a
+# genuine answer to "which side is right", and a sync that guesses wrong
+# resurrects work people have already done.
+
+LOCAL_TABLE = {"enquiry": ("store_enquiries", ("new", "contacted", "closed")),
+               "ticket": ("support_tickets", ("open", "waiting", "closed"))}
+
+
+def _advance(con, kind: str, local_id: int, to: str) -> str:
+    """Move a local record forward, never back. Returns what happened."""
+    table, order = LOCAL_TABLE.get(kind, (None, ()))
+    if not table or to not in order:
+        return ""
+    row = con.execute(f"SELECT status FROM {table} WHERE id=?",
+                      (local_id,)).fetchone()
+    if row is None:
+        return "gone"
+    now = row["status"]
+    if now not in order or order.index(to) <= order.index(now):
+        return ""                      # already there, or further along
+    con.execute(f"UPDATE {table} SET status=? WHERE id=?", (to, local_id))
+    con.commit()
+    return f"{now} → {to}"
+
+
+def sync(con, name: str) -> dict:
+    """Pull the state of everything we created over there."""
+    p = provider(name)
+    c = creds(con, name)
+    if not c:
+        raise HTTPException(400, f"{p['label']} isn't connected")
+    rows = con.execute(
+        "SELECT * FROM integration_links WHERE provider=?", (name,)).fetchall()
+    checked, changed, gone = 0, [], 0
+    for r in rows:
+        state, to = None, ""
+        if name == "trello":
+            state, to = _trello_state(c, r["remote_id"])
+        elif name == "pipedrive":
+            state, to = _pipedrive_state(con, c, r["remote_id"])
+        if state is None:
+            gone += 1
+            continue
+        checked += 1
+        did = _advance(con, r["kind"], r["local_id"], to) if to else ""
+        con.execute(
+            "UPDATE integration_links SET remote_state=?, applied=?,"
+            " synced_at=? WHERE id=?",
+            (state, did or r["applied"], time.time(), r["id"]))
+        if did:
+            changed.append({"kind": r["kind"], "id": r["local_id"],
+                            "state": state, "applied": did})
+    con.commit()
+    log(con, name, "sync", True,
+        f"{checked} checked, {len(changed)} applied"
+        + (f", {gone} unreachable" if gone else ""))
+    return {"checked": checked, "changed": changed, "unreachable": gone}
+
+
+def _trello_state(c: dict, card_id: str) -> tuple:
+    """(what the card looks like, what it means for us)."""
+    q = urllib.parse.urlencode({"key": c.get("api_key", ""),
+                                "token": c.get("token", "")})
+    ok, card = _req(f"https://api.trello.com/1/cards/{card_id}"
+                    f"?fields=name,closed,dueComplete,idList&{q}")
+    if not ok or not isinstance(card, dict):
+        return None, ""
+    # Archived or ticked off is finished. Otherwise the list it sits in is
+    # the state — that is how people actually use a board, and reading the
+    # list name means a team's own "Done" column works without configuring
+    # anything here.
+    if card.get("closed") or card.get("dueComplete"):
+        return "done", "closed"
+    ok2, lst = _req(f"https://api.trello.com/1/lists/{card.get('idList','')}"
+                    f"?fields=name&{q}")
+    lname = (lst.get("name", "") if ok2 and isinstance(lst, dict) else "")
+    low = lname.lower()
+    if any(w in low for w in ("done", "complete", "closed", "shipped", "won")):
+        return lname, "closed"
+    if any(w in low for w in ("doing", "progress", "contacted", "working")):
+        return lname, "contacted"
+    return lname or "open", ""
+
+
+def _pipedrive_state(con, c: dict, deal_id: str) -> tuple:
+    s = settings(con, "pipedrive")
+    dom = s.get("domain", "").replace(".pipedrive.com", "").strip("/")
+    tok = urllib.parse.quote(c.get("api_token", ""))
+    ok, d = _req(f"https://{dom}.pipedrive.com/api/v1/deals/{deal_id}"
+                 f"?api_token={tok}")
+    if not ok or not isinstance(d, dict) or not d.get("data"):
+        return None, ""
+    deal = d["data"]
+    st = deal.get("status", "open")
+    if st in ("won", "lost"):
+        # Both are conclusions. The pipeline knows which; our enquiry list
+        # only needs to know it is no longer waiting on anyone here.
+        return st, "closed"
+    if deal.get("stage_order_nr", 1) and int(
+            deal.get("stage_order_nr") or 1) > 1:
+        return f"stage {deal.get('stage_order_nr')}", "contacted"
+    return st, ""
+
+
+def links_for(con, kind: str, local_id: int) -> list:
+    """Where this record also lives, for showing on its own screen."""
+    return [dict(r) for r in con.execute(
+        "SELECT provider, remote_url, remote_state, synced_at"
+        " FROM integration_links WHERE kind=? AND local_id=?",
+        (kind, local_id)).fetchall()]
