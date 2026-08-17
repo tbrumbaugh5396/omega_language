@@ -731,3 +731,5 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
 .intg-form input[type="file"] { padding: 7px; font-size: 13px; }
 .intg-form .btn { align-self: flex-start; }
 .intg-form p:empty { display: none; }
+.intg-chat { margin-top: 14px; }
+.intg-chat .dc-wrap { margin-bottom: 0; }

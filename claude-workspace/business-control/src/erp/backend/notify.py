@@ -61,6 +61,17 @@ def sweep(con, cfg) -> None:
         push(con, f"Low stock: {r['product']} at {r['store']} ({r['qty']} left)",
              kind="inventory",
              dedup=f"low:{r['store_id']}:{r['product_id']}:{week}")
+        # Also a business event, so Slack and Trello hear about it. It was
+        # only ever a bell inside the app before, which meant the providers
+        # that declared an interest in low stock never actually got any.
+        try:
+            from storefront.backend.api import fire_webhooks
+            fire_webhooks("inventory.low", {
+                "product": r["product"], "store": r["store"],
+                "qty": r["qty"], "store_id": r["store_id"],
+                "product_id": r["product_id"]})
+        except Exception:
+            pass
 
     eng = analytics.engagement(con, cfg)
     for a in eng["alerts"]:

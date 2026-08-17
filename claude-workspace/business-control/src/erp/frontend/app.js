@@ -934,6 +934,7 @@ function emptyState(icon, title, hint) {
 async function render() {
   renderChrome();
   clearInterval(S._dcTimer);        // stop polling Discord once you leave it
+  clearInterval(S._slackTimer);     // and Slack
   if (S.promoLanding) return renderPromoLanding();
   if (!S.user && S.tab === "login") return renderLogin();
   view().innerHTML = SKELETON;
@@ -2521,6 +2522,8 @@ async function renderIntegrations() {
         <div class="doc-main"><b>${esc(p.label)}</b>
           <span class="dim">${esc(p.blurb)}</span></div>
         ${status}
+        ${p.connected ? `<button class="btn alt sm" data-igtest="${p.name}"
+          >Test</button>` : ""}
         ${p.connected || p.inbound_ready
           ? `<button class="btn alt sm" data-igoff="${p.name}">${
               p.auth === "inbound" ? "New key" : "Disconnect"}</button>` : ""}
@@ -2529,6 +2532,8 @@ async function renderIntegrations() {
       ${p.events.length ? `<p class="dim intg-when">Fires when
         ${p.events.map(esc).join(", ")}.</p>` : ""}
       ${p.connected ? "" : `<div class="intg-form" id="f-${p.name}"></div>`}
+      ${p.name === "slack" && p.connected
+        ? '<div class="intg-chat" id="slack-chat"></div>' : ""}
       ${p.name === "canva" && p.connected
         ? `<button class="btn alt sm" id="canva-list">List my designs</button>
            <div id="canva-out"></div>` : ""}
@@ -2558,7 +2563,17 @@ async function renderIntegrations() {
         </tr>`).join("")}</tbody></table></div></div>` : ""}`;
 
   d.providers.forEach((p) => drawForm(p, () => renderIntegrations()));
+  if ($("#slack-chat")) drawSlackChat();
 
+  view().querySelectorAll("[data-igtest]").forEach((b) => b.onclick = async () => {
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    try {
+      const r = await api(`/api/admin/integrations/${b.dataset.igtest}/test`,
+                          { method: "POST" });
+      toast(`Still working — ${r.detail}`);
+    } catch (e) { toast(e.message); }
+    finally { b.disabled = false; b.removeAttribute("aria-busy"); }
+  });
   view().querySelectorAll("[data-igoff]").forEach((b) => b.onclick = async () => {
     const name = b.dataset.igoff;
     const p = d.providers.find((x) => x.name === name);
@@ -2588,6 +2603,101 @@ async function renderIntegrations() {
         : '<p class="dim">No designs came back.</p>';
     } catch (e) { toast(e.message); }
   };
+}
+
+/* Reading and answering Slack from here. Same shape as the Discord reader,
+   deliberately: two chat surfaces that behave differently are two things to
+   learn for no reason. */
+async function drawSlackChat() {
+  const box = $("#slack-chat");
+  if (!box) return;
+  let list;
+  try {
+    list = await api("/api/admin/integrations/slack/channels");
+  } catch (e) {
+    box.innerHTML = `<p class="dim">${esc(e.message)}</p>`;
+    return;
+  }
+  if (list.error) {
+    box.innerHTML = `<p class="dim">${esc(list.error)}</p>`;
+    return;
+  }
+  if (!list.channels.length) {
+    box.innerHTML = '<p class="dim">No channels came back — check the '
+      + "app has channels:read.</p>";
+    return;
+  }
+  const readable = list.channels.filter((c) => c.member);
+  if (!S.slackChan || !list.channels.some((c) => c.id === S.slackChan)) {
+    S.slackChan = (readable[0] || list.channels[0]).id;
+  }
+  box.innerHTML = `
+    <div class="dc-wrap">
+      <div class="dc-list">${list.channels.map((c) => `
+        <button class="dc-c ${c.id === S.slackChan ? "on" : ""}"
+          data-slc="${c.id}"><b>#${esc(c.name)}</b>
+          ${c.member ? (c.topic ? `<span class="dim">${esc(c.topic)}</span>`
+            : "") : '<span class="dim">not joined</span>'}</button>`).join("")}
+      </div>
+      <div class="dc-room">
+        <div class="dc-msgs" id="slack-msgs"><p class="dim">Loading…</p></div>
+        <form class="dc-say" id="slack-say">
+          <input id="slack-text" autocomplete="off"
+            placeholder="Message #${esc((list.channels.find(
+              (c) => c.id === S.slackChan) || {}).name || "")}">
+          <button class="btn">Send</button>
+        </form>
+      </div>
+    </div>`;
+  box.querySelectorAll("[data-slc]").forEach((b) => b.onclick = () => {
+    S.slackChan = b.dataset.slc; drawSlackChat();
+  });
+  $("#slack-say").onsubmit = async (e) => {
+    e.preventDefault();
+    const input = $("#slack-text");
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    try {
+      await api(`/api/admin/integrations/slack/${S.slackChan}/messages`,
+                { body: { text } });
+      loadSlackMsgs();
+    } catch (err) { toast(err.message); input.value = text; }
+  };
+  loadSlackMsgs();
+  clearInterval(S._slackTimer);
+  S._slackTimer = setInterval(() => {
+    if (S.tab === "integrations" && $("#slack-msgs")) loadSlackMsgs();
+    else clearInterval(S._slackTimer);
+  }, 20000);
+}
+
+async function loadSlackMsgs() {
+  const el = $("#slack-msgs");
+  if (!el) return;
+  try {
+    const d = await api(
+      `/api/admin/integrations/slack/${S.slackChan}/messages`);
+    if (d.error) {
+      el.innerHTML = `<p class="dim">${esc(d.error)}</p>`;
+      return;
+    }
+    // Only redraw on change, so a poll doesn't yank the scroll position out
+    // from under someone reading.
+    const sig = d.messages.map((m) => m.id).join(",");
+    if (sig === el.dataset.sig) return;
+    el.dataset.sig = sig;
+    el.innerHTML = d.messages.map((m) => `
+      <div class="dc-m${m.bot ? " bot" : ""}">
+        <div class="dc-who">${esc(m.author)}${m.bot
+          ? '<span class="pill">bot</span>' : ""}
+          <span class="dim">${fmtDate(m.at)}</span></div>
+        <div class="dc-body">${esc(m.content) || '<i class="dim">—</i>'}</div>
+      </div>`).join("") || '<p class="dim">Nothing here yet.</p>';
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.innerHTML = `<p class="dim">${esc(e.message)}</p>`;
+  }
 }
 
 /* The connect form for one provider, from its declared fields. */

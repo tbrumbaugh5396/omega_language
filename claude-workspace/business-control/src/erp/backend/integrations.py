@@ -95,17 +95,30 @@ def init_tables(con):
 PROVIDERS = {
     "slack": {
         "label": "Slack",
-        "blurb": "Post what happens in the business into a channel.",
+        "blurb": "Post what happens in the business into a channel — and "
+                 "read and reply without leaving.",
         "auth": "webhook",
-        "fields": [{"k": "webhook_url", "label": "Incoming webhook URL",
-                    "secret": True,
-                    "hint": "Slack → Apps → Incoming Webhooks → Add to "
-                            "Workspace, then copy the URL for the channel."}],
+        # A webhook is a one-way pipe: it can post and can never read. So the
+        # bot token is a second, optional step, exactly as it is for Discord
+        # — connect only the webhook and the alerts still work.
+        "chat": True,
+        "fields": [
+            {"k": "webhook_url", "label": "Incoming webhook URL",
+             "secret": True,
+             "hint": "Slack → Apps → Incoming Webhooks → Add to Workspace, "
+                     "then copy the URL for the channel."},
+            {"k": "bot_token", "label": "Bot token (optional)",
+             "secret": True, "optional": True,
+             "hint": "Starts xoxb-. Needed only to read channels and reply "
+                     "from here; add the scopes channels:read, "
+                     "channels:history and chat:write to your app."},
+        ],
         "events": ["order.created", "enquiry.created", "ticket.created",
                    "inventory.low", "document.signed"],
         "does": "Sends a line to the channel when an order lands, stock runs "
                 "low, a partner enquires, a ticket opens or a document is "
-                "signed.",
+                "signed. With a bot token it also reads the channels and "
+                "lets you reply from here.",
     },
     "trello": {
         "label": "Trello",
@@ -337,6 +350,8 @@ def connect(con, name: str, fields: dict) -> dict:
     for f in p["fields"]:
         v = str(fields.get(f["k"], "")).strip()
         if not v:
+            if f.get("optional"):
+                continue
             raise HTTPException(400, f"{f['label']} is needed")
         supplied[f["k"]] = v
 
@@ -362,7 +377,18 @@ def check(name: str, c: dict) -> tuple:
                            "https://hooks.slack.com/")
         ok, d = _json_req(url, "POST", payload={
             "text": "Business Control is connected to this channel."})
-        return (True, "channel verified") if ok else (False, str(d))
+        if not ok:
+            return False, str(d)
+        tok = c.get("bot_token", "")
+        if not tok:
+            return True, "channel verified"
+        if not tok.startswith("xoxb-"):
+            return False, ("a bot token starts xoxb- — xoxp- is a user "
+                           "token and won't have the app's scopes")
+        ok2, d2 = _slack(tok, "auth.test")
+        if not ok2:
+            return False, f"the bot token was refused: {d2}"
+        return True, f"{d2.get('team', 'workspace')} · reading and replying"
 
     if name == "trello":
         q = urllib.parse.urlencode({"key": c.get("api_key", ""),
@@ -392,6 +418,50 @@ def check(name: str, c: dict) -> tuple:
     return False, "no check for that provider"
 
 
+def verify(con, name: str, cfg: dict) -> tuple:
+    """Ask a connected provider whether it still works.
+
+    Worth its own action because OAuth connections rot quietly — a refresh
+    token is revoked in someone else's admin panel and nothing here notices
+    until an order fails to post weeks later.
+    """
+    p = provider(name)
+    c = creds(con, name)
+    if not c:
+        return False, "not connected"
+    if p["auth"] in ("webhook", "key_token", "api_token"):
+        merged = {**c, **settings(con, name)}
+        return check(name, merged)
+    tok = access_token(con, name, cfg)
+    if not tok:
+        return False, "no usable token — reconnect"
+    if name == "dropbox":
+        ok, d = _req("https://api.dropboxapi.com/2/users/get_current_account",
+                     "POST", {"Authorization": f"Bearer {tok}",
+                              "Content-Type": "application/json"}, b"null")
+        if ok and isinstance(d, dict):
+            return True, (d.get("name", {}) or {}).get("display_name", "ok")
+        return False, str(d)
+    if name == "canva":
+        ok, d = _req("https://api.canva.com/rest/v1/users/me",
+                     headers={"Authorization": f"Bearer {tok}"})
+        return (True, "ok") if ok else (False, str(d))
+    if name == "quickbooks":
+        realm = settings(con, name).get("realm_id", "")
+        if not realm:
+            return False, "no company id — reconnect"
+        ok, d = _req(
+            f"https://quickbooks.api.intuit.com/v3/company/{realm}"
+            "/companyinfo/" + realm + "?minorversion=70",
+            headers={"Authorization": f"Bearer {tok}",
+                     "Accept": "application/json"})
+        if ok and isinstance(d, dict):
+            info = (d.get("CompanyInfo") or {})
+            return True, info.get("CompanyName", realm)
+        return False, str(d)
+    return False, "no check for that provider"
+
+
 def disconnect(con, name: str) -> dict:
     provider(name)
     con.execute("DELETE FROM integrations WHERE provider=?", (name,))
@@ -418,8 +488,8 @@ def oauth_url(con, name: str, cfg: dict, redirect: str, state: str) -> str:
     return p["oauth"]["authorize"] + "?" + urllib.parse.urlencode(q)
 
 
-def oauth_exchange(con, name: str, cfg: dict, code: str,
-                   redirect: str) -> dict:
+def oauth_exchange(con, name: str, cfg: dict, code: str, redirect: str,
+                   extra: dict | None = None) -> dict:
     p = provider(name)
     app = (cfg.get("integration_apps") or {}).get(name) or {}
     basic = base64.b64encode(
@@ -435,13 +505,18 @@ def oauth_exchange(con, name: str, cfg: dict, code: str,
     if not ok or not isinstance(d, dict) or not d.get("access_token"):
         raise HTTPException(400, f"{p['label']} wouldn't issue a token: {d}")
     expires = time.time() + int(d.get("expires_in") or 3600) - 60
-    account = str(d.get("realmId") or d.get("account_id")
-                  or d.get("team", {}).get("name", "") if isinstance(
-                      d.get("team"), dict) else "") or p["label"]
+    # QuickBooks identifies the company on the callback rather than in the
+    # token response, and every later call needs it — so it is kept, not
+    # just displayed. Without it a connected QuickBooks can't post anywhere.
+    setting = {}
+    realm = (extra or {}).get("realmId") or d.get("realmId")
+    if realm:
+        setting["realm_id"] = str(realm)
+    account = str(realm or d.get("account_id") or p["label"])
     save(con, name,
          {"access_token": d["access_token"],
           "refresh_token": d.get("refresh_token", "")},
-         account, {}, expires)
+         account, setting, expires)
     log(con, name, "oauth", True, account)
     return {"ok": True, "account": account}
 
@@ -566,6 +641,23 @@ def _line(event: str, d: dict) -> str:
     return f"{event}: {json.dumps(d)[:200]}"
 
 
+def _document_bytes(con, doc_id) -> tuple:
+    """The uploaded file for a document, if it has one."""
+    if not doc_id:
+        return None, ""
+    try:
+        row = con.execute("SELECT ext FROM documents WHERE id=?",
+                          (doc_id,)).fetchone()
+        if row is None or not row["ext"]:
+            return None, ""
+        from storefront.backend import config as sconfig
+        f = sconfig.DATA_DIR / "uploads" / "documents" / \
+            f"{doc_id}.{row['ext']}"
+        return (f.read_bytes(), row["ext"]) if f.exists() else (None, "")
+    except Exception:
+        return None, ""
+
+
 def _deliver(con, name: str, event: str, d: dict, c: dict) -> tuple:
     text = _line(event, d)
 
@@ -596,18 +688,162 @@ def _deliver(con, name: str, event: str, d: dict, c: dict) -> tuple:
             deal["person_id"] = pid
         return _json_req(f"{base}/deals?api_token={tok}", "POST", payload=deal)
 
+    if name == "quickbooks":
+        # A sales receipt rather than an invoice: the money has already been
+        # taken, and recording an invoice for a paid order leaves the
+        # accountant reconciling something that was never owed.
+        s = settings(con, name)
+        realm = s.get("realm_id") or ""
+        if not realm:
+            return False, ("no company id — reconnect QuickBooks so it can "
+                           "record which company to post to")
+        base = ("https://quickbooks.api.intuit.com/v3/company/"
+                f"{realm}/salesreceipt?minorversion=70")
+        lines = [{
+            "Amount": round((it.get("qty", 1)
+                             * it.get("unit_price_cents", 0)) / 100, 2),
+            "DetailType": "SalesItemLineDetail",
+            "Description": f"{it.get('name','')} ({it.get('sku','')}) "
+                           f"x{it.get('qty',1)}",
+            "SalesItemLineDetail": {"Qty": it.get("qty", 1)},
+        } for it in (d.get("items") or [])]
+        if not lines:
+            lines = [{"Amount": round((d.get("total_cents") or 0) / 100, 2),
+                      "DetailType": "SalesItemLineDetail",
+                      "Description": f"Order #{d.get('id','')}",
+                      "SalesItemLineDetail": {"Qty": 1}}]
+        payload = {"Line": lines,
+                   "PrivateNote": f"Business Control order #{d.get('id','')}",
+                   "CustomerMemo": {"value": d.get("customer", "")}}
+        if d.get("email"):
+            payload["BillEmail"] = {"Address": d["email"]}
+        return _json_req(base, "POST", {
+            "Authorization": f"Bearer {c.get('access_token','')}",
+            "Accept": "application/json"}, payload)
+
     if name == "dropbox":
-        # Only documents are filed; there is nothing useful to put in a
-        # folder for an order that is a row in a database.
+        # Only documents are filed; an order is a row in a database and there
+        # is nothing useful to put in a folder for it.
         if event != "document.signed":
             return True, "nothing to file"
-        body = json.dumps(d, indent=1).encode()
-        path = f"/business-control/signed/{d.get('id', 'doc')}.json"
-        return _req(
+        # The document itself where there is a file, and the signature record
+        # beside it either way — a folder holding a summary of a contract,
+        # and not the contract, is the wrong half.
+        blob, ext = _document_bytes(con, d.get("id"))
+        stem = f"/business-control/signed/{d.get('id', 'doc')}"
+        ok, detail = _req(
             "https://content.dropboxapi.com/2/files/upload", "POST",
             {"Authorization": f"Bearer {c.get('access_token','')}",
              "Dropbox-API-Arg": json.dumps(
-                 {"path": path, "mode": "overwrite", "mute": True}),
-             "Content-Type": "application/octet-stream"}, body)
+                 {"path": f"{stem}-signatures.json", "mode": "overwrite",
+                  "mute": True}),
+             "Content-Type": "application/octet-stream"},
+            json.dumps(d, indent=1).encode())
+        if blob:
+            ok2, detail2 = _req(
+                "https://content.dropboxapi.com/2/files/upload", "POST",
+                {"Authorization": f"Bearer {c.get('access_token','')}",
+                 "Dropbox-API-Arg": json.dumps(
+                     {"path": f"{stem}.{ext}", "mode": "overwrite",
+                      "mute": True}),
+                 "Content-Type": "application/octet-stream"}, blob)
+            return ok and ok2, f"{detail2 if not ok2 else 'filed with the file'}"
+        return ok, "filed (no attachment on the document)"
 
     return True, "connected, nothing to send for this event"
+
+
+# ---------- Slack, in both directions ----------
+#
+# The webhook posts and can never read; that is what a webhook is. Reading a
+# channel or answering in it needs a bot token, so it stays optional and
+# separate — the same shape as Discord, and for the same reason: most people
+# want the alerts and nothing else, and should not have to create an app to
+# get them.
+
+SLACK_API = "https://slack.com/api"
+
+
+def _slack(token: str, method: str, payload: dict | None = None) -> tuple:
+    """One place for every Slack call.
+
+    Slack answers 200 with {"ok": false, "error": "..."} rather than an HTTP
+    error, so a naive caller treats every failure as a success. Unwrapping it
+    here means no call site can make that mistake.
+    """
+    if payload is None:
+        ok, d = _req(f"{SLACK_API}/{method}",
+                     headers={"Authorization": f"Bearer {token}"})
+    else:
+        ok, d = _json_req(f"{SLACK_API}/{method}", "POST",
+                          {"Authorization": f"Bearer {token}"}, payload)
+    if not ok:
+        return False, str(d)
+    if not isinstance(d, dict):
+        return False, str(d)[:200]
+    if not d.get("ok"):
+        return False, d.get("error", "slack said no")
+    return True, d
+
+
+def slack_token(con) -> str:
+    tok = creds(con, "slack").get("bot_token", "")
+    if not tok:
+        raise HTTPException(
+            400, "Slack is posting alerts but can't read: add a bot token to "
+                 "the Slack integration to read channels and reply")
+    return tok
+
+
+def slack_channels(con) -> dict:
+    tok = slack_token(con)
+    ok, d = _slack(tok, "conversations.list?types=public_channel,"
+                        "private_channel&limit=200&exclude_archived=true")
+    if not ok:
+        return {"error": d, "channels": []}
+    chans = [{"id": c["id"], "name": c["name"],
+              "member": bool(c.get("is_member")),
+              "topic": (c.get("topic", {}) or {}).get("value", "")[:160]}
+             for c in d.get("channels", [])]
+    # A channel the bot hasn't been invited to can be listed but not read,
+    # so say which those are rather than letting them fail on selection.
+    chans.sort(key=lambda c: (not c["member"], c["name"]))
+    return {"channels": chans}
+
+
+def slack_messages(con, channel: str, limit: int = 40) -> dict:
+    tok = slack_token(con)
+    ok, d = _slack(tok, f"conversations.history?channel="
+                        f"{urllib.parse.quote(channel)}&limit={min(limit,100)}")
+    if not ok:
+        if d == "not_in_channel":
+            return {"error": "the bot isn't in that channel — invite it with "
+                             "/invite in Slack, then try again",
+                    "messages": []}
+        return {"error": d, "messages": []}
+    names = {}
+    out = []
+    for m in reversed(d.get("messages", [])):
+        uid = m.get("user") or m.get("bot_id") or ""
+        if uid and uid not in names:
+            okp, prof = _slack(tok, f"users.info?user={uid}")
+            names[uid] = (prof.get("user", {}).get("real_name")
+                          or prof.get("user", {}).get("name")
+                          or "someone") if okp else uid
+        out.append({"id": m.get("ts", ""),
+                    "author": names.get(uid, "someone"),
+                    "bot": bool(m.get("bot_id")),
+                    "content": m.get("text", ""),
+                    "at": float(m.get("ts", 0) or 0)})
+    return {"messages": out}
+
+
+def slack_send(con, channel: str, text: str, who: str) -> dict:
+    tok = slack_token(con)
+    # Attributed to the person, as in the Discord reader: a message from
+    # "the business" that nobody can trace back is worse than none.
+    ok, d = _slack(tok, "chat.postMessage",
+                   {"channel": channel, "text": f"*{who}:* {text[:2900]}"})
+    if not ok:
+        raise HTTPException(400, f"Slack refused that: {d}")
+    return {"ok": True, "ts": d.get("ts", "")}

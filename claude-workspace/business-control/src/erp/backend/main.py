@@ -957,7 +957,33 @@ def confirm_payment(oid: int, body: ConfirmPayBody,
     con.commit()
     notify.push(con, f"Order #{oid} paid — "
                      f"${o['total_cents'] / 100:,.2f}", kind="order")
+    _order_paid(con, oid)
     return {"ok": True, "status": "paid"}
+
+
+def _order_paid(con, oid: int) -> None:
+    """Announce a paid order.
+
+    Both routes to "paid" — Stripe confirming and someone marking it by hand
+    — go through here, because an integration that only hears about half the
+    payments is worse than one that hears about none: the books look right
+    until they don't.
+    """
+    o = con.execute(
+        "SELECT o.*, u.name customer, u.email FROM orders o"
+        " LEFT JOIN users u ON u.id=o.user_id WHERE o.id=?", (oid,)).fetchone()
+    if o is None:
+        return
+    items = [dict(r) for r in con.execute(
+        "SELECT oi.qty, oi.unit_price_cents, p.name, p.sku FROM order_items oi"
+        " JOIN products p ON p.id=oi.product_id WHERE oi.order_id=?",
+        (oid,)).fetchall()]
+    store_api.fire_webhooks("order.paid", {
+        "id": oid, "customer": o["customer"] or "a customer",
+        "email": o["email"] or "",
+        "total": f"${(o['total_cents'] or 0) / 100:,.2f}",
+        "total_cents": o["total_cents"], "tax_cents": o["tax_cents"],
+        "items": items})
 
 
 @app.post("/api/admin/orders/{oid}/paid")
@@ -969,6 +995,7 @@ def mark_paid(oid: int, user=Depends(admin_user), con=Depends(get_con)):
     con.commit()
     notify.push(con, f"Order #{oid} marked paid", kind="order",
                 user_id=o["user_id"])
+    _order_paid(con, oid)
     return {"ok": True}
 
 
@@ -2391,8 +2418,8 @@ def integrations_authorize(name: str, user=Depends(admin_user),
 
 
 @app.get("/oauth/{name}")
-def oauth_return(name: str, code: str = "", state: str = "", error: str = "",
-                 con=Depends(get_con)):
+def oauth_return(name: str, request: Request, code: str = "", state: str = "",
+                 error: str = "", con=Depends(get_con)):
     """Where the provider sends the person back.
 
     The state is checked because without it this endpoint would accept an
@@ -2419,13 +2446,50 @@ border-radius:14px;padding:26px}} a{{color:#6d55d6}}</style>
     con.commit()
     try:
         r = integrations.oauth_exchange(
-            con, name, CFG, code, f"{base_url()}/oauth/{name}")
+            con, name, CFG, code, f"{base_url()}/oauth/{name}",
+            dict(request.query_params))
     except HTTPException as e:
         return page("Not connected", f"<p>{esc_html(str(e.detail))}</p>")
     return page(
         f"{integrations.provider(name)['label']} connected",
         f"<p>Connected as {esc_html(r['account'])}.</p>"
         '<p><a href="/ops/">Back to Business Control</a></p>')
+
+
+@app.post("/api/admin/integrations/{name}/test")
+def integrations_test(name: str, user=Depends(admin_user),
+                      con=Depends(get_con)):
+    ok, detail = integrations.verify(con, name, CFG)
+    integrations.log(con, name, "test", ok, detail)
+    if not ok:
+        raise HTTPException(400, str(detail))
+    return {"ok": True, "detail": detail}
+
+
+# --- Slack, read and reply ---
+
+@app.get("/api/admin/integrations/slack/channels")
+def slack_channels(user=Depends(admin_user), con=Depends(get_con)):
+    return integrations.slack_channels(con)
+
+
+@app.get("/api/admin/integrations/slack/{channel}/messages")
+def slack_messages(channel: str, user=Depends(admin_user),
+                   con=Depends(get_con)):
+    return integrations.slack_messages(con, channel)
+
+
+class SlackSayBody(BaseModel):
+    text: str
+
+
+@app.post("/api/admin/integrations/slack/{channel}/messages")
+def slack_send(channel: str, body: SlackSayBody, user=Depends(admin_user),
+               con=Depends(get_con)):
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "nothing to send")
+    return integrations.slack_send(con, channel, text, user["name"])
 
 
 @app.post("/api/admin/integrations/{name}/inbound-key")

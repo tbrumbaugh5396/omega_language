@@ -2469,4 +2469,86 @@ ok("integrations" in _ops and "renderIntegrations" in _ops,
 ok("drawForm" in _ops,
    "which builds each form from the provider's own declaration")
 
+
+# --- what each integration actually does, versus what it claims ---
+# A provider that declares an event it has no handler for, or listens for an
+# event nothing ever fires, is a connection that looks live and does nothing.
+# Both were true when these first shipped.
+_src_ig = Path("src/erp/backend/integrations.py").read_text()
+_deliver = _src_ig[_src_ig.index("def _deliver("):]
+for _p, _pd in _ig.PROVIDERS.items():
+    if not _pd["events"]:
+        continue
+    ok(f'if name == "{_p}"' in _deliver,
+       f"{_p} declares events and has a handler for them")
+
+# Every event a provider listens for must be one the business actually
+# raises, or the integration waits forever for a thing that never happens.
+_emitted = set()
+for _f in Path("src").rglob("*.py"):
+    for _m in _re3.findall(r'fire_webhooks\(\s*"([a-z.]+)"',
+                           _f.read_text(errors="replace")):
+        _emitted.add(_m)
+_listened = set()
+for _pd in _ig.PROVIDERS.values():
+    _listened |= set(_pd["events"])
+_never = sorted(_listened - _emitted)
+ok(not _never,
+   "every event an integration waits for is one the business raises"
+   + (" — " + ", ".join(_never) if _never else ""))
+ok("order.paid" in _emitted, "a paid order is announced")
+ok("inventory.low" in _emitted, "and so is low stock")
+
+# Both routes to "paid" have to announce it, or the books are right until
+# someone marks an order paid by hand.
+_mainsrc = Path("src/erp/backend/main.py").read_text()
+ok(_mainsrc.count("_order_paid(con, oid)") >= 2,
+   "both the Stripe confirmation and the manual mark announce it")
+
+# --- Slack in both directions ---
+_slack = [p for p in _ist["providers"] if p["name"] == "slack"][0]
+ok(any(f.get("optional") for f in _slack["fields"]),
+   "the Slack bot token is optional — the alerts work without it")
+ok(c.post("/api/admin/integrations/slack/connect", headers=A,
+          json={"fields": {"webhook_url": "https://hooks.slack.com/x",
+                           "bot_token": "xoxp-user-token"}}
+          ).status_code == 400,
+   "a user token is refused where a bot token is needed")
+ok("xoxb" in c.post("/api/admin/integrations/slack/connect", headers=A,
+                    json={"fields": {"webhook_url": "https://hooks.slack.com/x",
+                                     "bot_token": "xoxp-nope"}}
+                    ).json()["detail"],
+   "and says which one to use")
+ok(c.get("/api/admin/integrations/slack/channels",
+         headers=A).status_code == 400,
+   "reading channels without a bot token is refused")
+ok("bot token" in c.get("/api/admin/integrations/slack/channels",
+                        headers=A).json()["detail"],
+   "with an explanation rather than an empty list")
+ok(c.post("/api/admin/integrations/slack/C123/messages", headers=A,
+          json={"text": ""}).status_code == 400,
+   "an empty message is refused")
+ok(c.get("/api/admin/integrations/slack/channels",
+         headers=CU).status_code in (401, 403),
+   "and the whole Slack surface is an owner's")
+# Slack answers 200 with ok:false, which a naive client reads as success.
+ok('if not d.get("ok")' in _src_ig,
+   "Slack's 200-with-an-error is unwrapped in one place")
+ok("slack-chat" in _ops and "loadSlackMsgs" in _ops,
+   "the screen reads and replies, not just posts")
+ok("_slackTimer" in _ops and _ops.count("clearInterval(S._slackTimer)") >= 2,
+   "and stops polling when you leave the tab")
+
+# A connection can be re-checked, because OAuth grants rot quietly.
+ok("def verify(" in _src_ig, "a connected provider can be re-tested")
+ok(c.post("/api/admin/integrations/dropbox/test",
+          headers=A).status_code == 400,
+   "testing something unconnected says so")
+ok("data-igtest" in _ops, "and there's a button for it")
+
+# QuickBooks needs the company id, which arrives on the callback rather than
+# in the token — losing it leaves a connection that can't post anywhere.
+ok("realm_id" in _src_ig and "dict(request.query_params)" in _mainsrc,
+   "the QuickBooks company id is captured from the callback and kept")
+
 print(f"\nall {checks} checks passed")
