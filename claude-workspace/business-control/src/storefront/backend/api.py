@@ -588,16 +588,33 @@ def rate_limit(request: Request):
 
 
 def fire_webhooks(event: str, payload: dict):
-    # Discord rules watch the same events as HTTP webhooks. Doing it here
-    # means every emitter gets Discord for free instead of each remembering.
-    try:
-        from . import discord as _dc
-        _dc.emit(event, payload)
-    except Exception:
-        pass
-    """POST the payload to every active webhook for the event, off-thread.
-    Bodies are HMAC-SHA256 signed (X-Store-Signature) with the store's
-    webhook secret so receivers can verify authenticity."""
+    """Announce a business event to everything listening.
+
+    HTTP webhooks, Discord and the integrations all watch the same events,
+    and they are fanned out from here rather than from each emitter — so a
+    new place that raises an event reaches all of them, and a new listener
+    reaches every existing event, without either having to know about the
+    other. (The docstring used to sit below the Discord call, where Python
+    treated it as a stray expression rather than documentation.)
+
+    Webhook bodies are HMAC-SHA256 signed (X-Store-Signature) with the
+    store's webhook secret so receivers can verify authenticity.
+    """
+    for fan in (_fan_discord, _fan_integrations):
+        try:
+            fan(event, payload)
+        except Exception:
+            pass          # a listener must never break the thing it heard
+
+
+def _fan_discord(event: str, payload: dict) -> None:
+    from . import discord as _dc
+    _dc.emit(event, payload)
+
+
+def _fan_integrations(event: str, payload: dict) -> None:
+    from erp.backend import integrations as _ig
+    _ig.emit(event, payload)
     con = db.connect()
     try:
         hooks = con.execute(

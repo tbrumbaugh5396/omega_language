@@ -809,6 +809,8 @@ const TABS = [
     roles: ["admin"] },
   { id: "discord", label: "Discord", icon: "chat", group: "Company",
     roles: ["admin"] },
+  { id: "integrations", label: "Integrations", icon: "link", group: "Company",
+    roles: ["admin"] },
   { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
     roles: ["admin"] },
   { id: "dbview", label: "Database", icon: "list", group: "Company",
@@ -946,6 +948,7 @@ async function render() {
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
+    integrations: renderIntegrations,
     hq: renderHQ, admin: renderAdmin, login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
@@ -2492,6 +2495,219 @@ function dbEdit(d, cols, row, pk) {
                 { method: "PATCH", body: { values } });
       closeModal(); toast("Saved"); drawDbTable();
     } catch (e) { toast(e.message); }
+  };
+}
+
+// ---------- integrations ----------
+/* One screen for all of them, drawn from what the server says each provider
+   needs. Seven hand-written panels would drift the moment an eighth arrived;
+   this way a new integration appears here the day it's added to the
+   registry, with the right form and the right explanation. */
+
+async function renderIntegrations() {
+  const d = await api("/api/admin/integrations");
+
+  const card = (p) => {
+    const status = p.connected
+      ? `<span class="pill ok">connected${p.account
+          ? " · " + esc(p.account) : ""}</span>`
+      : p.auth === "inbound"
+        ? (p.inbound_ready
+            ? `<span class="pill ok">ready · ${p.received} received</span>`
+            : '<span class="pill">not set up</span>')
+        : '<span class="pill">not connected</span>';
+    return `<div class="card intg" data-p="${p.name}">
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(p.label)}</b>
+          <span class="dim">${esc(p.blurb)}</span></div>
+        ${status}
+        ${p.connected || p.inbound_ready
+          ? `<button class="btn alt sm" data-igoff="${p.name}">${
+              p.auth === "inbound" ? "New key" : "Disconnect"}</button>` : ""}
+      </div>
+      <p class="dim intg-does">${esc(p.does)}</p>
+      ${p.events.length ? `<p class="dim intg-when">Fires when
+        ${p.events.map(esc).join(", ")}.</p>` : ""}
+      ${p.connected ? "" : `<div class="intg-form" id="f-${p.name}"></div>`}
+      ${p.name === "canva" && p.connected
+        ? `<button class="btn alt sm" id="canva-list">List my designs</button>
+           <div id="canva-out"></div>` : ""}
+      ${p.name === "laceup"
+        ? `<div class="intg-form" id="f-laceup-extra"></div>` : ""}
+    </div>`;
+  };
+
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Integrations</h2>
+        <p class="dim">Each of these is connected once and then works on its
+          own. Credentials are stored and never shown again — the screen can
+          tell you what a connection reached, but not what it is.</p></div>
+    </div>
+    ${d.providers.map(card).join("")}
+    ${d.log.length ? `<h3>Recent activity</h3>
+      <div class="card"><div class="tablewrap"><table>
+        <thead><tr><th>when</th><th>which</th><th>event</th><th>result</th>
+          </tr></thead>
+        <tbody>${d.log.map((l) => `<tr>
+          <td class="dim">${fmtDate(l.created_at)}</td>
+          <td>${esc(l.provider)}</td><td class="dim">${esc(l.event)}</td>
+          <td>${l.ok ? '<span class="pill ok">ok</span>'
+            : `<span class="pill bad">failed</span>
+               <span class="dim">${esc(l.detail)}</span>`}</td>
+        </tr>`).join("")}</tbody></table></div></div>` : ""}`;
+
+  d.providers.forEach((p) => drawForm(p, () => renderIntegrations()));
+
+  view().querySelectorAll("[data-igoff]").forEach((b) => b.onclick = async () => {
+    const name = b.dataset.igoff;
+    const p = d.providers.find((x) => x.name === name);
+    if (p.auth === "inbound") {
+      if (!confirm("Issue a new key? Whatever is using the old one stops "
+        + "working until it's updated.")) return;
+      const r = await api(
+        `/api/admin/integrations/${name}/inbound-key?rotate=1`,
+        { method: "POST" });
+      toast("New key issued");
+      renderIntegrations();
+      return;
+    }
+    if (!confirm(`Disconnect ${p.label}?`)) return;
+    await api(`/api/admin/integrations/${name}`, { method: "DELETE" });
+    renderIntegrations();
+  });
+
+  if ($("#canva-list")) $("#canva-list").onclick = async () => {
+    try {
+      const r = await api("/api/admin/integrations/canva/designs");
+      const items = r.items || r.designs || [];
+      $("#canva-out").innerHTML = items.length
+        ? `<table style="margin-top:8px">${items.slice(0, 20).map((x) =>
+            `<tr><td>${esc(x.title || x.id)}</td>
+             <td class="dim">${esc(x.id || "")}</td></tr>`).join("")}</table>`
+        : '<p class="dim">No designs came back.</p>';
+    } catch (e) { toast(e.message); }
+  };
+}
+
+/* The connect form for one provider, from its declared fields. */
+function drawForm(p, refresh) {
+  const box = $(`#f-${p.name}`);
+
+  if (p.name === "laceup") {
+    const extra = $("#f-laceup-extra");
+    if (extra) {
+      extra.innerHTML = `
+        <p class="dim">LaceUp publishes no API to call, so this goes the
+          other way: it posts orders to an address of ours, or you drop in a
+          file. Lines are matched to products by SKU — the code printed on
+          the case, not our internal ids.</p>
+        <button class="btn alt sm" id="lu-key">${p.inbound_ready
+          ? "Show the endpoint" : "Set up the endpoint"}</button>
+        <label class="f" style="margin-top:10px">Or import an order CSV
+          <span class="dim">columns: reference, customer, email, city, sku,
+            qty — one row per line</span>
+          <input type="file" id="lu-csv" accept=".csv"></label>
+        <div id="lu-out"></div>`;
+      $("#lu-key").onclick = async () => {
+        const r = await api(`/api/admin/integrations/laceup/inbound-key`,
+                            { method: "POST" });
+        $("#lu-out").innerHTML = `<div class="card" style="margin-top:10px">
+          <label>POST orders to</label>
+          <input value="${esc(r.url)}" readonly>
+          <label>With header <code>X-API-Key</code></label>
+          <input value="${esc(r.key)}" readonly>
+          <p class="dim">This key is the whole of the security on that
+            address, so treat it like a password. Issue a new one and the old
+            stops working immediately.</p></div>`;
+      };
+      $("#lu-csv").onchange = async (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const fd = new FormData();
+        fd.append("file", f);
+        try {
+          const r = await fetch("/api/admin/integrations/laceup/import", {
+            method: "POST", headers: { Authorization: "Bearer " + S.user.token },
+            body: fd });
+          const out = await r.json();
+          if (!r.ok) throw new Error(out.detail || "import failed");
+          $("#lu-out").innerHTML = `<p class="dim">Placed
+            ${out.placed.length} order(s).${out.skipped.length
+              ? ` Skipped ${out.skipped.length}: ` + out.skipped.map((s) =>
+                  esc(`${s.row} — ${s.why}`)).join("; ") : ""}</p>`;
+        } catch (err) { toast(err.message); }
+      };
+    }
+    return;
+  }
+
+  if (!box) return;
+
+  if (p.auth === "oauth2") {
+    box.innerHTML = `
+      <p class="dim">${p.app_ready
+        ? "App registered. Connecting opens " + esc(p.label)
+          + " so you can approve access."
+        : "First register an app with " + esc(p.label) + " and paste its "
+          + "client id and secret. They belong to your company, not to this "
+          + "software, which is why they aren't shipped with it."}</p>
+      ${p.app_ready ? "" : `
+        <label class="f">Client ID<input id="app-id-${p.name}"></label>
+        <label class="f">Client secret
+          <input id="app-secret-${p.name}" type="password"></label>
+        <button class="btn alt sm" data-appsave="${p.name}">Save app</button>`}
+      ${p.app_ready ? `<button class="btn" data-auth="${p.name}"
+        >Connect ${esc(p.label)}</button>` : ""}
+      <p class="dim" id="app-msg-${p.name}"></p>`;
+
+    const save = box.querySelector("[data-appsave]");
+    if (save) save.onclick = async () => {
+      try {
+        const r = await api(`/api/admin/integrations/${p.name}/app`, {
+          body: { client_id: $(`#app-id-${p.name}`).value,
+                  client_secret: $(`#app-secret-${p.name}`).value } });
+        toast(`Saved. Add ${r.redirect_uri} as the redirect URI.`);
+        refresh();
+      } catch (e) { toast(e.message); }
+    };
+    const go = box.querySelector("[data-auth]");
+    if (go) go.onclick = async () => {
+      try {
+        const r = await api(`/api/admin/integrations/${p.name}/authorize`);
+        location.href = r.url;
+      } catch (e) {
+        $(`#app-msg-${p.name}`).innerHTML =
+          `<span class="low">${esc(e.message)}</span>`;
+      }
+    };
+    return;
+  }
+
+  box.innerHTML = `
+    ${p.fields.map((f) => `<label class="f">${esc(f.label)}
+      ${f.hint ? `<span class="dim">${esc(f.hint)}</span>` : ""}
+      <input id="fld-${p.name}-${f.k}" ${f.secret ? 'type="password"' : ""}
+        autocomplete="off"></label>`).join("")}
+    <button class="btn" data-conn="${p.name}">Connect</button>
+    <p class="dim" id="msg-${p.name}"></p>`;
+  box.querySelector("[data-conn]").onclick = async () => {
+    const b = box.querySelector("[data-conn]");
+    const msg = $(`#msg-${p.name}`);
+    const fields = {};
+    p.fields.forEach((f) => {
+      fields[f.k] = $(`#fld-${p.name}-${f.k}`).value;
+    });
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    msg.textContent = `checking with ${p.label}…`;
+    try {
+      const r = await api(`/api/admin/integrations/${p.name}/connect`,
+                          { body: { fields } });
+      toast(`${p.label} connected${r.account ? " — " + r.account : ""}`);
+      refresh();
+    } catch (e) {
+      msg.innerHTML = `<span class="low">${esc(e.message)}</span>`;
+    } finally { b.disabled = false; b.removeAttribute("aria-busy"); }
   };
 }
 

@@ -1,19 +1,20 @@
 """Business Control — FastAPI backend. Serves the API and the PWA frontend."""
+import csv
 import io
 import json
 import secrets
 import socket
 
-from fastapi import (Depends, FastAPI, Header, HTTPException, Request,
-                     WebSocket, WebSocketDisconnect)
+from fastapi import (Depends, FastAPI, File, Header, HTTPException, Request,
+                     UploadFile, WebSocket, WebSocketDisconnect)
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse, Response)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (abtest, achieve, analytics, audit, auth, chat, config, cycles,
-               db, dbview, logistics, mailer, notify, payments, push,
-               shopify_sub, social, supply)
+               db, dbview, integrations, logistics, mailer, notify,
+               payments, push, shopify_sub, social, supply)
 
 app = FastAPI(title="Business Control")
 CFG = config.load()
@@ -23,6 +24,7 @@ _boot = db.connect()
 # Any PIN still in plaintext from before hashing gets converted here.
 auth.migrate_pins(_boot, CFG["pin_pepper"])
 supply.init_tables(_boot)
+integrations.init_tables(_boot)
 _boot.commit()
 _boot.close()
 
@@ -2321,6 +2323,231 @@ async function load() {
 }
 load();
 </script></body></html>"""
+
+
+# ---------- integrations ----------
+
+@app.get("/api/admin/integrations")
+def integrations_status(user=Depends(admin_user), con=Depends(get_con)):
+    d = integrations.status(con)
+    # Which OAuth apps have had their client id and secret saved. The secret
+    # itself never appears here.
+    apps = CFG.get("integration_apps") or {}
+    for p in d["providers"]:
+        p["app_ready"] = bool((apps.get(p["name"]) or {}).get("client_id"))
+    return d
+
+
+class ConnectBody(BaseModel):
+    fields: dict = {}
+
+
+@app.post("/api/admin/integrations/{name}/connect")
+def integrations_connect(name: str, body: ConnectBody,
+                         user=Depends(admin_user), con=Depends(get_con)):
+    return integrations.connect(con, name, body.fields)
+
+
+@app.delete("/api/admin/integrations/{name}")
+def integrations_disconnect(name: str, user=Depends(admin_user),
+                            con=Depends(get_con)):
+    return integrations.disconnect(con, name)
+
+
+class OAuthAppBody(BaseModel):
+    client_id: str = ""
+    client_secret: str = ""
+
+
+@app.post("/api/admin/integrations/{name}/app")
+def integrations_app(name: str, body: OAuthAppBody, user=Depends(admin_user)):
+    """Store the client id and secret of an app you registered.
+
+    These belong to your company rather than to this software, which is why
+    they are pasted rather than shipped: an OAuth client secret baked into a
+    distributed application is a secret in name only.
+    """
+    p = integrations.provider(name)
+    if p["auth"] != "oauth2":
+        raise HTTPException(400, f"{p['label']} doesn't use OAuth")
+    apps = dict(CFG.get("integration_apps") or {})
+    apps[name] = {"client_id": body.client_id.strip(),
+                  "client_secret": body.client_secret.strip()}
+    CFG["integration_apps"] = apps
+    config.save(CFG)
+    return {"ok": True, "redirect_uri": f"{base_url()}/oauth/{name}"}
+
+
+@app.get("/api/admin/integrations/{name}/authorize")
+def integrations_authorize(name: str, user=Depends(admin_user),
+                           con=Depends(get_con)):
+    """The URL to send someone to so they can approve access."""
+    state = secrets.token_urlsafe(18)
+    con.execute("INSERT OR REPLACE INTO store_meta(k,v) VALUES(?,?)",
+                (f"oauth_state:{name}", state))
+    con.commit()
+    return {"url": integrations.oauth_url(
+        con, name, CFG, f"{base_url()}/oauth/{name}", state)}
+
+
+@app.get("/oauth/{name}")
+def oauth_return(name: str, code: str = "", state: str = "", error: str = "",
+                 con=Depends(get_con)):
+    """Where the provider sends the person back.
+
+    The state is checked because without it this endpoint would accept an
+    authorisation code from anywhere — which is how an attacker attaches
+    their own account to somebody else's integration.
+    """
+    def page(title, body):
+        return HTMLResponse(
+            f"""<!doctype html><meta charset="utf-8"><title>{title}</title>
+<style>body{{font:16px/1.6 system-ui;margin:0;background:#f7f6f3;padding:44px 18px}}
+.c{{max-width:520px;margin:0 auto;background:#fff;border:1px solid #e3e0d9;
+border-radius:14px;padding:26px}} a{{color:#6d55d6}}</style>
+<div class="c"><h1>{title}</h1>{body}</div>""")
+
+    if error:
+        return page("Not connected", f"<p>{esc_html(error)}</p>")
+    want = con.execute("SELECT v FROM store_meta WHERE k=?",
+                       (f"oauth_state:{name}",)).fetchone()
+    if not want or not state or state != want["v"]:
+        return page("Not connected",
+                    "<p>That approval didn't come from a request this app "
+                    "made. Nothing has been connected.</p>")
+    con.execute("DELETE FROM store_meta WHERE k=?", (f"oauth_state:{name}",))
+    con.commit()
+    try:
+        r = integrations.oauth_exchange(
+            con, name, CFG, code, f"{base_url()}/oauth/{name}")
+    except HTTPException as e:
+        return page("Not connected", f"<p>{esc_html(str(e.detail))}</p>")
+    return page(
+        f"{integrations.provider(name)['label']} connected",
+        f"<p>Connected as {esc_html(r['account'])}.</p>"
+        '<p><a href="/ops/">Back to Business Control</a></p>')
+
+
+@app.post("/api/admin/integrations/{name}/inbound-key")
+def integrations_inbound_key(name: str, rotate: int = 0,
+                             user=Depends(admin_user), con=Depends(get_con)):
+    key = integrations.inbound_key(con, name, bool(rotate))
+    return {"key": key, "url": f"{base_url()}/api/inbound/{name}"}
+
+
+@app.post("/api/inbound/{name}")
+async def inbound(name: str, request: Request, con=Depends(get_con)):
+    """Orders pushed to us by a service that has no API to call.
+
+    LaceUp is the case this exists for: it writes orders on a van and can
+    send them on, but publishes nothing to call into. So the direction is
+    reversed — it posts here with the key we issued, and the rows land as
+    real orders through the same path as everything else.
+    """
+    integrations.provider(name)
+    key = (request.headers.get("x-api-key")
+           or request.query_params.get("key", ""))
+    integrations.check_inbound(con, name, key)
+    body = await request.json()
+    rows = body if isinstance(body, list) else body.get("orders") or [body]
+    made, skipped = [], []
+    for row in rows:
+        try:
+            made.append(_inbound_order(con, name, row))
+        except HTTPException as e:
+            skipped.append({"row": row.get("reference") or row.get("id"),
+                            "why": str(e.detail)})
+    integrations.log(con, name, "inbound", True,
+                     f"{len(made)} order(s), {len(skipped)} skipped")
+    return {"placed": made, "skipped": skipped}
+
+
+def _inbound_order(con, source: str, row: dict) -> int:
+    """One order from an outside system.
+
+    Products are matched by SKU rather than by id: an outside system knows
+    the code printed on the case, not our primary keys, and asking it to
+    learn them is how imports break the first time a database is restored.
+    """
+    items = []
+    for line in (row.get("items") or row.get("lines") or []):
+        sku = str(line.get("sku") or line.get("code") or "").strip()
+        p = con.execute("SELECT id FROM products WHERE sku=? AND active=1",
+                        (sku,)).fetchone()
+        if p is None:
+            raise HTTPException(400, f"no product with SKU {sku!r}")
+        items.append(OrderItemBody(product_id=p["id"],
+                                   qty=int(line.get("qty") or 1)))
+    if not items:
+        raise HTTPException(400, "no recognisable lines")
+
+    name = str(row.get("customer") or row.get("store") or source).strip()
+    email = str(row.get("email") or "").strip()
+    user = None
+    if email:
+        user = con.execute("SELECT * FROM users WHERE lower(email)=?",
+                           (email.lower(),)).fetchone()
+    if user is None:
+        cur = con.execute(
+            "INSERT INTO users(name,email,role,token,created_at)"
+            " VALUES(?,?,'customer',?,?)",
+            (name[:80], email[:120], secrets.token_urlsafe(24), db.now()))
+        con.commit()
+        user = con.execute("SELECT * FROM users WHERE id=?",
+                           (cur.lastrowid,)).fetchone()
+    body = OrderBody(
+        items=items, ship_name=name or "Delivery",
+        address=str(row.get("address") or "—"),
+        city=str(row.get("city") or "—"),
+        postal=str(row.get("postal") or ""),
+        region=str(row.get("region") or ""),
+        # Already sold on the van: this is a record of an order, not a
+        # request for one, so it doesn't go through the confirmation gate.
+        pay_method="card")
+    o = _place(con, user, body, False)
+    return o["id"]
+
+
+@app.post("/api/admin/integrations/{name}/import")
+async def integrations_import(name: str, file: UploadFile = File(...),
+                              user=Depends(admin_user), con=Depends(get_con)):
+    """A CSV of orders, for when the push route isn't set up.
+
+    Columns: reference, customer, email, city, sku, qty. One row per line
+    item; rows sharing a reference become one order.
+    """
+    integrations.provider(name)
+    raw = (await file.read()).decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(raw))
+    grouped: dict = {}
+    for r in reader:
+        ref = (r.get("reference") or r.get("order") or "1").strip()
+        g = grouped.setdefault(ref, {"items": []})
+        for k in ("customer", "email", "city", "address", "postal", "region"):
+            if r.get(k):
+                g[k] = r[k].strip()
+        g["items"].append({"sku": r.get("sku", ""), "qty": r.get("qty", 1)})
+    made, skipped = [], []
+    for ref, row in grouped.items():
+        try:
+            made.append(_inbound_order(con, name, row))
+        except HTTPException as e:
+            skipped.append({"row": ref, "why": str(e.detail)})
+    integrations.log(con, name, "import", True,
+                     f"{len(made)} order(s) from {file.filename}")
+    return {"placed": made, "skipped": skipped}
+
+
+@app.get("/api/admin/integrations/canva/designs")
+def canva_designs(user=Depends(admin_user), con=Depends(get_con)):
+    """Your Canva designs, so finished artwork can come straight in."""
+    tok = integrations.access_token(con, "canva", CFG)
+    ok, d = integrations._req(
+        "https://api.canva.com/rest/v1/designs",
+        headers={"Authorization": f"Bearer {tok}"})
+    if not ok:
+        raise HTTPException(400, f"Canva said: {d}")
+    return d
 
 
 # ---------- the audit log ----------

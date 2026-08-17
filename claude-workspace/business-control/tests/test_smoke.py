@@ -2346,4 +2346,127 @@ ok(c.post("/api/orders", json={"items": [{"product_id": _gpid, "qty": 1}],
 _con_k.close()
 _CFG["stripe_secret_key"] = ""
 
+
+# --- integrations ---
+from erp.backend import integrations as _ig  # noqa: E402
+_ist = c.get("/api/admin/integrations", headers=A).json()
+_names = [p["name"] for p in _ist["providers"]]
+for _want in ("dropbox", "canva", "quickbooks", "pipedrive", "slack",
+              "laceup", "trello"):
+    ok(_want in _names, f"{_want} is offered")
+ok(all(not p["connected"] for p in _ist["providers"]),
+   "none is connected until someone connects it")
+ok("credentials" not in json.dumps(_ist) and "access_token" not in
+   json.dumps(_ist),
+   "the status payload carries no credential of any kind")
+ok(c.get("/api/admin/integrations", headers=CU).status_code in (401, 403),
+   "integrations are an owner's screen")
+
+# Every provider declares what it needs, so the screen can be generated
+# rather than hand-written seven times.
+for _p in _ist["providers"]:
+    ok(_p["does"] and _p["auth"],
+       f"{_p['name']} says what it does and how it connects")
+
+# Credentials are checked before they are stored, not after.
+ok(c.post("/api/admin/integrations/slack/connect", headers=A,
+          json={"fields": {"webhook_url": "https://evil.example/hook"}}
+          ).status_code == 400,
+   "a webhook that isn't Slack's is refused")
+ok("hooks.slack.com" in c.post(
+    "/api/admin/integrations/slack/connect", headers=A,
+    json={"fields": {"webhook_url": "https://evil.example/h"}}
+   ).json()["detail"], "and says what a real one looks like")
+ok(c.post("/api/admin/integrations/trello/connect", headers=A,
+          json={"fields": {"api_key": "x"}}).status_code == 400,
+   "a half-filled form is refused before any call is made")
+ok(c.post("/api/admin/integrations/notreal/connect", headers=A,
+          json={"fields": {}}).status_code == 404,
+   "an unknown provider is a 404")
+_con_i = _db.connect()
+ok(_con_i.execute("SELECT COUNT(*) n FROM integrations").fetchone()["n"] == 0,
+   "and nothing was stored by any of those attempts")
+
+# OAuth: the client secret is the company's, so it can't be shipped.
+ok(c.get("/api/admin/integrations/dropbox/authorize",
+         headers=A).status_code == 400,
+   "an OAuth provider can't be authorised before its app is registered")
+ok("client id" in c.get("/api/admin/integrations/dropbox/authorize",
+                        headers=A).json()["detail"],
+   "and says what is missing")
+ok(c.post("/api/admin/integrations/slack/app", headers=A,
+          json={"client_id": "x"}).status_code == 400,
+   "a non-OAuth provider has no app to register")
+_app = c.post("/api/admin/integrations/dropbox/app", headers=A,
+              json={"client_id": "cid", "client_secret": "shh"}).json()
+ok("/oauth/dropbox" in _app["redirect_uri"],
+   "registering an app tells you the redirect URI to paste back")
+_auth = c.get("/api/admin/integrations/dropbox/authorize", headers=A).json()
+ok(_auth["url"].startswith("https://www.dropbox.com/oauth2/authorize"),
+   "and then it can build the approval URL")
+ok("state=" in _auth["url"] and "cid" in _auth["url"],
+   "carrying a state and the client id")
+# Without the state check this endpoint would accept a code from anywhere,
+# which is how somebody attaches their account to your integration.
+ok("Not connected" in c.get("/oauth/dropbox?code=abc&state=wrong").text,
+   "a callback with the wrong state connects nothing")
+ok(_con_i.execute("SELECT COUNT(*) n FROM integrations").fetchone()["n"] == 0,
+   "and still stores nothing")
+
+# LaceUp goes the other way, because there is no API to call.
+ok([p for p in _ist["providers"] if p["name"] == "laceup"][0]["auth"]
+   == "inbound", "LaceUp is inbound rather than pretending to be a client")
+ok(c.post("/api/admin/integrations/laceup/connect", headers=A,
+          json={"fields": {}}).status_code == 400,
+   "so it can't be 'connected' like the others")
+_lu = c.post("/api/admin/integrations/laceup/inbound-key", headers=A).json()
+ok(len(_lu["key"]) > 20 and _lu["url"].endswith("/api/inbound/laceup"),
+   "it issues a key and an address instead")
+ok(c.post("/api/inbound/laceup", json={}).status_code == 401,
+   "posting without the key is refused")
+ok(c.post("/api/inbound/laceup", headers={"X-API-Key": "wrong"},
+          json={}).status_code == 401, "and so is the wrong key")
+
+_pre = _con_i.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"]
+_push = c.post("/api/inbound/laceup", headers={"X-API-Key": _lu["key"]},
+               json={"orders": [
+                   {"reference": "LU-1", "customer": "Corner Grocer",
+                    "email": "van@example.com", "city": "Chicago",
+                    "address": "9 Oak",
+                    "items": [{"sku": "GUEST-1", "qty": 6}]},
+                   {"reference": "LU-2", "customer": "Bad",
+                    "items": [{"sku": "NOT-A-SKU", "qty": 1}]}]})
+ok(_push.status_code == 200, "a pushed batch is accepted")
+ok(len(_push.json()["placed"]) == 1, "the good order is placed")
+ok(_push.json()["skipped"] and "NOT-A-SKU" in
+   _push.json()["skipped"][0]["why"],
+   "and the bad one is skipped with the reason, not silently dropped")
+ok(_con_i.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"] == _pre + 1,
+   "exactly one order landed")
+
+_csv = b"reference,customer,email,city,sku,qty\n" \
+       b"A1,Van Sale,v@example.com,Boston,GUEST-1,3\n" \
+       b"A1,Van Sale,v@example.com,Boston,GUEST-1,2\n"
+_imp = c.post("/api/admin/integrations/laceup/import", headers=A,
+              files={"file": ("orders.csv", _csv, "text/csv")})
+ok(_imp.status_code == 200 and len(_imp.json()["placed"]) == 1,
+   "a CSV with two lines under one reference becomes one order")
+ok(c.post("/api/admin/integrations/laceup/import", headers=CU,
+          files={"file": ("o.csv", _csv, "text/csv")}).status_code
+   in (401, 403), "importing needs an owner")
+_con_i.close()
+
+# The fan-out reaches integrations without each emitter knowing.
+_sf = Path("src/storefront/backend/api.py").read_text()
+ok("_fan_integrations" in _sf and "_fan_discord" in _sf,
+   "business events fan out to integrations as well as Discord")
+ok(_sf.index("def fire_webhooks") < _sf.index("_fan_integrations"),
+   "from the one place every emitter already calls")
+ok("emit" in _ig.__dict__ and _ig.PROVIDERS["slack"]["events"],
+   "and providers declare which events they want")
+ok("integrations" in _ops and "renderIntegrations" in _ops,
+   "the ops app has the screen")
+ok("drawForm" in _ops,
+   "which builds each form from the provider's own declaration")
+
 print(f"\nall {checks} checks passed")
