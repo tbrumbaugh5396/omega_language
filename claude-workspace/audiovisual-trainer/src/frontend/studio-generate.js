@@ -7,7 +7,8 @@
 
 import { el, clear, api, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
-import { parseUniforms, desugar, SKETCH_VARS } from "./shader-uniforms.js";
+import { parseUniforms, desugar, hasSimPass, bakeDefaults, stripComments, SKETCH_VARS } from "./shader-uniforms.js";
+import { Feedback } from "./feedback.js";
 import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures } from "./shader-controls.js";
 import { gridOverlay } from "./grid-overlay.js";
 
@@ -723,6 +724,168 @@ col += vec3(1.0, 0.95, 0.85) * pow(max(dot(n, normalize(sd + view)), 0.0), 180.0
 col += vec3(0.6, 0.8, 0.9) * max(-h0, 0.0) * 4.0;              // caustic-ish light in the troughs
 
 finish(col)` },
+
+  // ---- simulations. Define vec4 sim(vec2 uv) and a state pass runs before
+  // the picture, reading its own last frame. These are real: the rule is
+  // applied every step to what the previous step left.
+
+  { id: "reaction", label: "Reaction–diffusion (Gray–Scott)", preview: [640, 640], steps: 8, source:
+`uniform float feed;      // @range 0.01 0.08 @default 0.037
+uniform float kill;      // @range 0.04 0.07 @default 0.06
+uniform vec3  ink;       // @color @default 0.10 0.05 0.20
+uniform vec3  paper;     // @color @default 0.95 0.92 0.85
+uniform vec3  edge;      // @color @default 0.90 0.45 0.20
+
+// Two chemicals, u (red channel) and v (green). v eats u and makes more v;
+// u is fed in and v is removed. Diffusion at different rates does the rest.
+// Karl Sims' weights for the Laplacian.
+vec4 sim(vec2 q) {
+  if (frame < 1) {
+    float blob = smoothstep(0.06, 0.02, length(p - vec2(0.0, 0.0)));
+    blob += smoothstep(0.03, 0.01, length(p - vec2(0.5, 0.3)));
+    return vec4(1.0, blob * 0.9, 0.0, 1.0);
+  }
+  vec4 c = prevAt(vec2(0.0));
+  vec4 lap = -c
+    + 0.2  * (prevAt(vec2(1.0, 0.0)) + prevAt(vec2(-1.0, 0.0)) + prevAt(vec2(0.0, 1.0)) + prevAt(vec2(0.0, -1.0)))
+    + 0.05 * (prevAt(vec2(1.0, 1.0)) + prevAt(vec2(-1.0, 1.0)) + prevAt(vec2(1.0, -1.0)) + prevAt(vec2(-1.0, -1.0)));
+  float u = c.r, v = c.g;
+  float uvv = u * v * v;
+  u += 1.0 * lap.r - uvv + feed * (1.0 - u);
+  v += 0.5 * lap.g + uvv - (feed + kill) * v;
+  // press to add v under the pointer
+  v += md * smoothstep(0.05, 0.0, length(q - m) * (u_resolution.x / u_resolution.y)) * 0.5;
+  return vec4(clamp(u, 0.0, 1.0), clamp(v, 0.0, 1.0), 0.0, 1.0);
+}
+
+float v = state(uv).g;
+vec3 col = mix(srgbToLinear(paper), srgbToLinear(edge), smoothstep(0.05, 0.25, v));
+col = mix(col, srgbToLinear(ink), smoothstep(0.25, 0.5, v));
+
+finish(col)` },
+
+  { id: "waves", label: "Wave equation — tap the water", preview: [800, 450], steps: 2, source:
+`uniform float speed;     // @range 0.1 0.5 @default 0.35 — wave speed (keep under 0.5 or it blows up)
+uniform float damping;   // @range 0.98 1.0 @default 0.996
+uniform float rain;      // @range 0 1 @default 0.15 — random drops
+uniform vec3  water;     // @color @default 0.06 0.35 0.50
+
+// Height in red, velocity in green. The discrete wave equation: acceleration
+// is the Laplacian of height. Press to make a drop; rain does it for you.
+vec4 sim(vec2 q) {
+  if (frame < 1) return vec4(0.0, 0.0, 0.0, 1.0);
+  vec4 c = prevAt(vec2(0.0));
+  float lap = prevAt(vec2(1.0, 0.0)).r + prevAt(vec2(-1.0, 0.0)).r
+            + prevAt(vec2(0.0, 1.0)).r + prevAt(vec2(0.0, -1.0)).r - 4.0 * c.r;
+  float vel = (c.g + speed * speed * lap) * damping;
+  float h = c.r + vel;
+  float aspect = u_resolution.x / u_resolution.y;
+  h += md * smoothstep(0.02, 0.0, length((q - m) * vec2(aspect, 1.0))) * 0.5;
+  // an occasional drop somewhere
+  float drop = step(1.0 - rain * 0.02, hash21(vec2(float(frame), seed)));
+  vec2 where = vec2(hash21(vec2(float(frame), 1.7)), hash21(vec2(2.3, float(frame))));
+  h += drop * smoothstep(0.015, 0.0, length((q - where) * vec2(aspect, 1.0))) * 0.6;
+  return vec4(h, vel, 0.0, 1.0);
+}
+
+float h0 = state(uv).r;
+vec3 n = normalize(vec3(-(stateAt(vec2(1.0, 0.0)).r - stateAt(vec2(-1.0, 0.0)).r) * 40.0, 1.0,
+                        -(stateAt(vec2(0.0, 1.0)).r - stateAt(vec2(0.0, -1.0)).r) * 40.0));
+vec3 sd = normalize(vec3(-0.4, 0.8, 0.5));
+vec3 view = vec3(0.0, 1.0, 0.0);
+vec3 refl = reflect(-view, n);
+vec3 col = srgbToLinear(water) * (0.6 + 0.4 * max(dot(n, sd), 0.0));
+col += sky(vec3(refl.x, abs(refl.y), refl.z), sd) * fresnel(max(dot(n, view), 0.0), 0.02) * 2.0;
+col += vec3(1.0, 0.95, 0.85) * pow(max(dot(n, normalize(sd + view)), 0.0), 200.0) * 2.0;
+col += vec3(0.5, 0.7, 0.8) * max(-h0, 0.0) * 3.0;
+
+finish(col)` },
+
+  { id: "life", label: "Life, with a trail", preview: [640, 640], steps: 1, source:
+`uniform float pace;      // @range 1 12 step 1 @default 4 — frames per generation
+uniform vec3  alive;     // @color @default 0.95 0.90 0.60
+uniform vec3  trail;     // @color @default 0.30 0.10 0.40
+
+// Conway's rule on the red channel; the green channel remembers how long a
+// cell has been dead, which is the trail. Press to paint cells alive.
+vec4 sim(vec2 q) {
+  vec4 c = prevAt(vec2(0.0));
+  if (frame < 1) return vec4(step(0.72, hash21(floor(gl_FragCoord.xy) + seed)), 0.0, 0.0, 1.0);
+  float paint = md * step(length((q - m) * vec2(u_resolution.x / u_resolution.y, 1.0)), 0.03)
+              * step(0.5, hash21(gl_FragCoord.xy + float(frame)));
+  if (mod(float(frame), pace) > 0.5) return vec4(max(c.r, paint), c.g, 0.0, 1.0);
+  float n = 0.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    if (x == 0 && y == 0) continue;
+    n += step(0.5, prevAt(vec2(float(x), float(y))).r);
+  }
+  float was = step(0.5, c.r);
+  float now = (was > 0.5 && (n == 2.0 || n == 3.0)) || (was < 0.5 && n == 3.0) ? 1.0 : 0.0;
+  now = max(now, paint);
+  float age = now > 0.5 ? 0.0 : min(c.g + 1.0 / 60.0, 1.0);
+  return vec4(now, age, 0.0, 1.0);
+}
+
+vec4 sv = state(uv);
+vec3 col = mix(srgbToLinear(trail) * (1.0 - sv.g), vec3(0.02), smoothstep(0.0, 1.0, sv.g));
+col = mix(col, srgbToLinear(alive), sv.r);
+
+finish(col)` },
+
+  { id: "ink", label: "Ink carried in a flow", preview: [800, 450], steps: 1, source:
+`uniform float swirl;     // @range 0.2 3 @default 1.2 — how tight the eddies are
+uniform float flow;      // @range 0 2 @default 0.8 — how fast it moves
+uniform float fade;      // @range 0.9 1.0 @default 0.995
+uniform vec3  ink1;      // @color @default 0.90 0.30 0.10
+uniform vec3  ink2;      // @color @default 0.10 0.40 0.90
+
+// Dye advected by a divergence-free field — the curl of a noise potential —
+// so it swirls without piling up. Back-trace one step and read what was there.
+// This is advection done honestly; it is not a pressure solve.
+vec2 velocity(vec2 q) {
+  float e = 0.01;
+  vec2 s = q * swirl + vec2(0.0, t * 0.05);
+  float dx = fbm(s + vec2(e, 0.0)) - fbm(s - vec2(e, 0.0));
+  float dy = fbm(s + vec2(0.0, e)) - fbm(s - vec2(0.0, e));
+  vec2 v = vec2(dy, -dx) / (2.0 * e) * 0.15;                       // curl
+  vec2 toMouse = q - (m * 2.0 - 1.0) * vec2(u_resolution.x / u_resolution.y, 1.0);
+  v += md * normalize(toMouse + 1e-4) * exp(-dot(toMouse, toMouse) * 30.0) * 0.6;
+  return v * flow;
+}
+vec4 sim(vec2 q) {
+  if (frame < 1) return vec4(0.0, 0.0, 0.0, 1.0);
+  vec2 aspect = vec2(u_resolution.x / u_resolution.y, 1.0);
+  vec2 pos = (q * 2.0 - 1.0) * aspect;
+  vec2 back = pos - velocity(pos) * (1.0 / 60.0) * 8.0;
+  vec4 c = prev((back / aspect) * 0.5 + 0.5) * fade;
+  // two sources breathe ink in on the left and right
+  float a = smoothstep(0.08, 0.0, length(pos - vec2(-aspect.x * 0.6, 0.35 * sin(t * 0.7))));
+  float b = smoothstep(0.08, 0.0, length(pos - vec2( aspect.x * 0.6, -0.35 * sin(t * 0.9))));
+  c.rgb += srgbToLinear(ink1) * a * 0.08 + srgbToLinear(ink2) * b * 0.08;
+  c.rgb += md * srgbToLinear(mix(ink1, ink2, 0.5)) * exp(-length(pos - (m * 2.0 - 1.0) * aspect) * 40.0) * 0.1;
+  return vec4(min(c.rgb, 4.0), 1.0);
+}
+
+vec3 col = state(uv).rgb + vec3(0.02, 0.02, 0.03);
+
+finish(col)` },
+
+  { id: "trails", label: "Trails — feedback without a sim", preview: [640, 640], source:
+`uniform float persist;   // @range 0.8 0.995 @default 0.96 — how long a trail lasts
+uniform float zoom;      // @range 0.98 1.02 @default 1.004 — feedback zoom per frame
+uniform float turn;      // @range -0.05 0.05 @default 0.008 — feedback rotation per frame
+uniform vec3  ink;       // @color @default 1.0 0.7 0.3
+
+// No sim(): u_prev is simply the last picture. Read it slightly zoomed and
+// turned, fade it, and draw this frame's orb on top. The classic feedback.
+vec2 c = (rot(turn) * (uv - 0.5)) / zoom + 0.5;
+vec3 last = prev(c).rgb * persist;
+vec2 orb = vec2(0.5) + 0.32 * vec2(cos(t * 1.3), sin(t * 2.1)) * vec2(1.0, u_resolution.x / u_resolution.y);
+float d = length((uv - orb) * vec2(u_resolution.x / u_resolution.y, 1.0));
+vec3 col = last + ink * smoothstep(0.03, 0.0, d) * 1.5;
+col += md * ink.bgr * smoothstep(0.05, 0.0, length((uv - m) * vec2(u_resolution.x / u_resolution.y, 1.0)));
+
+clamp(col, 0.0, 1.0)` },
 ];
 
 export const newGenerateDoc = (preset = GENERATE_PRESETS[0]) => ({
@@ -740,22 +903,30 @@ export async function generateEditor(host) {
   doc.seed ??= 0;
   doc.preview ||= [640, 640];
   doc.exportSize ||= [2048, 2048];
+  doc.mode ||= "sketch";                 // "sketch" | "glsl"
+  doc.simSteps ||= 1;
 
   const canvas = el("canvas", { width: doc.preview[0], height: doc.preview[1],
     style: { width: "100%", height: "auto", display: "block", background: "#000",
              borderRadius: "8px", cursor: "crosshair" } });
   const log = el("div.lab-log");
   const knobHost = el("div");
-  const editor = el("textarea.editor", { spellcheck: false, value: doc.sketch,
+  const editor = el("textarea.editor", { spellcheck: false,
+    value: doc.mode === "glsl" ? (doc.glsl || "") : doc.sketch,
     style: { minHeight: "420px" } });
 
-  let gl = null, program = null, raf = null, t0 = performance.now();
+  let gl = null, raf = null, t0 = performance.now();
+  let display = null, sim = null;         // the two programs; sim is null without a state pass
+  let quad = null;
   let uniforms = [];
-  const textures = {};                        // sampler name -> {url, tex, w, h}
+  const textures = {};                    // sampler name -> {url, tex, w, h}
+  let feedback = null;                    // Feedback instance, once GL exists
   const grid = gridOverlay();
   const mouse = [0.5, 0.5];
+  let mouseDown = 0;
   let paused = false, pausedAt = 0;
   const fpsLabel = el("span.fine");
+  const stateLabel = el("span.fine");
   let frames = 0, lastFpsAt = performance.now();
 
   canvas.addEventListener("pointermove", (e) => {
@@ -763,66 +934,142 @@ export async function generateEditor(host) {
     mouse[0] = ((e.clientX - r.left) / r.width) * canvas.width;
     mouse[1] = (1 - (e.clientY - r.top) / r.height) * canvas.height;
   });
+  canvas.addEventListener("pointerdown", (e) => { mouseDown = 1; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener("pointerup", () => { mouseDown = 0; });
+  canvas.addEventListener("pointercancel", () => { mouseDown = 0; });
 
-  function compile(fragSrc) {
-    clear(log);
-    if (!gl) {
-      gl = canvas.getContext("webgl", { preserveDrawingBuffer: true, antialias: false });
-      if (!gl) { log.textContent = "WebGL is not available in this browser."; return false; }
-    }
-    const mk = (type, code) => {
-      const s = gl.createShader(type);
-      gl.shaderSource(s, code);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        const info = gl.getShaderInfoLog(s) || "compile failed";
-        gl.deleteShader(s);
-        throw new Error(info);
-      }
-      return s;
-    };
-    let p;
-    try {
-      const vs = mk(gl.VERTEX_SHADER, VERT);
-      const fs = mk(gl.FRAGMENT_SHADER, fragSrc);
-      p = gl.createProgram();
-      gl.attachShader(p, vs);
-      gl.attachShader(p, fs);
-      gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-        throw new Error(gl.getProgramInfoLog(p) || "link failed");
-      }
-    } catch (e) {
-      // The generated shader has a preamble you did not type, so a raw line
-      // number would point at the wrong place. Say so rather than mislead.
-      log.textContent = String(e.message).trim() +
-        "\n\n(line numbers are for the generated shader — press Eject to see it)";
-      return false;
-    }
-    if (program) gl.deleteProgram(program);
-    program = p;
-    gl.useProgram(program);
+  /** The full GLSL that runs — generated from the sketch, or yours. */
+  const source = () => doc.mode === "glsl" ? (doc.glsl || "") : desugar(doc.sketch);
 
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  function ensureGL() {
+    if (gl) return true;
+    gl = canvas.getContext("webgl", { preserveDrawingBuffer: true, antialias: false });
+    if (!gl) { log.textContent = "WebGL is not available in this browser."; return false; }
+    quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(program, "a_pos");
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    feedback = new Feedback(gl);
+    feedback.resize(canvas.width, canvas.height);
     return true;
   }
 
-  function draw() {
-    if (!program || !gl) return;
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    const u = (n) => gl.getUniformLocation(program, n);
+  function link(fragSrc) {
+    const mk = (type, code) => {
+      const sh = gl.createShader(type);
+      gl.shaderSource(sh, code);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        const info = gl.getShaderInfoLog(sh) || "compile failed";
+        gl.deleteShader(sh);
+        throw new Error(info);
+      }
+      return sh;
+    };
+    const vs = mk(gl.VERTEX_SHADER, VERT);
+    const fs = mk(gl.FRAGMENT_SHADER, fragSrc);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(prog) || "link failed");
+    }
+    return prog;
+  }
+
+  /** Compile the display program and, if the source has a state pass, the sim
+      program too — from the same file, with SIM_PASS defined for the second. */
+  function compile(src) {
+    clear(log);
+    if (!ensureGL()) return false;
+    let d = null, s2 = null;
+    try {
+      d = link(src);
+      if (hasSimPass(src)) s2 = link("#define SIM_PASS\n" + src);
+    } catch (e) {
+      // Keep the last working programs: a shader that fails to compile should
+      // not blank the thing you were looking at.
+      if (d) gl.deleteProgram(d);
+      log.textContent = String(e.message).trim() + (doc.mode === "sketch"
+        ? "\n\n(line numbers are for the generated shader — press GLSL to see it, or edit it directly)"
+        : "");
+      return false;
+    }
+    if (display) gl.deleteProgram(display);
+    if (sim) gl.deleteProgram(sim);
+    display = d; sim = s2;
+    stateLabel.textContent = sim ? `sim · ${feedback.describe()}` : "";
+    return true;
+  }
+
+  const timeNow = () => paused ? pausedAt : (performance.now() - t0) / 1000;
+
+  /** Set everything both passes share, then bind the feedback textures on the
+      last two units — user images take the first ones. */
+  function setCommon(prog, prevTex, stateTex) {
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    const loc = gl.getAttribLocation(prog, "a_pos");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const u = (n) => gl.getUniformLocation(prog, n);
     gl.uniform2f(u("u_resolution"), canvas.width, canvas.height);
     gl.uniform2f(u("u_mouse"), mouse[0], mouse[1]);
-    gl.uniform1f(u("u_time"), paused ? pausedAt : (performance.now() - t0) / 1000);
+    gl.uniform1f(u("u_time"), timeNow());
     gl.uniform1f(u("u_seed"), doc.seed);
-    applyUniforms(gl, program, uniforms, doc.uniforms);
-    bindTextures(gl, program, uniforms, doc.uniforms, textures);
+    gl.uniform1i(u("u_frame"), feedback.frame);
+    gl.uniform1f(u("u_mouseDown"), mouseDown);
+    applyUniforms(gl, prog, uniforms, doc.uniforms);
+    bindTextures(gl, prog, uniforms, doc.uniforms, textures);
+    gl.activeTexture(gl.TEXTURE6);
+    gl.bindTexture(gl.TEXTURE_2D, prevTex);
+    if (u("u_prev")) gl.uniform1i(u("u_prev"), 6);
+    gl.activeTexture(gl.TEXTURE7);
+    gl.bindTexture(gl.TEXTURE_2D, stateTex);
+    if (u("u_state")) gl.uniform1i(u("u_state"), 7);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  /** One state step: read a, write b, swap. */
+  function stepSim() {
+    const w = feedback.write, r = feedback.read;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, w.fbo);
+    gl.viewport(0, 0, feedback.w, feedback.h);
+    setCommon(sim, r.tex, r.tex);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    feedback.swap();
+  }
+
+  /** The picture. Without a sim, u_prev is last frame's picture and this
+      frame's is captured for next time. */
+  function draw() {
+    if (!display || !gl) return;
+    if (feedback.w !== canvas.width || feedback.h !== canvas.height) {
+      feedback.resize(canvas.width, canvas.height);
+    }
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    if (sim) setCommon(display, feedback.write.tex, feedback.read.tex);
+    else setCommon(display, feedback.prevTex, feedback.prevTex);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (!sim) feedback.captureCanvas();
+  }
+
+  function frame() {
+    if (display && gl && !paused) {
+      if (sim) for (let i = 0; i < doc.simSteps; i++) stepSim();
+      draw();
+    } else if (display && gl) {
+      draw();
+    }
+    frames++;
+    const now = performance.now();
+    if (now - lastFpsAt > 500) {
+      fpsLabel.textContent =
+        `${Math.round((frames * 1000) / (now - lastFpsAt))} fps · ${canvas.width}×${canvas.height}`;
+      frames = 0; lastFpsAt = now;
+    }
+    raf = requestAnimationFrame(frame);
   }
 
   /** A picked file becomes a studio asset; the value is its capability URL. */
@@ -837,27 +1084,25 @@ export async function generateEditor(host) {
     return { url: asset.url, assetId: asset.id, w: dims[0], h: dims[1] };
   }
 
-  function frame() {
-    draw();
-    frames++;
-    const now = performance.now();
-    if (now - lastFpsAt > 500) {
-      fpsLabel.textContent =
-        `${Math.round((frames * 1000) / (now - lastFpsAt))} fps · ${canvas.width}×${canvas.height}`;
-      frames = 0; lastFpsAt = now;
-    }
-    raf = requestAnimationFrame(frame);
-  }
-
-  /** Re-read the source: rebuild the controls, then recompile. */
-  function run(save = true) {
-    doc.sketch = editor.value;
-    uniforms = parseUniforms(doc.sketch);
+  function rebuildControls() {
     clear(knobHost);
     knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save(), { onImage }));
-    const ok = compile(desugar(doc.sketch));
+  }
+
+  /** Re-read the source: rebuild the controls, then recompile. The sim keeps
+      its state across a recompile, so you can tune a rule while it runs. */
+  function run(save = true) {
+    if (doc.mode === "glsl") doc.glsl = editor.value; else doc.sketch = editor.value;
+    uniforms = parseUniforms(editor.value);
+    rebuildControls();
+    const ok = compile(source());
     if (ok && save) host.save(thumbnail());
     return ok;
+  }
+
+  function restart() {
+    t0 = performance.now(); pausedAt = 0;
+    if (feedback) feedback.reset();
   }
 
   function thumbnail() {
@@ -869,11 +1114,14 @@ export async function generateEditor(host) {
     } catch { return ""; }
   }
 
-  /** Render once at the export size. The preview canvas is resized rather than
-      a second context created, so what you export is what you were looking at. */
+  /** Render once at the export size. A simulation is its state, and its state
+      is the preview's size — so with feedback in play the export is that size,
+      not resampled to something the sim never ran at. */
   function exportPng() {
-    const [w, h] = doc.exportSize;
+    const usesFeedback = !!sim || /\bu_prev\b/.test(stripComments(source()));
+    let [w, h] = doc.exportSize;
     const maxDim = gl ? gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0] : 4096;
+    if (usesFeedback) { w = canvas.width; h = canvas.height; }
     if (w > maxDim || h > maxDim) {
       toast(`This GPU caps a render at ${maxDim}px. Pick a smaller size.`);
       return;
@@ -882,48 +1130,88 @@ export async function generateEditor(host) {
     // average down. Hard edges — foam lines, grass, board rails — are where a
     // single sample per pixel reads as cheap. Capped so a 4096 export does
     // not ask for a 268 MB drawing buffer.
-    const ss = doc.ssaa !== false && w * 2 <= maxDim && h * 2 <= maxDim
+    const ss = !usesFeedback && doc.ssaa !== false && w * 2 <= maxDim && h * 2 <= maxDim
              && w * h <= 2048 * 2048 ? 2 : 1;
     const [pw, ph] = [canvas.width, canvas.height];
-    canvas.width = w * ss; canvas.height = h * ss;
-    draw();
     let url;
-    try {
-      if (ss === 1) url = canvas.toDataURL("image/png");
-      else {
-        const out = document.createElement("canvas");
-        out.width = w; out.height = h;
-        const cx = out.getContext("2d");
-        cx.imageSmoothingEnabled = true;
-        cx.imageSmoothingQuality = "high";
-        cx.drawImage(canvas, 0, 0, w, h);
-        url = out.toDataURL("image/png");
-      }
-    } catch { toast("Could not read the canvas back."); }
-    canvas.width = pw; canvas.height = ph;
-    draw();
+    if (usesFeedback) {
+      // Draw the current state once more (no step) and read it back.
+      draw();
+      try { url = canvas.toDataURL("image/png"); } catch { toast("Could not read the canvas back."); }
+    } else {
+      canvas.width = w * ss; canvas.height = h * ss;
+      // The feedback storage tracks the canvas; a plain picture never reads it,
+      // so a temporary resize costs a reallocation and nothing else.
+      draw();
+      try {
+        if (ss === 1) url = canvas.toDataURL("image/png");
+        else {
+          const out = document.createElement("canvas");
+          out.width = w; out.height = h;
+          const cx = out.getContext("2d");
+          cx.imageSmoothingEnabled = true;
+          cx.imageSmoothingQuality = "high";
+          cx.drawImage(canvas, 0, 0, w, h);
+          url = out.toDataURL("image/png");
+        }
+      } catch { toast("Could not read the canvas back."); }
+      canvas.width = pw; canvas.height = ph;
+      draw();
+    }
     if (!url) return;
     const a = document.createElement("a");
     a.href = url;
     a.download = `${host.doc.name || "generate"}-${w}x${h}.png`;
     a.click();
-    toast(`Exported ${w}×${h}${ss > 1 ? ", 2× supersampled" : ""}.`);
+    toast(`Exported ${w}×${h}${ss > 1 ? ", 2× supersampled" : ""}${usesFeedback ? " (a simulation exports at its own size)" : ""}.`);
   }
 
-  function eject() {
+  // ------------------------------------------------------------ modes
+
+  const modeLabel = el("span.tag", {}, doc.mode === "glsl" ? "GLSL" : "sketch");
+  const modeBtn = el("button.ghost", { onclick: () => (doc.mode === "glsl" ? backToSketch() : showGlsl()) },
+    doc.mode === "glsl" ? "‹ Sketch" : "GLSL");
+
+  /** Sketch → GLSL. The generated file becomes the thing you edit; it is what
+      runs, so a change there is a change to the shader. One way — the sketch
+      is kept, but edits made here do not fold back into it. */
+  function editAsGlsl() {
+    const fresh = desugar(doc.sketch);
+    if (doc.glsl && doc.glsl !== fresh) {
+      if (!confirm("You have GLSL edits from before. Replace them with a fresh conversion of the sketch?")) {
+        // keep the old edits
+      } else doc.glsl = fresh;
+    } else doc.glsl = fresh;
+    doc.mode = "glsl";
+    editor.value = doc.glsl;
+    modeLabel.textContent = "GLSL"; modeBtn.textContent = "‹ Sketch";
+    closeModal();
+    run();
+    toast("Editing the shader directly. Uniforms, images and feedback all still work.");
+  }
+
+  function backToSketch() {
+    doc.mode = "sketch";
+    editor.value = doc.sketch;
+    modeLabel.textContent = "sketch"; modeBtn.textContent = "GLSL";
+    run();
+    toast("Back to the sketch. Your GLSL edits are kept and come back with GLSL → Edit.");
+  }
+
+  function showGlsl() {
     const src = desugar(doc.sketch);
-    const area = el("textarea.editor", { value: src, spellcheck: false,
+    const area = el("textarea.editor", { value: src, spellcheck: false, readOnly: true,
       style: { minHeight: "340px" } });
     modal(el("h2", {}, "The shader this becomes"),
-      el("p.fine", {}, "Plain GLSL ES 1.00 — the same thing the Shader editor " +
-        "runs. Open it there to keep working without the shorthand."),
+      el("p.fine", {}, "Plain GLSL ES 1.00. Edit it here and it becomes the " +
+        "shader you are working on — the sketch shorthand steps aside, and " +
+        "every line is yours. Or open it in the Shader editor, which has The " +
+        "Book of Shaders presets but no feedback buffers."),
       area,
       el("div.row", { style: { justifyContent: "flex-end" } },
-        el("button", { onclick: () => {
-          navigator.clipboard?.writeText(src);
-          toast("Copied.");
-        } }, "Copy"),
-        el("button.primary", { onclick: async () => {
+        el("button", { onclick: () => { navigator.clipboard?.writeText(src); toast("Copied."); } }, "Copy"),
+        el("button.primary", { onclick: editAsGlsl }, "Edit this GLSL here"),
+        el("button", { onclick: async () => {
           const made = await api("/api/studio/projects", { method: "POST",
             body: { kind: "shader", name: `${host.doc.name || "sketch"} (ejected)`,
                     data: { source: src, knobs: [0.5, 0.5, 0.5, 0.5] } } });
@@ -931,6 +1219,15 @@ export async function generateEditor(host) {
           location.hash = `#studio/shader/${made.id}`;
         } }, "Open as a shader"),
         el("button.ghost", { onclick: closeModal }, "Close")));
+  }
+
+  /** Current control values → @default annotations in the source. */
+  function bake() {
+    const baked = bakeDefaults(editor.value, uniforms, doc.uniforms);
+    if (baked === editor.value) { toast("Nothing to bake — the defaults already match."); return; }
+    editor.value = baked;
+    run();
+    toast("Baked: the values you dialled are now the source's defaults.");
   }
 
   function help() {
@@ -951,7 +1248,20 @@ uniform bool  mirror;  // @toggle`),
       el("p.fine", {}, "The type picks the control — float gives a slider, vec2 " +
         "an XY pad, vec3 named like a colour a swatch, bool a toggle. The " +
         "annotation only refines it, so a bare `uniform float k;` still works " +
-        "and gets 0 to 1."),
+        "and gets 0 to 1. Bake writes what you dialled back in as @default."),
+      el("h3", {}, "Simulation — feedback"),
+      el("p.fine", {}, "Define `vec4 sim(vec2 uv)` and a state pass runs before the " +
+        "picture, ping-ponging between two float buffers. In it, prev(uv) / " +
+        "prevAt(pixelOffset) read last frame's state; frame is 0 on the first " +
+        "pass, so set your initial state there. The picture then reads " +
+        "state(uv). Without sim(), prev(uv) is simply the last picture — " +
+        "trails and echoes. md is 1.0 while the pointer is down. Steps per " +
+        "frame runs the rule several times per drawn frame; Restart clears."),
+      el("h3", {}, "Editing the GLSL"),
+      el("p.fine", {}, "GLSL shows the file the sketch becomes. Edit this GLSL " +
+        "here makes that file the thing you edit and run — every line yours, " +
+        "line numbers in errors exact. Controls, images and feedback keep " +
+        "working because they only need the uniform declarations."),
       el("h3", {}, "Images"),
       el("p.fine", {}, "Declare `uniform sampler2D photo;` and a Choose image… " +
         "button appears; the file becomes an asset of this document. Declare " +
@@ -999,6 +1309,8 @@ uniform bool  mirror;  // @toggle`),
     onchange: (e) => {
       const p = GENERATE_PRESETS.find((x) => x.id === e.target.value);
       if (!p) return;
+      doc.mode = "sketch"; doc.glsl = "";
+      modeLabel.textContent = "sketch"; modeBtn.textContent = "GLSL";
       editor.value = p.source;
       doc.preset = p.id;
       doc.uniforms = {};            // a new sketch means new free variables
@@ -1007,7 +1319,9 @@ uniform bool  mirror;  // @toggle`),
         canvas.width = doc.preview[0]; canvas.height = doc.preview[1];
         sizeSel.value = `${doc.preview[0]}x${doc.preview[1]}`;
       }
+      if (p.steps) { doc.simSteps = p.steps; stepsSel.value = String(p.steps); }
       run();
+      restart();
     } }, el("option", { value: "" }, "sketch…"),
     ...GENERATE_PRESETS.map((p) =>
       el("option", { value: p.id, selected: p.id === doc.preset }, p.label)));
@@ -1027,6 +1341,11 @@ uniform bool  mirror;  // @toggle`),
       el("option", { value: `${w}x${h}`, selected: w === doc.exportSize[0] && h === doc.exportSize[1] },
         `export ${w}×${h}`)));
 
+  const stepsSel = el("select", { style: { width: "auto" }, title: "Simulation steps per drawn frame",
+    onchange: (e) => { doc.simSteps = +e.target.value; host.save(); },
+  }, ...[1, 2, 4, 8, 16].map((n) =>
+      el("option", { value: String(n), selected: n === doc.simSteps }, `${n} step${n > 1 ? "s" : ""}/frame`)));
+
   const pauseBtn = el("button", { onclick: () => {
     paused = !paused;
     if (paused) pausedAt = (performance.now() - t0) / 1000;
@@ -1041,8 +1360,8 @@ uniform bool  mirror;  // @toggle`),
       el("div.row.tight", {},
         el("button.primary", { onclick: () => run() }, "Run"),
         pauseBtn,
-        el("button", { onclick: () => { t0 = performance.now(); pausedAt = 0; } }, "Restart time"),
-        presetSel, sizeSel, exportSel,
+        el("button", { onclick: restart }, "Restart"),
+        presetSel, sizeSel, exportSel, stepsSel,
         el("button", { onclick: exportPng }, "Export PNG"),
         el("label.fine", { style: { display: "inline-flex", alignItems: "center", gap: ".3rem" } },
           el("input", { type: "checkbox", checked: doc.ssaa !== false, style: { width: "auto" },
@@ -1052,11 +1371,11 @@ uniform bool  mirror;  // @toggle`),
           doc.seed = Math.floor(Math.random() * 10000);
           randomise(uniforms, doc.uniforms);
           seedLabel.textContent = `seed ${doc.seed}`;
-          clear(knobHost);
-          knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save(), { onImage }));
+          rebuildControls();
           host.save();
         } }, "Randomise"),
-        el("button.ghost", { onclick: eject }, "Eject"),
+        el("button", { onclick: bake, title: "Write the current control values into the source as @default" }, "Bake"),
+        modeBtn, modeLabel,
         grid.button,
         el("button.ghost", { onclick: help }, "Help"),
         aiButton("Sketch…", {
@@ -1064,25 +1383,33 @@ uniform bool  mirror;  // @toggle`),
           describe: "Describe the image. You get a sketch back; whether it " +
             "reads right is your call, not the model's.",
           placeholder: "e.g. deep blue ground, warm embers drifting upward, soft",
-          context: () =>
-            "Target: an expression for this app's shader sketch shorthand. " +
-            "Write GLSL ES 1.00. Declare uniforms with annotation comments " +
-            "(// @range lo hi, // @color, // @pad, // @toggle) and end with a " +
-            "single colour expression — no main(), no gl_FragColor. " +
-            "In scope: uv, st, p (vec2), t, seed (float), m (vec2). " +
-            "Helpers: random, hash21, noise, fbm, rot, smin, sdCircle, sdBox, " +
-            "sdSegment, sdCapsule, sdEllipse, aa, palette, sky(rd,sunDir), " +
-            "fresnel, tonemap, srgb, dither, vignette, grain, luma, finish, " +
-            "coverUV(uv, imgSize), containUV. `uniform sampler2D name;` is an image " +
-            "the user picks; `uniform vec2 name_size;` is its size, (0,0) if none. " +
-            "Defining `float scene(vec3 p)` enables march, normal3, softShadow, ao, " +
-            "lookAt, sdSphere, sdBox3, sdTorus, sdCapsule3, sdPlane. " +
-            "For scenes work in linear light and end with finish(col). " +
-            "#rrggbb is a vec3 literal. Loop bounds must be constant; " +
-            "statements before the final expression are allowed.",
-          onResult: (res) => { editor.value = res.text; doc.uniforms = {}; run(); },
+          context: () => doc.mode === "glsl"
+            ? "Target: a complete WebGL1 GLSL ES 1.00 fragment shader for this app. " +
+              "Keep the existing uniforms u_resolution, u_mouse, u_time, u_seed, u_prev, " +
+              "u_state, u_frame, u_mouseDown; declare your own with annotation comments " +
+              "(// @range lo hi, // @color, // @pad, // @toggle). If you use a state pass, " +
+              "guard it with #ifdef SIM_PASS inside main and read u_prev there. Must set gl_FragColor."
+            : "Target: an expression for this app's shader sketch shorthand. " +
+              "Write GLSL ES 1.00. Declare uniforms with annotation comments " +
+              "(// @range lo hi, // @color, // @pad, // @toggle) and end with a " +
+              "single colour expression — no main(), no gl_FragColor. " +
+              "In scope: uv, st, p (vec2), t, seed, md (float), m (vec2), frame (int). " +
+              "Helpers: random, hash21, noise, fbm, rot, smin, sdCircle, sdBox, " +
+              "sdSegment, sdCapsule, sdEllipse, aa, palette, sky(rd,sunDir), " +
+              "fresnel, tonemap, srgb, dither, vignette, grain, luma, finish, " +
+              "coverUV(uv, imgSize), containUV. `uniform sampler2D name;` is an image " +
+              "the user picks; `uniform vec2 name_size;` is its size, (0,0) if none. " +
+              "Defining `float scene(vec3 p)` enables march, normal3, softShadow, ao, " +
+              "lookAt, sdSphere, sdBox3, sdTorus, sdCapsule3, sdPlane. " +
+              "Defining `vec4 sim(vec2 uv)` adds a feedback state pass: inside it " +
+              "prev(uv)/prevAt(pixelOffset) read last frame's state and frame==0 is the " +
+              "first pass; the picture reads state(uv). " +
+              "For scenes work in linear light and end with finish(col). " +
+              "#rrggbb is a vec3 literal. Loop bounds must be constant; " +
+              "statements before the final expression are allowed.",
+          onResult: (res) => { editor.value = res.text; doc.uniforms = {}; run(); restart(); },
         }),
-        seedLabel, fpsLabel)),
+        seedLabel, fpsLabel, stateLabel)),
 
     el("div.lab-split", {},
       el("div.stack", {},
@@ -1090,7 +1417,8 @@ uniform bool  mirror;  // @toggle`),
         knobHost,
         el("p.fine", {}, "Ctrl/Cmd+Enter runs. Editing re-runs after a pause. " +
           "A sketch that fails to compile leaves the last working image on " +
-          "screen and prints the error underneath.")),
+          "screen and prints the error underneath. Press on the canvas to " +
+          "drive md and u_mouse in a simulation.")),
       el("div.stack", {}, editor)));
 
   run(false);
@@ -1100,7 +1428,9 @@ uniform bool  mirror;  // @toggle`),
     cancelAnimationFrame(raf);
     clearTimeout(typeTimer);
     if (gl) releaseTextures(gl, textures);
-    if (gl && program) gl.deleteProgram(program);
+    if (feedback) feedback.release();
+    if (gl && display) gl.deleteProgram(display);
+    if (gl && sim) gl.deleteProgram(sim);
     const lose = gl && gl.getExtension("WEBGL_lose_context");
     if (lose) lose.loseContext();
   };

@@ -14,6 +14,7 @@
 /** Supplied by the runtime, so they are driven rather than dialled. */
 export const RESERVED = new Set([
   "u_resolution", "u_mouse", "u_time", "u_seed",
+  "u_prev", "u_state", "u_frame", "u_mouseDown",
 ]);
 
 // Scanned over the whole source rather than line by line: `uniform vec2 u_r;
@@ -240,6 +241,12 @@ vec3 palette(float t){ return palette(t, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0
   return (uv - 0.5) * s + 0.5;
 }`],
   ["luma", `float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }`],
+  // Feedback. prev/state read a uv; the *At forms read at a pixel offset from
+  // this fragment, which is what a stencil wants.
+  ["prev", `vec4 prev(vec2 q){ return texture2D(u_prev, q); }`],
+  ["prevAt", `vec4 prevAt(vec2 dpx){ return texture2D(u_prev, (gl_FragCoord.xy + dpx) / u_resolution); }`],
+  ["state", `vec4 state(vec2 q){ return texture2D(u_state, q); }`],
+  ["stateAt", `vec4 stateAt(vec2 dpx){ return texture2D(u_state, (gl_FragCoord.xy + dpx) / u_resolution); }`],
 ];
 
 /**
@@ -296,7 +303,11 @@ precision mediump float;
 uniform vec2  u_resolution;
 uniform vec2  u_mouse;
 uniform float u_time;
-uniform float u_seed;`;
+uniform float u_seed;
+uniform sampler2D u_prev;    // last frame — of the state if sim() exists, else of the picture
+uniform sampler2D u_state;   // this frame's state, once sim() has run
+uniform int   u_frame;       // frames since Restart; 0 on the first
+uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
 
 /** The variables in scope inside a sketch, documented for the help panel. */
 export const SKETCH_VARS = [
@@ -306,6 +317,8 @@ export const SKETCH_VARS = [
   ["t", "float", "seconds since the sketch started"],
   ["m", "vec2", "pointer, 0 to 1"],
   ["seed", "float", "changes when you press Randomise"],
+  ["md", "float", "1.0 while the pointer is pressed on the canvas"],
+  ["frame", "int", "frames since Restart — 0 on the first, so a sim can set its initial state"],
   ["<image>_size", "vec2", "pixels of a sampler2D you declared, if you also declare this vec2"],
 ];
 
@@ -398,7 +411,18 @@ export function desugar(sketch) {
     ["float", "t", "u_time"],
     ["vec2", "m", "u_mouse / u_resolution"],
     ["float", "seed", "u_seed"],
+    ["float", "md", "u_mouseDown"],
+    ["int", "frame", "u_frame"],
   ].filter(([, name]) => !defines(name));
+
+  // Defining `vec4 sim(vec2 uv)` adds a state pass. The same file serves both
+  // passes: the runtime prepends `#define SIM_PASS` for the first one.
+  const hasSim = /\bvec4\s+sim\s*\(\s*vec2\b/.test(declared);
+  const simBlock = hasSim ? `#ifdef SIM_PASS
+  gl_FragColor = sim(gl_FragCoord.xy / u_resolution);
+#else
+` : "";
+  const simEnd = hasSim ? "\n#endif" : "";
 
   return expandHex(`${PRELUDE}
 ${vars.map(([ty, name]) => `${ty} ${name};`).join("\n")}
@@ -407,10 +431,54 @@ ${COERCE}
 ${preamble}
 void main() {
 ${vars.map(([, name, init]) => `  ${name} = ${init};`).join("\n")}
-${body}
+${simBlock}${body}
   gl_FragColor = vec4(_rgb(
 ${colour}
-  ), 1.0);
+  ), 1.0);${simEnd}
 }
 `);
+}
+
+/** Does this shader (sketch-generated or hand-written) carry a state pass? */
+export function hasSimPass(glsl) {
+  return /\bSIM_PASS\b/.test(stripComments(glsl));
+}
+
+/**
+ * Write the current control values back into the source as `@default`
+ * annotations, so the code carries the state — what you dialled is what a
+ * fresh copy opens with. Works on a sketch or on full GLSL alike, because it
+ * only touches uniform declaration lines.
+ */
+export function bakeDefaults(src, uniforms, values) {
+  let out = String(src);
+  const fmt = (v, u) => {
+    if (u.isInt || u.type === "int") return String(Math.round(v));
+    if (u.type === "bool") return v > 0.5 ? "1" : "0";
+    const s = Math.abs(v) >= 100 ? v.toFixed(1) : Math.abs(v) >= 10 ? v.toFixed(2) : v.toFixed(3);
+    return s.replace(/\.?0+$/, "") || "0";
+  };
+  for (const u of uniforms) {
+    if (u.control === "image") continue;
+    const v = values[u.name];
+    if (!Array.isArray(v)) continue;
+    const decl = new RegExp(
+      "(\\buniform\\s+(?:lowp\\s+|mediump\\s+|highp\\s+)?" + u.type + "\\s+" + u.name +
+      "\\s*;)([^\\n]*)");
+    out = out.replace(decl, (m, head, rest) => {
+      const val = v.map((x) => fmt(x, u)).join(" ");
+      let comment = rest;
+      const c = rest.indexOf("//");
+      if (c === -1) return `${head}  // @default ${val}`;
+      const before = rest.slice(0, c), body = rest.slice(c + 2);
+      // Replace an existing @default (with however many numbers) or add one
+      // right after the // so it reads first.
+      const re = /@default(\s+-?[\d.]+)+/;
+      const newBody = re.test(body) ? body.replace(re, `@default ${val}`)
+                                    : ` @default ${val}` + body;
+      comment = `${before}//${newBody}`;
+      return head + comment;
+    });
+  }
+  return out;
 }
