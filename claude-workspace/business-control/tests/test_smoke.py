@@ -2677,4 +2677,87 @@ ok("data-igsync" in _ops, "the screen offers the sync")
 ok("links" in c.get("/api/store/admin/enquiries", headers=A).text,
    "and the enquiry list carries the remote state with it")
 
+
+# --- live sync, and refusing to pretend ---
+# A webhook registered against an address the provider can't reach creates a
+# subscription that never fires and looks exactly like one that works.
+for _addr, _want in (("http://localhost:8860", False),
+                     ("http://127.0.0.1:8860", False),
+                     ("http://192.168.1.15:8860", False),
+                     ("http://10.0.0.4:8860", False),
+                     ("http://172.16.4.4:8860", False),
+                     ("https://ops.example.com", True)):
+    ok(_ig.reachable(_addr)[0] is _want,
+       f"{_addr} is {'usable' if _want else 'refused'} for a webhook")
+ok("public_base_url" in _ig.reachable("http://localhost:8860")[1],
+   "and the refusal says how to fix it")
+
+_con_w = _db.connect()
+_ig.save(_con_w, "trello", {"api_key": "k", "token": "t"}, "me",
+         {"list_id": "L1"})
+ok(c.post("/api/admin/integrations/trello/webhook",
+          headers=A).status_code == 400,
+   "going live from a private address is refused")
+ok(c.post("/api/admin/integrations/slack/webhook",
+          headers=A).status_code == 400,
+   "and a provider with no state to send back has nothing to register")
+ok(c.delete("/api/admin/integrations/trello/webhook",
+            headers=A).status_code == 400,
+   "removing one that was never registered says so")
+
+# Trello checks the address answers before it will register anything.
+ok(c.head("/api/inbound/trello").status_code == 200,
+   "the inbound address answers the probe Trello sends first")
+ok(c.head("/api/inbound/notreal").status_code == 404,
+   "but only for a provider that exists")
+
+# A push arriving.
+_con_w.execute(
+    "INSERT INTO store_enquiries(kind,name,company,status,created_at)"
+    " VALUES('wholesale','Live','Live Co','new',?)", (_t.time(),))
+_con_w.commit()
+_lid = _con_w.execute(
+    "SELECT id FROM store_enquiries ORDER BY id DESC LIMIT 1").fetchone()["id"]
+_ig.link(_con_w, "trello", "enquiry", _lid, "live-card", "u")
+_wkey = _ig.inbound_key(_con_w, "trello")
+ok(len(_wkey) > 20, "a provider that pushes gets an inbound key too")
+ok(c.post("/api/inbound/trello", json={}).status_code == 401,
+   "a push with no key is refused")
+
+_real2 = _ig._req
+_ig._req = lambda url, method="GET", headers=None, body=None, timeout=15: (
+    (True, {"idList": "L9"}) if "/cards/" in url else (True, {"name": "Done"}))
+_pushed = c.post(f"/api/inbound/trello?key={_wkey}",
+                 json={"action": {"data": {"card": {"id": "live-card"}}}})
+ok(_pushed.status_code == 200 and _pushed.json().get("applied"),
+   "a card moved to Done arrives and is applied")
+ok(_con_w.execute("SELECT status FROM store_enquiries WHERE id=?",
+                  (_lid,)).fetchone()["status"] == "closed",
+   "closing the enquiry without anyone pressing sync")
+# A board has other cards on it and a pipeline has other deals; those are
+# not errors.
+ok(c.post(f"/api/inbound/trello?key={_wkey}",
+          json={"action": {"data": {"card": {"id": "someone-elses"}}}}
+          ).json()["ignored"] == "not one of ours",
+   "a card we didn't create is ignored rather than failing")
+ok("nothing identifiable" in c.post(
+    f"/api/inbound/trello?key={_wkey}", json={"unexpected": 1}
+   ).json()["ignored"], "and so is a payload shape we don't recognise")
+_ig._req = _real2
+_con_w.close()
+
+# The push re-reads the record rather than trusting the payload, so one
+# interpretation serves both the button and the webhook.
+ok("_trello_state(c, remote_id)" in _src_ig
+   and "_pipedrive_state(con, c, remote_id)" in _src_ig,
+   "a push is interpreted by the same readers the manual sync uses")
+
+# --- Slack has its own place in the nav ---
+ok('{ id: "slack"' in _ops and "renderSlack" in _ops,
+   "Slack is a screen in the sidebar, not only a settings panel")
+ok('S.tab === "slack"' in _ops,
+   "and its reader keeps polling while you are on it")
+ok('id: "integrations"' in _ops,
+   "integrations is in the sidebar too")
+
 print(f"\nall {checks} checks passed")

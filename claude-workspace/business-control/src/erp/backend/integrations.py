@@ -34,6 +34,7 @@ Two honest limits, stated here rather than discovered later:
 """
 import base64
 import json
+import re
 import secrets
 import threading
 import time
@@ -364,6 +365,7 @@ def status(con) -> dict:
             "fields": [{k: v for k, v in f.items()} for f in p["fields"]],
             "events": [EVENT_LABELS.get(e, e) for e in p["events"]],
             "syncs": bool(p.get("syncs")),
+            "live": bool(settings(con, name).get("webhook_id")),
             "connected": bool(r and r["active"]),
             "account": r["account"] if r else "",
             "connected_at": r["connected_at"] if r else 0,
@@ -609,9 +611,20 @@ def access_token(con, name: str, cfg: dict) -> str:
 
 # ---------- inbound ----------
 
+def receives(p: dict) -> bool:
+    """Does anything ever POST to us for this provider?
+
+    Two reasons it might: the provider has no API to call, so the direction
+    is reversed entirely; or it has one and also pushes changes as they
+    happen. Both need a key, which is why this is a question about the
+    provider rather than about its auth kind.
+    """
+    return p["auth"] == "inbound" or bool(p.get("syncs"))
+
+
 def inbound_key(con, name: str, rotate: bool = False) -> str:
     p = provider(name)
-    if p["auth"] != "inbound":
+    if not receives(p):
         raise HTTPException(400, f"{p['label']} doesn't receive data")
     row = con.execute("SELECT key FROM integration_inbound WHERE provider=?",
                       (name,)).fetchone()
@@ -1020,3 +1033,151 @@ def links_for(con, kind: str, local_id: int) -> list:
         "SELECT provider, remote_url, remote_state, synced_at"
         " FROM integration_links WHERE kind=? AND local_id=?",
         (kind, local_id)).fetchall()]
+
+
+# ---------- live sync ----------
+#
+# Polling on a button is a person remembering. A webhook is the provider
+# telling us as it happens, which is what "live" has to mean — but it only
+# works if they can reach us, and that is the part worth being strict about:
+# registering a webhook against an address on somebody's laptop creates a
+# subscription that can never fire and looks exactly like one that works.
+
+PRIVATE_HOST = re.compile(
+    r"^(localhost|127\.|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|"
+    r"172\.(1[6-9]|2\d|3[01])\.|\[?::1)", re.I)
+
+
+def reachable(base: str) -> tuple:
+    """Could an outside service actually call us here?"""
+    try:
+        host = urllib.parse.urlparse(base).hostname or ""
+    except Exception:
+        return False, "that isn't a URL"
+    if not host:
+        return False, "no host in the address"
+    if PRIVATE_HOST.match(host):
+        return False, (
+            f"{host} is only reachable from this network, so a webhook "
+            "registered against it would never arrive. Set public_base_url "
+            "in data/config.json to a public address — a tunnel is enough "
+            "for testing — and try again.")
+    return True, host
+
+
+def webhook_register(con, name: str, base: str) -> dict:
+    """Ask a provider to tell us when things change."""
+    p = provider(name)
+    if not p.get("syncs"):
+        raise HTTPException(400, f"{p['label']} has no state to send back")
+    c = creds(con, name)
+    if not c:
+        raise HTTPException(400, f"{p['label']} isn't connected")
+    ok, why = reachable(base)
+    if not ok:
+        raise HTTPException(400, why)
+
+    key = inbound_key(con, name)
+    url = f"{base}/api/inbound/{name}?key={urllib.parse.quote(key)}"
+    st = settings(con, name)
+
+    if name == "trello":
+        q = urllib.parse.urlencode({
+            "key": c.get("api_key", ""), "token": c.get("token", ""),
+            "callbackURL": url, "idModel": st.get("list_id", ""),
+            "description": "Business Control"})
+        okr, d = _req(f"https://api.trello.com/1/webhooks?{q}", "POST")
+        if not okr:
+            # Trello HEADs the callback before accepting it, so this is
+            # usually "we couldn't reach you" wearing a 400.
+            raise HTTPException(
+                400, f"Trello wouldn't register it: {d}. It calls the "
+                     "address first to check it answers, so this normally "
+                     "means the URL isn't reachable from the internet.")
+        hook_id = d.get("id", "") if isinstance(d, dict) else ""
+    elif name == "pipedrive":
+        dom = st.get("domain", "").replace(".pipedrive.com", "").strip("/")
+        tok = urllib.parse.quote(c.get("api_token", ""))
+        okr, d = _json_req(
+            f"https://{dom}.pipedrive.com/api/v1/webhooks?api_token={tok}",
+            "POST", payload={"subscription_url": url,
+                             "event_action": "updated",
+                             "event_object": "deal"})
+        if not okr:
+            raise HTTPException(400, f"Pipedrive wouldn't register it: {d}")
+        hook_id = str((d.get("data", {}) or {}).get("id", ""))
+    else:
+        raise HTTPException(400, f"no webhook for {p['label']}")
+
+    st["webhook_id"] = hook_id
+    con.execute("UPDATE integrations SET settings=? WHERE provider=?",
+                (json.dumps(st), name))
+    con.commit()
+    log(con, name, "webhook", True, f"registered {hook_id}")
+    return {"ok": True, "id": hook_id, "url": url}
+
+
+def webhook_remove(con, name: str) -> dict:
+    p = provider(name)
+    c = creds(con, name)
+    st = settings(con, name)
+    hid = st.get("webhook_id", "")
+    if not hid:
+        raise HTTPException(400, "no webhook registered")
+    if name == "trello":
+        q = urllib.parse.urlencode({"key": c.get("api_key", ""),
+                                    "token": c.get("token", "")})
+        _req(f"https://api.trello.com/1/webhooks/{hid}?{q}", "DELETE")
+    elif name == "pipedrive":
+        dom = st.get("domain", "").replace(".pipedrive.com", "").strip("/")
+        tok = urllib.parse.quote(c.get("api_token", ""))
+        _req(f"https://{dom}.pipedrive.com/api/v1/webhooks/{hid}"
+             f"?api_token={tok}", "DELETE")
+    st.pop("webhook_id", None)
+    con.execute("UPDATE integrations SET settings=? WHERE provider=?",
+                (json.dumps(st), name))
+    con.commit()
+    log(con, name, "webhook", True, "removed")
+    return {"ok": True}
+
+
+def handle_push(con, name: str, body: dict) -> dict:
+    """One change, arriving as it happens.
+
+    Deliberately re-reads the record from the provider rather than trusting
+    the payload: a webhook body is a snapshot of one moment and the shapes
+    differ per provider and per event, whereas the state readers already know
+    how to interpret a card and a deal. One interpretation, two ways in.
+    """
+    remote_id = ""
+    if name == "trello":
+        remote_id = str(((body.get("action") or {}).get("data") or {})
+                        .get("card", {}).get("id", ""))
+    elif name == "pipedrive":
+        cur = body.get("current") or {}
+        remote_id = str(cur.get("id") or (body.get("meta") or {}).get("id", ""))
+    if not remote_id:
+        return {"ok": True, "ignored": "nothing identifiable in that payload"}
+
+    lk = con.execute(
+        "SELECT * FROM integration_links WHERE provider=? AND remote_id=?",
+        (name, remote_id)).fetchone()
+    if lk is None:
+        # Something we didn't create. Not an error: a board has other cards
+        # on it, and a pipeline has other deals.
+        return {"ok": True, "ignored": "not one of ours"}
+
+    c = creds(con, name)
+    state, to = ((_trello_state(c, remote_id)) if name == "trello"
+                 else _pipedrive_state(con, c, remote_id))
+    if state is None:
+        return {"ok": True, "ignored": "gone over there"}
+    did = _advance(con, lk["kind"], lk["local_id"], to) if to else ""
+    con.execute(
+        "UPDATE integration_links SET remote_state=?, applied=?, synced_at=?"
+        " WHERE id=?", (state, did or lk["applied"], time.time(), lk["id"]))
+    con.commit()
+    log(con, name, "push", True,
+        f"{lk['kind']} #{lk['local_id']}: {state}" + (f" ({did})" if did else ""))
+    return {"ok": True, "kind": lk["kind"], "local_id": lk["local_id"],
+            "state": state, "applied": did}

@@ -2492,6 +2492,18 @@ def slack_send(channel: str, body: SlackSayBody, user=Depends(admin_user),
     return integrations.slack_send(con, channel, text, user["name"])
 
 
+@app.post("/api/admin/integrations/{name}/webhook")
+def integrations_webhook_on(name: str, user=Depends(admin_user),
+                            con=Depends(get_con)):
+    return integrations.webhook_register(con, name, base_url())
+
+
+@app.delete("/api/admin/integrations/{name}/webhook")
+def integrations_webhook_off(name: str, user=Depends(admin_user),
+                             con=Depends(get_con)):
+    return integrations.webhook_remove(con, name)
+
+
 @app.post("/api/admin/integrations/{name}/sync")
 def integrations_sync(name: str, user=Depends(admin_user),
                       con=Depends(get_con)):
@@ -2512,20 +2524,38 @@ def integrations_inbound_key(name: str, rotate: int = 0,
     return {"key": key, "url": f"{base_url()}/api/inbound/{name}"}
 
 
+@app.head("/api/inbound/{name}")
+def inbound_probe(name: str):
+    """Trello calls the address before it will register a webhook against it.
+
+    Answering here rather than letting it 405 is the difference between a
+    subscription that registers and one that is refused with a message about
+    the callback — which reads like a bug in us rather than a check passing.
+    """
+    integrations.provider(name)
+    return Response(status_code=200)
+
+
 @app.post("/api/inbound/{name}")
 async def inbound(name: str, request: Request, con=Depends(get_con)):
-    """Orders pushed to us by a service that has no API to call.
+    """Anything an outside service pushes at us.
 
-    LaceUp is the case this exists for: it writes orders on a van and can
-    send them on, but publishes nothing to call into. So the direction is
-    reversed — it posts here with the key we issued, and the rows land as
-    real orders through the same path as everything else.
+    Two different jobs behind one door, because the door is the same: a key
+    we issued, on an address we published. LaceUp sends orders, because it
+    publishes no API to call into. Trello and Pipedrive send changes, so a
+    card finished on the board lands here as it happens rather than when
+    somebody remembers to press sync.
     """
     integrations.provider(name)
     key = (request.headers.get("x-api-key")
            or request.query_params.get("key", ""))
     integrations.check_inbound(con, name, key)
     body = await request.json()
+
+    if name in ("trello", "pipedrive"):
+        return integrations.handle_push(con, name, body if isinstance(
+            body, dict) else {})
+
     rows = body if isinstance(body, list) else body.get("orders") or [body]
     made, skipped = [], []
     for row in rows:

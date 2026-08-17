@@ -809,6 +809,8 @@ const TABS = [
     roles: ["admin"] },
   { id: "discord", label: "Discord", icon: "chat", group: "Company",
     roles: ["admin"] },
+  { id: "slack", label: "Slack", icon: "megaphone", group: "Company",
+    roles: ["admin"] },
   { id: "integrations", label: "Integrations", icon: "link", group: "Company",
     roles: ["admin"] },
   { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
@@ -1015,7 +1017,7 @@ async function render() {
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
-    integrations: renderIntegrations,
+    integrations: renderIntegrations, slack: renderSlack,
     hq: renderHQ, admin: renderAdmin, login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
@@ -2588,9 +2590,13 @@ async function renderIntegrations() {
         <div class="doc-main"><b>${esc(p.label)}</b>
           <span class="dim">${esc(p.blurb)}</span></div>
         ${status}
-        ${p.connected && p.syncs
-          ? `<button class="btn alt sm" data-igsync="${p.name}"
-             >Sync state back</button>` : ""}
+        ${p.connected && p.syncs ? `
+          <span class="pill ${p.live ? "ok" : ""}">${p.live
+            ? "live" : "on demand"}</span>
+          <button class="btn alt sm" data-iglive="${p.name}">${p.live
+            ? "Stop live updates" : "Go live"}</button>
+          <button class="btn alt sm" data-igsync="${p.name}"
+            >Sync now</button>` : ""}
         ${p.connected ? `<button class="btn alt sm" data-igtest="${p.name}"
           >Test</button>` : ""}
         ${p.connected || p.inbound_ready
@@ -2634,6 +2640,24 @@ async function renderIntegrations() {
   d.providers.forEach((p) => drawForm(p, () => renderIntegrations()));
   if ($("#slack-chat")) drawSlackChat();
 
+  view().querySelectorAll("[data-iglive]").forEach((b) => b.onclick = async () => {
+    const name = b.dataset.iglive;
+    const on = d.providers.find((x) => x.name === name).live;
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    try {
+      if (on) {
+        await api(`/api/admin/integrations/${name}/webhook`,
+                  { method: "DELETE" });
+        toast("Live updates off — sync by hand from here");
+      } else {
+        await api(`/api/admin/integrations/${name}/webhook`,
+                  { method: "POST" });
+        toast("Live — changes over there now arrive as they happen");
+      }
+      renderIntegrations();
+    } catch (e) { toast(e.message); }
+    finally { b.disabled = false; b.removeAttribute("aria-busy"); }
+  });
   view().querySelectorAll("[data-igsync]").forEach((b) => b.onclick = async () => {
     b.disabled = true; b.setAttribute("aria-busy", "true");
     try {
@@ -2685,6 +2709,45 @@ async function renderIntegrations() {
         : '<p class="dim">No designs came back.</p>';
     } catch (e) { toast(e.message); }
   };
+}
+
+/* Slack its own screen, beside Discord, because that is where you look for
+   a conversation — not inside a settings page. The integrations screen still
+   holds the connection; this holds the talking. */
+async function renderSlack() {
+  const st = await api("/api/admin/integrations");
+  const p = st.providers.find((x) => x.name === "slack");
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Slack</h2>
+        <p class="dim">${p.connected
+          ? "Alerts go out on their own. Read the channels and answer here."
+          : "Not connected yet."}</p></div>
+      <button class="btn alt" id="sl-setup">${p.connected
+        ? "Connection settings" : "Connect Slack"}</button>
+    </div>
+    ${p.connected ? '<div id="slack-chat"></div>' : `
+      <div class="card empty"><span class="e-ic">${opsIcon("megaphone")}</span>
+        <b>Slack isn't connected</b>
+        <p class="dim">Add an incoming webhook and the business starts
+          posting to your channel. Add a bot token as well and you can read
+          the channels and reply from here.</p>
+        <button class="btn" id="sl-go">Set it up</button></div>`}`;
+  const toSettings = () => { S.tab = "integrations"; render(); };
+  $("#sl-setup").onclick = toSettings;
+  if ($("#sl-go")) $("#sl-go").onclick = toSettings;
+  if (p.connected) {
+    drawSlackChat();
+    // Without a bot token the reader explains itself; say it here too, so
+    // the empty panel isn't a mystery.
+    setTimeout(() => {
+      const box = $("#slack-chat");
+      if (box && !box.innerHTML.trim()) {
+        box.innerHTML = '<p class="dim">Add a bot token under Integrations '
+          + "to read and reply here.</p>";
+      }
+    }, 1200);
+  }
 }
 
 /* Reading and answering Slack from here. Same shape as the Discord reader,
@@ -2749,7 +2812,9 @@ async function drawSlackChat() {
   loadSlackMsgs();
   clearInterval(S._slackTimer);
   S._slackTimer = setInterval(() => {
-    if (S.tab === "integrations" && $("#slack-msgs")) loadSlackMsgs();
+    if ((S.tab === "slack" || S.tab === "integrations") && $("#slack-msgs")) {
+      loadSlackMsgs();
+    }
     else clearInterval(S._slackTimer);
   }, 20000);
 }
