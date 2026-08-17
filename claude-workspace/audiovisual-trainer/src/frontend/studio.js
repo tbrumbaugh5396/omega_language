@@ -11,9 +11,11 @@ import { musicEditor } from "./studio-music.js";
 import { videoEditor } from "./studio-video.js";
 import { shaderEditor, SHADER_PRESETS } from "./studio-shader.js";
 import { designEditor, newDesignDoc, FRAME_PRESETS } from "./studio-design.js";
+import { generateEditor, newGenerateDoc, GENERATE_PRESETS } from "./studio-generate.js";
 
 const EDITORS = { canvas: canvasEditor, music: musicEditor, video: videoEditor,
-                  shader: shaderEditor, design: designEditor };
+                  shader: shaderEditor, design: designEditor,
+                  generate: generateEditor };
 
 const KINDS = [
   { id: "canvas", title: "Canvas", blurb:
@@ -31,6 +33,9 @@ const KINDS = [
   { id: "shader", title: "Shader", blurb:
     "A GLSL sketchpad with The Book of Shaders' uniform names, so examples " +
     "from the book paste in and run unchanged. Chapter presets included." },
+  { id: "generate", title: "Generate", blurb:
+    "One colour expression, and every uniform you declare becomes a slider, " +
+    "swatch or pad. Randomise, then export a PNG at print size." },
 ];
 
 export async function studioView(ctx) {
@@ -155,6 +160,12 @@ function presetsFor(kind) {
     return FRAME_PRESETS.map(([name, w, h]) => ({
       label: `${name} — ${w}×${h}`,
       data: () => newDesignDoc(name),
+    }));
+  }
+  if (kind === "generate") {
+    return GENERATE_PRESETS.map((p) => ({
+      label: p.label,
+      data: () => newGenerateDoc(p),
     }));
   }
   if (kind === "shader") {

@@ -25,7 +25,7 @@ from . import config, db
 
 router = APIRouter(prefix="/api/studio")
 
-KINDS = ("canvas", "music", "video", "shader", "design")
+KINDS = ("canvas", "music", "video", "shader", "design", "generate")
 MAX_UPLOAD = 512 * 1024 * 1024        # 512 MB — a short 4K clip fits
 ALLOWED_PREFIXES = ("image/", "audio/", "video/")
 

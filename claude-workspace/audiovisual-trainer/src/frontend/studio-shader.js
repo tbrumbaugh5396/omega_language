@@ -9,8 +9,10 @@
 // That compatibility is the whole point of the chapter presets below; getting
 // clever with the names would break the one thing this is for.
 
-import { el, clear, toast, modal, closeModal, knob } from "./ui.js";
+import { el, clear, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
+import { parseUniforms } from "./shader-uniforms.js";
+import { buildControls, applyUniforms } from "./shader-controls.js";
 
 const PREAMBLE_HINT = `#ifdef GL_ES
 precision mediump float;
@@ -335,6 +337,9 @@ export async function shaderEditor(host) {
   doc.source ||= SHADER_PRESETS[1].source;
   doc.knobs ||= [0.5, 0.5, 0.5, 0.5];
   doc.paused = false;
+  // Documents written before uniforms were introspected stored four bare
+  // numbers. They were always u_k, so that is where they land.
+  doc.uniforms ||= { u_k: doc.knobs.slice() };
 
   const canvas = el("canvas", { width: 640, height: 480,
     style: { width: "100%", height: "auto", display: "block", background: "#000",
@@ -343,7 +348,9 @@ export async function shaderEditor(host) {
   const editor = el("textarea.editor", { spellcheck: false, value: doc.source,
     style: { minHeight: "460px" } });
 
+  const knobHost = el("div");
   let gl = null, program = null, raf = null, t0 = performance.now();
+  let uniforms = [];
   const mouse = [0.5, 0.5];
   let fps = 0, frames = 0, lastFpsAt = performance.now();
   const fpsLabel = el("span.fine");
@@ -409,7 +416,8 @@ export async function shaderEditor(host) {
       gl.uniform2f(u("u_resolution"), canvas.width, canvas.height);
       gl.uniform2f(u("u_mouse"), mouse[0], mouse[1]);
       gl.uniform1f(u("u_time"), doc.paused ? pausedAt : (now - t0) / 1000);
-      gl.uniform4f(u("u_k"), ...doc.knobs);
+      gl.uniform1f(u("u_seed"), doc.seed || 0);
+      applyUniforms(gl, program, uniforms, doc.uniforms);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
       frames++;
@@ -424,6 +432,12 @@ export async function shaderEditor(host) {
   let pausedAt = 0;
 
   function run() {
+    // Every uniform you declare gets the control its type implies. u_k keeps
+    // working — it is just a vec4 like any other now, so the old documents
+    // carry their knob values straight over.
+    uniforms = parseUniforms(editor.value);
+    clear(knobHost);
+    knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save()));
     const ok = compile(editor.value);
     if (ok) {
       doc.source = editor.value;
@@ -525,12 +539,7 @@ export async function shaderEditor(host) {
     el("div.lab-split", {},
       el("div.stack", {},
         el("div.lab-out", {}, canvas, log),
-        el("div.knobs", {}, ...doc.knobs.map((v, i) =>
-          knob(`u_k.${"xyzw"[i]}`, {
-            min: 0, max: 1, step: 0.005, value: v,
-            format: (x) => x.toFixed(3),
-            oninput: (x) => { doc.knobs[i] = x; host.save(); },
-          }))),
+        knobHost,
         el("p.fine", {}, "Ctrl/Cmd+Enter runs. Editing re-runs after a pause. " +
           "A shader that fails to compile leaves the last working one on " +
           "screen and prints the error underneath.")),
@@ -538,5 +547,16 @@ export async function shaderEditor(host) {
 
   run();
   frame();
+
+  // Without this the render loop and the GL context outlive the editor. A
+  // browser only grants a handful of WebGL contexts before it starts dropping
+  // the oldest, so leaking one per visit eventually blanks the canvas.
+  root._cleanup = () => {
+    cancelAnimationFrame(raf);
+    clearTimeout(typeTimer);
+    if (gl && program) gl.deleteProgram(program);
+    const lose = gl && gl.getExtension("WEBGL_lose_context");
+    if (lose) lose.loseContext();
+  };
   return root;
 }
