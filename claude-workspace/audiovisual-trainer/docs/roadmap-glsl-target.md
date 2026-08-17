@@ -375,13 +375,22 @@ SVG, but they also say what SVG cannot: exact anti-aliasing at any zoom via
 compiled this way is editable geometry inside the shader, and every control
 Generate already has applies to it.
 
-- **`svg-to-sdf`**: the compiler above, from the Design document model and
-  from imported SVG files, emitting a Generate sketch (each shape a named
-  function; fills, strokes, transforms, gradients, opacity, clip). Round
-  joins/caps first; miter, bevel and dashes (arc-length parametrisation)
-  after.
-- **Design → Generate**: "Open as shader" on a design; **Generate → Design**
-  is not attempted (the boundary of §2.3 again).
+- **`design-to-sdf` — shipped** (`3e28c79`+): the compiler from the Design
+  document model. Frame, rect (radius), ellipse, line, image (as `@asset` /
+  `@data` sampler with cover mapping), nested frames, rotation about the
+  centre composed through the tree, opacity multiplied down, multiply/screen
+  blends, painter's order; each shape a named `s_*` function of `q` in frame
+  pixels; three controls (inflate, outline, wobble) at zero for parity.
+  Text is greeked as bars, and says so. **Parity: mean error 0.08/255
+  against the browser's own SVG rasterisation of the same frame, zero pixels
+  off by more than 40**, rotated nested frame and opacity included. The
+  Design studio's **Shader** button opens the result as a Generate document at
+  the frame's aspect.
+- **Next in this line**: SVG *file* import into the same compiler (paths with
+  Béziers flattened adaptively, polygons with winding, gradients, clipPath),
+  miter/bevel joins and dashes (arc-length parametrisation), frame clipping
+  as an option.
+- **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
 - Text via an SDF glyph atlas — a texture, but a *distance* texture, so still
   crisp at any scale — is L and last; a paragraph is thousands of segments.

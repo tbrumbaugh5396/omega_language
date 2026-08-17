@@ -1484,7 +1484,9 @@ uniform bool  mirror;  // @toggle`),
       doc.preview = e.target.value.split("x").map(Number);
       canvas.width = doc.preview[0]; canvas.height = doc.preview[1];
       host.save();
-    } }, ...SIZES.map(([w, h]) =>
+    } }, ...SIZES.concat(SIZES.some(([w, h]) => w === doc.preview[0] && h === doc.preview[1])
+                          ? [] : [doc.preview.slice()])            // a compiled design keeps its aspect
+      .map(([w, h]) =>
       el("option", { value: `${w}x${h}`, selected: w === doc.preview[0] && h === doc.preview[1] },
         `preview ${w}×${h}`)));
 

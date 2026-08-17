@@ -9,8 +9,9 @@
 // thing the composition lesson is about, and a layout tool that cannot show
 // you the grid cannot teach you to see it.
 
-import { el, clear, append, toast, modal, closeModal, confirmDialog } from "./ui.js";
+import { el, clear, append, toast, modal, closeModal, confirmDialog, api } from "./ui.js";
 import { aiButton } from "./ai.js";
+import { compileDesignFrame, fitPreview } from "./design-to-sdf.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const svg = (tag, attrs = {}) => {
@@ -844,6 +845,25 @@ export async function designEditor(host) {
     URL.revokeObjectURL(a.href);
   }
 
+  /** The frame as a Generate sketch: every shape an SDF, opened as a new
+      shader document. One way — the design stays the vector source. */
+  async function openAsShader() {
+    const node = selected().find((n) => n.type === "frame") || doc.nodes.find((n) => n.type === "frame");
+    if (!node) { toast("Nothing to compile — make a frame first"); return; }
+    let out;
+    try { out = compileDesignFrame(node); }
+    catch (e) { toast(`Could not compile: ${e.message}`); return; }
+    const preview = fitPreview(out.width, out.height);
+    const made = await api("/api/studio/projects", { method: "POST",
+      body: { kind: "generate", name: `${node.name || "frame"} (shader)`,
+              data: { sketch: out.source, preset: "", uniforms: {}, seed: 0, mode: "sketch",
+                      preview, exportSize: [out.width - (out.width % 2), out.height - (out.height % 2)],
+                      simSteps: 1, from: { design: host.doc.id, frame: node.id } } } });
+    toast(`${out.shapes} shape${out.shapes === 1 ? "" : "s"} compiled` +
+          (out.notes.length ? ` — ${out.notes[0]}` : "") + ". Opening…");
+    location.hash = `#studio/generate/${made.id}`;
+  }
+
   async function exportPng(scale = 2) {
     const node = selected().find((n) => n.type === "frame") || doc.nodes.find((n) => n.type === "frame");
     if (!node) { toast("Nothing to export — make a frame first"); return; }
@@ -913,6 +933,8 @@ export async function designEditor(host) {
         zoomLabel,
         el("button.ghost", { onclick: exportSvg }, "SVG"),
         el("button.ghost", { onclick: () => exportPng(2) }, "PNG @2x"),
+        el("button.ghost", { onclick: openAsShader,
+          title: "Compile this frame to a shader: every shape becomes a signed-distance function" }, "Shader"),
         aiButton("Layout ideas…", {
           task: "brief",
           describe: "The model proposes structure in words — hierarchy, grid, " +
