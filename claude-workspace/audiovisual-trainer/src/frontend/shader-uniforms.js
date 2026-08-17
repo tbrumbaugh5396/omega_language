@@ -65,6 +65,11 @@ function annotations(comment) {
     } else if (key === "label") {
       out.label = words.slice(i + 1).join(" ");
       i = words.length;
+    } else if (key === "data" || key === "asset") {
+      // The pixels themselves (a data: URL) or where to fetch them. One
+      // token — URLs have no spaces; a data URL can be very long.
+      out.src = words[i + 1] || "";
+      i += 1;
     } else {
       out.flags.add(key);
     }
@@ -124,7 +129,7 @@ export function parseUniforms(src) {
       // shader declares that vec2; that uniform is then driven, not dialled.
       out.push({ name, type, control: "image", width: 0, isInt: false,
                  min: 0, max: 0, step: 0, label: a.label || name, value: null,
-                 sizeUniform: `${name}_size` });
+                 sizeUniform: `${name}_size`, src: a.src || null });
       continue;
     }
     let control;
@@ -442,6 +447,33 @@ ${colour}
 /** Does this shader (sketch-generated or hand-written) carry a state pass? */
 export function hasSimPass(glsl) {
   return /\bSIM_PASS\b/.test(stripComments(glsl));
+}
+
+/**
+ * Put images into the source itself. For each sampler with a value, the
+ * declaration line gains `@data <dataURL>` (or `@asset <url>` when asked to
+ * reference rather than embed). `resolve(name, value)` returns the string to
+ * write — a data URL from the caller's fetch, or the asset URL. The result
+ * is still valid GLSL; the loader reads the comment and fills the sampler.
+ */
+export async function embedImages(src, uniforms, values, resolve, key = "data") {
+  let out = String(src);
+  for (const u of uniforms) {
+    if (u.control !== "image") continue;
+    const v = values[u.name];
+    if (!v || !v.url) continue;
+    const url = await resolve(u.name, v);
+    if (!url) continue;
+    const decl = new RegExp("(\\buniform\\s+sampler2D\\s+" + u.name + "\\s*;)([^\\n]*)");
+    out = out.replace(decl, (m, head, rest) => {
+      const c = rest.indexOf("//");
+      const tag = `@${key} ${url}`;
+      if (c === -1) return `${head}  // ${tag}`;
+      let body = rest.slice(c + 2).replace(/@(?:data|asset)\s+\S+/, "").replace(/\s+$/, "");
+      return `${head}${rest.slice(0, c)}// ${tag}${body ? " " + body.trim() : ""}`;
+    });
+  }
+  return out;
 }
 
 /**

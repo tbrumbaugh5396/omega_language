@@ -186,7 +186,61 @@ target.
 - **Bake** is the bridge inside a node (values → `@default`); **Freeze** is the
   bridge across nodes (a fused chain → one custom node you now own the text of).
 
-### 2.4 Colour
+### 2.4 Where the pixels live
+
+The question that decides whether "GLSL as the target" is honest: a shader
+declares `uniform sampler2D mask;`, but the *bytes* of the mask are not in the
+text. Can an image, a selection, a painted layer be "in the shader"? Three
+ways, in increasing order of how much they change the model:
+
+**(a) The sampler is the variable; the annotation carries the data.**
+Already shipped as of this writing. A declaration may say where its pixels
+come from:
+
+```glsl
+uniform sampler2D mask;   // @data data:image/png;base64,iVBOR…   (the bytes themselves)
+uniform sampler2D photo;  // @asset /api/studio/assets/12/blob?k=…  (a pointer)
+```
+
+Still valid GLSL — it is a comment — so nothing downstream changes. The
+loader (`buildControls`) fills the sampler from the source when nothing has
+been chosen. **Embed** writes chosen images into the current source as
+`@data`; the GLSL dialog can produce a self-contained eject. Verified: a
+document created from embedded text alone, with no assets, renders its
+picture. Cost: a PNG in base64 is ~1.37× its size in the text — fine for
+masks and layers up to a few MB, wrong for a 4k photo, which should stay an
+`@asset`. Inside the studio the doc keeps `@asset`; on export you choose.
+
+**(b) Constant arrays.** GLSL ES 3.00 allows `const` array initialisers; 1.00
+does not; both hit implementation limits at a few thousand values and compile
+time grows badly. Viable for an 8×8 dither matrix or a 32×32 one-bit mask
+packed into ints (ES 3.00 has bit ops), not for layers. A curiosity, not a
+plan.
+
+**(c) Compile the structure to math.** Most raster edits are *not* raster in
+origin. A rectangle, ellipse or lasso selection is a shape — an SDF. A brush
+stroke is a polyline with pressure — a capsule chain (`sdCapsule` per
+segment, radius from pressure) or, for a soft brush, a sum of Gaussians along
+the path. Feather is `smoothstep` on the distance. These become **code with
+no data**, they compose with everything else in the graph, and they are
+non-destructive for free — the stroke log the editor already keeps for undo
+*is* the source. Limits: a few hundred segments per node before uniform
+counts and per-pixel cost bite; beyond that (or once a layer is flattened
+into freehand pixels) the node bakes to a texture and becomes case (a).
+Text is the same story via an SDF glyph atlas, and is L.
+
+So the rule for the graph:
+
+- shapes, selections, strokes, gradients, text → **structure nodes** (math);
+- photographs, videos, flattened paint → **texture nodes** (`@asset`, or
+  `@data` when the file must stand alone);
+- a structure node **may bake** to a texture node when it grows too large;
+  a texture node never un-bakes.
+
+This is what makes the thesis hold. The shader is not a lossy dump of a
+bitmap; for everything that had structure, the shader *is* the structure.
+
+### 2.5 Colour
 
 One working space: **linear light, scene-referred**, in half-float
 intermediates. Sources decode on entry (sRGB → linear, or the video's transfer
@@ -252,9 +306,10 @@ The Generate stack is the seed of everything; make it load-bearing.
   layers, clipping masks and group layers become plain nodes. **Filters stop
   baking**: Apply adds a node; the layer panel shows a stack you can reorder,
   bypass, re-open. "Flatten" bakes on request.
-- Brushes and selections stay CPU-side (they *author* textures — the source
-  node's bitmap and the mask node's bitmap); undo stays an op log. GPU brush
-  stamping is a later optimisation, not a change of model.
+- Selections and strokes become **structure nodes** (§2.4c): a selection of
+  shapes is an SDF node; a stroke log is a capsule-chain node up to N
+  segments, baking to a mask texture beyond that. Freehand pixel painting on
+  a flattened layer stays a texture. Undo stays an op log.
 - **Shader layer**: a Generate sketch as a live layer (generative fill,
   simulation, 3D) with its controls in the layer panel; time-driven if the
   sketch uses `t`.

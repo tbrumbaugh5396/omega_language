@@ -7,7 +7,7 @@
 
 import { el, clear, api, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
-import { parseUniforms, desugar, hasSimPass, bakeDefaults, stripComments, SKETCH_VARS } from "./shader-uniforms.js";
+import { parseUniforms, desugar, hasSimPass, bakeDefaults, embedImages, stripComments, SKETCH_VARS } from "./shader-uniforms.js";
 import { Feedback } from "./feedback.js";
 import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
          mediaDims, seekVideos, resumeVideos } from "./shader-controls.js";
@@ -1287,8 +1287,8 @@ export async function generateEditor(host) {
   /** Sketch → GLSL. The generated file becomes the thing you edit; it is what
       runs, so a change there is a change to the shader. One way — the sketch
       is kept, but edits made here do not fold back into it. */
-  function editAsGlsl() {
-    const fresh = desugar(doc.sketch);
+  function editAsGlsl(text) {
+    const fresh = typeof text === "string" ? text : desugar(doc.sketch);
     if (doc.glsl && doc.glsl !== fresh) {
       if (!confirm("You have GLSL edits from before. Replace them with a fresh conversion of the sketch?")) {
         // keep the old edits
@@ -1310,23 +1310,55 @@ export async function generateEditor(host) {
     toast("Back to the sketch. Your GLSL edits are kept and come back with GLSL → Edit.");
   }
 
+  /** Fetch an image value's bytes as a data URL, so the source can carry them. */
+  async function toDataUrl(v) {
+    const res = await fetch(v.url);
+    const blob = await res.blob();
+    if (blob.size > 12e6) throw new Error(`${(blob.size / 1e6).toFixed(0)} MB is too much to embed`);
+    return new Promise((ok, no) => {
+      const r = new FileReader();
+      r.onload = () => ok(r.result);
+      r.onerror = () => no(new Error("could not read"));
+      r.readAsDataURL(blob);
+    });
+  }
+
+  /** The current source with every chosen image embedded as `@data`, so the
+      file stands alone. Also usable in place: Embed writes it into the editor. */
+  async function selfContained(src) {
+    const imgs = uniforms.filter((u) => u.control === "image" && doc.uniforms[u.name] && doc.uniforms[u.name].url);
+    if (!imgs.length) return src;
+    return embedImages(src, uniforms, doc.uniforms, async (name, v) => {
+      if (v.url.startsWith("data:")) return v.url;
+      try { return await toDataUrl(v); }
+      catch (e) { toast(`${name}: ${e.message}`); return null; }
+    });
+  }
+
   function showGlsl() {
     const src = desugar(doc.sketch);
     const area = el("textarea.editor", { value: src, spellcheck: false, readOnly: true,
       style: { minHeight: "340px" } });
+    const embedBox = el("input", { type: "checkbox", checked: false, style: { width: "auto" },
+      onchange: async (e) => {
+        area.value = e.target.checked ? await selfContained(src) : src;
+      } });
+    const nImg = uniforms.filter((u) => u.control === "image" && doc.uniforms[u.name] && doc.uniforms[u.name].url).length;
     modal(el("h2", {}, "The shader this becomes"),
       el("p.fine", {}, "Plain GLSL ES 1.00. Edit it here and it becomes the " +
         "shader you are working on — the sketch shorthand steps aside, and " +
         "every line is yours. Or open it in the Shader editor, which has The " +
         "Book of Shaders presets but no feedback buffers."),
+      nImg ? el("label.fine", { style: { display: "inline-flex", gap: ".4rem", alignItems: "center" } },
+        embedBox, `Embed the ${nImg} image${nImg > 1 ? "s" : ""} in the source (@data), so the file stands alone`) : null,
       area,
       el("div.row", { style: { justifyContent: "flex-end" } },
-        el("button", { onclick: () => { navigator.clipboard?.writeText(src); toast("Copied."); } }, "Copy"),
-        el("button.primary", { onclick: editAsGlsl }, "Edit this GLSL here"),
+        el("button", { onclick: () => { navigator.clipboard?.writeText(area.value); toast("Copied."); } }, "Copy"),
+        el("button.primary", { onclick: () => editAsGlsl(area.value) }, "Edit this GLSL here"),
         el("button", { onclick: async () => {
           const made = await api("/api/studio/projects", { method: "POST",
             body: { kind: "shader", name: `${host.doc.name || "sketch"} (ejected)`,
-                    data: { source: src, knobs: [0.5, 0.5, 0.5, 0.5] } } });
+                    data: { source: area.value, knobs: [0.5, 0.5, 0.5, 0.5] } } });
           closeModal();
           location.hash = `#studio/shader/${made.id}`;
         } }, "Open as a shader"),
@@ -1375,6 +1407,11 @@ uniform bool  mirror;  // @toggle`),
         "line numbers in errors exact. Controls, images and feedback keep " +
         "working because they only need the uniform declarations."),
       el("h3", {}, "Images and video"),
+      el("p.fine", {}, "A picture can live in the text: `uniform sampler2D mask; " +
+        "// @data data:image/png;base64,…` fills the sampler from the source " +
+        "itself, and `@asset <url>` points at one. Embed writes the chosen " +
+        "images in as @data; the GLSL dialog can do the same for an ejected " +
+        "file, so a shader stands alone with its pictures."),
       el("p.fine", {}, "Declare `uniform sampler2D photo;` and a Choose image… " +
         "button appears; the file — a picture or a video — becomes an asset " +
         "of this document. A video plays muted in a loop and is uploaded every " +
@@ -1492,6 +1529,13 @@ uniform bool  mirror;  // @toggle`),
           host.save();
         } }, "Randomise"),
         el("button", { onclick: bake, title: "Write the current control values into the source as @default" }, "Bake"),
+        el("button", { title: "Write the chosen images into the source as @data, so the text carries its pictures",
+          onclick: async () => {
+            const out = await selfContained(editor.value);
+            if (out === editor.value) { toast("No images to embed."); return; }
+            editor.value = out; run();
+            toast("Embedded: the source now carries its images.");
+          } }, "Embed"),
         modeBtn, modeLabel,
         grid.button,
         el("button.ghost", { onclick: help }, "Help"),

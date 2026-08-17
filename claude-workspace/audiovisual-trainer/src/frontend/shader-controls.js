@@ -117,6 +117,13 @@ function imageControl(u, values, onChange, onImage) {
         background: "var(--bg-2, #10141f)" }, src: cur && cur.url ? cur.url : "" });
   const note = el("span.fine", {},
     cur && cur.url ? `${isVid ? "video " : ""}${cur.w || "?"}×${cur.h || "?"}` : "no image yet");
+  // An image that came from the source (@data / @asset) has no size yet.
+  if (cur && cur.url && !cur.w) {
+    mediaDims(cur.url, cur.kind).then(([w, h]) => {
+      cur.w = w; cur.h = h;
+      note.textContent = `${isVid ? "video " : ""}${w}×${h}${cur.fromSource ? " · from the source" : ""}`;
+    });
+  }
   const file = el("input", { type: "file", accept: "image/*,video/*", style: { display: "none" },
     onchange: async (e) => {
       const f = e.target.files && e.target.files[0];
@@ -169,6 +176,14 @@ export function mediaDims(url, kind) {
  * `onImage(u, file)` uploads a picked file and resolves to {url, w, h}.
  */
 export function buildControls(uniforms, values, onChange, { onImage } = {}) {
+  // An image declared in the source (`// @data …` or `// @asset …`) fills the
+  // slot when nothing has been chosen — that is how an ejected, self-contained
+  // shader arrives with its pictures.
+  for (const u of uniforms) {
+    if (u.control === "image" && u.src && !(values[u.name] && values[u.name].url)) {
+      values[u.name] = { url: u.src, kind: /^data:video\//.test(u.src) || /\.(mp4|webm|mov)(\?|$)/i.test(u.src) ? "video" : "image", fromSource: true };
+    }
+  }
   if (!uniforms.length) {
     return el("p.fine", {}, "No adjustable uniforms. Declare one — " +
       "`uniform float scale; // @range 1 40` — and a control appears here.");
