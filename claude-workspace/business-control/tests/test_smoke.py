@@ -2466,6 +2466,26 @@ ok("emit" in _ig.__dict__ and _ig.PROVIDERS["slack"]["events"],
    "and providers declare which events they want")
 ok("integrations" in _ops and "renderIntegrations" in _ops,
    "the ops app has the screen")
+
+# Reachability. Below 720px the sidebar is hidden and the bottom bar held
+# five tabs out of twenty-six, so twenty-one screens — Integrations among
+# them — had no route to them at all. A screen you can't navigate to is a
+# screen that doesn't exist, whatever the render map says.
+ok("more-tabs" in _ops and "showAllTabs" in _ops,
+   "a narrow window can reach every screen, not just the bottom five")
+ok("#tabs { display: none; }" in _css,
+   "the sidebar really is hidden at that width")   # the reason More matters
+ok("slice(0, 4)" in _ops,
+   "the bar keeps four shortcuts and spends the fifth slot on the way out")
+ok("tab-find" in _ops,
+   "and the list can be typed at, because 26 is more than anyone scans")
+# Every tab in the nav must appear in the sheet, or the sheet is another
+# partial list and the bug comes back in a smaller form.
+ok("NAV_GROUPS.map((g)" in _ops.split("function showAllTabs")[1][:600],
+   "the sheet is built from the same groups as the sidebar")
+ok("tabs.filter((t) => t.group === g)" in
+   _ops.split("function showAllTabs")[1][:900],
+   "and from the same allowed-tab list, so it can't drift from it")
 ok("drawForm" in _ops,
    "which builds each form from the provider's own declaration")
 

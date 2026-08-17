@@ -915,12 +915,78 @@ function renderChrome() {
     bottom.id = "bottomnav";
     document.body.appendChild(bottom);
   }
-  bottom.innerHTML = MOBILE_PRIORITY
-    .map((id) => tabs.find((t) => t.id === id)).filter(Boolean).slice(0, 5)
-    .map(btn).join("");
-  document.querySelectorAll("#tabs button, #bottomnav button").forEach((b) => {
-    b.onclick = () => { S.promoLanding = null; S.tab = b.dataset.t; render(); };
+  /* Four shortcuts and a way to everything else.
+
+     The bottom bar used to be the only navigation under 720px, showing five
+     tabs out of twenty-six — so twenty-one screens, Integrations and
+     Sourcing and the audit log among them, had no route to them at all on a
+     phone or a narrow window. Five shortcuts is the right number for a
+     thumb; the mistake was letting that also be the whole menu. */
+  const quick = MOBILE_PRIORITY
+    .map((id) => tabs.find((t) => t.id === id)).filter(Boolean).slice(0, 4);
+  const inQuick = new Set(quick.map((t) => t.id));
+  bottom.innerHTML = quick.map(btn).join("")
+    + `<button id="more-tabs" class="${
+        tabs.some((t) => t.id === S.tab && !inQuick.has(t.id)) ? "on" : ""}">
+        <span class="ic">${opsIcon("list")}</span><span>More</span></button>`;
+
+  document.querySelectorAll("#tabs button, #bottomnav button[data-t]")
+    .forEach((b) => {
+      b.onclick = () => { S.promoLanding = null; S.tab = b.dataset.t; render(); };
+    });
+  $("#more-tabs").onclick = () => showAllTabs(tabs);
+}
+
+/* Every screen, grouped as the sidebar groups them. */
+function showAllTabs(tabs) {
+  const sheet = document.createElement("div");
+  sheet.id = "tab-sheet";
+  sheet.innerHTML = `<div class="sheet-card">
+    <div class="sheet-head"><b>Go to</b>
+      <button class="btn alt sm" data-close-sheet>Close</button></div>
+    <input id="tab-find" placeholder="Find a screen" autocomplete="off">
+    <div class="sheet-list">${NAV_GROUPS.map((g) => {
+      const group = tabs.filter((t) => t.group === g);
+      if (!group.length) return "";
+      return `<div class="sheet-group">${g}</div>` + group.map((t) => `
+        <button class="sheet-t ${t.id === S.tab ? "on" : ""}"
+          data-go="${t.id}" data-label="${esc(t.label.toLowerCase())}">
+          <span class="ic">${opsIcon(t.icon)}</span>${esc(t.label)}</button>`
+      ).join("");
+    }).join("")}</div></div>`;
+  document.body.appendChild(sheet);
+
+  const close = () => {
+    sheet.remove();
+    document.removeEventListener("keydown", esc2);
+  };
+  const esc2 = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", esc2);
+  sheet.onclick = (e) => { if (e.target === sheet) close(); };
+  sheet.querySelector("[data-close-sheet]").onclick = close;
+  sheet.querySelectorAll("[data-go]").forEach((b) => b.onclick = () => {
+    close();
+    S.promoLanding = null;
+    S.tab = b.dataset.go;
+    render();
   });
+  // Twenty-six screens is more than anyone scans, so let it be typed at.
+  const find = sheet.querySelector("#tab-find");
+  find.oninput = () => {
+    const q = find.value.trim().toLowerCase();
+    sheet.querySelectorAll("[data-go]").forEach((b) => {
+      b.hidden = !!q && !b.dataset.label.includes(q);
+    });
+    sheet.querySelectorAll(".sheet-group").forEach((g) => {
+      let n = g.nextElementSibling, any = false;
+      while (n && n.matches("[data-go]")) {
+        if (!n.hidden) any = true;
+        n = n.nextElementSibling;
+      }
+      g.hidden = !any;
+    });
+  };
+  setTimeout(() => find.focus(), 40);
 }
 
 const SKELETON = '<div class="skel"></div><div class="skel" style="height:180px">'
