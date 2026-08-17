@@ -351,12 +351,44 @@ The Generate stack is the seed of everything; make it load-bearing.
 
 ### Phase 5 — Design meets the target *(M)*
 
-- Effects on design layers through the graph (a design frame is a source
-  node once rasterised).
-- **SDF export**: circles, rects, rounded rects, lines, polygons and cubic
-  Béziers (as flattened segments) → GLSL SDF functions, so a design becomes a
-  shader (`aa()` for edges). Text via an SDF glyph atlas is L and last.
-- Geometry stays vector; this is a bridge, not a replacement.
+SVG is the best case for §2.4c, because it is already structure: nothing has
+to be recovered, only translated. Every primitive has a direct SDF —
+
+| SVG | GLSL |
+|---|---|
+| `rect` (with `rx`) | `sdBox(p, half) - rx` |
+| `circle` / `ellipse` | `sdCircle` / `sdEllipse` |
+| `line`, `polyline` | capsule chain (`sdSegment`) |
+| `polygon`, `path` M/L/H/V/Z | segments + winding sign; Q/C Béziers flattened adaptively (quadratics exact) |
+| `stroke-width`, round caps/joins | `abs(d) - w/2`; a capsule chain gives round joins free |
+| `fill-rule` | union / crossing-count sign |
+| `transform` | inverse `mat3` on `p` before the shape |
+| linear / radial gradient | `dot(p, dir)` / `length(p - c)` into a ramp |
+| opacity, painter's order | the `mix` chain compositing already is |
+| `clipPath` | `max(d, -dClip)` |
+| CSS / SMIL animation | `t` |
+
+— and the result is more than parity. SDFs are resolution-independent like
+SVG, but they also say what SVG cannot: exact anti-aliasing at any zoom via
+`fwidth`, offset by adding to `d`, outline as `abs(d) - w`, glow as
+`exp(-k·d)`, morph as `mix(d1, d2, k)`, booleans as `min/max/smin`. A design
+compiled this way is editable geometry inside the shader, and every control
+Generate already has applies to it.
+
+- **`svg-to-sdf`**: the compiler above, from the Design document model and
+  from imported SVG files, emitting a Generate sketch (each shape a named
+  function; fills, strokes, transforms, gradients, opacity, clip). Round
+  joins/caps first; miter, bevel and dashes (arc-length parametrisation)
+  after.
+- **Design → Generate**: "Open as shader" on a design; **Generate → Design**
+  is not attempted (the boundary of §2.3 again).
+- Effects on design layers through the graph.
+- Text via an SDF glyph atlas — a texture, but a *distance* texture, so still
+  crisp at any scale — is L and last; a paragraph is thousands of segments.
+- Where it strains: paths past a few hundred segments per pixel bake to a
+  texture; `feGaussianBlur` and friends are pass boundaries, not per-pixel.
+- Geometry stays vector in the Design document; this is a compile target, not
+  a replacement for the vector model.
 
 ### Phase 6 — Platform and performance *(M, continuous)*
 
