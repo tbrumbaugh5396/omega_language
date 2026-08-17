@@ -189,14 +189,33 @@ const HELPERS = [
   float h=clamp(dot(pa,ba)/dot(ba,ba),0.0,1.0);
   return length(pa-ba*h);
 }`],
+  ["sdCapsule", `float sdCapsule(vec2 p, vec2 a, vec2 b, float r){ return sdSegment(p,a,b)-r; }`],
+  ["sdEllipse", `float sdEllipse(vec2 p, vec2 r){ float k0=length(p/r), k1=length(p/(r*r)); return k0*(k0-1.0)/max(k1,1e-4); }`],
+  ["smin", `float smin(float a, float b, float k){ float h=clamp(0.5+0.5*(b-a)/k,0.0,1.0); return mix(b,a,h)-k*h*(1.0-h); }`],
   // No fwidth: GL_OES_standard_derivatives is an extension, and a sketch that
   // fails to compile on a machine without it is worse than a fixed width.
   ["aa", `float aa(float d, float w){ return smoothstep(w,-w,d); }
 float aa(float d){ return aa(d, 1.5/u_resolution.y); }`],
   ["palette", `vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d){ return a+b*cos(6.28318*(c*t+d)); }
 vec3 palette(float t){ return palette(t, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0,0.33,0.67)); }`],
-  ["srgbToLinear", `vec3 srgbToLinear(vec3 c){ return pow(c, vec3(2.2)); }`],
+  ["srgbToLinear", `vec3 srgbToLinear(vec3 c){ return pow(max(c,0.0), vec3(2.2)); }`],
   ["linearToSrgb", `vec3 linearToSrgb(vec3 c){ return pow(max(c,0.0), vec3(1.0/2.2)); }`],
+  // The finishing kit. Everything below works in linear light and expects you
+  // to end with finish(), which tone-maps, encodes to sRGB and dithers.
+  ["fresnel", `float fresnel(float cosTheta, float f0){ return f0+(1.0-f0)*pow(clamp(1.0-cosTheta,0.0,1.0),5.0); }`],
+  ["sky", `vec3 sky(vec3 rd, vec3 sd){
+  float y = clamp(rd.y, 0.0, 1.0);
+  vec3 col = mix(vec3(0.42,0.55,0.78), vec3(0.04,0.14,0.48), pow(y,0.55));
+  float s = max(dot(rd,sd),0.0);
+  col += vec3(1.0,0.90,0.70)*(pow(s,512.0)*6.0 + pow(s,64.0)*0.4 + pow(s,6.0)*0.10);
+  return col;
+}`],
+  ["tonemap", `vec3 tonemap(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14),0.0,1.0); }`],
+  ["srgb", `vec3 srgb(vec3 c){ c=max(c,0.0); return mix(c*12.92, 1.055*pow(c,vec3(1.0/2.4))-0.055, step(vec3(0.0031308),c)); }`],
+  ["dither", `vec3 dither(vec3 c){ return c + (hash21(gl_FragCoord.xy + fract(u_time)*61.0)-0.5)/255.0; }`],
+  ["vignette", `float vignette(vec2 uv, float k){ vec2 q=uv*(1.0-uv); return pow(clamp(q.x*q.y*16.0,0.0,1.0),k); }`],
+  ["grain", `float grain(vec2 uv, float t){ return hash21(floor(uv*u_resolution)+fract(t*13.7)*91.0)-0.5; }`],
+  ["finish", `vec3 finish(vec3 lin){ return dither(srgb(tonemap(lin))); }`],
 ];
 
 /** Names the sketch is allowed to end with, whatever their type. */
@@ -205,8 +224,14 @@ vec3 _rgb(vec4 c){ return c.rgb; }
 vec3 _rgb(vec2 c){ return vec3(c, 0.0); }
 vec3 _rgb(float g){ return vec3(g); }`;
 
+// highp where the GPU offers it: raymarched water and hashes of large
+// coordinates fall apart in mediump.
 const PRELUDE = `#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 #endif
 uniform vec2  u_resolution;
 uniform vec2  u_mouse;
@@ -232,20 +257,40 @@ export const SKETCH_VARS = [
  * and GLSL would evaluate them once for the whole draw rather than per
  * fragment. Splitting on the last `;` alone got that wrong.
  */
+// `type name(args) {` — and not `if (...) {`, which also ends in a brace but
+// belongs inside main.
+const FUNC_DEF = new RegExp(
+  "^\\s*(?!(?:if|for|while|do|else|switch|return)\\b)" +
+  "[A-Za-z_]\\w*(?:\\s+[A-Za-z_]\\w*)*\\s+[A-Za-z_]\\w*\\s*\\([^)]*\\)\\s*\\{");
+const DECL_START = /^\s*(uniform|attribute|varying|const|struct|precision|invariant)\b/;
+// A real directive, not a `#f80` colour literal that happens to start a line.
+const DIRECTIVE = /^[ \t]*#\s*(define|undef|if|ifdef|ifndef|else|elif|endif|extension|version|pragma|line|error)\b[^\n]*/gm;
+
 export function splitSketch(sketch) {
-  const src = String(sketch);
+  const decls = [], stmts = [];
+  // Preprocessor lines end at the newline, not at a semicolon, so they are
+  // lifted out first. Blanked to spaces, so every later offset still holds.
+  const src = String(sketch).replace(DIRECTIVE, (m) => {
+    decls.push(m.trim());
+    return " ".repeat(m.length);
+  });
   const bare = stripComments(src);
   const spans = [];
-  let depth = 0, start = 0;
+  let brace = 0, paren = 0, start = 0;
 
   for (let i = 0; i < bare.length; i++) {
     const ch = bare[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") { if (--depth === 0) { spans.push([start, i + 1]); start = i + 1; } }
-    else if (ch === ";" && depth === 0) { spans.push([start, i + 1]); start = i + 1; }
+    if (ch === "(") paren++;
+    else if (ch === ")") paren = Math.max(0, paren - 1);
+    else if (ch === "{") brace++;
+    else if (ch === "}") {
+      if (--brace <= 0) { brace = 0; spans.push([start, i + 1]); start = i + 1; }
+    } else if (ch === ";" && brace === 0 && paren === 0) {
+      // paren === 0 keeps the semicolons inside `for (a; b; c)` from splitting it
+      spans.push([start, i + 1]); start = i + 1;
+    }
   }
 
-  const decls = [], stmts = [];
   for (let [s, e] of spans) {
     // Absorb a trailing comment on the same line, so the annotation stays with
     // the declaration it belongs to.
@@ -256,9 +301,7 @@ export function splitSketch(sketch) {
     const text = src.slice(s, e);
     const code = bare.slice(s, e).trim();
     if (!code) continue;
-    const isDecl = /^(uniform|attribute|varying|const|struct|precision)\b/.test(code)
-      || code.startsWith("#")
-      || code.endsWith("}");          // a function definition
+    const isDecl = DECL_START.test(code) || FUNC_DEF.test(code);
     (isDecl ? decls : stmts).push(text);
   }
 
