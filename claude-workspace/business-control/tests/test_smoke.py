@@ -2760,4 +2760,55 @@ ok('S.tab === "slack"' in _ops,
 ok('id: "integrations"' in _ops,
    "integrations is in the sidebar too")
 
+
+# --- a provider's capabilities are declared, so they can be checked ---
+# Dropbox said in prose that it gave the database export somewhere to land,
+# and no code did that. Prose can't be tested, so the capability is named and
+# the name is what gets checked.
+_ACTION_IMPL = {
+    "file_documents": "_document_bytes",
+    "store_backup": "def dropbox_upload(",
+    "browse": "def dropbox_list(",
+    "cards": "def trello_cards(",
+}
+for _n, _pd in _ig.PROVIDERS.items():
+    for _a in _pd.get("actions", []):
+        ok(_a in _ACTION_IMPL,
+           f"{_n} declares the known action {_a!r}")
+        ok(_ACTION_IMPL.get(_a, "\0") in _src_ig,
+           f"and {_n}'s {_a} has an implementation behind it")
+ok("store_backup" in _ig.PROVIDERS["dropbox"]["actions"],
+   "Dropbox declares that it stores the backup")
+ok("dbview.backup_bytes(con)" in _mainsrc.split(
+    "/api/admin/integrations/dropbox/backup")[1][:900],
+   "and the endpoint sends the real database file, not a summary")
+ok("owners only" in _mainsrc.split(
+    "/api/admin/integrations/dropbox/backup")[1][:1200],
+   "which is owners-only, being unredacted")
+
+# --- screens, not just connect forms ---
+for _tab, _fn in (("slack", "renderSlack"), ("trello", "renderTrello"),
+                  ("dropbox", "renderDropbox"),
+                  ("discord", "renderDiscord")):
+    ok(f'{{ id: "{_tab}"' in _ops and _fn in _ops,
+       f"{_tab} has its own screen in the sidebar")
+ok(c.get("/api/admin/integrations/trello/cards",
+         headers=A).status_code == 200,
+   "the Trello screen has something to read")
+ok(c.get("/api/admin/integrations/dropbox/files",
+         headers=A).status_code == 400,
+   "and the Dropbox one says so when nothing is connected")
+ok(c.post("/api/admin/integrations/dropbox/backup",
+          headers=A).status_code == 400,
+   "backing up to a disconnected Dropbox is refused rather than silent")
+for _p in ("/api/admin/integrations/trello/cards",
+           "/api/admin/integrations/dropbox/files"):
+    ok(c.get(_p, headers=CU).status_code in (401, 403),
+       f"{_p.rsplit('/', 1)[1]} is an owner's view")
+
+# The Trello view reads our own link rows, so it shows what we raised rather
+# than whatever else is on someone's board.
+ok("FROM integration_links WHERE provider='trello'" in _src_ig,
+   "the card list comes from what this system pushed")
+
 print(f"\nall {checks} checks passed")

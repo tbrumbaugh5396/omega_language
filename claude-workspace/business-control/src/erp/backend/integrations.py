@@ -157,6 +157,7 @@ PROVIDERS = {
         ],
         "events": ["enquiry.created", "ticket.created", "inventory.low"],
         "syncs": True,
+        "actions": ["cards"],
         "does": "Creates a card for each new enquiry, support ticket or "
                 "low-stock warning, so the work sits where the team looks — "
                 "and reads back where each card has got to, so a thing done "
@@ -191,8 +192,12 @@ PROVIDERS = {
         },
         "fields": [],
         "events": ["document.signed"],
-        "does": "Files a copy of each signed document, and gives the "
-                "database export somewhere to land that isn't one laptop.",
+        # Declared rather than described. A sentence saying a provider files
+        # backups drifts from the code silently; a named action can be
+        # checked against a handler, and is.
+        "actions": ["file_documents", "store_backup", "browse"],
+        "does": "Files a copy of each signed document, and takes the whole "
+                "database backup so it isn't only on one laptop.",
     },
     "quickbooks": {
         "label": "QuickBooks",
@@ -365,6 +370,7 @@ def status(con) -> dict:
             "fields": [{k: v for k, v in f.items()} for f in p["fields"]],
             "events": [EVENT_LABELS.get(e, e) for e in p["events"]],
             "syncs": bool(p.get("syncs")),
+            "actions": list(p.get("actions") or []),
             "live": bool(settings(con, name).get("webhook_id")),
             "connected": bool(r and r["active"]),
             "account": r["account"] if r else "",
@@ -1181,3 +1187,101 @@ def handle_push(con, name: str, body: dict) -> dict:
         f"{lk['kind']} #{lk['local_id']}: {state}" + (f" ({did})" if did else ""))
     return {"ok": True, "kind": lk["kind"], "local_id": lk["local_id"],
             "state": state, "applied": did}
+
+
+# ---------- Dropbox as a place things live ----------
+
+def dropbox_list(con, cfg: dict, path: str = "/business-control") -> dict:
+    """What is actually in the folder.
+
+    Worth a screen rather than a claim: an integration that files things
+    somewhere you can't see is one you have to take on faith, and the first
+    time anybody checks is the day they need the file.
+    """
+    tok = access_token(con, "dropbox", cfg)
+    if not tok:
+        raise HTTPException(400, "Dropbox isn't connected")
+    ok, d = _json_req("https://api.dropboxapi.com/2/files/list_folder", "POST",
+                      {"Authorization": f"Bearer {tok}"},
+                      {"path": path, "recursive": True, "limit": 200})
+    if not ok:
+        # An empty folder is a path error until something has been filed.
+        if "path/not_found" in str(d):
+            return {"path": path, "files": [],
+                    "note": "nothing filed here yet"}
+        raise HTTPException(400, f"Dropbox said: {d}")
+    files = [{"name": e.get("name", ""), "path": e.get("path_display", ""),
+              "size": e.get("size", 0),
+              "modified": e.get("server_modified", "")}
+             for e in d.get("entries", []) if e.get(".tag") == "file"]
+    files.sort(key=lambda f: f["modified"], reverse=True)
+    return {"path": path, "files": files}
+
+
+def dropbox_upload(con, cfg: dict, path: str, blob: bytes) -> dict:
+    tok = access_token(con, "dropbox", cfg)
+    if not tok:
+        raise HTTPException(400, "Dropbox isn't connected")
+    ok, d = _req("https://content.dropboxapi.com/2/files/upload", "POST",
+                 {"Authorization": f"Bearer {tok}",
+                  "Dropbox-API-Arg": json.dumps(
+                      {"path": path, "mode": "overwrite", "mute": True}),
+                  "Content-Type": "application/octet-stream"}, blob)
+    if not ok:
+        log(con, "dropbox", "backup", False, str(d))
+        raise HTTPException(400, f"Dropbox refused the upload: {d}")
+    log(con, "dropbox", "backup", True, f"{path} ({len(blob) // 1024} KB)")
+    return {"ok": True, "path": path, "bytes": len(blob)}
+
+
+def dropbox_link(con, cfg: dict, path: str) -> str:
+    """A link someone can open. Dropbox refuses to make a second one for the
+    same file, and hands back the existing link in the error — so that case
+    is read rather than treated as a failure."""
+    tok = access_token(con, "dropbox", cfg)
+    ok, d = _json_req(
+        "https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings",
+        "POST", {"Authorization": f"Bearer {tok}"}, {"path": path})
+    if ok and isinstance(d, dict):
+        return d.get("url", "")
+    ok2, d2 = _json_req(
+        "https://api.dropboxapi.com/2/sharing/list_shared_links", "POST",
+        {"Authorization": f"Bearer {tok}"}, {"path": path})
+    if ok2 and isinstance(d2, dict) and d2.get("links"):
+        return d2["links"][0].get("url", "")
+    return ""
+
+
+# ---------- Trello, as something you can look at ----------
+
+def trello_cards(con) -> dict:
+    """Everything we pushed to the board, and where each got to.
+
+    Read from our own link rows rather than from the board: the question is
+    "what did we send and what happened to it", not "what is on the board" —
+    a board has plenty on it that this system never raised.
+    """
+    rows = con.execute(
+        "SELECT * FROM integration_links WHERE provider='trello'"
+        " ORDER BY created_at DESC LIMIT 100").fetchall()
+    out = []
+    for r in rows:
+        table = LOCAL_TABLE.get(r["kind"], (None,))[0]
+        label, local_state = "", ""
+        if table:
+            row = con.execute(
+                f"SELECT * FROM {table} WHERE id=?", (r["local_id"],)
+            ).fetchone()
+            if row is not None:
+                keys = row.keys()
+                label = (row["company"] if "company" in keys and row["company"]
+                         else row["name"] if "name" in keys and row["name"]
+                         else row["topic"] if "topic" in keys else "")
+                local_state = row["status"] if "status" in keys else ""
+        out.append({
+            "kind": r["kind"], "local_id": r["local_id"], "label": label,
+            "local_state": local_state, "remote_state": r["remote_state"],
+            "url": r["remote_url"], "applied": r["applied"],
+            "synced_at": r["synced_at"], "created_at": r["created_at"],
+        })
+    return {"cards": out}

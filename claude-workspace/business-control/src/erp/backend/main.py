@@ -1,5 +1,6 @@
 """Business Control — FastAPI backend. Serves the API and the PWA frontend."""
 import csv
+import time
 import io
 import json
 import secrets
@@ -2490,6 +2491,38 @@ def slack_send(channel: str, body: SlackSayBody, user=Depends(admin_user),
     if not text:
         raise HTTPException(400, "nothing to send")
     return integrations.slack_send(con, channel, text, user["name"])
+
+
+@app.get("/api/admin/integrations/dropbox/files")
+def dropbox_files(user=Depends(admin_user), con=Depends(get_con)):
+    return integrations.dropbox_list(con, CFG)
+
+
+@app.post("/api/admin/integrations/dropbox/backup")
+def dropbox_backup(user=Depends(admin_user), con=Depends(get_con)):
+    """Send the whole database to Dropbox.
+
+    The unredacted file, same as the download — a backup with the
+    credentials stripped out is a file that looks like one right up until
+    you need it. Owners only, for that reason, and it lands in a folder the
+    screen can then show you, because a backup nobody has ever seen is a
+    belief rather than a backup.
+    """
+    if not user["is_admin"]:
+        raise HTTPException(403, "owners only")
+    blob = dbview.backup_bytes(con)
+    stamp = time.strftime("%Y-%m-%d-%H%M", time.localtime())
+    r = integrations.dropbox_upload(
+        con, CFG, f"/business-control/backups/business-control-{stamp}.db",
+        blob)
+    audit.record(con, user, "POST", "/api/admin/integrations/dropbox/backup",
+                 f"database backup to Dropbox ({len(blob) // 1024} KB)", 200)
+    return r
+
+
+@app.get("/api/admin/integrations/trello/cards")
+def trello_cards(user=Depends(admin_user), con=Depends(get_con)):
+    return integrations.trello_cards(con)
 
 
 @app.post("/api/admin/integrations/{name}/webhook")

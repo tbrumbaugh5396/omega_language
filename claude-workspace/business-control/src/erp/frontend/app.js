@@ -811,6 +811,10 @@ const TABS = [
     roles: ["admin"] },
   { id: "slack", label: "Slack", icon: "megaphone", group: "Company",
     roles: ["admin"] },
+  { id: "trello", label: "Trello", icon: "list", group: "Company",
+    roles: ["admin"] },
+  { id: "dropbox", label: "Dropbox", icon: "file", group: "Company",
+    roles: ["admin"] },
   { id: "integrations", label: "Integrations", icon: "link", group: "Company",
     roles: ["admin"] },
   { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
@@ -1018,6 +1022,7 @@ async function render() {
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
     integrations: renderIntegrations, slack: renderSlack,
+    trello: renderTrello, dropbox: renderDropbox,
     hq: renderHQ, admin: renderAdmin, login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
@@ -2966,6 +2971,153 @@ function drawForm(p, refresh) {
       msg.innerHTML = `<span class="low">${esc(e.message)}</span>`;
     } finally { b.disabled = false; b.removeAttribute("aria-busy"); }
   };
+}
+
+// ---------- Trello ----------
+/* What we sent to the board and what became of it. Read from our own
+   records rather than from the board, because the question is "what did we
+   raise and did anyone deal with it" — a board has plenty on it this system
+   never put there. */
+async function renderTrello() {
+  const st = await api("/api/admin/integrations");
+  const p = st.providers.find((x) => x.name === "trello");
+  if (!p.connected) {
+    view().innerHTML = `
+      <h2>Trello</h2>
+      <div class="card empty"><span class="e-ic">${opsIcon("list")}</span>
+        <b>Trello isn't connected</b>
+        <p class="dim">Connect it and every enquiry, support ticket and
+          low-stock warning becomes a card on the list you choose.</p>
+        <button class="btn" id="tr-go">Set it up</button></div>`;
+    $("#tr-go").onclick = () => { S.tab = "integrations"; render(); };
+    return;
+  }
+  const { cards } = await api("/api/admin/integrations/trello/cards");
+  const open = cards.filter((c) => c.local_state !== "closed");
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Trello</h2>
+        <p class="dim">${esc(p.account)} · ${p.live
+          ? "changes on the board arrive here as they happen"
+          : "press sync to read the board — or go live under Integrations"}
+        </p></div>
+      <span class="head-acts">
+        <button class="btn alt" id="tr-sync">Sync now</button>
+      </span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">${cards.length}</div>
+        <div class="l">cards raised</div></div>
+      <div class="stat"><div class="n ${open.length ? "" : ""}">${open.length}</div>
+        <div class="l">still open here</div></div>
+      <div class="stat"><div class="n">${p.live ? "live" : "manual"}</div>
+        <div class="l">updates</div></div>
+    </div>
+    ${cards.length ? `<div class="card"><div class="tablewrap"><table>
+      <thead><tr><th>what</th><th>raised for</th><th>on the board</th>
+        <th>here</th><th>last read</th><th></th></tr></thead>
+      <tbody>${cards.map((c) => `<tr>
+        <td>${esc(c.kind)} #${c.local_id}</td>
+        <td>${esc(c.label || "—")}</td>
+        <td>${c.remote_state
+          ? `<span class="pill">${esc(c.remote_state)}</span>`
+          : '<span class="dim">not read yet</span>'}</td>
+        <td><span class="pill ${c.local_state === "closed" ? "ok" : ""}"
+          >${esc(c.local_state || "—")}</span></td>
+        <td class="dim">${c.synced_at ? timeAgo(c.synced_at) : "never"}</td>
+        <td>${c.url ? `<a class="btn alt sm" href="${esc(c.url)}"
+          target="_blank" rel="noopener">Open</a>` : ""}</td>
+      </tr>`).join("")}</tbody></table></div></div>`
+      : `<div class="card empty"><span class="e-ic">${opsIcon("list")}</span>
+         <b>No cards raised yet</b>
+         <p class="dim">The next enquiry, ticket or low-stock warning will
+           make one.</p></div>`}`;
+  $("#tr-sync").onclick = async () => {
+    const b = $("#tr-sync");
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    try {
+      const r = await api("/api/admin/integrations/trello/sync",
+                          { method: "POST" });
+      toast(r.changed.length
+        ? `${r.changed.length} of ${r.checked} moved on`
+        : `${r.checked} checked, nothing has changed`);
+      renderTrello();
+    } catch (e) { toast(e.message); }
+    finally { b.disabled = false; b.removeAttribute("aria-busy"); }
+  };
+}
+
+// ---------- Dropbox ----------
+/* The folder, not a promise about it. An integration that files things
+   somewhere you can't see is one you take on faith, and the first time
+   anybody checks is the day they need the file. */
+async function renderDropbox() {
+  const st = await api("/api/admin/integrations");
+  const p = st.providers.find((x) => x.name === "dropbox");
+  if (!p.connected) {
+    view().innerHTML = `
+      <h2>Dropbox</h2>
+      <div class="card empty"><span class="e-ic">${opsIcon("file")}</span>
+        <b>Dropbox isn't connected</b>
+        <p class="dim">Connect it and signed documents are filed
+          automatically, and the database backup has somewhere to live that
+          isn't this machine.</p>
+        <button class="btn" id="db-go">Set it up</button></div>`;
+    $("#db-go").onclick = () => { S.tab = "integrations"; render(); };
+    return;
+  }
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Dropbox</h2>
+        <p class="dim">${esc(p.account)} · signed documents are filed here as
+          they're signed.</p></div>
+      <span class="head-acts">
+        <button class="btn" id="dbx-backup">Back up the database</button>
+        <button class="btn alt" id="dbx-refresh">Refresh</button>
+      </span>
+    </div>
+    <p class="dim" style="max-width:640px">A backup goes up whole and
+      unredacted — credentials included — because one with the secrets
+      stripped out only looks like a backup until you need it. Treat the
+      folder the way you'd treat the database.</p>
+    <div id="dbx-files"><div class="skel"></div></div>`;
+  const draw = async () => {
+    try {
+      const d = await api("/api/admin/integrations/dropbox/files");
+      $("#dbx-files").innerHTML = d.files.length
+        ? `<div class="card"><div class="tablewrap"><table>
+            <thead><tr><th>file</th><th>where</th><th class="num">size</th>
+              <th>filed</th></tr></thead>
+            <tbody>${d.files.map((f) => `<tr>
+              <td>${esc(f.name)}</td>
+              <td class="dim">${esc(f.path.replace("/" + f.name, "") || "/")}</td>
+              <td class="num">${(f.size / 1024).toFixed(0)} KB</td>
+              <td class="dim">${esc((f.modified || "").replace("T", " ")
+                .replace("Z", ""))}</td>
+            </tr>`).join("")}</tbody></table></div></div>`
+        : `<div class="card empty"><span class="e-ic">${opsIcon("file")}</span>
+           <b>Nothing filed yet</b><p class="dim">${esc(d.note
+             || "Sign a document, or back the database up, and it appears here.")}
+           </p></div>`;
+    } catch (e) {
+      $("#dbx-files").innerHTML = `<div class="card dim">${esc(e.message)}</div>`;
+    }
+  };
+  $("#dbx-refresh").onclick = draw;
+  $("#dbx-backup").onclick = async () => {
+    const b = $("#dbx-backup");
+    if (!confirm("Send a full backup to Dropbox?\n\nIt contains everything, "
+      + "credentials included.")) return;
+    b.disabled = true; b.setAttribute("aria-busy", "true");
+    try {
+      const r = await api("/api/admin/integrations/dropbox/backup",
+                          { method: "POST" });
+      toast(`Backed up — ${(r.bytes / 1024).toFixed(0)} KB`);
+      draw();
+    } catch (e) { toast(e.message); }
+    finally { b.disabled = false; b.removeAttribute("aria-busy"); }
+  };
+  draw();
 }
 
 // ---------- confetti (achievement unlocks) ----------
