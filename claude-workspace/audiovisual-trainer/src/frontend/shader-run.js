@@ -1,0 +1,195 @@
+// Run a sketch (or full GLSL) offscreen and hand back pixels.
+//
+// This is what lets a shader act as a filter in the Canvas studio, and what
+// an image-only caller uses when it does not want an editor: give it source,
+// a size, images by uniform name (as canvases), values, and a time; get a
+// canvas back. Feedback works too — ask for N steps and the sim runs N times
+// before the picture is drawn.
+//
+// One hidden WebGL canvas is shared, because a browser only grants a handful
+// of contexts and a filter dialog would otherwise burn one per preview.
+
+import { parseUniforms, desugar, hasSimPass } from "./shader-uniforms.js";
+import { applyUniforms } from "./shader-controls.js";
+import { Feedback } from "./feedback.js";
+
+const VERT = `attribute vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+
+let shared = null;   // { canvas, gl, quad, feedback, programs: Map }
+
+function ctx() {
+  if (shared) return shared;
+  const canvas = document.createElement("canvas");
+  const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true, antialias: false });
+  if (!gl) throw new Error("WebGL is not available");
+  const quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  shared = { canvas, gl, quad, feedback: new Feedback(gl), programs: new Map() };
+  return shared;
+}
+
+function link(gl, fragSrc) {
+  const mk = (type, code) => {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, code);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      const info = gl.getShaderInfoLog(sh) || "compile failed";
+      gl.deleteShader(sh);
+      throw new Error(info);
+    }
+    return sh;
+  };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, mk(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, fragSrc));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(prog) || "link failed");
+  }
+  return prog;
+}
+
+/** Full GLSL for a source that may be a sketch or may already be a shader. */
+export function toGlsl(source) {
+  return /\bvoid\s+main\s*\(/.test(source) ? source : desugar(source);
+}
+
+/** Compile once per distinct source; a filter dialog re-renders on every
+    slider move and must not recompile each time. */
+function programsFor(source) {
+  const s = ctx();
+  const glsl = toGlsl(source);
+  let entry = s.programs.get(glsl);
+  if (entry) return entry;
+  const display = link(s.gl, glsl);
+  const sim = hasSimPass(glsl) ? link(s.gl, "#define SIM_PASS\n" + glsl) : null;
+  entry = { display, sim, uniforms: parseUniforms(source) };
+  // Keep the cache small: a dialog only ever wants the last few.
+  if (s.programs.size > 8) {
+    const [k, v] = s.programs.entries().next().value;
+    s.gl.deleteProgram(v.display);
+    if (v.sim) s.gl.deleteProgram(v.sim);
+    s.programs.delete(k);
+  }
+  s.programs.set(glsl, entry);
+  return entry;
+}
+
+function uploadCanvas(gl, tex, src) {
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+}
+
+/**
+ * Render `source` at width×height and return a 2D canvas of the result.
+ *
+ * @param opts.images   { uniformName: HTMLCanvasElement | HTMLImageElement | ImageBitmap }
+ * @param opts.values   uniform values keyed by name (as the editors store them)
+ * @param opts.time     seconds for u_time
+ * @param opts.steps    sim steps to run before drawing (feedback sketches)
+ * @param opts.reset    clear the feedback state first (default true)
+ * @param opts.mouse    [x, y] in pixels, y up (default centre)
+ * @param opts.seed
+ */
+export function renderSketch(source, width, height, opts = {}) {
+  const s = ctx();
+  const { gl, canvas, quad, feedback } = s;
+  const { display, sim, uniforms } = programsFor(source);
+  const values = opts.values || {};
+  const images = opts.images || {};
+
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width; canvas.height = height;
+  }
+  feedback.resize(width, height);
+  if (opts.reset !== false) feedback.reset();
+
+  // Image uniforms from the caller's canvases.
+  const texByName = new Map();
+  let unit = 0;
+  const bindCommon = (prog, prevTex, stateTex) => {
+    gl.useProgram(prog);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    const loc = gl.getAttribLocation(prog, "a_pos");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    const u = (n) => gl.getUniformLocation(prog, n);
+    gl.uniform2f(u("u_resolution"), width, height);
+    const m = opts.mouse || [width / 2, height / 2];
+    gl.uniform2f(u("u_mouse"), m[0], m[1]);
+    gl.uniform1f(u("u_time"), opts.time || 0);
+    gl.uniform1f(u("u_seed"), opts.seed || 0);
+    gl.uniform1i(u("u_frame"), feedback.frame);
+    gl.uniform1f(u("u_mouseDown"), 0);
+    applyUniforms(gl, prog, uniforms, values);
+    unit = 0;
+    for (const uni of uniforms) {
+      if (uni.control !== "image") continue;
+      let tex = texByName.get(uni.name);
+      const src = images[uni.name];
+      if (!tex) {
+        tex = gl.createTexture();
+        if (src) uploadCanvas(gl, tex, src);
+        else {
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                        new Uint8Array([128, 128, 128, 255]));
+        }
+        texByName.set(uni.name, tex);
+      }
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      if (u(uni.name)) gl.uniform1i(u(uni.name), unit);
+      const sz = u(uni.sizeUniform);
+      if (sz) gl.uniform2f(sz, src ? (src.width || src.naturalWidth || 0) : 0,
+                               src ? (src.height || src.naturalHeight || 0) : 0);
+      unit++;
+    }
+    gl.activeTexture(gl.TEXTURE6);
+    gl.bindTexture(gl.TEXTURE_2D, prevTex);
+    if (u("u_prev")) gl.uniform1i(u("u_prev"), 6);
+    gl.activeTexture(gl.TEXTURE7);
+    gl.bindTexture(gl.TEXTURE_2D, stateTex);
+    if (u("u_state")) gl.uniform1i(u("u_state"), 7);
+    gl.activeTexture(gl.TEXTURE0);
+  };
+
+  if (sim) {
+    const steps = Math.max(1, opts.steps || 1);
+    for (let i = 0; i < steps; i++) {
+      const w = feedback.write, r = feedback.read;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, w.fbo);
+      gl.viewport(0, 0, width, height);
+      bindCommon(sim, r.tex, r.tex);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      feedback.swap();
+    }
+  }
+  gl.viewport(0, 0, width, height);
+  if (sim) bindCommon(display, feedback.write.tex, feedback.read.tex);
+  else bindCommon(display, feedback.prevTex, feedback.prevTex);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if (!sim) feedback.captureCanvas();
+
+  for (const tex of texByName.values()) gl.deleteTexture(tex);
+
+  const out = document.createElement("canvas");
+  out.width = width; out.height = height;
+  out.getContext("2d").drawImage(canvas, 0, 0);
+  return out;
+}
+
+/** The controls a source would show, for a host that wants to build them. */
+export function sketchUniforms(source) {
+  return parseUniforms(source);
+}

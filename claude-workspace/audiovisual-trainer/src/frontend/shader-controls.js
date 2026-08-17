@@ -102,25 +102,36 @@ function sliders(u, value, onChange) {
   });
 }
 
-/** A picture you choose. The value is {url, w, h}; the bytes live in the
-    studio's asset store, and the URL carries its own capability key. */
+/** A picture or a video you choose. The value is {url, kind, w, h}; the bytes
+    live in the studio's asset store, and the URL carries its own capability
+    key. A video plays muted in a loop and is uploaded to the GPU every frame. */
 function imageControl(u, values, onChange, onImage) {
   const cur = values[u.name];
-  const thumb = el("img", { style: { width: "100%", maxHeight: "72px", objectFit: "cover",
-    borderRadius: "6px", display: cur && cur.url ? "block" : "none",
-    background: "var(--bg-2, #10141f)" }, src: cur && cur.url ? cur.url : "" });
-  const note = el("span.fine", {}, cur && cur.url ? `${cur.w || "?"}×${cur.h || "?"}` : "no image yet");
-  const file = el("input", { type: "file", accept: "image/*", style: { display: "none" },
+  const isVid = cur && cur.kind === "video";
+  const thumb = isVid
+    ? el("video", { muted: true, loop: true, playsInline: true, autoplay: true,
+        style: { width: "100%", maxHeight: "72px", objectFit: "cover", borderRadius: "6px",
+                 display: "block", background: "var(--bg-2, #10141f)" }, src: cur.url })
+    : el("img", { style: { width: "100%", maxHeight: "72px", objectFit: "cover",
+        borderRadius: "6px", display: cur && cur.url ? "block" : "none",
+        background: "var(--bg-2, #10141f)" }, src: cur && cur.url ? cur.url : "" });
+  const note = el("span.fine", {},
+    cur && cur.url ? `${isVid ? "video " : ""}${cur.w || "?"}×${cur.h || "?"}` : "no image yet");
+  const file = el("input", { type: "file", accept: "image/*,video/*", style: { display: "none" },
     onchange: async (e) => {
       const f = e.target.files && e.target.files[0];
       if (!f || !onImage) return;
       note.textContent = "uploading…";
       try {
-        const v = await onImage(u, f);        // {url, w, h}
+        const v = await onImage(u, f);        // {url, kind, w, h}
         values[u.name] = v;
-        thumb.src = v.url; thumb.style.display = "block";
-        note.textContent = `${v.w}×${v.h}`;
+        note.textContent = `${v.kind === "video" ? "video " : ""}${v.w}×${v.h}`;
         onChange();
+        // The thumbnail element's kind may have changed; the panel rebuilds
+        // on the next run, so just show what we can now.
+        if (thumb.tagName.toLowerCase() === (v.kind === "video" ? "video" : "img")) {
+          thumb.src = v.url; thumb.style.display = "block";
+        }
       } catch (err) { note.textContent = err.message || "upload failed"; }
       e.target.value = "";
     } });
@@ -132,6 +143,24 @@ function imageControl(u, values, onChange, onImage) {
       } }, "Clear") : null,
       note),
     thumb, file);
+}
+
+/** Read the size of a picked file: an image's natural size or a video's frame. */
+export function mediaDims(url, kind) {
+  return new Promise((res) => {
+    if (kind === "video") {
+      const v = document.createElement("video");
+      v.muted = true; v.preload = "metadata";
+      v.onloadedmetadata = () => res([v.videoWidth, v.videoHeight]);
+      v.onerror = () => res([0, 0]);
+      v.src = url;
+    } else {
+      const im = new Image();
+      im.onload = () => res([im.naturalWidth, im.naturalHeight]);
+      im.onerror = () => res([0, 0]);
+      im.src = url;
+    }
+  });
 }
 
 /**
@@ -197,11 +226,33 @@ export function bindTextures(gl, program, uniforms, values, cache) {
     const loc = gl.getUniformLocation(program, u.name);
     const want = values[u.name] && values[u.name].url;
     let entry = cache[u.name];
+    const kind = values[u.name] && values[u.name].kind === "video" ? "video" : "image";
     if (want && (!entry || entry.url !== want)) {
-      if (entry && entry.tex) gl.deleteTexture(entry.tex);
-      entry = cache[u.name] = { url: want, tex: null, w: 0, h: 0 };
-      const img = new Image();
-      img.onload = () => {
+      if (entry) dropEntry(gl, entry);
+      entry = cache[u.name] = { url: want, tex: null, w: 0, h: 0, kind };
+      if (kind === "video") {
+        // A video is uploaded every frame it has a new picture. Muted so it
+        // may autoplay; looped so a texture never goes black.
+        const vid = document.createElement("video");
+        vid.muted = true; vid.loop = true; vid.playsInline = true; vid.preload = "auto";
+        vid.oncanplay = () => {
+          if (cache[u.name] !== entry) return;
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          entry.tex = tex; entry.w = vid.videoWidth; entry.h = vid.videoHeight;
+          entry.lastTime = -1;
+          if (values[u.name]) { values[u.name].w = entry.w; values[u.name].h = entry.h; }
+          vid.play().catch(() => {});
+        };
+        vid.src = want;
+        entry.video = vid;
+      }
+      const img = kind === "video" ? null : new Image();
+      if (img) img.onload = () => {
         if (cache[u.name] !== entry) return;           // superseded while loading
         const tex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -218,13 +269,20 @@ export function bindTextures(gl, program, uniforms, values, cache) {
         // Remember the size on the value, so the panel can show it next time.
         if (values[u.name]) { values[u.name].w = entry.w; values[u.name].h = entry.h; }
       };
-      img.src = want;
+      if (img) img.src = want;
     } else if (!want && entry) {
-      if (entry.tex) gl.deleteTexture(entry.tex);
+      dropEntry(gl, entry);
       entry = cache[u.name] = null;
     }
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, entry && entry.tex ? entry.tex : cache.blank);
+    if (entry && entry.tex && entry.video && entry.video.readyState >= 2
+        && entry.video.currentTime !== entry.lastTime) {
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, entry.video);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      entry.lastTime = entry.video.currentTime;
+    }
     if (loc) gl.uniform1i(loc, unit);
     const sizeLoc = gl.getUniformLocation(program, u.sizeUniform);
     if (sizeLoc) gl.uniform2f(sizeLoc, entry && entry.tex ? entry.w : 0, entry && entry.tex ? entry.h : 0);
@@ -233,12 +291,47 @@ export function bindTextures(gl, program, uniforms, values, cache) {
   gl.activeTexture(gl.TEXTURE0);
 }
 
+function dropEntry(gl, e) {
+  if (e.tex) gl.deleteTexture(e.tex);
+  if (e.video) { e.video.pause(); e.video.removeAttribute("src"); e.video.load(); }
+}
+
 export function releaseTextures(gl, cache) {
   for (const k of Object.keys(cache)) {
     const e = cache[k];
     if (k === "blank" && e) gl.deleteTexture(e);
-    else if (e && e.tex) gl.deleteTexture(e.tex);
+    else if (e) dropEntry(gl, e);
     delete cache[k];
+  }
+}
+
+/** For an offline render: put every video texture at time t (looping) and
+    wait until it has that frame, so the export is deterministic. */
+export async function seekVideos(cache, t) {
+  const waits = [];
+  for (const k of Object.keys(cache)) {
+    const e = cache[k];
+    if (!e || !e.video || !e.video.duration) continue;
+    const v = e.video;
+    v.pause();
+    const target = t % v.duration;
+    if (Math.abs(v.currentTime - target) < 0.001) continue;
+    waits.push(new Promise((res) => {
+      const done = () => { v.removeEventListener("seeked", done); res(); };
+      v.addEventListener("seeked", done);
+      v.currentTime = target;
+      setTimeout(done, 400);                       // never hang an export on a seek
+    }));
+    e.lastTime = -1;                               // force the upload
+  }
+  await Promise.all(waits);
+}
+
+/** After an offline render: let the videos play again. */
+export function resumeVideos(cache) {
+  for (const k of Object.keys(cache)) {
+    const e = cache[k];
+    if (e && e.video) e.video.play().catch(() => {});
   }
 }
 

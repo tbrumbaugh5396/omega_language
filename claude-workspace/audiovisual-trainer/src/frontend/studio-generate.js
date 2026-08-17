@@ -9,7 +9,9 @@ import { el, clear, api, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms, desugar, hasSimPass, bakeDefaults, stripComments, SKETCH_VARS } from "./shader-uniforms.js";
 import { Feedback } from "./feedback.js";
-import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures } from "./shader-controls.js";
+import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
+         mediaDims, seekVideos, resumeVideos } from "./shader-controls.js";
+import { muxMp4 } from "./video-mux.js";
 import { gridOverlay } from "./grid-overlay.js";
 
 const VERT = `attribute vec2 a_pos;
@@ -1002,7 +1004,10 @@ export async function generateEditor(host) {
     return true;
   }
 
-  const timeNow = () => paused ? pausedAt : (performance.now() - t0) / 1000;
+  let forcedTime = null;                  // set during an offline export
+  let exporting = false;
+  const timeNow = () => forcedTime !== null ? forcedTime
+                      : paused ? pausedAt : (performance.now() - t0) / 1000;
 
   /** Set everything both passes share, then bind the feedback textures on the
       last two units — user images take the first ones. */
@@ -1056,6 +1061,7 @@ export async function generateEditor(host) {
   }
 
   function frame() {
+    if (exporting) { raf = requestAnimationFrame(frame); return; }
     if (display && gl && !paused) {
       if (sim) for (let i = 0; i < doc.simSteps; i++) stepSim();
       draw();
@@ -1072,16 +1078,13 @@ export async function generateEditor(host) {
     raf = requestAnimationFrame(frame);
   }
 
-  /** A picked file becomes a studio asset; the value is its capability URL. */
+  /** A picked file — image or video — becomes a studio asset; the value is
+      its capability URL. */
   async function onImage(u, file) {
-    const asset = await host.upload(file, { role: "texture", uniform: u.name });
-    const dims = await new Promise((res) => {
-      const im = new Image();
-      im.onload = () => res([im.naturalWidth, im.naturalHeight]);
-      im.onerror = () => res([0, 0]);
-      im.src = asset.url;
-    });
-    return { url: asset.url, assetId: asset.id, w: dims[0], h: dims[1] };
+    const kind = (file.type || "").startsWith("video/") ? "video" : "image";
+    const asset = await host.upload(file, { role: "texture", uniform: u.name, kind });
+    const dims = await mediaDims(asset.url, kind);
+    return { url: asset.url, assetId: asset.id, kind, w: dims[0], h: dims[1] };
   }
 
   function rebuildControls() {
@@ -1164,6 +1167,115 @@ export async function generateEditor(host) {
     a.download = `${host.doc.name || "generate"}-${w}x${h}.png`;
     a.click();
     toast(`Exported ${w}×${h}${ss > 1 ? ", 2× supersampled" : ""}${usesFeedback ? " (a simulation exports at its own size)" : ""}.`);
+  }
+
+  /**
+   * Render a run of frames at a fixed clock and write an MP4. Nothing is
+   * recorded off the screen: each frame is drawn for exactly t = i/fps, a
+   * sim is stepped once per frame (times steps/frame), and video textures
+   * are seeked to that instant — so the file is the same every time.
+   */
+  function exportVideo() {
+    if (!display || !gl) { toast("Nothing compiled to export."); return; }
+    const durIn = el("input", { type: "number", min: 1, max: 120, step: 1, value: doc.videoSecs || 6,
+      style: { width: "5rem" } });
+    const fpsSel = el("select", {}, ...[24, 30, 60].map((f) =>
+      el("option", { value: f, selected: f === (doc.videoFps || 30) }, `${f} fps`)));
+    const usesFeedback = !!sim || /\bu_prev\b/.test(stripComments(source()));
+    const sizeNote = usesFeedback
+      ? `at the preview size, ${canvas.width}×${canvas.height} — a simulation is its state`
+      : `at ${Math.min(doc.exportSize[0], 1920)}×${Math.min(doc.exportSize[1], 1920)}`;
+    const restartBox = el("input", { type: "checkbox", checked: false, style: { width: "auto" } });
+    const status = el("p.fine", {}, `Renders ${sizeNote}. Frame-exact; not a screen recording.`);
+    const bar = el("div", { style: { height: "6px", background: "var(--line)", borderRadius: "3px" } },
+      el("div", { style: { height: "100%", width: "0%", background: "var(--accent, #6ea8ff)", borderRadius: "3px" } }));
+    let cancelled = false;
+
+    modal(el("h2", {}, "Export video"),
+      el("div.row.tight", {}, el("label", {}, "seconds ", durIn), fpsSel,
+        el("label.fine", { style: { display: "inline-flex", gap: ".3rem", alignItems: "center" } },
+          restartBox, "restart the sim first")),
+      status, bar,
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: () => { cancelled = true; closeModal(); } }, "Cancel"),
+        el("button.primary", { onclick: go }, "Render")));
+
+    async function go() {
+      const secs = Math.max(1, Math.min(120, +durIn.value || 6));
+      const fps = +fpsSel.value;
+      doc.videoSecs = secs; doc.videoFps = fps; host.save();
+      const frames = Math.round(secs * fps);
+      let W = canvas.width, H = canvas.height;
+      if (!usesFeedback) {
+        W = Math.min(doc.exportSize[0], 1920); H = Math.min(doc.exportSize[1], 1920);
+        W -= W % 2; H -= H % 2;                       // H.264 wants even sizes
+      }
+      if (!("VideoEncoder" in window)) {
+        status.textContent = "This browser has no WebCodecs; a video export needs Chrome, Edge or Safari 17+.";
+        return;
+      }
+      exporting = true;
+      const [pw, ph] = [canvas.width, canvas.height];
+      if (W !== pw || H !== ph) { canvas.width = W; canvas.height = H; }
+      if (restartBox.checked && feedback) feedback.reset();
+      const vsamples = [];
+      let vdesc = null;
+      const encoder = new VideoEncoder({
+        output: (chunk, meta) => {
+          if (meta?.decoderConfig?.description && !vdesc) {
+            vdesc = new Uint8Array(meta.decoderConfig.description);
+          }
+          const data = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(data);
+          vsamples.push({ data, timestamp: chunk.timestamp,
+                          duration: chunk.duration || 1e6 / fps, type: chunk.type });
+        },
+        error: (e) => { status.textContent = `Encoder: ${e.message}`; cancelled = true; },
+      });
+      const codec = (W * H > 1280 * 720) ? "avc1.4d0028" : "avc1.42001f";
+      try {
+        encoder.configure({ codec, width: W, height: H, framerate: fps,
+          bitrate: Math.round(W * H * fps * 0.12), avc: { format: "avc" } });
+        for (let f = 0; f < frames; f++) {
+          if (cancelled) break;
+          forcedTime = f / fps;
+          await seekVideos(textures, forcedTime);
+          if (sim) for (let i = 0; i < doc.simSteps; i++) stepSim();
+          draw();
+          const vf = new VideoFrame(canvas, { timestamp: Math.round(forcedTime * 1e6),
+                                              duration: Math.round(1e6 / fps) });
+          encoder.encode(vf, { keyFrame: f % (fps * 2) === 0 });
+          vf.close();
+          if (encoder.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 8));
+          if (f % 5 === 0) {
+            status.textContent = `Frame ${f + 1} of ${frames}…`;
+            bar.firstChild.style.width = `${Math.round((100 * f) / frames)}%`;
+            await new Promise((r) => setTimeout(r, 0));
+          }
+        }
+        if (!cancelled) {
+          await encoder.flush();
+          encoder.close();
+          status.textContent = "Writing the file…";
+          const blob = muxMp4([{ kind: "video", samples: vsamples, description: vdesc,
+                                 width: W, height: H, timescale: 1_000_000 }]);
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `${host.doc.name || "generate"}-${W}x${H}.mp4`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+          closeModal();
+          toast(`Exported ${secs}s at ${fps} fps, ${(blob.size / 1e6).toFixed(1)} MB (no audio).`);
+        } else { try { encoder.close(); } catch { /* already */ } }
+      } catch (err) {
+        status.textContent = `Export failed: ${err.message}`;
+      } finally {
+        forcedTime = null;
+        exporting = false;
+        if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
+        resumeVideos(textures);
+      }
+    }
   }
 
   // ------------------------------------------------------------ modes
@@ -1262,9 +1374,13 @@ uniform bool  mirror;  // @toggle`),
         "here makes that file the thing you edit and run — every line yours, " +
         "line numbers in errors exact. Controls, images and feedback keep " +
         "working because they only need the uniform declarations."),
-      el("h3", {}, "Images"),
+      el("h3", {}, "Images and video"),
       el("p.fine", {}, "Declare `uniform sampler2D photo;` and a Choose image… " +
-        "button appears; the file becomes an asset of this document. Declare " +
+        "button appears; the file — a picture or a video — becomes an asset " +
+        "of this document. A video plays muted in a loop and is uploaded every " +
+        "frame; on export it is seeked frame-exactly. Export video writes an " +
+        "MP4 rendered at a fixed clock, so a sim advances one frame per frame " +
+        "and the file is the same every time. Declare " +
         "`uniform vec2 photo_size;` too and it is filled with the pixel size — " +
         "(0, 0) until an image is chosen, so a sketch can draw a stand-in. " +
         "coverUV / containUV fit it to the frame like CSS object-fit."),
@@ -1363,6 +1479,7 @@ uniform bool  mirror;  // @toggle`),
         el("button", { onclick: restart }, "Restart"),
         presetSel, sizeSel, exportSel, stepsSel,
         el("button", { onclick: exportPng }, "Export PNG"),
+        el("button", { onclick: exportVideo }, "Export video"),
         el("label.fine", { style: { display: "inline-flex", alignItems: "center", gap: ".3rem" } },
           el("input", { type: "checkbox", checked: doc.ssaa !== false, style: { width: "auto" },
             oninput: (e) => { doc.ssaa = e.target.checked; host.save(); } }),

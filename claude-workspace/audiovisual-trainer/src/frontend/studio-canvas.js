@@ -18,11 +18,14 @@
 //   · Text layers stay text. They re-render from their properties on every
 //     edit and only become pixels when you ask them to.
 
-import { el, clear, append, toast, modal, closeModal, knob, confirmDialog } from "./ui.js";
+import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, api } from "./ui.js";
 import * as I from "./engine-image.js";
 import { Selection, wandMask } from "./canvas-selection.js";
 import { aiButton } from "./ai.js";
 import { gridOverlay } from "./grid-overlay.js";
+import { GENERATE_PRESETS } from "./studio-generate.js";
+import { renderSketch, sketchUniforms } from "./shader-run.js";
+import { buildControls } from "./shader-controls.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
   "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
@@ -851,29 +854,85 @@ export async function canvasEditor(host) {
 
   // ------------------------------------------------------------ filters
 
-  function filterDialog() {
+  async function filterDialog() {
     const l = L();
     if (l.type === "text") { toast("Rasterise the text layer first"); return; }
-    const selBox = el("select", {}, ...I.FILTERS.map((f) =>
-      el("option", { value: f.id }, f.name)));
+    // Shader filters: any Generate sketch that takes an image. The layer is
+    // handed in as its first sampler, so a photo grade written there applies
+    // here, with the same controls.
+    const shaderPresets = GENERATE_PRESETS.filter((p) => /\bsampler2D\b/.test(p.source));
+    let shaderDocs = [];
+    try {
+      const { projects } = await api("/api/studio/projects");
+      shaderDocs = (projects || []).filter((p) => p.kind === "generate" && p.id !== host.doc.id);
+    } catch { /* offline: presets only */ }
+    const selBox = el("select", {},
+      el("optgroup", { label: "Filters" }, ...I.FILTERS.map((f) =>
+        el("option", { value: f.id }, f.name))),
+      el("optgroup", { label: "Shader — Generate presets" }, ...shaderPresets.map((p) =>
+        el("option", { value: `shader:preset:${p.id}` }, p.label))),
+      shaderDocs.length ? el("optgroup", { label: "Shader — your Generate documents" },
+        ...shaderDocs.map((d) => el("option", { value: `shader:doc:${d.id}` }, d.name))) : null);
     const controls = el("div.stack");
     const preview = el("canvas", { width: 320, height: Math.round((320 * H) / W),
       style: { width: "100%", borderRadius: "8px", background: "#000" } });
     const source = I.getImage(l.canvas);
-    let params = {}, result = null;
+    let params = {}, result = null, resultCanvas = null;
+    let shader = null;                        // { source, uniforms, values, imageName, time }
 
-    const recompute = () => {
-      const f = I.FILTERS.find((x) => x.id === selBox.value);
-      try { result = f.fn(source, params); }
-      catch (e) { toast(`Filter failed: ${e.message}`); return; }
-      const tmp = I.putImage(I.makeCanvas(W, H), result);
+    const paintPreview = (tmp) => {
       const pg = preview.getContext("2d");
       pg.fillStyle = doc.background || "#fff";
       pg.fillRect(0, 0, preview.width, preview.height);
       pg.drawImage(tmp, 0, 0, preview.width, preview.height);
     };
-    const build = () => {
+    const recompute = () => {
+      if (shader) {
+        try {
+          resultCanvas = renderSketch(shader.source, W, H, {
+            images: { [shader.imageName]: l.canvas }, values: shader.values,
+            time: shader.time, steps: 8 });
+          result = null;
+        } catch (e) { toast(`Shader failed: ${String(e.message).split("\n")[0]}`); return; }
+        paintPreview(resultCanvas);
+        return;
+      }
       const f = I.FILTERS.find((x) => x.id === selBox.value);
+      try { result = f.fn(source, params); }
+      catch (e) { toast(`Filter failed: ${e.message}`); return; }
+      resultCanvas = null;
+      paintPreview(I.putImage(I.makeCanvas(W, H), result));
+    };
+    const buildShader = async (src) => {
+      const uniforms = sketchUniforms(src);
+      const img = uniforms.find((u) => u.control === "image");
+      if (!img) { toast("That sketch takes no image, so it cannot filter a layer."); return; }
+      shader = { source: src, uniforms, values: {}, imageName: img.name, time: 0 };
+      // Seed defaults; images are the layer, so their controls are not shown.
+      for (const u of uniforms) if (u.control !== "image") shader.values[u.name] = u.value.slice();
+      clear(controls);
+      controls.append(el("p.fine", {}, `The layer is passed as \`${img.name}\`.`));
+      controls.append(buildControls(uniforms.filter((u) => u.control !== "image"),
+        shader.values, recompute));
+      controls.append(knob("time", { min: 0, max: 20, step: 0.05, value: 0,
+        format: (v) => v.toFixed(2) + " s",
+        oninput: (v) => { shader.time = v; recompute(); } }));
+      recompute();
+    };
+    const build = async () => {
+      const v = selBox.value;
+      if (v.startsWith("shader:preset:")) {
+        const p = shaderPresets.find((x) => x.id === v.slice(14));
+        return buildShader(p.source);
+      }
+      if (v.startsWith("shader:doc:")) {
+        const d = await api(`/api/studio/projects/${v.slice(11)}`);
+        const src = d.data && (d.data.mode === "glsl" ? d.data.glsl : d.data.sketch);
+        if (!src) { toast("That document has no source yet."); return; }
+        return buildShader(src);
+      }
+      shader = null;
+      const f = I.FILTERS.find((x) => x.id === v);
       params = {};
       clear(controls);
       for (const [name, min, max, def] of f.params) {
@@ -900,9 +959,9 @@ export async function canvasEditor(host) {
         el("button", { onclick: closeModal }, "Cancel"),
         el("button.primary", {
           onclick: () => {
-            if (!result) return;
+            if (!result && !resultCanvas) return;
             snapshot();
-            const filtered = I.putImage(I.makeCanvas(W, H), result);
+            const filtered = resultCanvas || I.putImage(I.makeCanvas(W, H), result);
             if (sel.active) {
               sel.clip(filtered);
               l.ctx.drawImage(filtered, 0, 0);
