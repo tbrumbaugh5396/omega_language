@@ -22,6 +22,7 @@ import { el, clear, append, toast, modal, closeModal, knob, confirmDialog } from
 import * as I from "./engine-image.js";
 import { Selection, wandMask } from "./canvas-selection.js";
 import { aiButton } from "./ai.js";
+import { gridOverlay } from "./grid-overlay.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
   "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
@@ -194,7 +195,8 @@ export async function canvasEditor(host) {
   const vg = view.getContext("2d");
   const og = overlay.getContext("2d");
 
-  const stage = el("div", { style: { position: "relative", lineHeight: 0 } }, view, overlay);
+  const grid = gridOverlay();
+  const stage = el("div", { style: { position: "relative", lineHeight: 0 } }, view, overlay, grid.overlay);
 
   let strokeCanvas = null, strokeCtx = null;
 
@@ -1126,6 +1128,7 @@ export async function canvasEditor(host) {
           el("button", { onclick: () => addLayer() }, "+ Layer"),
           el("button", { onclick: () => fileInput.click() }, "Import"),
           el("button", { onclick: exportPng }, "PNG"),
+          grid.button,
           fileInput),
         el("div.row.tight", { style: { marginTop: ".4rem" } },
           el("span.fine", {}, "zoom"),

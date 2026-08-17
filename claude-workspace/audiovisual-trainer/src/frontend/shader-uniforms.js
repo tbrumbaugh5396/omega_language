@@ -21,13 +21,13 @@ export const RESERVED = new Set([
 // pattern silently finds nothing in it.
 const DECL = new RegExp(
   "\\buniform\\s+(?:lowp\\s+|mediump\\s+|highp\\s+)?" +
-  "(float|int|bool|vec2|vec3|vec4)\\s+" +
+  "(float|int|bool|vec2|vec3|vec4|sampler2D)\\s+" +
   "([A-Za-z_][A-Za-z0-9_]*)\\s*(?:\\[\\s*\\d+\\s*\\])?\\s*;", "g");
 
 const COLOURISH = /(colou?r|tint|rgb|ink|hue|paint)/i;
 
 /** Widths of the value each GLSL type carries. */
-const WIDTH = { float: 1, int: 1, bool: 1, vec2: 2, vec3: 3, vec4: 4 };
+const WIDTH = { float: 1, int: 1, bool: 1, vec2: 2, vec3: 3, vec4: 4, sampler2D: 0 };
 
 /**
  * Read `@` annotations out of a trailing comment. Anything that is not an
@@ -118,6 +118,14 @@ export function parseUniforms(src) {
     const c = rest.indexOf("//");
     const a = annotations(c === -1 ? "" : rest.slice(c + 2));
     const width = WIDTH[type];
+    if (type === "sampler2D") {
+      // An image you choose. Its pixel size is offered as <name>_size if the
+      // shader declares that vec2; that uniform is then driven, not dialled.
+      out.push({ name, type, control: "image", width: 0, isInt: false,
+                 min: 0, max: 0, step: 0, label: a.label || name, value: null,
+                 sizeUniform: `${name}_size` });
+      continue;
+    }
     let control;
     if (type === "bool" || a.flags.has("toggle")) control = "toggle";
     else if (a.flags.has("color") || a.flags.has("colour")) control = "color";
@@ -150,7 +158,10 @@ export function parseUniforms(src) {
       value: value.slice(0, width),
     });
   }
-  return out;
+  // A vec2 named <sampler>_size belongs to the sampler, not the panel.
+  const samplers = new Set(out.filter((u) => u.control === "image").map((u) => u.name));
+  return out.filter((u) => !(u.type === "vec2" && u.name.endsWith("_size")
+                             && samplers.has(u.name.slice(0, -5))));
 }
 
 // ---------------------------------------------------------------- the sketch
@@ -216,7 +227,56 @@ vec3 palette(float t){ return palette(t, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0
   ["vignette", `float vignette(vec2 uv, float k){ vec2 q=uv*(1.0-uv); return pow(clamp(q.x*q.y*16.0,0.0,1.0),k); }`],
   ["grain", `float grain(vec2 uv, float t){ return hash21(floor(uv*u_resolution)+fract(t*13.7)*91.0)-0.5; }`],
   ["finish", `vec3 finish(vec3 lin){ return dither(srgb(tonemap(lin))); }`],
+  // Fit an image into the frame the way CSS object-fit does. Both take the
+  // image size in pixels; the frame is u_resolution.
+  ["coverUV", `vec2 coverUV(vec2 uv, vec2 img){
+  float fa = u_resolution.x/u_resolution.y, ia = img.x/max(img.y,1.0);
+  vec2 s = fa > ia ? vec2(1.0, ia/fa) : vec2(fa/ia, 1.0);
+  return (uv - 0.5) * s + 0.5;
+}`],
+  ["containUV", `vec2 containUV(vec2 uv, vec2 img){
+  float fa = u_resolution.x/u_resolution.y, ia = img.x/max(img.y,1.0);
+  vec2 s = fa > ia ? vec2(fa/ia, 1.0) : vec2(1.0, ia/fa);
+  return (uv - 0.5) * s + 0.5;
+}`],
+  ["luma", `float luma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }`],
 ];
+
+/**
+ * The 3D kit. Only present when the sketch defines `float scene(vec3 p)`,
+ * because GLSL has no function pointers: these call scene() through a
+ * forward declaration, and an undefined scene() would fail to link every
+ * 2D sketch that never wanted them.
+ */
+const HELPERS_3D = `float scene(vec3 p);
+float sdSphere(vec3 p, float r){ return length(p)-r; }
+float sdBox3(vec3 p, vec3 b){ vec3 d=abs(p)-b; return length(max(d,0.0))+min(max(d.x,max(d.y,d.z)),0.0); }
+float sdTorus(vec3 p, vec2 t){ vec2 q=vec2(length(p.xz)-t.x,p.y); return length(q)-t.y; }
+float sdCapsule3(vec3 p, vec3 a, vec3 b, float r){ vec3 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.0,1.0); return length(pa-ba*h)-r; }
+float sdPlane(vec3 p, float h){ return p.y-h; }
+vec3 normal3(vec3 p){
+  vec2 e=vec2(0.0008,0.0);
+  return normalize(vec3(scene(p+e.xyy)-scene(p-e.xyy), scene(p+e.yxy)-scene(p-e.yxy), scene(p+e.yyx)-scene(p-e.yyx)));
+}
+float march(vec3 ro, vec3 rd, float maxD){
+  float t=0.0;
+  for(int i=0;i<96;i++){ float d=scene(ro+rd*t); if(d<0.0006*t+0.0004) return t; t+=d*0.9; if(t>maxD) break; }
+  return -1.0;
+}
+float softShadow(vec3 ro, vec3 rd, float k){
+  float res=1.0, t=0.03;
+  for(int i=0;i<40;i++){ float h=scene(ro+rd*t); if(h<0.0004) return 0.0; res=min(res,k*h/t); t+=clamp(h,0.01,0.25); if(t>14.0) break; }
+  return clamp(res,0.0,1.0);
+}
+float ao(vec3 p, vec3 n){
+  float occ=0.0, sca=1.0;
+  for(int i=0;i<5;i++){ float h=0.01+0.14*float(i)/4.0; occ+=(h-scene(p+n*h))*sca; sca*=0.9; }
+  return clamp(1.0-2.5*occ,0.0,1.0);
+}
+mat3 lookAt(vec3 ro, vec3 ta){
+  vec3 f=normalize(ta-ro); vec3 r=normalize(cross(f,vec3(0.0,1.0,0.0))); vec3 u=cross(r,f);
+  return mat3(r,u,f);
+}`;
 
 /** Names the sketch is allowed to end with, whatever their type. */
 const COERCE = `vec3 _rgb(vec3 c){ return c; }
@@ -246,6 +306,7 @@ export const SKETCH_VARS = [
   ["t", "float", "seconds since the sketch started"],
   ["m", "vec2", "pointer, 0 to 1"],
   ["seed", "float", "changes when you press Randomise"],
+  ["<image>_size", "vec2", "pixels of a sampler2D you declared, if you also declare this vec2"],
 ];
 
 /**
@@ -320,11 +381,12 @@ export function desugar(sketch) {
   const defines = (name) =>
     new RegExp(`\\b(?:float|int|bool|vec2|vec3|vec4|mat2)\\s+${name}\\b`).test(declared);
 
-  const helpers = HELPERS
+  let helpers = HELPERS
     .filter(([name]) =>
       !new RegExp(`\\b(?:float|int|vec2|vec3|vec4|mat2)\\s+${name}\\s*\\(`).test(declared))
     .map(([, src]) => src)
     .join("\n");
+  if (/\bfloat\s+scene\s*\(\s*vec3\b/.test(declared)) helpers += "\n" + HELPERS_3D;
 
   // The coordinates are file-scope so a function you write in the preamble can
   // read them, the way it reads a uniform. They are assigned once per fragment

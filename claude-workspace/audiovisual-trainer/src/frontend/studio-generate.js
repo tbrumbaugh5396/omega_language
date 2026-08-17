@@ -8,7 +8,8 @@
 import { el, clear, api, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms, desugar, SKETCH_VARS } from "./shader-uniforms.js";
-import { buildControls, applyUniforms, randomise } from "./shader-controls.js";
+import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures } from "./shader-controls.js";
+import { gridOverlay } from "./grid-overlay.js";
 
 const VERT = `attribute vec2 a_pos;
 void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
@@ -486,6 +487,242 @@ col += vec3(1.0, 0.6, 0.3) * smoothstep(0.014, 0.0, d) * step(0.0, d) * 0.4;   /
 col = mix(col, vec3(0.05, 0.035, 0.025), aa(d));
 
 finish(col)` },
+
+  // ---- images. A sampler2D is a picture you choose; <name>_size reads (0,0)
+  // until you do, so these draw a stand-in rather than a grey square.
+
+  { id: "grade", label: "Photo — grade, grain, vignette", preview: [800, 450], source:
+`uniform sampler2D photo;  // @image
+uniform vec2  photo_size;
+uniform float exposure;   // @range -2 2 @default 0.2 — stops
+uniform float contrast;   // @range 0.5 2 @default 1.15
+uniform float warmth;     // @range -1 1 @default 0.25
+uniform float fade;       // @range 0 1 @default 0.25 — lifted blacks
+uniform float grainAmt;   // @range 0 1 @default 0.35
+uniform float vig;        // @range 0 1 @default 0.5
+
+// A stand-in when there is no image: soft blobs and a horizon.
+vec3 standIn(vec2 q) {
+  vec3 c = mix(vec3(0.85, 0.55, 0.30), vec3(0.15, 0.30, 0.55), q.y);
+  c = mix(c, vec3(1.0, 0.9, 0.7), smoothstep(0.35, 0.0, length(q - vec2(0.65, 0.6))));
+  c *= 0.8 + 0.4 * fbm(q * 5.0);
+  return srgbToLinear(c);
+}
+
+vec3 lin = photo_size.x > 0.5
+  ? srgbToLinear(texture2D(photo, coverUV(uv, photo_size)).rgb)
+  : standIn(uv);
+lin *= exp2(exposure);
+float l = luma(lin);
+lin = mix(vec3(l), lin, 1.05);                                    // a touch of saturation
+lin = pow(max(lin, 0.0), vec3(contrast)) * pow(0.18, 1.0 - contrast);   // contrast about middle grey
+lin *= mix(vec3(1.0), vec3(1.08, 1.0, 0.90), warmth);            // warm / cool
+lin = lin * (1.0 - fade * 0.15) + fade * 0.03;                   // film fade: black is not zero
+lin *= mix(1.0, vignette(uv, 0.4), vig);
+lin += grain(uv, t) * grainAmt * 0.06 * (0.3 + l);              // grain rides the midtones
+
+finish(lin)` },
+
+  { id: "halftone", label: "Photo — halftone and dither", preview: [800, 450], source:
+`uniform sampler2D photo;  // @image
+uniform vec2  photo_size;
+uniform float cellPx;     // @range 3 24 step 1 @default 8 — dot cell in pixels
+uniform float angle;      // @range 0 1.57 @default 0.4 — screen angle
+uniform bool  ordered;    // @toggle — Bayer dither instead of dots
+uniform vec3  ink;        // @color @default 0.08 0.06 0.10
+uniform vec3  paper;      // @color @default 0.96 0.93 0.86
+
+// The same photo, quantised two ways. Both are Module 5: a threshold with a
+// carrier keeps tone as area, where a plain threshold would throw it away.
+float bayer(vec2 px) {
+  vec2 c = floor(mod(px, 4.0));
+  float b = 0.0;
+  b += mod(c.x, 2.0) * 8.0 + mod(c.y, 2.0) * 4.0;
+  b += mod(floor(c.x / 2.0), 2.0) * 2.0 + mod(floor(c.y / 2.0), 2.0);
+  return (b + 0.5) / 16.0;
+}
+float source(vec2 q) {
+  if (photo_size.x > 0.5) return luma(texture2D(photo, coverUV(q, photo_size)).rgb);
+  float g = 0.5 + 0.5 * sin(q.x * 6.0) * cos(q.y * 4.0);       // a stand-in gradient
+  return mix(g, smoothstep(0.4, 0.0, length(q - vec2(0.5))), 0.5);
+}
+
+vec2 px = gl_FragCoord.xy;
+float tone;
+float v;
+if (ordered) {
+  tone = source(uv);
+  v = step(bayer(px), tone);
+} else {
+  vec2 r = rot(angle) * px;
+  vec2 cell = (floor(r / cellPx) + 0.5) * cellPx;
+  vec2 back = rot(-angle) * cell;                                // sample at the cell centre
+  tone = source(back / u_resolution);
+  float radius = sqrt(1.0 - tone) * cellPx * 0.62;              // area carries the tone
+  v = smoothstep(-0.7, 0.7, length(r - cell) - radius);
+}
+
+srgbToLinear(mix(ink, paper, v))` },
+
+  // ---- three dimensions and motion. Real ray hits against real surfaces;
+  // the ball drops are exact ballistics, solved for time rather than stepped.
+
+  { id: "still", label: "Still life, raymarched (3D)", preview: [800, 450], source:
+`uniform float sunHeight; // @range 0.1 1.2 @default 0.6
+uniform float orbit;     // @range 0 6.28 @default 0.6 — where the camera stands
+uniform vec3  paint;     // @color @default 0.80 0.25 0.18
+uniform vec3  metal;     // @color @default 0.90 0.75 0.45
+uniform float gloss;     // @range 0 1 @default 0.6
+
+// Defining scene(vec3) brings in the 3D kit: march, normal3, softShadow, ao,
+// lookAt and the primitives. Objects are told apart by asking which one is
+// nearest at the hit — GLSL has no way to hand a material back from march().
+float scene(vec3 q) {
+  float floorD = sdPlane(q, 0.0);
+  float ball = sdSphere(q - vec3(-0.9, 0.6, 0.2), 0.6);
+  float box = sdBox3(q - vec3(0.8, 0.45, -0.3), vec3(0.45)) - 0.04;
+  float ring = sdTorus(q - vec3(0.2, 0.22, 0.9), vec2(0.5, 0.12));
+  return min(min(floorD, ball), min(box, ring));
+}
+int nearest(vec3 q) {
+  float a = sdPlane(q, 0.0), b = sdSphere(q - vec3(-0.9, 0.6, 0.2), 0.6);
+  float c = sdBox3(q - vec3(0.8, 0.45, -0.3), vec3(0.45)) - 0.04;
+  float d = sdTorus(q - vec3(0.2, 0.22, 0.9), vec2(0.5, 0.12));
+  float m = min(min(a, b), min(c, d));
+  return m == a ? 0 : (m == b ? 1 : (m == c ? 2 : 3));
+}
+
+vec3 sd = normalize(vec3(-0.6, sunHeight, 0.4));
+vec3 ro = vec3(3.6 * sin(orbit), 1.7, 3.6 * cos(orbit));
+vec3 rd = lookAt(ro, vec3(0.0, 0.4, 0.0)) * normalize(vec3(p, 1.7));
+vec3 col = sky(rd, sd);
+float tHit = march(ro, rd, 30.0);
+if (tHit > 0.0) {
+  vec3 pos = ro + rd * tHit;
+  vec3 n = normal3(pos);
+  int id = nearest(pos);
+  vec3 albedo = id == 0
+    ? mix(vec3(0.55), vec3(0.85), mod(floor(pos.x) + floor(pos.z), 2.0)) * 0.6
+    : (id == 1 ? srgbToLinear(paint) : (id == 2 ? srgbToLinear(metal) : vec3(0.85, 0.87, 0.9)));
+  float dif = max(dot(n, sd), 0.0) * softShadow(pos + n * 0.01, sd, 12.0);
+  float occ = ao(pos, n);
+  vec3 lig = vec3(1.0, 0.92, 0.80) * 2.6 * dif;
+  lig += vec3(0.35, 0.45, 0.65) * (0.5 + 0.5 * n.y) * occ;         // sky fill
+  lig += vec3(0.25, 0.20, 0.15) * max(-n.y, 0.0) * occ * 0.4;      // ground bounce
+  col = albedo * lig;
+  vec3 hv = normalize(sd - rd);
+  float fr = fresnel(max(dot(n, -rd), 0.0), 0.04);
+  vec3 refl = sky(reflect(rd, n), sd) * softShadow(pos + n * 0.01, reflect(rd, n), 8.0);
+  col += pow(max(dot(n, hv), 0.0), mix(12.0, 240.0, gloss)) * dif * gloss * 1.5;
+  col = mix(col, refl, fr * gloss * (id == 0 ? 0.3 : 1.0));
+  col = mix(col, sky(rd, sd), 1.0 - exp(-tHit * 0.02));           // aerial perspective
+}
+
+finish(col)` },
+
+  { id: "bounce", label: "Bouncing balls, exact ballistics (3D)", preview: [800, 450], source:
+`uniform float drop;      // @range 0.6 3 @default 1.8 — release height
+uniform float bouncy;    // @range 0.3 0.95 @default 0.72 — restitution
+uniform float speed;     // @range 0.2 2 @default 1.0
+uniform float sunHeight; // @range 0.2 1.2 @default 0.7
+
+// Height of a ball dropped from h0 at time t, restitution e, solved in
+// closed form: the n-th flight lasts T0·e^n and the sum is geometric, so n
+// falls out of a log rather than a step loop. It settles, pauses, repeats.
+float bounceY(float tt, float h0, float e) {
+  float g = 9.8;
+  float T0 = 2.0 * sqrt(2.0 * h0 / g);          // one full flight from height h0
+  float settle = T0 * 0.5 + T0 * e / (1.0 - e); // fall + every bounce
+  tt = mod(tt, settle + 1.2);
+  if (tt < T0 * 0.5) return h0 - 0.5 * g * tt * tt;
+  float u = tt - T0 * 0.5;
+  float arg = 1.0 - u * (1.0 - e) / (T0 * e);
+  if (arg <= 0.001) return 0.0;
+  float n = floor(log(arg) / log(e));
+  float Sn = T0 * e * (1.0 - pow(e, n)) / (1.0 - e);
+  float Tn = T0 * pow(e, n + 1.0);
+  float tau = u - Sn;
+  float v0 = 0.5 * g * Tn;
+  return max(v0 * tau - 0.5 * g * tau * tau, 0.0);
+}
+float scene(vec3 q) {
+  float d = sdPlane(q, 0.0);
+  float tt = t * speed;
+  d = min(d, sdSphere(q - vec3(-1.2, 0.3 + bounceY(tt, drop, bouncy), 0.0), 0.3));
+  d = min(d, sdSphere(q - vec3(0.0, 0.3 + bounceY(tt + 0.7, drop * 0.8, bouncy * 0.9), 0.0), 0.3));
+  d = min(d, sdSphere(q - vec3(1.2, 0.3 + bounceY(tt + 1.4, drop * 0.6, min(bouncy * 1.15, 0.95)), 0.0), 0.3));
+  return d;
+}
+
+vec3 sd = normalize(vec3(-0.5, sunHeight, 0.6));
+vec3 ro = vec3(0.4, 1.6, 5.2);
+vec3 rd = lookAt(ro, vec3(0.0, 0.8, 0.0)) * normalize(vec3(p, 1.8));
+vec3 col = sky(rd, sd);
+float tHit = march(ro, rd, 40.0);
+if (tHit > 0.0) {
+  vec3 pos = ro + rd * tHit;
+  vec3 n = normal3(pos);
+  bool isFloor = pos.y < 0.02 && abs(n.y) > 0.99;
+  vec3 albedo = isFloor
+    ? mix(vec3(0.62), vec3(0.78), mod(floor(pos.x) + floor(pos.z), 2.0)) * 0.55
+    : (pos.x < -0.6 ? vec3(0.8, 0.2, 0.15) : (pos.x < 0.6 ? vec3(0.15, 0.5, 0.8) : vec3(0.9, 0.7, 0.2)));
+  float dif = max(dot(n, sd), 0.0) * softShadow(pos + n * 0.01, sd, 16.0);
+  vec3 lig = vec3(1.0, 0.92, 0.80) * 2.6 * dif + vec3(0.35, 0.45, 0.65) * (0.5 + 0.5 * n.y) * ao(pos, n);
+  col = albedo * lig;
+  vec3 hv = normalize(sd - rd);
+  col += pow(max(dot(n, hv), 0.0), 120.0) * dif * (isFloor ? 0.2 : 1.2);
+  col = mix(col, sky(rd, sd), 1.0 - exp(-tHit * 0.015));
+}
+
+finish(col)` },
+
+  { id: "ripples", label: "Ripple tank — interference and reflection", preview: [800, 450], source:
+`uniform int   sources;   // @range 1 4 @default 2
+uniform float wavelength;// @range 0.05 0.5 @default 0.16
+uniform float speed;     // @range 0 3 @default 1.0
+uniform float damping;   // @range 0 3 @default 0.8 — falloff with distance
+uniform vec2  s1;        // @pad
+uniform vec2  s2;        // @pad @default 0.75 0.6
+uniform vec3  water;     // @color @default 0.10 0.40 0.55
+
+// Circular waves from up to four sources in a rectangular tank. The walls
+// reflect: each source gets its four mirror images, which is exactly what a
+// hard boundary does to a wave. Interference is then just the sum.
+float wave(vec2 q, vec2 src, float k, float w) {
+  float r = length(q - src);
+  return cos(k * r - w * t) * exp(-damping * r) / sqrt(1.0 + r * 4.0);
+}
+float tank(vec2 q, vec2 src, float k, float w) {
+  float A = u_resolution.x / u_resolution.y;                       // tank half-width
+  float h = wave(q, src, k, w);
+  h += wave(q, vec2(-2.0 * A - src.x, src.y), k, w) + wave(q, vec2(2.0 * A - src.x, src.y), k, w);
+  h += wave(q, vec2(src.x, -2.0 - src.y), k, w) + wave(q, vec2(src.x, 2.0 - src.y), k, w);
+  return h;
+}
+float height(vec2 q) {
+  float k = 6.2831 / wavelength, w = k * speed * 0.35;
+  float A = u_resolution.x / u_resolution.y;
+  vec2 c1 = (s1 * 2.0 - 1.0) * vec2(A, 1.0);
+  vec2 c2 = (s2 * 2.0 - 1.0) * vec2(A, 1.0);
+  float h = tank(q, c1, k, w);
+  if (sources > 1) h += tank(q, c2, k, w);
+  if (sources > 2) h += tank(q, vec2(-A * 0.6, -0.55), k, w);
+  if (sources > 3) h += tank(q, vec2(A * 0.55, -0.6), k, w);
+  return h * 0.06;
+}
+
+float e = 0.004;
+float h0 = height(p);
+vec3 n = normalize(vec3(-(height(p + vec2(e, 0.0)) - h0) / e, 1.0, -(height(p + vec2(0.0, e)) - h0) / e));
+vec3 sd = normalize(vec3(-0.4, 0.8, 0.5));
+vec3 view = vec3(0.0, 1.0, 0.0);
+vec3 refl = reflect(-view, n);
+vec3 col = srgbToLinear(water) * (0.6 + 0.4 * max(dot(n, sd), 0.0));
+col += sky(vec3(refl.x, abs(refl.y), refl.z), sd) * fresnel(max(dot(n, view), 0.0), 0.02) * 2.0;
+col += vec3(1.0, 0.95, 0.85) * pow(max(dot(n, normalize(sd + view)), 0.0), 180.0) * 2.0;
+col += vec3(0.6, 0.8, 0.9) * max(-h0, 0.0) * 4.0;              // caustic-ish light in the troughs
+
+finish(col)` },
 ];
 
 export const newGenerateDoc = (preset = GENERATE_PRESETS[0]) => ({
@@ -514,6 +751,8 @@ export async function generateEditor(host) {
 
   let gl = null, program = null, raf = null, t0 = performance.now();
   let uniforms = [];
+  const textures = {};                        // sampler name -> {url, tex, w, h}
+  const grid = gridOverlay();
   const mouse = [0.5, 0.5];
   let paused = false, pausedAt = 0;
   const fpsLabel = el("span.fine");
@@ -582,7 +821,20 @@ export async function generateEditor(host) {
     gl.uniform1f(u("u_time"), paused ? pausedAt : (performance.now() - t0) / 1000);
     gl.uniform1f(u("u_seed"), doc.seed);
     applyUniforms(gl, program, uniforms, doc.uniforms);
+    bindTextures(gl, program, uniforms, doc.uniforms, textures);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /** A picked file becomes a studio asset; the value is its capability URL. */
+  async function onImage(u, file) {
+    const asset = await host.upload(file, { role: "texture", uniform: u.name });
+    const dims = await new Promise((res) => {
+      const im = new Image();
+      im.onload = () => res([im.naturalWidth, im.naturalHeight]);
+      im.onerror = () => res([0, 0]);
+      im.src = asset.url;
+    });
+    return { url: asset.url, assetId: asset.id, w: dims[0], h: dims[1] };
   }
 
   function frame() {
@@ -602,7 +854,7 @@ export async function generateEditor(host) {
     doc.sketch = editor.value;
     uniforms = parseUniforms(doc.sketch);
     clear(knobHost);
-    knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save()));
+    knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save(), { onImage }));
     const ok = compile(desugar(doc.sketch));
     if (ok && save) host.save(thumbnail());
     return ok;
@@ -700,6 +952,17 @@ uniform bool  mirror;  // @toggle`),
         "an XY pad, vec3 named like a colour a swatch, bool a toggle. The " +
         "annotation only refines it, so a bare `uniform float k;` still works " +
         "and gets 0 to 1."),
+      el("h3", {}, "Images"),
+      el("p.fine", {}, "Declare `uniform sampler2D photo;` and a Choose image… " +
+        "button appears; the file becomes an asset of this document. Declare " +
+        "`uniform vec2 photo_size;` too and it is filled with the pixel size — " +
+        "(0, 0) until an image is chosen, so a sketch can draw a stand-in. " +
+        "coverUV / containUV fit it to the frame like CSS object-fit."),
+      el("h3", {}, "Three dimensions"),
+      el("p.fine", {}, "Define `float scene(vec3 p)` and the 3D kit comes in: " +
+        "march(ro, rd, maxD), normal3, softShadow(ro, rd, k), ao(p, n), " +
+        "lookAt(ro, target), and sdSphere, sdBox3, sdTorus, sdCapsule3, sdPlane. " +
+        "It is only added when scene() exists, because the kit calls it."),
       el("h3", {}, "Helpers"),
       el("p.fine", {}, "Shape and noise: random, hash21, noise, fbm, rot, smin, " +
         "sdCircle, sdBox, sdSegment, sdCapsule, sdEllipse, aa, palette. " +
@@ -790,10 +1053,11 @@ uniform bool  mirror;  // @toggle`),
           randomise(uniforms, doc.uniforms);
           seedLabel.textContent = `seed ${doc.seed}`;
           clear(knobHost);
-          knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save()));
+          knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save(), { onImage }));
           host.save();
         } }, "Randomise"),
         el("button.ghost", { onclick: eject }, "Eject"),
+        grid.button,
         el("button.ghost", { onclick: help }, "Help"),
         aiButton("Sketch…", {
           task: "code",
@@ -808,7 +1072,11 @@ uniform bool  mirror;  // @toggle`),
             "In scope: uv, st, p (vec2), t, seed (float), m (vec2). " +
             "Helpers: random, hash21, noise, fbm, rot, smin, sdCircle, sdBox, " +
             "sdSegment, sdCapsule, sdEllipse, aa, palette, sky(rd,sunDir), " +
-            "fresnel, tonemap, srgb, dither, vignette, grain, finish. " +
+            "fresnel, tonemap, srgb, dither, vignette, grain, luma, finish, " +
+            "coverUV(uv, imgSize), containUV. `uniform sampler2D name;` is an image " +
+            "the user picks; `uniform vec2 name_size;` is its size, (0,0) if none. " +
+            "Defining `float scene(vec3 p)` enables march, normal3, softShadow, ao, " +
+            "lookAt, sdSphere, sdBox3, sdTorus, sdCapsule3, sdPlane. " +
             "For scenes work in linear light and end with finish(col). " +
             "#rrggbb is a vec3 literal. Loop bounds must be constant; " +
             "statements before the final expression are allowed.",
@@ -818,7 +1086,7 @@ uniform bool  mirror;  // @toggle`),
 
     el("div.lab-split", {},
       el("div.stack", {},
-        el("div.lab-out", {}, canvas, log),
+        el("div.lab-out", {}, el("div", { style: { position: "relative" } }, canvas, grid.overlay), log),
         knobHost,
         el("p.fine", {}, "Ctrl/Cmd+Enter runs. Editing re-runs after a pause. " +
           "A sketch that fails to compile leaves the last working image on " +
@@ -831,6 +1099,7 @@ uniform bool  mirror;  // @toggle`),
   root._cleanup = () => {
     cancelAnimationFrame(raf);
     clearTimeout(typeTimer);
+    if (gl) releaseTextures(gl, textures);
     if (gl && program) gl.deleteProgram(program);
     const lose = gl && gl.getExtension("WEBGL_lose_context");
     if (lose) lose.loseContext();

@@ -12,7 +12,8 @@
 import { el, clear, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms } from "./shader-uniforms.js";
-import { buildControls, applyUniforms } from "./shader-controls.js";
+import { buildControls, applyUniforms, bindTextures, releaseTextures } from "./shader-controls.js";
+import { gridOverlay } from "./grid-overlay.js";
 
 const PREAMBLE_HINT = `#ifdef GL_ES
 precision mediump float;
@@ -351,6 +352,19 @@ export async function shaderEditor(host) {
   const knobHost = el("div");
   let gl = null, program = null, raf = null, t0 = performance.now();
   let uniforms = [];
+  const textures = {};
+  const grid = gridOverlay();
+
+  async function onImage(u, file) {
+    const asset = await host.upload(file, { role: "texture", uniform: u.name });
+    const dims = await new Promise((res) => {
+      const im = new Image();
+      im.onload = () => res([im.naturalWidth, im.naturalHeight]);
+      im.onerror = () => res([0, 0]);
+      im.src = asset.url;
+    });
+    return { url: asset.url, assetId: asset.id, w: dims[0], h: dims[1] };
+  }
   const mouse = [0.5, 0.5];
   let fps = 0, frames = 0, lastFpsAt = performance.now();
   const fpsLabel = el("span.fine");
@@ -418,6 +432,7 @@ export async function shaderEditor(host) {
       gl.uniform1f(u("u_time"), doc.paused ? pausedAt : (now - t0) / 1000);
       gl.uniform1f(u("u_seed"), doc.seed || 0);
       applyUniforms(gl, program, uniforms, doc.uniforms);
+      bindTextures(gl, program, uniforms, doc.uniforms, textures);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
       frames++;
@@ -437,7 +452,7 @@ export async function shaderEditor(host) {
     // carry their knob values straight over.
     uniforms = parseUniforms(editor.value);
     clear(knobHost);
-    knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save()));
+    knobHost.append(buildControls(uniforms, doc.uniforms, () => host.save(), { onImage }));
     const ok = compile(editor.value);
     if (ok) {
       doc.source = editor.value;
@@ -513,6 +528,7 @@ export async function shaderEditor(host) {
         el("button", { onclick: () => { t0 = performance.now(); pausedAt = 0; } }, "Restart time"),
         presetSel, sizeSel,
         el("button", { onclick: savePng }, "PNG"),
+        grid.button,
         el("button.ghost", {
           onclick: () => modal(el("h2", {}, "Uniforms available"),
             el("pre.editor", { style: { minHeight: "auto" } }, PREAMBLE_HINT),
@@ -538,7 +554,7 @@ export async function shaderEditor(host) {
 
     el("div.lab-split", {},
       el("div.stack", {},
-        el("div.lab-out", {}, canvas, log),
+        el("div.lab-out", {}, el("div", { style: { position: "relative" } }, canvas, grid.overlay), log),
         knobHost,
         el("p.fine", {}, "Ctrl/Cmd+Enter runs. Editing re-runs after a pause. " +
           "A shader that fails to compile leaves the last working one on " +
@@ -554,6 +570,7 @@ export async function shaderEditor(host) {
   root._cleanup = () => {
     cancelAnimationFrame(raf);
     clearTimeout(typeTimer);
+    if (gl) releaseTextures(gl, textures);
     if (gl && program) gl.deleteProgram(program);
     const lose = gl && gl.getExtension("WEBGL_lose_context");
     if (lose) lose.loseContext();

@@ -102,17 +102,51 @@ function sliders(u, value, onChange) {
   });
 }
 
+/** A picture you choose. The value is {url, w, h}; the bytes live in the
+    studio's asset store, and the URL carries its own capability key. */
+function imageControl(u, values, onChange, onImage) {
+  const cur = values[u.name];
+  const thumb = el("img", { style: { width: "100%", maxHeight: "72px", objectFit: "cover",
+    borderRadius: "6px", display: cur && cur.url ? "block" : "none",
+    background: "var(--bg-2, #10141f)" }, src: cur && cur.url ? cur.url : "" });
+  const note = el("span.fine", {}, cur && cur.url ? `${cur.w || "?"}×${cur.h || "?"}` : "no image yet");
+  const file = el("input", { type: "file", accept: "image/*", style: { display: "none" },
+    onchange: async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f || !onImage) return;
+      note.textContent = "uploading…";
+      try {
+        const v = await onImage(u, f);        // {url, w, h}
+        values[u.name] = v;
+        thumb.src = v.url; thumb.style.display = "block";
+        note.textContent = `${v.w}×${v.h}`;
+        onChange();
+      } catch (err) { note.textContent = err.message || "upload failed"; }
+      e.target.value = "";
+    } });
+  return el("label.knob", {}, u.label,
+    el("div.row.tight", { style: { marginTop: ".2rem" } },
+      el("button", { type: "button", onclick: () => file.click() }, "Choose image…"),
+      cur && cur.url ? el("button.ghost", { type: "button", onclick: () => {
+        values[u.name] = null; thumb.style.display = "none"; note.textContent = "no image"; onChange();
+      } }, "Clear") : null,
+      note),
+    thumb, file);
+}
+
 /**
  * Build the panel. `values` is the live store, keyed by uniform name — mutated
  * in place so the render loop reads current values without re-binding.
+ * `onImage(u, file)` uploads a picked file and resolves to {url, w, h}.
  */
-export function buildControls(uniforms, values, onChange) {
+export function buildControls(uniforms, values, onChange, { onImage } = {}) {
   if (!uniforms.length) {
     return el("p.fine", {}, "No adjustable uniforms. Declare one — " +
       "`uniform float scale; // @range 1 40` — and a control appears here.");
   }
   const nodes = [];
   for (const u of uniforms) {
+    if (u.control === "image") { nodes.push(imageControl(u, values, onChange, onImage)); continue; }
     // Keep the value across an edit when the shape still fits; a slider that
     // resets every time you touch the source is worse than no slider.
     const prev = values[u.name];
@@ -131,6 +165,7 @@ export function buildControls(uniforms, values, onChange) {
 /** Push the stored values at the live program. */
 export function applyUniforms(gl, program, uniforms, values) {
   for (const u of uniforms) {
+    if (u.control === "image") continue;     // bindTextures() owns these
     const loc = gl.getUniformLocation(program, u.name);
     if (!loc) continue;                      // optimised out; nothing to set
     const v = values[u.name] || u.value;
@@ -143,10 +178,75 @@ export function applyUniforms(gl, program, uniforms, values) {
   }
 }
 
+/**
+ * Bind every sampler2D to its own texture unit, loading images on demand.
+ * `cache` persists across frames and is emptied by releaseTextures(). Until
+ * an image arrives, or when none is chosen, a 1×1 mid-grey stands in and the
+ * size uniform reads (0, 0) — which is how a sketch tells there is no image.
+ */
+export function bindTextures(gl, program, uniforms, values, cache) {
+  let unit = 0;
+  if (!cache.blank) {
+    cache.blank = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, cache.blank);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
+                  new Uint8Array([128, 128, 128, 255]));
+  }
+  for (const u of uniforms) {
+    if (u.control !== "image") continue;
+    const loc = gl.getUniformLocation(program, u.name);
+    const want = values[u.name] && values[u.name].url;
+    let entry = cache[u.name];
+    if (want && (!entry || entry.url !== want)) {
+      if (entry && entry.tex) gl.deleteTexture(entry.tex);
+      entry = cache[u.name] = { url: want, tex: null, w: 0, h: 0 };
+      const img = new Image();
+      img.onload = () => {
+        if (cache[u.name] !== entry) return;           // superseded while loading
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        // Flip so uv (0,0) is the bottom-left, matching gl_FragCoord. NPOT
+        // images are fine in WebGL1 as long as they clamp and skip mipmaps.
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        entry.tex = tex; entry.w = img.naturalWidth; entry.h = img.naturalHeight;
+        // Remember the size on the value, so the panel can show it next time.
+        if (values[u.name]) { values[u.name].w = entry.w; values[u.name].h = entry.h; }
+      };
+      img.src = want;
+    } else if (!want && entry) {
+      if (entry.tex) gl.deleteTexture(entry.tex);
+      entry = cache[u.name] = null;
+    }
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, entry && entry.tex ? entry.tex : cache.blank);
+    if (loc) gl.uniform1i(loc, unit);
+    const sizeLoc = gl.getUniformLocation(program, u.sizeUniform);
+    if (sizeLoc) gl.uniform2f(sizeLoc, entry && entry.tex ? entry.w : 0, entry && entry.tex ? entry.h : 0);
+    unit++;
+  }
+  gl.activeTexture(gl.TEXTURE0);
+}
+
+export function releaseTextures(gl, cache) {
+  for (const k of Object.keys(cache)) {
+    const e = cache[k];
+    if (k === "blank" && e) gl.deleteTexture(e);
+    else if (e && e.tex) gl.deleteTexture(e.tex);
+    delete cache[k];
+  }
+}
+
 /** New values for everything the Randomise button should move. Colours stay
     inside a pleasant band rather than going anywhere in the cube. */
 export function randomise(uniforms, values) {
   for (const u of uniforms) {
+    if (u.control === "image") continue;
     const v = values[u.name] || (values[u.name] = u.value.slice());
     if (u.control === "color") {
       const h = Math.random(), s = 0.35 + Math.random() * 0.45, l = 0.35 + Math.random() * 0.4;
