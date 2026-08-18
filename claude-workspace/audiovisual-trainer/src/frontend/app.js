@@ -352,6 +352,15 @@ function initMenu() {
         } catch (e2) { toast(e2.message); }
       };
       input.click();
+    } else if (act === "selftest") {
+      const { selfTestPanel } = await import("./selftest.js");
+      modal(el("h2", {}, "Shader self-test"),
+        el("p.fine", {}, "Compiles every preset for both passes on this GPU, renders " +
+          "each, and runs the shape compilers against the browser's own " +
+          "rasterisation. Numbers are mean error out of 255."),
+        selfTestPanel(),
+        el("div.row", { style: { justifyContent: "flex-end" } },
+          el("button.primary", { onclick: closeModal }, "Close")));
     } else if (act === "seed") {
       const r = await api("/api/seed", { method: "POST" });
       const n = Object.values(r).filter((v) => typeof v === "number").reduce((a, b) => a + b, 0);

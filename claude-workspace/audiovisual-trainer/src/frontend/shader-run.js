@@ -9,28 +9,33 @@
 // One hidden WebGL canvas is shared, because a browser only grants a handful
 // of contexts and a filter dialog would otherwise burn one per preview.
 
-import { parseUniforms, desugar, hasSimPass } from "./shader-uniforms.js";
+import { parseUniforms, desugar, hasSimPass, isEs3, withDefine } from "./shader-uniforms.js";
 import { applyUniforms } from "./shader-controls.js";
 import { Feedback } from "./feedback.js";
 
 const VERT = `attribute vec2 a_pos;
 void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+const VERT_300 = `#version 300 es
+in vec2 a_pos;
+void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
 
-let shared = null;   // { canvas, gl, quad, feedback, programs: Map }
-
-function ctx() {
-  if (shared) return shared;
-  const canvas = document.createElement("canvas");
-  const gl = canvas.getContext("webgl", { preserveDrawingBuffer: true, antialias: false });
-  if (!gl) throw new Error("WebGL is not available");
-  const quad = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-  shared = { canvas, gl, quad, feedback: new Feedback(gl), programs: new Map() };
-  return shared;
+/**
+ * A GL context for shader work: WebGL2 where the browser has it, WebGL1
+ * otherwise. WebGL2 is where float render targets, fwidth, integer textures
+ * and MRT are standard rather than extensions, and a 1.00 shader still
+ * compiles on it unchanged — so nothing is lost by asking for it first.
+ */
+export function getGL(canvas, attrs = {}) {
+  const a = { preserveDrawingBuffer: true, antialias: false, ...attrs };
+  const gl2 = canvas.getContext("webgl2", a);
+  if (gl2) return gl2;
+  return canvas.getContext("webgl", a);
 }
+export const isGL2 = (gl) =>
+  typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext;
 
-function link(gl, fragSrc) {
+/** Link a fragment shader with the matching vertex shader for its version. */
+export function linkProgram(gl, fragSrc) {
   const mk = (type, code) => {
     const sh = gl.createShader(type);
     gl.shaderSource(sh, code);
@@ -43,7 +48,7 @@ function link(gl, fragSrc) {
     return sh;
   };
   const prog = gl.createProgram();
-  gl.attachShader(prog, mk(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, mk(gl.VERTEX_SHADER, isEs3(fragSrc) ? VERT_300 : VERT));
   gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, fragSrc));
   gl.linkProgram(prog);
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
@@ -52,20 +57,38 @@ function link(gl, fragSrc) {
   return prog;
 }
 
-/** Full GLSL for a source that may be a sketch or may already be a shader. */
-export function toGlsl(source) {
-  return /\bvoid\s+main\s*\(/.test(source) ? source : desugar(source);
+let shared = null;   // { canvas, gl, quad, feedback, programs: Map }
+
+function ctx() {
+  if (shared) return shared;
+  const canvas = document.createElement("canvas");
+  const gl = getGL(canvas);
+  if (!gl) throw new Error("WebGL is not available");
+  const quad = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  shared = { canvas, gl, quad, feedback: new Feedback(gl), programs: new Map() };
+  return shared;
+}
+
+const link = linkProgram;
+
+/** Full GLSL for a source that may be a sketch or may already be a shader.
+    A sketch is emitted for the context it will run on. */
+export function toGlsl(source, gl = null) {
+  if (/\bvoid\s+main\s*\(/.test(source)) return source;
+  return desugar(source, { es3: gl ? isGL2(gl) : !!(shared && isGL2(shared.gl)) });
 }
 
 /** Compile once per distinct source; a filter dialog re-renders on every
     slider move and must not recompile each time. */
 function programsFor(source) {
   const s = ctx();
-  const glsl = toGlsl(source);
+  const glsl = toGlsl(source, s.gl);
   let entry = s.programs.get(glsl);
   if (entry) return entry;
   const display = link(s.gl, glsl);
-  const sim = hasSimPass(glsl) ? link(s.gl, "#define SIM_PASS\n" + glsl) : null;
+  const sim = hasSimPass(glsl) ? link(s.gl, withDefine(glsl, "SIM_PASS")) : null;
   entry = { display, sim, uniforms: parseUniforms(source) };
   // Keep the cache small: a dialog only ever wants the last few.
   if (s.programs.size > 8) {

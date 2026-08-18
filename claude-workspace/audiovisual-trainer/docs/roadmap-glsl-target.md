@@ -257,7 +257,33 @@ Each phase lists deliverables, what "done" means (a test you can run), rough
 size (S ≈ a session, M ≈ a few, L ≈ many), and dependencies. Order is by
 dependency and by payoff.
 
-### Phase 0 — Harden the foundation *(S–M, now)*
+### Phase 0 — Harden the foundation *(S–M, now)* — **shipped, `24fc41c`+**
+
+What landed, against the list below: WebGL2 is the context everywhere
+(`getGL` tries it first; the Generate, Shader and offscreen renderers share it
+and one `linkProgram` that picks the vertex stage by the fragment's version).
+A sketch emits GLSL ES 3.00 on WebGL2 — `#version 300 es`, `out fragColor`,
+and two `#define`s that keep `gl_FragColor` and `texture2D` working so every
+sketch, helper and Book of Shaders paste-in compiles unchanged — and 1.00
+elsewhere; `aa()` uses `fwidth` under 3.00. Feedback storage negotiates float
+via `EXT_color_buffer_float` with sized formats. `desugarMapped` carries a
+line map from generated to sketch lines and `mapErrors` rewrites the driver's
+log against it, so an error reads "line 3: … undeclared identifier" with the
+offending sketch line under it. Schema v1 adds `@group @help @module` on a
+uniform and a header block `sketchMeta` reads (`@node @module @pass
+@precision @space`).
+
+The self-test lives in the account menu ("Self-test the shaders"): every
+Generate preset compiled for both passes and drawn, controls probed on the
+non-feedback ones, every Shader preset compiled, and the two shape compilers
+plus the glyph atlas run against the browser's own rasterisation with the
+thresholds the commits reported. **Its first run caught a real regression**:
+the joins commit had put a mitre wedge at every vertex of a flattened curve,
+which took the SVG fixture from 2.33 to 5.70/255, and no hand check had
+noticed. Fixed by skipping joins below ~12°; 40/40 now, on WebGL2 with float
+state.
+
+Not done from the list, deliberately: nothing.
 
 The Generate stack is the seed of everything; make it load-bearing.
 

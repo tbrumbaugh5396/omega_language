@@ -174,7 +174,13 @@ const unit = (from, to) => {
  */
 function joinPatch(v, e1, e2, hw, join, miterLimit) {
   const cross = e1[0] * e2[1] - e1[1] * e2[0];
-  if (Math.abs(cross) < 1e-6) return null;             // straight through
+  const dot = e1[0] * e2[0] + e1[1] * e2[1];
+  // Below about 12° there is no corner to speak of — the two round caps of the
+  // capsules already meet cleanly. This matters most on a flattened curve,
+  // where every vertex is a shallow turn: a mitre wedge at each of fifty
+  // vertices bulges outward along what should be a smooth line, and the
+  // browser draws no such thing.
+  if (Math.abs(cross) < 1e-6 || dot > 0.978) return null;
   const s = cross > 0 ? -1 : 1;                        // the outside of the turn
   const perp = (d) => [-d[1] * s, d[0] * s];
   const n1 = perp(e1), n2 = perp(e2);

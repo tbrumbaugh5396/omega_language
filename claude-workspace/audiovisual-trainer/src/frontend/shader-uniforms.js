@@ -65,6 +65,17 @@ function annotations(comment) {
     } else if (key === "label") {
       out.label = words.slice(i + 1).join(" ");
       i = words.length;
+    } else if (key === "group" || key === "module") {
+      // One token: a panel section, or a course module slug the control
+      // links to (`@module 05-display`).
+      out[key] = words[i + 1] || "";
+      i += 1;
+    } else if (key === "help") {
+      // Free text up to the next annotation, so `@help … @module x` keeps both.
+      let j = i + 1;
+      while (j < words.length && words[j][0] !== "@") j++;
+      out.help = words.slice(i + 1, j).join(" ");
+      i = j - 1;
     } else if (key === "data" || key === "asset") {
       // The pixels themselves (a data: URL) or where to fetch them. One
       // token — URLs have no spaces; a data URL can be very long.
@@ -165,6 +176,7 @@ export function parseUniforms(src) {
       min, max, step,
       label: a.label || name,
       value: value.slice(0, width),
+      group: a.group || null, module: a.module || null, help: a.help || null,
     });
   }
   // A vec2 named <sampler>_size belongs to the sampler, not the panel.
@@ -317,6 +329,50 @@ uniform sampler2D u_state;   // this frame's state, once sim() has run
 uniform int   u_frame;       // frames since Restart; 0 on the first
 uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
 
+// GLSL ES 3.00, for a WebGL2 context. The version line must be the very first
+// line of the file, so a runtime that prepends `#define SIM_PASS` inserts it
+// after this line rather than before it. Shims keep every sketch and helper
+// written in 1.00 spelling compiling unchanged: texture2D and gl_FragColor are
+// the two names that changed, and both are one #define away.
+const PRELUDE_300 = `#version 300 es
+precision highp float;
+precision highp int;
+out vec4 fragColor;
+#define gl_FragColor fragColor
+#define texture2D texture
+#define textureCube texture
+uniform vec2  u_resolution;
+uniform vec2  u_mouse;
+uniform float u_time;
+uniform float u_seed;
+uniform sampler2D u_prev;    // last frame — of the state if sim() exists, else of the picture
+uniform sampler2D u_state;   // this frame's state, once sim() has run
+uniform int   u_frame;       // frames since Restart; 0 on the first
+uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
+
+// The two anti-aliasing helpers by GLSL version. Under 3.00 the width comes
+// from fwidth(d) — the exact rate the distance changes across this pixel — so
+// an edge is one pixel soft at any zoom, in any coordinate system, with no
+// guess about units. 1.00 has no derivatives without an extension, so it uses
+// a fixed width in normalised units, which is right at one scale only.
+const AA_100 = `float aa(float d, float w){ return smoothstep(w,-w,d); }
+float aa(float d){ return aa(d, 1.5/u_resolution.y); }`;
+const AA_300 = `float aa(float d, float w){ return smoothstep(w,-w,d); }
+float aa(float d){ float w = fwidth(d) * 0.75 + 1e-6; return smoothstep(w,-w,d); }`;
+
+/** Does a hand-written shader ask for ES 3.00? Only a leading #version says so. */
+export function isEs3(glsl) {
+  return /^\s*#version\s+300\s+es\b/.test(String(glsl));
+}
+
+/** Prepend a define without moving a #version line off line one. */
+export function withDefine(glsl, define) {
+  const src = String(glsl);
+  if (!isEs3(src)) return `#define ${define}\n${src}`;
+  const nl = src.indexOf("\n");
+  return `${src.slice(0, nl + 1)}#define ${define}\n${src.slice(nl + 1)}`;
+}
+
 /** The variables in scope inside a sketch, documented for the help panel. */
 export const SKETCH_VARS = [
   ["uv", "vec2", "0 to 1 across the frame, y up"],
@@ -350,10 +406,18 @@ const DIRECTIVE = /^[ \t]*#\s*(define|undef|if|ifdef|ifndef|else|elif|endif|exte
 
 export function splitSketch(sketch) {
   const decls = [], stmts = [];
+  const declLines = [], stmtLines = [];        // sketch line each chunk begins on
+  const raw = String(sketch);
+  const lineOf = (offset) => {
+    let n = 1;
+    for (let i = 0; i < offset && i < raw.length; i++) if (raw.charCodeAt(i) === 10) n++;
+    return n;
+  };
   // Preprocessor lines end at the newline, not at a semicolon, so they are
   // lifted out first. Blanked to spaces, so every later offset still holds.
-  const src = String(sketch).replace(DIRECTIVE, (m) => {
+  const src = raw.replace(DIRECTIVE, (m, _kw, offset) => {
     decls.push(m.trim());
+    declLines.push(lineOf(offset));
     return " ".repeat(m.length);
   });
   const bare = stripComments(src);
@@ -384,29 +448,56 @@ export function splitSketch(sketch) {
     const code = bare.slice(s, e).trim();
     if (!code) continue;
     const isDecl = DECL_START.test(code) || FUNC_DEF.test(code);
-    (isDecl ? decls : stmts).push(text);
+    // A chunk's slice begins right after the previous terminator, so it
+    // usually opens with the tail of that line: a newline, maybe a comment.
+    // Those blank lines are dropped, so the chunk's first emitted line is the
+    // sketch line its code starts on — which is what the source map needs.
+    const blank = /^(?:[ \t]*\n)+/.exec(text);
+    const lead = blank ? blank[0].length : 0;
+    const clean = text.slice(lead);
+    const line = lineOf(s + lead);
+    if (isDecl) { decls.push(clean); declLines.push(line); }
+    else { stmts.push(clean); stmtLines.push(line); }
   }
 
+  const exprText = src.slice(start);
+  const exprLead = exprText.length - exprText.replace(/^\s*/, "").length;
   return {
     preamble: decls.join("\n"),
     body: stmts.join("\n"),
-    expr: src.slice(start).trim(),
+    expr: exprText.trim(),
+    // For the source map: which sketch line each emitted chunk begins on.
+    declLines, stmtLines, exprLine: lineOf(start + exprLead),
+    declTexts: decls, stmtTexts: stmts,
   };
 }
 
-/** Sketch shorthand to a complete fragment shader. */
-export function desugar(sketch) {
-  const { preamble, body, expr } = splitSketch(sketch);
+/**
+ * Sketch shorthand to a complete fragment shader.
+ *
+ * `opts.es3` emits GLSL ES 3.00 for a WebGL2 context — same sketch, same
+ * helpers, with `aa()` gaining fwidth. Otherwise 1.00, which any context runs.
+ * `desugarMapped` returns the same text plus a line map, for errors.
+ */
+export function desugar(sketch, opts = {}) {
+  return desugarMapped(sketch, opts).source;
+}
+
+export function desugarMapped(sketch, opts = {}) {
+  const parts = splitSketch(sketch);
+  const { preamble, body, expr } = parts;
   const colour = expr || "vec3(0.0)";
   const declared = stripComments(preamble);
   const defines = (name) =>
     new RegExp(`\\b(?:float|int|bool|vec2|vec3|vec4|mat2)\\s+${name}\\b`).test(declared);
 
   let helpers = HELPERS
-    .filter(([name]) =>
-      !new RegExp(`\\b(?:float|int|vec2|vec3|vec4|mat2)\\s+${name}\\s*\\(`).test(declared))
+    .filter(([name]) => name !== "aa"
+      && !new RegExp(`\\b(?:float|int|vec2|vec3|vec4|mat2)\\s+${name}\\s*\\(`).test(declared))
     .map(([, src]) => src)
     .join("\n");
+  // aa() is chosen by version, and only if the sketch has not defined its own.
+  if (!/\bfloat\s+aa\s*\(/.test(declared)) helpers += "\n" + (opts.es3 ? AA_300 : AA_100);
   if (/\bfloat\s+scene\s*\(\s*vec3\b/.test(declared)) helpers += "\n" + HELPERS_3D;
 
   // The coordinates are file-scope so a function you write in the preamble can
@@ -432,19 +523,77 @@ export function desugar(sketch) {
 ` : "";
   const simEnd = hasSim ? "\n#endif" : "";
 
-  return expandHex(`${PRELUDE}
-${vars.map(([ty, name]) => `${ty} ${name};`).join("\n")}
-${helpers}
-${COERCE}
-${preamble}
-void main() {
-${vars.map(([, name, init]) => `  ${name} = ${init};`).join("\n")}
-${simBlock}${body}
-  gl_FragColor = vec4(_rgb(
-${colour}
-  ), 1.0);${simEnd}
+  // Assemble line by line so every emitted line knows which sketch line, if
+  // any, it came from. Chunk text is verbatim, so a chunk that begins on
+  // sketch line L puts its k-th line at L + k.
+  const out = [], map = [];
+  const emit = (text, fromLine = 0) => {
+    const lines = String(text).split("\n");
+    lines.forEach((l, k) => { out.push(l); map.push(fromLine ? fromLine + k : 0); });
+  };
+  emit(opts.es3 ? PRELUDE_300 : PRELUDE);
+  emit(vars.map(([ty, name]) => `${ty} ${name};`).join("\n"));
+  emit(helpers);
+  emit(COERCE);
+  parts.declTexts.forEach((t, i) => emit(t, parts.declLines[i]));
+  emit("void main() {");
+  emit(vars.map(([, name, init]) => `  ${name} = ${init};`).join("\n"));
+  if (hasSim) emit(simBlock.replace(/\n$/, ""));
+  parts.stmtTexts.forEach((t, i) => emit(t, parts.stmtLines[i]));
+  emit("  gl_FragColor = vec4(_rgb(");
+  emit(colour, parts.exprLine);
+  emit("  ), 1.0);" + simEnd);
+  emit("}");
+  emit("");
+  // expandHex works per line and never adds or removes newlines, so the map
+  // survives it.
+  return { source: expandHex(out.join("\n")), map, es3: !!opts.es3 };
 }
-`);
+
+/**
+ * Turn a driver's "ERROR: 0:LINE: message" lines into sketch terms. Lines the
+ * user never wrote are labelled as generated, with the offending code shown,
+ * rather than pointing at a line number that means nothing to them.
+ */
+export function mapErrors(log, mapped, sketchText) {
+  const srcLines = mapped.source.split("\n");
+  const sketchLines = String(sketchText || "").split("\n");
+  return String(log).split("\n").map((line) => {
+    const m = /^(ERROR|WARNING):\s*\d+:(\d+):\s*(.*)$/.exec(line.trim());
+    if (!m) return line;
+    const gen = +m[2];
+    const sk = mapped.map[gen - 1] || 0;
+    if (sk) return `${m[1]} line ${sk}: ${m[3]}\n    ${(sketchLines[sk - 1] || "").trim()}`;
+    return `${m[1]} in generated code: ${m[3]}\n    ${(srcLines[gen - 1] || "").trim()}`;
+  }).join("\n");
+}
+
+/**
+ * Sketch-level metadata, from `@key value` in the leading comment lines. This
+ * is the schema the render graph (roadmap, Phase 1) reads to treat a sketch as
+ * a node: what it is called, which course module explains it, whether it must
+ * be its own pass, what precision and colour space it wants.
+ *
+ *   // @node adjust.exposure
+ *   // @module 05-display
+ *   // @pass            — never fused with its neighbours (reads a neighbourhood)
+ *   // @precision float — half is the default intermediate
+ *   // @space encoded   — linear is the default working space
+ */
+export function sketchMeta(src) {
+  const meta = { node: null, module: null, pass: false, precision: null, space: null, title: null };
+  for (const raw of String(src).split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!line.startsWith("//")) break;                 // the header ends at the first code
+    const body = line.replace(/^\/\/\s?/, "");
+    if (meta.title === null && !body.startsWith("@")) meta.title = body;
+    const m = /@(node|module|pass|precision|space)\b\s*(\S*)/.exec(body);
+    if (!m) continue;
+    if (m[1] === "pass") meta.pass = true;
+    else meta[m[1]] = m[2] || null;
+  }
+  return meta;
 }
 
 /** Does this shader (sketch-generated or hand-written) carry a state pass? */

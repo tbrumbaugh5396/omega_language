@@ -12,6 +12,7 @@
 import { el, clear, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms } from "./shader-uniforms.js";
+import { getGL, linkProgram } from "./shader-run.js";
 import { buildControls, applyUniforms, bindTextures, releaseTextures } from "./shader-controls.js";
 import { gridOverlay } from "./grid-overlay.js";
 
@@ -378,31 +379,14 @@ export async function shaderEditor(host) {
   function compile(src) {
     clear(log);
     if (!gl) {
-      gl = canvas.getContext("webgl", { preserveDrawingBuffer: true, antialias: false });
+      gl = getGL(canvas);
       if (!gl) { log.textContent = "WebGL is not available in this browser."; return false; }
     }
-    const mk = (type, code) => {
-      const s = gl.createShader(type);
-      gl.shaderSource(s, code);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        const info = gl.getShaderInfoLog(s) || "compile failed";
-        gl.deleteShader(s);
-        throw new Error(info);
-      }
-      return s;
-    };
-    let vs, fs, p;
+    let p;
     try {
-      vs = mk(gl.VERTEX_SHADER, VERT);
-      fs = mk(gl.FRAGMENT_SHADER, src);
-      p = gl.createProgram();
-      gl.attachShader(p, vs);
-      gl.attachShader(p, fs);
-      gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-        throw new Error(gl.getProgramInfoLog(p) || "link failed");
-      }
+      // A Book of Shaders paste-in is 1.00 and compiles unchanged on WebGL2;
+      // a shader that opens with `#version 300 es` gets a 300 vertex stage.
+      p = linkProgram(gl, src);
     } catch (e) {
       // Keep the last working program on screen: a shader that fails to
       // compile should not blank the thing you were looking at.

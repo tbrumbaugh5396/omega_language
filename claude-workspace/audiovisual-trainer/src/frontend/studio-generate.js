@@ -7,7 +7,9 @@
 
 import { el, clear, api, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
-import { parseUniforms, desugar, hasSimPass, bakeDefaults, embedImages, stripComments, SKETCH_VARS } from "./shader-uniforms.js";
+import { parseUniforms, desugar, desugarMapped, mapErrors, hasSimPass, isEs3, withDefine,
+         bakeDefaults, embedImages, stripComments, SKETCH_VARS } from "./shader-uniforms.js";
+import { getGL, isGL2, linkProgram } from "./shader-run.js";
 import { Feedback } from "./feedback.js";
 import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
          mediaDims, seekVideos, resumeVideos } from "./shader-controls.js";
@@ -1043,12 +1045,19 @@ export async function generateEditor(host) {
   canvas.addEventListener("pointerup", () => { mouseDown = 0; });
   canvas.addEventListener("pointercancel", () => { mouseDown = 0; });
 
-  /** The full GLSL that runs — generated from the sketch, or yours. */
-  const source = () => doc.mode === "glsl" ? (doc.glsl || "") : desugar(doc.sketch);
+  /** The full GLSL that runs — generated from the sketch, or yours. A sketch is
+      emitted for the context: ES 3.00 on WebGL2, 1.00 otherwise. */
+  let lastMapped = null;                     // the last sketch → GLSL map, for errors
+  const es3 = () => !!(gl && isGL2(gl));
+  const source = () => {
+    if (doc.mode === "glsl") return doc.glsl || "";
+    lastMapped = desugarMapped(doc.sketch, { es3: es3() });
+    return lastMapped.source;
+  };
 
   function ensureGL() {
     if (gl) return true;
-    gl = canvas.getContext("webgl", { preserveDrawingBuffer: true, antialias: false });
+    gl = getGL(canvas);
     if (!gl) { log.textContent = "WebGL is not available in this browser."; return false; }
     quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
@@ -1058,29 +1067,7 @@ export async function generateEditor(host) {
     return true;
   }
 
-  function link(fragSrc) {
-    const mk = (type, code) => {
-      const sh = gl.createShader(type);
-      gl.shaderSource(sh, code);
-      gl.compileShader(sh);
-      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        const info = gl.getShaderInfoLog(sh) || "compile failed";
-        gl.deleteShader(sh);
-        throw new Error(info);
-      }
-      return sh;
-    };
-    const vs = mk(gl.VERTEX_SHADER, VERT);
-    const fs = mk(gl.FRAGMENT_SHADER, fragSrc);
-    const prog = gl.createProgram();
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      throw new Error(gl.getProgramInfoLog(prog) || "link failed");
-    }
-    return prog;
-  }
+  const link = (fragSrc) => linkProgram(gl, fragSrc);
 
   /** Compile the display program and, if the source has a state pass, the sim
       program too — from the same file, with SIM_PASS defined for the second. */
@@ -1088,22 +1075,32 @@ export async function generateEditor(host) {
     clear(log);
     if (!ensureGL()) return false;
     let d = null, s2 = null;
+    let inSim = false;
     try {
       d = link(src);
-      if (hasSimPass(src)) s2 = link("#define SIM_PASS\n" + src);
+      if (hasSimPass(src)) { inSim = true; s2 = link(withDefine(src, "SIM_PASS")); }
     } catch (e) {
       // Keep the last working programs: a shader that fails to compile should
       // not blank the thing you were looking at.
       if (d) gl.deleteProgram(d);
-      log.textContent = String(e.message).trim() + (doc.mode === "sketch"
-        ? "\n\n(line numbers are for the generated shader — press GLSL to see it, or edit it directly)"
-        : "");
+      let msg = String(e.message).trim();
+      if (doc.mode === "sketch" && lastMapped) {
+        // Errors arrive against the generated file; say them in sketch lines.
+        // The sim program has one extra line (the define) after any #version.
+        if (inSim) msg = msg.replace(/(ERROR|WARNING):\s*(\d+):(\d+):/g,
+          (m, k, a, b) => `${k}: ${a}:${Math.max(1, +b - 1)}:`);
+        msg = mapErrors(msg, lastMapped, doc.sketch);
+      } else if (inSim) {
+        msg = msg.replace(/(ERROR|WARNING):\s*(\d+):(\d+):/g,
+          (m, k, a, b) => `${k}: ${a}:${Math.max(1, +b - 1)}:`);
+      }
+      log.textContent = msg;
       return false;
     }
     if (display) gl.deleteProgram(display);
     if (sim) gl.deleteProgram(sim);
     display = d; sim = s2;
-    stateLabel.textContent = sim ? `sim · ${feedback.describe()}` : "";
+    stateLabel.textContent = sim ? `sim · ${feedback.describe()}` : (es3() ? "WebGL2 · ES 3.00" : "WebGL1 · ES 1.00");
     return true;
   }
 
@@ -1391,7 +1388,7 @@ export async function generateEditor(host) {
       runs, so a change there is a change to the shader. One way — the sketch
       is kept, but edits made here do not fold back into it. */
   function editAsGlsl(text) {
-    const fresh = typeof text === "string" ? text : desugar(doc.sketch);
+    const fresh = typeof text === "string" ? text : desugar(doc.sketch, { es3: es3() });
     if (doc.glsl && doc.glsl !== fresh) {
       if (!confirm("You have GLSL edits from before. Replace them with a fresh conversion of the sketch?")) {
         // keep the old edits
@@ -1439,7 +1436,8 @@ export async function generateEditor(host) {
   }
 
   function showGlsl() {
-    const src = desugar(doc.sketch);
+    // The version that actually runs here — 3.00 on WebGL2 — not a generic one.
+    const src = desugar(doc.sketch, { es3: es3() });
     const area = el("textarea.editor", { value: src, spellcheck: false, readOnly: true,
       style: { minHeight: "340px" } });
     const embedBox = el("input", { type: "checkbox", checked: false, style: { width: "auto" },
@@ -1504,6 +1502,12 @@ uniform bool  mirror;  // @toggle`),
         "state(uv). Without sim(), prev(uv) is simply the last picture — " +
         "trails and echoes. md is 1.0 while the pointer is down. Steps per " +
         "frame runs the rule several times per drawn frame; Restart clears."),
+      el("h3", {}, "Which GLSL"),
+      el("p.fine", {}, "On WebGL2 a sketch is emitted as GLSL ES 3.00 — texture2D " +
+        "and gl_FragColor still work, by #define — and aa() uses fwidth, so an " +
+        "edge is one pixel soft at any zoom. On WebGL1 it is 1.00 with a fixed " +
+        "width. A hand-written shader picks its own version by its first line: " +
+        "`#version 300 es`, or nothing for 1.00; both run on either context."),
       el("h3", {}, "Editing the GLSL"),
       el("p.fine", {}, "GLSL shows the file the sketch becomes. Edit this GLSL " +
         "here makes that file the thing you edit and run — every line yours, " +

@@ -14,10 +14,19 @@
 function tryTarget(gl, w, h, kind, exts) {
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
-  const type = kind === "float" ? gl.FLOAT
-             : kind === "half" ? exts.half.HALF_FLOAT_OES
-             : gl.UNSIGNED_BYTE;
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, type, null);
+  if (exts.gl2) {
+    // WebGL2 names its formats: a sized internal format, and HALF_FLOAT is a
+    // core constant rather than an extension's. Rendering to either still
+    // needs EXT_color_buffer_float, which the constructor asked for.
+    const internal = kind === "float" ? gl.RGBA32F : kind === "half" ? gl.RGBA16F : gl.RGBA8;
+    const type = kind === "float" ? gl.FLOAT : kind === "half" ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+    gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, gl.RGBA, type, null);
+  } else {
+    const type = kind === "float" ? gl.FLOAT
+               : kind === "half" ? exts.half.HALF_FLOAT_OES
+               : gl.UNSIGNED_BYTE;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, type, null);
+  }
   // Linear filtering of float textures is its own extension. Without it a
   // sim can still run at NEAREST; only smooth sampling of the state suffers.
   const linear = kind === "byte"
@@ -42,7 +51,16 @@ function tryTarget(gl, w, h, kind, exts) {
 export class Feedback {
   constructor(gl) {
     this.gl = gl;
-    this.exts = {
+    const gl2 = typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext;
+    this.exts = gl2 ? {
+      gl2: true,
+      // Float textures are core in WebGL2; rendering *to* them is not.
+      float: gl.getExtension("EXT_color_buffer_float"),
+      floatLinear: gl.getExtension("OES_texture_float_linear"),
+      half: gl.getExtension("EXT_color_buffer_float") || gl.getExtension("EXT_color_buffer_half_float"),
+      halfLinear: true,                       // half-float filtering is core in WebGL2
+    } : {
+      gl2: false,
       float: gl.getExtension("OES_texture_float"),
       floatLinear: gl.getExtension("OES_texture_float_linear"),
       half: gl.getExtension("OES_texture_half_float"),
@@ -131,8 +149,9 @@ export class Feedback {
   /** A word for the panel. */
   describe() {
     if (!this.kind) return "no feedback storage";
-    return this.kind === "float" ? "float state"
-         : this.kind === "half" ? "half-float state"
-         : "8-bit state (this GPU will not render to float; sims will be coarse)";
+    const api = this.exts.gl2 ? "WebGL2" : "WebGL1";
+    return this.kind === "float" ? `float state · ${api}`
+         : this.kind === "half" ? `half-float state · ${api}`
+         : `8-bit state · ${api} (this GPU will not render to float; sims will be coarse)`;
   }
 }
