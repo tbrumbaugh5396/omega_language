@@ -13,6 +13,7 @@ import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
          mediaDims, seekVideos, resumeVideos } from "./shader-controls.js";
 import { muxMp4 } from "./video-mux.js";
 import { compileSvg } from "./svg-to-sdf.js";
+import { loadFontFile, registeredFonts } from "./font-file.js";
 import { fitPreview } from "./sdf-core.js";
 import { gridOverlay } from "./grid-overlay.js";
 
@@ -1408,6 +1409,12 @@ uniform bool  mirror;  // @toggle`),
         "here makes that file the thing you edit and run — every line yours, " +
         "line numbers in errors exact. Controls, images and feedback keep " +
         "working because they only need the uniform declarations."),
+      el("h3", {}, "Type"),
+      el("p.fine", {}, "Text compiles to a distance-field atlas. Load a font " +
+        "file with Font… and any text asking for that family is built from the " +
+        "outlines in the file — TrueType's quadratics or CFF's cubics — which " +
+        "places a corner exactly. Without one, the glyph is rasterised and its " +
+        "outline traced back, which is close but about a pixel loose at corners."),
       el("h3", {}, "From vectors"),
       el("p.fine", {}, "SVG… compiles a file into this sketch: rects, circles, " +
         "ellipses, lines, polygons and paths (Béziers flattened adaptively, " +
@@ -1519,6 +1526,22 @@ uniform bool  mirror;  // @toggle`),
 
   const seedLabel = el("span.fine", {}, `seed ${doc.seed}`);
 
+  /** A font file gives true outlines, so text compiles from the shapes the
+      designer drew rather than from a traced raster. */
+  const fontInput = el("input", { type: "file", accept: ".ttf,.otf,.woff,.ttc,font/*",
+    style: { display: "none" },
+    onchange: async (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      toast("Reading the font…");
+      try {
+        const font = await loadFontFile(f);
+        toast(`${font.family} — ${font.format} outlines, ${font.numGlyphs} glyphs. ` +
+              `Text asking for that family now compiles from them.`);
+      } catch (err) { toast(`Could not read that font: ${err.message}`); }
+    } });
+
   /** An SVG file compiles to a sketch: every shape a signed-distance function. */
   const svgInput = el("input", { type: "file", accept: ".svg,image/svg+xml",
     style: { display: "none" },
@@ -1581,6 +1604,9 @@ uniform bool  mirror;  // @toggle`),
         el("button", { onclick: () => svgInput.click(),
           title: "Compile an SVG file: paths, gradients and all, into this sketch" }, "SVG…"),
         svgInput,
+        el("button", { onclick: () => fontInput.click(),
+          title: "Load a .ttf/.otf/.woff so text compiles from true outlines" }, "Font…"),
+        fontInput,
         el("button.ghost", { onclick: help }, "Help"),
         aiButton("Sketch…", {
           task: "code",

@@ -141,7 +141,7 @@ function simplifyOpen(pts, tol) {
  * share exactly one channel. A smooth loop keeps all three, which is what
  * makes a circle behave exactly as it did before.
  */
-export function colorEdges(contours, cosLimit = Math.cos((32 * Math.PI) / 180), window = 1.2) {
+export function colorEdges(contours, cosLimit = Math.cos((40 * Math.PI) / 180), window = 1.0) {
   const edges = [];
   for (const pts of contours) {
     const n = pts.length - 1;                       // last repeats the first
@@ -168,9 +168,14 @@ export function colorEdges(contours, cosLimit = Math.cos((32 * Math.PI) / 180), 
       const [px, py] = walk(i, -1), [qx, qy] = walk(i, 1);
       if (px * qx + py * qy < cosLimit) corners.push(i);
     }
-    // Neighbouring detections belong to the same corner; keep one of each run.
+    // Several detections can belong to one corner — but only when they are
+    // physically close. Merging by index alone is wrong for a true outline,
+    // where consecutive vertices are all genuine corners: an 'H' has twelve in
+    // a row, and index-merging would leave three.
+    const near = 0.6;
     for (let i = corners.length - 1; i > 0; i--) {
-      if (corners[i] - corners[i - 1] <= 1) corners.splice(i, 1);
+      const a = pts[corners[i - 1] % n], b = pts[corners[i] % n];
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) < near) corners.splice(i, 1);
     }
     const pieces = [];
     if (!corners.length) {
@@ -206,7 +211,7 @@ export function colorEdges(contours, cosLimit = Math.cos((32 * Math.PI) / 180), 
 
 /** Signed distance from p to one coloured edge, with msdfgen's pseudo-distance
     at the edge's own ends so a corner stays sharp instead of rounding. */
-function edgeDistance(edge, px, py) {
+function edgeDistance(edge, px, py, reach = 2) {
   const pts = edge.pts;
   let best = Infinity, bestI = 0, bestT = 0;
   for (let i = 0; i + 1 < pts.length; i++) {
@@ -225,8 +230,13 @@ function edgeDistance(edge, px, py) {
   const cross = (ex * (py - ay) - ey * (px - ax)) / l;
   let mag = best;
   // Past either free end, measure to the line's continuation — that is what
-  // lets one channel keep going straight while its neighbour turns.
-  if ((bestI === 0 && bestT < 0) || (bestI === pts.length - 2 && bestT > 1)) {
+  // lets one channel keep going straight while its neighbour turns. But only
+  // just past: an edge's line has no business speaking about points far beyond
+  // where the edge stops, and on a flattened curve, where every short edge has
+  // two free ends, letting it do so sprays specks around the letterform.
+  const past = bestT < 0 ? -bestT * l : bestT > 1 ? (bestT - 1) * l : 0;
+  if (past > 0 && past < reach
+      && ((bestI === 0 && bestT < 0) || (bestI === pts.length - 2 && bestT > 1))) {
     mag = Math.abs(cross);
   }
   // Both are returned because they do different jobs: the true distance
@@ -276,11 +286,12 @@ export function renderMSDF(edges, w, h, spread, inside) {
       const px = x + 0.25, py = y + 0.25;
       let bd = [Infinity, Infinity, Infinity];
       let bs = [null, null, null];
+      let trueD = Infinity;
       for (const e of edges) {
-        let r = null;
+        const r = edgeDistance(e, px, py);
+        if (r.d < trueD) trueD = r.d;
         for (let ch = 0; ch < 3; ch++) {
           if (!(e.colour & (1 << ch))) continue;
-          if (r === null) r = edgeDistance(e, px, py);
           if (r.d < bd[ch]) { bd[ch] = r.d; bs[ch] = r.s; }
         }
       }
@@ -290,15 +301,46 @@ export function renderMSDF(edges, w, h, spread, inside) {
       // Beyond the field's reach there is no edge to ask, so the coverage
       // decides — and that value is already the right way round, which is why
       // only the measured ones are flipped.
-      const far = (inside(x, y) ? -1 : 1) * spread;
-      const i = (y * w + x) * 3;
+      const covered = inside(x, y);
+      const far = (covered ? -1 : 1) * spread;
+      const v = [0, 0, 0];
       for (let ch = 0; ch < 3; ch++) {
         const measured = bs[ch] !== null && bd[ch] <= reach;
-        out[i + ch] = enc(measured ? (flip ? -bs[ch] : bs[ch]) : far);
+        v[ch] = measured ? (flip ? -bs[ch] : bs[ch]) : far;
       }
+      // Error correction, and the reason msdfgen has one too. Three channels
+      // reconstruct a corner by disagreeing, but where several edges meet at a
+      // shallow angle the disagreement can outvote the truth and leave a speck
+      // floating beside the letterform. The true distance is known here, so
+      // where the median wanders more than a pixel from it, the truth wins —
+      // which is far enough away never to blunt a corner.
+      const med = median(v[0], v[1], v[2]);
+      const trueS = (covered ? -1 : 1) * Math.min(trueD, spread);
+      if (Math.abs(med - trueS) > 1) { v[0] = v[1] = v[2] = trueS; }
+      const i = (y * w + x) * 3;
+      for (let ch = 0; ch < 3; ch++) out[i + ch] = enc(v[ch]);
     }
   }
   return out;
+}
+
+/**
+ * Even-odd point-in-contours test. When the outline comes from a font file
+ * there is no raster to consult, so coverage is answered by the geometry.
+ */
+export function makeInsideTest(contours) {
+  return (x, y) => {
+    const px = x + 0.5, py = y + 0.5;
+    let cross = 0;
+    for (const c of contours) {
+      for (let i = 0; i + 1 < c.length; i++) {
+        const [ax, ay] = c[i], [bx, by] = c[i + 1];
+        if ((ay > py) === (by > py)) continue;
+        if (px < ax + ((py - ay) / (by - ay)) * (bx - ax)) cross++;
+      }
+    }
+    return (cross & 1) === 1;
+  };
 }
 
 /** The GLSL side: the median of the three channels is the distance. */

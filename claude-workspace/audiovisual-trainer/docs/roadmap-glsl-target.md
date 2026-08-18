@@ -422,10 +422,31 @@ Generate already has applies to it.
     `{singleChannel: true}` remains for anyone who prefers the rounder,
     area-truer corner. Build cost roughly doubles (120 ms vs 59 ms for five
     glyphs); the atlas is RGB, so ~58 KB against ~20 KB.
+- **True outlines — shipped** (`font-file.js`), which removes the tracing
+  error rather than working around it. A font file is parsed directly: sfnt,
+  TrueType collections and WOFF containers; `glyf` outlines (quadratic
+  B-splines, implied on-curve midpoints, composite glyphs) and CFF (Type 2
+  charstrings with local and global subroutines, the hint operators, and the
+  four curve families); `cmap` 4/6/12, `hmtx`, `name`. The face is also
+  registered with the document, so the browser lays the text out with the same
+  font the outlines came from — the file gives the shapes, the text engine
+  gives the positions, and neither guesses at the other. Load one with
+  **Font…** in Generate; any text asking for that family compiles from it.
+  Verified against the browser's own rasterisation of each glyph: the parsed
+  outlines agree to within 0.3–0.65% of pixels.
+  - **Corner area error at 6.25×: 61 (single-channel) and 66 (traced MSDF) →
+    16 with true outlines.** Whole-string mean 3.70 / 4.23 → **3.09**.
+  - Two bugs worth remembering. Merging corner detections by index is right
+    for a traced outline and wrong for a real one, where consecutive vertices
+    are all genuine corners — an 'H' collapsed from twelve to three. And a
+    curve has to be flattened finer than the corner window, or its segments
+    read as a sequence of sharp turns.
+  - The magnitude-based error correction pass (median against the true
+    distance, truth winning past a pixel) is what finally cleared the specks
+    from serif letterforms. A sign-based version, tried first, never fired.
 - **Next in this line**: dashes (arc-length parametrisation) and miter joins;
-  stop-opacity via vec4 ramps; and true outlines — parsing an uploaded font
-  file rather than tracing a raster would remove the corner-placement error
-  entirely.
+  stop-opacity via vec4 ramps; kerning and shaping read from `GPOS`/`GSUB`
+  rather than borrowed from the text engine; and WOFF2, which needs Brotli.
 - **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
 - **Text via an SDF glyph atlas — shipped** (`glyph-atlas.js`). No font file is

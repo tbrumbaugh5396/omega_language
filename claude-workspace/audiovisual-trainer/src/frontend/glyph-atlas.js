@@ -17,7 +17,8 @@
 // the browser would apply. That is the same text engine the SVG and design
 // renderers use, which is the point: the shader agrees with the picture.
 
-import { traceContours, simplify, colorEdges, renderMSDF, MEDIAN_GLSL } from "./msdf.js";
+import { traceContours, simplify, colorEdges, renderMSDF, makeInsideTest, MEDIAN_GLSL } from "./msdf.js";
+import { getFont } from "./font-file.js";
 
 const PPEM = 48;          // atlas pixels per em, after downsampling
 const SUPER = 2;          // rendered at SUPER × PPEM, then halved
@@ -65,6 +66,36 @@ function edt2d(binary, w, h) {
   return out;
 }
 
+/**
+ * A glyph built from real outlines: no raster, no tracing. The contours arrive
+ * in em units with y down, are scaled to atlas pixels, and the field is
+ * computed against them directly.
+ */
+function outlineGlyph(parsed, ch) {
+  let contours;
+  // Flattened finely on purpose: the corner test measures a turn over about a
+  // pixel of arc, so segments have to be shorter than that or a smooth curve
+  // presents itself as a sequence of sharp turns.
+  try { contours = parsed.outlineEm(ch, 0.00002); } catch { return null; }
+  const adv = parsed.advanceEm(ch);
+  if (!contours.length) return { adv, blank: true };
+
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const c of contours) for (const [x, y] of c) {
+    if (x < x0) x0 = x; if (y < y0) y0 = y;
+    if (x > x1) x1 = x; if (y > y1) y1 = y;
+  }
+  const padEm = (SPREAD + 1) / PPEM;
+  const bx = x0 - padEm, by = y0 - padEm;
+  const bw = (x1 - x0) + padEm * 2, bh = (y1 - y0) + padEm * 2;
+  const lw = Math.max(2, Math.ceil(bw * PPEM)), lh = Math.max(2, Math.ceil(bh * PPEM));
+  // Into tile pixels, with the tile's top-left at the origin.
+  const local = contours.map((c) => c.map(([x, y]) => [(x - bx) * PPEM, (y - by) * PPEM]));
+  const edges = colorEdges(local);
+  const field = renderMSDF(edges, lw, lh, SPREAD, makeInsideTest(local));
+  return { adv, bx, by, bw, bh, w: lw, h: lh, field, channels: 3, blank: false };
+}
+
 const fontCss = (spec, px) =>
   `${spec.style || "normal"} ${spec.weight || 400} ${px}px ${spec.family || "system-ui, sans-serif"}`;
 
@@ -96,10 +127,19 @@ export async function buildAtlas(runs, opts = {}) {
 
   // First pass: rasterise each glyph's field and remember its size.
   const tiles = [];
+  let trueOutlines = 0;
   for (const [key, f] of fonts) {
     measure.font = fontCss(f.spec, hi);
     f.glyphs = new Map();
+    // A parsed font file is the better source by a clear margin: its outlines
+    // are what the designer drew, so a corner is placed exactly rather than
+    // recovered to within about a pixel.
+    const parsed = (opts.singleChannel || opts.trace) ? null : getFont(f.spec.family);
     for (const ch of [...f.chars].sort()) {
+      if (parsed) {
+        const g = outlineGlyph(parsed, ch);
+        if (g) { f.glyphs.set(ch, g); if (!g.blank) { tiles.push(g); trueOutlines++; } continue; }
+      }
       const m = measure.measureText(ch);
       const adv = m.width / hi;
       const left = m.actualBoundingBoxLeft, right = m.actualBoundingBoxRight;
@@ -228,6 +268,7 @@ export async function buildAtlas(runs, opts = {}) {
     /** Signed distance range the field carries, in em. */
     spreadEm: SPREAD / PPEM,
     multiChannel: tiles.some((t) => t.channels === 3),
+    trueOutlines,
   };
 }
 
