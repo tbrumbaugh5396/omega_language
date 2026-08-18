@@ -402,9 +402,30 @@ Generate already has applies to it.
 - **Known gaps, reported in the import notes rather than hidden**: miter and
   bevel joins are drawn round; CSS stylesheets and classes, filters, masks
   and patterns are ignored; stop-opacity is dropped; text is greeked.
-- **Next in this line**: dashes (arc-length parametrisation), miter joins,
-  stop-opacity via vec4 ramps, and multi-channel (MSDF) glyphs, which keep
-  sharp corners on letterforms that a single channel rounds slightly.
+- **MSDF — shipped** (`msdf.js`), and the honest account of it. A single
+  channel cannot hold a corner: it stores the distance to the nearest edge, and
+  a corner's crease is lost to bilinear filtering. Chlumský's answer needs
+  outlines, which no browser will give for a system font — so they are
+  recovered: marching squares on the anti-aliased coverage (sub-pixel, and
+  already better than the binary threshold), Douglas–Peucker, corners found
+  over an arc-length window, edges coloured so neighbours share exactly one
+  channel, and each channel storing the pseudo-distance of the edge nearest by
+  *true* distance. In GLSL the sample is `med3(r, g, b)`.
+  - **At 1:1 it is better**: a design's text region 2.17 vs 2.31/255, and
+    pixels off by 60 down from 655 to 487.
+  - **At 6× it draws sharp corners where a single channel rounds them** — but
+    the reconstructed apex sits up to about one atlas pixel outside the true
+    one, because the edges it meets were traced rather than read. Measured on
+    one corner at 6.25×: single-channel loses 13 pixels of area to rounding,
+    MSDF gains 45 by overshooting. Whole-string mean 5.44 vs 5.27.
+  - So it is the default because normal sizes are the common case, and
+    `{singleChannel: true}` remains for anyone who prefers the rounder,
+    area-truer corner. Build cost roughly doubles (120 ms vs 59 ms for five
+    glyphs); the atlas is RGB, so ~58 KB against ~20 KB.
+- **Next in this line**: dashes (arc-length parametrisation) and miter joins;
+  stop-opacity via vec4 ramps; and true outlines — parsing an uploaded font
+  file rather than tracing a raster would remove the corner-placement error
+  entirely.
 - **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
 - **Text via an SDF glyph atlas — shipped** (`glyph-atlas.js`). No font file is

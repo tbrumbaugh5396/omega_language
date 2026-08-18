@@ -17,6 +17,8 @@
 // the browser would apply. That is the same text engine the SVG and design
 // renderers use, which is the point: the shader agrees with the picture.
 
+import { traceContours, simplify, colorEdges, renderMSDF, MEDIAN_GLSL } from "./msdf.js";
+
 const PPEM = 48;          // atlas pixels per em, after downsampling
 const SUPER = 2;          // rendered at SUPER × PPEM, then halved
 const SPREAD = 8;         // distance range in atlas pixels, each way
@@ -73,7 +75,7 @@ const fontCss = (spec, px) =>
  * @returns null when there is nothing to draw, else
  *   { dataUrl, width, height, fonts: Map(key → {glyphs: Map(ch → metrics), ascent}) }
  */
-export async function buildAtlas(runs) {
+export async function buildAtlas(runs, opts = {}) {
   if (typeof document === "undefined") return null;
   try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch { /* older engine */ }
 
@@ -117,28 +119,51 @@ export async function buildAtlas(runs) {
       cg.fillText(ch, pad + left, pad + asc);
 
       const img = cg.getImageData(0, 0, w, h).data;
-      const inside = new Uint8Array(w * h), outside = new Uint8Array(w * h);
-      for (let i = 0, p = 3; i < w * h; i++, p += 4) {
-        if (img[p] >= 128) inside[i] = 1; else outside[i] = 1;
-      }
-      // Signed field: distance out of the glyph minus distance into it.
-      const dOut = edt2d(inside, w, h), dIn = edt2d(outside, w, h);
+      const alpha = new Uint8Array(w * h);
+      for (let i = 0, p = 3; i < w * h; i++, p += 4) alpha[i] = img[p];
 
-      // Halve to atlas resolution, averaging the distance (valid for a field).
       const lw = Math.max(1, Math.round(w / SUPER)), lh = Math.max(1, Math.round(h / SUPER));
-      const field = new Uint8ClampedArray(lw * lh);
-      for (let y = 0; y < lh; y++) {
-        for (let x = 0; x < lw; x++) {
-          let acc = 0, n = 0;
-          for (let sy = y * SUPER; sy < Math.min(h, (y + 1) * SUPER); sy++) {
-            for (let sx = x * SUPER; sx < Math.min(w, (x + 1) * SUPER); sx++) {
-              const i = sy * w + sx;
-              acc += (Math.sqrt(dOut[i]) - Math.sqrt(dIn[i])) / SUPER;   // atlas px
-              n++;
+      const coveredHi = (x, y) => alpha[Math.min(h - 1, y) * w + Math.min(w - 1, x)] >= 128;
+      const covered = (x, y) => coveredHi(Math.floor(x * SUPER + SUPER / 2), Math.floor(y * SUPER + SUPER / 2));
+
+      let field = null, channels = 1;
+      if (!opts.singleChannel) {
+        // Outlines from the anti-aliased coverage, brought down to atlas
+        // scale, cut at their corners and coloured.
+        // The tolerance matters more than it looks: too tight and the traced
+        // staircase keeps micro-vertices, the corner test fires at each, and
+        // every false corner becomes an edge end whose pseudo-distance
+        // extends past the outline. An 'H' should come out with twelve
+        // corners, not eighteen.
+        const contours = traceContours(alpha, w, h)
+          .map((c) => simplify(c.map(([x, y]) => [x / SUPER, y / SUPER]), 0.12))
+          .filter((c) => c.length > 3);
+        if (contours.length) {
+          const edges = colorEdges(contours);
+          field = renderMSDF(edges, lw, lh, SPREAD, covered);
+          channels = 3;
+        }
+      }
+      if (!field) {
+        // Single channel: the exact transform on the thresholded bitmap.
+        const inside = new Uint8Array(w * h), outside = new Uint8Array(w * h);
+        for (let i = 0; i < w * h; i++) { if (alpha[i] >= 128) inside[i] = 1; else outside[i] = 1; }
+        const dOut = edt2d(inside, w, h), dIn = edt2d(outside, w, h);
+        field = new Uint8ClampedArray(lw * lh * 3);
+        for (let y = 0; y < lh; y++) {
+          for (let x = 0; x < lw; x++) {
+            let acc = 0, n = 0;
+            for (let sy = y * SUPER; sy < Math.min(h, (y + 1) * SUPER); sy++) {
+              for (let sx = x * SUPER; sx < Math.min(w, (x + 1) * SUPER); sx++) {
+                const i = sy * w + sx;
+                acc += (Math.sqrt(dOut[i]) - Math.sqrt(dIn[i])) / SUPER;
+                n++;
+              }
             }
+            const v = Math.round(255 * Math.min(1, Math.max(0, 0.5 + (acc / Math.max(1, n)) / (2 * SPREAD))));
+            const i3 = (y * lw + x) * 3;
+            field[i3] = field[i3 + 1] = field[i3 + 2] = v;
           }
-          const sd = acc / Math.max(1, n);
-          field[y * lw + x] = Math.round(255 * Math.min(1, Math.max(0, 0.5 + sd / (2 * SPREAD))));
         }
       }
       const g = {
@@ -147,7 +172,7 @@ export async function buildAtlas(runs) {
         // the baseline, y down.
         bx: (-left - pad) / hi, by: (-asc - pad) / hi,
         bw: (w / SUPER) / PPEM, bh: (h / SUPER) / PPEM,
-        w: lw, h: lh, field, blank: false,
+        w: lw, h: lh, field, channels, blank: false,
       };
       f.glyphs.set(ch, g);
       tiles.push(g);
@@ -184,9 +209,11 @@ export async function buildAtlas(runs) {
   for (const t of tiles) {
     for (let y = 0; y < t.h; y++) {
       for (let x = 0; x < t.w; x++) {
-        const v = t.field[y * t.w + x];
+        const src = (y * t.w + x) * 3;
         const i = ((t.y + y) * size + (t.x + x)) * 4;
-        out.data[i] = out.data[i + 1] = out.data[i + 2] = v;
+        out.data[i] = t.field[src];
+        out.data[i + 1] = t.field[src + 1];
+        out.data[i + 2] = t.field[src + 2];
       }
     }
     t.u0 = t.x / size; t.v0 = t.y / size;
@@ -200,6 +227,7 @@ export async function buildAtlas(runs) {
     width: size, height: size, fonts,
     /** Signed distance range the field carries, in em. */
     spreadEm: SPREAD / PPEM,
+    multiChannel: tiles.some((t) => t.channels === 3),
   };
 }
 
@@ -219,16 +247,18 @@ export function layoutLine(text, spec, sizePx, letterSpacing = 0) {
   return { glyphs: out, width: x };
 }
 
-/** The GLSL helper every text item shares. */
-export const GLYPH_HELPER = `float glyph(vec2 p, vec2 pos, vec2 size, vec4 uvr, float k) {
+/** The GLSL helper every text item shares. Multi-channel fields take the
+    median of the three, which is what reconstructs a corner. */
+export const GLYPH_HELPER = `${MEDIAN_GLSL}
+float glyph(vec2 p, vec2 pos, vec2 size, vec4 uvr, float k) {
   vec2 r = (p - pos) / size;
   // Outside the tile the field is not defined, so say "far" rather than clamp.
   if (r.x < -0.02 || r.x > 1.02 || r.y < -0.02 || r.y > 1.02) return 1e4;
   // Textures are uploaded flipped (uv (0,0) is bottom-left), and the atlas
   // rectangles are in image space, so v comes back the other way up.
   vec2 auv = mix(uvr.xy, uvr.zw, clamp(r, 0.0, 1.0));
-  float v = texture2D(u_font, vec2(auv.x, 1.0 - auv.y)).r;
-  return (v - 0.5) * k;
+  vec3 s = texture2D(u_font, vec2(auv.x, 1.0 - auv.y)).rgb;
+  return (med3(s.r, s.g, s.b) - 0.5) * k;
 }`;
 
 /**

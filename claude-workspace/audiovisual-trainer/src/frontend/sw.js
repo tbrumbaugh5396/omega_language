@@ -1,6 +1,6 @@
 // Network-first everywhere (this is a local server, so the network is the
 // source of truth); the cache is only an offline fallback.
-const CACHE = "av-trainer-v9";
+const CACHE = "av-trainer-v10";
 const SHELL = ["/", "/static/styles.css", "/static/app.js", "/static/ui.js",
                "/static/engine-audio.js", "/static/engine-image.js",
                "/static/drills-audio.js", "/static/drills-visual.js",
@@ -9,7 +9,7 @@ const SHELL = ["/", "/static/styles.css", "/static/app.js", "/static/ui.js",
                "/static/library.js", "/static/markdown.js", "/static/figures.js", "/static/figures-content.js", "/static/progress.js", "/static/ai.js",
                "/static/studio.js", "/static/studio-canvas.js", "/static/canvas-selection.js",
                "/static/studio-music.js", "/static/studio-video.js", "/static/studio-shader.js", "/static/studio-generate.js",
-               "/static/shader-uniforms.js", "/static/shader-controls.js", "/static/grid-overlay.js", "/static/feedback.js", "/static/shader-run.js", "/static/design-to-sdf.js", "/static/sdf-core.js", "/static/svg-to-sdf.js", "/static/glyph-atlas.js", "/static/video-mux.js", "/static/studio-design.js",
+               "/static/shader-uniforms.js", "/static/shader-controls.js", "/static/grid-overlay.js", "/static/feedback.js", "/static/shader-run.js", "/static/design-to-sdf.js", "/static/sdf-core.js", "/static/svg-to-sdf.js", "/static/glyph-atlas.js", "/static/msdf.js", "/static/video-mux.js", "/static/studio-design.js",
                "/static/icons/icon-192.png", "/static/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
