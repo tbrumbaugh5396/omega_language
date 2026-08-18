@@ -17,7 +17,8 @@ def _ago(days: int) -> str:
 
 def seed_user(con, uid: int) -> dict:
     """Insert starter rows for a user. Skips anything already present."""
-    added = {"pieces": 0, "practice": 0, "progress": 0, "articulation": 0}
+    added = {"pieces": 0, "practice": 0, "progress": 0, "articulation": 0,
+             "studio": 0}
     now = db.now()
 
     have_pieces = con.execute("SELECT COUNT(*) c FROM pieces WHERE user_id=?",
@@ -179,5 +180,53 @@ def seed_user(con, uid: int) -> dict:
              "look up why compositing then needs a different formula.",
              "", "", 0, now))
         added["articulation"] += 1
+
+    have_studio = con.execute("SELECT COUNT(*) c FROM studio_projects WHERE user_id=?",
+                              (uid,)).fetchone()["c"]
+    if not have_studio:
+        # A design worth compiling. The Design studio's Shader button turns a
+        # frame into a sketch where every shape is a signed-distance function,
+        # and that path is invisible until there is something to press it on.
+        design = {
+            "nodes": [{
+                "id": "seed-frame", "type": "frame", "name": "Poster", "x": 0, "y": 0,
+                "w": 900, "h": 1200, "fill": "#f2ece1", "visible": True,
+                "grid": {"on": False, "columns": 12, "gutter": 24, "margin": 72},
+                "children": [
+                    {"id": "seed-band", "type": "rect", "name": "Band", "x": 0, "y": 0,
+                     "w": 900, "h": 420, "fill": "#16233d", "visible": True},
+                    {"id": "seed-sun", "type": "ellipse", "name": "Sun", "x": 560, "y": 96,
+                     "w": 220, "h": 220, "fill": "#ff7a3d", "visible": True},
+                    {"id": "seed-title", "type": "text", "name": "Title", "x": 72, "y": 132,
+                     "w": 460, "h": 190, "text": "Compile\nthis to a\nshader",
+                     "fontSize": 62, "lineHeight": 1.12, "fontWeight": 700,
+                     "fill": "#f2ece1", "visible": True},
+                    {"id": "seed-rule", "type": "line", "name": "Rule", "x": 72, "y": 470,
+                     "w": 756, "h": 0, "stroke": "#16233d", "strokeWidth": 3, "visible": True},
+                    {"id": "seed-body", "type": "text", "name": "Body", "x": 72, "y": 510,
+                     "w": 600, "h": 240,
+                     "text": "Every shape here becomes a\ndistance function. Press Shader\nand move inflate, outline and\nwobble — the three knobs each\ncompile emits.",
+                     "fontSize": 30, "lineHeight": 1.45, "fontWeight": 400,
+                     "fill": "#16233d", "visible": True},
+                    {"id": "seed-chip1", "type": "rect", "name": "Chip", "x": 72, "y": 840,
+                     "w": 210, "h": 96, "radius": 18, "fill": "#2f7d5b", "visible": True},
+                    {"id": "seed-chip2", "type": "rect", "name": "Chip 2", "x": 306, "y": 840,
+                     "w": 210, "h": 96, "radius": 18, "fill": "#b03a5b",
+                     "visible": True, "opacity": 0.85},
+                    {"id": "seed-chip3", "type": "rect", "name": "Chip 3", "x": 540, "y": 840,
+                     "w": 288, "h": 96, "radius": 48, "fill": "none",
+                     "stroke": "#16233d", "strokeWidth": 4, "visible": True},
+                    {"id": "seed-foot", "type": "text", "name": "Foot", "x": 72, "y": 1030,
+                     "w": 700, "h": 60, "text": "Design → Shader → yours to edit",
+                     "fontSize": 26, "fontWeight": 500, "fill": "#16233d", "visible": True},
+                ],
+            }],
+            "viewport": {"x": 60, "y": 40, "zoom": 0.45},
+        }
+        con.execute(
+            "INSERT INTO studio_projects(user_id,name,kind,data,thumb,created,updated) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (uid, "Poster — compile me", "design", json.dumps(design), "", now, now))
+        added["studio"] = 1
 
     return added

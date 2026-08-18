@@ -891,6 +891,106 @@ vec3 col = last + ink * smoothstep(0.03, 0.0, d) * 1.5;
 col += md * ink.bgr * smoothstep(0.05, 0.0, length((uv - m) * vec2(u_resolution.x / u_resolution.y, 1.0)));
 
 clamp(col, 0.0, 1.0)` },
+
+  // ---- the shape compiler's own idiom, written by hand. This is what a
+  // design or an SVG turns into, so it is the thing to read when you want to
+  // edit one — and the three knobs at the top are the ones every compile emits.
+
+  { id: "mark", label: "Logo mark — booleans and offsets", preview: [800, 450], source:
+`uniform float inflate;  // @range -20 20 @default 0 — offset every edge (px)
+uniform float outline;  // @range 0 14 @default 0 — stroke every shape (px)
+uniform float round;    // @range 0 40 @default 18 — how softly the parts merge
+uniform float gap;      // @range 0 40 @default 14 — counter-space
+uniform vec3  ink;      // @color @default 0.10 0.17 0.29
+uniform vec3  accent;   // @color @default 1.0 0.48 0.24
+uniform vec3  paper;    // @color @default 0.96 0.93 0.86
+
+// A mark built the way a distance field wants: union with smin so parts fuse,
+// subtraction with max(-d) to cut a counter, abs(d) - w for an outline. Every
+// one of these is a thing SVG cannot say, which is the argument for compiling
+// to this rather than exporting from it.
+const vec2 FRAME = vec2(800.0, 450.0);
+float cov(float d, float px) { return smoothstep(0.75 * px, -0.75 * px, d); }
+
+float body(vec2 q) {
+  float stem = sdBox(q - vec2(-70.0, 0.0), vec2(26.0, 110.0));
+  float bowl = sdCircle(q - vec2(30.0, -34.0), 78.0);
+  float foot = sdCapsule(q, vec2(-70.0, 96.0), vec2(96.0, 96.0), 24.0);
+  float d = smin(stem, bowl, round);
+  d = smin(d, foot, round * 0.6);
+  return max(d, -(sdCircle(q - vec2(34.0, -38.0), 34.0) - gap * 0.25));   // the counter
+}
+float spark(vec2 q) {
+  vec2 r = rot(0.785) * (q - vec2(112.0, -104.0));
+  return min(sdBox(r, vec2(5.0, 30.0)), sdBox(r, vec2(30.0, 5.0)));
+}
+
+vec2 q = (vec2(uv.x, 1.0 - uv.y) - 0.5) * FRAME;
+float px = FRAME.y / u_resolution.y;
+
+float d = body(q) - inflate;
+float s = spark(q) - inflate;
+vec3 col = paper;
+col = mix(col, ink, cov(d, px));
+col = mix(col, accent, cov(s, px));
+if (outline > 0.0) {
+  col = mix(col, ink, cov(abs(d) - outline * 0.5, px));
+  col = mix(col, accent, cov(abs(s) - outline * 0.5, px));
+}
+
+col` },
+
+  { id: "poster", label: "Poster in code — dashes and joins", preview: [800, 500], source:
+`uniform float dashLen;  // @range 4 60 @default 26 — dash length (px)
+uniform float dashGap;  // @range 2 40 @default 14
+uniform float phase;    // @range 0 1 @default 0 — where the pattern starts
+uniform float weight;   // @range 2 20 @default 7 — rule weight (px)
+uniform vec3  ink;      // @color @default 0.10 0.17 0.29
+uniform vec3  accent;   // @color @default 0.69 0.23 0.36
+uniform vec3  paper;    // @color @default 0.96 0.94 0.90
+
+// Dashes along a line, done the way a field can: measure arc length, then use
+// mod() to decide whether this point is in a dash or a gap. The SVG compiler
+// does the same by cutting the polyline at compile time — this is the same
+// idea in one expression, and it animates for free.
+const vec2 FRAME = vec2(800.0, 500.0);
+float cov(float d, float px) { return smoothstep(0.75 * px, -0.75 * px, d); }
+
+// A dashed segment: distance to the line, cut into dashes by position along it.
+float dashedSeg(vec2 q, vec2 a, vec2 b, float w) {
+  vec2 ab = b - a;
+  float len = length(ab);
+  vec2 dir = ab / len;
+  float t = clamp(dot(q - a, dir), 0.0, len);
+  float dLine = length(q - (a + dir * t)) - w * 0.5;
+  float period = dashLen + dashGap;
+  float on = step(mod(t + phase * period, period), dashLen);
+  return mix(1e5, dLine, on);
+}
+// A mitred corner: the two arms, plus the wedge that fills the outside.
+float elbow(vec2 q, vec2 a, vec2 v, vec2 b, float w) {
+  float d = min(sdSegment(q, a, v), sdSegment(q, v, b)) - w * 0.5;
+  vec2 e1 = normalize(v - a), e2 = normalize(b - v);
+  vec2 n1 = vec2(-e1.y, e1.x), n2 = vec2(-e2.y, e2.x);
+  float s = (e1.x * e2.y - e1.y * e2.x) > 0.0 ? -1.0 : 1.0;
+  n1 *= s; n2 *= s;
+  vec2 m = normalize(n1 + n2);
+  float wedge = max(max(dot(q - v, n1) - w * 0.5, dot(q - v, n2) - w * 0.5), -dot(q - v, m));
+  return min(d, wedge);
+}
+
+vec2 q = vec2(uv.x, 1.0 - uv.y) * FRAME;
+float px = FRAME.y / u_resolution.y;
+vec3 col = paper;
+
+col = mix(col, ink, cov(sdBox(q - vec2(400.0, 96.0), vec2(300.0, 2.0)), px));
+col = mix(col, accent, cov(dashedSeg(q, vec2(100.0, 150.0), vec2(700.0, 150.0), weight), px));
+col = mix(col, ink,    cov(dashedSeg(q, vec2(100.0, 190.0), vec2(700.0, 190.0), weight * 0.5), px));
+col = mix(col, ink,    cov(elbow(q, vec2(120.0, 380.0), vec2(300.0, 250.0), vec2(480.0, 380.0), weight * 2.0), px));
+col = mix(col, accent, cov(elbow(q, vec2(520.0, 380.0), vec2(640.0, 260.0), vec2(700.0, 380.0), weight * 2.0), px));
+col = mix(col, ink, cov(sdBox(q - vec2(400.0, 440.0), vec2(300.0, 1.0)), px));
+
+col` },
 ];
 
 export const newGenerateDoc = (preset = GENERATE_PRESETS[0]) => ({
