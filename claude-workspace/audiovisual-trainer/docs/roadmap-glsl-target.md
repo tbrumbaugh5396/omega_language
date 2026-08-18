@@ -410,9 +410,31 @@ Generate already has applies to it.
   **Parity on a scene of every join type, a mitre-limit fallback, four dash
   patterns and a stroked rect: mean 0.32/255, 132 pixels of 319,200 off by
   more than 60.**
+- **stop-opacity — shipped.** A gradient with any translucent stop compiles to
+  a vec4 ramp and its alpha joins the coverage rather than the colour; opaque
+  gradients stay vec3, so the common case costs nothing. Parity on
+  fade-to-transparent, a three-stop varying-alpha ramp, a radial glow and a
+  gradient-stroked rectangle: **mean 0.26/255, zero pixels off**.
+- **Kerning from the font — shipped.** GPOS's `kern` feature (pair lookups in
+  both the specific-pair and class-pair forms, reached through extension
+  lookups) and the legacy `kern` table. With a parsed font, advances come from
+  `hmtx` and pairs from the font, so layout no longer depends on the browser
+  having the family. Verified: Arial reads AV −74/1000 em and P. −129 from
+  GPOS, Baskerville (inside a TTC) reads AV −120 from the old table, and a
+  monospace correctly reports none.
+  - Worth knowing: **that is also more accurate than asking the text engine.**
+    Laying the same string out both ways and rendering against the browser's
+    own SVG, font metrics scored 1.97/255 and canvas `measureText` 8.39 —
+    canvas measurement and SVG shaping do not agree, and the font is the
+    better authority.
+- **WOFF2 — partial, and labelled as such.** It is Brotli-compressed and
+  further transforms `glyf`/`loca`; the platform will not inflate Brotli, and
+  carrying a decoder plus that transform is out of proportion here. A WOFF2 is
+  therefore registered for *layout*, which browsers support natively, and its
+  glyphs fall back to tracing. The loader says so in as many words rather than
+  half-claiming support.
 - **Known gaps, reported in the import notes rather than hidden**: CSS
-  stylesheets and classes, filters, masks and patterns are ignored;
-  stop-opacity is dropped.
+  stylesheets and classes, filters, masks and patterns are ignored.
 - **MSDF — shipped** (`msdf.js`), and the honest account of it. A single
   channel cannot hold a corner: it stores the distance to the nearest edge, and
   a corner's crease is lost to bilinear filtering. Chlumský's answer needs
@@ -455,10 +477,11 @@ Generate already has applies to it.
   - The magnitude-based error correction pass (median against the true
     distance, truth winning past a pixel) is what finally cleared the specks
     from serif letterforms. A sign-based version, tried first, never fired.
-- **Next in this line**: stop-opacity via vec4 ramps; kerning and shaping read
-  from `GPOS`/`GSUB` rather than borrowed from the text engine; and WOFF2,
-  which needs Brotli. With those, Phase 5 is finished and the work moves to
-  Phase 0 and the render graph, which is where the rest of the roadmap lives.
+- **What is left here**: GSUB shaping (ligatures, contextual alternates) —
+  kerning is read, substitution is not; and WOFF2 outlines, which wait on a
+  Brotli decoder. Neither blocks anything: **Phase 5 is otherwise done, and the
+  work now moves to Phase 0 and the render graph**, which is where the rest of
+  the roadmap lives.
 - **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
 - **Text via an SDF glyph atlas — shipped** (`glyph-atlas.js`). No font file is

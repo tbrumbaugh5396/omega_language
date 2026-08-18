@@ -1537,8 +1537,10 @@ uniform bool  mirror;  // @toggle`),
       toast("Reading the font…");
       try {
         const font = await loadFontFile(f);
-        toast(`${font.family} — ${font.format} outlines, ${font.numGlyphs} glyphs. ` +
-              `Text asking for that family now compiles from them.`);
+        if (font.outlines === false) { toast(`${font.family}: ${font.note}`, 7000); return; }
+        toast(`${font.family} — ${font.format} outlines, ${font.numGlyphs} glyphs, ` +
+              `kerning from ${font.kerningSource === "none" ? "advances only" : font.kerningSource}. ` +
+              `Text asking for that family now compiles from them.`, 5000);
       } catch (err) { toast(`Could not read that font: ${err.message}`); }
     } });
 

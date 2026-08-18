@@ -243,8 +243,9 @@ function gradientFn(def, world, bbox, idFor, notes) {
     const ss = styleOf(s);
     let off = String(ss.offset ?? "0").trim();
     const o = off.endsWith("%") ? parseFloat(off) / 100 : parseFloat(off) || 0;
-    if (parseFloat(ss["stop-opacity"] ?? "1") < 1) notes.add("stop-opacity is ignored");
-    return { o: Math.max(0, Math.min(1, o)), c: paint(ss["stop-color"], "#000000") || "#000000" };
+    const a = Math.max(0, Math.min(1, parseFloat(ss["stop-opacity"] ?? "1")));
+    return { o: Math.max(0, Math.min(1, o)), a: Number.isFinite(a) ? a : 1,
+             c: paint(ss["stop-color"], "#000000") || "#000000" };
   }).sort((a, b) => a.o - b.o);
   if (!stops.length) return null;
 
@@ -269,18 +270,23 @@ function gradientFn(def, world, bbox, idFor, notes) {
     tExpr = `clamp(dot(gq - vec2(${num(x1, 3)}, ${num(y1, 3)}), vec2(${num(dx, 3)}, ${num(dy, 3)})) / ${num(l2, 4)}, 0.0, 1.0)`;
   }
 
-  const ramp = [`  vec3 c = ${stops[0].c};`];
+  // A ramp of colour, and — only when some stop asks for it — a ramp of alpha
+  // alongside it. Opaque gradients stay vec3 so the common case costs nothing.
+  const translucent = stops.some((st) => st.a < 1);
+  const ty = translucent ? "vec4" : "vec3";
+  const lit = (st) => (translucent ? `vec4(${st.c}, ${num(st.a, 3)})` : st.c);
+  const ramp = [`  ${ty} c = ${lit(stops[0])};`];
   for (let k = 1; k < stops.length; k++) {
     const a = stops[k - 1].o, b = stops[k].o;
-    ramp.push(`  c = mix(c, ${stops[k].c}, clamp((tg - ${num(a, 4)}) / ${num(Math.max(b - a, 1e-4), 4)}, 0.0, 1.0));`);
+    ramp.push(`  c = mix(c, ${lit(stops[k])}, clamp((tg - ${num(a, 4)}) / ${num(Math.max(b - a, 1e-4), 4)}, 0.0, 1.0));`);
   }
   const name = idFor();
   // The gradient lives in the shape's own space, so it localises q the same
   // way the shape does, then undoes any gradientTransform.
   const inner = mul(world, gt);
   return {
-    name,
-    src: `vec3 ${name}(vec2 q) {
+    name, vec4: translucent,
+    src: `${ty} ${name}(vec2 q) {
 ${localise(inner)}
   vec2 gq = lq;
   float tg = ${tExpr};
@@ -362,7 +368,7 @@ export async function compileSvg(text, opts = {}) {
       const g = gradientFn(def, world, bbox, () => `grad_${++gradN}`, notes);
       if (!g) return null;
       items.push({ __raw: g.src });
-      return { expr: `${g.name}(q)` };
+      return { expr: `${g.name}(q)`, vec4: g.vec4 };
     }
     notes.add(`fill url(#${p.ref}) is not a gradient — ignored`);
     return null;

@@ -18,7 +18,7 @@
 // renderers use, which is the point: the shader agrees with the picture.
 
 import { traceContours, simplify, colorEdges, renderMSDF, makeInsideTest, MEDIAN_GLSL } from "./msdf.js";
-import { getFont } from "./font-file.js";
+import { getFont, primaryFamily } from "./font-file.js";
 
 const PPEM = 48;          // atlas pixels per em, after downsampling
 const SUPER = 2;          // rendered at SUPER × PPEM, then halved
@@ -272,8 +272,27 @@ export async function buildAtlas(runs, opts = {}) {
   };
 }
 
-/** Per-character pen positions, with the browser's own kerning. */
+/**
+ * Per-character pen positions.
+ *
+ * With a parsed font the advances come from `hmtx` and the pairs from GPOS's
+ * kern feature (or the old `kern` table), which is the font's own answer and
+ * does not depend on the browser having the family installed. Otherwise the
+ * text engine is asked, by measuring growing prefixes, which picks up whatever
+ * kerning it would apply.
+ */
 export function layoutLine(text, spec, sizePx, letterSpacing = 0) {
+  const font = getFont(spec.family);
+  if (font && font.outlines !== false && font.kernEm) {
+    const out = [];
+    let x = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (i > 0) x += font.kernEm(text[i - 1], text[i]) * sizePx;
+      out.push({ ch: text[i], x });
+      x += font.advanceEm(text[i]) * sizePx + letterSpacing;
+    }
+    return { glyphs: out, width: x };
+  }
   const c = document.createElement("canvas").getContext("2d");
   c.font = fontCss(spec, sizePx);
   const out = [];

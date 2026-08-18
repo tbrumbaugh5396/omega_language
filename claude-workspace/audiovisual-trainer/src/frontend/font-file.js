@@ -432,6 +432,170 @@ function parseCFF(dv) {
   return { outline, numGlyphs: charStrings.items.length };
 }
 
+// ------------------------------------------------------------------ kerning
+
+const popcount = (v) => { let n = 0; while (v) { n += v & 1; v >>= 1; } return n; };
+/** Byte offset of XAdvance within a value record, or -1 if it is not there. */
+const xAdvanceAt = (fmt) => (fmt & 0x0004 ? popcount(fmt & 0x0003) * 2 : -1);
+
+function coverageIndex(dv, off, gid) {
+  const fmt = dv.getUint16(off);
+  if (fmt === 1) {
+    const n = dv.getUint16(off + 2);
+    let lo = 0, hi = n - 1;
+    while (lo <= hi) {                                   // sorted, so bisect
+      const mid = (lo + hi) >> 1, g = dv.getUint16(off + 4 + mid * 2);
+      if (g === gid) return mid;
+      if (g < gid) lo = mid + 1; else hi = mid - 1;
+    }
+    return -1;
+  }
+  if (fmt === 2) {
+    const n = dv.getUint16(off + 2);
+    for (let i = 0; i < n; i++) {
+      const p = off + 4 + i * 6;
+      const start = dv.getUint16(p), end = dv.getUint16(p + 2);
+      if (gid >= start && gid <= end) return dv.getUint16(p + 4) + (gid - start);
+    }
+  }
+  return -1;
+}
+
+function classOf(dv, off, gid) {
+  if (!off) return 0;
+  const fmt = dv.getUint16(off);
+  if (fmt === 1) {
+    const start = dv.getUint16(off + 2), n = dv.getUint16(off + 4);
+    return gid >= start && gid < start + n ? dv.getUint16(off + 6 + (gid - start) * 2) : 0;
+  }
+  if (fmt === 2) {
+    const n = dv.getUint16(off + 2);
+    for (let i = 0; i < n; i++) {
+      const p = off + 4 + i * 6;
+      if (gid >= dv.getUint16(p) && gid <= dv.getUint16(p + 2)) return dv.getUint16(p + 4);
+    }
+  }
+  return 0;
+}
+
+/**
+ * Horizontal kerning from GPOS's `kern` feature — the pair-adjustment lookups,
+ * in both the specific-pair and the class-pair form, reached through extension
+ * lookups where a font uses them. The old `kern` table is read too, since
+ * plenty of TrueType files still carry only that.
+ */
+function buildKerning(tables) {
+  const subtables = [];
+
+  const gpos = tables.GPOS;
+  if (gpos) {
+    try {
+      const featureListOff = gpos.getUint16(6), lookupListOff = gpos.getUint16(8);
+      const wanted = new Set();
+      const fCount = gpos.getUint16(featureListOff);
+      for (let i = 0; i < fCount; i++) {
+        const p = featureListOff + 2 + i * 6;
+        const t = String.fromCharCode(gpos.getUint8(p), gpos.getUint8(p + 1),
+                                      gpos.getUint8(p + 2), gpos.getUint8(p + 3));
+        if (t !== "kern") continue;
+        const fOff = featureListOff + gpos.getUint16(p + 4);
+        const n = gpos.getUint16(fOff + 2);
+        for (let k = 0; k < n; k++) wanted.add(gpos.getUint16(fOff + 4 + k * 2));
+      }
+      const lookupCount = gpos.getUint16(lookupListOff);
+      for (const li of wanted) {
+        if (li >= lookupCount) continue;
+        const lOff = lookupListOff + gpos.getUint16(lookupListOff + 2 + li * 2);
+        const type = gpos.getUint16(lOff), subCount = gpos.getUint16(lOff + 4);
+        for (let k = 0; k < subCount; k++) {
+          let off = lOff + gpos.getUint16(lOff + 6 + k * 2), t = type;
+          if (t === 9) {                                  // extension: hop through
+            t = gpos.getUint16(off + 2);
+            off = off + gpos.getUint32(off + 4);
+          }
+          if (t === 2) subtables.push({ dv: gpos, off });
+        }
+      }
+    } catch { /* a malformed GPOS should not cost the whole font */ }
+  }
+
+  const pairFromGPOS = (dv, off, a, b) => {
+    const fmt = dv.getUint16(off);
+    const covOff = off + dv.getUint16(off + 2);
+    const vf1 = dv.getUint16(off + 4), vf2 = dv.getUint16(off + 6);
+    const xa = xAdvanceAt(vf1);
+    if (xa < 0) return 0;
+    const rec1 = popcount(vf1) * 2, rec2 = popcount(vf2) * 2;
+    const ci = coverageIndex(dv, covOff, a);
+    if (ci < 0) return 0;
+    if (fmt === 1) {
+      const setCount = dv.getUint16(off + 8);
+      if (ci >= setCount) return 0;
+      const setOff = off + dv.getUint16(off + 10 + ci * 2);
+      const n = dv.getUint16(setOff);
+      const stride = 2 + rec1 + rec2;
+      for (let i = 0; i < n; i++) {
+        const p = setOff + 2 + i * stride;
+        if (dv.getUint16(p) === b) return dv.getInt16(p + 2 + xa);
+      }
+      return 0;
+    }
+    if (fmt === 2) {
+      const cd1 = off + dv.getUint16(off + 8), cd2 = off + dv.getUint16(off + 10);
+      const c1Count = dv.getUint16(off + 12), c2Count = dv.getUint16(off + 14);
+      const c1 = classOf(dv, cd1, a), c2 = classOf(dv, cd2, b);
+      if (c1 >= c1Count || c2 >= c2Count) return 0;
+      const stride = rec1 + rec2;
+      const p = off + 16 + (c1 * c2Count + c2) * stride;
+      return dv.getInt16(p + xa);
+    }
+    return 0;
+  };
+
+  // The legacy table, format 0: a sorted list of pairs.
+  const legacy = [];
+  const kt = tables.kern;
+  if (kt) {
+    try {
+      let p = 4;                                          // version, nTables
+      const nTables = kt.getUint16(2);
+      for (let i = 0; i < nTables && p + 6 <= kt.byteLength; i++) {
+        const length = kt.getUint16(p + 2), coverage = kt.getUint16(p + 4);
+        if ((coverage & 1) && ((coverage >> 8) === 0)) {
+          const nPairs = kt.getUint16(p + 6);
+          legacy.push({ dv: kt, base: p + 14, nPairs });
+        }
+        p += length || 6;
+      }
+    } catch { /* as above */ }
+  }
+  const pairFromLegacy = (t, a, b) => {
+    const key = (a << 16) | b;
+    let lo = 0, hi = t.nPairs - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1, o = t.base + mid * 6;
+      const k = (t.dv.getUint16(o) << 16) | t.dv.getUint16(o + 2);
+      if (k === key) return t.dv.getInt16(o + 4);
+      if (k < key) lo = mid + 1; else hi = mid - 1;
+    }
+    return 0;
+  };
+
+  if (!subtables.length && !legacy.length) return { kern: () => 0, source: "none" };
+  const cache = new Map();
+  const kern = (a, b) => {
+    const key = a * 65536 + b;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    let v = 0;
+    for (const st of subtables) { v = pairFromGPOS(st.dv, st.off, a, b); if (v) break; }
+    if (!v) for (const t of legacy) { v = pairFromLegacy(t, a, b); if (v) break; }
+    cache.set(key, v);
+    return v;
+  };
+  return { kern, source: subtables.length ? "GPOS" : "kern" };
+}
+
 // ------------------------------------------------------------------ flatten
 
 function flattenPath(path, tol, out) {
@@ -480,7 +644,27 @@ function flattenPath(path, tol, out) {
  */
 export async function loadFontFile(file) {
   const buf = file instanceof ArrayBuffer ? file : await file.arrayBuffer();
-  const tables = await readTables(buf);
+  let tables;
+  try {
+    tables = await readTables(buf);
+  } catch (e) {
+    if (!/WOFF2/.test(e.message)) throw e;
+    // WOFF2 is Brotli-compressed and further transforms glyf and loca. The
+    // platform will not inflate Brotli, and carrying a decoder plus the
+    // transform for it is out of proportion here — so the face is registered
+    // for layout, which the browser does support natively, and the shapes
+    // fall back to tracing. Said plainly rather than half-claimed.
+    const family = (file.name || "font").replace(/\.[^.]+$/, "");
+    try {
+      const face = new FontFace(family, buf);
+      await face.load();
+      document.fonts.add(face);
+    } catch { throw new Error("that WOFF2 could not be loaded"); }
+    return { family, format: "WOFF2", outlines: false, numGlyphs: 0,
+             note: "WOFF2 needs Brotli, which the browser will not decompress — "
+                 + "this font is available for layout, but its glyphs are traced "
+                 + "rather than read. Convert to .ttf, .otf or .woff for true outlines." };
+  }
   if (!tables.head || !tables.cmap) throw new Error("that font has no head/cmap table");
 
   const unitsPerEm = tables.head.getUint16(18) || 1000;
@@ -512,12 +696,17 @@ export async function loadFontFile(file) {
     };
   }
 
+  const kerning = buildKerning(tables);
+
   // The family name as the file states it, so text already asking for it is
   // matched rather than renamed.
   let family = readName(tables.name) || (file.name || "font").replace(/\.[^.]+$/, "");
   const font = {
-    family, format, unitsPerEm, numGlyphs,
+    family, format, unitsPerEm, numGlyphs, outlines: true,
+    kerningSource: kerning.source,
     glyphIdFor,
+    /** Pair kerning between two characters, in em. */
+    kernEm: (a, b) => kerning.kern(glyphIdFor(a.codePointAt(0)), glyphIdFor(b.codePointAt(0))) / unitsPerEm,
     advanceEm: (ch) => advanceOf(glyphIdFor(ch.codePointAt(0))) / unitsPerEm,
     /** Contours in em units, y down (the atlas convention), pen at the origin. */
     outlineEm(ch, tol = 0.002) {

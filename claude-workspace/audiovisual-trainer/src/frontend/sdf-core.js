@@ -361,6 +361,9 @@ ${it.body}
     const sub = (v) => (typeof v === "string" ? v : v && v.expr ? v.expr : v);
     const fillExpr = it.fill ? String(sub(it.fill)).replace(/@ID@/g, id) : null;
     const strokeExpr = it.stroke ? String(sub(it.stroke)).replace(/@ID@/g, id) : null;
+    // A translucent gradient answers in vec4; its alpha belongs in the
+    // coverage, not the colour, so it is pulled out into a local first.
+    const fill4 = !!(it.fill && it.fill.vec4), stroke4 = !!(it.stroke && it.stroke.vec4);
     const put = (colour, cover) => {
       const c = it.blend === "multiply" ? `col * (${colour})`
               : it.blend === "screen" ? `1.0 - (1.0 - col) * (1.0 - (${colour}))`
@@ -372,19 +375,39 @@ ${it.body}
     if (it.open && it.baked) {
       // The width is already in the distance, so this paints like any filled
       // shape; inflate still offsets the outline and outline still thickens it.
-      lines.push(`{ float d = ${id}(q) - inflate - outline * 0.5;`,
-        `  ${put(strokeExpr || "vec3(0.0)", `cov(d, px) * ${op}${clipMul}`)} }`);
+      lines.push(`{ float d = ${id}(q) - inflate - outline * 0.5;`);
+      if (stroke4) {
+        lines.push(`  vec4 sc = ${strokeExpr};`,
+          `  ${put("sc.rgb", `cov(d, px) * ${op} * sc.a${clipMul}`)} }`);
+      } else {
+        lines.push(`  ${put(strokeExpr || "vec3(0.0)", `cov(d, px) * ${op}${clipMul}`)} }`);
+      }
     } else if (it.open) {
       lines.push(`{ float d = ${id}(q);`,
-        `  float sw = max(${num(it.strokeWidth || 1)}, outline) + inflate * 2.0;`,
-        `  ${put(strokeExpr || "vec3(0.0)", `cov(d - sw * 0.5, px) * ${op}${clipMul}`)} }`);
+        `  float sw = max(${num(it.strokeWidth || 1)}, outline) + inflate * 2.0;`);
+      if (stroke4) {
+        lines.push(`  vec4 sc = ${strokeExpr};`,
+          `  ${put("sc.rgb", `cov(d - sw * 0.5, px) * ${op} * sc.a${clipMul}`)} }`);
+      } else {
+        lines.push(`  ${put(strokeExpr || "vec3(0.0)", `cov(d - sw * 0.5, px) * ${op}${clipMul}`)} }`);
+      }
     } else {
       lines.push(`{ float d = ${id}(q) - inflate;`);
-      if (fillExpr) lines.push(`  ${put(fillExpr, `cov(d, px) * ${op}${clipMul}`)}`);
+      if (fillExpr && fill4) {
+        lines.push(`  vec4 fc = ${fillExpr};`,
+          `  ${put("fc.rgb", `cov(d, px) * ${op} * fc.a${clipMul}`)}`);
+      } else if (fillExpr) {
+        lines.push(`  ${put(fillExpr, `cov(d, px) * ${op}${clipMul}`)}`);
+      }
       const sw = it.strokeWidth || 0;
       if (sw > 0 || strokeExpr) {
-        lines.push(`  float sw = max(${num(sw)}, outline);`,
-          `  if (sw > 0.0) ${put(strokeExpr || "vec3(0.0)", `cov(abs(d) - sw * 0.5, px) * ${op}${clipMul}`)} }`);
+        lines.push(`  float sw = max(${num(sw)}, outline);`);
+        if (strokeExpr && stroke4) {
+          lines.push(`  vec4 sc = ${strokeExpr};`,
+            `  if (sw > 0.0) ${put("sc.rgb", `cov(abs(d) - sw * 0.5, px) * ${op} * sc.a${clipMul}`)} }`);
+        } else {
+          lines.push(`  if (sw > 0.0) ${put(strokeExpr || "vec3(0.0)", `cov(abs(d) - sw * 0.5, px) * ${op}${clipMul}`)} }`);
+        }
       } else {
         lines.push(`  if (outline > 0.0) ${put("vec3(0.12)", `cov(abs(d) - outline * 0.5, px) * ${op}${clipMul}`)} }`);
       }
