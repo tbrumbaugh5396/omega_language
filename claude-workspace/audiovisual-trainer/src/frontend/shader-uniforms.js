@@ -129,7 +129,10 @@ export function parseUniforms(src) {
       // shader declares that vec2; that uniform is then driven, not dialled.
       out.push({ name, type, control: "image", width: 0, isInt: false,
                  min: 0, max: 0, step: 0, label: a.label || name, value: null,
-                 sizeUniform: `${name}_size`, src: a.src || null });
+                 sizeUniform: `${name}_size`, src: a.src || null,
+                 // A glyph atlas is machinery, not a choice: it binds like any
+                 // other sampler but has no business in the panel.
+                 hidden: a.flags.has("hidden") });
       continue;
     }
     let control;

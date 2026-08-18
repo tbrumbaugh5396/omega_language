@@ -135,7 +135,9 @@ export function renderSketch(source, width, height, opts = {}) {
     for (const uni of uniforms) {
       if (uni.control !== "image") continue;
       let tex = texByName.get(uni.name);
-      const src = images[uni.name];
+      // A sampler that carries its own picture in the source resolves from the
+      // cache loadSketchImages filled.
+      const src = images[uni.name] || (uni.src && imageCache.get(uni.src)) || null;
       if (!tex) {
         tex = gl.createTexture();
         if (src) uploadCanvas(gl, tex, src);
@@ -192,4 +194,29 @@ export function renderSketch(source, width, height, opts = {}) {
 /** The controls a source would show, for a host that wants to build them. */
 export function sketchUniforms(source) {
   return parseUniforms(source);
+}
+
+const imageCache = new Map();      // url → HTMLImageElement, decoded
+
+/**
+ * Resolve every sampler the source declares with `@data` or `@asset` into a
+ * decoded image, so a later renderSketch can bind it. Sources carry their own
+ * pictures — a compiled design carries its glyph atlas this way — and a
+ * synchronous render cannot wait for them, so this is the step before.
+ */
+export async function loadSketchImages(source, into = {}) {
+  const jobs = [];
+  for (const u of parseUniforms(source)) {
+    if (u.control !== "image" || !u.src || into[u.name]) continue;
+    if (imageCache.has(u.src)) { into[u.name] = imageCache.get(u.src); continue; }
+    jobs.push(new Promise((res) => {
+      const im = new Image();
+      im.crossOrigin = "anonymous";
+      im.onload = () => { imageCache.set(u.src, im); into[u.name] = im; res(); };
+      im.onerror = () => res();
+      im.src = u.src;
+    }));
+  }
+  await Promise.all(jobs);
+  return into;
 }

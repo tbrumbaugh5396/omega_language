@@ -7,23 +7,29 @@
 // signed-distance function of q (frame pixels, y down, like SVG); fills and
 // strokes become coverage; painter's order becomes a mix chain.
 //
-// Text is the honest exception. Glyphs need an SDF atlas (roadmap, Phase 5);
-// until then a text block is greeked as bars, one per line, at its own
-// colour and metrics, and the source says so where it happens.
+// Text goes through a glyph atlas (glyph-atlas.js): the browser rasterises
+// each character, an exact distance transform turns it into a field, and the
+// text becomes one texture sample per glyph. Greeked bars remain the fallback
+// when no atlas can be built.
 
 import { num, hex, I, mul, translate, rotateAbout, localise, emitSketch, fitPreview } from "./sdf-core.js";
+import { buildAtlas, emitTextRun, GLYPH_HELPER } from "./glyph-atlas.js";
 
 export { fitPreview };
 
 /**
  * Compile one frame (and everything inside it) to a sketch.
+ *
+ * Asynchronous because real text needs a glyph atlas, and building one means
+ * rasterising and distance-transforming every character the design uses.
  * @returns { source, width, height, shapes, images, notes }
  */
-export function compileDesignFrame(frame, opts = {}) {
+export async function compileDesignFrame(frame, opts = {}) {
   const W = Math.max(1, Math.round(frame.w)), H = Math.max(1, Math.round(frame.h));
   const items = [];
   const uniforms = [];
   const notes = [];
+  const texts = [];
   let imgCount = 0;
 
   function visit(node, parentWorld, parentOpacity, depth) {
@@ -72,22 +78,23 @@ export function compileDesignFrame(frame, opts = {}) {
       });
     } else if (node.type === "text") {
       const size = Number(node.fontSize) || 32;
-      const lh = (Number(node.lineHeight) || 1.3) * size;
       const lines = String(node.text ?? "Text").split("\n");
-      const bars = lines.map((line, i) => {
-        const wid = Math.min(node.w, Math.max(size * 0.4, [...line].length * size * 0.52));
-        const x0 = node.align === "center" ? (node.w - wid) / 2
-                 : node.align === "right" ? node.w - wid : 0;
-        const y0 = i * lh + size * 0.28;
-        return `  d = min(d, sdRR(lq - vec2(${num(x0)}, ${num(y0)}), vec2(${num(wid)}, ${num(size * 0.56)}), ${num(size * 0.28)}));`;
-      });
-      notes.push(`text "${lines[0].slice(0, 24)}" is greeked as bars`);
-      items.push({
+      const item = {
         name: node.name || "text", world, opacity, blend,
-        comment: `text "${lines[0].slice(0, 32).replace(/"/g, "'")}" — greeked: glyphs need an SDF atlas`,
-        body: `  float d = 1e5;\n${bars.join("\n")}\n  return d;`,
+        comment: `text "${lines[0].slice(0, 32).replace(/"/g, "'")}"`,
         fill: hex(node.fill, "#111111"),
-      });
+        __text: {
+          run: { text: String(node.text ?? "Text"), family: node.fontFamily || "system-ui, sans-serif",
+                 weight: node.fontWeight || 500, style: "normal" },
+          opts: { size, lineHeight: Number(node.lineHeight) || 1.3,
+                  letterSpacing: Number(node.letterSpacing) || 0,
+                  align: node.align || "left", boxWidth: node.w,
+                  firstBaseline: size * 0.92 },
+          lines,
+        },
+      };
+      items.push(item);
+      texts.push(item);
     } else if (node.type === "image" && node.href) {
       const u = `img_${++imgCount}`;
       uniforms.push(`uniform sampler2D ${u};   // @${/^data:/.test(node.href) ? "data" : "asset"} ${node.href}`,
@@ -114,11 +121,43 @@ ${localise(world)}
 
   visit(frame, I, 1, 0);
 
+  // One atlas for the whole frame, then each text item gets its glyph chain.
+  const preFuncs = [];
+  if (texts.length) {
+    const atlas = opts.text === "greek" ? null : await buildAtlas(texts.map((t) => t.__text.run));
+    if (atlas) {
+      uniforms.push(`uniform sampler2D u_font;   // @hidden the glyph atlas @data ${atlas.dataUrl}`);
+      preFuncs.push(GLYPH_HELPER);
+      for (const it of texts) {
+        const r = emitTextRun(atlas, it.__text.run, it.__text.opts);
+        if (r) { it.body = r.body; it.comment += ` — ${r.glyphs} glyphs`; }
+        else greek(it);
+      }
+    } else {
+      for (const it of texts) greek(it);
+      notes.push("no glyph atlas could be built — text is greeked as bars");
+    }
+    for (const it of texts) delete it.__text;
+  }
+
   const source = emitSketch(items, {
     width: W, height: H,
     title: `Compiled from the design "${frame.name || "frame"}"`,
     background: hex(frame.fill, "#ffffff"),
-    uniforms,
+    uniforms, preFuncs,
   });
   return { source, width: W, height: H, shapes: items.length, images: imgCount, notes };
+
+  /** The old behaviour, kept as the fallback: one bar per line. */
+  function greek(it) {
+    const { opts: o, lines } = it.__text;
+    const bars = lines.map((line, i) => {
+      const wid = Math.min(o.boxWidth, Math.max(o.size * 0.4, [...line].length * o.size * 0.52));
+      const x0 = o.align === "center" ? (o.boxWidth - wid) / 2
+               : o.align === "right" ? o.boxWidth - wid : 0;
+      const y0 = i * o.lineHeight * o.size + o.size * 0.28;
+      return `  d = min(d, sdRR(lq - vec2(${num(x0)}, ${num(y0)}), vec2(${num(wid)}, ${num(o.size * 0.56)}), ${num(o.size * 0.28)}));`;
+    });
+    it.body = `  float d = 1e5;\n${bars.join("\n")}\n  return d;`;
+  }
 }

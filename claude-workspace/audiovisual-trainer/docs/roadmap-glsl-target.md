@@ -403,11 +403,24 @@ Generate already has applies to it.
   bevel joins are drawn round; CSS stylesheets and classes, filters, masks
   and patterns are ignored; stop-opacity is dropped; text is greeked.
 - **Next in this line**: dashes (arc-length parametrisation), miter joins,
-  stop-opacity via vec4 ramps, and text through an SDF glyph atlas.
+  stop-opacity via vec4 ramps, and multi-channel (MSDF) glyphs, which keep
+  sharp corners on letterforms that a single channel rounds slightly.
 - **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
-- Text via an SDF glyph atlas — a texture, but a *distance* texture, so still
-  crisp at any scale — is L and last; a paragraph is thousands of segments.
+- **Text via an SDF glyph atlas — shipped** (`glyph-atlas.js`). No font file is
+  parsed: the browser rasterises each glyph at 96 ppem, an exact Euclidean
+  distance transform (Felzenszwalb–Huttenlocher, linear time — not the usual
+  8SSEDT approximation) turns it into a field, that field is halved to 48 ppem
+  (which distance survives and coverage does not), and the glyphs are shelf-
+  packed into the smallest power-of-two atlas. The atlas rides in the source
+  as an `@hidden @data` sampler, so a compiled design is still one file.
+  Positions come from `measureText` on growing prefixes, so kerning is the
+  browser's own. Text costs one texture sample per glyph, each behind a tile
+  bounds test. **Parity: a design's text region went from 38.2 to 2.31/255
+  against the browser's own text rendering; an SVG with three families, three
+  weights and all three anchors reads 1.65/255 overall.** And the point of
+  doing it as distance rather than coverage: inflate, outline and wobble act
+  on letterforms exactly as they act on every other shape.
 - Where it strains: paths past a few hundred segments per pixel bake to a
   texture; `feGaussianBlur` and friends are pass boundaries, not per-pixel.
 - Geometry stays vector in the Design document; this is a compile target, not

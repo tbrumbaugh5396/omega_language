@@ -1527,7 +1527,8 @@ uniform bool  mirror;  // @toggle`),
       e.target.value = "";
       if (!f) return;
       let out;
-      try { out = compileSvg(await f.text(), { name: f.name }); }
+      toast("Compiling shapes and glyphs…");
+      try { out = await compileSvg(await f.text(), { name: f.name }); }
       catch (err) { toast(`Could not compile: ${err.message}`); return; }
       doc.mode = "sketch"; doc.glsl = ""; doc.uniforms = {}; doc.preset = "";
       modeLabel.textContent = "sketch"; modeBtn.textContent = "GLSL";

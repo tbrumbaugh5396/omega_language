@@ -176,6 +176,7 @@ export function mediaDims(url, kind) {
  * `onImage(u, file)` uploads a picked file and resolves to {url, w, h}.
  */
 export function buildControls(uniforms, values, onChange, { onImage } = {}) {
+  const shown = uniforms.filter((u) => !u.hidden);
   // An image declared in the source (`// @data …` or `// @asset …`) fills the
   // slot when nothing has been chosen — that is how an ejected, self-contained
   // shader arrives with its pictures.
@@ -184,12 +185,13 @@ export function buildControls(uniforms, values, onChange, { onImage } = {}) {
       values[u.name] = { url: u.src, kind: /^data:video\//.test(u.src) || /\.(mp4|webm|mov)(\?|$)/i.test(u.src) ? "video" : "image", fromSource: true };
     }
   }
-  if (!uniforms.length) {
+  if (!shown.length) {
     return el("p.fine", {}, "No adjustable uniforms. Declare one — " +
       "`uniform float scale; // @range 1 40` — and a control appears here.");
   }
   const nodes = [];
   for (const u of uniforms) {
+    if (u.hidden) continue;                       // bound, but not offered
     if (u.control === "image") { nodes.push(imageControl(u, values, onChange, onImage)); continue; }
     // Keep the value across an edit when the shape still fits; a slider that
     // resets every time you touch the source is worse than no slider.

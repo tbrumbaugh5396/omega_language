@@ -18,6 +18,7 @@ import {
   num, hex, I, mul, translate, scaleM, rotateAbout, localise,
   polygonBody, openStrokeBody, emitSketch,
 } from "./sdf-core.js";
+import { buildAtlas, emitTextRun, GLYPH_HELPER } from "./glyph-atlas.js";
 
 const NAMED = {
   black: "#000000", white: "#ffffff", red: "#ff0000", lime: "#00ff00",
@@ -295,7 +296,7 @@ ${ramp.join("\n")}
  * Compile SVG text to a sketch.
  * @returns { source, width, height, shapes, notes }
  */
-export function compileSvg(text, opts = {}) {
+export async function compileSvg(text, opts = {}) {
   const dom = new DOMParser().parseFromString(text, "image/svg+xml");
   const err = dom.querySelector("parsererror");
   if (err) throw new Error("that file is not valid SVG");
@@ -330,6 +331,7 @@ export function compileSvg(text, opts = {}) {
 
   const items = [];
   const uniforms = [];
+  const texts = [];
   const clips = new Map();      // id → emitted clip function name
   let gradN = 0, imgN = 0, edgeTotal = 0, truncated = 0;
   const EDGE_CAP = opts.edgeCap || 9000;
@@ -497,16 +499,27 @@ ${localise(world3)}
       const content = (el.textContent || "").trim();
       if (!content) return;
       const anchor = st["text-anchor"] || "start";
-      const wid = Math.max(size * 0.4, [...content].length * size * 0.52);
-      const x = len(st.x, 0) - (anchor === "middle" ? wid / 2 : anchor === "end" ? wid : 0);
-      const y = len(st.y, 0) - size * 0.72;
-      notes.add(`text "${content.slice(0, 24)}" is greeked as a bar — real glyphs need an SDF atlas`);
-      items.push({
-        name: "text", comment: `text "${content.slice(0, 28).replace(/"/g, "'")}" — greeked`,
+      const x = len(st.x, 0), y = len(st.y, 0);
+      const est = Math.max(size * 0.4, [...content].length * size * 0.52);
+      const item = {
+        name: st.id || "text", comment: `text "${content.slice(0, 28).replace(/"/g, "'")}"`,
         world: world2, opacity,
-        body: `  return sdRR(lq - vec2(${num(x)}, ${num(y)}), vec2(${num(wid)}, ${num(size * 0.72)}), ${num(size * 0.2)});`,
-        fill: resolvePaint(paint(inh.fill, "#000000"), world2, { x, y, w: wid, h: size }) || "#000000",
-      });
+        fill: resolvePaint(paint(inh.fill, "#000000"), world2, { x, y: y - size, w: est, h: size }) || "#000000",
+        __text: {
+          run: { text: content, family: st["font-family"] || "system-ui, sans-serif",
+                 weight: st["font-weight"] || 400,
+                 style: st["font-style"] || "normal" },
+          // SVG places text by its baseline, and text-anchor shifts it by the
+          // measured width — which the atlas layout knows, so boxWidth is zero
+          // and the alignment does the work.
+          opts: { size, lineHeight: 1, letterSpacing: len(st["letter-spacing"], 0),
+                  align: anchor === "middle" ? "center" : anchor === "end" ? "right" : "left",
+                  boxWidth: 0, firstBaseline: 0 },
+          anchorAt: [x, y], est,
+        },
+      };
+      items.push(item);
+      texts.push(item);
       return;
     }
 
@@ -563,6 +576,37 @@ ${localise(world3)}
 
   visit(root, rootM, 1, { fill: undefined, stroke: undefined, "stroke-width": undefined });
 
+  // One atlas for every text element in the file.
+  const preFuncs = [];
+  if (texts.length) {
+    const atlas = opts.text === "greek" ? null : await buildAtlas(texts.map((t) => t.__text.run));
+    if (atlas) {
+      uniforms.push(`uniform sampler2D u_font;   // @hidden the glyph atlas @data ${atlas.dataUrl}`);
+      preFuncs.push(GLYPH_HELPER);
+      for (const it of texts) {
+        const t = it.__text;
+        // Shift the whole run so the pen starts at the SVG anchor point.
+        it.world = mul(it.world, translate(t.anchorAt[0], t.anchorAt[1]));
+        const r = emitTextRun(atlas, t.run, t.opts);
+        if (r) { it.body = r.body; it.comment += ` — ${r.glyphs} glyphs`; }
+        else greekSvg(it);
+      }
+    } else {
+      for (const it of texts) greekSvg(it);
+      notes.add("no glyph atlas could be built — text is greeked as bars");
+    }
+    for (const it of texts) delete it.__text;
+  }
+
+  function greekSvg(it) {
+    const t = it.__text, o = t.opts;
+    const wid = t.est;
+    const dx = o.align === "center" ? -wid / 2 : o.align === "right" ? -wid : 0;
+    it.world = mul(it.world, translate(t.anchorAt[0], t.anchorAt[1]));
+    it.body = `  return sdRR(lq - vec2(${num(dx)}, ${num(-o.size * 0.72)}), vec2(${num(wid)}, ${num(o.size * 0.72)}), ${num(o.size * 0.2)});`;
+    notes.add(`text "${t.run.text.slice(0, 24)}" is greeked as a bar`);
+  }
+
   if (truncated) notes.add(`${truncated} shape${truncated === 1 ? " was" : "s were"} dropped past the ${EDGE_CAP}-edge budget`);
   if (!items.filter((i) => !i.__raw).length) throw new Error("nothing drawable was found in that file");
 
@@ -574,7 +618,7 @@ ${localise(world3)}
     width: W, height: H, title: `Compiled from ${opts.name || "an SVG file"}`,
     background: opts.background === undefined ? "#ffffff" : opts.background,
     uniforms,
-    preFuncs: raw,
+    preFuncs: [...preFuncs, ...raw],
   });
   return { source, width: W, height: H, shapes: shapes.length, notes: [...notes], edges: edgeTotal };
 }

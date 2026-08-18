@@ -851,7 +851,8 @@ export async function designEditor(host) {
     const node = selected().find((n) => n.type === "frame") || doc.nodes.find((n) => n.type === "frame");
     if (!node) { toast("Nothing to compile — make a frame first"); return; }
     let out;
-    try { out = compileDesignFrame(node); }
+    toast("Compiling shapes and glyphs…");
+    try { out = await compileDesignFrame(node); }
     catch (e) { toast(`Could not compile: ${e.message}`); return; }
     const preview = fitPreview(out.width, out.height);
     const made = await api("/api/studio/projects", { method: "POST",
