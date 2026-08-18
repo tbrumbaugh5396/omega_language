@@ -99,7 +99,117 @@ export function emitEdges(subpaths, { winding }) {
  * perpendicular to the end tangent; `square` pushes that cut out by half the
  * width, which is why it needs the literal width rather than the live knob.
  */
-export function openStrokeBody(subpaths, { cap = "butt", halfWidth = 0 }) {
+/**
+ * Cut polylines into their dashes, by arc length.
+ *
+ * A dash pattern is a property of distance along the path, which nothing in a
+ * distance field knows about — so it is resolved here, at compile time, and
+ * each dash becomes its own open polyline with its own caps. An odd-length
+ * pattern repeats to even, as SVG says.
+ */
+export function dashPolylines(subpaths, pattern, offset = 0, maxPieces = 800) {
+  const pat = pattern.filter((v) => Number.isFinite(v) && v >= 0);
+  if (!pat.length) return subpaths;
+  const dashes = pat.length % 2 ? pat.concat(pat) : pat;
+  const period = dashes.reduce((a, b) => a + b, 0);
+  if (period <= 0) return subpaths;
+
+  const out = [];
+  for (const sp of subpaths) {
+    const pts = sp.closed && (sp.pts[0][0] !== sp.pts[sp.pts.length - 1][0]
+                           || sp.pts[0][1] !== sp.pts[sp.pts.length - 1][1])
+      ? sp.pts.concat([sp.pts[0]]) : sp.pts;
+    // Where in the pattern the path starts, and whether that phase is drawn.
+    // stroke-dashoffset is the distance *into* the pattern to begin at, so it
+    // advances the phase rather than retarding it.
+    let rem = ((offset % period) + period) % period;
+    let idx = 0;
+    while (rem >= dashes[idx]) { rem -= dashes[idx]; idx = (idx + 1) % dashes.length; }
+    let left = dashes[idx] - rem;
+    let on = idx % 2 === 0;
+    let cur = on ? [pts[0]] : null;
+
+    for (let i = 0; i + 1 < pts.length; i++) {
+      let [ax, ay] = pts[i];
+      const [bx, by] = pts[i + 1];
+      let segLeft = Math.hypot(bx - ax, by - ay);
+      while (segLeft > 1e-9) {
+        const step = Math.min(segLeft, left);
+        const t = step / segLeft;
+        const nx = ax + (bx - ax) * t, ny = ay + (by - ay) * t;
+        if (on) cur.push([nx, ny]);
+        segLeft -= step;
+        left -= step;
+        ax = nx; ay = ny;
+        if (left <= 1e-9) {                       // this dash or gap ends here
+          if (on && cur && cur.length > 1) out.push({ pts: cur, closed: false });
+          idx = (idx + 1) % dashes.length;
+          left = dashes[idx];
+          on = !on;
+          cur = on ? [[ax, ay]] : null;
+          if (out.length > maxPieces) return out;
+        }
+      }
+    }
+    if (on && cur && cur.length > 1) out.push({ pts: cur, closed: false });
+  }
+  return out;
+}
+
+/** Unit direction from one point to another. */
+const unit = (from, to) => {
+  const dx = to[0] - from[0], dy = to[1] - from[1];
+  const l = Math.hypot(dx, dy) || 1;
+  return [dx / l, dy / l];
+};
+
+/**
+ * The patch that turns a round join into a mitre or a bevel: the wedge on the
+ * outside of the turn, bounded by each segment's own offset line. Those two
+ * lines meet at the mitre tip, so for a mitre no further limit is needed; a
+ * bevel simply cuts the wedge off at the chord.
+ *
+ * Returned in *outline* terms — the half-width is already in it — because a
+ * join has no centreline to be a distance from.
+ */
+function joinPatch(v, e1, e2, hw, join, miterLimit) {
+  const cross = e1[0] * e2[1] - e1[1] * e2[0];
+  if (Math.abs(cross) < 1e-6) return null;             // straight through
+  const s = cross > 0 ? -1 : 1;                        // the outside of the turn
+  const perp = (d) => [-d[1] * s, d[0] * s];
+  const n1 = perp(e1), n2 = perp(e2);
+  let mx = n1[0] + n2[0], my = n1[1] + n2[1];
+  const ml = Math.hypot(mx, my);
+  if (ml < 1e-6) return null;                          // a full reversal
+  mx /= ml; my /= ml;
+  const cosHalf = n1[0] * mx + n1[1] * my;
+  if (cosHalf < 1e-4) return null;
+  const bevel = join === "bevel" || 1 / cosHalf > miterLimit;
+  const V = `vec2(${num(v[0], 3)}, ${num(v[1], 3)})`;
+  const terms = [
+    `dot(jv, vec2(${num(n1[0], 4)}, ${num(n1[1], 4)})) - ${num(hw, 3)}`,
+    `dot(jv, vec2(${num(n2[0], 4)}, ${num(n2[1], 4)})) - ${num(hw, 3)}`,
+    `-dot(jv, vec2(${num(mx, 4)}, ${num(my, 4)}))`,
+  ];
+  if (bevel) terms.push(`dot(jv, vec2(${num(mx, 4)}, ${num(my, 4)})) - ${num(hw * cosHalf, 3)}`);
+  const expr = terms.reduce((acc, t) => (acc ? `max(${acc}, ${t})` : t), "");
+  return `  { vec2 jv = lq - ${V}; ds = min(ds, ${expr}); }`;
+}
+
+/** A closed subpath needs its last segment back: the point list names each
+    corner once, so the run from the final corner to the first is implied. */
+const closeRing = (sp) => {
+  const p = sp.pts;
+  if (!sp.closed || p.length < 3) return sp;
+  const same = Math.abs(p[0][0] - p[p.length - 1][0]) < 1e-9
+            && Math.abs(p[0][1] - p[p.length - 1][1]) < 1e-9;
+  return same ? sp : { ...sp, pts: p.concat([p[0]]) };
+};
+
+export function openStrokeBody(subpaths, { cap = "butt", halfWidth = 0,
+                                           join = "round", miterLimit = 4 }) {
+  subpaths = subpaths.map(closeRing);
+  if (join !== "round") return bakedStrokeBody(subpaths, { cap, halfWidth, join, miterLimit });
   const blocks = [];
   let edges = 0;
   for (const sp of subpaths) {
@@ -134,6 +244,52 @@ export function openStrokeBody(subpaths, { cap = "butt", halfWidth = 0 }) {
   return {
     body: `  float d = 1e5;\n  vec2 a = vec2(0.0), b = vec2(0.0);\n${blocks.join("\n")}\n  return d;`,
     edges,
+  };
+}
+
+/**
+ * A stroke whose width is baked in, returning the distance to its outline
+ * rather than to its centreline. Mitre and bevel joins need this: the wedge
+ * they add is a region, not an offset of a line.
+ */
+function bakedStrokeBody(subpaths, { cap, halfWidth: hw, join, miterLimit }) {
+  subpaths = subpaths.map(closeRing);
+  const blocks = [];
+  let edges = 0, joins = 0;
+  for (const sp of subpaths) {
+    const pts = sp.pts;
+    if (pts.length < 2) continue;
+    const lines = [`  { float ds = 1e5;`, `  a = vec2(${num(pts[0][0], 3)}, ${num(pts[0][1], 3)});`];
+    for (const p of pts.slice(1)) {
+      lines.push(`  b = vec2(${num(p[0], 3)}, ${num(p[1], 3)}); ds = min(ds, sdSegment(lq, a, b) - ${num(hw, 3)}); a = b;`);
+      edges++;
+    }
+    const closed = sp.closed
+      && Math.abs(pts[0][0] - pts[pts.length - 1][0]) < 1e-6
+      && Math.abs(pts[0][1] - pts[pts.length - 1][1]) < 1e-6;
+    const last = pts.length - 1;
+    for (let i = 1; i < last; i++) {
+      const patch = joinPatch(pts[i], unit(pts[i - 1], pts[i]), unit(pts[i], pts[i + 1]), hw, join, miterLimit);
+      if (patch) { lines.push(patch); joins++; }
+    }
+    if (closed && pts.length > 2) {
+      // The seam is a join like any other.
+      const patch = joinPatch(pts[0], unit(pts[last - 1], pts[last]), unit(pts[0], pts[1]), hw, join, miterLimit);
+      if (patch) { lines.push(patch); joins++; }
+    } else if (cap !== "round") {
+      // Baked, so the cut lands on the end point with no half-width to add;
+      // a square cap pushes it out by one.
+      const push = cap === "square" ? ` - ${num(hw, 3)}` : "";
+      const d0 = unit(pts[0], pts[1]), dN = unit(pts[last - 1], pts[last]);
+      lines.push(`  ds = max(ds, -dot(lq - vec2(${num(pts[0][0], 3)}, ${num(pts[0][1], 3)}), vec2(${num(d0[0], 4)}, ${num(d0[1], 4)}))${push});`,
+                 `  ds = max(ds, dot(lq - vec2(${num(pts[last][0], 3)}, ${num(pts[last][1], 3)}), vec2(${num(dN[0], 4)}, ${num(dN[1], 4)}))${push});`);
+    }
+    lines.push(`  d = min(d, ds); }`);
+    blocks.push(lines.join("\n"));
+  }
+  return {
+    body: `  float d = 1e5;\n  vec2 a = vec2(0.0), b = vec2(0.0);\n${blocks.join("\n")}\n  return d;`,
+    edges, joins, baked: true,
   };
 }
 
@@ -213,7 +369,12 @@ ${it.body}
     };
     const clipMul = it.clip ? ` * cov(${it.clip}(q), px)` : "";
     const lines = [];
-    if (it.open) {
+    if (it.open && it.baked) {
+      // The width is already in the distance, so this paints like any filled
+      // shape; inflate still offsets the outline and outline still thickens it.
+      lines.push(`{ float d = ${id}(q) - inflate - outline * 0.5;`,
+        `  ${put(strokeExpr || "vec3(0.0)", `cov(d, px) * ${op}${clipMul}`)} }`);
+    } else if (it.open) {
       lines.push(`{ float d = ${id}(q);`,
         `  float sw = max(${num(it.strokeWidth || 1)}, outline) + inflate * 2.0;`,
         `  ${put(strokeExpr || "vec3(0.0)", `cov(d - sw * 0.5, px) * ${op}${clipMul}`)} }`);

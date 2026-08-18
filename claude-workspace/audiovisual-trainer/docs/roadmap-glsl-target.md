@@ -399,9 +399,20 @@ Generate already has applies to it.
   polygonised. **Parity: mean 2.33/255 against the browser's own rasterisation
   of a file exercising all of the above, 11 pixels of 240,000 off by more
   than 50.** Generate's **SVG…** button imports one.
-- **Known gaps, reported in the import notes rather than hidden**: miter and
-  bevel joins are drawn round; CSS stylesheets and classes, filters, masks
-  and patterns are ignored; stop-opacity is dropped; text is greeked.
+- **Dashes and joins — shipped.** `stroke-dasharray` and `stroke-dashoffset`
+  are resolved by arc length at compile time, so each dash becomes its own
+  polyline with its own caps — which is also why a dashed circle stops being
+  a circle and goes through the polyline path. Mitre and bevel joins add the
+  wedge on the outside of each turn, bounded by the two segments' own offset
+  lines; `stroke-miterlimit` falls back to bevel. A join is a region rather
+  than an offset of a line, so those strokes bake the width into the shape and
+  paint like a filled outline — inflate and outline still act on them.
+  **Parity on a scene of every join type, a mitre-limit fallback, four dash
+  patterns and a stroked rect: mean 0.32/255, 132 pixels of 319,200 off by
+  more than 60.**
+- **Known gaps, reported in the import notes rather than hidden**: CSS
+  stylesheets and classes, filters, masks and patterns are ignored;
+  stop-opacity is dropped.
 - **MSDF — shipped** (`msdf.js`), and the honest account of it. A single
   channel cannot hold a corner: it stores the distance to the nearest edge, and
   a corner's crease is lost to bilinear filtering. Chlumský's answer needs
@@ -444,9 +455,10 @@ Generate already has applies to it.
   - The magnitude-based error correction pass (median against the true
     distance, truth winning past a pixel) is what finally cleared the specks
     from serif letterforms. A sign-based version, tried first, never fired.
-- **Next in this line**: dashes (arc-length parametrisation) and miter joins;
-  stop-opacity via vec4 ramps; kerning and shaping read from `GPOS`/`GSUB`
-  rather than borrowed from the text engine; and WOFF2, which needs Brotli.
+- **Next in this line**: stop-opacity via vec4 ramps; kerning and shaping read
+  from `GPOS`/`GSUB` rather than borrowed from the text engine; and WOFF2,
+  which needs Brotli. With those, Phase 5 is finished and the work moves to
+  Phase 0 and the render graph, which is where the rest of the roadmap lives.
 - **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
 - **Text via an SDF glyph atlas — shipped** (`glyph-atlas.js`). No font file is

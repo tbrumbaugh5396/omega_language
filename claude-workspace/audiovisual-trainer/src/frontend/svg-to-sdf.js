@@ -16,7 +16,7 @@
 
 import {
   num, hex, I, mul, translate, scaleM, rotateAbout, localise,
-  polygonBody, openStrokeBody, emitSketch,
+  polygonBody, openStrokeBody, dashPolylines, emitSketch,
 } from "./sdf-core.js";
 import { buildAtlas, emitTextRun, GLYPH_HELPER } from "./glyph-atlas.js";
 
@@ -456,6 +456,9 @@ export async function compileSvg(text, opts = {}) {
       "stroke-opacity": st["stroke-opacity"] !== undefined ? st["stroke-opacity"] : inherited["stroke-opacity"],
       "stroke-linecap": st["stroke-linecap"] !== undefined ? st["stroke-linecap"] : inherited["stroke-linecap"],
       "stroke-linejoin": st["stroke-linejoin"] !== undefined ? st["stroke-linejoin"] : inherited["stroke-linejoin"],
+      "stroke-miterlimit": st["stroke-miterlimit"] !== undefined ? st["stroke-miterlimit"] : inherited["stroke-miterlimit"],
+      "stroke-dasharray": st["stroke-dasharray"] !== undefined ? st["stroke-dasharray"] : inherited["stroke-dasharray"],
+      "stroke-dashoffset": st["stroke-dashoffset"] !== undefined ? st["stroke-dashoffset"] : inherited["stroke-dashoffset"],
     };
 
     if (tag === "g" || tag === "svg" || tag === "a") {
@@ -533,20 +536,38 @@ ${localise(world3)}
     if (!hasFill && !strokePaint) return;
 
     const bbox = bboxOf(geo.subs);
-    let body, edges = 0;
+    let body, edges = 0, bakedStroke = false, openStroke = false;
+
+    // Dashes are resolved by arc length before anything is emitted, so each
+    // dash arrives as its own polyline with its own caps — and a dashed circle
+    // stops being a circle, which is why this comes before the shape choice.
+    let subs = geo.subs, dashed = false;
+    const dashSpec = String(inh["stroke-dasharray"] || "none").trim();
+    if (strokePaint && dashSpec && dashSpec !== "none") {
+      const pattern = dashSpec.split(/[\s,]+/).map((v) => len(v, 0)).filter((v) => v >= 0);
+      if (pattern.some((v) => v > 0)) {
+        subs = dashPolylines(subs, pattern, len(inh["stroke-dashoffset"], 0));
+        dashed = true;
+        if (!subs.length) return;                         // dashed into nothing
+        if (subs.length > 700) notes.add("a dash pattern was cut short at 800 pieces");
+      }
+    }
+
     // A circle or ellipse has an exact distance; using it instead of a polygon
-    // keeps the file small and the edge perfect at any zoom.
-    if (geo.ellipse && Math.abs(geo.ellipse.rx - geo.ellipse.ry) < 1e-6) {
+    // keeps the file small and the edge perfect at any zoom. Its stroke is a
+    // band around that distance, so it is never an "open" stroke — treating it
+    // as one drew a filled disc, because the inside is where d is most negative.
+    if (geo.ellipse && !dashed && Math.abs(geo.ellipse.rx - geo.ellipse.ry) < 1e-6) {
       body = `  return length(lq - vec2(${num(geo.ellipse.cx)}, ${num(geo.ellipse.cy)})) - ${num(geo.ellipse.rx)};`;
-    } else if (geo.ellipse) {
+    } else if (geo.ellipse && !dashed) {
       body = `  return sdEllipse(lq - vec2(${num(geo.ellipse.cx)}, ${num(geo.ellipse.cy)}), vec2(${num(geo.ellipse.rx)}, ${num(geo.ellipse.ry)}));`;
     } else if (!hasFill && strokePaint) {
-      const cap = (inh["stroke-linecap"] || st["stroke-linecap"] || "butt").toLowerCase();
-      const r = openStrokeBody(geo.subs, { cap, halfWidth: strokeW / 2 });
-      body = r.body; edges = r.edges;
-      if ((inh["stroke-linejoin"] || st["stroke-linejoin"] || "miter") === "miter") {
-        notes.add("stroke-linejoin: miter is drawn round — sharp corners are eased");
-      }
+      const cap = String(inh["stroke-linecap"] || "butt").toLowerCase();
+      const join = String(inh["stroke-linejoin"] || "miter").toLowerCase();
+      const miterLimit = parseFloat(inh["stroke-miterlimit"] ?? "4") || 4;
+      const r = openStrokeBody(subs, { cap, halfWidth: strokeW / 2, join, miterLimit });
+      body = r.body; edges = r.edges; bakedStroke = !!r.baked; openStroke = true;
+      edgeTotal += edges;
     } else {
       const r = polygonBody(geo.subs, {
         winding: hasFill,
@@ -569,7 +590,8 @@ ${localise(world3)}
       fill: hasFill ? resolvePaint(fillPaint, world2, bbox) : null,
       stroke: strokePaint ? resolvePaint(strokePaint, world2, bbox) : null,
       strokeWidth: strokeW,
-      open: !hasFill && !!strokePaint,
+      open: openStroke,
+      baked: bakedStroke,
       clip: clipFor(st["clip-path"], world2),
     });
   }
