@@ -83,6 +83,13 @@ function toggleControl(u, value, onChange) {
       oninput: (e) => { value[0] = e.target.checked ? 1 : 0; onChange(); } }));
 }
 
+function selectControl(u, value, onChange) {
+  return el("label.knob", { title: u.help || u.label }, u.label,
+    el("select", { style: { marginTop: ".2rem" },
+      onchange: (e) => { value[0] = +e.target.value; onChange(); } },
+      ...u.options.map((o, i) => el("option", { value: String(i), selected: Math.round(value[0]) === i }, o))));
+}
+
 function sliders(u, value, onChange) {
   const suffix = u.width === 1 ? [""] : ["x", "y", "z", "w"].slice(0, u.width);
   return suffix.map((s, i) => {
@@ -201,6 +208,7 @@ export function buildControls(uniforms, values, onChange, { onImage } = {}) {
     values[u.name] = v;
 
     if (u.control === "pad") nodes.push(xyPad(u, v, onChange));
+    else if (u.control === "select") nodes.push(selectControl(u, v, onChange));
     else if (u.control === "color") nodes.push(...colourControl(u, v, onChange));
     else if (u.control === "toggle") nodes.push(toggleControl(u, v, onChange));
     else nodes.push(...sliders(u, v, onChange));

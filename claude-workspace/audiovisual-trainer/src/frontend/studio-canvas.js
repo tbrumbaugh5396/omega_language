@@ -26,6 +26,8 @@ import { gridOverlay } from "./grid-overlay.js";
 import { GENERATE_PRESETS } from "./studio-generate.js";
 import { renderSketch, sketchUniforms } from "./shader-run.js";
 import { buildControls } from "./shader-controls.js";
+import { applyNode } from "./graph-compile.js";
+import { nodeType } from "./render-graph.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
   "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
@@ -869,6 +871,10 @@ export async function canvasEditor(host) {
     const selBox = el("select", {},
       el("optgroup", { label: "Filters" }, ...I.FILTERS.map((f) =>
         el("option", { value: f.id }, f.name))),
+      el("optgroup", { label: "Render graph nodes (GPU)" },
+        el("option", { value: "graph:adjust.exposure" }, "Exposure — stops, linear light"),
+        el("option", { value: "graph:adjust.curves" }, "Curves — shadows / mids / highlights"),
+        el("option", { value: "graph:filter.blur" }, "Gaussian blur — the same kernel, on the GPU")),
       el("optgroup", { label: "Shader — Generate presets" }, ...shaderPresets.map((p) =>
         el("option", { value: `shader:preset:${p.id}` }, p.label))),
       shaderDocs.length ? el("optgroup", { label: "Shader — your Generate documents" },
@@ -879,6 +885,7 @@ export async function canvasEditor(host) {
     const source = I.getImage(l.canvas);
     let params = {}, result = null, resultCanvas = null;
     let shader = null;                        // { source, uniforms, values, imageName, time }
+    let graphNode = null;                     // { type, values }
 
     const paintPreview = (tmp) => {
       const pg = preview.getContext("2d");
@@ -887,6 +894,20 @@ export async function canvasEditor(host) {
       pg.drawImage(tmp, 0, 0, preview.width, preview.height);
     };
     const recompute = () => {
+      if (graphNode) {
+        try {
+          const vals = { ...graphNode.values };
+          if (graphNode.type === "adjust.curves") {
+            // three sliders → a curve through (0,0), (0.25,s), (0.5,m), (0.75,h), (1,1)
+            const [sh, mi, hi] = [vals.shadows[0], vals.mids[0], vals.highs[0]];
+            vals.curve = { points: [[0, 0], [0.25, 0.25 + sh * 0.25], [0.5, 0.5 + mi * 0.25], [0.75, 0.75 + hi * 0.25], [1, 1]] };
+          }
+          resultCanvas = applyNode(l.canvas, graphNode.type, vals);
+          result = null;
+        } catch (e) { toast(`Graph failed: ${String(e.message).split("\n")[0]}`); return; }
+        paintPreview(resultCanvas);
+        return;
+      }
       if (shader) {
         try {
           resultCanvas = renderSketch(shader.source, W, H, {
@@ -921,6 +942,30 @@ export async function canvasEditor(host) {
     };
     const build = async () => {
       const v = selBox.value;
+      shader = null; graphNode = null;
+      if (v.startsWith("graph:")) {
+        const type = v.slice(6);
+        clear(controls);
+        graphNode = { type, values: {} };
+        if (type === "adjust.curves") {
+          graphNode.values = { shadows: [0], mids: [0], highs: [0], amount: [1] };
+          for (const [k, lab] of [["shadows", "shadows"], ["mids", "midtones"], ["highs", "highlights"]]) {
+            controls.append(knob(lab, { min: -1, max: 1, step: 0.01, value: 0, format: (x) => x.toFixed(2),
+              oninput: (x) => { graphNode.values[k] = [x]; recompute(); } }));
+          }
+          controls.append(knob("amount", { min: 0, max: 1, step: 0.01, value: 1, format: (x) => x.toFixed(2),
+            oninput: (x) => { graphNode.values.amount = [x]; recompute(); } }));
+        } else {
+          const t = nodeType(type === "filter.blur" ? "filter.blur1d" : type);
+          const shown = t.params.filter((u) => !u.hidden && u.control !== "image");
+          for (const u of shown) graphNode.values[u.name] = u.value.slice();
+          controls.append(buildControls(shown, graphNode.values, recompute));
+        }
+        controls.append(el("p.fine", {}, `A render-graph node (${type}); its GLSL is what runs. ` +
+          "Filters here still bake on Apply — the layer stack becomes a live graph in the next phase."));
+        recompute();
+        return;
+      }
       if (v.startsWith("shader:preset:")) {
         const p = shaderPresets.find((x) => x.id === v.slice(14));
         return buildShader(p.source);
@@ -931,7 +976,6 @@ export async function canvasEditor(host) {
         if (!src) { toast("That document has no source yet."); return; }
         return buildShader(src);
       }
-      shader = null;
       const f = I.FILTERS.find((x) => x.id === v);
       params = {};
       clear(controls);

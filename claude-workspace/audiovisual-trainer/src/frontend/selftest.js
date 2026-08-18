@@ -21,6 +21,9 @@ import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages } from "./sha
 import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
+import { createGraph, addNode, addBlur, curveLut, NODE_TYPES } from "./render-graph.js";
+import { renderGraph, ejectGraph } from "./graph-compile.js";
+import { blurFast, getImage } from "./engine-image.js";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -269,6 +272,74 @@ export async function runSelfTest(report = () => {}) {
            detail: `mean ${r.mean}/255 · ${r.off} px off by >60 (${r.pct}%) · want <4.0` });
   } catch (e) {
     push({ group: "Text → glyph atlas", name: "compile", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The render graph: each proving node against a CPU reference computed the
+  // same way, and the whole chain ejected as text that compiles.
+  try {
+    const W = 200, H = 120;
+    const src = document.createElement("canvas"); src.width = W; src.height = H;
+    const g = src.getContext("2d");
+    const gr = g.createLinearGradient(0, 0, W, H); gr.addColorStop(0, "#f4efe6"); gr.addColorStop(1, "#1b2b4b");
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    g.fillStyle = "#ff7a3d"; g.beginPath(); g.arc(70, 60, 32, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#2f7d5b"; g.fillRect(120, 30, 50, 60);
+    const srcData = g.getImageData(0, 0, W, H).data;
+    const px = (c) => c.getContext("2d").getImageData(0, 0, W, H).data;
+    const cmp = (a, b) => compare(a, b, W, H, { thresh: 8 });
+
+    // exposure: +1 stop in linear light, done in JS the same way
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source"); gph.output = addNode(gph, "adjust.exposure", { stops: [1] }, [s0]);
+      const got = px(renderGraph(gph, { [s0]: src }));
+      const ref = new Uint8ClampedArray(srcData);
+      const dec = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+      const enc = (v) => { v = Math.min(1, Math.max(0, v)); return Math.round(255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055)); };
+      for (let i = 0; i < ref.length; i += 4) for (let ch = 0; ch < 3; ch++) ref[i + ch] = enc(Math.pow(dec(srcData[i + ch]) * 2, 1) );
+      // the node uses pow(2.2) approximations for speed; allow for that
+      const r = cmp(got, ref);
+      push({ group: "Render graph", name: "adjust.exposure vs CPU (+1 stop, linear)", ok: r.mean < 3.0,
+             detail: `mean ${r.mean}/255 · ${r.off} px off by >8 · want <3.0 (the node uses the 2.2 approximation)` }); }
+    // curves: identity LUT must be the identity, and a lift must lift
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source"); gph.output = addNode(gph, "adjust.curves", { curve: { points: [[0, 0], [1, 1]] } }, [s0]);
+      const r = cmp(px(renderGraph(gph, { [s0]: src })), srcData);
+      const gph2 = createGraph(W, H); const s1 = addNode(gph2, "source"); gph2.output = addNode(gph2, "adjust.curves", { curve: { points: [[0, 0.2], [1, 1]] } }, [s1]);
+      const lifted = px(renderGraph(gph2, { [s1]: src }));
+      let darkest = 255; for (let i = 0; i < lifted.length; i += 4) darkest = Math.min(darkest, lifted[i], lifted[i + 1], lifted[i + 2]);
+      push({ group: "Render graph", name: "adjust.curves identity, and a black lift", ok: r.mean < 1.0 && darkest >= 45,
+             detail: `identity mean ${r.mean}/255 · lifted floor ${darkest} (want ≥ 45 for a 0.2 lift)` }); }
+    // blur: the CPU Gaussian is the reference, same sigma and kernel
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source"); gph.output = addBlur(gph, s0, 6);
+      const got = px(renderGraph(gph, { [s0]: src }));
+      const ref = blurFast(getImage(src), 6).data;
+      const r = cmp(got, ref);
+      push({ group: "Render graph", name: "filter.blur (two passes) vs engine-image blurFast, r=6", ok: r.mean < 1.5,
+             detail: `mean ${r.mean}/255 · ${r.off} px off by >8 · want <1.5` }); }
+    // blend: multiply of the image over itself is the square, in JS
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source"); const s1 = addNode(gph, "source");
+      gph.output = addNode(gph, "composite.blend", { mode: [1], opacity: [1] }, [s0, s1]);
+      const got = px(renderGraph(gph, { [s0]: src, [s1]: src }));
+      const ref = new Uint8ClampedArray(srcData);
+      for (let i = 0; i < ref.length; i += 4) for (let ch = 0; ch < 3; ch++) ref[i + ch] = Math.round(srcData[i + ch] * srcData[i + ch] / 255);
+      const r = cmp(got, ref);
+      push({ group: "Render graph", name: "composite.blend multiply vs CPU", ok: r.mean < 1.5,
+             detail: `mean ${r.mean}/255 · ${r.off} px off by >8 · want <1.5` }); }
+    // the chain, ejected: every pass is GLSL that links
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source"); const s1 = addNode(gph, "source");
+      const e = addNode(gph, "adjust.exposure", { stops: [0.5] }, [s0]);
+      const b = addBlur(gph, e, 4);
+      gph.output = addNode(gph, "composite.blend", { mode: [2], opacity: [0.7] }, [b, s1]);
+      renderGraph(gph, { [s0]: src, [s1]: src });
+      const parts = ejectGraph(gph, { parts: true }).filter((p2) => p2.glsl);
+      const text = ejectGraph(gph);
+      let allLink = true, why = "";
+      for (const part of parts) {
+        try { const p2 = linkProgram(gl, part.glsl); gl.deleteProgram(p2); }
+        catch (e) { allLink = false; why = `${part.type}: ${String(e.message).split("\n")[0]}`; }
+      }
+      push({ group: "Render graph", name: `eject: ${parts.length} passes, ${NODE_TYPES.size} node types registered`, ok: parts.length === 4 && allLink,
+             detail: `${Math.round(text.length / 1024)} KB of GLSL${allLink ? ", every pass links on its own" : " — " + why}` }); }
+  } catch (e) {
+    push({ group: "Render graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

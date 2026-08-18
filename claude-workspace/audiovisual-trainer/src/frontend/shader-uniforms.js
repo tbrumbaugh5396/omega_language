@@ -65,6 +65,11 @@ function annotations(comment) {
     } else if (key === "label") {
       out.label = words.slice(i + 1).join(" ");
       i = words.length;
+    } else if (key === "options") {
+      // An enumeration: `@options normal,multiply,screen` on an int makes a
+      // select whose value is the index.
+      out.options = String(words[i + 1] || "").split(",").map((w2) => w2.trim()).filter(Boolean);
+      i += 1;
     } else if (key === "group" || key === "module") {
       // One token: a panel section, or a course module slug the control
       // links to (`@module 05-display`).
@@ -143,20 +148,23 @@ export function parseUniforms(src) {
                  sizeUniform: `${name}_size`, src: a.src || null,
                  // A glyph atlas is machinery, not a choice: it binds like any
                  // other sampler but has no business in the panel.
-                 hidden: a.flags.has("hidden") });
+                 hidden: a.flags.has("hidden"),
+                 // A lookup the host builds from a value (a curve from points).
+                 lut: a.flags.has("lut") });
       continue;
     }
     let control;
-    if (type === "bool" || a.flags.has("toggle")) control = "toggle";
+    if (a.options && a.options.length && (type === "int" || type === "float")) control = "select";
+    else if (type === "bool" || a.flags.has("toggle")) control = "toggle";
     else if (a.flags.has("color") || a.flags.has("colour")) control = "color";
     else if (a.flags.has("pad")) control = "pad";
     else if (type === "vec2") control = "pad";
     else if ((type === "vec3" || type === "vec4") && COLOURISH.test(name)) control = "color";
     else control = "slider";
 
-    const isInt = type === "int" || a.flags.has("int");
-    const min = a.min ?? (control === "color" ? 0 : isInt ? 0 : 0);
-    const max = a.max ?? (isInt ? 16 : 1);
+    const isInt = type === "int" || a.flags.has("int") || control === "select";
+    const min = a.min ?? 0;
+    const max = a.max ?? (control === "select" ? Math.max(0, (a.options || []).length - 1) : isInt ? 16 : 1);
     const step = a.step ?? (isInt ? 1 : (max - min) / 200);
 
     let value = a.default;
@@ -177,6 +185,8 @@ export function parseUniforms(src) {
       label: a.label || name,
       value: value.slice(0, width),
       group: a.group || null, module: a.module || null, help: a.help || null,
+      options: a.options || null,
+      hidden: a.flags.has("hidden"),          // driven by the host, not dialled
     });
   }
   // A vec2 named <sampler>_size belongs to the sampler, not the panel.

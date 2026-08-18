@@ -306,7 +306,36 @@ The Generate stack is the seed of everything; make it load-bearing.
   (course link), `@group`, `@help`. `parseUniforms` learns them; nothing else
   changes yet.
 
-### Phase 1 — The render graph and compiler *(L; the keystone)*
+### Phase 1 — The render graph and compiler *(L; the keystone)* — **1.1 + 1.2 (proving nodes) shipped**
+
+`render-graph.js` is the model: `defineNode(sketch)` registers a node type
+from sketch text — `sketchMeta` reads `@node/@module/@pass`, `parseUniforms`
+gives inputs (`in0`, `in1`, …) and parameters, `@lut` marks a sampler the host
+builds from a value, `@options` makes an enum. A graph is nodes with params
+and input references and one output; `topo`, `validate`, bypass. Four proving
+nodes: `adjust.exposure`, `adjust.curves` (256-entry monotone-cubic LUT from
+points), `composite.blend` (eight modes, opacity), `filter.blur1d` (`@pass`;
+two make a blur, same σ and kernel as the CPU reference).
+
+`graph-compile.js` is the compiler: one pass per node into a pooled half-float
+target on WebGL2, inputs bound as textures with `<in>_size`, LUTs uploaded and
+cached by content, sources handed in by the host; `eject` returns every pass
+as `{header, glsl}` and `ejectText` joins them. `renderGraph` and `applyNode`
+run on a shared context.
+
+**Parity, in the self-test** (Render graph group): exposure vs a JS reference
+0.96/255; curves identity 0.00 and a black lift lifts; **blur 0.12/255 against
+`engine-image.blurFast` at r=6, the same kernel**; blend multiply 0.02; the
+four-pass chain ejects as 22 KB of GLSL and every pass links on its own.
+The Canvas filter dialog offers the three single-input nodes as "Render graph
+nodes (GPU)" — a first surface, still baking on Apply until Phase 2.
+
+Two things worth remembering: `half` is a reserved word in ES 3.00 and not in
+1.00, which the node found on WebGL2 first; and `@hidden` had only been
+honoured on samplers.
+
+**Left in Phase 1:** 1.3 port the 21 CPU filters as nodes with parity tests;
+1.4 fusion of per-pixel chains and ejection of a fused layer.
 
 - `render-graph.js`: node model, schema loading from sketch text, validation.
 - `graph-compile.js`: passes, fusion, FBO pool, program cache, ejection.
