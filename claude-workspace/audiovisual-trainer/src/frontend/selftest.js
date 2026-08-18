@@ -22,8 +22,9 @@ import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
 import { createGraph, addNode, addBlur, curveLut, NODE_TYPES } from "./render-graph.js";
-import { renderGraph, ejectGraph } from "./graph-compile.js";
-import { blurFast, getImage } from "./engine-image.js";
+import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
+import { blurFast, getImage, FILTERS } from "./engine-image.js";
+import { GRAPH_FILTERS } from "./filter-nodes.js";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -340,6 +341,74 @@ export async function runSelfTest(report = () => {}) {
              detail: `${Math.round(text.length / 1024)} KB of GLSL${allLink ? ", every pass links on its own" : " — " + why}` }); }
   } catch (e) {
     push({ group: "Render graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The catalogue: every CPU filter against its node, default parameters, on
+  // a picture with edges, gradients, saturated colour and a dark region.
+  try {
+    const W = 160, H = 100;
+    const src = document.createElement("canvas"); src.width = W; src.height = H;
+    const g = src.getContext("2d");
+    const gr = g.createLinearGradient(0, 0, W, H); gr.addColorStop(0, "#fff8ee"); gr.addColorStop(1, "#0d1220");
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    g.fillStyle = "#e04020"; g.beginPath(); g.arc(50, 50, 26, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#1fa36c"; g.fillRect(95, 20, 40, 60);
+    g.fillStyle = "#3355ff"; g.fillRect(20, 78, 120, 8);
+    g.fillStyle = "#ffffff"; g.fillRect(140, 8, 12, 12);
+    const img = getImage(src);
+    for (const gf of GRAPH_FILTERS) {
+      const cpu = FILTERS.find((f) => f.id === gf.cpu);
+      if (gf.cpuOnly) {
+        push({ group: "Catalogue: CPU vs graph node", name: gf.name, ok: true, detail: `stays on the CPU — ${gf.cpuOnly}` });
+        continue;
+      }
+      try {
+        const params = {};
+        for (const [name, , , def] of cpu.params) params[name] = def;
+        for (const [name, def] of cpu.colors || []) params[name] = def;
+        const t0 = performance.now();
+        const ref = cpu.fn(img, params).data;
+        const tc = performance.now() - t0;
+        const t1 = performance.now();
+        const got = applyFilter(src, gf, { ...params, seed: 3 }).getContext("2d").getImageData(0, 0, W, H).data;
+        const tg = performance.now() - t1;
+        if (gf.statistical) {
+          // Grain: not the same noise, so the same statistics — the mean unmoved,
+          // the spread of (got − source) near amount/√3.
+          const base = img.data;
+          let dm = 0, dv = 0, n = 0;
+          for (let i = 0; i < got.length; i += 4) { const d = got[i] - base[i]; dm += d; dv += d * d; n++; }
+          const mean = dm / n, sd = Math.sqrt(dv / n - mean * mean);
+          const want = params.amount / Math.sqrt(3);
+          const ok = Math.abs(mean) < 1.5 && Math.abs(sd - want) < want * 0.35;
+          push({ group: "Catalogue: CPU vs graph node", name: gf.name, ok,
+                 detail: `statistical: mean shift ${mean.toFixed(2)}, spread ${sd.toFixed(1)} (want ≈ ${want.toFixed(1)}) · cpu ${tc.toFixed(0)} ms, gpu ${tg.toFixed(0)} ms` });
+          continue;
+        }
+        if (gf.id === "halftone") {
+          // The CPU draws its dots through the canvas, whose rasteriser is a
+          // law unto itself on two-pixel discs; the node's dot is exact area
+          // (π r² to a tenth of a pixel). So compare tone — both softened by
+          // three pixels — rather than edge pixels.
+          const soft = (data) => blurFast(new ImageData(new Uint8ClampedArray(data), W, H), 3).data;
+          const r = compare(soft(got), soft(ref), W, H, { thresh: 12 });
+          push({ group: "Catalogue: CPU vs graph node", name: gf.name, ok: r.mean < 6,
+                 detail: `tone (3 px soft) mean ${r.mean}/255 · want <6 — the canvas dot is the coarser of the two (±4% ink on two-pixel discs) · cpu ${tc.toFixed(0)} ms, gpu ${tg.toFixed(0)} ms` });
+          continue;
+        }
+        const r = compare(got, ref, W, H, { thresh: 12 });
+        // Tolerances: per-pixel maths should agree to a fraction of a level;
+        // resampling filters differ by their rounding at edges.
+        const tol = /motion|radial|lens|chromatic|pixelate/.test(gf.id) ? 2.5
+                  : /edges|emboss/.test(gf.id) ? 2.0 : 1.2;
+        push({ group: "Catalogue: CPU vs graph node", name: gf.name, ok: r.mean < tol,
+               detail: `mean ${r.mean}/255 · ${r.off} px off by >12 (${r.pct}%) · want <${tol} · cpu ${tc.toFixed(0)} ms, gpu ${tg.toFixed(0)} ms` });
+      } catch (e) {
+        push({ group: "Catalogue: CPU vs graph node", name: gf.name, ok: false, detail: String(e.message).split("\n")[0] });
+      }
+    }
+  } catch (e) {
+    push({ group: "Catalogue: CPU vs graph node", name: "setup", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

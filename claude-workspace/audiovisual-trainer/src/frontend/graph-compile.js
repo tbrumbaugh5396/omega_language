@@ -187,7 +187,7 @@ export class GraphRunner {
       gl.uniform2f(u("u_resolution"), W, H);
       gl.uniform1f(u("u_time"), opts.time || 0);
       gl.uniform2f(u("u_mouse"), W / 2, H / 2);
-      gl.uniform1f(u("u_seed"), 0);
+      gl.uniform1f(u("u_seed"), opts.seed || 0);
       gl.uniform1i(u("u_frame"), 0);
       gl.uniform1f(u("u_mouseDown"), 0);
       // Parameters: the node's values, defaults for anything unset.
@@ -329,6 +329,19 @@ export function renderGraph(graph, sources, opts = {}) {
 export function ejectGraph(graph, { parts = false } = {}) {
   const r = sharedRunner().runner;
   return parts ? r.eject(graph) : r.ejectText(graph);
+}
+
+/**
+ * Apply a catalogue filter (filter-nodes.js) to a canvas: build its graph on a
+ * source, run, return a canvas. Used by the Canvas filter dialog until layers
+ * become subgraphs, and by the self-test for parity.
+ */
+export function applyFilter(canvasIn, filter, params = {}) {
+  const w = canvasIn.width, h = canvasIn.height;
+  const graph = { width: w, height: h, nodes: [], output: null };
+  graph.nodes.push({ id: "src", type: "source", params: {}, inputs: [], bypass: false });
+  graph.output = filter.build(graph, "src", params);
+  return renderGraph(graph, { src: canvasIn }, { seed: params.seed || 0 });
 }
 
 /**

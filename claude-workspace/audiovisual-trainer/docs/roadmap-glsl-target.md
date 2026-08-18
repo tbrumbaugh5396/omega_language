@@ -306,7 +306,7 @@ The Generate stack is the seed of everything; make it load-bearing.
   (course link), `@group`, `@help`. `parseUniforms` learns them; nothing else
   changes yet.
 
-### Phase 1 — The render graph and compiler *(L; the keystone)* — **1.1 + 1.2 (proving nodes) shipped**
+### Phase 1 — The render graph and compiler *(L; the keystone)* — **1.1–1.3 shipped; 1.4 (fusion) left**
 
 `render-graph.js` is the model: `defineNode(sketch)` registers a node type
 from sketch text — `sketchMeta` reads `@node/@module/@pass`, `parseUniforms`
@@ -334,8 +334,28 @@ Two things worth remembering: `half` is a reserved word in ES 3.00 and not in
 1.00, which the node found on WebGL2 first; and `@hidden` had only been
 honoured on samplers.
 
-**Left in Phase 1:** 1.3 port the 21 CPU filters as nodes with parity tests;
-1.4 fusion of per-pixel chains and ejection of a fused layer.
+**1.3, the catalogue** (`filter-nodes.js`): the 21 CPU filters as 20 node
+types plus a `GRAPH_FILTERS` table that mirrors `engine-image.FILTERS` id for
+id, each entry building its graph (`bloom` = bright-pass → blur → add; the
+blur is two `filter.blur1d`). Every node was written from the CPU
+implementation, not from memory of what the effect "is": the exact sRGB
+transfer for grade, OKLab for hue/duotone, the CPU's Uint8 clamp on the
+sobel intermediate, the same Bayer 8×8, the same prng structure for grain,
+`round`-sampling in motion blur, the same 14 radial steps. Error-diffusion
+dither stays on the CPU and says why (serial dependence). The self-test's
+"Catalogue: CPU vs graph node" group runs all 21 at default parameters
+against `FILTERS[i].fn` on a 160×100 picture with edges, gradients, saturated
+colour and a dark region: **eighteen agree to under 0.1/255, most to 0.00**;
+grain compares statistics (mean shift −0.09, spread 8.0 vs 8.1 wanted);
+halftone compares tone after a 3 px soften (3.9/255) because the reference is
+canvas-drawn and Skia's rasteriser is ±4% on ink at two-pixel discs — the
+node's dot is π r² to a tenth of a pixel, so the node is the truer of the two.
+The Canvas filter dialog lists all twenty as "… — on the GPU" with the CPU
+filter's own parameter ranges and colours, so both paths get identical
+controls; `applyFilter(canvas, entry, params)` is the one-call bridge. 66/66.
+
+**Left in Phase 1:** 1.4 fusion of per-pixel chains and ejection of a fused
+layer.
 
 - `render-graph.js`: node model, schema loading from sketch text, validation.
 - `graph-compile.js`: passes, fusion, FBO pool, program cache, ejection.
@@ -623,7 +643,7 @@ authored as text) — is the right one, and it is a separate roadmap.
 | 0.3 | Schema v1 (`@pass @precision @space @module …`) | S | — | one grammar |
 | 1.1 | Render graph model + compiler (per-node passes) | L | 0.1, 0.3 | the keystone |
 | 1.2 | Built-in nodes: adjust + composite + geometry | M | 1.1 | non-destructive colour |
-| 1.3 | Port 21 filters to nodes, parity tests | M | 1.1 | one effect library |
+| 1.3 | Port 21 filters to nodes, parity tests — **shipped** | M | 1.1 | one effect library |
 | 1.4 | Fusion + ejection | M | 1.1 | speed; readable GLSL per layer |
 | 2.1 | Canvas layers as subgraphs; adjustment layers | L | 1.x | Photoshop's model |
 | 2.2 | Curves/Levels/HSL UI + histogram | M | 2.1 | the colourist's tools |

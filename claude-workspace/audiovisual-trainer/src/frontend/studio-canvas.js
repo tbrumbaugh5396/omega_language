@@ -26,8 +26,9 @@ import { gridOverlay } from "./grid-overlay.js";
 import { GENERATE_PRESETS } from "./studio-generate.js";
 import { renderSketch, sketchUniforms } from "./shader-run.js";
 import { buildControls } from "./shader-controls.js";
-import { applyNode } from "./graph-compile.js";
+import { applyNode, applyFilter } from "./graph-compile.js";
 import { nodeType } from "./render-graph.js";
+import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
   "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
@@ -874,7 +875,8 @@ export async function canvasEditor(host) {
       el("optgroup", { label: "Render graph nodes (GPU)" },
         el("option", { value: "graph:adjust.exposure" }, "Exposure — stops, linear light"),
         el("option", { value: "graph:adjust.curves" }, "Curves — shadows / mids / highlights"),
-        el("option", { value: "graph:filter.blur" }, "Gaussian blur — the same kernel, on the GPU")),
+        ...GRAPH_FILTERS.filter((f) => !f.cpuOnly).map((f) =>
+          el("option", { value: `gfilter:${f.id}` }, `${f.name} — on the GPU`))),
       el("optgroup", { label: "Shader — Generate presets" }, ...shaderPresets.map((p) =>
         el("option", { value: `shader:preset:${p.id}` }, p.label))),
       shaderDocs.length ? el("optgroup", { label: "Shader — your Generate documents" },
@@ -894,6 +896,16 @@ export async function canvasEditor(host) {
       pg.drawImage(tmp, 0, 0, preview.width, preview.height);
     };
     const recompute = () => {
+      if (graphNode && graphNode.filter) {
+        try {
+          const flat = {};
+          for (const [k, v] of Object.entries(graphNode.values)) flat[k] = Array.isArray(v) ? v[0] : v;
+          resultCanvas = applyFilter(l.canvas, graphNode.filter, flat);
+          result = null;
+        } catch (e) { toast(`Graph failed: ${String(e.message).split("\n")[0]}`); return; }
+        paintPreview(resultCanvas);
+        return;
+      }
       if (graphNode) {
         try {
           const vals = { ...graphNode.values };
@@ -943,6 +955,30 @@ export async function canvasEditor(host) {
     const build = async () => {
       const v = selBox.value;
       shader = null; graphNode = null;
+      if (v.startsWith("gfilter:")) {
+        // A catalogue filter, run through the graph, with the CPU filter's
+        // own parameter list so the two sides get identical controls.
+        const gf = graphFilter(v.slice(8));
+        const cpu = I.FILTERS.find((x) => x.id === gf.cpu);
+        clear(controls);
+        graphNode = { filter: gf, values: {} };
+        for (const [name, min, max, def] of cpu.params) {
+          graphNode.values[name] = def;
+          controls.append(knob(name, { min, max, step: (max - min) / 100, value: def,
+            format: (x) => (Math.abs(x) >= 10 ? x.toFixed(0) : x.toFixed(2)),
+            oninput: (x) => { graphNode.values[name] = x; recompute(); } }));
+        }
+        for (const [name, def] of cpu.colors || []) {
+          graphNode.values[name] = def;
+          controls.append(el("label", {}, name,
+            el("input", { type: "color", value: def,
+              oninput: (e) => { graphNode.values[name] = e.target.value; recompute(); } })));
+        }
+        controls.append(el("p.fine", {}, `The catalogue's ${cpu.name}, as a render-graph node — the same ` +
+          "mathematics on the GPU; the self-test holds it to the CPU version. Still bakes on Apply."));
+        recompute();
+        return;
+      }
       if (v.startsWith("graph:")) {
         const type = v.slice(6);
         clear(controls);
