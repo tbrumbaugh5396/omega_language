@@ -12,6 +12,8 @@ import { Feedback } from "./feedback.js";
 import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
          mediaDims, seekVideos, resumeVideos } from "./shader-controls.js";
 import { muxMp4 } from "./video-mux.js";
+import { compileSvg } from "./svg-to-sdf.js";
+import { fitPreview } from "./sdf-core.js";
 import { gridOverlay } from "./grid-overlay.js";
 
 const VERT = `attribute vec2 a_pos;
@@ -1406,6 +1408,13 @@ uniform bool  mirror;  // @toggle`),
         "here makes that file the thing you edit and run — every line yours, " +
         "line numbers in errors exact. Controls, images and feedback keep " +
         "working because they only need the uniform declarations."),
+      el("h3", {}, "From vectors"),
+      el("p.fine", {}, "SVG… compiles a file into this sketch: rects, circles, " +
+        "ellipses, lines, polygons and paths (Béziers flattened adaptively, " +
+        "arcs converted) become signed-distance functions; linear and radial " +
+        "gradients become ramps; transforms, groups, use, clip-path and " +
+        "fill-rule are honoured. The Design studio's Shader button does the " +
+        "same for a frame. Text is greeked — real glyphs need an SDF atlas."),
       el("h3", {}, "Images and video"),
       el("p.fine", {}, "A picture can live in the text: `uniform sampler2D mask; " +
         "// @data data:image/png;base64,…` fills the sampler from the source " +
@@ -1510,6 +1519,34 @@ uniform bool  mirror;  // @toggle`),
 
   const seedLabel = el("span.fine", {}, `seed ${doc.seed}`);
 
+  /** An SVG file compiles to a sketch: every shape a signed-distance function. */
+  const svgInput = el("input", { type: "file", accept: ".svg,image/svg+xml",
+    style: { display: "none" },
+    onchange: async (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = "";
+      if (!f) return;
+      let out;
+      try { out = compileSvg(await f.text(), { name: f.name }); }
+      catch (err) { toast(`Could not compile: ${err.message}`); return; }
+      doc.mode = "sketch"; doc.glsl = ""; doc.uniforms = {}; doc.preset = "";
+      modeLabel.textContent = "sketch"; modeBtn.textContent = "GLSL";
+      editor.value = out.source;
+      doc.preview = fitPreview(out.width, out.height);
+      canvas.width = doc.preview[0]; canvas.height = doc.preview[1];
+      sizeSel.value = `${doc.preview[0]}x${doc.preview[1]}`;
+      doc.exportSize = [out.width - (out.width % 2), out.height - (out.height % 2)];
+      run(); restart();
+      toast(`${out.shapes} shape${out.shapes === 1 ? "" : "s"}, ${out.edges} edges` +
+            (out.notes.length ? ` — ${out.notes[0]}` : ""));
+      if (out.notes.length > 1) {
+        modal(el("h2", {}, "Imported, with notes"),
+          el("ul", {}, ...out.notes.map((n) => el("li", {}, el("span.fine", {}, n)))),
+          el("div.row", { style: { justifyContent: "flex-end" } },
+            el("button.primary", { onclick: closeModal }, "Close")));
+      }
+    } });
+
   const root = el("div.stack", {},
     el("div.card.tight", {},
       el("div.row.tight", {},
@@ -1540,6 +1577,9 @@ uniform bool  mirror;  // @toggle`),
           } }, "Embed"),
         modeBtn, modeLabel,
         grid.button,
+        el("button", { onclick: () => svgInput.click(),
+          title: "Compile an SVG file: paths, gradients and all, into this sketch" }, "SVG…"),
+        svgInput,
         el("button.ghost", { onclick: help }, "Help"),
         aiButton("Sketch…", {
           task: "code",

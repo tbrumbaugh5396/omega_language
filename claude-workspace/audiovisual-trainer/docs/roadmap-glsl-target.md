@@ -386,10 +386,24 @@ Generate already has applies to it.
   off by more than 40**, rotated nested frame and opacity included. The
   Design studio's **Shader** button opens the result as a Generate document at
   the frame's aspect.
-- **Next in this line**: SVG *file* import into the same compiler (paths with
-  Béziers flattened adaptively, polygons with winding, gradients, clipPath),
-  miter/bevel joins and dashes (arc-length parametrisation), frame clipping
-  as an option.
+- **`svg-to-sdf` — shipped**: an SVG *file* through the same emitter.
+  rect/rx, circle, ellipse, line, polyline, polygon, path (M L H V C S Q T A Z,
+  cubics and quadratics flattened adaptively by chord flatness, arcs converted
+  to centre form and sampled), `g`/`use`/`symbol`/`defs`, the full transform
+  list, viewBox with preserveAspectRatio, presentation attributes and inline
+  style with inheritance, fill-rule nonzero and even-odd (signed crossings —
+  one accumulator, since parity is shared), linear and radial gradients with
+  objectBoundingBox and userSpaceOnUse units and href stop inheritance,
+  clip-path, opacity/fill-opacity/stroke-opacity, `<image>` as a sampler,
+  butt/square/round caps. Circles keep their exact distance rather than being
+  polygonised. **Parity: mean 2.33/255 against the browser's own rasterisation
+  of a file exercising all of the above, 11 pixels of 240,000 off by more
+  than 50.** Generate's **SVG…** button imports one.
+- **Known gaps, reported in the import notes rather than hidden**: miter and
+  bevel joins are drawn round; CSS stylesheets and classes, filters, masks
+  and patterns are ignored; stop-opacity is dropped; text is greeked.
+- **Next in this line**: dashes (arc-length parametrisation), miter joins,
+  stop-opacity via vec4 ramps, and text through an SDF glyph atlas.
 - **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
 - Text via an SDF glyph atlas — a texture, but a *distance* texture, so still
