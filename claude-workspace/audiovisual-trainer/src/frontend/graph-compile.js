@@ -372,16 +372,19 @@ export class GraphRunner {
     const dt = lastT === undefined ? 0 : Math.max(0, now - lastT);
     // Resolving commits this frame's values as next frame's prev() — which
     // is why it happens here, in the runner, and nowhere that merely looks.
+    const fired = [];                   // effects described by this run, in order
     const plan = (frameNo) => {
       if (dynamic && pending.length) {
         for (const ev of pending) {
-          resolveParams(written, { t: now, frame: frameNo, seed: opts.seed || 0,
-                                   keys: keysObj, event: ev, eventPass: true, commit: true });
+          const r = resolveParams(written, { t: now, frame: frameNo, seed: opts.seed || 0,
+                                             keys: keysObj, event: ev, eventPass: true, commit: true });
+          if (r.fired) fired.push(...r.fired);
         }
         pending = [];
       }
       let g = resolveParams(written, { t: now, frame: frameNo, seed: opts.seed || 0, keys: keysObj,
                                       event: { kind: "frame", frame: frameNo, t: now, dt }, commit: true });
+      if (g.fired) fired.push(...g.fired);
       g = compileFields(g);
       // Fusion is on unless a caller wants the passes as written — the
       // self-test wants both, to hold one against the other.
@@ -574,7 +577,7 @@ export class GraphRunner {
     for (const [id, o] of outputs) if (o.target && id !== graph.output) this.pool.put(o.target);
     this.lastOut = out && out.target ? out.target : null;
     for (const t of owned) gl.deleteTexture(t.tex);
-    return { tex: out.tex, w: out.w, h: out.h, passes, frame };
+    return { tex: out.tex, w: out.w, h: out.h, passes, frame, fired };
   }
 
   /** What this runner is holding, for anything that wants to say so. */
@@ -712,6 +715,9 @@ export function renderGraph(graph, sources, opts = {}) {
   }
   const out = runner.run(graph, sources, opts);
   if (opts.onPasses) opts.onPasses(out.passes);
+  // What the graph asked the world to do — notes, parameter moves — for the
+  // host to perform. The runner never performs anything.
+  if (opts.onFired && out.fired && out.fired.length) opts.onFired(out.fired, out.frame);
   runner.present(out, graph.width, graph.height);
   // `into` draws straight into a caller's context: a timeline at 60 fps should
   // not allocate a canvas a frame.

@@ -81,6 +81,13 @@ export function schedule(inst, song, { at = 0 } = {}) {
   for (const a of song.automation || []) {
     const pm = inst.param(a.node, a.param);
     if (!pm) continue;
+    // `points` are exact: a value at a time, set and held, no sampling in
+    // between. It is what a live performance leaves behind — one set per
+    // frame — and holding it to the live path needs the very same calls.
+    if (Array.isArray(a.points)) {
+      for (const pt of a.points) pm.setValueAtTime(pt.v, at + pt.t);
+      continue;
+    }
     const track = a.track || [];
     if (!track.length) continue;
     // Sampled at a fixed grid rather than handed to the browser's own ramps:

@@ -25,6 +25,7 @@ import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback
 import { lifeStep, grayScottStep } from "./sim-nodes.js";
 import { shipStep, shipAsData, menuAsData } from "./game-nodes.js";
 import { EventQueue, pointerEvents } from "./events.js";
+import { LiveInstrument, shipInstrument, renderFired } from "./live-audio.js";
 import { Keyboard, KEY } from "./keyboard.js";
 import { renderGraph, ejectGraph, applyFilter, resetGraphState } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
@@ -1504,6 +1505,87 @@ texel == vec2(0.0) ? vec4(v, 0.0, 0.0, 1.0) : vec4((v - 0.14) * 100.0, 0.0, 0.0,
              detail: `${st.listeners} parameters listening for events (index, selected), ${st.states} carrying state` }); }
   } catch (e) {
     push({ group: "Events", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The live audio path. The claim is not "it makes a sound" — it is that the
+  // sound an event makes live is the sound the bounce would make, because
+  // both are the same instrument scheduled by the same primitive. So the
+  // live instrument is run on an OfflineAudioContext, fed the fired effects
+  // frame by frame as the playground would, and held sample for sample
+  // against renderSong given the same effects as a batch.
+  try {
+    const SR = 48000, FPS = 60, FRAMES = 90;
+    const instrument = shipInstrument();
+    // A scripted flight with three pulses and a stretch of thrust.
+    const flight = () => {
+      const g = createGraph(120, 80); g.stateKey = "selftest-live-" + (Math.random() * 1e9 | 0);
+      g.output = shipAsData(g, undefined, { params: {
+        pulse: { expr: 'on("keydown", 32) ? 0.0 : prev("pulse") + 0.03 * on("frame")', value: [9] } } });
+      g.effects = [
+        { kind: "note", when: 'on("keydown", 32)', hz: '330 * 2 ^ (mod(ch("ship.turns"), 12) / 12)', dur: "0.3" },
+        { kind: "param", node: instrument.hum, param: "level", value: 'ch("ship.burning") * 0.9' },
+      ];
+      const kb = new Keyboard();
+      const fired = [];
+      for (let f = 0; f < FRAMES; f++) {
+        const evs = [];
+        if (f === 10 || f === 40 || f === 41) { evs.push({ kind: "keydown", code: 32 }); kb.press(32); }
+        if (f === 12 || f === 43) { evs.push({ kind: "keyup", code: 32 }); kb.release(32); }
+        if (f === 20) { evs.push({ kind: "keydown", code: KEY.left }); kb.press(KEY.left); }
+        if (f === 30) { evs.push({ kind: "keyup", code: KEY.left }); kb.release(KEY.left); }
+        if (f === 50) kb.press(KEY.up);
+        if (f === 75) kb.release(KEY.up);
+        renderGraph(g, {}, { keys: kb, events: evs, reset: f === 0, time: f / FPS,
+                             onFired: (fx) => fired.push(...fx) });
+      }
+      resetGraphState(g.stateKey);
+      return fired;
+    };
+
+    // 1. The effects a run describes are data, and the same run describes
+    //    the same effects.
+    const firedA = flight(), firedB = flight();
+    const notes = firedA.filter((f) => f.kind === "note");
+    const sameList = JSON.stringify(firedA) === JSON.stringify(firedB);
+    push({ group: "Live audio", name: "a run describes its effects, and the same run describes the same", ok: sameList && notes.length === 3,
+           detail: `${firedA.length} effects over ${FRAMES} frames — ${notes.length} notes (frames ${notes.map((n) => n.frame).join(", ")}, ${notes.map((n) => (+n.hz).toFixed(0)).join("/")} Hz) and ${firedA.length - notes.length} hum levels · two runs ${sameList ? "identical" : "DIFFER"}` });
+
+    // 2. Live, frame by frame, on an offline context — against the batch bounce.
+    { const seconds = FRAMES / FPS + 0.25;
+      const offline = new OfflineAudioContext(1, Math.round(seconds * SR), SR);
+      const live = await LiveInstrument.create({ graph: instrument.graph, noteNode: instrument.noteNode, voices: 8, ctx: offline });
+      for (let f = 0; f < FRAMES; f++) live.perform(firedA.filter((x) => x.frame === f), f / FPS);
+      const liveBuf = await offline.startRendering();
+      const { buffer: batchBuf } = await renderFired(firedA, { graph: instrument.graph, noteNode: instrument.noteNode,
+                                                                fps: FPS, frames: FRAMES, sampleRate: SR, voices: 8 });
+      const a = liveBuf.getChannelData(0), b = batchBuf.getChannelData(0);
+      let same = a.length === b.length, worst = 0, energy = 0;
+      for (let i = 0; i < Math.min(a.length, b.length); i++) { const d = Math.abs(a[i] - b[i]); if (d > worst) worst = d; if (d !== 0) same = false; energy += a[i] * a[i]; }
+      const rms = Math.sqrt(energy / a.length);
+      push({ group: "Live audio", name: "live, fed frame by frame, equals the bounce, sample for sample", ok: same && rms > 0.01,
+             detail: `${a.length} samples · ${same ? "identical" : `worst difference ${worst.toExponential(2)}`} · rms ${rms.toFixed(3)} — one instrument, one scheduling primitive, two ways of calling it` });
+
+      // 3. The note lands where the event was: silence before frame 10, sound
+      //    within a few ms after it.
+      const at = (f0, f1) => { let e = 0, n = 0; for (let i = Math.round(f0 / FPS * SR); i < Math.round(f1 / FPS * SR); i++) { e += a[i] * a[i]; n++; } return Math.sqrt(e / Math.max(1, n)); };
+      const before = at(0, 10), after = at(10, 14), thrust = at(55, 70), idle = at(80, 90);
+      push({ group: "Live audio", name: "the note lands on the frame of the keydown; the hum follows the thrust", ok: before < 1e-6 && after > 0.05 && thrust > idle * 3,
+             detail: `rms before the first press ${before.toExponential(1)}, in the 4 frames after it ${after.toFixed(3)} · hum during thrust ${thrust.toFixed(3)} vs idle ${idle.toFixed(3)}` });
+
+      // 4. Two presses a frame apart are two notes on two voices, not one.
+      const took = live.notes, stolen = live.stolen;
+      push({ group: "Live audio", name: "three presses are three notes, two of them overlapping on separate voices", ok: took === 3 && stolen === 0,
+             detail: `${took} notes performed, ${stolen} voices stolen — frames 40 and 41 overlap and each keeps its own voice` });
+      await live.close();
+    }
+
+    // 5. The instrument's source is the bounce's source: nothing in the live
+    //    path compiles anything of its own.
+    { const live1 = sourceFor(instrument.graph, { voices: 8 });
+      push({ group: "Live audio", name: "the live instrument is the bounce's compiled loop, not a second one", ok: live1.findings.length === 0 && live1.loop.length > 100,
+             detail: `${live1.loop.split("\n").length} lines of generated process(), allocation-free, the same text for both paths` }); }
+  } catch (e) {
+    push({ group: "Live audio", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

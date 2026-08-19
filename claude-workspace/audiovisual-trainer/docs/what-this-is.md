@@ -60,8 +60,8 @@ And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
-keyboard as a texture, an event queue, and a **178-check self-test across 25
-groups that runs inside the app**.
+keyboard as a texture, an event queue, a live instrument, and a **183-check
+self-test across 26 groups that runs inside the app**.
 
 ---
 
@@ -176,7 +176,10 @@ mentions it runs once per event, in order, before the frame. With those, a
 parameter that reads its own last value is a state, the expression over it is
 the update, and the shader that draws the result is purely the view — and all
 three are text in the document. A log of events plus the graph is a replay,
-to the byte. The ship's position
+to the byte. And a model can *describe* what it wants the world to do —
+`effects`, a note on a keydown, a hum level every frame — as data the host
+performs: the live instrument fed those effects frame by frame produces the
+same 84 000 samples as the bounce fed them as a batch. The ship's position
 is a number you can read off the graph, not a texel you have to decode; it
 equals the CPU integration of its own equations to 2e−15, and the ejected
 pass header prints the update beside the shader that draws it.
@@ -285,8 +288,9 @@ Each of these is recorded in its roadmap with the reason, not left as a
 surprise:
 
 - **Colour management** — which is what gates wide-gamut P3 output.
-- **The live audio path** — the DSP engine bounces *beside* the built-in synth
-  rather than being what you hear when you press play.
+- **The live audio path in the Music studio** — the DSP engine now plays live
+  and is held sample-for-sample to its own bounce, but the Music studio's
+  transport still drives the built-in synth rather than it.
 - **Contextual-alternate shaping** (`calt`) and **WOFF2 outlines** — the second
   needs a Brotli decoder and its static dictionary, which is out of proportion
   to what it buys.

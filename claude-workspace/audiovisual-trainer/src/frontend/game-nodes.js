@@ -59,23 +59,22 @@ vec2 pos = s.xy + vel;
 pos.x = mod(pos.x + aspect, 2.0 * aspect) - aspect;
 pos.y = mod(pos.y + 1.0, 2.0) - 1.0;
 
+// Draw the ship where the register says it is, facing the way it faces —
+// for every texel, the register ones included. aa() takes a derivative, and
+// a derivative is computed across a 2×2 quad; if the two register texels
+// skipped this, the two texels sharing their quad would take fwidth() of a
+// value their neighbours never computed, and flicker. So everything is
+// computed, and the register texels merely overwrite the result.
+vec2 q = rot(h) * (p - pos);       // rot() turns by minus its argument, so this is R(-h)
+vec2 nose = vec2(size, 0.0), tl = vec2(-size * 0.5, size * 0.45), tr = vec2(-size * 0.5, -size * 0.45);
+float d = -min(min(hp(q, nose, tl), hp(q, tl, tr)), hp(q, tr, nose));
+float body = aa(d);
+// Exhaust, only when thrusting: a flicker behind the tail.
+float ex = up * aa(length(q - vec2(-size * 0.7 - 0.35 * size * hash21(vec2(frame, 1.0)), 0.0)) - size * 0.16);
+vec4 out_ = vec4(mix(flame, hull, body), max(body, ex));
 vec2 texel = floor(gl_FragCoord.xy);
-vec4 out_;
-if (texel == vec2(0.0)) {
-  out_ = vec4(pos, vel);                       // the register
-} else if (texel == vec2(1.0, 0.0)) {
-  out_ = vec4(n, 0.0, 0.0, 1.0);               // the heading, as a count of turns
-} else {
-  // Draw the ship where the register says it is, facing the way it faces.
-  vec2 q = rot(h) * (p - pos);       // rot() turns by minus its argument, so this is R(-h)
-  vec2 nose = vec2(size, 0.0), tl = vec2(-size * 0.5, size * 0.45), tr = vec2(-size * 0.5, -size * 0.45);
-  float d = -min(min(hp(q, nose, tl), hp(q, tl, tr)), hp(q, tr, nose));
-  float body = aa(d);
-  // Exhaust, only when thrusting: a flicker behind the tail.
-  float ex = up * aa(length(q - vec2(-size * 0.7 - 0.35 * size * hash21(vec2(frame, 1.0)), 0.0)) - size * 0.16);
-  vec3 col = mix(flame, hull, body);
-  out_ = vec4(col, max(body, ex));
-}
+if (texel == vec2(0.0)) out_ = vec4(pos, vel);                 // the register
+else if (texel == vec2(1.0, 0.0)) out_ = vec4(n, 0.0, 0.0, 1.0); // the heading, as a count of turns
 out_`);
 
 defineNode(`// The keyboard, as the picture it is: one column per key code, three rows.

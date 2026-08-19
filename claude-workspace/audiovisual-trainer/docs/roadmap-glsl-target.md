@@ -1270,6 +1270,68 @@ pulse:    { expr: 'on("keydown", 32) ? 0.0 : prev("pulse") + 0.03 * on("frame")'
 but nothing schedules by it. And nothing yet makes a sound on one: the live
 audio path is still the gap.
 
+### Phase 14 — The live audio path: an effect becomes a sound *(M)* — **shipped**
+
+The DSP graph has bounced offline since audio Phase D, sample-exact and the
+same file twice. It did not play live, and nothing in a picture could make a
+sound. Both are one change, and the change is small because the pieces were
+already the right shape.
+
+**Effects.** A graph may carry `effects: [{ kind, when, …args }]`, every field
+an expression. Elm calls this a `Cmd`: the model *describes* what it wants
+done, as data with its arguments evaluated, and the host performs it. A `note`
+whose `when` is `on("keydown", 32)` fires once per press with its pitch
+computed from the model; a `param` with no `when` fires every frame and
+carries a value. The same listening rule as parameters — in an event pass only
+an effect whose `when` listens is considered. What fired comes back from the
+runner (`onFired`), in order, and it is data: the same keys give the same
+list.
+
+```js
+g.effects = [
+  { kind: "note",  when: 'on("keydown", 32)', hz: '330 * 2 ^ (mod(ch("ship.turns"), 12) / 12)', dur: "0.35" },
+  { kind: "param", node: hum, param: "level", value: 'ch("ship.burning") * 0.9' },
+];
+```
+
+**The instrument.** `live-audio.js` runs the *same* compiled DSP graph on a
+live `AudioContext` — `installGraph` already took any context — and performs
+a fired list: a note is a voice's pitch and gate scheduled on and off, a param
+is one `setValueAtTime`. The voice allocator takes notes one at a time by the
+rule `allocateVoices` applies to a whole list, so for notes in time order it is
+the same assignment. `ctx` may be an `OfflineAudioContext`, which is how it is
+held to the bounce. The playground's ship has a sound switch; on, a pulse is a
+note whose pitch follows how far the ship has turned, and the hum follows the
+thrust.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| the effects a scripted flight describes, twice | **93 effects, identical** — 3 notes, 90 hum levels |
+| the live instrument on an offline context, fed frame by frame, vs `renderSong` fed the same list as a batch | **84 000 samples, identical** |
+| rms before the first press / in the four frames after it | **0.0** / **0.245** |
+| hum during thrust vs idle | **0.725** vs **0.075** |
+| three presses, two a frame apart | **3 notes, 0 voices stolen** |
+| the live instrument's loop vs the bounce's | the same 93 generated lines |
+
+One thing it found: `schedule()` sampled a *held* automation track on a grid,
+and at the exact time of a key returned the previous key's value — one frame
+late against a live `setValueAtTime`. Automation can now be `points`, set and
+held exactly, which is what a live performance leaves behind; the parity check
+went from 4.3e−4 to identical.
+
+And one it found in Phase 11: the texel ship's replay check flickered by two
+texels about one run in eight. `aa()` takes `fwidth()`, a derivative computed
+across a 2×2 quad; the two register texels skipped the draw, so the two texels
+sharing their quad took the derivative of a value their neighbours never
+computed. Everything is computed now and the registers merely overwrite; 150
+runs of 40 frames hash identically.
+
+*Left:* the instrument is one graph, chosen by the host; a document does not
+yet say which instrument its effects want. Events are performed at the frame
+they arrived in, quantised to the frame — fine at 60 fps, audible at 10.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1353,6 +1415,7 @@ audio path is still the gap.
 | 11.1 | Input: the keyboard as a texture, a ship you fly — **shipped** | M | 10.1 | a simulation you can play |
 | 12.1 | `prev()` and `key()` in expressions: the model is data — **shipped** | S | 9.1, 11.1 | Model–Update–View, all three readable |
 | 13.1 | Events: a queue, delivered once each, in order — **shipped** | M | 12.1 | a menu; a replay that is a log |
+| 14.1 | Effects and the live audio path — **shipped** | M | 13.1, audio D | an event makes a sound; live equals the bounce |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

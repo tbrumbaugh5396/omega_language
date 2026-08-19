@@ -17,6 +17,7 @@ import "./field-nodes.js";
 import "./sim-nodes.js";
 import { shipAsData, menuAsData } from "./game-nodes.js";
 import { EventQueue, keyboardEvents, pointerEvents } from "./events.js";
+import { LiveInstrument, shipInstrument } from "./live-audio.js";
 
 /** A seed picture, drawn with the 2D canvas. */
 function seedCanvas(w, h, draw) {
@@ -49,7 +50,15 @@ export const PLAY_DEMOS = [
       const shell = addNode(g, "field.shell", { thickness: [0.012] }, [ring]);
       const ink = addNode(g, "field.shade", { fill: [1, 0.5, 0.25], filled: [1], width: [0], glow: [0] }, [shell]);
       g.output = addNode(g, "composite.blend", { mode: [0], opacity: [1] }, [trail, ink]);
-      return { graph: g, sources: {} };
+      // Sound, as effects the graph describes and the host performs: a note
+      // on the keydown that starts a pulse — its pitch following how far the
+      // ship has turned — and the hum's level following the thrust.
+      const inst = shipInstrument();
+      g.effects = [
+        { kind: "note", when: 'on("keydown", 32)', hz: '330 * 2 ^ (mod(ch("ship.turns"), 12) / 12)', dur: "0.35" },
+        { kind: "param", node: inst.hum, param: "level", value: 'ch("ship.burning") * 0.9' },
+      ];
+      return { graph: g, sources: {}, instrument: inst };
     },
   },
   {
@@ -158,6 +167,25 @@ export function playgroundDialog(startId = "mvu") {
   const keyboard = new Keyboard();
   const queue = new EventQueue();
   let current = null, raf = 0, frames = 0, lastAt = performance.now(), fps = 0, running = true;
+  // Sound is off until asked for: an AudioContext needs a gesture, and a page
+  // that starts humming on its own is a page you close.
+  let live = null, wantSound = false;
+  const soundBtn = el("button", {}, "Sound: off");
+  const ensureSound = async () => {
+    if (!wantSound || !current || !current.instrument) return;
+    if (live && live.for === current.instrument) { await live.resume(); return; }
+    if (live) { await live.close(); live = null; }
+    const { graph, noteNode } = current.instrument;
+    live = await LiveInstrument.create({ graph, noteNode, voices: 8 });
+    live.for = current.instrument;
+    await live.resume();
+  };
+  soundBtn.onclick = async () => {
+    wantSound = !wantSound;
+    soundBtn.textContent = wantSound ? "Sound: on" : "Sound: off";
+    if (wantSound) await ensureSound();
+    else if (live) { await live.close(); live = null; }
+  };
 
   const pick = (id) => {
     const demo = PLAY_DEMOS.find((d) => d.id === id) || PLAY_DEMOS[0];
@@ -169,6 +197,8 @@ export function playgroundDialog(startId = "mvu") {
     ctx.imageSmoothingEnabled = !current.pixelated;
     keyboard.clear(); queue.drain();
     for (const b of tabs.children) b.classList.toggle("primary", b.dataset.id === id);
+    soundBtn.hidden = !current.instrument;
+    ensureSound();
   };
 
   const tabs = el("div.row", {}, ...PLAY_DEMOS.map((d) =>
@@ -180,7 +210,8 @@ export function playgroundDialog(startId = "mvu") {
       const { graph, sources, stepsPerFrame } = current;
       try {
         renderGraph(graph, sources, { keys: keyboard, events: queue, steps: stepsPerFrame || 1,
-                                      time: performance.now() / 1000, into: ctx });
+                                      time: performance.now() / 1000, into: ctx,
+                                      onFired: (fired) => { if (live && wantSound) live.perform(fired); } });
       } catch (e) {
         status.textContent = String(e.message).split("\n")[0];
       }
@@ -190,7 +221,8 @@ export function playgroundDialog(startId = "mvu") {
     const now = performance.now();
     if (now - lastAt > 500) { fps = Math.round((frames * 1000) / (now - lastAt)); frames = 0; lastAt = now; }
     const held = keyboard.held();
-    status.textContent = `${fps} fps · ${held.length ? "holding " + held.join(", ") : "no keys held"}`;
+    const snd = live && wantSound ? ` · sound ${live.meter.rms > 0.001 ? "●" : "○"} ${live.notes} note${live.notes === 1 ? "" : "s"}` : "";
+    status.textContent = `${fps} fps · ${held.length ? "holding " + held.join(", ") : "no keys held"}${snd}`;
     raf = requestAnimationFrame(frame);
   };
 
@@ -198,6 +230,7 @@ export function playgroundDialog(startId = "mvu") {
     running = false;
     cancelAnimationFrame(raf);
     stopKeys(); stopPointer();
+    if (live) { live.close(); live = null; }
     if (current) resetGraphState(current.graph.stateKey);
   };
 
@@ -206,6 +239,7 @@ export function playgroundDialog(startId = "mvu") {
       "left alone between frames. Click the picture first so it has the keys."),
     tabs, canvas, how, summary, status,
     el("div.row", { style: { justifyContent: "flex-end" } },
+      soundBtn,
       el("button", { onclick: () => { if (current) { resetGraphState(current.graph.stateKey); keyboard.clear(); } } }, "Reset"),
       el("button.primary", { onclick: () => { stop(); closeModal(); } }, "Close")));
   canvas.tabIndex = 0;
