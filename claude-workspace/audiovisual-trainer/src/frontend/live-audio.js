@@ -25,11 +25,23 @@
 // instruments scheduled from the whole list up front.
 
 import { installGraph } from "./dsp-runtime.js";
-import { createDspGraph, addDspNode } from "./dsp-graph.js";
 import { schedule } from "./dsp-song.js";
+import { resolveInstruments } from "./instrument-library.js";
 
-/** The instruments a document declares, and which one an unnamed effect means. */
-export const instrumentsOf = (graph) => (graph && graph.instruments) || {};
+// The builders live with the library now — an instrument's home is the place
+// that knows what makes two of them the same one.
+export { toneInstrument, shipInstrument } from "./instrument-library.js";
+
+/**
+ * The instruments a document means, with every reference followed. A document
+ * may carry an instrument, reference one, or do both; by the time anything
+ * here sees it, it is a declaration.
+ */
+export function instrumentsOf(graph) {
+  const { instruments, errors } = resolveInstruments(graph);
+  if (errors.length) throw new Error(errors[0]);
+  return instruments;
+}
 export const defaultInstrument = (graph) => Object.keys(instrumentsOf(graph))[0] || null;
 
 /**
@@ -142,7 +154,7 @@ export class LiveInstrument {
  */
 export class LiveRig {
   static async create(graph, { ctx = null, lookahead = 0.03, split = false } = {}) {
-    const decls = instrumentsOf(graph);
+    const decls = instrumentsOf(graph);      // references followed
     const names = Object.keys(decls);
     if (!names.length) throw new Error("this document names no instruments");
     const context = ctx || new (window.AudioContext || window.webkitAudioContext)();
@@ -200,37 +212,6 @@ export class LiveRig {
 }
 
 /**
- * A plain enveloped tone: the smallest instrument worth naming, and the one
- * a second voice in a document usually wants. Returns a declaration ready to
- * put in `graph.instruments`.
- */
-export function toneInstrument({ amp = 0.3, attackMs = 3, decayMs = 180, voices = 4, gain = 1 } = {}) {
-  const g = createDspGraph();
-  const note = addDspNode(g, "voice.note", {});
-  // The envelope drives the oscillator's own gate, which is already a
-  // multiply — so an AD envelope costs one node and no new DSP.
-  const env = addDspNode(g, "env.ad", { inputs: { gate: [note, "gate"] }, params: { attackMs, decayMs } });
-  g.output = addDspNode(g, "osc.sineHz", { inputs: { hz: [note, "hz"], gate: [env, "y"] }, params: { amp } });
-  return { graph: g, noteNode: note, voices, gain };
-}
-
-/**
- * The instrument the playground and the test both use: a polyphonic sine
- * voice summed with a low hum whose level a `param` effect drives.
- * Returns { graph, noteNode, hum } where `hum` is the node id of the hum's
- * gain, so `{ kind: "param", node: hum, param: "level", value: … }` moves it.
- */
-export function shipInstrument() {
-  const g = createDspGraph();
-  const note = addDspNode(g, "voice.note", {});
-  const voice = addDspNode(g, "osc.sineHz", { inputs: { hz: [note, "hz"], gate: [note, "gate"] }, params: { amp: 0.35 } });
-  const humOsc = addDspNode(g, "osc.saw", { params: { hz: 55, amp: 0.18, blep: 1 } });
-  const hum = addDspNode(g, "gain.smooth", { inputs: { x: [humOsc, "y"] }, params: { level: 0, ms: 60 } });
-  g.output = addDspNode(g, "mix.add", { inputs: { a: [voice, "y"], b: [hum, "y"] }, params: { gainA: 1, gainB: 1 } });
-  return { graph: g, noteNode: note, hum };
-}
-
-/**
  * The fired list of a whole run, bounced offline — the batch path, for
  * holding the live one against.
  *
@@ -241,6 +222,9 @@ export function shipInstrument() {
  */
 export async function renderFired(fired, { instruments, fps = 60, frames, sampleRate = 48000,
                                            tail = 0.25, split = false }) {
+  // References are followed here too, so a caller may hand over a document's
+  // declarations exactly as they were written.
+  instruments = instrumentsOf({ instruments });
   const names = Object.keys(instruments || {});
   if (!names.length) throw new Error("no instruments to render with");
   const fallback = names[0];

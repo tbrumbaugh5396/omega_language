@@ -1391,6 +1391,64 @@ that want the same one carry it twice; there is no library of instruments the
 way there is of nodes. And the Music studio's transport still drives the
 built-in synth rather than a named instrument.
 
+### Phase 16 — The instrument library *(S)* — **shipped**
+
+Phase 15 made every document carry its instruments, which made every document
+whole and made two documents wanting the same sound carry it twice. The node
+library solved that by saying *the document is the node* — nothing is copied,
+because a node type is only ever a sketch with `@node` in its header.
+
+An instrument has no header to name it with. What it has is its own data, so
+**identity here is a hash of the instrument itself** — `inst.1xlq9ni` — and
+"the same instrument" becomes provable rather than a naming convention two
+people have to keep.
+
+The obstacle is that DSP node ids come from a counter that never resets, so
+two identical instruments built a minute apart read as `n32` and `n50` and
+hash differently. `normalise` renumbers them `i0, i1, …` in dependency order
+and sorts every key first. That is the whole trick, and it is why the id means
+what it says. It also carries an instrument's own names for its parts — the
+`hum` node a `param` effect writes to — through the renumbering, so a document
+that *references* an instrument asks the declaration where the hum is rather
+than assuming it knows.
+
+**A reference is an optimisation, never a dependency:**
+
+```js
+{ ref: "tone.bell" }                       the library's, by name
+{ ref: "inst.1xlq9ni", graph, noteNode }   the library's, or this copy
+{ graph, noteNode }                        this copy, nothing else
+```
+
+A document that carries both plays on a machine whose library has never heard
+of it. `internInstruments` turns copies into references, `inlineInstruments`
+turns them back, and a document put through both is the same document.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| two identical instruments built 5 node-ids apart | graphs differ (`n32` vs `n50`), ids **the same** |
+| one millisecond of decay | a **different** id |
+| an instrument before and after renumbering | **44 000 samples, identical** |
+| a document interned then inlined | **identical**, and **92% smaller** as references (674 → 55 bytes) |
+| a carried copy after the library forgets it | **identical**; without the copy, *"which this library does not have and this document does not carry"* |
+| two documents interning one sound | the same ref, and **the very same declaration** |
+
+Four instruments ship named — `tone.blip`, `tone.bell`, `tone.pluck`,
+`ship.classic` — each registered under its name *and* under what it sounds
+like, so a document written elsewhere finds it either way.
+
+The check that a carried copy survives the library forgetting it failed first
+time, and it was the test's fault in an instructive way: it built the
+reference-only document *after* forgetting, and interning had quietly put the
+instrument back. Interning registers; that is what it is for.
+
+*Left:* the library is in memory and rebuilt from the built-ins at load, so an
+instrument a document interned is remembered for the session and not past it —
+there is no place to keep one the way a Generate document keeps a node. And
+nothing shows the library: no browser, no audition button.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1476,6 +1534,7 @@ built-in synth rather than a named instrument.
 | 13.1 | Events: a queue, delivered once each, in order — **shipped** | M | 12.1 | a menu; a replay that is a log |
 | 14.1 | Effects and the live audio path — **shipped** | M | 13.1, audio D | an event makes a sound; live equals the bounce |
 | 15.1 | The document names its instrument — **shipped** | S | 14.1 | a document that is whole, sound included |
+| 16.1 | The instrument library, content-addressed — **shipped** | S | 15.1 | one sound, one instrument, provably |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

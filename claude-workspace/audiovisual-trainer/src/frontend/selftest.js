@@ -25,7 +25,10 @@ import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback
 import { lifeStep, grayScottStep } from "./sim-nodes.js";
 import { shipStep, shipAsData, menuAsData } from "./game-nodes.js";
 import { EventQueue, pointerEvents } from "./events.js";
-import { LiveRig, shipInstrument, toneInstrument, renderFired } from "./live-audio.js";
+import { LiveRig, renderFired } from "./live-audio.js";
+import { shipInstrument, toneInstrument, instrumentId, normalise, internInstruments,
+         inlineInstruments, resolveInstruments, instrumentFor, forgetInstrument,
+         instrumentNames, instrumentCount, instrumentBytes } from "./instrument-library.js";
 import { Keyboard, KEY } from "./keyboard.js";
 import { renderGraph, ejectGraph, applyFilter, resetGraphState } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
@@ -1660,6 +1663,100 @@ texel == vec2(0.0) ? vec4(v, 0.0, 0.0, 1.0) : vec4((v - 0.14) * 100.0, 0.0, 0.0,
              detail: `${one.loop.split("\n").length} lines of generated process(), allocation-free, the same text live and bounced` }); }
   } catch (e) {
     push({ group: "Live audio", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The instrument library. The claim is that two documents wanting the same
+  // sound do not each carry it — and that "the same sound" is decidable,
+  // because an instrument's identity is a hash of what it sounds like rather
+  // than a name somebody has to keep.
+  try {
+    const SR = 48000, FPS = 60, FRAMES = 40;
+    const fired = [
+      { kind: "note", instrument: "a", frame: 4, hz: 440, dur: 0.25 },
+      { kind: "note", instrument: "a", frame: 20, hz: 550, dur: 0.25 },
+    ];
+    const render = (instruments) => renderFired(fired, { instruments, fps: FPS, frames: FRAMES, sampleRate: SR });
+    const identical = (x, y) => {
+      const a = x.getChannelData(0), b = y.getChannelData(0);
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    };
+
+    // 1. The point of the whole thing: two instruments built minutes and many
+    //    node ids apart are the same instrument, and are known to be.
+    { const one = toneInstrument({ decayMs: 200 });
+      for (let i = 0; i < 5; i++) toneInstrument({});          // burn some node ids
+      const two = toneInstrument({ decayMs: 200 });
+      const rawSame = JSON.stringify(one.graph) === JSON.stringify(two.graph);
+      const idSame = instrumentId(one) === instrumentId(two);
+      const different = instrumentId(toneInstrument({ decayMs: 201 }));
+      push({ group: "Instrument library", name: "the same sound is the same instrument, whenever it was built", ok: !rawSame && idSame && different !== instrumentId(one),
+             detail: `their graphs differ as written (${one.graph.nodes[0].id} vs ${two.graph.nodes[0].id}) and hash the same: ${instrumentId(one)} · one millisecond of decay makes it ${different} instead` }); }
+
+    // 2. Normalising must not change the sound — the renumbering is the whole
+    //    mechanism, so it is held to samples rather than to inspection.
+    { const raw = toneInstrument({ decayMs: 200 });
+      const a = await render({ a: raw });
+      const b = await render({ a: normalise(raw) });
+      push({ group: "Instrument library", name: "renumbering an instrument does not change what it sounds like", ok: identical(a.buffer, b.buffer),
+             detail: `nodes renumbered to ${normalise(raw).graph.nodes.map((n) => n.id).join(", ")} in dependency order · ${a.buffer.length} samples, identical` }); }
+
+    // 3. intern shrinks a document; inline puts it back; the round trip is
+    //    the same document, held to samples.
+    { const g = createGraph(16, 16); g.stateKey = "selftest-instlib-round";
+      g.instruments = { a: toneInstrument({ decayMs: 200 }), b: toneInstrument({ decayMs: 90 }) };
+      const before = instrumentBytes(g);
+      const interned = internInstruments(g);
+      const after = instrumentBytes(interned);
+      const back = inlineInstruments(interned);
+      const one = await render(g.instruments);
+      const two = await render(back.instruments);
+      push({ group: "Instrument library", name: "intern then inline is the same document", ok: identical(one.buffer, two.buffer) && after < before / 4,
+             detail: `${before} bytes of instrument became ${after} as references (${Math.round((1 - after / before) * 100)}% smaller), and back again — ${one.buffer.length} samples, identical` }); }
+
+    // 4. A reference is an optimisation, not a dependency: a document that
+    //    carries a copy as well plays where the library has never heard of it.
+    { const g = createGraph(16, 16);
+      g.instruments = { a: toneInstrument({ decayMs: 133 }) };
+      const travelling = internInstruments(g, { carry: true });
+      // Both forms made before anything is forgotten: interning registers, so
+      // asking for the bare one afterwards would quietly put it back.
+      const bare = internInstruments(g);                       // reference only
+      const ref = travelling.instruments.a.ref;
+      const withLibrary = await render(travelling.instruments);
+      forgetInstrument(ref);                                   // another machine
+      const stranded = await render(travelling.instruments);
+      let refused = null;
+      try { await render(bare.instruments); } catch (e2) { refused = String(e2.message); }
+      push({ group: "Instrument library", name: "a carried copy plays where the library does not have it", ok: identical(withLibrary.buffer, stranded.buffer) && /does not have/.test(refused || ""),
+             detail: `${ref} forgotten, and the carried copy rendered the same ${stranded.buffer.length} samples · the same document without the copy says: ${String(refused).split(" — ")[0]}` }); }
+
+    // 5. A reference to nothing at all is named, with what there is.
+    { const g = createGraph(16, 16);
+      g.instruments = { a: { ref: "tone.nothing" } };
+      const { errors } = resolveInstruments(g);
+      push({ group: "Instrument library", name: "a reference the library cannot follow is named", ok: errors.length === 1 && /tone\.nothing/.test(errors[0]),
+             detail: errors[0] || "not reported" }); }
+
+    // 6. Two documents referring to the same instrument refer to one thing.
+    { const shared = toneInstrument({ decayMs: 275 });
+      const mk = () => { const g = createGraph(16, 16); g.instruments = { v: shared }; return internInstruments(g); };
+      const g1 = mk(), g2 = mk();
+      const same = g1.instruments.v.ref === g2.instruments.v.ref;
+      const resolvedSame = resolveInstruments(g1).instruments.v === resolveInstruments(g2).instruments.v;
+      push({ group: "Instrument library", name: "two documents wanting one sound share one instrument", ok: same && resolvedSame,
+             detail: same ? `both say ${g1.instruments.v.ref}, and both resolve to the very same declaration — interning the second registered nothing new` : "two references" }); }
+
+    // 7. The built-ins are in the library under both a name and what they are,
+    //    and the name is the one the playground's documents use.
+    { const byName = instrumentFor("ship.classic");
+      const byContent = byName && instrumentFor(instrumentId(byName));
+      const named = instrumentNames();
+      push({ group: "Instrument library", name: "a built-in answers to its name and to what it sounds like", ok: !!byName && byContent === byName && named.length >= 4,
+             detail: `${named.length} named (${named.join(", ")}), ${instrumentCount()} distinct · ship.classic is also ${instrumentId(byName)}, and names its own hum node "${byName.hum}"` }); }
+  } catch (e) {
+    push({ group: "Instrument library", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

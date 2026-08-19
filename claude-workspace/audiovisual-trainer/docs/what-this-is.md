@@ -60,8 +60,9 @@ And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
-keyboard as a texture, an event queue, live instruments the document names,
-and a **186-check self-test across 26 groups that runs inside the app**.
+keyboard as a texture, an event queue, a content-addressed instrument
+library, and a **193-check self-test across 27 groups that runs inside the
+app**.
 
 ---
 
@@ -183,7 +184,14 @@ data, so `graph.instruments` carries its own synths and each effect names
 which one it is for. Fed frame by frame, the live rig produces the same
 84 000 samples per instrument as the batch scheduler given the whole list —
 and the instruments survive `JSON.stringify` and back unchanged, which is the
-test that an instrument is really in the document rather than in the host. The ship's position
+test that an instrument is really in the document rather than in the host.
+
+An instrument's *identity* is a hash of what it sounds like, after its nodes
+are renumbered in dependency order — so two built minutes apart are known to
+be the same one, and a document may reference `inst.1xlq9ni` instead of
+carrying it. A reference is an optimisation and never a dependency: a document
+that carries the copy as well plays where the library has never heard of it,
+and interning one is 92% smaller with the samples identical either way. The ship's position
 is a number you can read off the graph, not a texel you have to decode; it
 equals the CPU integration of its own equations to 2e−15, and the ejected
 pass header prints the update beside the shader that draws it.

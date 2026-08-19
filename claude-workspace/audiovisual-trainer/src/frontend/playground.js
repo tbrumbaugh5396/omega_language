@@ -17,7 +17,8 @@ import "./field-nodes.js";
 import "./sim-nodes.js";
 import { shipAsData, menuAsData } from "./game-nodes.js";
 import { EventQueue, keyboardEvents, pointerEvents } from "./events.js";
-import { LiveRig, shipInstrument, toneInstrument } from "./live-audio.js";
+import { LiveRig } from "./live-audio.js";
+import { instrumentFor } from "./instrument-library.js";
 
 /** A seed picture, drawn with the 2D canvas. */
 function seedCanvas(w, h, draw) {
@@ -54,8 +55,12 @@ export const PLAY_DEMOS = [
       // on the keydown that starts a pulse — its pitch following how far the
       // ship has turned — and the hum's level following the thrust.
       // The document names its instrument, and its effects name which.
-      const inst = shipInstrument();
-      g.instruments = { ship: { graph: inst.graph, noteNode: inst.noteNode, voices: 8 } };
+      // Referenced, not carried: the library ships this one. Its node ids are
+      // the library's — an instrument names its own parts, and a reference
+      // gets those names, which is why the effect asks the declaration where
+      // the hum is rather than assuming.
+      const inst = instrumentFor("ship.classic");
+      g.instruments = { ship: { ref: "ship.classic" } };
       g.effects = [
         { kind: "note", instrument: "ship", when: 'on("keydown", 32)',
           hz: '330 * 2 ^ (mod(ch("ship.turns"), 12) / 12)', dur: "0.35" },
@@ -71,10 +76,7 @@ export const PLAY_DEMOS = [
     build(W, H) {
       const g = createGraph(W, H); g.stateKey = "play-menu";
       g.output = menuAsData(g, 4);
-      g.instruments = {
-        blip: toneInstrument({ amp: 0.22, attackMs: 1, decayMs: 70, voices: 4 }),
-        tone: toneInstrument({ amp: 0.3, attackMs: 6, decayMs: 420, voices: 4, gain: 0.9 }),
-      };
+      g.instruments = { blip: { ref: "tone.blip" }, tone: { ref: "tone.bell" } };
       g.effects = [
         // Pitch follows which row is highlighted, so moving down sounds lower.
         { kind: "note", instrument: "blip", when: 'on("keydown", 40) + on("keydown", 38)',
