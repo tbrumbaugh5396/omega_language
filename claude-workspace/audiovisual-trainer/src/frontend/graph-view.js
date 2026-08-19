@@ -163,7 +163,10 @@ export function graphSummary(graph) {
       + (ps.listeners ? `, ${ps.listeners} listening for events` : ""));
   }
   if (ps.tracks) bits.push(`${ps.tracks} keyed`);
-  if (ps.effects) bits.push(`${ps.effects} effect${ps.effects === 1 ? "" : "s"} described for the host`);
+  if (ps.effects) {
+    bits.push(`${ps.effects} effect${ps.effects === 1 ? "" : "s"} described for the host`
+      + (ps.instruments.length ? `, played by ${ps.instruments.join(" and ")}` : ""));
+  }
   const mem = fedBack(graph).size;
   if (mem) bits.push(`${mem} node${mem === 1 ? "" : "s"} remembered between frames`);
   if (st.saved > 0) bits.push(`${st.saved} saved by fusing`);

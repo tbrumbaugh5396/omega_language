@@ -60,8 +60,8 @@ And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
-keyboard as a texture, an event queue, a live instrument, and a **183-check
-self-test across 26 groups that runs inside the app**.
+keyboard as a texture, an event queue, live instruments the document names,
+and a **186-check self-test across 26 groups that runs inside the app**.
 
 ---
 
@@ -178,8 +178,12 @@ the update, and the shader that draws the result is purely the view — and all
 three are text in the document. A log of events plus the graph is a replay,
 to the byte. And a model can *describe* what it wants the world to do —
 `effects`, a note on a keydown, a hum level every frame — as data the host
-performs: the live instrument fed those effects frame by frame produces the
-same 84 000 samples as the bounce fed them as a batch. The ship's position
+performs. And the document says *what it sounds like*: a DSP graph is plain
+data, so `graph.instruments` carries its own synths and each effect names
+which one it is for. Fed frame by frame, the live rig produces the same
+84 000 samples per instrument as the batch scheduler given the whole list —
+and the instruments survive `JSON.stringify` and back unchanged, which is the
+test that an instrument is really in the document rather than in the host. The ship's position
 is a number you can read off the graph, not a texel you have to decode; it
 equals the CPU integration of its own equations to 2e−15, and the ejected
 pass header prints the update beside the shader that draws it.

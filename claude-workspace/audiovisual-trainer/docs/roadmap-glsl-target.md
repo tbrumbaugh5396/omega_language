@@ -1332,6 +1332,65 @@ runs of 40 frames hash identically.
 yet say which instrument its effects want. Events are performed at the frame
 they arrived in, quantised to the frame — fine at 60 fps, audible at 10.
 
+### Phase 15 — The document names its instrument *(S)* — **shipped**
+
+Phase 14's effects made a sound, but the host chose what with: the playground
+built a DSP graph in JavaScript and handed it to the player. A document that
+cannot say what it sounds like is not whole.
+
+A DSP graph is already plain data — nodes, wires, parameters — so it travels
+inside the render-graph document the way a `@data` texture or a field tree
+does:
+
+```js
+g.instruments = {
+  blip: toneInstrument({ decayMs: 70 }),
+  tone: toneInstrument({ decayMs: 420, gain: 0.9 }),
+};
+g.effects = [
+  { kind: "note", instrument: "blip", when: 'on("keydown", 40) + on("keydown", 38)',
+    hz: '880 * 2 ^ (-ch("menu.index") / 12)', dur: "0.08" },
+  { kind: "note", instrument: "tone", when: 'on("keydown", 13)', … },
+];
+```
+
+**Resolved at description time.** An effect that names no instrument is
+resolved to the document's first — *in the fired list*, not by the host — so
+the list that comes back says which instrument every effect is for and the
+player never guesses. A name the document does not carry is reported once, by
+name, with what the document does have. `LiveRig` installs what it is handed
+and routes by name; it chooses nothing. A per-instrument `gain` lets a
+document balance two without editing either one's DSP graph.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| the effects of a scripted flight, twice | **95, identical** — 3 to "ship", 2 to "bell", 90 hum levels |
+| the rig fed frame by frame vs the batch scheduler, per instrument | **ship identical, bell identical** — 84 000 samples each |
+| the bell's channel through the ship's first two notes | **0.0** — then 0.139 on its own note |
+| the instruments through `JSON.stringify` and back | **identical, sample for sample** |
+| an effect naming no instrument | resolved to `"first"` in the description |
+| an effect naming `"tuba"` | *there is no instrument called "tuba" — this document has "bell"* |
+
+The JSON row is the one that matters: an instrument that only worked because a
+JavaScript object was still in scope would fail it.
+
+**Why per instrument.** The first version of the parity check mixed both
+instruments and compared one channel, and it failed by 1.19e−7 — and so did
+the JSON check, for the same reason. Each instrument alone rendered
+identically; two together did not. Summing two float32 streams is not
+bit-stable between renders on this machine: the first disagreement was at the
+sample the second instrument starts, at 2⁻²⁴. So each instrument now renders
+to its own channel and is compared there. Mixed, the comparison measures the
+browser's adder; per channel, there is no adder, and what is left is the two
+schedulers — which is the thing the check is about.
+
+*Left:* an instrument is written into the document inline, so two documents
+that want the same one carry it twice; there is no library of instruments the
+way there is of nodes. And the Music studio's transport still drives the
+built-in synth rather than a named instrument.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1416,6 +1475,7 @@ they arrived in, quantised to the frame — fine at 60 fps, audible at 10.
 | 12.1 | `prev()` and `key()` in expressions: the model is data — **shipped** | S | 9.1, 11.1 | Model–Update–View, all three readable |
 | 13.1 | Events: a queue, delivered once each, in order — **shipped** | M | 12.1 | a menu; a replay that is a log |
 | 14.1 | Effects and the live audio path — **shipped** | M | 13.1, audio D | an event makes a sound; live equals the bounce |
+| 15.1 | The document names its instrument — **shipped** | S | 14.1 | a document that is whole, sound included |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

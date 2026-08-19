@@ -17,7 +17,7 @@ import "./field-nodes.js";
 import "./sim-nodes.js";
 import { shipAsData, menuAsData } from "./game-nodes.js";
 import { EventQueue, keyboardEvents, pointerEvents } from "./events.js";
-import { LiveInstrument, shipInstrument } from "./live-audio.js";
+import { LiveRig, shipInstrument, toneInstrument } from "./live-audio.js";
 
 /** A seed picture, drawn with the 2D canvas. */
 function seedCanvas(w, h, draw) {
@@ -53,20 +53,35 @@ export const PLAY_DEMOS = [
       // Sound, as effects the graph describes and the host performs: a note
       // on the keydown that starts a pulse — its pitch following how far the
       // ship has turned — and the hum's level following the thrust.
+      // The document names its instrument, and its effects name which.
       const inst = shipInstrument();
+      g.instruments = { ship: { graph: inst.graph, noteNode: inst.noteNode, voices: 8 } };
       g.effects = [
-        { kind: "note", when: 'on("keydown", 32)', hz: '330 * 2 ^ (mod(ch("ship.turns"), 12) / 12)', dur: "0.35" },
-        { kind: "param", node: inst.hum, param: "level", value: 'ch("ship.burning") * 0.9' },
+        { kind: "note", instrument: "ship", when: 'on("keydown", 32)',
+          hz: '330 * 2 ^ (mod(ch("ship.turns"), 12) / 12)', dur: "0.35" },
+        { kind: "param", instrument: "ship", node: inst.hum, param: "level",
+          value: 'ch("ship.burning") * 0.9' },
       ];
-      return { graph: g, sources: {}, instrument: inst };
+      return { graph: g, sources: {} };
     },
   },
   {
     id: "menu", title: "Menu",
-    how: "Up and down move, Enter chooses, Escape clears. Each press is an event delivered once, in order — type two downs fast and it moves two.",
+    how: "Up and down move, Enter chooses, Escape clears. Two instruments: a short blip when it moves, a longer tone when it chooses — the document names both and each effect says which.",
     build(W, H) {
       const g = createGraph(W, H); g.stateKey = "play-menu";
       g.output = menuAsData(g, 4);
+      g.instruments = {
+        blip: toneInstrument({ amp: 0.22, attackMs: 1, decayMs: 70, voices: 4 }),
+        tone: toneInstrument({ amp: 0.3, attackMs: 6, decayMs: 420, voices: 4, gain: 0.9 }),
+      };
+      g.effects = [
+        // Pitch follows which row is highlighted, so moving down sounds lower.
+        { kind: "note", instrument: "blip", when: 'on("keydown", 40) + on("keydown", 38)',
+          hz: '880 * 2 ^ (-ch("menu.index") / 12)', dur: "0.08" },
+        { kind: "note", instrument: "tone", when: 'on("keydown", 13)',
+          hz: '440 * 2 ^ (ch("menu.index") / 12)', dur: "0.5" },
+      ];
       return { graph: g, sources: {} };
     },
   },
@@ -172,12 +187,12 @@ export function playgroundDialog(startId = "mvu") {
   let live = null, wantSound = false;
   const soundBtn = el("button", {}, "Sound: off");
   const ensureSound = async () => {
-    if (!wantSound || !current || !current.instrument) return;
-    if (live && live.for === current.instrument) { await live.resume(); return; }
+    if (!wantSound || !current || !current.graph.instruments) return;
+    if (live && live.for === current.graph) { await live.resume(); return; }
     if (live) { await live.close(); live = null; }
-    const { graph, noteNode } = current.instrument;
-    live = await LiveInstrument.create({ graph, noteNode, voices: 8 });
-    live.for = current.instrument;
+    // The host installs what the document names, and nothing else.
+    live = await LiveRig.create(current.graph);
+    live.for = current.graph;
     await live.resume();
   };
   soundBtn.onclick = async () => {
@@ -197,7 +212,7 @@ export function playgroundDialog(startId = "mvu") {
     ctx.imageSmoothingEnabled = !current.pixelated;
     keyboard.clear(); queue.drain();
     for (const b of tabs.children) b.classList.toggle("primary", b.dataset.id === id);
-    soundBtn.hidden = !current.instrument;
+    soundBtn.hidden = !current.graph.instruments;
     ensureSound();
   };
 
@@ -221,7 +236,8 @@ export function playgroundDialog(startId = "mvu") {
     const now = performance.now();
     if (now - lastAt > 500) { fps = Math.round((frames * 1000) / (now - lastAt)); frames = 0; lastAt = now; }
     const held = keyboard.held();
-    const snd = live && wantSound ? ` · sound ${live.meter.rms > 0.001 ? "●" : "○"} ${live.notes} note${live.notes === 1 ? "" : "s"}` : "";
+    const snd = live && wantSound
+      ? ` · ${[...live.players.keys()].join(" + ")} ${live.meter.rms > 0.001 ? "●" : "○"} ${live.notes} note${live.notes === 1 ? "" : "s"}` : "";
     status.textContent = `${fps} fps · ${held.length ? "holding " + held.join(", ") : "no keys held"}${snd}`;
     raf = requestAnimationFrame(frame);
   };
