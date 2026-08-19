@@ -15,6 +15,9 @@
 export const RESERVED = new Set([
   "u_resolution", "u_mouse", "u_time", "u_seed",
   "u_prev", "u_state", "u_state2", "u_frame", "u_mouseDown", "u_origin",
+  // The keyboard, as a 256×3 picture: row 0 held, row 1 went down this
+  // frame, row 2 toggled. Read it with keyDown(u_keys, code) and friends.
+  "u_keys",
 ]);
 
 // Scanned over the whole source rather than line by line: `uniform vec2 u_r;
@@ -240,6 +243,13 @@ const HELPERS = [
 float aa(float d){ return aa(d, 1.5/u_resolution.y); }`],
   ["palette", `vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d){ return a+b*cos(6.28318*(c*t+d)); }
 vec3 palette(float t){ return palette(t, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0,0.33,0.67)); }`],
+  // The keyboard texture is 256 wide and 3 tall; a key is a column and the
+  // rows are held / went down this frame / toggled. Codes are the legacy
+  // keyCode numbers — 37..40 are the arrows, 32 is space — because that is
+  // what every Shadertoy sketch already uses.
+  ["keyDown",   `float keyDown(sampler2D k, float code){ return texture2D(k, vec2((code+0.5)/256.0, 0.5/3.0)).r; }`],
+  ["keyHit",    `float keyHit(sampler2D k, float code){ return texture2D(k, vec2((code+0.5)/256.0, 1.5/3.0)).r; }`],
+  ["keyToggle", `float keyToggle(sampler2D k, float code){ return texture2D(k, vec2((code+0.5)/256.0, 2.5/3.0)).r; }`],
   ["srgbToLinear", `vec3 srgbToLinear(vec3 c){ return pow(max(c,0.0), vec3(2.2)); }`],
   ["linearToSrgb", `vec3 linearToSrgb(vec3 c){ return pow(max(c,0.0), vec3(1.0/2.2)); }`],
   // The finishing kit. Everything below works in linear light and expects you

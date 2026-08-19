@@ -40,9 +40,11 @@ class TargetPool {
     } else {
       this.half = gl.getExtension("OES_texture_half_float");
       this.halfLinear = gl.getExtension("OES_texture_half_float_linear");
+      this.float = gl.getExtension("OES_texture_float");
+      this.floatLinear = !!gl.getExtension("OES_texture_float_linear");
     }
   }
-  make(w, h) {
+  make(w, h, want = null) {
     const gl = this.gl;
     const tryKind = (kind) => {
       // Clear anything an earlier call left behind: getError() reports the
@@ -53,14 +55,18 @@ class TargetPool {
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
       if (this.gl2) {
-        const internal = kind === "half" ? gl.RGBA16F : gl.RGBA8;
-        const type = kind === "half" ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+        const internal = kind === "float" ? gl.RGBA32F : kind === "half" ? gl.RGBA16F : gl.RGBA8;
+        const type = kind === "float" ? gl.FLOAT : kind === "half" ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
         gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, gl.RGBA, type, null);
       } else {
-        const type = kind === "half" ? this.half.HALF_FLOAT_OES : gl.UNSIGNED_BYTE;
+        if (kind === "float" && !this.float) return null;
+        const type = kind === "float" ? gl.FLOAT : kind === "half" ? this.half.HALF_FLOAT_OES : gl.UNSIGNED_BYTE;
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, type, null);
       }
-      const linear = kind === "byte" || this.gl2 || this.halfLinear;
+      // A 32-bit target filters linearly only with its own extension; a
+      // register read at a texel centre does not care, and NEAREST is exact.
+      const linear = kind === "byte" || (kind === "half" && (this.gl2 || this.halfLinear))
+                  || (kind === "float" && this.floatLinear);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, linear ? gl.LINEAR : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, linear ? gl.LINEAR : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -73,6 +79,13 @@ class TargetPool {
       if (!ok) { gl.deleteTexture(tex); gl.deleteFramebuffer(fbo); return null; }
       return { tex, fbo, w, h, kind };
     };
+    // `want` asks for a specific precision — a simulation's register wants
+    // 32 bits — and falls back to the pool's kind if the GPU declines. The
+    // pool's own kind is settled once, by the first allocation that succeeds.
+    if (want && want !== this.kind) {
+      const t = tryKind(want);
+      if (t) { this.made++; return t; }
+    }
     const order = this.kind ? [this.kind] : ((this.gl2 ? this.ext : this.half) ? ["half", "byte"] : ["byte"]);
     for (const k of order) {
       const t = tryKind(k);
@@ -219,6 +232,25 @@ export class GraphRunner {
     return tex.tex;
   }
 
+  /** The keyboard canvas as a texture — one upload per run, kept between. */
+  keysTexture(canvas) {
+    const gl = this.gl;
+    if (!this.keys) {
+      this.keys = { tex: gl.createTexture() };
+      gl.bindTexture(gl.TEXTURE_2D, this.keys.tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.keys.tex);
+    // Not flipped: row 0 of the canvas is "held", and the helpers read row 0
+    // at the bottom of the texture. A picture of a keyboard has no "up".
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+    return this.keys;
+  }
+
   /** A 256×1 lookup texture from a byte array, cached by content. */
   lutTexture(bytes) {
     const key = Array.from(bytes.subarray(0, 64)).join(",") + "|" + bytes.length;
@@ -252,8 +284,16 @@ export class GraphRunner {
    */
   memoryFor(graph, node, W, H) {
     const key = this.memoryKey(graph, node);
+    // `@precision float` in the node's header asks for 32 bits. Half float
+    // is fine for a picture and wrong for a register: this GPU's float→half
+    // conversion was measured to lose about 0.4% over thirty accumulations,
+    // which is a ship that drifts from its own equations.
+    const t = node.type ? nodeType(node.type) : null;
+    const want = t && t.precision === "float" ? "float" : null;
     let m = this.memory.get(key);
-    if (m && (m.w !== W || m.h !== H)) { this.freeMemory(m); this.memory.delete(key); m = null; }
+    if (m && (m.w !== W || m.h !== H || (want && m.kind !== want && m.kind !== "float"))) {
+      this.freeMemory(m); this.memory.delete(key); m = null;
+    }
     if (m) {
       this.memory.delete(key); this.memory.set(key, m);   // most recently wanted goes last
       return m;
@@ -264,13 +304,14 @@ export class GraphRunner {
     }
     const gl = this.gl;
     const make = () => {
-      const t = this.pool.make(W, H);
+      const t = this.pool.make(W, H, want);
       gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       return t;
     };
-    m = { read: make(), write: make(), w: W, h: H };
+    const read = make(), write = make();
+    m = { read, write, w: W, h: H, kind: read.kind };
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     this.memory.set(key, m);
     return m;
@@ -338,8 +379,19 @@ export class GraphRunner {
       gl.uniform2f(u("u_mouse"), W / 2, H / 2);
       gl.uniform1f(u("u_seed"), opts.seed || 0);
       gl.uniform1i(u("u_frame"), frame);
-      gl.uniform1f(u("u_mouseDown"), 0);
+      gl.uniform1f(u("u_mouseDown"), opts.mouseDown ? 1 : 0);
+      if (opts.mouse) gl.uniform2f(u("u_mouse"), opts.mouse[0], opts.mouse[1]);
       return u;
+    };
+    // The keyboard, bound after a pass's own samplers so the unit is free.
+    // Absent, a 1×1 blank: every key reads as up.
+    const keysTex = opts.keys ? (opts.keys.tex ? opts.keys : this.keysTexture(opts.keys)) : null;
+    const bindKeys = (u, unit) => {
+      if (!u("u_keys")) return unit;
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, keysTex ? keysTex.tex : this.blank);
+      gl.uniform1i(u("u_keys"), unit);
+      return unit + 1;
     };
     const lutBytes = (val) => (val && val.points ? curveLut(val.points)
       : (val instanceof Uint8ClampedArray ? val : curveLut(null)));
@@ -414,6 +466,7 @@ export class GraphRunner {
         }
         unit++;
       }
+      unit = bindKeys(u, unit);
       gl.activeTexture(gl.TEXTURE0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       outputs.set(n.id, { tex: target.tex, w: W, h: H, target: remembered.has(n.id) ? null : target });
@@ -446,6 +499,7 @@ export class GraphRunner {
         const src = s.from ? texOf(s.from, s.back) : null;
         gl.uniform2f(u(s.name), src ? src.w : W, src ? src.h : H);
       }
+      unit = bindKeys(u, unit);
       gl.activeTexture(gl.TEXTURE0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       outputs.set(step.id, { tex: target.tex, w: W, h: H, target: remembered.has(step.id) ? null : target });
@@ -489,6 +543,7 @@ export class GraphRunner {
     return { programs: this.programs.size, fused: this.fused.size, luts: this.luts.size,
              ownTextures: this.own.size, pooled: this.pool.free.length,
              memories: this.memory.size,
+             floatMemories: [...this.memory.values()].filter((m) => m.kind === "float").length,
              targetsMade: this.pool.made, targetsEvicted: this.pool.evicted,
              precision: this.pool.kind };
   }
@@ -585,6 +640,7 @@ export class GraphRunner {
     for (const t of this.luts.values()) gl.deleteTexture(t);
     for (const t of this.own.values()) gl.deleteTexture(t.tex);
     for (const m of this.memory.values()) this.freeMemory(m);
+    if (this.keys) gl.deleteTexture(this.keys.tex);
     if (this.lastOut) { gl.deleteTexture(this.lastOut.tex); gl.deleteFramebuffer(this.lastOut.fbo); }
     this.pool.release();
     if (this.blit) gl.deleteProgram(this.blit);

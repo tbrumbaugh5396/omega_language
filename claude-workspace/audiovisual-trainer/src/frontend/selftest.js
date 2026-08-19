@@ -21,8 +21,10 @@ import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets 
 import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
-import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback, findNode } from "./render-graph.js";
+import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback, findNode, defineNode } from "./render-graph.js";
 import { lifeStep, grayScottStep } from "./sim-nodes.js";
+import { shipStep } from "./game-nodes.js";
+import { Keyboard, KEY } from "./keyboard.js";
 import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
@@ -957,23 +959,36 @@ vec4(vec3(0.106, 0.169, 0.294), aa(d))`, W, H, { time: 0 });
       push({ group: "Feedback", name: `Gray–Scott, ${STEPS} steps, vs the CPU stencil`, ok: meanU < 1.0 && meanV < 1.0 && moved > 100,
              detail: `u mean ${meanU.toFixed(2)}/255, v mean ${meanV.toFixed(2)}/255, worst u ${maxU.toFixed(0)} · want <1.0 (half-float state, thirty nonlinear steps) · v has spread to ${moved} cells` }); }
 
-    // 4. A trail's decay is a geometric series, and the series is the check.
+    // 4. A trail's fade is geometric, and the power is the check. One frame of
+    //    ink, then twenty of nothing: the ghost's alpha is 0.9^20 exactly, and
+    //    its colour is the ink's — fading is alpha, not darkening.
     { const W = 40, H = 30;
-      const src = seedCanvas(W, H, (g) => { g.fillStyle = "#c8643c"; g.fillRect(0, 0, W, H); });
+      const ink = seedCanvas(W, H, (g) => { g.fillStyle = "#c8643c"; g.fillRect(0, 0, W, H); });
+      const nothing = document.createElement("canvas"); nothing.width = W; nothing.height = H;   // transparent
       const gph = fresh(createGraph(W, H));
       const s0 = addNode(gph, "source");
       const tr = addNode(gph, "feedback.trail", { decay: [0.9] }, [s0, null], { name: "trail" });
       feedback(gph, tr, 1, tr);
       gph.output = tr;
       const N = 20;
-      const out = px(renderGraph(gph, { [s0]: src }, { steps: N, reset: true }));
-      const want = 1 - Math.pow(0.9, N);                // starts from nothing, fills toward the source
-      const s = px(src);
-      let sum = 0;
-      for (let i = 0; i < W * H; i++) for (let c = 0; c < 3; c++) sum += Math.abs(out[i * 4 + c] - s[i * 4 + c] * want);
-      const mean = sum / (W * H * 3);
-      push({ group: "Feedback", name: `a trail after ${N} frames is 1 − 0.9^${N} of the source`, ok: mean < 1.5,
-             detail: `mean ${mean.toFixed(2)}/255 against the closed form (${(want * 100).toFixed(1)}%) · want <1.5 in half float` }); }
+      renderGraph(gph, { [s0]: ink }, { reset: true });
+      let out;
+      for (let i = 0; i < N; i++) out = renderGraph(gph, { [s0]: nothing }, {});
+      // Read straight from the GPU canvas? It is premultiplied on present, so
+      // go through the 2D canvas the graph returns and undo it per pixel.
+      const d = px(out);
+      const a = Math.pow(0.9, N);
+      let errA = 0, errC = 0;
+      for (let i = 0; i < W * H; i++) {
+        const pa = d[i * 4 + 3] / 255;
+        errA += Math.abs(pa - a);
+        // At this alpha the stored colour is quantised hard; compare hue-ish:
+        // the red channel should still be the ink's 0xc8.
+        if (pa > 0.05) errC += Math.abs(d[i * 4] - 0xc8);
+      }
+      const meanA = errA / (W * H) * 255, meanC = errC / (W * H);
+      push({ group: "Feedback", name: `a trail after ${N} empty frames is 0.9^${N} of the ink, in alpha`, ok: meanA < 1.5 && meanC < 12,
+             detail: `alpha ${(a * 255).toFixed(1)}/255 expected · mean alpha error ${meanA.toFixed(2)}/255, red still within ${meanC.toFixed(1)} of the ink · the colour does not darken, the coverage goes down` }); }
 
     // 5. A fused run can be the thing remembered. grade → trail fuses into one
     //    draw whose id is the trail; that draw has to land in memory.
@@ -1036,12 +1051,191 @@ vec4(vec3(0.106, 0.169, 0.294), aa(d))`, W, H, { time: 0 });
       push({ group: "Feedback", name: "the ejected shader names the memory", ok,
              detail: ok ? "the pass header marks the input as last frame and the pass as kept between frames" : "not said" }); }
 
-    // 9. The runner holds what it remembers, and no more than the cap.
+    // 9. A register wants 32 bits. The same accumulation — add 0.006, keep
+    //    98.5%, thirty times — in half-float memory and in float memory,
+    //    against the CPU. The first drifts on this GPU; the second does not,
+    //    and that is why game.ship says @precision float.
+    { const probe = (id, precision) => defineNode(`// ${id}
+// @node test.${id}
+// @alpha
+// @pass${precision ? "\n// @precision float" : ""}
+uniform sampler2D in0;
+uniform vec2 in0_size;
+vec4 reg() { return texture2D(in0, vec2(0.5, 0.5) / in0_size); }
+vec4 s = frame == 0 ? vec4(0.0) : reg();
+float v = (s.x + 0.006) * 0.985;
+vec2 texel = floor(gl_FragCoord.xy);
+texel == vec2(0.0) ? vec4(v, 0.0, 0.0, 1.0) : vec4((v - 0.14) * 100.0, 0.0, 0.0, 1.0)`);
+      probe("accHalf", false); probe("accFloat", true);
+      const run = (id) => {
+        const g = fresh(createGraph(32, 32));
+        const a = addNode(g, `test.${id}`, {}, [null], { name: "acc" });
+        feedback(g, a, 0, a); g.output = a;
+        let out;
+        for (let f = 0; f < 30; f++) out = renderGraph(g, {}, { reset: f === 0 });
+        return px(out)[(10 * 32 + 10) * 4] / 255 / 100 + 0.14;
+      };
+      let cpu = 0;
+      for (let f = 0; f < 30; f++) cpu = (cpu + 0.006) * 0.985;
+      const half = run("accHalf"), flt = run("accFloat");
+      const st = graphStats();
+      const eh = Math.abs(half - cpu) / cpu, ef = Math.abs(flt - cpu) / cpu;
+      push({ group: "Feedback", name: "a register in float memory does not drift; in half it does", ok: ef < 0.0005 && st.floatMemories > 0,
+             detail: `after 30 accumulations the CPU says ${cpu.toFixed(5)}; half-float memory ${half.toFixed(5)} (${(eh * 100).toFixed(2)}% off), float memory ${flt.toFixed(5)} (${(ef * 100).toFixed(3)}% off) · ${st.floatMemories} float memories held` }); }
+
+    // 10. The runner holds what it remembers, and no more than the cap.
     { const st = graphStats();
       push({ group: "Feedback", name: "memories are counted and capped", ok: st.memories > 0 && st.memories <= 32,
-             detail: `${st.memories} node memories held (cap 32), each a pair of ${st.precision}-float targets` }); }
+             detail: `${st.memories} node memories held (cap 32), ${st.floatMemories} of them 32-bit by request, the rest ${st.precision}` }); }
   } catch (e) {
     push({ group: "Feedback", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Input: the keyboard as a texture, and a game held to its own equations.
+  try {
+    const px = (c) => c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+
+    // 1. The keyboard texture is what it says: a press lights three rows in
+    //    the right column for one frame, then two, and a release leaves one.
+    { const kb = new Keyboard();
+      kb.press(KEY.right);
+      const read = (row) => px(kb.texture())[(row * 256 + KEY.right) * 4];
+      const a = [read(0), read(1), read(2)];
+      kb.tick();
+      const b = [read(0), read(1), read(2)];
+      kb.release(KEY.right);
+      const c = [read(0), read(1), read(2)];
+      kb.press(KEY.right); kb.tick();
+      const d = [read(0), read(1), read(2)];
+      const ok = a.join() === "255,255,255" && b.join() === "255,0,255" && c.join() === "0,0,255" && d.join() === "255,0,0";
+      push({ group: "Input", name: "a key press is one column, three rows, one frame", ok,
+             detail: ok ? "held / this frame / toggled: 1,1,1 → tick → 1,0,1 → release → 0,0,1 → press again → 1,0,0"
+                        : `got ${a} / ${b} / ${c} / ${d}` }); }
+
+    // 2. The graph reads it. input.keys draws a lit cell exactly where the
+    //    key is, and nowhere when nothing is held.
+    { const W = 256, H = 3;
+      const gph = createGraph(W, H);
+      gph.output = addNode(gph, "input.keys", { lit: [1, 1, 1], unlit: [0, 0, 0] });
+      const kb = new Keyboard();
+      const quiet = px(renderGraph(gph, {}, { keys: kb.texture() }));
+      kb.press(KEY.space);
+      const loud = px(renderGraph(gph, {}, { keys: kb.texture() }));
+      const litQuiet = [...quiet].filter((v, i) => i % 4 === 0 && v > 128).length;
+      // The canvas is y-down: row 0 of the texture (held) is the bottom row of the picture.
+      const at = (col, rowFromBottom) => loud[((H - 1 - rowFromBottom) * W + col) * 4];
+      const ok = litQuiet === 0 && at(KEY.space, 0) > 128 && at(KEY.space, 1) > 128 && at(KEY.space, 2) > 128
+              && at(KEY.space + 1, 0) < 128 && at(KEY.left, 0) < 128;
+      push({ group: "Input", name: "a node sees the key the host pressed, in its column", ok,
+             detail: ok ? `nothing lit with no keys; space lights column ${KEY.space} in all three rows and no other`
+                        : `${litQuiet} lit when quiet; col ${KEY.space}: ${at(KEY.space, 0)},${at(KEY.space, 1)},${at(KEY.space, 2)}` }); }
+
+    // 3. The ship, flown by a script, against the CPU integration of the same
+    //    equations with the same presses. The state lives in half float, so
+    //    the bar is pixels, not bits.
+    { const W = 240, H = 160;
+      const P = { thrust: 0.006, turn: 0.09, drag: 0.985, aspect: W / H };
+      // Chosen so the ship ends mid-frame: the picture does not wrap, only the
+      // position does, and a ship straddling the edge has a centroid that
+      // says nothing. The check below insists on that.
+      const script = (f) => ({ left: f >= 10 && f < 25, right: f >= 60 && f < 70, up: f >= 5 && f < 30 });
+      const gph = createGraph(W, H); gph.stateKey = "selftest-ship";
+      const ship = addNode(gph, "game.ship",
+        // Big, so the centroid of its pixels is a measurement and not a guess:
+        // at 0.06 the whole ship is a dozen pixels.
+        { thrust: [P.thrust], turn: [P.turn], drag: [P.drag], size: [0.25] }, [null], { name: "ship" });
+      feedback(gph, ship, 0, ship);
+      gph.output = ship;
+      const kb = new Keyboard();
+      const FRAMES = 80;
+      let cpu = null, out = null;
+      for (let f = 0; f < FRAMES; f++) {
+        const k = script(f);
+        kb.clear();
+        if (k.left) kb.press(KEY.left);
+        if (k.right) kb.press(KEY.right);
+        if (k.up) kb.press(KEY.up);
+        out = renderGraph(gph, {}, { keys: kb.texture(), reset: f === 0 });
+        cpu = shipStep(cpu, script, f, P);
+      }
+      // Where is the ship drawn? The centroid of its hull pixels, in p units.
+      const d = px(out);
+      let sx = 0, sy = 0, n = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        if (d[i + 3] > 128 && !(y === H - 1 && x < 2)) { sx += x; sy += y; n++; }
+      }
+      const cx = sx / n, cy = sy / n;
+      // The triangle's centroid sits a sixth of its length behind the nose's
+      // midpoint: nose at +size, tail at -size/2, so the mean x is 0 exactly.
+      const wantX = (cpu.x / P.aspect * 0.5 + 0.5) * W;
+      const wantY = (0.5 - cpu.y * 0.5) * H;
+      const errPx = Math.hypot(cx - wantX, cy - wantY);
+      const moved = Math.hypot(cpu.x, cpu.y) > 0.1;
+      const inside = Math.abs(cpu.x) < P.aspect - 0.2 && Math.abs(cpu.y) < 0.8;
+      push({ group: "Input", name: `a ship flown for ${FRAMES} frames lands where the equations say`, ok: n > 20 && errPx < 2.5 && moved && inside,
+             detail: `drawn at (${cx.toFixed(1)}, ${cy.toFixed(1)}), the CPU says (${wantX.toFixed(1)}, ${wantY.toFixed(1)}) — ${errPx.toFixed(2)} px apart after thrust, a left turn and a right turn · want <2.5 px (a 32-bit register)` }); }
+
+    // 4. The same keys, the same game, twice: a replay is exact.
+    { const W = 120, H = 80;
+      const run = () => {
+        const gph = createGraph(W, H); gph.stateKey = "selftest-ship-replay";
+        const ship = addNode(gph, "game.ship", {}, [null], { name: "ship" });
+        feedback(gph, ship, 0, ship);
+        gph.output = ship;
+        const kb = new Keyboard();
+        let out;
+        for (let f = 0; f < 40; f++) {
+          kb.clear(); if (f > 3) kb.press(KEY.up); if (f % 7 < 3) kb.press(KEY.left);
+          out = renderGraph(gph, {}, { keys: kb.texture(), reset: f === 0, time: 0 });
+        }
+        return px(out);
+      };
+      const a = run(), b = run();
+      let diff = 0;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) diff++;
+      push({ group: "Input", name: "a replay with the same keys is the same picture", ok: diff === 0,
+             detail: `${diff} bytes differ between two runs of 40 frames — the keyboard is data, so the game is a function of it` }); }
+
+    // 5. Life listens: space holds it still, R starts it over.
+    { const W = 24, H = 24;
+      const seed = document.createElement("canvas"); seed.width = W; seed.height = H;
+      const g2 = seed.getContext("2d"); g2.fillStyle = "#000"; g2.fillRect(0, 0, W, H);
+      g2.fillStyle = "#fff"; [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]].forEach(([x, y]) => g2.fillRect(x + 4, y + 4, 1, 1));
+      const gph = createGraph(W, H); gph.stateKey = "selftest-life-keys";
+      const s0 = addNode(gph, "source");
+      const life = addNode(gph, "sim.life", {}, [null, s0], { name: "life" });
+      feedback(gph, life, 0, life);
+      gph.output = life;
+      const kb = new Keyboard();
+      const seedPx = px(seed);
+      const same = (a, b) => { let d2 = 0; for (let i = 0; i < a.length; i += 4) if ((a[i] > 127) !== (b[i] > 127)) d2++; return d2; };
+      renderGraph(gph, { [s0]: seed }, { keys: kb.texture(), reset: true });        // frame 0: seed
+      const g1 = px(renderGraph(gph, { [s0]: seed }, { keys: kb.texture() }));     // one generation
+      kb.press(KEY.space); kb.tick();                                               // toggled: paused
+      const held1 = px(renderGraph(gph, { [s0]: seed }, { keys: kb.texture() }));
+      const held2 = px(renderGraph(gph, { [s0]: seed }, { keys: kb.texture() }));
+      kb.clear(); kb.press(KEY.r);                                                  // R this frame
+      const reseeded = px(renderGraph(gph, { [s0]: seed }, { keys: kb.texture() }));
+      const ok = same(g1, seedPx) > 0 && same(held1, g1) === 0 && same(held2, g1) === 0 && same(reseeded, seedPx) === 0;
+      push({ group: "Input", name: "Life holds still on space and starts over on R", ok,
+             detail: ok ? "one generation moved the glider; two frames under space changed nothing; R brought the seed back exactly"
+                        : `gen ${same(g1, seedPx)} · held ${same(held1, g1)},${same(held2, g1)} · reseed ${same(reseeded, seedPx)}` }); }
+
+    // 6. A reserved name survives fusion. input.keys after a grade fuses into
+    //    one draw, and the keyboard still reaches it by its own name.
+    { const W = 256, H = 3;
+      const gph = createGraph(W, H);
+      const k = addNode(gph, "input.keys", { lit: [1, 1, 1], unlit: [0, 0, 0] });
+      gph.output = addNode(gph, "adjust.exposure", { stops: [0] }, [k]);
+      const kb = new Keyboard(); kb.press(KEY.enter);
+      let drew = [];
+      const out = px(renderGraph(gph, {}, { keys: kb.texture(), onPasses: (ps) => { drew = ps; } }));
+      const lit = out[((H - 1) * W + KEY.enter) * 4] > 128;
+      push({ group: "Input", name: "u_keys keeps its name through fusion", ok: drew.length === 1 && lit,
+             detail: `${drew.length} draw, and column ${KEY.enter} is lit inside the fused program — the reserved name was not prefixed` }); }
+  } catch (e) {
+    push({ group: "Input", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on
@@ -1742,7 +1936,7 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
     // A node the app generates — a compiled title, a frozen look — is not a
     // library node and has nothing to document; the library is what this is
     // a promise about.
-    const generated = (id) => id.startsWith("you.") || id.startsWith("source.title.") || id.startsWith("fused.");
+    const generated = (id) => id.startsWith("you.") || id.startsWith("source.title.") || id.startsWith("fused.") || id.startsWith("test.");
     { const gaps = referenceGaps();
       const builtIn = gaps.withGaps.filter((d) => !generated(d.id));
       push({ group: "Cross-cutting", name: "every built-in node describes itself",

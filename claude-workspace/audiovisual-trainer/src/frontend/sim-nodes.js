@@ -14,28 +14,34 @@
 
 import { defineNode } from "./render-graph.js";
 
-defineNode(`// Persistence: what is there now, laid over what was there last frame, faded.
-// Motion trails, phosphor, a long exposure — wire in1 back to this node.
+defineNode(`// Persistence: this frame at full strength, over last frame faded. Motion
+// trails, phosphor, a long exposure — wire in1 back to this node. Straight
+// alpha throughout, like every compositing node here: fading is the alpha
+// going down, and "over" is the ordinary source-over.
 // @node feedback.trail
 // @module 07-shaders
 // @alpha
 uniform sampler2D in0;   // @help this frame
 uniform sampler2D in1;   // @help last frame — wire this node's own output back here
-uniform float decay;     // @range 0 1 @default 0.9 @help how much of last frame survives
+uniform float decay;     // @range 0 1 @default 0.9 @help how much of last frame's alpha survives
 
 vec4 fresh = texture2D(in0, uv);
 vec4 prev  = texture2D(in1, uv);
-mix(fresh, prev, decay)`);
+float fa = prev.a * decay;
+float a = fresh.a + fa * (1.0 - fresh.a);
+vec3 rgb = a > 0.0 ? (fresh.rgb * fresh.a + prev.rgb * fa * (1.0 - fresh.a)) / a : vec3(0.0);
+vec4(rgb, a)`);
 
 defineNode(`// Conway's Life. Every cell looks at its eight neighbours in last frame and
 // decides; the rule is three lines and the behaviour is not. Dead beyond the
-// edge. Frame 0 reads the seed instead.
+// edge. Frame 0 reads the seed instead — and so does R; space pauses.
 // @node sim.life
 // @module 07-shaders
 // @pass
 uniform sampler2D in0;     // @help last generation — wire this node's own output back here
 uniform vec2 in0_size;
 uniform sampler2D in1;     // @help the seed, read on frame 0: anything brighter than half is alive
+uniform sampler2D u_keys;
 
 float cell(vec2 o) {
   vec2 q = uv * in0_size + o;
@@ -43,8 +49,10 @@ float cell(vec2 o) {
   return step(0.5, texture2D(in0, q / in0_size).r);
 }
 float live;
-if (frame == 0) {
+if (frame == 0 || keyHit(u_keys, 82.0) > 0.5) {          // the first frame, or R
   live = step(0.5, texture2D(in1, uv).r);
+} else if (keyToggle(u_keys, 32.0) > 0.5) {              // space: hold still
+  live = cell(vec2(0.0));
 } else {
   float n = cell(vec2(-1.0, -1.0)) + cell(vec2(0.0, -1.0)) + cell(vec2(1.0, -1.0))
           + cell(vec2(-1.0,  0.0))                          + cell(vec2(1.0,  0.0))
@@ -63,7 +71,8 @@ defineNode(`// Gray–Scott reaction–diffusion: two chemicals, one eats the ot
 // @pass
 uniform sampler2D in0;   // @help last state — wire this node's own output back here
 uniform vec2 in0_size;
-uniform sampler2D in1;   // @help the seed, read on frame 0
+uniform sampler2D in1;   // @help the seed, read on frame 0, and again when R is pressed
+uniform sampler2D u_keys;
 uniform float feed;      // @range 0.01 0.1 @default 0.055 @help how fast u is replenished
 uniform float kill;      // @range 0.04 0.07 @default 0.062 @help how fast v is removed
 uniform float dU;        // @range 0 1 @default 1.0 @help diffusion of u
@@ -77,7 +86,7 @@ vec2 at(vec2 o) {
   return texture2D(in0, q / in0_size).rg;
 }
 vec2 s;
-if (frame == 0) {
+if (frame == 0 || keyHit(u_keys, 82.0) > 0.5) {
   s = vec2(1.0, step(0.5, texture2D(in1, uv).r));
 } else {
   vec2 c = at(vec2(0.0));

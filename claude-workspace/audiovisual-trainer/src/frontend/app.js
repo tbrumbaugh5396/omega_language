@@ -358,6 +358,9 @@ function initMenu() {
         } catch (e2) { toast(e2.message); }
       };
       input.click();
+    } else if (act === "playground") {
+      const { playgroundDialog } = await import("./playground.js");
+      playgroundDialog();
     } else if (act === "selftest") {
       const { selfTestPanel } = await import("./selftest.js");
       modal(el("h2", {}, "Shader self-test"),

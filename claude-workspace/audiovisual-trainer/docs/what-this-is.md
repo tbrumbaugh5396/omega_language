@@ -59,8 +59,9 @@ Underneath them, **two compilers sharing one discipline**:
 And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
-reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, and
-a **156-check self-test across 22 groups that runs inside the app**.
+reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
+keyboard as a texture, and a **163-check self-test across 23 groups that runs
+inside the app**.
 
 ---
 
@@ -114,6 +115,7 @@ behind it is a claim.
 | the JavaScript engine, 19 parameter expressions | **exact**, worst disagreement 0.0 |
 | Conway's Life, a glider, 12 generations, vs the CPU rule | **0 cells differ** |
 | Gray–Scott, 30 steps in half float, vs the CPU stencil | **0.62/255** |
+| a ship flown 80 frames by script, vs the CPU integration of its equations | **0.72 px** |
 
 Every number above is what the self-test reports on this machine today, not
 what it reported when the feature landed — the two differ occasionally, because
@@ -201,6 +203,8 @@ Worth naming, because the combination is the claim and the parts are not.
   `dsp-graph.js` is 431 lines; Faust is a research language with a decade of
   optimisation behind it. This is a teaching-sized thing that shares the shape.
 - **Non-destructive layer effects** — Photoshop smart filters, 2007.
+- **The keyboard as a texture** — Shadertoy's `iKeyboard`, and the whole
+  tradition of games kept in a buffer's pixels. Copied on purpose.
 - **Feedback buffers** — Shadertoy's Buffer A reading itself, every
   ping-pong sim since the 1990s. The only claim here is that it is a marked
   edge in a typed graph rather than a convention, and that it is measured.
@@ -243,6 +247,9 @@ its course lesson are the same text.
 - **Simulate, in the graph.** A node reads what it drew last frame; a seed
   field tree starts it; reset is forgetting. One draw per generation, and the
   ejected shader says which input is memory.
+- **Play it.** The keyboard arrives as a texture, `u_keys`; a ship keeps its
+  state in one texel of its own last frame and flies where its equations say
+  to 0.72 px; the same keys twice are the same picture, byte for byte.
 - **Compose geometry, not pictures of geometry.** Union, subtract, offset,
   shell, repeat and a smoothing radius between any two shapes — as wires, at
   full precision, ending in one draw. A glow is a falloff in distance, which

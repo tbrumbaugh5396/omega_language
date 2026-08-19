@@ -9,7 +9,7 @@
 //
 // This is the one place that knows what "a name a sketch declares" means.
 
-import { stripComments } from "./shader-uniforms.js";
+import { stripComments, RESERVED } from "./shader-uniforms.js";
 
 /**
  * Every name a sketch declares at file scope: uniforms, consts, structs,
@@ -36,6 +36,9 @@ export function declaredNames(source, parts) {
     if (m) names.add(m[1]);
   }
   names.delete("main");
+  // The host binds these by name in every pass. Prefixed, they would be
+  // declared and never set — a keyboard nobody is typing on.
+  for (const r of RESERVED) names.delete(r);
   return names;
 }
 

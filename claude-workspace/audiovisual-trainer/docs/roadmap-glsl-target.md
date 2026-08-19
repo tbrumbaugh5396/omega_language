@@ -1104,6 +1104,65 @@ has MRT — two targets, velocity and dye — and the graph does not yet; a flui
 wants it. Nothing in a graph reads the keyboard, so a simulation can be
 watched but not played; that is the next thing between this and a game.
 
+### Phase 11 — Input: a simulation you can play *(M)* — **shipped**
+
+A shader cannot be handed an event. It can be handed a picture, and a picture
+of the keyboard is 256 columns by 3 rows — one column per key code, and a row
+each for *held*, *went down this frame* and *toggled*. That is Shadertoy's
+`iKeyboard`, copied rather than improved on so that every sketch written
+against it reads here unchanged. It arrives as `u_keys`, a reserved uniform
+the host binds in every pass that declares it, and three prelude helpers read
+it: `keyDown(u_keys, 39.0)`, `keyHit`, `keyToggle`.
+
+`keyboard.js` owns the state and the canvas. A test presses a key by calling
+`press(39)` and gets the same frame a person would — which is what makes a
+game testable, and a replay exact.
+
+**`game.ship`** is the proof: arrows turn and thrust, it wraps, and its
+position, velocity and heading live in the texel at the bottom-left of its
+own last frame — every other texel reads that one and draws. One texture
+carries the game and the picture of the game, which is how Shadertoy games
+have always done it. `input.keys` draws the keyboard texture itself, for
+seeing that the host is really feeding keys. Life and reaction–diffusion now
+listen too: space holds Life still, R reseeds both.
+
+**The playground** (account menu → *Playground*) is the loop that makes "can
+be played" a thing you do: a canvas, a Keyboard on the page, rAF, the graph
+every frame with memory left alone between. Four demos, one tab each.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| a ship flown 80 frames by script, vs the CPU integration of the same equations | **0.72 px** apart |
+| the same keys, the same game, twice | **0 bytes differ** |
+| the keyboard texture: held / this frame / toggled through press, tick, release | **exact** |
+| `input.keys` lit in the pressed column, all three rows, no other | **exact** |
+| Life under space, two frames | **0 cells changed**; under R, the seed back **exactly** |
+| `u_keys` through a fused program | **still bound by name** |
+
+**Two things it turned up.** The ship's register drifted: 3 px off its own
+equations after 80 frames, consistently, in half float. Measured directly,
+this GPU's float→half conversion loses about **0.5% over thirty
+accumulations** — not rounding noise, a bias — so `@precision float` in a
+node's header now asks for a 32-bit memory, `game.ship` says it, and a check
+runs the same accumulation in both and reports both numbers (half **0.53%**
+off, float **0.012%**). And `codeOf` returned 0 for a real `ArrowLeft` that
+arrived with a `key` and no `keyCode` — which is most of them now — so names
+map to codes too.
+
+**The trail was wrong.** `mix(fresh, prev, decay)` made this frame only 14%
+present at decay 0.86, and a ship drawn through it vanished under its own
+threshold. A trail is this frame at full strength *over* last frame faded;
+fading is the alpha going down, not the colour darkening. Its check now asks
+for exactly that: one frame of ink, twenty of nothing, the ghost's alpha is
+0.9²⁰ to **0.00/255** and its red is still the ink's.
+
+*Left:* no mouse in the graph (`u_mouse` is bound, but the playground does not
+feed it), no gamepad, no sound on an event — the live audio path is the gap
+between "a simulation you can play" and "a game", and it is an audio-roadmap
+item.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1184,6 +1243,7 @@ watched but not played; that is the next thing between this and a game.
 | 8.1 | Field wires: a port that carries a function — **shipped** | M | 1.x | geometry that composes |
 | 9.1 | Parameter expressions and references — **shipped** | M | 1.x | a graph that holds relationships |
 | 10.1 | Feedback: a wire that reads last frame — **shipped** | M | 1.x | simulation in the graph |
+| 11.1 | Input: the keyboard as a texture, a ship you fly — **shipped** | M | 10.1 | a simulation you can play |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
