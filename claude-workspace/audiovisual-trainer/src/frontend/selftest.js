@@ -39,6 +39,7 @@ import { graphStats } from "./graph-compile.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
 import { createDspGraph, addDspNode, defineDspNode, allocationReport, topoDsp, DSP_NODES } from "./dsp-graph.js";
 import { installGraph, sourceFor } from "./dsp-runtime.js";
+import { renderSong, patternToNotes, allocateVoices, noteHz, toWav } from "./dsp-song.js";
 import { fftMag } from "./engine-audio.js";
 import { freezeEffects } from "./canvas-graph.js";
 import { registerNode, withNodeHeader, nodeIdFor, keepVersion, versionSummary,
@@ -1619,6 +1620,111 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
                  + "anything that would allocate in the loop" }); }
   } catch (e) {
     push({ group: "Audio graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // A song: instruments as graphs, notes scheduled onto voices, automation
+  // from the same evaluator the video timeline uses, and a bounce that is the
+  // same file twice.
+  try {
+    const SR = 48000;
+    const instrument = () => {
+      const g = createDspGraph();
+      const note = addDspNode(g, "voice.note", {});
+      g.output = addDspNode(g, "osc.sineHz",
+        { inputs: { hz: [note, "hz"], gate: [note, "gate"] }, params: { amp: 0.4 } });
+      return { g, note };
+    };
+
+    // The bar this phase sets.
+    { const { g, note } = instrument();
+      const song = { graph: g, noteNode: note,
+        notes: patternToNotes([[60], [64], [67], [72]], { bpm: 120, stepsPerBeat: 4 }) };
+      const r1 = await renderSong(song, { sampleRate: SR, voices: 4 });
+      const r2 = await renderSong(song, { sampleRate: SR, voices: 4 });
+      const a = r1.buffer.getChannelData(0), b = r2.buffer.getChannelData(0);
+      let same = a.length === b.length;
+      for (let i = 0; same && i < a.length; i++) if (a[i] !== b[i]) same = false;
+      push({ group: "Audio song", name: "a bounce is sample-exact, and the same file twice",
+             ok: same && r1.realtimeRatio > 1,
+             detail: `${r1.seconds.toFixed(2)} s rendered in ${r1.ms.toFixed(0)} ms — `
+               + `${r1.realtimeRatio.toFixed(1)}× faster than real time — and the two renders are `
+               + `${same ? "identical, sample for sample" : "NOT identical"} · nothing in the graph has a `
+               + "clock of its own, so there is nothing left to vary" }); }
+
+    // The notes are the notes.
+    { const { g, note } = instrument();
+      const song = { graph: g, noteNode: note,
+        notes: patternToNotes([[60], [64], [67], [72]], { bpm: 120, stepsPerBeat: 4, gate: 0.9 }) };
+      const { buffer } = await renderSong(song, { sampleRate: SR, voices: 4 });
+      const ch = buffer.getChannelData(0);
+      const N = 2048, bin = SR / N;
+      const errs = song.notes.map((n) => {
+        const at = Math.round((n.t + 0.01) * SR);
+        const mag = fftMag(ch.subarray(at, at + N));
+        let pk = 1;
+        for (let i = 2; i < mag.length; i++) if (mag[i] > mag[pk]) pk = i;
+        return Math.abs(pk * bin - n.hz);
+      });
+      const worst = Math.max(...errs);
+      push({ group: "Audio song", name: "each step sounds the note it was given", ok: worst < bin,
+             detail: `MIDI 60, 64, 67, 72 at 120 bpm: every one within ${worst.toFixed(1)} Hz of its `
+               + `pitch, against an FFT bin of ${bin.toFixed(1)} Hz — which is the measurement's own limit` }); }
+
+    // Automation, from the evaluator the video timeline uses.
+    { const g = createDspGraph();
+      const n2 = addDspNode(g, "noise.white", { params: { amp: 0.5 } });
+      const lp = addDspNode(g, "filter.svf", { inputs: { x: [n2, "y"] }, params: { freq: 8000, q: 0.707 } });
+      g.output = lp;
+      const song = { graph: g, notes: [],
+        automation: [{ node: lp, param: "freq",
+                       track: [{ t: 0, v: 8000, ease: "linear" }, { t: 1, v: 300, ease: "linear" }] }] };
+      const r = await renderSong(song, { sampleRate: SR, seconds: 1.2, voices: 1 });
+      const ch = r.buffer.getChannelData(0);
+      const brightness = (at) => {
+        const mag = fftMag(ch.subarray(Math.round(at * SR), Math.round(at * SR) + 4096));
+        let hi = 0, lo = 0;
+        for (let i = 1; i < mag.length; i++) {
+          if (i * SR / 4096 > 4000) hi += mag[i]; else lo += mag[i];
+        }
+        return hi / (lo + 1e-9);
+      };
+      const early = brightness(0.1), late = brightness(0.9);
+      push({ group: "Audio song", name: "automation is the video timeline's keyframes, on a filter",
+             ok: early > late * 5,
+             detail: `a cutoff keyed 8000 → 300 Hz over a second: the energy above 4 kHz falls from `
+               + `${early.toFixed(2)} to ${late.toFixed(3)} of the energy below it · the evaluator is `
+               + "`evalTrack` from video-graph.js, imported, not reimplemented — a parameter moving over "
+               + "time is the same problem whichever studio asks" }); }
+
+    // Voice stealing, which has to be decided rather than left to luck.
+    { const notes = [];
+      for (let k = 0; k < 6; k++) notes.push({ t: k * 0.01, dur: 1, midi: 60 + k, hz: noteHz(60 + k) });
+      const placed = allocateVoices(notes, 3);
+      const stolen = placed.filter((p2) => p2.stolen);
+      const distinct = new Set(placed.slice(0, 3).map((p2) => p2.voice)).size;
+      push({ group: "Audio song", name: "more notes than voices steals the oldest, and says which",
+             ok: distinct === 3 && stolen.length === 3,
+             detail: `six notes into three voices: the first three take one each, and `
+               + `${stolen.length} of the rest steal — the oldest sounding voice, which is the one you `
+               + "are least likely to still be listening to" }); }
+
+    // The file that leaves the browser.
+    { const { g, note } = instrument();
+      const song = { graph: g, noteNode: note, notes: patternToNotes([[69]], { bpm: 120 }) };
+      const { buffer } = await renderSong(song, { sampleRate: SR, voices: 2 });
+      const wav = toWav(buffer);
+      const head = new DataView(await wav.slice(0, 44).arrayBuffer());
+      const tag = (at) => String.fromCharCode(head.getUint8(at), head.getUint8(at + 1),
+                                              head.getUint8(at + 2), head.getUint8(at + 3));
+      const ok = tag(0) === "RIFF" && tag(8) === "WAVE" && tag(36) === "data"
+        && head.getUint32(24, true) === SR && head.getUint16(34, true) === 16
+        && wav.size === 44 + buffer.length * 2;
+      push({ group: "Audio song", name: "the bounce writes a WAV a tool will open", ok,
+             detail: `${(wav.size / 1024).toFixed(0)} KB: RIFF/WAVE, ${head.getUint32(24, true)} Hz, `
+               + `${head.getUint16(34, true)}-bit, and the data chunk is exactly the ${buffer.length} `
+               + "samples rendered" }); }
+  } catch (e) {
+    push({ group: "Audio song", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

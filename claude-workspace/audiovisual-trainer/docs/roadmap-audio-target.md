@@ -286,7 +286,7 @@ teaches people to ignore failures, which costs more than the check is worth —
 so `randomise` now takes a generator and the self-test seeds it. The suite
 gives the same answer every time it is run.
 
-### Phase D — Music on the graph *(L)*
+### Phase D — Music on the graph *(L)* — **shipped**
 
 - Instruments become graphs; the step sequencer drives note events into them.
 - Per-track effect chains, the same node types.
@@ -296,6 +296,42 @@ gives the same answer every time it is run.
 - **Offline render** must be sample-exact and faster than real time, and must
   produce *the same file twice* — the audio equivalent of the frame-exact
   export, and the same test.
+
+**Met.** `dsp-song.js` holds the song model and the bounce. The done-when
+reads: **0.97 s rendered in 106 ms — 9.2× faster than real time — and the two
+renders identical, sample for sample.** Nothing in the graph has a clock of
+its own, so there is nothing left to vary.
+
+Two decisions carry it:
+
+- **Notes are scheduled, not messaged.** Every per-voice value became an
+  AudioParam, so a note is `setValueAtTime(hz, t)`: sample-accurate, and the
+  same whether it plays live or renders offline. A port message cannot do
+  that — in an offline render it arrives *after* the render has finished,
+  which is how the first version of this rendered silence.
+- **Automation is the visual roadmap's keyframes, imported rather than
+  reimplemented.** `evalTrack` from `video-graph.js`, the same function the
+  video timeline evaluates a keyed grade with. A parameter moving over time is
+  the same problem whichever studio asks, and two implementations would mean
+  two answers to "what is it at 1.4 seconds". A cutoff keyed 8000 → 300 Hz
+  drops the energy above 4 kHz from 1.38 to 0.080 of the energy below it.
+
+Also in: **voice allocation** with the ordinary rule stated plainly — the
+oldest sounding voice is stolen, because it is the one you are least likely to
+still be listening to — and a **WAV writer**, checked by reading its own header
+back. Every step sounds the note it was given, within 7.6 Hz against an FFT
+bin of 23.4.
+
+**The thread from the sequencer exists.** The Music studio has a
+**Bounce (graph)** button: the active pattern, rendered through a compiled
+instrument graph — voice → sine → state-variable filter — and downloaded.
+Measured on an eight-note pattern: 2.5 s in 706 ms.
+
+**Left in Phase D:** the studio still plays through its original sampled
+synth; the graph engine is a bounce beside it rather than the thing you hear
+when you press play. Per-track effect chains and an automation *editor* are
+model-level only — the model takes them (a track is a graph, and a track's
+automation is a keyframe list), and there is no UI for either yet.
 
 ### Phase E — What you can see *(M)*
 

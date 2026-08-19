@@ -53,6 +53,12 @@ export function processorSource(compiled, name, init = {}) {
   }).join("\n");
   const voiceBind = compiled.voiceArrays.map((v) =>
     `    const VP_${v.name} = this.VP_${v.name};`).join("\n");
+  // Per-voice parameters are read into their array once a block. k-rate, so
+  // one number each, and the loop then costs an array read rather than a
+  // parameter lookup.
+  const voiceRead = compiled.voiceArrays.flatMap((v) =>
+    Array.from({ length: v.voices }, (_, k) =>
+      `    VP_${v.name}[${k}] = parameters.${v.name}_v${k}[0];`)).join("\n");
   const bufBase = compiled.buffers.map((b) =>
     `        const bBase_${b.name} = v * ${b.size};`).join("\n");
   const bufBind = compiled.buffers.map((b) =>
@@ -110,6 +116,7 @@ ${math}
     const TAU = 6.283185307179586;
     const PI = 3.141592653589793;
 ${params}
+${voiceRead}
     // Once a block: coefficients, and anything else that does not change
     // between samples. This is what @control and // @block are for.
 ${compiled.coefDecls}
@@ -169,6 +176,16 @@ export function innerLoopOf(code) {
 export function sourceFor(graph, opts = {}) {
   const compiled = compileDspGraph(graph, opts);
   const init = opts.voiceInit || {};
+  // Per-voice values are parameters now, so an initial value is a parameter
+  // *default* — setting the array in the constructor would be overwritten by
+  // the first block's parameter read, which is exactly the bug this fixes.
+  for (const [base, values] of Object.entries(init)) {
+    if (!Array.isArray(values)) continue;
+    values.forEach((v, k) => {
+      const d = compiled.params.find((pp) => pp.name === `${base}_v${k}`);
+      if (d && Number.isFinite(v)) d.defaultValue = v;
+    });
+  }
   const name = nameFor(compiled.loop + compiled.outExpr + JSON.stringify(init) + compiled.voices);
   const code = processorSource(compiled, name, init);
   const findings = allocationReport(innerLoopOf(code));
@@ -199,9 +216,14 @@ export async function installGraph(ctx, graph, opts = {}) {
   return {
     node, name, code, meter, compiled,
     param: (nodeId, uniform) => node.parameters.get(`${nodeId}_${uniform}`),
-    /** Set one per-voice value — a note's pitch, its gate. */
-    setVoice: (voice, nodeId, name, value) =>
-      node.port.postMessage({ voice, name: `${nodeId}_${name}`, value }),
+    /**
+     * Set one per-voice value at a time — a note's pitch, its gate. It is an
+     * AudioParam, so this is sample-accurate and renders offline identically.
+     */
+    setVoice: (voice, nodeId, name, value, when = 0) => {
+      const pm = node.parameters.get(`${nodeId}_${name}_v${voice}`);
+      if (pm) pm.setValueAtTime(value, when);
+    },
     voices: compiled.voices,
     reset: () => node.port.postMessage({ reset: true }),
     stop: () => node.port.postMessage({ stop: true }),

@@ -221,7 +221,10 @@ const MATH = ["sin", "cos", "tan", "abs", "min", "max", "sqrt", "exp", "log",
  * pointless when both are per-sample.
  */
 export function compileDspGraph(graph, { voices = 1 } = {}) {
-  const V = Math.max(1, Math.min(64, voices | 0));
+  // Sixteen is the cap because every per-voice value becomes an AudioParam,
+  // and a param per voice is what makes a note schedulable to the sample —
+  // which is what an offline render needs and a port message cannot give.
+  const V = Math.max(1, Math.min(16, voices | 0));
   const order = topoDsp(graph);
   const params = [];                 // AudioParam descriptors
   const stateSlots = [];             // one entry per state variable
@@ -279,6 +282,13 @@ export function compileDspGraph(graph, { voices = 1 } = {}) {
       buffers.push({ name: bufName, size, mask: size - 1, idxSlot, voices: V });
     }
     for (const pv of t.perVoice) {
+      // One parameter per voice: `n1_pitch_v0`, `n1_pitch_v1`, … Scheduling a
+      // note is then setValueAtTime, which is sample-accurate, deterministic,
+      // and identical whether it plays live or renders offline.
+      for (let v = 0; v < V; v++) {
+        params.push({ name: `${px}${pv.name}_v${v}`, defaultValue: pv.value,
+                      minValue: -1e6, maxValue: 1e6, automationRate: "k-rate" });
+      }
       voiceArrays.push({ name: `${px}${pv.name}`, node: n.id, port: pv.name,
                          value: pv.value, voices: V });
     }

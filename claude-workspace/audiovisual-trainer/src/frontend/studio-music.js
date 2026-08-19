@@ -884,6 +884,46 @@ export async function musicEditor(host) {
     }
   }
 
+  /**
+   * The pattern, rendered through the compiled DSP graph rather than the
+   * built-in synth: notes scheduled onto voices, the whole thing bounced
+   * offline. It is the same file every time, which the sampled synth cannot
+   * promise, and it is the thread from this sequencer to the audio roadmap's
+   * engine.
+   */
+  async function bounceGraph() {
+    const pat = patternById(activePattern);
+    if (!pat || !pat.notes.length) { toast("This pattern has no notes yet."); return; }
+    try {
+      const { createDspGraph, addDspNode } = await import("./dsp-graph.js");
+      const { renderSong, noteHz, toWav } = await import("./dsp-song.js");
+      const g = createDspGraph();
+      const note = addDspNode(g, "voice.note", {});
+      const osc = addDspNode(g, "osc.sineHz",
+        { inputs: { hz: [note, "hz"], gate: [note, "gate"] }, params: { amp: 0.25 } });
+      const lp = addDspNode(g, "filter.svf",
+        { inputs: { x: [osc, "y"] }, params: { freq: 4000, q: 0.8 } });
+      g.output = lp;
+      const sd = secPerStep();
+      const notes = pat.notes
+        .filter((n) => Number.isFinite(n.step) && Number.isFinite(n.pitch))
+        .map((n) => ({ t: n.step * sd, dur: Math.max(0.05, (n.len || 1) * sd),
+                       midi: n.pitch, hz: noteHz(n.pitch) }));
+      toast(`Rendering ${notes.length} notes…`);
+      const r = await renderSong({ graph: g, noteNode: note, notes },
+                                 { sampleRate: 48000, voices: 8 });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(toWav(r.buffer));
+      a.download = `${host.doc.name || "pattern"}-graph.wav`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast(`Bounced ${r.seconds.toFixed(1)}s in ${r.ms.toFixed(0)}ms — `
+        + `${r.realtimeRatio.toFixed(1)}× faster than real time, and the same file every time.`);
+    } catch (e) {
+      toast(`The graph bounce failed: ${String(e.message).split("\n")[0]}`);
+    }
+  }
+
   function exportWav() {
     if (!rendered) { toast("Nothing rendered yet — press play once"); return; }
     const Lc = rendered.getChannelData(0);
@@ -1029,6 +1069,8 @@ export async function musicEditor(host) {
             oninput: (e) => { barW = +e.target.value; drawArrange(); } })),
         el("button", { onclick: () => audioInput.click() }, "Import audio"),
         el("button", { onclick: exportWav }, "WAV"),
+        el("button.ghost", { title: "render this pattern through the compiled DSP graph",
+          onclick: bounceGraph }, "Bounce (graph)"),
         audioInput,
         aiButton("Pattern…", {
           task: "music",
