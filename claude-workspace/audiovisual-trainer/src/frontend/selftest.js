@@ -28,7 +28,9 @@ import { GRAPH_FILTERS } from "./filter-nodes.js";
 import { planPasses, fuseStats, fusibleReason } from "./graph-fuse.js";
 import { documentGraph, applyEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
 import { BLEND_ORDER } from "./composite-nodes.js";
-import { clipAt, evalTrack, frameGraph, gradeEffects, putKey } from "./video-graph.js";
+import { clipAt, evalTrack, frameGraph, gradeEffects, putKey, sourceTimeAt } from "./video-graph.js";
+import { parseCube } from "./lut-cube.js";
+import { drawWaveform, drawHistogram, frameStats } from "./scopes.js";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -765,6 +767,69 @@ export async function runSelfTest(report = () => {}) {
       push({ group: "Video on the graph", name: "a Generate sim runs as a clip effect, and repeats", ok: same && differs > 500,
              detail: same ? `${preset.steps} steps a frame, seeded from the clip · ${differs} pixels changed by it · identical when run again`
                           : "the same frame came out differently the second time" }); }
+
+    // A LUT: an identity cube must change nothing, and a known one must do
+    // exactly what it says.
+    { const n = 17;
+      const idLines = [`LUT_3D_SIZE ${n}`];
+      const swapLines = [`TITLE "swap"`, `LUT_3D_SIZE ${n}`];
+      for (let b = 0; b < n; b++) for (let g = 0; g < n; g++) for (let r = 0; r < n; r++) {
+        const R = r / (n - 1), G = g / (n - 1), B = b / (n - 1);
+        idLines.push(`${R} ${G} ${B}`);
+        swapLines.push(`${B} ${R} ${G}`);          // rgb -> bgr rotated, an unmistakable change
+      }
+      const idc = parseCube(idLines.join("\n"));
+      const swap = parseCube(swapLines.join("\n"));
+      const lutFx = (lut) => ({ id: "l", kind: "lut", bypass: false, lut, params: { amount: 1 } });
+      const base = shotA.getContext("2d").getImageData(0, 0, W, H).data;
+      const same = applyEffects(shotA, [lutFx(idc)]).getContext("2d").getImageData(0, 0, W, H).data;
+      const rot = applyEffects(shotA, [lutFx(swap)]).getContext("2d").getImageData(0, 0, W, H).data;
+      const rIdent = compare(same, base, W, H, { thresh: 6 });
+      // the rotation, done in JS on the same pixels
+      const want = new Uint8ClampedArray(base);
+      for (let i = 0; i < want.length; i += 4) {
+        want[i] = base[i + 2]; want[i + 1] = base[i]; want[i + 2] = base[i + 1];
+      }
+      const rSwap = compare(rot, want, W, H, { thresh: 6 });
+      push({ group: "Video on the graph", name: `a ${n}³ .cube: identity changes nothing, a known cube does what it says`,
+             ok: rIdent.mean < 1.5 && rSwap.mean < 3.0,
+             detail: `identity ${rIdent.mean}/255 · a channel rotation ${rSwap.mean}/255 against the same thing in JS ` +
+                     `(a ${n}-cube quantises, so a little is expected) · want <1.5 and <3.0` }); }
+
+    // Speed ramps: a constant multiplies, a ramp integrates.
+    { const flat = { in: 2, speed: 2, dur: 4 };
+      const constOk = Math.abs(sourceTimeAt(flat, 3) - 8) < 1e-6;
+      // 1x to 3x linearly over 4s covers the mean of the ramp, not either end
+      const ramp = { in: 0, dur: 4, keys: { speed: [{ t: 0, v: 1, ease: "linear" }, { t: 4, v: 3, ease: "linear" }] } };
+      const at4 = sourceTimeAt(ramp, 4);
+      const rampOk = Math.abs(at4 - 8) < 0.02;
+      const monotone = sourceTimeAt(ramp, 1) < sourceTimeAt(ramp, 2) && sourceTimeAt(ramp, 2) < at4;
+      push({ group: "Video on the graph", name: "speed: a constant multiplies, a ramp integrates", ok: constOk && rampOk && monotone,
+             detail: `2× from 2s reaches ${sourceTimeAt(flat, 3).toFixed(3)}s (want 8) · a 1×→3× ramp over 4s covers ` +
+                     `${at4.toFixed(3)}s of source (want 8, the mean rate — not 4 and not 12)` }); }
+
+    // The scopes read the frame, so they have to agree with what is in it.
+    { const flat = document.createElement("canvas"); flat.width = 64; flat.height = 64;
+      const fg2 = flat.getContext("2d");
+      fg2.fillStyle = "#000"; fg2.fillRect(0, 0, 64, 32);
+      fg2.fillStyle = "#fff"; fg2.fillRect(0, 32, 64, 32);
+      const img = fg2.getImageData(0, 0, 64, 64);
+      const st = frameStats(img);
+      const wave = document.createElement("canvas"); wave.width = 120; wave.height = 60;
+      const hist = document.createElement("canvas"); hist.width = 120; hist.height = 60;
+      drawWaveform(img, wave); drawHistogram(img, hist);
+      const wd = wave.getContext("2d").getImageData(0, 0, 120, 60).data;
+      // half black and half white: a trace at the very top and the very bottom, nothing between
+      let top = 0, mid = 0, bot = 0;
+      for (let x = 0; x < 120; x++) {
+        if (wd[(0 * 120 + x) * 4 + 1] > 40) top++;
+        if (wd[(30 * 120 + x) * 4 + 1] > 40) mid++;
+        if (wd[(59 * 120 + x) * 4 + 1] > 40) bot++;
+      }
+      const ok = Math.abs(st.mean - 0.5) < 0.02 && st.crushed > 0.45 && st.clipped > 0.45 && top > 100 && bot > 100 && mid === 0;
+      push({ group: "Video on the graph", name: "the scopes measure the frame they are given", ok,
+             detail: `half black, half white: mean ${(st.mean * 100).toFixed(0)} IRE, ${(st.crushed * 100).toFixed(0)}% crushed, ` +
+                     `${(st.clipped * 100).toFixed(0)}% clipped · the waveform has ${top} columns at the top, ${bot} at the bottom, ${mid} in the middle` }); }
 
     // The transition node at its two ends is the two clips, exactly.
     { const two = (progress) => {

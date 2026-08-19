@@ -38,8 +38,60 @@ export function curveFromSliders(v) {
   return { points: [[0, 0], [0.25, 0.25 + sh * 0.25], [0.5, 0.5 + mi * 0.25], [0.75, 0.75 + hi * 0.25], [1, 1]] };
 }
 
-/** Add one effect to a graph, on top of `input`. Returns the new output id. */
-export function effectNode(graph, input, eff) {
+// A .cube parsed once and kept: a 33-cube is a hundred thousand bytes, and
+// decoding it on every frame would be silly.
+const LUT_CACHE = new Map();
+
+/**
+ * A LUT effect's tile sheet as a canvas: the cube's slices laid side by side,
+ * n·n wide and n tall, which is what the node samples. The bytes travel in the
+ * document as base64, so a graded look is part of the file rather than a
+ * reference to something on disk.
+ */
+export function lutCanvas(lut) {
+  const key = lut.data;
+  const hit = LUT_CACHE.get(key);
+  if (hit) return hit;
+  const n = lut.size | 0;
+  const bin = atob(lut.data);
+  const c = document.createElement("canvas");
+  c.width = n * n; c.height = n;
+  const img = new ImageData(n * n, n);
+  for (let b = 0; b < n; b++) {
+    for (let g = 0; g < n; g++) {
+      for (let r = 0; r < n; r++) {
+        const si = ((b * n + g) * n + r) * 3;
+        // Rows go in upside down: the uploader flips the y axis, as it must
+        // for a picture, and green is this sheet's y axis.
+        const di = (((n - 1 - g) * (n * n)) + (b * n + r)) * 4;
+        img.data[di] = bin.charCodeAt(si);
+        img.data[di + 1] = bin.charCodeAt(si + 1);
+        img.data[di + 2] = bin.charCodeAt(si + 2);
+        img.data[di + 3] = 255;
+      }
+    }
+  }
+  c.getContext("2d").putImageData(img, 0, 0);
+  LUT_CACHE.set(key, c);
+  if (LUT_CACHE.size > 8) LUT_CACHE.delete(LUT_CACHE.keys().next().value);
+  return c;
+}
+
+/**
+ * Add one effect to a graph, on top of `input`. Returns the new output id.
+ * `sources` is the caller's source map: an effect that carries its own
+ * texture — a LUT — registers it there rather than inventing new plumbing.
+ */
+export function effectNode(graph, input, eff, sources = null) {
+  if (eff.kind === "lut") {
+    if (!sources) throw new Error("a LUT effect needs somewhere to put its texture");
+    const lid = addNode(graph, "source");
+    sources[lid] = lutCanvas(eff.lut);
+    const dom = eff.lut.domain || { min: [0, 0, 0], max: [1, 1, 1] };
+    return addNode(graph, "filter.lut3d", {
+      size: [eff.lut.size], amount: [first(eff.params && eff.params.amount, 1)],
+      dmin: dom.min, dmax: dom.max }, [input, lid]);
+  }
   if (eff.kind === "graph") {
     const gf = graphFilter(eff.ref);
     if (!gf || !gf.build) throw new Error(`no graph filter "${eff.ref}"`);
@@ -54,10 +106,11 @@ export function effectNode(graph, input, eff) {
   throw new Error(`${eff.kind} is not a graph effect`);
 }
 
-const isGraphKind = (e) => e.kind === "graph" || e.kind === "node";
+const isGraphKind = (e) => e.kind === "graph" || e.kind === "node" || e.kind === "lut";
 
 /** One non-graph effect, on the CPU or through a sketch. */
 function applyOther(canvas, eff) {
+  if (eff.kind === "lut") return `LUT — ${eff.name || "cube"}`;
   if (eff.kind === "cpu") {
     const f = I.FILTERS.find((x) => x.id === eff.ref);
     if (!f) throw new Error(`no filter "${eff.ref}"`);
@@ -87,10 +140,11 @@ export function applyEffects(base, effects) {
     // sees across the boundary between one filter and the next.
     const graph = createGraph(cur.width, cur.height);
     const src = addNode(graph, "source");
+    const sources = { [src]: cur };
     let last = src;
-    while (i < list.length && isGraphKind(list[i])) { last = effectNode(graph, last, list[i]); i++; }
+    while (i < list.length && isGraphKind(list[i])) { last = effectNode(graph, last, list[i], sources); i++; }
     graph.output = last;
-    cur = renderGraph(graph, { [src]: cur });
+    cur = renderGraph(graph, sources);
   }
   return cur;
 }
@@ -104,7 +158,8 @@ export function effectCost(effects) {
     const graph = createGraph(64, 64);
     const src = addNode(graph, "source");
     let last = src;
-    while (i < list.length && isGraphKind(list[i])) { last = effectNode(graph, last, list[i]); i++; }
+    const sources = {};
+    while (i < list.length && isGraphKind(list[i])) { last = effectNode(graph, last, list[i], sources); i++; }
     graph.output = last;
     const st = fuseStats(graph);
     draws += st.after; nodes += st.before;
@@ -126,7 +181,8 @@ export function ejectEffects(effects, w, h) {
     const src = addNode(graph, "source");
     let last = src;
     const names = [];
-    while (i < list.length && isGraphKind(list[i])) { names.push(effectLabel(list[i])); last = effectNode(graph, last, list[i]); i++; }
+    const sources = {};
+    while (i < list.length && isGraphKind(list[i])) { names.push(effectLabel(list[i])); last = effectNode(graph, last, list[i], sources); i++; }
     graph.output = last;
     out.push(`// ---- ${names.join(" → ")}\n${ejectGraph(graph)}`);
   }
@@ -190,7 +246,7 @@ export function documentGraph(layers, { width, height, background = "#ffffff", p
       // No pixels: the stack runs on everything composited so far, and the
       // result comes back through the mask at the layer's opacity.
       let out = acc;
-      for (const e of (l.effects || []).filter((x) => !x.bypass)) out = effectNode(graph, out, e);
+      for (const e of (l.effects || []).filter((x) => !x.bypass)) out = effectNode(graph, out, e, sources);
       if (out === acc) continue;
       const mask = maskOf(l);
       if (mask) {
@@ -207,8 +263,8 @@ export function documentGraph(layers, { width, height, background = "#ffffff", p
     sources[sid] = pix;
     let out = sid;
     for (const e of (l.effects || []).filter((x) => !x.bypass)) {
-      if (e.kind !== "graph" && e.kind !== "node") { out = null; break; }   // CPU steps cannot be in the graph
-      out = effectNode(graph, out, e);
+      if (!isGraphKind(e)) { out = null; break; }        // CPU steps cannot be in the graph
+      out = effectNode(graph, out, e, sources);
     }
     if (out === null) continue;
     const mask = maskOf(l);

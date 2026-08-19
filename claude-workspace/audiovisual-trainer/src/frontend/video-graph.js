@@ -193,3 +193,33 @@ function hexToRgb(hex) {
   const n = parseInt(full || "000000", 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
+
+// ------------------------------------------------------------------ speed
+
+/**
+ * Where in the source a clip is at local time t.
+ *
+ * At a constant speed this is the obvious multiplication. Keyed, it is the
+ * integral of the speed track — a ramp from 1× to 0.2× does not reach the
+ * same frame as either endpoint would, and getting that wrong is what makes
+ * a ramp slip. Integrated at a fixed step so the preview and the export
+ * agree exactly rather than nearly.
+ */
+export const SPEED_STEP = 1 / 480;
+
+export function sourceTimeAt(clip, local) {
+  const base = clip.in || 0;
+  const track = clip.keys && clip.keys.speed;
+  if (!track || !track.length) return base + local * (clip.speed ?? 1);
+  let acc = 0;
+  const n = Math.max(0, Math.floor(local / SPEED_STEP));
+  for (let i = 0; i < n; i++) acc += evalTrack(track, (i + 0.5) * SPEED_STEP) * SPEED_STEP;
+  const rest = local - n * SPEED_STEP;
+  if (rest > 0) acc += evalTrack(track, n * SPEED_STEP + rest * 0.5) * rest;
+  return base + acc;
+}
+
+/** How much source a clip will consume — what a ramp does to its reach. */
+export function sourceSpanOf(clip) {
+  return sourceTimeAt(clip, clip.dur) - (clip.in || 0);
+}

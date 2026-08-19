@@ -29,7 +29,9 @@ import { buildControls } from "./shader-controls.js";
 import { sketchUniforms } from "./shader-run.js";
 import { GENERATE_PRESETS } from "./studio-generate.js";
 import { clipAt, frameGraph, gradeEffects, hasKeys, keyablePaths, paramAt, putKey,
-         EASES, DEFAULT_GRADE } from "./video-graph.js";
+         sourceTimeAt, sourceSpanOf, EASES, DEFAULT_GRADE } from "./video-graph.js";
+import { parseCube } from "./lut-cube.js";
+import { drawWaveform, drawVectorscope, drawHistogram, frameStats } from "./scopes.js";
 
 const PREVIEW_MAX = 900;
 const RULER_H = 24, ROW_H = 54, GUTTER = 116;
@@ -177,6 +179,15 @@ export async function videoEditor(host) {
    * call this same function — which is what keeps an export reproducible.
    */
   function renderAt(t, g = cg, target = { w: pw, h: ph }) {
+    const { graph, sources } = frameGraph(frameEntries(t, target), {
+      width: target.w, height: target.h, background: "#000000", scale: target.w / W,
+      alphaOf: (c) => fadeAlpha(c, t - c.start) });
+    renderGraph(graph, sources, { into: g });
+    if (g === cg) updateScopes();
+  }
+
+  /** Every clip on screen at t, resolved and rasterised, in draw order. */
+  function frameEntries(t, target = { w: pw, h: ph }) {
     const entries = [];
     let i = 0;
     for (const tr of doc.tracks) {
@@ -198,10 +209,7 @@ export async function videoEditor(host) {
         entries.push({ clip: at, pixels, preApplied, transition: transitionAt(ordered, idx, t) });
       });
     }
-    const { graph, sources } = frameGraph(entries, {
-      width: target.w, height: target.h, background: "#000000", scale: target.w / W,
-      alphaOf: (c) => fadeAlpha(c, t - c.start) });
-    renderGraph(graph, sources, { into: g });
+    return entries;
   }
 
   /**
@@ -236,7 +244,7 @@ export async function videoEditor(host) {
       if (!m || clip.kind === "image" || clip.kind === "title") continue;
       const inside = playhead >= clip.start && playhead < clipEnd(clip);
       if (inside) {
-        const want = (clip.in || 0) + (playhead - clip.start);
+        const want = sourceTimeAt(clip, playhead - clip.start);
         if (Math.abs(m.currentTime - want) > 0.12) m.currentTime = want;
       } else if (!m.paused) m.pause();
     }
@@ -255,7 +263,7 @@ export async function videoEditor(host) {
       if (!m || clip.kind === "image" || clip.kind === "title") continue;
       const inside = playhead >= clip.start && playhead < clipEnd(clip);
       if (inside && m.paused && !track.mute) {
-        m.currentTime = (clip.in || 0) + (playhead - clip.start);
+        m.currentTime = sourceTimeAt(clip, playhead - clip.start);
         m.play().catch(() => {});
       } else if ((!inside || track.mute) && !m.paused) m.pause();
     }
@@ -542,6 +550,64 @@ export async function videoEditor(host) {
   // ---------------------------------------------------------------- inspector
 
   const inspector = el("div.stack");
+  /** The frame at the playhead as GLSL: what the timeline compiles to, now. */
+  function frameGlsl() {
+    let text;
+    try {
+      const entries = frameEntries(playhead, { w: pw, h: ph });
+      const { graph } = frameGraph(entries, { width: pw, height: ph, background: "#000000",
+        scale: pw / W, alphaOf: (c) => fadeAlpha(c, playhead - c.start) });
+      text = ejectGraph(graph);
+    } catch (e) { text = `// ${String(e.message).split("\n")[0]}`; }
+    modal(el("h2", {}, "This frame, as GLSL"),
+      el("p.fine", {}, `Every clip on screen at ${playhead.toFixed(2)}s — its grade written out as the ` +
+        "CSS filter functions, its effects, and the compositor — fused. Clip pixels arrive as textures; " +
+        "everything else is in the text."),
+      el("textarea", { rows: 18, readonly: true,
+        style: { fontFamily: "ui-monospace, monospace", fontSize: ".72rem" }, value: text }),
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: () => { navigator.clipboard.writeText(text); toast("Copied"); } }, "Copy"),
+        el("button.primary", { onclick: closeModal }, "Close")));
+  }
+
+  // ---------------------------------------------------------------- scopes
+
+  const scopeWave = el("canvas", { width: 240, height: 110, style: { width: "100%", borderRadius: "6px", display: "block" } });
+  const scopeVector = el("canvas", { width: 130, height: 130, style: { width: "48%", borderRadius: "6px" } });
+  const scopeHist = el("canvas", { width: 130, height: 130, style: { width: "48%", borderRadius: "6px" } });
+  const scopeNote = el("p.fine", {}, "");
+  let scopesOn = false, scopeDue = 0;
+
+  /**
+   * The instruments, on the frame that was actually composited — so what they
+   * measure is what will be exported, not an approximation of it.
+   */
+  function updateScopes() {
+    if (!scopesOn) return;
+    const now = performance.now();
+    if (now < scopeDue) return;                    // a scope at 10 Hz is still a scope
+    scopeDue = now + 100;
+    try {
+      const img = cg.getImageData(0, 0, canvas.width, canvas.height);
+      drawWaveform(img, scopeWave);
+      drawVectorscope(img, scopeVector);
+      drawHistogram(img, scopeHist);
+      const st = frameStats(img);
+      scopeNote.textContent = `mean ${(st.mean * 100).toFixed(0)} IRE · `
+        + `${(st.crushed * 100).toFixed(1)}% crushed · ${(st.clipped * 100).toFixed(1)}% clipped · `
+        + `cast ${(st.cast * 100).toFixed(1)}%`;
+    } catch (e) { scopeNote.textContent = String(e.message).split("\n")[0]; }
+  }
+
+  const scopePanel = el("div.card", { style: { display: "none" } },
+    el("h3", {}, "Scopes"),
+    el("p.fine", {}, "Waveform is luma up the vertical, one column per column of the frame. " +
+      "The vectorscope is hue as angle and saturation as radius, with the 75% primaries boxed and " +
+      "the skin-tone line drawn. Rec. 709 throughout."),
+    scopeWave,
+    el("div.row.tight", { style: { justifyContent: "space-between" } }, scopeVector, scopeHist),
+    scopeNote);
+
   // ---------------------------------------------------------------- keyframes
 
   const localOf = (c) => playhead - c.start;
@@ -607,6 +673,28 @@ export async function videoEditor(host) {
   }
 
   /**
+   * Speed, and speed ramps. A constant is a multiplication; keyed, the source
+   * time is the integral of the track, which is the difference between a ramp
+   * that lands where you meant and one that slips.
+   */
+  function speedPanel(c) {
+    if (c.kind !== "video" && c.kind !== "audio") return null;
+    const ramped = hasKeys(c, "speed");
+    const span = sourceSpanOf(c);
+    const over = c.srcDur ? span > (c.srcDur - (c.in || 0)) + 1e-3 : false;
+    return el("div.stack", { style: { gap: ".2rem", marginTop: ".4rem" } },
+      el("h4", { style: { margin: 0 } }, "Speed"),
+      keyed(c, "speed", "speed",
+        { min: 0.1, max: 4, step: 0.01, format: (v) => `${v.toFixed(2)}×` },
+        () => c.speed ?? 1, (v) => { c.speed = v; }),
+      el("p.fine", {}, ramped
+        ? `A ramp: it eats ${span.toFixed(2)}s of source over ${c.dur.toFixed(2)}s on the timeline.`
+        : `${((c.speed ?? 1)).toFixed(2)}× — ${span.toFixed(2)}s of source over ${c.dur.toFixed(2)}s.`),
+      over ? el("p.fine", { style: { color: "var(--warm)" } },
+        "That runs past the end of the source; the last frame will hold.") : null);
+  }
+
+  /**
    * A transition lives in the overlap between two clips on one track: drag a
    * clip so it starts before the one before it ends, and that overlap is the
    * whole of the transition's time. It is a two-input node, so the outgoing
@@ -640,6 +728,24 @@ export async function videoEditor(host) {
         "no transition (fade over instead)"));
   }
 
+  // A .cube goes into the clip as bytes, so the look travels with the file.
+  const lutInput = el("input", {
+    type: "file", accept: ".cube,text/plain", hidden: true,
+    onchange: async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file || !selected) return;
+      try {
+        const lut = parseCube(await file.text());
+        selected.effects = selected.effects || [];
+        selected.effects.push({ ...makeEffect("lut", "", { amount: 1 }),
+                                lut, name: lut.title || file.name.replace(/\.cube$/i, "") });
+        toast(`${lut.size}³ LUT loaded${lut.domain ? " (with its own domain)" : ""}`);
+        renderInspector(); renderAt(playhead); host.save();
+      } catch (err) { toast(`That .cube did not read: ${err.message}`); }
+    },
+  });
+
   // ---------------------------------------------------------------- clip effects
 
   function effectPanel(c) {
@@ -654,7 +760,9 @@ export async function videoEditor(host) {
     return el("div.stack", { style: { gap: ".2rem", marginTop: ".4rem" } },
       el("div.spread", {},
         el("h4", { style: { margin: 0 } }, "Effects"),
-        el("button.ghost", { onclick: () => effectDialog(c) }, "+ effect")),
+        el("div.row.tight", {},
+          el("button.ghost", { title: "load a .cube", onclick: () => lutInput.click() }, "+ LUT"),
+          el("button.ghost", { onclick: () => effectDialog(c) }, "+ effect"))),
       ...fx.map((e, i) => el("div.spread", {},
         el("div.row.tight", {},
           el("input", { type: "checkbox", checked: !e.bypass, style: { width: "auto" },
@@ -799,8 +907,10 @@ export async function videoEditor(host) {
           { min, max, step, format: (v) => (key === "hue" ? `${v.toFixed(0)}°` : v.toFixed(2)) },
           () => g[key], (v) => { g[key] = v; })),
       effectPanel(c),
+      speedPanel(c),
       transitionPanel(c),
       keyPanel(c),
+      lutInput,
       el("div.row.tight", { style: { marginTop: ".4rem" } },
         el("button.ghost", { onclick: () => { c.grade = { ...DEFAULT_GRADE }; renderInspector(); renderAt(playhead); host.save(); } }, "Reset"),
         el("button.ghost", {
@@ -986,7 +1096,7 @@ export async function videoEditor(host) {
           if (clip.kind !== "video") continue;
           if (t < clip.start || t >= clipEnd(clip)) continue;
           const m = media.get(clip.id);
-          if (m) { m.pause(); await seekExact(m, (clip.in || 0) + (t - clip.start)); }
+          if (m) { m.pause(); await seekExact(m, sourceTimeAt(clip, t - clip.start)); }
         }
         renderAt(t, og, { w: W, h: H });
         const frame = new VideoFrame(out, { timestamp: Math.round(t * 1e6),
@@ -1108,6 +1218,14 @@ export async function videoEditor(host) {
         el("button.ghost", { onclick: () => addTrack("video") }, "+ V track"),
         el("button.ghost", { onclick: () => addTrack("audio") }, "+ A track"),
         el("button.primary", { onclick: exportVideo }, "Export MP4"),
+        el("button.ghost", { onclick: (e) => {
+          scopesOn = !scopesOn;
+          scopePanel.style.display = scopesOn ? "" : "none";
+          e.target.classList.toggle("on", scopesOn);
+          scopeDue = 0; updateScopes();
+        } }, "Scopes"),
+        el("button.ghost", { title: "the frame at the playhead, as one chain of shaders",
+          onclick: frameGlsl }, "GLSL"),
         fileInput,
         el("label.row.tight", { style: { marginBottom: 0, fontSize: ".78rem" } }, "zoom",
           el("input", { type: "range", min: 10, max: 180, step: 2, value: pxPerSec,
@@ -1125,7 +1243,7 @@ export async function videoEditor(host) {
 
     el("div.lab-split", { style: { gridTemplateColumns: "minmax(0,1fr) 290px" } },
       el("div.stack", {}, canvas, el("div.card.tight", { style: { overflow: "auto" } }, timeline)),
-      el("div.card.tight", {}, el("h4", {}, "Clip"), inspector)));
+      el("div.stack", {}, el("div.card.tight", {}, el("h4", {}, "Clip"), inspector), scopePanel)));
 
   root._cleanup = () => { stop(); document.removeEventListener("keydown", onKey); };
 

@@ -199,3 +199,27 @@ if (mode == 1) {
   outc = d < progress ? bb : aa;
 }
 outc`);
+
+defineNode(`// A 3D LUT, its slices laid out side by side: n·n across, n down.
+// @node filter.lut3d
+// @module 05-display
+// @alpha
+uniform sampler2D in0;
+uniform sampler2D in1;    // @hidden the cube, as a tile sheet
+uniform float size;       // @range 2 64 @default 33 @hidden
+uniform float amount;     // @range 0 1 @default 1 @help how far towards the look
+uniform vec3  dmin;       // @hidden @default 0 0 0 the cube's own input domain, which a log LUT moves
+uniform vec3  dmax;       // @hidden @default 1 1 1
+
+vec4 c = texture2D(in0, uv);
+float n = max(2.0, size);
+vec3 span = max(dmax - dmin, vec3(1e-6));
+vec3 q = clamp((c.rgb - dmin) / span, 0.0, 1.0);
+float sl = q.b * (n - 1.0);
+float s0 = floor(sl), s1 = min(s0 + 1.0, n - 1.0);
+// half a texel in from each tile's edge, so linear filtering never crosses one
+float su = (q.r * (n - 1.0) + 0.5) / (n * n);
+float sv = (q.g * (n - 1.0) + 0.5) / n;
+vec3 lo = texture2D(in1, vec2(su + s0 / n, sv)).rgb;
+vec3 hi = texture2D(in1, vec2(su + s1 / n, sv)).rgb;
+vec4(mix(c.rgb, mix(lo, hi, sl - s0), amount), c.a)`);
