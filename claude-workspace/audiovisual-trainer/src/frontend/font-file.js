@@ -479,6 +479,121 @@ function classOf(dv, off, gid) {
 }
 
 /**
+ * Substitution from GSUB: ligatures, which is the part a reader notices.
+ *
+ * The `liga` and `clig` features, lookup type 4 (ligature substitution) and
+ * type 1 (single substitution), reached through type 7 extensions where a font
+ * uses them. Contextual and chained-contextual lookups — type 5 and 6, which
+ * is where `calt` lives — are not applied: they need a matching engine rather
+ * than a table read, and the fonts that depend on them are mostly scripts.
+ * What is read is said, and what is not is said too.
+ */
+function buildSubstitution(tables) {
+  const gsub = tables.GSUB;
+  const ligsByFirst = new Map();      // first gid → [{ rest: [gid…], gid }]
+  const single = new Map();           // gid → gid
+  const featuresSeen = new Set();
+  if (!gsub) return { ligatures: ligsByFirst, single, features: [], count: 0 };
+
+  try {
+    const featureListOff = gsub.getUint16(6), lookupListOff = gsub.getUint16(8);
+    const wanted = new Set();
+    const fCount = gsub.getUint16(featureListOff);
+    for (let i = 0; i < fCount; i++) {
+      const p = featureListOff + 2 + i * 6;
+      const tag = String.fromCharCode(gsub.getUint8(p), gsub.getUint8(p + 1),
+                                      gsub.getUint8(p + 2), gsub.getUint8(p + 3));
+      if (tag !== "liga" && tag !== "clig") continue;
+      featuresSeen.add(tag);
+      const fOff = featureListOff + gsub.getUint16(p + 4);
+      const n = gsub.getUint16(fOff + 2);
+      for (let k = 0; k < n; k++) wanted.add(gsub.getUint16(fOff + 4 + k * 2));
+    }
+    const lookupCount = gsub.getUint16(lookupListOff);
+    for (const li of wanted) {
+      if (li >= lookupCount) continue;
+      const lOff = lookupListOff + gsub.getUint16(lookupListOff + 2 + li * 2);
+      const type = gsub.getUint16(lOff), subCount = gsub.getUint16(lOff + 4);
+      for (let k = 0; k < subCount; k++) {
+        let off = lOff + gsub.getUint16(lOff + 6 + k * 2), t = type;
+        if (t === 7) {                                   // extension: hop through
+          t = gsub.getUint16(off + 2);
+          off = off + gsub.getUint32(off + 4);
+        }
+        if (t === 4) readLigatureSubst(gsub, off, ligsByFirst);
+        else if (t === 1) readSingleSubst(gsub, off, single);
+      }
+    }
+  } catch { /* a malformed GSUB should not cost the whole font */ }
+
+  // Longest first, so "ffi" wins over "ff" at the same position.
+  for (const list of ligsByFirst.values()) list.sort((a, b) => b.rest.length - a.rest.length);
+  let count = 0;
+  for (const list of ligsByFirst.values()) count += list.length;
+  return { ligatures: ligsByFirst, single, features: [...featuresSeen], count };
+}
+
+function readLigatureSubst(dv, off, out) {
+  if (dv.getUint16(off) !== 1) return;
+  const covOff = off + dv.getUint16(off + 2);
+  const setCount = dv.getUint16(off + 4);
+  for (let i = 0; i < setCount; i++) {
+    const first = coverageGlyphAt(dv, covOff, i);
+    if (first < 0) continue;
+    const setOff = off + dv.getUint16(off + 6 + i * 2);
+    const ligCount = dv.getUint16(setOff);
+    const list = out.get(first) || [];
+    for (let k = 0; k < ligCount; k++) {
+      const ligOff = setOff + dv.getUint16(setOff + 2 + k * 2);
+      const gid = dv.getUint16(ligOff);
+      const comps = dv.getUint16(ligOff + 2);            // includes the first
+      const rest = [];
+      for (let c = 1; c < comps; c++) rest.push(dv.getUint16(ligOff + 2 + c * 2));
+      if (rest.length) list.push({ rest, gid });
+    }
+    if (list.length) out.set(first, list);
+  }
+}
+
+function readSingleSubst(dv, off, out) {
+  const fmt = dv.getUint16(off);
+  const covOff = off + dv.getUint16(off + 2);
+  if (fmt === 1) {
+    const delta = dv.getInt16(off + 4);
+    for (let i = 0; ; i++) {
+      const g = coverageGlyphAt(dv, covOff, i);
+      if (g < 0) break;
+      out.set(g, (g + delta) & 0xffff);
+    }
+  } else if (fmt === 2) {
+    const n = dv.getUint16(off + 4);
+    for (let i = 0; i < n; i++) {
+      const g = coverageGlyphAt(dv, covOff, i);
+      if (g < 0) break;
+      out.set(g, dv.getUint16(off + 6 + i * 2));
+    }
+  }
+}
+
+/** The glyph a coverage table lists at a given index; −1 past the end. */
+function coverageGlyphAt(dv, off, index) {
+  const fmt = dv.getUint16(off);
+  if (fmt === 1) {
+    const n = dv.getUint16(off + 2);
+    return index < n ? dv.getUint16(off + 4 + index * 2) : -1;
+  }
+  if (fmt === 2) {
+    const n = dv.getUint16(off + 2);
+    for (let i = 0; i < n; i++) {
+      const p = off + 4 + i * 6;
+      const start = dv.getUint16(p), end = dv.getUint16(p + 2), first = dv.getUint16(p + 4);
+      if (index >= first && index <= first + (end - start)) return start + (index - first);
+    }
+  }
+  return -1;
+}
+
+/**
  * Horizontal kerning from GPOS's `kern` feature — the pair-adjustment lookups,
  * in both the specific-pair and the class-pair form, reached through extension
  * lookups where a font uses them. The old `kern` table is read too, since
@@ -701,17 +816,58 @@ export async function loadFontFile(file) {
   // The family name as the file states it, so text already asking for it is
   // matched rather than renamed.
   let family = readName(tables.name) || (file.name || "font").replace(/\.[^.]+$/, "");
+  const subst = buildSubstitution(tables);
+
+  /**
+   * A token is what one glyph draws: usually a character, but "fi" where the
+   * font has a ligature for it. Everything downstream — advances, kerning,
+   * outlines, the atlas — takes tokens, so a ligature needs no special case
+   * anywhere except here.
+   */
+  const gidOfToken = (token) => {
+    const chars = [...String(token)];
+    if (chars.length === 1) {
+      const g = glyphIdFor(chars[0].codePointAt(0));
+      return subst.single.get(g) ?? g;
+    }
+    const gids = chars.map((c) => glyphIdFor(c.codePointAt(0)));
+    for (const lig of subst.ligatures.get(gids[0]) || []) {
+      if (lig.rest.length !== gids.length - 1) continue;
+      if (lig.rest.every((g, k) => g === gids[k + 1])) return lig.gid;
+    }
+    return gids[0];
+  };
+
+  /** A string split into the tokens this font would actually draw. */
+  const shapeTokens = (text) => {
+    const chars = [...String(text)];
+    const gids = chars.map((c) => glyphIdFor(c.codePointAt(0)));
+    const out = [];
+    for (let i2 = 0; i2 < chars.length; ) {
+      let took = 0;
+      for (const lig of subst.ligatures.get(gids[i2]) || []) {
+        const n = lig.rest.length;
+        if (i2 + n > chars.length - 1) continue;
+        if (lig.rest.every((g, k) => g === gids[i2 + 1 + k])) { took = n + 1; break; }
+      }
+      if (took) { out.push(chars.slice(i2, i2 + took).join("")); i2 += took; }
+      else { out.push(chars[i2]); i2 += 1; }
+    }
+    return out;
+  };
+
   const font = {
     family, format, unitsPerEm, numGlyphs, outlines: true,
     kerningSource: kerning.source,
-    glyphIdFor,
-    /** Pair kerning between two characters, in em. */
-    kernEm: (a, b) => kerning.kern(glyphIdFor(a.codePointAt(0)), glyphIdFor(b.codePointAt(0))) / unitsPerEm,
-    advanceEm: (ch) => advanceOf(glyphIdFor(ch.codePointAt(0))) / unitsPerEm,
+    ligatureCount: subst.count, ligatureFeatures: subst.features,
+    ligatureTable: subst.ligatures,
+    glyphIdFor, gidOfToken, shapeTokens,
+    /** Pair kerning between two tokens, in em. */
+    kernEm: (a, b) => kerning.kern(gidOfToken(a), gidOfToken(b)) / unitsPerEm,
+    advanceEm: (token) => advanceOf(gidOfToken(token)) / unitsPerEm,
     /** Contours in em units, y down (the atlas convention), pen at the origin. */
-    outlineEm(ch, tol = 0.002) {
-      const gid = glyphIdFor(ch.codePointAt(0));
-      if (!gid && ch !== " ") { /* .notdef is a legitimate answer */ }
+    outlineEm(token, tol = 0.002) {
+      const gid = gidOfToken(token);
       const paths = outlineOf(gid) || [];
       const flat = [];
       for (const p of paths) flattenPath(p, tol * unitsPerEm * unitsPerEm, flat);
@@ -752,6 +908,14 @@ function readName(dv) {
 }
 
 /** The first family in a CSS font-family list, unquoted. */
+/**
+ * The substitution reader, on a GSUB table by itself. A seam for the
+ * self-test: a font that carries Latin ligatures in GSUB cannot be assumed to
+ * be on the machine — on macOS most of them keep ligatures in Apple's own
+ * `morx` instead — so the table is built by hand and read back.
+ */
+export const readGsubForTest = (dv) => buildSubstitution({ GSUB: dv });
+
 export const primaryFamily = (css) =>
   String(css || "").split(",")[0].trim().replace(/^["']|["']$/g, "");
 

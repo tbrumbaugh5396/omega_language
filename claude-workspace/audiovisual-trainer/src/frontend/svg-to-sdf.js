@@ -18,7 +18,7 @@ import {
   num, hex, I, mul, translate, scaleM, rotateAbout, localise,
   polygonBody, openStrokeBody, dashPolylines, emitSketch,
 } from "./sdf-core.js";
-import { buildAtlas, emitTextRun, GLYPH_HELPER } from "./glyph-atlas.js";
+import { buildAtlas, emitTextRun, GLYPH_HELPER, bakeShapeField } from "./glyph-atlas.js";
 
 const NAMED = {
   black: "#000000", white: "#ffffff", red: "#ff0000", lime: "#00ff00",
@@ -339,7 +339,8 @@ export async function compileSvg(text, opts = {}) {
   const uniforms = [];
   const texts = [];
   const clips = new Map();      // id → emitted clip function name
-  let gradN = 0, imgN = 0, edgeTotal = 0, truncated = 0;
+  let gradN = 0, imgN = 0, edgeTotal = 0, truncated = 0, bakedN = 0;
+  const baked = [];
   const EDGE_CAP = opts.edgeCap || 9000;
 
   const bboxOf = (subs) => {
@@ -580,8 +581,26 @@ ${localise(world3)}
         evenOdd: (inh["fill-rule"] || "nonzero") === "evenodd",
       });
       body = r.body; edges = r.edges;
+      // Past the budget the shape stops being segments and becomes a field in
+      // a texture. It loses the things a distance function has — inflate and
+      // outline still work on it, but it is a picture of geometry now rather
+      // than geometry — so the notes say which shapes went that way.
+      if (edgeTotal + edges > EDGE_CAP) {
+        const field = bakeShapeField(geo.subs.map((sp) => sp.pts), {
+          evenOdd: (inh["fill-rule"] || "nonzero") === "evenodd" });
+        if (field) {
+          const name = `u_baked${bakedN++}`;
+          uniforms.push(`uniform sampler2D ${name};   // @hidden a baked field @data ${field.dataUrl}`);
+          body = `  vec2 bt = (lq - vec2(${num(field.x)}, ${num(field.y)})) / vec2(${num(field.w)}, ${num(field.h)});\n`
+               + `  vec2 bo = abs(bt - 0.5) - 0.5;\n`
+               + `  float bd = length(max(bo, 0.0)) + min(max(bo.x, bo.y), 0.0);\n`
+               + `  if (bd > 0.0) return bd * ${num(Math.max(field.w, field.h))} + ${num(field.range)};\n`
+               + `  return (texture2D(${name}, vec2(bt.x, 1.0 - bt.y)).r - 0.5) * ${num(-2 * field.range)};`;
+          edges = 0;
+          baked.push(`${st.id || tag} (${field.pixels} px)`);
+        } else { truncated++; return; }
+      }
       edgeTotal += edges;
-      if (edgeTotal > EDGE_CAP) { truncated++; return; }
     }
 
     const fillOp = parseFloat(inh["fill-opacity"] ?? "1");
@@ -635,6 +654,11 @@ ${localise(world3)}
     notes.add(`text "${t.run.text.slice(0, 24)}" is greeked as a bar`);
   }
 
+  if (baked.length) {
+    notes.add(`past the ${EDGE_CAP}-edge budget, ${baked.length} shape${baked.length === 1 ? " was" : "s were"} `
+      + `baked to a distance field carried in the source: ${baked.slice(0, 4).join(", ")}`
+      + `${baked.length > 4 ? ", …" : ""} — inflate and outline still act on them, but they are no longer editable geometry`);
+  }
   if (truncated) notes.add(`${truncated} shape${truncated === 1 ? " was" : "s were"} dropped past the ${EDGE_CAP}-edge budget`);
   if (!items.filter((i) => !i.__raw).length) throw new Error("nothing drawable was found in that file");
 

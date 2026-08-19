@@ -31,6 +31,7 @@ import { BLEND_ORDER } from "./composite-nodes.js";
 import { clipAt, evalTrack, frameGraph, gradeEffects, putKey, sourceTimeAt } from "./video-graph.js";
 import { parseCube } from "./lut-cube.js";
 import { compileTitleNode } from "./title-node.js";
+import { readGsubForTest } from "./font-file.js";
 import { freezeEffects } from "./canvas-graph.js";
 import { registerNode, withNodeHeader, nodeIdFor, keepVersion, versionSummary,
          MAX_VERSIONS, declaresNode } from "./node-library.js";
@@ -1019,6 +1020,63 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
              detail: isGL2(gl)
                ? `${outs} outputs declared · state() came back ${d[0]} (want 64), state2() ${d[1]} (want 191)`
                : "WebGL1 here: one target, and state2() reads the first — the sketch still runs" }); }
+
+    // A shape past the edge budget: it used to be dropped, which is a visible
+    // failure. Now it bakes to a field carried in the source.
+    { const pts = [];
+      const N = 900;
+      for (let i = 0; i < N; i++) {
+        const ang = (i / N) * Math.PI * 2;
+        const r = 120 + 40 * Math.sin(ang * 17);
+        pts.push(`${(200 + r * Math.cos(ang)).toFixed(2)},${(200 + r * Math.sin(ang)).toFixed(2)}`);
+      }
+      const file = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">`
+        + `<rect width="400" height="400" fill="#101828"/>`
+        + `<polygon points="${pts.join(" ")}" fill="#f0a35e"/></svg>`;
+      const SW = 300, SH = 300;
+      const ref = document.createElement("canvas"); ref.width = SW; ref.height = SH;
+      const im = new Image();
+      im.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(file);
+      await im.decode();
+      ref.getContext("2d").drawImage(im, 0, 0, SW, SH);
+      const compiled = await compileSvg(file, { edgeCap: 400 });
+      await loadSketchImages(compiled.source);
+      const got = renderSketch(compiled.source, SW, SH, {}).getContext("2d").getImageData(0, 0, SW, SH).data;
+      const r2 = compare(got, ref.getContext("2d").getImageData(0, 0, SW, SH).data, SW, SH, { thresh: 60 });
+      const said = compiled.notes.some((n2) => /baked to a distance field/.test(n2));
+      push({ group: "Nodes from Generate", name: "a shape past the edge budget bakes to a field rather than vanishing",
+             ok: r2.mean < 2.0 && said,
+             detail: `${N} edges at a 400 budget · mean ${r2.mean}/255 against the browser's own rasterisation, ` +
+                     `${r2.off} px off by >60 (${r2.pct}%) · the notes say which shapes went that way` }); }
+
+    // GSUB: the ligature table read back off a hand-built GSUB, so the check
+    // does not depend on a font being installed. (It usually is not: on macOS
+    // most families keep their Latin ligatures in Apple's `morx` instead.)
+    { const bytes = [];
+      const u16 = (v) => { bytes.push((v >> 8) & 255, v & 255); };
+      const tag = (t) => { for (const c of t) bytes.push(c.charCodeAt(0)); };
+      // header: version, scriptList, featureList, lookupList
+      u16(1); u16(0); u16(0); u16(10); u16(24);
+      // featureList at 10: one 'liga' feature pointing at lookup 0
+      u16(1); tag("liga"); u16(8);
+      /* feature at 18 */ u16(0); u16(1); u16(0);
+      // lookupList at 24: one lookup
+      u16(1); u16(4);
+      /* lookup at 28 */ u16(4); u16(0); u16(1); u16(8);
+      /* subtable at 36 */ u16(1); u16(8); u16(1); u16(14);
+      /* coverage at 44 */ u16(1); u16(1); u16(10);
+      /* ligature set at 50 */ u16(1); u16(4);
+      /* ligature at 54 */ u16(99); u16(2); u16(11);
+      const dv = new DataView(new Uint8Array(bytes).buffer);
+      const subst = readGsubForTest(dv);
+      const forTen = subst.ligatures.get(10) || [];
+      const ok = subst.count === 1 && subst.features.includes("liga")
+        && forTen.length === 1 && forTen[0].gid === 99
+        && forTen[0].rest.length === 1 && forTen[0].rest[0] === 11;
+      push({ group: "Nodes from Generate", name: "GSUB: a ligature substitution is read back off the table",
+             ok,
+             detail: ok ? `glyph 10 + 11 → 99, from the liga feature · ${subst.count} ligature read`
+                        : `read ${subst.count} ligatures, features [${subst.features}]` }); }
 
     // Versions: a ring, and a summary that says what moved.
     { const data = {};

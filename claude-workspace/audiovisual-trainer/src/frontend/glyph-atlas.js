@@ -67,6 +67,79 @@ function edt2d(binary, w, h) {
 }
 
 /**
+ * A shape too complex to be segments, as a distance field in a texture.
+ *
+ * The emitter unrolls every edge of a path into the shader, which is right
+ * up to a point and past it is thousands of tests a pixel. Beyond the budget
+ * the shape used to be dropped, which is a visible failure; this bakes it
+ * instead — rasterise, distance-transform, and carry the field in the source.
+ * It stops being editable geometry and becomes a picture of geometry, which
+ * is the honest trade and is said in the notes.
+ *
+ * `subpaths` are arrays of [x, y] in the shape's own space. Returns
+ * `{ dataUrl, x, y, w, h, range }` — the box the field covers, in that same
+ * space, and the distance the 8 bits span.
+ */
+export function bakeShapeField(subpaths, { evenOdd = false, maxSide = 512, range = 12 } = {}) {
+  let x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+  for (const sp of subpaths) for (const [x, y] of sp) {
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  if (!(x1 > x0 && y1 > y0)) return null;
+  x0 -= range; y0 -= range; x1 += range; y1 += range;
+  const bw = x1 - x0, bh = y1 - y0;
+  const scale = Math.min(maxSide / Math.max(bw, bh), 4);
+  const w = Math.max(8, Math.round(bw * scale)), h = Math.max(8, Math.round(bh * scale));
+
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.fillStyle = "#000"; g.fillRect(0, 0, w, h);
+  g.fillStyle = "#fff";
+  g.beginPath();
+  for (const sp of subpaths) {
+    if (sp.length < 2) continue;
+    g.moveTo((sp[0][0] - x0) * (w / bw), (sp[0][1] - y0) * (h / bh));
+    for (let i = 1; i < sp.length; i++) g.lineTo((sp[i][0] - x0) * (w / bw), (sp[i][1] - y0) * (h / bh));
+    g.closePath();
+  }
+  g.fill(evenOdd ? "evenodd" : "nonzero");
+
+  const px = g.getImageData(0, 0, w, h).data;
+  const inside = new Uint8Array(w * h), outside = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const on = px[i * 4] > 127;
+    inside[i] = on ? 1 : 0;
+    outside[i] = on ? 0 : 1;
+  }
+  const dOut = edt2d(inside, w, h);       // distance from outside to the shape
+  const dIn = edt2d(outside, w, h);       // distance from inside to the edge
+  // One raster pixel, in the shape's own units — the field has to come back
+  // as a distance in the space the rest of the sketch works in.
+  const unit = Math.max(bw / w, bh / h);
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const d = (inside[i] ? -Math.sqrt(dIn[i]) : Math.sqrt(dOut[i])) * unit;
+    const v = Math.round(255 * Math.min(1, Math.max(0, 0.5 - d / (2 * range))));
+    out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = v;
+    out[i * 4 + 3] = 255;
+  }
+  g.putImageData(new ImageData(out, w, h), 0, 0);
+  return { dataUrl: c.toDataURL("image/png"), x: x0, y: y0, w: bw, h: bh, range, pixels: w * h };
+}
+
+/**
+ * What one glyph draws. A font file that carries `liga` says so — "fi" comes
+ * back as one token where the font has that ligature — and everything else
+ * splits per character, which is what the browser's own rasteriser gives us.
+ */
+export function tokensOf(text, spec) {
+  const font = spec && getFont(spec.family);
+  if (font && font.shapeTokens && font.ligatureCount) return font.shapeTokens(text);
+  return [...String(text)];
+}
+
+/**
  * A glyph built from real outlines: no raster, no tracing. The contours arrive
  * in em units with y down, are scaled to atlas pixels, and the field is
  * computed against them directly.
@@ -115,7 +188,9 @@ export async function buildAtlas(runs, opts = {}) {
   for (const r of runs) {
     const key = fontCss({ family: r.family, weight: r.weight, style: r.style }, 1);
     if (!fonts.has(key)) fonts.set(key, { spec: r, chars: new Set() });
-    for (const ch of String(r.text ?? "")) if (ch !== "\n") fonts.get(key).chars.add(ch);
+    // Tokens, not characters: with a parsed font "fi" may be one glyph, and
+    // the atlas has to hold that glyph rather than an f and an i.
+    for (const ch of tokensOf(String(r.text ?? ""), r)) if (ch !== "\n") fonts.get(key).chars.add(ch);
   }
   if (!fonts.size) return null;
 
@@ -284,12 +359,13 @@ export async function buildAtlas(runs, opts = {}) {
 export function layoutLine(text, spec, sizePx, letterSpacing = 0) {
   const font = getFont(spec.family);
   if (font && font.outlines !== false && font.kernEm) {
+    const toks = tokensOf(text, spec);
     const out = [];
     let x = 0;
-    for (let i = 0; i < text.length; i++) {
-      if (i > 0) x += font.kernEm(text[i - 1], text[i]) * sizePx;
-      out.push({ ch: text[i], x });
-      x += font.advanceEm(text[i]) * sizePx + letterSpacing;
+    for (let i = 0; i < toks.length; i++) {
+      if (i > 0) x += font.kernEm(toks[i - 1], toks[i]) * sizePx;
+      out.push({ ch: toks[i], x });
+      x += font.advanceEm(toks[i]) * sizePx + letterSpacing;
     }
     return { glyphs: out, width: x };
   }
