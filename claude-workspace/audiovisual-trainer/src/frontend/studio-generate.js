@@ -18,6 +18,7 @@ import { zipStore, pngBytes } from "./zip-store.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { loadFontFile, registeredFonts } from "./font-file.js";
 import { fitPreview } from "./sdf-core.js";
+import { nodeReference, referenceGaps } from "./node-docs.js";
 import { registerNode, withNodeHeader, nodeShape, declaresNode, keepVersion,
          versionSummary, usersOfNode, nodeIdFor } from "./node-library.js";
 import { gridOverlay } from "./grid-overlay.js";
@@ -889,7 +890,7 @@ finish(col)` },
 //
 // sim()  -> the velocity, read back with state()
 // sim2() -> the dye, read back with state2()
-// @module 07-motion
+// @module 07-shaders
 uniform float swirl;     // @range 0 3 @default 1.4 @help how hard the curl of the noise pushes
 uniform float damp;      // @range 0.9 1 @default 0.985 @help how fast the motion dies away
 uniform float inject;    // @range 0 1 @default 0.55 @help dye put in at the pointer, and at the start
@@ -943,7 +944,7 @@ finish(srgbToLinear(dye) * (1.0 + length(v) * 0.05))` },
 // to be a clip effect — the layer or clip arrives as \`src\`, and because the
 // state is rebuilt from that seed every frame, the same frame always comes
 // out the same way, which is what an export needs.
-// @module 07-motion
+// @module 07-shaders
 uniform sampler2D src;     // the clip, or the layer
 uniform float stir;        // @range 0 4 @default 1.6 @help how far the flow carries the ink each step
 uniform float spread;      // @range 0 2 @default 0.9 @help how much it diffuses as it goes
@@ -1786,6 +1787,53 @@ export async function generateEditor(host) {
     toast("Baked: the values you dialled are now the source's defaults.");
   }
 
+  /**
+   * The node reference. Nothing here is written down twice: the description
+   * is the sketch's first comment line, the controls are its uniforms, and
+   * the lesson is its @module — so a node that changes documents itself.
+   */
+  async function nodeReferenceDialog() {
+    let modules = [];
+    try { modules = (await api("/api/course")).modules || []; } catch { /* offline */ }
+    const titleOf = (slug) => (modules.find((m) => m.slug === slug) || {}).title || slug;
+    const { groups } = nodeReference();
+    const gaps = referenceGaps();
+    const section = (slug, list) => el("div.stack", { style: { gap: ".3rem", marginTop: ".6rem" } },
+      el("h3", { style: { margin: 0 } },
+        slug ? el("a", { href: `#library/course/${slug}`, onclick: closeModal }, titleOf(slug))
+             : "Not tied to a lesson"),
+      ...list.map((d) => el("div", { style: { borderLeft: "2px solid var(--line)", paddingLeft: ".6rem" } },
+        el("div.row.tight", { style: { alignItems: "baseline" } },
+          el("code", {}, d.id),
+          d.mine ? el("span.tag", {}, "yours") : null,
+          d.pass ? el("span.tag", { title: "reads a neighbourhood, so it is its own pass" }, "@pass") : null,
+          d.alpha ? el("span.tag", { title: "carries transparency through" }, "@alpha") : null,
+          el("span.fine", {}, `${d.inputs.length} input${d.inputs.length === 1 ? "" : "s"}`)),
+        el("p.fine", { style: { margin: ".1rem 0" } }, d.title),
+        d.params.length ? el("table", {}, el("tbody", {}, ...d.params.map((pm) =>
+          el("tr", {},
+            el("td", {}, el("code", {}, pm.name)),
+            el("td", {}, el("span.fine", {},
+              pm.options ? pm.options.join(" · ")
+                : pm.range ? `${pm.range[0]} … ${pm.range[1]}`
+                : pm.control)),
+            el("td", {}, el("span.fine", {}, pm.help || pm.label || "")))))) : null)));
+    modal(el("h2", {}, "Nodes", el("span.fine", {}, ` ${gaps.total}`)),
+      el("p.fine", {}, "Every node the effect menus offer, described by itself: the first line of " +
+        "its sketch is what it is, its uniforms are its controls, and @module is the lesson it " +
+        "belongs with. Nothing here is written down a second time, so it cannot go stale."),
+      gaps.withGaps.length
+        ? el("p.fine", { style: { color: "var(--warm)" } },
+            `${gaps.documented} of ${gaps.total} are fully described. Missing: `
+            + gaps.withGaps.slice(0, 3).map((d) => `${d.id} (${d.gaps[0]})`).join("; ")
+            + (gaps.withGaps.length > 3 ? `, and ${gaps.withGaps.length - 3} more` : ""))
+        : el("p.fine", {}, `All ${gaps.total} are fully described.`),
+      el("div", { style: { maxHeight: "56vh", overflow: "auto" } },
+        ...[...groups.entries()].map(([slug, list]) => section(slug, list))),
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button.primary", { onclick: closeModal }, "Close")));
+  }
+
   function help() {
     modal(el("h2", {}, "How a sketch works"),
       el("p.fine", {}, "Write one colour expression. Anything above the last " +
@@ -2029,6 +2077,8 @@ uniform bool  mirror;  // @toggle`),
           title: "Load a .ttf/.otf/.woff so text compiles from true outlines" }, "Font…"),
         fontInput,
         el("button.ghost", { onclick: help }, "Help"),
+        el("button.ghost", { onclick: nodeReferenceDialog,
+          title: "every node, written by the nodes" }, "Nodes…"),
         aiButton("Sketch…", {
           task: "code",
           describe: "Describe the image. You get a sketch back; whether it " +

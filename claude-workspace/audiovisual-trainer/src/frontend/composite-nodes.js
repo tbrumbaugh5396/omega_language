@@ -86,7 +86,7 @@ defineNode(`// One layer over what is under it: the browser's blend modes, to th
 uniform sampler2D in0;   // the backdrop
 uniform sampler2D in1;   // the layer
 uniform int   mode;      // @options source-over,multiply,screen,overlay,darken,lighten,color-dodge,color-burn,hard-light,soft-light,difference,exclusion,hue,saturation,color,luminosity @default 0
-uniform float opacity;   // @range 0 1 @default 1
+uniform float opacity;   // @range 0 1 @default 1 @help how much of this layer is let through
 ${BLEND_GLSL}
 vec4 b = texture2D(in0, uv);
 vec4 s = texture2D(in1, uv);
@@ -107,10 +107,10 @@ vec4(c.rgb, c.a * texture2D(in1, uv).a)`);
 
 defineNode(`// A flat colour, alpha and all: what a document sits on.
 // @node source.flat
-// @module 01-light-and-exposure
+// @module 00-radiometry
 // @alpha
 uniform vec3  colour;    // @color @default 1 1 1
-uniform float alpha;     // @range 0 1 @default 1
+uniform float alpha;     // @range 0 1 @default 1 @help how opaque the flat colour is
 vec4(colour, alpha)`);
 
 // ------------------------------------------------------------------ video
@@ -122,12 +122,12 @@ vec4(colour, alpha)`);
 
 defineNode(`// brightness, contrast, saturate and hue-rotate — the CSS filter functions, to the spec.
 // @node filter.cssGrade
-// @module 01-light-and-exposure
+// @module 00-radiometry
 // @alpha
 uniform sampler2D in0;
-uniform float brightness;   // @range 0.2 2 @default 1
-uniform float contrast;     // @range 0.2 2.5 @default 1
-uniform float saturation;   // @range 0 2.5 @default 1
+uniform float brightness;   // @range 0.2 2 @default 1 @help multiplies every channel, as CSS does
+uniform float contrast;     // @range 0.2 2.5 @default 1 @help pivots each channel about mid grey
+uniform float saturation;   // @range 0 2.5 @default 1 @help distance from the luma axis; 0 is grey
 uniform float hue;          // @range -180 180 @default 0 @help degrees
 
 vec4 c = texture2D(in0, uv);
@@ -175,10 +175,10 @@ defineNode(`// A transition between what is already there (in0) and what is arri
 uniform sampler2D in0;
 uniform sampler2D in1;
 uniform int   mode;       // @options dissolve,wipe,dip,push @default 0
-uniform float progress;   // @range 0 1 @default 0
+uniform float progress;   // @range 0 1 @default 0 @help how far through the transition, 0 to 1
 uniform float angle;      // @range 0 360 @default 0 @help the wipe's direction, degrees
 uniform vec3  colour;     // @color @default 0 0 0 @help what a dip passes through
-uniform float softness;   // @range 0 0.5 @default 0.08
+uniform float softness;   // @range 0 0.5 @default 0.08 @help how soft the wipe's edge is
 
 vec4 a = texture2D(in0, uv);
 vec4 b = texture2D(in1, uv);

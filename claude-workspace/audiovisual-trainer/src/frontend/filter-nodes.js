@@ -63,8 +63,8 @@ defineNode(`// Motion blur: n taps along a direction, positions rounded to pixel
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
-uniform float length_;  // @range 2 60 @default 16 @label length
-uniform float angle;    // @range 0 180 @default 0
+uniform float length_;  // @range 2 60 @default 16 @help how far the smear reaches, in pixels @label length @help how far the smear reaches, in pixels
+uniform float angle;    // @range 0 180 @default 0 @help the direction of the smear, degrees
 ${NEAREST}
 float a = radians(angle);
 vec2 dir = vec2(cos(a), sin(a));
@@ -89,7 +89,7 @@ defineNode(`// Radial blur: samples toward the centre at shrinking scales, posit
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
-uniform float strength; // @range 0.01 0.3 @default 0.08
+uniform float strength; // @range 0.01 0.3 @default 0.08 @help how far the samples reach toward the centre
 uniform int   steps;    // @range 4 24 @default 14 @hidden
 vec2 c0 = in0_size * 0.5;
 vec2 px = vec2(gl_FragCoord.x - 0.5, in0_size.y - gl_FragCoord.y - 0.5);
@@ -110,7 +110,7 @@ defineNode(`// Lens blur: a flat disc kernel of radius r, clamped at the border.
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
-uniform int   radius;   // @range 1 12 @default 4
+uniform int   radius;   // @range 1 12 @default 4 @help the disc's radius, in pixels
 vec4 acc = vec4(0.0);
 float count = 0.0;
 for (int dy = -12; dy <= 12; dy++) {
@@ -130,7 +130,7 @@ defineNode(`// Unsharp mask: the original plus amount × (original − its blur)
 // @alpha
 uniform sampler2D in0;
 uniform sampler2D in1;
-uniform float amount;   // @range 0 3 @default 0.8
+uniform float amount;   // @range 0 3 @default 0.8 @help how much of the difference from the blur is added
 vec4 o = texture2D(in0, uv);
 vec4 b = texture2D(in1, uv);
 vec4(clamp(o.rgb + amount * (o.rgb - b.rgb), 0.0, 1.0), o.a)`);
@@ -184,11 +184,11 @@ defineNode(`// Grade: lift, gamma, gain, saturation and temperature, in linear l
 // @module 05-display
 // @alpha
 uniform sampler2D in0;
-uniform float lift;     // @range -0.15 0.3 @default 0
-uniform float gamma;    // @range 0.3 2.5 @default 1
-uniform float gain;     // @range 0.3 2.5 @default 1
-uniform float sat;      // @range 0 2.5 @default 1
-uniform float temp;     // @range -1 1 @default 0
+uniform float lift;     // @range -0.15 0.3 @default 0 @help raises the black point, in linear light
+uniform float gamma;    // @range 0.3 2.5 @default 1 @help bends the midtones without moving black or white
+uniform float gain;     // @range 0.3 2.5 @default 1 @help scales the whole range — exposure, in effect
+uniform float sat;      // @range 0 2.5 @default 1 @help distance from grey; 0 is monochrome
+uniform float temp;     // @range -1 1 @default 0 @help warm above zero, cool below
 ${EXACT}
 vec4 c = texture2D(in0, uv);
 vec3 l = toLin(c.rgb);
@@ -204,7 +204,7 @@ defineNode(`// Hue rotate, in OKLab so lightness holds still.
 // @module 04-color-organization
 // @alpha
 uniform sampler2D in0;
-uniform float degrees;  // @range -180 180 @default 30
+uniform float degrees;  // @range -180 180 @default 30 @help rotation around the OKLab hue circle
 ${EXACT}
 ${OKLAB}
 vec4 c = texture2D(in0, uv);
@@ -232,7 +232,7 @@ defineNode(`// Posterize: each channel to n levels.
 // @module 05-display
 // @alpha
 uniform sampler2D in0;
-uniform int levels;     // @range 2 12 @default 5
+uniform int levels;     // @range 2 12 @default 5 @help how many steps each channel is allowed
 vec4 c = texture2D(in0, uv);
 float n = float(max(2, levels) - 1);
 vec4(floor(c.rgb * n + 0.5) / n, c.a)`);
@@ -242,7 +242,7 @@ defineNode(`// Threshold on luma, 0..255.
 // @module 05-display
 // @alpha
 uniform sampler2D in0;
-uniform float level;    // @range 0 255 @default 128
+uniform float level;    // @range 0 255 @default 128 @help the luma the picture splits at
 ${LUMA}
 vec4 c = texture2D(in0, uv);
 float v = step(level, lumaOf(c.rgb * 255.0));
@@ -254,7 +254,7 @@ defineNode(`// Ordered dither with the 8×8 Bayer matrix, computed rather than s
 // @module 05-display
 // @alpha
 uniform sampler2D in0;
-uniform int levels;     // @range 2 8 @default 2
+uniform int levels;     // @range 2 8 @default 2 @help how many steps the ordered dither quantises to
 float bayer8(vec2 p) {
   float v = 0.0;
   for (int k = 0; k < 3; k++) {
@@ -278,8 +278,8 @@ defineNode(`// Halftone: dots on a rotated grid, radius from the luma at the dot
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
-uniform float cell;     // @range 3 20 @default 6
-uniform float angle;    // @range 0 90 @default 15
+uniform float cell;     // @range 3 20 @default 6 @help the spacing of the dot grid, in pixels
+uniform float angle;    // @range 0 90 @default 15 @help the screen angle of the dot grid, degrees
 ${LUMA}
 float s = max(2.0, cell);
 float a = radians(angle), cs = cos(a), sn = sin(a);
@@ -317,7 +317,7 @@ defineNode(`// Pixelate: the mean of each s×s cell, cells anchored at the top-l
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
-uniform int   size;     // @range 2 40 @default 8
+uniform int   size;     // @range 2 40 @default 8 @help the side of each block, in pixels
 float s = float(max(2, size));
 vec2 px = vec2(gl_FragCoord.x - 0.5, in0_size.y - gl_FragCoord.y - 0.5);
 vec2 cell = floor(px / s) * s;
@@ -340,7 +340,7 @@ defineNode(`// Bloom, first half: keep only what is brighter than the cut.
 // @module 05-display
 // @alpha
 uniform sampler2D in0;
-uniform float cut;      // @range 100 250 @default 190
+uniform float cut;      // @range 100 250 @default 190 @help only what is brighter than this glows
 ${LUMA}
 vec4 c = texture2D(in0, uv);
 float k = step(cut, lumaOf(c.rgb * 255.0) + 0.001);
@@ -352,7 +352,7 @@ defineNode(`// Bloom, second half: the original plus amount × the softened brig
 // @alpha
 uniform sampler2D in0;
 uniform sampler2D in1;
-uniform float amount;   // @range 0 2 @default 0.7
+uniform float amount;   // @range 0 2 @default 0.7 @help how much of the bright pass is added back
 vec4 o = texture2D(in0, uv);
 vec4 s = texture2D(in1, uv);
 vec4(min(o.rgb + s.rgb * amount, 1.0), o.a)`);
@@ -364,7 +364,7 @@ defineNode(`// Chromatic aberration: red pushed out from the centre, blue pulled
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
-uniform float amount;   // @range 0 20 @default 4
+uniform float amount;   // @range 0 20 @default 4 @help how far the red and blue channels part, in pixels
 ${NEAREST}
 vec2 px = vec2(gl_FragCoord.x - 0.5, in0_size.y - gl_FragCoord.y - 0.5);
 vec2 d = (px - in0_size * 0.5) / in0_size;
@@ -381,8 +381,8 @@ defineNode(`// Vignette: a squared falloff from the corner distance.
 // @alpha
 uniform sampler2D in0;
 uniform vec2  in0_size;
-uniform float amount;   // @range 0 1 @default 0.5
-uniform float softness; // @range 0.1 1 @default 0.6
+uniform float amount;   // @range 0 1 @default 0.5 @help how dark the corners go
+uniform float softness; // @range 0.1 1 @default 0.6 @help how gradually it falls off from the centre
 vec2 px = vec2(gl_FragCoord.x - 0.5, in0_size.y - gl_FragCoord.y - 0.5);
 vec2 c0 = in0_size * 0.5;
 float t = length(px - c0) / length(c0);
@@ -398,7 +398,7 @@ defineNode(`// Film grain: the same noise on all three channels, ±amount in 8-b
 // @module 05-display
 // @alpha
 uniform sampler2D in0;
-uniform float amount;   // @range 0 60 @default 14
+uniform float amount;   // @range 0 60 @default 14 @help the spread of the noise, in levels
 vec4 c = texture2D(in0, uv);
 float n = (hash21(gl_FragCoord.xy + u_seed * 17.0) * 2.0 - 1.0) * amount / 255.0;
 vec4(clamp(c.rgb + n, 0.0, 1.0), c.a)`);

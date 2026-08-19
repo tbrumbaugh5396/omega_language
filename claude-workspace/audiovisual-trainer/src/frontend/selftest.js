@@ -12,7 +12,7 @@
 // It reports; it does not gate. A number that has drifted is a fact to look
 // at, not a reason to block a save.
 
-import { el, clear } from "./ui.js";
+import { el, clear, api } from "./ui.js";
 import { GENERATE_PRESETS } from "./studio-generate.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3 } from "./shader-uniforms.js";
@@ -36,6 +36,7 @@ import { renderTiled, maxRenderSize } from "./shader-run.js";
 import { auditNodes, portabilitySummary, auditSource } from "./wgsl-audit.js";
 import { zipStore, crc32 } from "./zip-store.js";
 import { graphStats } from "./graph-compile.js";
+import { nodeReference, referenceGaps } from "./node-docs.js";
 import { freezeEffects } from "./canvas-graph.js";
 import { registerNode, withNodeHeader, nodeIdFor, keepVersion, versionSummary,
          MAX_VERSIONS, declaresNode } from "./node-library.js";
@@ -1165,6 +1166,84 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
                      + `intermediates in ${st.precision || "—"}` }); }
   } catch (e) {
     push({ group: "Platform", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The cross-cutting promises: that a node documents itself, that its
+  // lesson exists, and that it still draws what it drew.
+  try {
+    let courseModules = [];
+    try { courseModules = ((await api("/api/course")) || {}).modules || []; } catch { /* offline */ }
+
+    // A node the app generates — a compiled title, a frozen look — is not a
+    // library node and has nothing to document; the library is what this is
+    // a promise about.
+    const generated = (id) => id.startsWith("you.") || id.startsWith("source.title.") || id.startsWith("fused.");
+    { const gaps = referenceGaps();
+      const builtIn = gaps.withGaps.filter((d) => !generated(d.id));
+      push({ group: "Cross-cutting", name: "every built-in node describes itself",
+             ok: builtIn.length === 0,
+             detail: builtIn.length
+               ? `${builtIn.length} incomplete: ` + builtIn.slice(0, 3).map((d) => `${d.id} — ${d.gaps[0]}`).join("; ")
+               : `${gaps.total} nodes, all with a description and help on every control · `
+                 + "written by the nodes, so it cannot go stale" }); }
+
+    { const { docs } = nodeReference();
+      const slugs = new Set(courseModules.map((m) => m.slug));
+      const tagged = docs.filter((d) => d.module && !generated(d.id));
+      const dangling = slugs.size ? tagged.filter((d) => !slugs.has(d.module)) : [];
+      const untagged = docs.filter((d) => !d.module && !generated(d.id));
+      push({ group: "Cross-cutting", name: "every node's @module names a lesson that exists",
+             ok: dangling.length === 0 && untagged.length === 0,
+             detail: !slugs.size ? "the course could not be fetched, so the links were not checked"
+               : dangling.length || untagged.length
+                 ? `${dangling.length} point nowhere (${dangling.slice(0, 2).map((d) => `${d.id}→${d.module}`).join(", ")}), `
+                   + `${untagged.length} carry no module`
+                 : `${tagged.length} nodes across ${new Set(tagged.map((d) => d.module)).size} lessons, `
+                   + "every one of them a course module that exists" }); }
+
+    // Golden images are not attempted across machines — two GPUs disagree in
+    // the last bit and a hash would fail on the wrong one. What is checked is
+    // what a golden was for: that a node draws, that it changes the picture,
+    // and that it does the same thing twice.
+    { const W2 = 64, H2 = 48;
+      const src2 = document.createElement("canvas"); src2.width = W2; src2.height = H2;
+      { const g2 = src2.getContext("2d");
+        const gr = g2.createLinearGradient(0, 0, W2, H2);
+        gr.addColorStop(0, "#f8f0e0"); gr.addColorStop(1, "#141c2e");
+        g2.fillStyle = gr; g2.fillRect(0, 0, W2, H2);
+        g2.fillStyle = "#d05028"; g2.fillRect(8, 8, 24, 20); }
+      const base = src2.getContext("2d").getImageData(0, 0, W2, H2).data;
+      const drew = [], stuck = [], flaky = [];
+      for (const [id, t] of NODE_TYPES) {
+        if (t.inputs.length !== 1 || generated(id)) continue;
+        try {
+          const graph = createGraph(W2, H2);
+          const s0 = addNode(graph, "source");
+          graph.output = addNode(graph, id, {}, [s0]);
+          const a1 = renderGraph(graph, { [s0]: src2 }).getContext("2d").getImageData(0, 0, W2, H2).data;
+          const a2 = renderGraph(graph, { [s0]: src2 }).getContext("2d").getImageData(0, 0, W2, H2).data;
+          let same = true, moved = 0;
+          for (let i = 0; i < a1.length; i += 4) {
+            if (a1[i] !== a2[i] || a1[i + 1] !== a2[i + 1]) same = false;
+            if (Math.abs(a1[i] - base[i]) > 2) moved++;
+          }
+          if (!same) flaky.push(id);
+          else if (!moved) stuck.push(id);
+          else drew.push(id);
+        } catch (e) { flaky.push(`${id} (${String(e.message).split("\n")[0]})`); }
+      }
+      // Being an identity at its defaults is a legitimate design — a grade
+      // whose defaults did something would be a bad grade — so that is
+      // reported rather than failed. What is not allowed is a node that
+      // cannot be run twice for the same answer.
+      push({ group: "Cross-cutting", name: "every single-input node draws and repeats exactly",
+             ok: flaky.length === 0,
+             detail: flaky.length ? `not repeatable: ${flaky.join(", ")}`
+               : `${drew.length} nodes drew and repeated byte for byte; ${stuck.length} are identities at `
+                 + `their defaults (${stuck.join(", ") || "none"}), which is what a grade should be · `
+                 + "goldens across machines are not attempted — two GPUs disagree in the last bit" }); }
+  } catch (e) {
+    push({ group: "Cross-cutting", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

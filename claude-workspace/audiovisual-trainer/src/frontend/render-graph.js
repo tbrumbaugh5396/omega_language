@@ -144,7 +144,7 @@ defineNode(`// Composite in1 over in0 with a blend mode and an opacity. Encoded 
 uniform sampler2D in0;
 uniform sampler2D in1;
 uniform int   mode;      // @options normal,multiply,screen,overlay,darken,lighten,difference,add @default 0
-uniform float opacity;   // @range 0 1 @default 1
+uniform float opacity;   // @range 0 1 @default 1 @help how much of in1 is let through
 
 vec4 a = texture2D(in0, uv);
 vec4 b = texture2D(in1, uv);
