@@ -10,8 +10,8 @@
 // is negotiated — float, then half float, then plain bytes — and reported,
 // because a sim written for float looks wrong in bytes and you should know.
 
-/** Try to build a render target of the given kind; null if the GPU refuses. */
-function tryTarget(gl, w, h, kind, exts) {
+/** One texture of the given kind, filtered and clamped, ready to attach. */
+function makeTex(gl, w, h, kind, exts) {
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
   if (exts.gl2) {
@@ -37,15 +37,32 @@ function tryTarget(gl, w, h, kind, exts) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filt);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return { tex, linear };
+}
+
+/**
+ * A render target of the given kind, with `channels` colour attachments.
+ *
+ * Two attachments is what lets one sim keep two fields — velocity and the dye
+ * being carried through it — instead of packing both into one RGBA. It needs
+ * MRT, which WebGL2 has as standard; asking for two on WebGL1 fails here and
+ * the caller falls back to one.
+ */
+function tryTarget(gl, w, h, kind, exts, channels = 1) {
+  if (channels > 1 && !exts.gl2) return null;
+  const parts = [];
+  for (let i = 0; i < channels; i++) parts.push(makeTex(gl, w, h, kind, exts));
   const fbo = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  parts.forEach((p, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, p.tex, 0));
+  if (channels > 1) gl.drawBuffers(parts.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
   const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
     && gl.getError() === gl.NO_ERROR;
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.bindTexture(gl.TEXTURE_2D, null);
-  if (!ok) { gl.deleteTexture(tex); gl.deleteFramebuffer(fbo); return null; }
-  return { tex, fbo, kind, linear };
+  if (!ok) { for (const p of parts) gl.deleteTexture(p.tex); gl.deleteFramebuffer(fbo); return null; }
+  return { tex: parts[0].tex, tex2: parts[1] ? parts[1].tex : null, texes: parts.map((p) => p.tex),
+           fbo, kind, linear: parts[0].linear, channels };
 }
 
 export class Feedback {
@@ -69,29 +86,46 @@ export class Feedback {
     // Some GPUs will render to float; some only to half; some to neither.
     // Decided once by actually trying, not by reading extension names.
     this.kind = null;
+    this.channels = 1;
     this.a = null; this.b = null;         // the ping-pong pair (state)
     this.prevTex = null;                  // last displayed frame, for the no-sim path
     this.w = 0; this.h = 0;
     this.frame = 0;
   }
 
-  /** (Re)build storage at a size. Also resets the simulation. */
-  resize(w, h) {
-    if (w === this.w && h === this.h && this.a) return;
+  /**
+   * (Re)build storage at a size, with one or two channels. Also resets the
+   * simulation — changing what the state *is* invalidates what it held.
+   */
+  resize(w, h, channels = 1) {
+    const want = Math.max(1, Math.min(2, channels | 0));
+    if (w === this.w && h === this.h && this.a && this.channels === want) return;
     this.release();
-    this.w = w; this.h = h;
+    this.w = w; this.h = h; this.channels = want;
     const gl = this.gl;
     const order = [];
     if (this.exts.float) order.push("float");
     if (this.exts.half) order.push("half");
     order.push("byte");
     for (const kind of order) {
-      const a = tryTarget(gl, w, h, kind, this.exts);
+      const a = tryTarget(gl, w, h, kind, this.exts, want);
       if (!a) continue;
-      const b = tryTarget(gl, w, h, kind, this.exts);
-      if (!b) { gl.deleteTexture(a.tex); gl.deleteFramebuffer(a.fbo); continue; }
+      const b = tryTarget(gl, w, h, kind, this.exts, want);
+      if (!b) { for (const t of a.texes) gl.deleteTexture(t); gl.deleteFramebuffer(a.fbo); continue; }
       this.a = a; this.b = b; this.kind = kind;
       break;
+    }
+    // Two channels asked for and refused: run with one and say so.
+    if (!this.a && want > 1) {
+      this.channels = 1;
+      for (const kind of order) {
+        const a = tryTarget(gl, w, h, kind, this.exts, 1);
+        if (!a) continue;
+        const b = tryTarget(gl, w, h, kind, this.exts, 1);
+        if (!b) { for (const t of a.texes) gl.deleteTexture(t); gl.deleteFramebuffer(a.fbo); continue; }
+        this.a = a; this.b = b; this.kind = kind;
+        break;
+      }
     }
     // The previous displayed frame is always bytes: it is a copy of the canvas.
     this.prevTex = gl.createTexture();
@@ -140,7 +174,7 @@ export class Feedback {
   release() {
     const gl = this.gl;
     for (const t of [this.a, this.b]) {
-      if (t) { gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fbo); }
+      if (t) { for (const tex of t.texes || [t.tex]) gl.deleteTexture(tex); gl.deleteFramebuffer(t.fbo); }
     }
     if (this.prevTex) gl.deleteTexture(this.prevTex);
     this.a = this.b = this.prevTex = null;
@@ -150,8 +184,9 @@ export class Feedback {
   describe() {
     if (!this.kind) return "no feedback storage";
     const api = this.exts.gl2 ? "WebGL2" : "WebGL1";
-    return this.kind === "float" ? `float state · ${api}`
-         : this.kind === "half" ? `half-float state · ${api}`
-         : `8-bit state · ${api} (this GPU will not render to float; sims will be coarse)`;
+    const ch = this.channels > 1 ? " · two targets" : "";
+    return this.kind === "float" ? `float state · ${api}${ch}`
+         : this.kind === "half" ? `half-float state · ${api}${ch}`
+         : `8-bit state · ${api}${ch} (this GPU will not render to float; sims will be coarse)`;
   }
 }

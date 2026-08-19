@@ -97,6 +97,18 @@ function proveNode(id, type) {
  * at boot; failures are reported rather than thrown, because a broken node
  * must not stop the app from starting.
  */
+let loading = null;
+
+/**
+ * Load the library once, whoever asks first. The boot warms it; anything that
+ * needs the list — the Studio page, an effect menu — awaits the same promise
+ * rather than racing it.
+ */
+export function ensureUserNodes() {
+  if (!loading) loading = loadUserNodes().catch(() => []);
+  return loading;
+}
+
 export async function loadUserNodes() {
   let projects = [];
   try {

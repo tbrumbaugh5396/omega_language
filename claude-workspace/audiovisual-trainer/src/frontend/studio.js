@@ -6,6 +6,7 @@
 
 import { el, clear, api, toast, confirmDialog, modal, closeModal, relTime } from "./ui.js";
 import { aiChip } from "./ai.js";
+import { userNodes, userNodeProblems, ensureUserNodes } from "./node-library.js";
 import { canvasEditor } from "./studio-canvas.js";
 import { musicEditor } from "./studio-music.js";
 import { videoEditor } from "./studio-video.js";
@@ -70,7 +71,43 @@ export async function studioView(ctx) {
   root.append(el("div.card", {},
     el("h2", {}, "Documents", el("span.fine", {}, `${projects.length}`)),
     el("div.candidates", {}, ...projects.map((p) => projectTile(ctx, p)))));
+  // The library may still be arriving; the card fills itself in when it does.
+  const nodeCard = el("div", {});
+  root.append(nodeCard);
+  ensureUserNodes().then(() => { clear(nodeCard); nodeCard.append(nodeLibraryCard(ctx)); });
   return root;
+}
+
+/**
+ * The nodes you have written: Generate documents with `@node` in the header,
+ * which is the whole of what makes one. They are listed here because a node
+ * is used somewhere other than where it is edited, and a library you cannot
+ * see is one you forget you have.
+ */
+function nodeLibraryCard(ctx) {
+  const mine = userNodes(), broken = userNodeProblems();
+  if (!mine.length && !broken.length) {
+    return el("div.card", {},
+      el("h2", {}, "Your nodes"),
+      el("p.fine", {}, "None yet. Any Generate sketch becomes an effect in Canvas and Video the moment " +
+        "it says `// @node <name>` in its header — the Save as node button in Generate writes that line " +
+        "for you. A stack of effects can also be frozen into one, from the Canvas layer panel."));
+  }
+  const row = (n) => el("div.spread", { style: { alignItems: "baseline", gap: ".5rem" } },
+    el("div", {},
+      el("button.ghost", { style: { padding: ".1em .3em" },
+        onclick: () => n.docId && ctx.go("studio", "generate", String(n.docId)) }, n.name),
+      el("span.fine", {}, ` ${n.id}`)),
+    el("span.fine", {}, n.error ? "" : `${n.inputs.length} input${n.inputs.length === 1 ? "" : "s"} · `
+      + `${n.params.filter((u) => u.control !== "image").length} controls`
+      + (n.module ? ` · ${n.module}` : "")));
+  return el("div.card", {},
+    el("h2", {}, "Your nodes", el("span.fine", {}, `${mine.length}`)),
+    el("p.fine", {}, "Each of these is a Generate document — editing the sketch changes the node " +
+      "everywhere it is used. They appear in the effect menus in Canvas and Video."),
+    el("div.stack", { style: { gap: ".25rem" } }, ...mine.map(row)),
+    ...broken.map((n) => el("p.fine", { style: { color: "var(--bad, #e06c5a)" } },
+      `${n.name || n.id}: ${n.error}`)));
 }
 
 function projectTile(ctx, p) {

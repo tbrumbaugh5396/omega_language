@@ -9,7 +9,7 @@ import { el, clear, api, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms, desugar, desugarMapped, mapErrors, hasSimPass, isEs3, withDefine,
          bakeDefaults, embedImages, stripComments, sketchMeta, SKETCH_VARS } from "./shader-uniforms.js";
-import { getGL, isGL2, linkProgram } from "./shader-run.js";
+import { getGL, isGL2, linkProgram, dualTargets } from "./shader-run.js";
 import { Feedback } from "./feedback.js";
 import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
          mediaDims, seekVideos, resumeVideos } from "./shader-controls.js";
@@ -879,6 +879,63 @@ vec3 col = state(uv).rgb + vec3(0.02, 0.02, 0.03);
 
 finish(col)` },
 
+  { id: "fluid", label: "Fluid — velocity and dye, on two targets", preview: [640, 640], steps: 2, source:
+`// Two fields, two targets. The first state holds a velocity field; the
+// second holds the dye being carried through it. Packing both into one RGBA
+// is the usual trick and it always hurts — four channels between a vector
+// and a colour. Defining sim2() as well as sim() asks for a second target,
+// which WebGL2 gives as standard, and then each field has its own four.
+//
+// sim()  -> the velocity, read back with state()
+// sim2() -> the dye, read back with state2()
+// @module 07-motion
+uniform float swirl;     // @range 0 3 @default 1.4 @help how hard the curl of the noise pushes
+uniform float damp;      // @range 0.9 1 @default 0.985 @help how fast the motion dies away
+uniform float inject;    // @range 0 1 @default 0.55 @help dye put in at the pointer, and at the start
+uniform float fade;      // @range 0.9 1 @default 0.994 @help how long the dye lasts
+
+// The curl of a noise field: divergence-free, so it stirs without pumping.
+vec2 curlNoise(vec2 p) {
+  float e = 0.06;
+  float n1 = fbm(p + vec2(0.0, e)), n2 = fbm(p - vec2(0.0, e));
+  float n3 = fbm(p + vec2(e, 0.0)), n4 = fbm(p - vec2(e, 0.0));
+  return vec2(n1 - n2, n4 - n3) / (2.0 * e);
+}
+
+vec4 sim(vec2 q) {
+  if (frame == 0) return vec4(0.0);
+  // Semi-Lagrangian advection: look back along the velocity and take what
+  // was there.
+  vec2 v = state(q).xy;
+  vec2 back = q - v / u_resolution;
+  vec2 carried = texture2D(u_state, back).xy;
+  vec2 force = curlNoise(q * 3.0 + vec2(t * 0.05, 0.0)) * swirl;
+  vec2 push = (m - q) * md * 40.0;
+  return vec4((carried + force * 0.02 + push) * damp, 0.0, 1.0);
+}
+
+vec4 sim2(vec2 q) {
+  vec2 v = state(q).xy;
+  vec4 dye = texture2D(u_state2, q - v / u_resolution);
+  if (frame == 0) {
+    float ring = smoothstep(0.34, 0.3, length(q - 0.5));
+    return vec4(palette(q.x + q.y, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0, 0.33, 0.67)) * ring, 1.0);
+  }
+  // A standing source, so it keeps going without anyone touching it, and
+  // the pointer as a second one for when they do.
+  vec2 spout = 0.5 + 0.3 * vec2(cos(t * 0.61), sin(t * 0.83));
+  float at = smoothstep(0.055, 0.0, length(q - spout)) * inject
+           + smoothstep(0.09, 0.0, length(q - m)) * md * inject;
+  vec3 ink = palette(t * 0.2, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0, 0.33, 0.67));
+  return vec4(mix(dye.rgb * fade, ink, clamp(at, 0.0, 1.0)), 1.0);
+}
+
+vec3 dye = state2(uv).rgb;
+vec2 v = state(uv).xy;
+// A little of the motion in the shading, so the field is visible as well as
+// its effect: bright where it is moving fast.
+finish(srgbToLinear(dye) * (1.0 + length(v) * 0.05))` },
+
   { id: "clipink", label: "Video — ink stirred out of the picture", preview: [640, 360], steps: 6, source:
 `// Ink stirred out of what the picture is showing: the frame seeds a flow,
 // the flow carries it, and the result is mixed back over the frame. Written
@@ -1132,6 +1189,10 @@ export async function generateEditor(host) {
     if (display) gl.deleteProgram(display);
     if (sim) gl.deleteProgram(sim);
     display = d; sim = s2;
+    // Two fields if the sketch defines sim2(); the buffers are rebuilt on the
+    // next draw, and describe() then says whether the GPU actually gave two.
+    wantChannels = s2 && dualTargets(src) ? 2 : 1;
+    if (feedback.channels !== wantChannels) feedback.resize(canvas.width, canvas.height, wantChannels);
     stateLabel.textContent = sim ? `sim · ${feedback.describe()}` : (es3() ? "WebGL2 · ES 3.00" : "WebGL1 · ES 1.00");
     return true;
   }
@@ -1143,7 +1204,7 @@ export async function generateEditor(host) {
 
   /** Set everything both passes share, then bind the feedback textures on the
       last two units — user images take the first ones. */
-  function setCommon(prog, prevTex, stateTex) {
+  function setCommon(prog, prevTex, stateTex, stateTex2) {
     gl.useProgram(prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     const loc = gl.getAttribLocation(prog, "a_pos");
@@ -1164,15 +1225,24 @@ export async function generateEditor(host) {
     gl.activeTexture(gl.TEXTURE7);
     gl.bindTexture(gl.TEXTURE_2D, stateTex);
     if (u("u_state")) gl.uniform1i(u("u_state"), 7);
+    // The second field, for a sim that keeps two. Where there is none it
+    // reads the first, so a sketch written for two still draws something.
+    gl.activeTexture(gl.TEXTURE5);
+    gl.bindTexture(gl.TEXTURE_2D, stateTex2 || stateTex);
+    if (u("u_state2")) gl.uniform1i(u("u_state2"), 5);
     gl.activeTexture(gl.TEXTURE0);
   }
+
+  // Decided when the program is compiled, not per frame: desugaring the
+  // sketch to ask is not something to do sixty times a second.
+  let wantChannels = 1;
 
   /** One state step: read a, write b, swap. */
   function stepSim() {
     const w = feedback.write, r = feedback.read;
     gl.bindFramebuffer(gl.FRAMEBUFFER, w.fbo);
     gl.viewport(0, 0, feedback.w, feedback.h);
-    setCommon(sim, r.tex, r.tex);
+    setCommon(sim, r.tex, r.tex, r.tex2);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     feedback.swap();
@@ -1182,11 +1252,14 @@ export async function generateEditor(host) {
       frame's is captured for next time. */
   function draw() {
     if (!display || !gl) return;
-    if (feedback.w !== canvas.width || feedback.h !== canvas.height) {
-      feedback.resize(canvas.width, canvas.height);
+    // The channel count matters as much as the size: a sketch that grew a
+    // sim2() needs a second target, and a resize that only checks dimensions
+    // would leave state2() reading the first field.
+    if (feedback.w !== canvas.width || feedback.h !== canvas.height || feedback.channels !== wantChannels) {
+      feedback.resize(canvas.width, canvas.height, wantChannels);
     }
     gl.viewport(0, 0, canvas.width, canvas.height);
-    if (sim) setCommon(display, feedback.write.tex, feedback.read.tex);
+    if (sim) setCommon(display, feedback.write.tex, feedback.read.tex, feedback.read.tex2);
     else setCommon(display, feedback.prevTex, feedback.prevTex);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     if (!sim) feedback.captureCanvas();

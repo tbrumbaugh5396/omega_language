@@ -579,7 +579,7 @@ track and prev/next navigation — not the **draggable curve editor in the
 timeline** the bullet asks for. The model is ready for it (per-key eases are
 already stored per key); it is the editor that is missing.
 
-### Phase 4 — Generate as the node authoring environment *(M)*
+### Phase 4 — Generate as the node authoring environment *(M)* — **shipped**
 
 - **Save as node**: a sketch with `@node <name>` appears in Canvas and Video
   effect menus with its icon, group and help.
@@ -589,6 +589,59 @@ already stored per key); it is the editor that is missing.
   (MRT on WebGL2: a sim writing velocity and dye to two targets).
 - Optional **graph view**: a visual editor of the render graph. Useful, not
   load-bearing; the layer panel is the graph view most people want.
+
+**Save as node.** A node type has never been anything but a sketch with
+`@node` in its header, so a user's Generate document with that line in it was
+already one — all that was missing was for the app to go and look.
+`node-library.js` is that looking: at boot it finds the documents that declare
+a node, registers each under a namespaced id (`you.<name>`) so a built-in can
+never be quietly shadowed, and proves it by drawing one 16×16 frame. A node
+that will not draw stays in the list *with its error*, because "my node
+vanished" is worse to debug than "my node says why". The document **is** the
+node: editing the sketch changes it everywhere it is used, and the Studio page
+lists what you have with its inputs, controls and module.
+
+**Freeze.** A stack that fuses into one pass is one shader, so it can become a
+node with a name: the dialled values are baked in as `@default`s, a LUT in the
+stack travels with it as `@data`, and the result is saved as a Generate
+document — so a frozen look can be opened and edited like anything else.
+Verified end to end in the browser: two effects → one node with one input and
+seven controls, and the picture byte-identical before and after.
+
+**Versions.** A node other documents depend on is not a thing to edit without
+a way back, so the text is versioned in the document — a ring of twelve, with
+a diff that names the uniforms that moved — and the dialog says which
+documents use the node before you change it.
+
+**Multi-input and multi-output.** A sketch declaring `in0` and `in1` works as
+an effect, the second picture chosen in the dialog. And `vec4 sim2(vec2)`
+alongside `sim()` asks for a **second render target**: the sim pass writes both
+at once and `state2()` reads the second back, so one simulation can keep a
+velocity field and the dye being carried through it in four channels each
+instead of squeezing both into one RGBA. MRT is core in WebGL2 and absent in
+WebGL1, so under 1.00 the second pass is not emitted and `state2()` reads the
+first — the sketch still runs, and `describe()` says which it got. Shipped
+with a fluid preset that uses it.
+
+**Graph view** — read-only, as the bullet allows. It shows what the passes
+are, which of them fused (a dashed surround), where the textures come from and
+what the whole thing costs. Building a wire editor for a document that is
+nearly always a chain would be a large thing for a small return; this answers
+the questions the layer panel cannot.
+
+Three real bugs came out of building it. Fusion left a carried input's
+`in0_size` as a uniform — the runner happened to set it, but a node registered
+from the fused text got it as a control defaulting to (0.5, 0.5); a carried
+input is always the size of the pass, so it is `u_resolution`. Freeze named
+the stack's own input `f0_in0`, which is a name only fusion cares about, so
+the frozen node declared no input at all — the graph view is what made that
+visible. And `TargetPool` judged an allocation by `getError()`, which reports
+the *oldest* pending error, so a failure somewhere else read as this
+allocation failing; it drains first now.
+
+**Left in Phase 4:** importing a node from a file is "paste it into a Generate
+document in GLSL mode, then Save as node" — there is no drop-a-`.glsl`-here.
+92/92.
 
 ### Phase 5 — Design meets the target *(M)*
 

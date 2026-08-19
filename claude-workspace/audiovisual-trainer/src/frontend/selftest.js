@@ -17,7 +17,7 @@ import { GENERATE_PRESETS } from "./studio-generate.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3 } from "./shader-uniforms.js";
 import { applyUniforms, randomise } from "./shader-controls.js";
-import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages } from "./shader-run.js";
+import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets } from "./shader-run.js";
 import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
@@ -923,10 +923,14 @@ export async function runSelfTest(report = () => {}) {
           for (const u of t.params) if (u.control !== "image") params[u.name] = u.value.slice();
           const got = px(applyEffects(src, [makeEffect("node", entry.id, params)]));
           const r = compare(got, wanted, W, H, { thresh: 6 });
+          // And it must be a *filter*: one input, called in0, or the graph
+          // will treat it as something that draws rather than something that
+          // takes a picture.
+          const shaped = t.inputs.length === 1 && t.inputs[0] === "in0";
           push({ group: "Nodes from Generate", name: "a stack freezes into one node that looks the same",
-                 ok: r.mean < 1.0,
-                 detail: `three effects → one node · mean ${r.mean}/255 · ${t.params.length} controls, ` +
-                         `their dialled values baked in as defaults · want <1.0` });
+                 ok: r.mean < 1.0 && shaped,
+                 detail: `three effects → one node · mean ${r.mean}/255 · inputs [${t.inputs.join(", ")}] · ` +
+                         `${t.params.length} controls, their dialled values baked in as defaults · want <1.0` });
         }
       } }
 
@@ -966,6 +970,29 @@ export async function runSelfTest(report = () => {}) {
         detail = `inputs ${entry.inputs.join(", ")} · half way to white everywhere, worst ${worst.toFixed(1)}/255`;
       }
       push({ group: "Nodes from Generate", name: "a two-input sketch works as a node", ok, detail }); }
+
+    // Two targets: the point is that the two states hold different things.
+    // A probe writes a known number into each and reads both back.
+    { const probe = `// Two fields at once.
+uniform float k;   // @range 0 1 @default 1
+vec4 sim(vec2 q) { return vec4(0.25, 0.0, 0.0, 1.0); }
+vec4 sim2(vec2 q) { return vec4(0.0, 0.75, 0.0, 1.0); }
+vec3(state(uv).r, state2(uv).g, 0.0) * k`;
+      const dual = dualTargets(probe);
+      const glsl = desugar(probe, { es3: isGL2(gl) });
+      const outs = (glsl.match(/^layout\(location = \d\) out vec4 \w+;/gm) || []).length;
+      const out = renderSketch(probe, 32, 32, { steps: 2 });
+      const d = out.getContext("2d").getImageData(0, 0, 32, 32).data;
+      // 0.25 and 0.75 come back as 64 and 191; if both landed in one target
+      // the two would be equal, and if the second never ran green would be 0.
+      const okDual = isGL2(gl)
+        ? (dual && outs === 2 && Math.abs(d[0] - 64) <= 2 && Math.abs(d[1] - 191) <= 2)
+        : true;
+      push({ group: "Nodes from Generate", name: "a sim can write two targets, and they hold different things",
+             ok: okDual,
+             detail: isGL2(gl)
+               ? `${outs} outputs declared · state() came back ${d[0]} (want 64), state2() ${d[1]} (want 191)`
+               : "WebGL1 here: one target, and state2() reads the first — the sketch still runs" }); }
 
     // Versions: a ring, and a summary that says what moved.
     { const data = {};

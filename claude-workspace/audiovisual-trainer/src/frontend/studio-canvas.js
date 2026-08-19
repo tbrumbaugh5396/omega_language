@@ -29,6 +29,7 @@ import { buildControls } from "./shader-controls.js";
 import { nodeType } from "./render-graph.js";
 import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
 import { userNodes, registerNode, withNodeHeader } from "./node-library.js";
+import { graphSvg, graphSummary } from "./graph-view.js";
 import { fusedSketch, planPasses } from "./graph-fuse.js";
 import { applyEffects, documentGaps, documentGraph, effectCost, effectLabel, ejectEffects,
          freezeEffects, makeEffect, prepareEffects, sketchEffect } from "./canvas-graph.js";
@@ -1588,6 +1589,41 @@ export async function canvasEditor(host) {
         } }, "Freeze")));
   }
 
+  /**
+   * The document's graph, drawn. It shows rather than edits: the layer panel
+   * is the editor, and this answers the questions the panel cannot — what the
+   * passes are, which of them fused, and where the textures come from.
+   */
+  function documentGraphView() {
+    let body, summary = "";
+    try {
+      const names = {};
+      const { graph } = documentGraph(layers, {
+        width: W, height: H, background: doc.background || "#ffffff",
+        pixelsOf: (l) => { return l.canvas; }, maskOf: (l) => l.maskCanvas });
+      // Name the sources after the layers they came from, in graph order.
+      const visible = layers.filter((l) => l.visible && l.type !== "adjust");
+      let k = 0;
+      for (const n of graph.nodes) {
+        if (n.type !== "source") continue;
+        const l = visible[k];
+        names[n.id] = l ? l.name : "a mask";
+        if (l && l.maskCanvas) k += 0; else k += 1;
+      }
+      body = graphSvg(graph, { sourceNames: names });
+      summary = graphSummary(graph);
+    } catch (e) {
+      body = el("p.fine", {}, String(e.message).split("\n")[0]);
+    }
+    modal(el("h2", {}, "The document's graph"),
+      el("p.fine", {}, "Every layer, its stack and its mask, as the passes they compile to. " +
+        "A dashed surround is a run that fused into one draw; an orange outline is the output."),
+      el("div", { style: { overflow: "auto", background: "rgba(0,0,0,.25)", borderRadius: "10px" } }, body),
+      el("p.fine", {}, summary),
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button.primary", { onclick: closeModal }, "Close")));
+  }
+
   function showStackGlsl(l) {
     let text;
     try { text = ejectEffects(l.effects, W, H); }
@@ -1755,6 +1791,7 @@ export async function canvasEditor(host) {
           el("button", { onclick: () => fileInput.click() }, "Import"),
           el("button", { onclick: exportPng }, "PNG"),
           el("button", { title: "the whole document as one chain of shaders", onclick: documentGlsl }, "GLSL"),
+          el("button", { title: "the document's render graph, drawn", onclick: documentGraphView }, "Graph"),
           grid.button,
           fileInput),
         el("div.row.tight", { style: { marginTop: ".4rem" } },

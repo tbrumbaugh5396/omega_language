@@ -389,6 +389,16 @@ export function freezeEffects(effects, { width = 1024, height = 1024 } = {}) {
   }
 
   let sketch = step.sketch;
+  // The stack's own input is the node's input, and a node's input is called
+  // in0 — the fused text knows it as f<k>_in0, which is a name only fusion
+  // cares about. Without this the frozen node declares no input at all and
+  // the graph treats it as something that draws rather than something that
+  // filters.
+  const entry = step.samplers.find((smp) => smp.from === src);
+  if (entry) {
+    const re = new RegExp(`\\b${entry.name}\\b`, "g");
+    sketch = sketch.replace(new RegExp(`\\b${entry.name}_size\\b`, "g"), "in0_size").replace(re, "in0");
+  }
   // Any sampler that was fed by a LUT sheet carries it now.
   for (const smp of step.samplers) {
     const sheet = lutOf.get(smp.from);

@@ -40,6 +40,11 @@ class TargetPool {
   make(w, h) {
     const gl = this.gl;
     const tryKind = (kind) => {
+      // Clear anything an earlier call left behind: getError() reports the
+      // oldest error still pending, so without this a failure somewhere else
+      // is read as this allocation failing, and a perfectly good target is
+      // thrown away.
+      while (gl.getError() !== gl.NO_ERROR) { /* drain */ }
       const tex = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, tex);
       if (this.gl2) {

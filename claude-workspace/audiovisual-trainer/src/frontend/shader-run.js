@@ -133,13 +133,15 @@ export function renderSketch(source, width, height, opts = {}) {
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width; canvas.height = height;
   }
-  feedback.resize(width, height);
+  // Two targets when the sketch defines sim2(); the buffers decide whether
+  // the GPU will actually give two, and say so in describe().
+  feedback.resize(width, height, dualTargets(source) ? 2 : 1);
   if (opts.reset !== false) feedback.reset();
 
   // Image uniforms from the caller's canvases.
   const texByName = new Map();
   let unit = 0;
-  const bindCommon = (prog, prevTex, stateTex) => {
+  const bindCommon = (prog, prevTex, stateTex, stateTex2) => {
     gl.useProgram(prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     const loc = gl.getAttribLocation(prog, "a_pos");
@@ -185,6 +187,11 @@ export function renderSketch(source, width, height, opts = {}) {
     gl.activeTexture(gl.TEXTURE7);
     gl.bindTexture(gl.TEXTURE_2D, stateTex);
     if (u("u_state")) gl.uniform1i(u("u_state"), 7);
+    // The second state, where the sketch keeps one. Without it, state2()
+    // reads the first — the sketch still runs, it just has one field.
+    gl.activeTexture(gl.TEXTURE0 + 5);
+    gl.bindTexture(gl.TEXTURE_2D, stateTex2 || stateTex);
+    if (u("u_state2")) gl.uniform1i(u("u_state2"), 5);
     gl.activeTexture(gl.TEXTURE0);
   };
 
@@ -194,14 +201,14 @@ export function renderSketch(source, width, height, opts = {}) {
       const w = feedback.write, r = feedback.read;
       gl.bindFramebuffer(gl.FRAMEBUFFER, w.fbo);
       gl.viewport(0, 0, width, height);
-      bindCommon(sim, r.tex, r.tex);
+      bindCommon(sim, r.tex, r.tex, r.tex2);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       feedback.swap();
     }
   }
   gl.viewport(0, 0, width, height);
-  if (sim) bindCommon(display, feedback.write.tex, feedback.read.tex);
+  if (sim) bindCommon(display, feedback.write.tex, feedback.read.tex, feedback.read.tex2);
   else bindCommon(display, feedback.prevTex, feedback.prevTex);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   if (!sim) feedback.captureCanvas();
@@ -213,6 +220,10 @@ export function renderSketch(source, width, height, opts = {}) {
   out.getContext("2d").drawImage(canvas, 0, 0);
   return out;
 }
+
+/** Does this sketch keep two fields? `vec4 sim2(vec2)` is how it says so. */
+export const dualTargets = (source) =>
+  /\bvec4\s+sim2\s*\(\s*vec2\b/.test(String(source)) && /\bvec4\s+sim\s*\(\s*vec2\b/.test(String(source));
 
 /** The controls a source would show, for a host that wants to build them. */
 export function sketchUniforms(source) {

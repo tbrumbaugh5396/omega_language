@@ -14,7 +14,7 @@
 /** Supplied by the runtime, so they are driven rather than dialled. */
 export const RESERVED = new Set([
   "u_resolution", "u_mouse", "u_time", "u_seed",
-  "u_prev", "u_state", "u_frame", "u_mouseDown",
+  "u_prev", "u_state", "u_state2", "u_frame", "u_mouseDown",
 ]);
 
 // Scanned over the whole source rather than line by line: `uniform vec2 u_r;
@@ -277,6 +277,11 @@ vec3 palette(float t){ return palette(t, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0
   ["prevAt", `vec4 prevAt(vec2 dpx){ return texture2D(u_prev, (gl_FragCoord.xy + dpx) / u_resolution); }`],
   ["state", `vec4 state(vec2 q){ return texture2D(u_state, q); }`],
   ["stateAt", `vec4 stateAt(vec2 dpx){ return texture2D(u_state, (gl_FragCoord.xy + dpx) / u_resolution); }`],
+  // The second state, for a sim that keeps two things — velocity and dye,
+  // say. Without a second target these read the first, so a sketch written
+  // for two still runs (badly, and it will say so) where MRT is missing.
+  ["state2", `vec4 state2(vec2 q){ return texture2D(u_state2, q); }`],
+  ["stateAt2", `vec4 stateAt2(vec2 dpx){ return texture2D(u_state2, (gl_FragCoord.xy + dpx) / u_resolution); }`],
 ];
 
 /**
@@ -340,6 +345,7 @@ uniform float u_time;
 uniform float u_seed;
 uniform sampler2D u_prev;    // last frame — of the state if sim() exists, else of the picture
 uniform sampler2D u_state;   // this frame's state, once sim() has run
+uniform sampler2D u_state2;  // the second state, if the sketch defines sim2()
 uniform int   u_frame;       // frames since Restart; 0 on the first
 uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
 
@@ -348,10 +354,11 @@ uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
 // after this line rather than before it. Shims keep every sketch and helper
 // written in 1.00 spelling compiling unchanged: texture2D and gl_FragColor are
 // the two names that changed, and both are one #define away.
+// The fragment outputs are emitted by desugar, not here: once a second one
+// exists both need explicit locations, and GLSL ES 3.00 will not mix.
 const PRELUDE_300 = `#version 300 es
 precision highp float;
 precision highp int;
-out vec4 fragColor;
 #define gl_FragColor fragColor
 #define texture2D texture
 #define textureCube texture
@@ -361,6 +368,7 @@ uniform float u_time;
 uniform float u_seed;
 uniform sampler2D u_prev;    // last frame — of the state if sim() exists, else of the picture
 uniform sampler2D u_state;   // this frame's state, once sim() has run
+uniform sampler2D u_state2;  // the second state, if the sketch defines sim2()
 uniform int   u_frame;       // frames since Restart; 0 on the first
 uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
 
@@ -530,9 +538,18 @@ export function desugarMapped(sketch, opts = {}) {
 
   // Defining `vec4 sim(vec2 uv)` adds a state pass. The same file serves both
   // passes: the runtime prepends `#define SIM_PASS` for the first one.
+  //
+  // Defining `vec4 sim2(vec2 uv)` as well adds a *second* target: the sim pass
+  // writes both at once, and `state2()` reads the second back. That is what
+  // lets one simulation keep two different things — a velocity field and the
+  // dye being carried through it — rather than squeezing both into one RGBA.
+  // It needs MRT, which is core in WebGL2 and absent in WebGL1, so under 1.00
+  // the second pass is simply not emitted and state2() reads the first.
   const hasSim = /\bvec4\s+sim\s*\(\s*vec2\b/.test(declared);
+  const wantsSim2 = /\bvec4\s+sim2\s*\(\s*vec2\b/.test(declared);
+  const hasSim2 = hasSim && wantsSim2 && !!opts.es3;
   const simBlock = hasSim ? `#ifdef SIM_PASS
-  gl_FragColor = sim(gl_FragCoord.xy / u_resolution);
+  gl_FragColor = sim(gl_FragCoord.xy / u_resolution);${hasSim2 ? "\n  fragColor1 = sim2(gl_FragCoord.xy / u_resolution);" : ""}
 #else
 ` : "";
   const simEnd = hasSim ? "\n#endif" : "";
@@ -546,6 +563,13 @@ export function desugarMapped(sketch, opts = {}) {
     lines.forEach((l, k) => { out.push(l); map.push(fromLine ? fromLine + k : 0); });
   };
   emit(opts.es3 ? PRELUDE_300 : PRELUDE);
+  // The second colour attachment is declared only when it is written; once it
+  // is, both outputs need an explicit location. It is behind the same #ifdef
+  // as the pass that writes it: the display pass draws to the canvas, which
+  // has one colour buffer, and a shader declaring an output it has nowhere to
+  // put is a shader some drivers refuse.
+  if (opts.es3) emit("layout(location = 0) out vec4 fragColor;");
+  if (hasSim2) emit("#ifdef SIM_PASS\nlayout(location = 1) out vec4 fragColor1;\n#endif");
   emit(vars.map(([ty, name]) => `${ty} ${name};`).join("\n"));
   emit(helpers);
   emit(COERCE);
