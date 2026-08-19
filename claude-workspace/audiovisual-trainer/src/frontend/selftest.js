@@ -639,6 +639,32 @@ export async function runSelfTest(report = () => {}) {
              ok: r.mean < 2.0,
              detail: `mean ${r.mean}/255 · ${r.off} px off by >6 (${r.pct}%) · want <2.0 — the roadmap's own bar for this phase` }); }
 
+    // Transparency has to survive a stack: every catalogue node computes an
+    // alpha, and for a long time the compiler was throwing it away — which
+    // turned the clear surround of anything you blurred into an opaque box.
+    { const c = document.createElement("canvas"); c.width = W; c.height = H;
+      const g2 = c.getContext("2d");
+      g2.fillStyle = "#e08040";
+      g2.beginPath(); g2.arc(W / 2, H / 2, 22, 0, Math.PI * 2); g2.fill();
+      const corner = () => 3;                       // a pixel far from the disc
+      const out = applyEffects(c, [
+        makeEffect("node", "filter.blur", { radius: [5] }),
+        makeEffect("graph", "grade", { lift: 0.02, gamma: 1.1, gain: 1.05, sat: 1.2 }),
+        makeEffect("graph", "vignette", { amount: 0.4, softness: 0.6 }),
+      ]).getContext("2d").getImageData(0, 0, W, H).data;
+      const at = (x, y) => out[(y * W + x) * 4 + 3];
+      const clear2 = at(corner(), corner()) === 0 && at(W - 4, H - 4) === 0;
+      const solid = at(W / 2, H / 2) > 250;
+      // And the blur must not drag black out of the transparency: just outside
+      // the disc the colour should still be the disc's, only fainter.
+      const i = ((H / 2) * W + (W / 2 + 23)) * 4;   // one pixel outside a 22px disc
+      const soft = out[i + 3];
+      const hue = out[i] > out[i + 1] && out[i + 1] > out[i + 2];
+      push({ group: "Canvas on the graph", name: "transparency survives a stack, and a blur does not bleed black",
+             ok: clear2 && solid && soft > 20 && soft < 250 && hue,
+             detail: `clear corners ${clear2 ? "stay clear" : "went opaque"} · centre alpha ${at(W / 2, H / 2)} · ` +
+                     `just outside the disc alpha ${soft} and the colour is still the disc's (${out[i]},${out[i + 1]},${out[i + 2]})` }); }
+
     // And the whole thing ejects as GLSL that links.
     { const layers = [
         { name: "back", visible: true, opacity: 1, blend: "source-over", type: "raster", effects: [] },

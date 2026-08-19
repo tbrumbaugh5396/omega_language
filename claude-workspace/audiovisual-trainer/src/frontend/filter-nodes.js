@@ -53,6 +53,7 @@ const LUMA = `float lumaOf(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722
 defineNode(`// Motion blur: n taps along a direction, positions rounded to pixels.
 // @node filter.motion
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -78,6 +79,7 @@ vec4(c.rgb, texture2D(in0, uv).a)`);
 defineNode(`// Radial blur: samples toward the centre at shrinking scales, positions rounded.
 // @node filter.radial
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -98,6 +100,7 @@ vec4(c.rgb, texture2D(in0, uv).a)`);
 defineNode(`// Lens blur: a flat disc kernel of radius r, clamped at the border.
 // @node filter.lens
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -118,6 +121,7 @@ vec4(c.rgb, texture2D(in0, uv).a)`);
 defineNode(`// Unsharp mask: the original plus amount × (original − its blur). in1 is the blur.
 // @node filter.unsharp
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform sampler2D in1;
 uniform float amount;   // @range 0 3 @default 0.8
@@ -128,6 +132,7 @@ vec4(clamp(o.rgb + amount * (o.rgb - b.rgb), 0.0, 1.0), o.a)`);
 defineNode(`// Sobel edges: gradient magnitude per channel, from the two 3×3 kernels.
 // @node filter.edges
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -152,6 +157,7 @@ vec4(mag / 255.0, texture2D(in0, uv).a)`);
 defineNode(`// Emboss: the 3×3 kernel, offset by mid-grey.
 // @node filter.emboss
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -170,6 +176,7 @@ vec4(clamp(acc + 128.0 / 255.0, 0.0, 1.0), texture2D(in0, uv).a)`);
 defineNode(`// Grade: lift, gamma, gain, saturation and temperature, in linear light — the exact transfer.
 // @node adjust.grade
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform float lift;     // @range -0.15 0.3 @default 0
 uniform float gamma;    // @range 0.3 2.5 @default 1
@@ -189,6 +196,7 @@ vec4(clamp(toSrgb(l), 0.0, 1.0), c.a)`);
 defineNode(`// Hue rotate, in OKLab so lightness holds still.
 // @node adjust.hue
 // @module 04-color-organization
+// @alpha
 uniform sampler2D in0;
 uniform float degrees;  // @range -180 180 @default 30
 ${EXACT}
@@ -202,6 +210,7 @@ vec4(clamp(toSrgb(oklabToLin(rot)), 0.0, 1.0), c.a)`);
 defineNode(`// Duotone: OKLab lightness maps a line between two colours.
 // @node adjust.duotone
 // @module 04-color-organization
+// @alpha
 uniform sampler2D in0;
 uniform vec3 dark;      // @color @default 0.078 0.102 0.180
 uniform vec3 light;     // @color @default 0.949 0.902 0.800
@@ -215,6 +224,7 @@ vec4(clamp(toSrgb(oklabToLin(A + (B - A) * L)), 0.0, 1.0), c.a)`);
 defineNode(`// Posterize: each channel to n levels.
 // @node adjust.posterize
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform int levels;     // @range 2 12 @default 5
 vec4 c = texture2D(in0, uv);
@@ -224,6 +234,7 @@ vec4(floor(c.rgb * n + 0.5) / n, c.a)`);
 defineNode(`// Threshold on luma, 0..255.
 // @node adjust.threshold
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform float level;    // @range 0 255 @default 128
 ${LUMA}
@@ -235,6 +246,7 @@ defineNode(`// Ordered dither with the 8×8 Bayer matrix, computed rather than s
 // the value at (x, y) is the bit-interleave of x^y and y, reversed.
 // @node filter.ditherOrdered
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform int levels;     // @range 2 8 @default 2
 float bayer8(vec2 p) {
@@ -256,6 +268,7 @@ vec4(floor((c.rgb * 255.0 + t) / 255.0 * n + 0.5) / n, c.a)`);
 defineNode(`// Halftone: dots on a rotated grid, radius from the luma at the dot's centre.
 // @node filter.halftone
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -294,6 +307,7 @@ vec4(vec3(1.0 - cov), 1.0)`);
 defineNode(`// Pixelate: the mean of each s×s cell, cells anchored at the top-left like the CPU.
 // @node filter.pixelate
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -318,6 +332,7 @@ acc / max(n, 1.0)`);
 defineNode(`// Bloom, first half: keep only what is brighter than the cut.
 // @node filter.bright
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform float cut;      // @range 100 250 @default 190
 ${LUMA}
@@ -328,6 +343,7 @@ vec4(c.rgb * k, c.a)`);
 defineNode(`// Bloom, second half: the original plus amount × the softened bright pass (in1).
 // @node filter.bloomAdd
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform sampler2D in1;
 uniform float amount;   // @range 0 2 @default 0.7
@@ -338,6 +354,7 @@ vec4(min(o.rgb + s.rgb * amount, 1.0), o.a)`);
 defineNode(`// Chromatic aberration: red pushed out from the centre, blue pulled in, positions rounded.
 // @node filter.chromatic
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -355,6 +372,7 @@ vec4(r, c.g, b, c.a)`);
 defineNode(`// Vignette: a squared falloff from the corner distance.
 // @node filter.vignette
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform vec2  in0_size;
 uniform float amount;   // @range 0 1 @default 0.5
@@ -372,6 +390,7 @@ defineNode(`// Film grain: the same noise on all three channels, ±amount in 8-b
 // is unchanged and the spread is amount/√3.
 // @node filter.grain
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform float amount;   // @range 0 60 @default 14
 vec4 c = texture2D(in0, uv);
@@ -381,6 +400,7 @@ vec4(clamp(c.rgb + n, 0.0, 1.0), c.a)`);
 defineNode(`// Invert.
 // @node adjust.invert
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 vec4 c = texture2D(in0, uv);
 vec4(1.0 - c.rgb, c.a)`);

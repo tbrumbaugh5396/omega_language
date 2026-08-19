@@ -114,6 +114,7 @@ export function resolveBypass(graph, id) {
 defineNode(`// Exposure, in stops, about linear light.
 // @node adjust.exposure
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform float stops;    // @range -4 4 @default 0 @help exposure in stops
 uniform float offset;   // @range -0.2 0.2 @default 0 @help added after, in linear light
@@ -125,6 +126,7 @@ vec4(linearToSrgb(clamp(lin, 0.0, 1.0)), c.a)`);
 defineNode(`// A tone curve, applied through a 256-entry lookup the host builds from control points.
 // @node adjust.curves
 // @module 05-display
+// @alpha
 uniform sampler2D in0;
 uniform sampler2D curve;   // @hidden @lut the master curve, 256×1
 uniform float amount;      // @range 0 1 @default 1 @help how much of the curve to apply
@@ -138,6 +140,7 @@ vec4(mix(c.rgb, mapped, amount), c.a)`);
 defineNode(`// Composite in1 over in0 with a blend mode and an opacity. Encoded space, as the browser does.
 // @node composite.blend
 // @module 03-additive-subtractive
+// @alpha
 uniform sampler2D in0;
 uniform sampler2D in1;
 uniform int   mode;      // @options normal,multiply,screen,overlay,darken,lighten,difference,add @default 0
@@ -160,6 +163,7 @@ defineNode(`// One direction of a separable Gaussian: sigma = radius / 2, kernel
 // kernel engine-image uses, so the CPU path is the reference. Two of these make a blur.
 // @node filter.blur1d
 // @module 05-display
+// @alpha
 // @pass
 uniform sampler2D in0;
 uniform vec2  in0_size;
@@ -173,10 +177,15 @@ int reach = int(ceil(radius));          // not "half": that is a reserved word i
 for (int i = -40; i <= 40; i++) {
   if (i < -reach || i > reach) continue;
   float wgt = exp(-float(i * i) / (2.0 * sigma * sigma));
-  acc += texture2D(in0, uv + dir * float(i) / in0_size) * wgt;
+  // Premultiplied, so a transparent pixel contributes no colour: blurring
+  // straight alpha drags whatever happens to be under the transparency out
+  // into the edge, which on a layer with nothing behind it is black.
+  vec4 s = texture2D(in0, uv + dir * float(i) / in0_size);
+  acc += vec4(s.rgb * s.a, s.a) * wgt;
   total += wgt;
 }
-radius < 1.0 ? texture2D(in0, uv) : acc / total`);
+vec4 r = acc / total;
+radius < 1.0 ? texture2D(in0, uv) : (r.a > 0.0 ? vec4(r.rgb / r.a, r.a) : vec4(0.0))`);
 
 /** A blur is two 1-D passes; this adds both and returns the second's id. */
 export function addBlur(graph, input, radius) {

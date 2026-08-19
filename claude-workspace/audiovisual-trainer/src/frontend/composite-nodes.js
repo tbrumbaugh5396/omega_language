@@ -161,10 +161,12 @@ float n = 0.0;
 for (int i = -64; i <= 64; i++) {
   float f = float(i);
   if (f < lo || f > hi) continue;
-  acc += texture2D(in0, uv + dir * f / in0_size);
+  vec4 s = texture2D(in0, uv + dir * f / in0_size);
+  acc += vec4(s.rgb * s.a, s.a);       // premultiplied, as the filter spec says
   n += 1.0;
 }
-n > 0.0 ? acc / n : texture2D(in0, uv)`);
+vec4 r = acc / max(n, 1.0);
+n > 0.0 ? (r.a > 0.0 ? vec4(r.rgb / r.a, r.a) : vec4(0.0)) : texture2D(in0, uv)`);
 
 defineNode(`// A transition between what is already there (in0) and what is arriving (in1).
 // @node transition.mix

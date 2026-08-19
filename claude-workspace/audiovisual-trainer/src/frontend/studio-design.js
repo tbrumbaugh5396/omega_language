@@ -12,6 +12,12 @@
 import { el, clear, append, toast, modal, closeModal, confirmDialog, api } from "./ui.js";
 import { aiButton } from "./ai.js";
 import { compileDesignFrame, fitPreview } from "./design-to-sdf.js";
+import { applyEffects, effectCost, effectLabel, makeEffect, prepareEffects } from "./canvas-graph.js";
+import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
+import { userNodes } from "./node-library.js";
+import { nodeType } from "./render-graph.js";
+import { buildControls } from "./shader-controls.js";
+import { FILTERS } from "./engine-image.js";
 
 const SVGNS = "http://www.w3.org/2000/svg";
 const svg = (tag, attrs = {}) => {
@@ -133,8 +139,74 @@ export async function designEditor(host) {
 
   // ---------------------------------------------------------------- render
 
-  function paintNode(node, parentAbs = { x: 0, y: 0 }) {
+  /**
+   * A node with an effect stack is drawn through the graph: its own subtree is
+   * rasterised on its own, the stack runs over it, and the result goes back in
+   * as an image. Baking is asynchronous, so the plain drawing stands in until
+   * it lands and nothing ever waits for a frame.
+   *
+   * The raster is padded, because a blur or a glow does not stay inside the
+   * box the shape occupies.
+   */
+  const FX_PAD = 40;
+  const fxCache = new Map();          // key → { url, w, h, pad }
+  const fxPending = new Set();
+
+  const fxKey = (node) => JSON.stringify([nodeShape(node), node.effects]);
+  const nodeShape = (n) => ({
+    t: n.type, w: n.w, h: n.h, r: n.radius, f: n.fill, s: n.stroke, sw: n.strokeWidth,
+    o: n.opacity, b: n.blend, rot: n.rotation, tx: n.text, fs: n.fontSize, ff: n.fontFamily,
+    fw: n.fontWeight, al: n.align, lh: n.lineHeight, ls: n.letterSpacing, src: n.src,
+    kids: (n.children || []).map(nodeShape),
+  });
+
+  async function bakeEffects(node) {
+    const key = fxKey(node);
+    if (fxPending.has(key)) return;
+    fxPending.add(key);
+    try {
+      const pad = FX_PAD, scale = 2;
+      const w = Math.max(1, Math.round(node.w)) + pad * 2;
+      const h = Math.max(1, Math.round(node.h)) + pad * 2;
+      const holder = svg("svg", { xmlns: SVGNS, width: w, height: h, viewBox: `0 0 ${w} ${h}` });
+      const g = paintNode(node, { x: 0, y: 0 }, true);
+      if (g) { g.setAttribute("transform", `translate(${pad} ${pad})`
+        + (node.rotation ? ` rotate(${node.rotation} ${node.w / 2} ${node.h / 2})` : "")); holder.append(g); }
+      const text = new XMLSerializer().serializeToString(holder);
+      const img = new Image();
+      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(text);
+      await img.decode();
+      const c = document.createElement("canvas");
+      c.width = w * scale; c.height = h * scale;
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      const out = applyEffects(c, node.effects || []);
+      fxCache.set(key, { url: out.toDataURL("image/png"), w, h, pad });
+      if (fxCache.size > 24) fxCache.delete(fxCache.keys().next().value);
+      renderWorld();
+    } catch (e) {
+      fxCache.set(key, { error: String(e.message).split("\n")[0] });
+    } finally {
+      fxPending.delete(key);
+    }
+  }
+
+  function paintNode(node, parentAbs = { x: 0, y: 0 }, raw = false) {
     if (node.visible === false) return null;
+    if (!raw && (node.effects || []).some((e) => !e.bypass)) {
+      const hit = fxCache.get(fxKey(node));
+      if (hit && hit.url) {
+        const g2 = svg("g", { "data-id": node.id,
+          transform: `translate(${node.x} ${node.y})`,
+          opacity: node.opacity ?? 1,
+          style: node.blend && node.blend !== "normal" ? `mix-blend-mode:${node.blend}` : null });
+        const im = svg("image", { x: -hit.pad, y: -hit.pad, width: hit.w, height: hit.h });
+        im.setAttributeNS("http://www.w3.org/1999/xlink", "href", hit.url);
+        im.setAttribute("href", hit.url);
+        g2.append(im);
+        return g2;
+      }
+      if (!hit) bakeEffects(node);
+    }
     const g = svg("g", {
       "data-id": node.id,
       transform: `translate(${node.x} ${node.y})` +
@@ -229,12 +301,18 @@ export async function designEditor(host) {
     }
   }
 
+  let worldPass = 0;
   function renderWorld() {
+    // bakeEffects calls back into here when a raster lands; one level deep is
+    // all it ever needs, and the guard keeps a failed bake from looping.
+    if (worldPass > 2) return;
+    worldPass++;
     clear(worldG);
     for (const n of doc.nodes) {
       const g = paintNode(n);
       if (g) worldG.append(g);
     }
+    worldPass--;
   }
 
   function renderOverlay(extra = null) {
@@ -691,6 +769,81 @@ export async function designEditor(host) {
   }
 
   const inspector = el("div.stack");
+  /**
+   * A design node's effect stack. The geometry stays vector — this is not a
+   * raster tool — but a blur or a grade is not geometry, and the graph is
+   * where those belong. The stack runs over the node's own rendering and
+   * composites back into the design in its place.
+   */
+  function effectPanel(n) {
+    const fx = n.effects || [];
+    const cost = fx.length ? (() => { try { return effectCost(fx); } catch (e) { return null; } })() : null;
+    const move = (i, d) => {
+      const j = i + d;
+      if (j < 0 || j >= fx.length) return;
+      snapshot();
+      [fx[i], fx[j]] = [fx[j], fx[i]];
+      renderWorld(); renderInspector(); save();
+    };
+    const changed = () => { renderWorld(); save(); };
+    return el("div.stack", { style: { gap: ".2rem", marginTop: ".5rem" } },
+      el("div.spread", {},
+        el("h4", { style: { margin: 0 } }, "Effects"),
+        el("button.ghost", { onclick: () => effectDialog(n) }, "+ effect")),
+      ...fx.map((e, i) => el("div.spread", {},
+        el("div.row.tight", {},
+          el("input", { type: "checkbox", checked: !e.bypass, style: { width: "auto" },
+            onchange: (ev) => { e.bypass = !ev.target.checked; changed(); } }),
+          el("span.fine", { style: { opacity: e.bypass ? 0.5 : 1 } }, effectLabel(e))),
+        el("div.row.tight", {},
+          el("button.ghost", { title: "earlier", onclick: () => move(i, -1) }, "↑"),
+          el("button.ghost", { title: "later", onclick: () => move(i, 1) }, "↓"),
+          el("button.ghost.danger", {
+            onclick: () => { snapshot(); fx.splice(i, 1); renderWorld(); renderInspector(); save(); } }, "×")))),
+      fx.length ? el("p.fine", {}, `${cost ? cost.draws : "?"} GPU draw${cost && cost.draws === 1 ? "" : "s"} · `
+        + "the node is rasterised, the stack runs over it, and the result goes back into the design. "
+        + "The geometry stays vector.") : null);
+  }
+
+  function effectDialog(n) {
+    const pick = el("select", {},
+      el("optgroup", { label: "Catalogue (GPU)" },
+        ...GRAPH_FILTERS.filter((f) => !f.cpuOnly).map((f) => el("option", { value: `g:${f.id}` }, f.name))),
+      el("optgroup", { label: "Render graph nodes" },
+        el("option", { value: "n:adjust.exposure" }, "Exposure"),
+        el("option", { value: "n:adjust.curves" }, "Curves"),
+        el("option", { value: "n:filter.blur" }, "Gaussian blur")),
+      userNodes().length ? el("optgroup", { label: "Your nodes" },
+        ...userNodes().map((u) => el("option", { value: `n:${u.id}` }, u.name))) : null);
+    modal(el("h2", {}, "Effect on this node"),
+      el("p.fine", {}, "The same nodes the other studios use. It runs over this node's own rendering, " +
+        "so a blur or a glow spreads outside its box and still composites correctly."),
+      pick,
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: closeModal }, "Cancel"),
+        el("button.primary", { onclick: () => {
+          const v = pick.value, kind = v[0], ref = v.slice(2);
+          let e;
+          if (kind === "g") {
+            const gf = graphFilter(ref);
+            const cpu = FILTERS.find((f) => f.id === gf.cpu);
+            const params = {};
+            for (const [name, , , def] of (cpu ? cpu.params : [])) params[name] = def;
+            for (const [name, def] of (cpu && cpu.colors) || []) params[name] = def;
+            e = makeEffect("graph", ref, params);
+          } else {
+            const t = nodeType(ref === "filter.blur" ? "filter.blur1d" : ref);
+            const params = {};
+            for (const u of t.params.filter((x) => !x.hidden && x.control !== "image")) params[u.name] = u.value.slice();
+            e = makeEffect("node", ref, params);
+          }
+          snapshot();
+          n.effects = n.effects || [];
+          n.effects.push(e);
+          closeModal(); renderWorld(); renderInspector(); save();
+        } }, "Add")));
+  }
+
   function renderInspector() {
     clear(inspector);
     const nodes = selected();
@@ -770,6 +923,8 @@ export async function designEditor(host) {
             el("input", { type: "checkbox", checked: !!L.hug, style: { width: "auto" },
               onchange: (e) => { L.hug = e.target.checked; renderAll(); save(); } }), "hug contents")) : null);
     }
+
+    append(inspector, effectPanel(n));
 
     if (n.type === "frame" && n.grid) {
       append(inspector,
