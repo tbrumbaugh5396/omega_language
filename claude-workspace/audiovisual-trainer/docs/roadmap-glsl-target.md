@@ -900,23 +900,51 @@ nested paths and the DOS timestamp all round-trip.
 - **P3 output** stays gated exactly where the bullet puts it: on colour
   management, which is Phase 2's remaining item.
 
-### Phase 7 — What stays outside *(note)*
+### Phase 7 — What stays outside *(note)* — **written**
 
 Audio does not compile to GLSL. The analogous move — Music as an AudioWorklet
 DSP graph with the same schema discipline (`// @range` on parameters, nodes
 authored as text) — is the right one, and it is a separate roadmap.
 
+That roadmap now exists: **[`roadmap-audio-target.md`](roadmap-audio-target.md)**.
+It starts by being clear about why it is not this document with different
+words — a picture is a pure function of position and a sound is not, so the
+target is a graph of stateful nodes rather than one expression — and then
+carries over the four things this roadmap actually got its value from: the
+schema in a comment, the document-is-the-graph rule, a parity number against
+a reference nobody wrote for the occasion, and fusion. Its grammar adds
+exactly three ideas to the one here: `state`, named `in`/`out` ports, and
+`@rate`.
+
 ### Cross-cutting
 
-- **Course integration** — every built-in node carries `@module`; the Help
-  panel and layer panel link to it; the course pages gain "open in Canvas
-  with this node" buttons.
-- **AI** — the agents author nodes (sketches) and graph edits, not pixels.
-  Critique stays non-ranking.
-- **Docs** — each node is self-documenting from its annotations; the Help
-  modal is generated, never hand-maintained.
-- **Testing** — parity tests (CPU vs GPU), golden images per node, the
-  in-app self-test, and the ejected-GLSL-reproduces-the-composite check.
+- **Course integration — shipped.** Every built-in node carries `@module`,
+  and the generated reference groups by lesson and links to it. Building it
+  found four nodes tagged with slugs the course does not have
+  (`01-light-and-exposure`, `07-motion`), so those links went nowhere; they
+  point at real modules now and a check holds every tag to a module the
+  course actually has. *Left:* "open in Canvas with this node" buttons on the
+  course pages themselves — the link runs the other way so far.
+- **Docs — shipped.** `node-docs.js` generates the reference from the
+  annotations: the first comment line is what a node is, its uniforms are its
+  controls with ranges and help, `@pass` and `@alpha` say how it behaves in a
+  chain. Nothing is written twice, so it cannot go stale. Its first useful act
+  was reporting its own holes — 10 of 33 nodes fully described — and those are
+  filled, with the self-test holding the property rather than trusting it. The
+  prose Help stays hand-written on purpose: it explains *concepts*, which no
+  annotation carries.
+- **Testing — shipped, with one thing deliberately not done.** Parity tests
+  (CPU vs GPU, browser vs compiler), the in-app self-test, and the
+  ejected-GLSL-reproduces-the-composite check are all in place: **102 checks**.
+  *Golden images per node are not attempted*, and that is a decision rather
+  than an omission — two GPUs disagree in the last bit, so a stored hash would
+  fail on the wrong machine and teach everyone to ignore it. What a golden was
+  *for* is checked instead: every single-input node draws, and repeats byte
+  for byte. Being an identity at its defaults is reported, not failed, because
+  a grade whose defaults did something would be a bad grade.
+- **AI — not started.** The agents write briefs, shot lists and critiques
+  today; authoring nodes and graph edits is the intended next step and nothing
+  has been built for it. Critique stays non-ranking.
 
 ---
 
