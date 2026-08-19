@@ -60,7 +60,7 @@ And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
-keyboard as a texture, and a **163-check self-test across 23 groups that runs
+keyboard as a texture, and a **170-check self-test across 24 groups that runs
 inside the app**.
 
 ---
@@ -115,7 +115,7 @@ behind it is a claim.
 | the JavaScript engine, 19 parameter expressions | **exact**, worst disagreement 0.0 |
 | Conway's Life, a glider, 12 generations, vs the CPU rule | **0 cells differ** |
 | Gray–Scott, 30 steps in half float, vs the CPU stencil | **0.62/255** |
-| a ship flown 80 frames by script, vs the CPU integration of its equations | **0.72 px** |
+| a ship flown 80 frames by script, vs the CPU integration of its equations | **0.72 px** with its state in a texel; **2.0e−15** with its state in data |
 
 Every number above is what the self-test reports on this machine today, not
 what it reported when the feature landed — the two differ occasionally, because
@@ -167,6 +167,22 @@ keeps between runs, and the node it points at draws into the other half of
 the pair. That single mechanism — no special node — is Life, reaction–diffusion
 and a motion trail, each held to a CPU implementation of the same rule written
 one screen away from the sketch. Life comes out exact.
+
+### Model, Update and View are all three readable
+
+`prev("pos")` is a parameter as it was last frame; `key(38)` is the keyboard.
+With those two, a parameter that reads its own last value is a state, the
+expression over it is the update, and the shader that draws the result is
+purely the view — and all three are text in the document. The ship's position
+is a number you can read off the graph, not a texel you have to decode; it
+equals the CPU integration of its own equations to 2e−15, and the ejected
+pass header prints the update beside the shader that draws it.
+
+The dual the user named is then real in both directions: the graph says what
+things are and how they change; the shader says how they look; field wires
+let a pixel be asked which shape it is in. That is the position this thing
+holds — not a more explicit website, but a document where meaning and
+appearance are both readable and provably the same.
 
 ### One evaluator across media
 
@@ -247,9 +263,9 @@ its course lesson are the same text.
 - **Simulate, in the graph.** A node reads what it drew last frame; a seed
   field tree starts it; reset is forgetting. One draw per generation, and the
   ejected shader says which input is memory.
-- **Play it.** The keyboard arrives as a texture, `u_keys`; a ship keeps its
-  state in one texel of its own last frame and flies where its equations say
-  to 0.72 px; the same keys twice are the same picture, byte for byte.
+- **Play it.** The keyboard arrives as a texture, `u_keys`, and as `key()`
+  in an expression. A ship whose state is data flies where its equations say
+  to 2e−15; the same keys twice are the same model, byte for byte.
 - **Compose geometry, not pictures of geometry.** Union, subtract, offset,
   shell, repeat and a smoothing radius between any two shapes — as wires, at
   full precision, ending in one draw. A glow is a falloff in distance, which

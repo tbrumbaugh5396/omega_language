@@ -1163,6 +1163,65 @@ feed it), no gamepad, no sound on an event — the live audio path is the gap
 between "a simulation you can play" and "a game", and it is an audio-roadmap
 item.
 
+### Phase 12 — Update as expressions: the model is data *(S)* — **shipped**
+
+Phase 11's ship kept its state in a texel: position, velocity and heading in
+the pixel at (0,0) of its own last frame. It worked, and it is how Shadertoy
+does it, and it is exactly what makes "you can see what everything means"
+false — the model had gone opaque, readable only by running the shader and
+decoding a pixel somebody promised to lay out that way.
+
+Two more things an expression can see fix that:
+
+- `prev("pos")` — a parameter as it was resolved **last frame**; before there
+  is a last frame, its written `value`, which is therefore the initial state
+  and is written down as one.
+- `key(38)`, `keyHit`, `keyToggle` — the keyboard, the same three rows the
+  texture has.
+
+A parameter that reads its own last value is a state; an expression over that
+is a transition; and the shader that reads the result is then purely the
+View. That is Model–Update–View with all three readable:
+
+```js
+turns:   { expr: 'prev("turns") + key(37) - key(39)', value: [0] },
+heading: { expr: 'pi / 2 + ch("turns") * 0.09' },
+vel:     { expr: ['(prev("vel", 0) + cos(ch("heading")) * 0.006 * key(38)) * 0.985', …], value: [0, 0] },
+pos:     { expr: ['wrap(prev("pos", 0) + ch("vel", 0), aspect)', …], value: [0, 0] },
+```
+
+and `game.shipView`, which draws at `pos` facing `heading` and keeps nothing.
+A bare `"turns"` means this node's own; a parameter the shader does not read
+(`vel`, `turns`) is still a parameter — a model can carry a velocity the view
+never draws. Last frame's values are kept per `stateKey` and advance **only
+when the runner runs a frame**: a panel, a summary or an ejection that
+resolves the graph to look at it does not move time. The runner re-resolves
+each step of a multi-step call, and `reset` forgets this memory along with the
+texture one.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| the data ship's state vs the CPU integration, 80 frames, read from the document | **2.0e−15** — exact, same doubles |
+| the data ship vs the texel ship, drawn | **0.00 px** apart |
+| `prev()` before any frame / after 1 / after 3 more in one call / after reset | 1.5 / 2 / 3.5 / 1.5 — **and looking twice does not advance it** |
+| `key()`, `keyHit()`, `keyToggle()` vs the Keyboard | **exact**, all three rows |
+| a replay of 50 frames, the model dumped | **183 bytes, identical** |
+| the ejected pass header | carries `pos = wrap(prev("pos", 0) + …)` beside the shader |
+
+Two consequences worth writing down. The texel ship needed `@precision float`
+memory and drifted 0.72 px in 80 frames from rounding; the data ship is the
+same arithmetic in the same doubles as the reference and drifts by nothing.
+And the View node has no `@pass` and no memory of its own, so it **fuses** —
+ship + trail is one draw where the texel version was two. Moving the state
+into data made the view fusible.
+
+*Left:* an expression is a per-frame map; there is no event queue, no
+"between frames", no way to say "on the frame this key went down, do this
+once and remember that it happened" except by arithmetic on `keyHit`. That
+is enough for a ship and not for a menu.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1244,6 +1303,7 @@ item.
 | 9.1 | Parameter expressions and references — **shipped** | M | 1.x | a graph that holds relationships |
 | 10.1 | Feedback: a wire that reads last frame — **shipped** | M | 1.x | simulation in the graph |
 | 11.1 | Input: the keyboard as a texture, a ship you fly — **shipped** | M | 10.1 | a simulation you can play |
+| 12.1 | `prev()` and `key()` in expressions: the model is data — **shipped** | S | 9.1, 11.1 | Model–Update–View, all three readable |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

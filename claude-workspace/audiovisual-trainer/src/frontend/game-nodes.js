@@ -12,7 +12,7 @@
 // carries the game and the picture of the game, which is how Shadertoy games
 // have always done it and why this is one node rather than two.
 
-import { defineNode } from "./render-graph.js";
+import { defineNode, addNode } from "./render-graph.js";
 import { KEY } from "./keyboard.js";
 
 defineNode(`// A ship. Left and right turn it, up thrusts, and it wraps at the edges.
@@ -94,7 +94,55 @@ vec2 f = fract(uv * vec2(256.0, 3.0));
 float gap = step(0.08, f.x) * step(0.08, f.y);
 mix(unlit * 0.6, mix(unlit, lit, v), gap)`);
 
-export const GAME_NODES = ["game.ship", "input.keys"];
+defineNode(`// A ship, drawn where it is told. This node keeps nothing: its position,
+// heading and whether it is burning are parameters, and the graph that owns
+// it writes them as expressions over prev() and key(). That makes this the
+// View of a Model–Update–View, and only the View — the model is numbers in
+// the document, the update is the expressions, and the shader is a pure
+// function of both.
+// @node game.shipView
+// @module 07-shaders
+// @alpha
+uniform vec2  pos;          // @pad @range -2 2 @default 0 0 @help where, in screen heights, centred
+uniform float heading;      // @range -10 10 @default 1.5707963 @help radians, anticlockwise from +x
+uniform float burning;      // @toggle @default 0 @help draw the exhaust
+uniform float size;         // @range 0.02 0.3 @default 0.06 @help ship length, in screen heights
+uniform vec3  hull;         // @color @default #f4efe6
+uniform vec3  flame;        // @color @default #ff7a3d
+
+float hp(vec2 q, vec2 a, vec2 b) { vec2 e = b - a; return (e.x * (q.y - a.y) - e.y * (q.x - a.x)) / length(e); }
+
+vec2 q = rot(heading) * (p - pos);   // rot() turns by minus its argument
+vec2 nose = vec2(size, 0.0), tl = vec2(-size * 0.5, size * 0.45), tr = vec2(-size * 0.5, -size * 0.45);
+float d = -min(min(hp(q, nose, tl), hp(q, tl, tr)), hp(q, tr, nose));
+float body = aa(d);
+float ex = burning * aa(length(q - vec2(-size * 0.7 - 0.35 * size * hash21(vec2(frame, 1.0)), 0.0)) - size * 0.16);
+vec4(mix(flame, hull, body), max(body, ex))`);
+
+export const GAME_NODES = ["game.ship", "game.shipView", "input.keys"];
+
+/**
+ * The ship as data: a node named `ship` whose parameters are its model and
+ * whose expressions are its update. Left/right (or A/D) turn, up (or W)
+ * thrusts, and it wraps. `P` is the same constants shipStep takes, so the
+ * self-test can hold this graph to that function — and it should be exact,
+ * because both are the same arithmetic in the same doubles.
+ */
+export function shipAsData(graph, P = { thrust: 0.006, turn: 0.09, drag: 0.985 }, extra = {}) {
+  const thrustOn = "max(key(38), key(87))";
+  return addNode(graph, "game.shipView", {
+    // The model. `value` is the state before the first frame.
+    turns:   { expr: 'prev("turns") + key(37) - key(39) + key(65) - key(68)', value: [0] },
+    heading: { expr: `pi / 2 + ch("turns") * ${P.turn}` },
+    vel:     { expr: [`(prev("vel", 0) + cos(ch("heading")) * ${P.thrust} * ${thrustOn}) * ${P.drag}`,
+                      `(prev("vel", 1) + sin(ch("heading")) * ${P.thrust} * ${thrustOn}) * ${P.drag}`],
+               value: [0, 0] },
+    pos:     { expr: ['wrap(prev("pos", 0) + ch("vel", 0), aspect)',
+                      'wrap(prev("pos", 1) + ch("vel", 1), 1)'], value: [0, 0] },
+    burning: { expr: thrustOn },
+    ...(extra.params || {}),
+  }, [], { name: extra.name || "ship" });
+}
 
 // ------------------------------------------------------------------ reference
 

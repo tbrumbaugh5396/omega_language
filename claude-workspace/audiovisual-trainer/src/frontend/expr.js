@@ -82,6 +82,9 @@ export const FUNCTIONS = {
   mod: [2, (a, b) => a - b * Math.floor(a / (b || 1e-9))],
   fract: [1, (x) => x - Math.floor(x)],
   hash: [1, hash1],
+  // Fold a value into -r..r, the way a position wraps at the edge of a
+  // screen. mod with the divisor's sign, so it never jumps.
+  wrap: [2, (v, r) => { const d = 2 * (r || 1e-9); return v + r - d * Math.floor((v + r) / d) - r; }],
   // Smooth value noise, 0..1, one dimension. For drift that is not a sine.
   noise: [1, (x) => {
     const i = Math.floor(x), f = x - i;
@@ -177,11 +180,11 @@ function parse(tokens, src) {
 
 // ------------------------------------------------------------------ walking
 
-/** Every `ch("…")` with a literal name, so dependencies are known before it runs. */
+/** Every `ch("…")` and `prev("…")` with a literal name, so dependencies are known before it runs. */
 function referencesOf(node, into = []) {
   if (!node || typeof node !== "object") return into;
-  if (node.k === "call" && node.name === "ch" && node.args[0] && node.args[0].k === "str") {
-    into.push({ path: node.args[0].v,
+  if (node.k === "call" && (node.name === "ch" || node.name === "prev") && node.args[0] && node.args[0].k === "str") {
+    into.push({ path: node.args[0].v, last: node.name === "prev",
                 comp: node.args[1] && node.args[1].k === "num" ? node.args[1].v : 0 });
   }
   for (const key of ["cond", "a", "b"]) if (node[key]) referencesOf(node[key], into);
@@ -223,11 +226,23 @@ function walk(node, env) {
       throw new Error(`"${node.name}" is not a name this expression can see`);
     }
     case "call": {
-      if (node.name === "ch") {
-        if (!env.ch) throw new Error("ch() has nothing to look up here");
+      // The three ways an expression reaches outside itself. `ch` is another
+      // parameter this frame; `prev` is a parameter as it was *last* frame,
+      // which is what makes a parameter a state and an expression an update;
+      // `key` is the keyboard. All three arrive from the caller, so this file
+      // knows nothing about graphs or keyboards and can be tested without one.
+      if (node.name === "ch" || node.name === "prev") {
+        const look = env[node.name];
+        if (!look) throw new Error(`${node.name}() has nothing to look up here`);
         const path = walk(node.args[0], env);
         const comp = node.args.length > 1 ? walk(node.args[1], env) : 0;
-        return env.ch(String(path), Math.round(comp));
+        return look(String(path), Math.round(comp));
+      }
+      if (node.name === "key" || node.name === "keyHit" || node.name === "keyToggle") {
+        if (!env.keys) throw new Error(`${node.name}() — no keyboard reaches this graph`);
+        const code = Math.round(walk(node.args[0], env));
+        const row = node.name === "key" ? env.keys.down : node.name === "keyHit" ? env.keys.hit : env.keys.toggle;
+        return code >= 0 && code < row.length && row[code] ? 1 : 0;
       }
       const f = FUNCTIONS[node.name];
       if (!f) throw new Error(`there is no function called "${node.name}"`);
@@ -277,5 +292,7 @@ export function compileExpr(text) {
 export const VOCABULARY = {
   functions: Object.keys(FUNCTIONS).sort(),
   constants: Object.keys(CONSTANTS),
-  reference: 'ch("node.param") — another node\'s parameter, by name or by id',
+  reference: 'ch("node.param") — another node\'s parameter, by name or by id; "param" alone is this node\'s',
+  state: 'prev("node.param") — the same, as it was last frame; its stored value before the first',
+  input: "key(code), keyHit(code), keyToggle(code) — the keyboard, by key code",
 };

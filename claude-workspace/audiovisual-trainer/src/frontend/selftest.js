@@ -23,14 +23,14 @@ import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
 import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback, findNode, defineNode } from "./render-graph.js";
 import { lifeStep, grayScottStep } from "./sim-nodes.js";
-import { shipStep } from "./game-nodes.js";
+import { shipStep, shipAsData } from "./game-nodes.js";
 import { Keyboard, KEY } from "./keyboard.js";
-import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
+import { renderGraph, ejectGraph, applyFilter, resetGraphState } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
 import { planPasses, fuseStats, fusibleReason } from "./graph-fuse.js";
 import { compileFields, fieldStats } from "./field-graph.js";
-import { resolveParams, paramProblems, paramStats } from "./param-graph.js";
+import { resolveParams, paramProblems, paramStats, paramState } from "./param-graph.js";
 import { compileExpr, FUNCTIONS } from "./expr.js";
 import "./field-nodes.js";
 import { documentGraph, applyEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
@@ -1236,6 +1236,127 @@ texel == vec2(0.0) ? vec4(v, 0.0, 0.0, 1.0) : vec4((v - 0.14) * 100.0, 0.0, 0.0,
              detail: `${drew.length} draw, and column ${KEY.enter} is lit inside the fused program — the reserved name was not prefixed` }); }
   } catch (e) {
     push({ group: "Input", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Model–Update–View: the model is parameters, the update is expressions
+  // over prev() and key(), the view is the shader. The claim is that the
+  // state is then a number in the document rather than a texel — so the
+  // first check below reads it off the document and holds it to the CPU
+  // exactly, with no centroid and no pixels in between.
+  try {
+    const px = (c) => c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    const P = { thrust: 0.006, turn: 0.09, drag: 0.985 };
+    const script = (f) => ({ left: f >= 10 && f < 25, right: f >= 60 && f < 70, up: f >= 5 && f < 30 });
+    const pressFor = (kb, k) => { kb.clear(); if (k.left) kb.press(KEY.left); if (k.right) kb.press(KEY.right); if (k.up) kb.press(KEY.up); };
+
+    // 1. The data ship vs the CPU integration: exact, because it is the same
+    //    arithmetic in the same doubles. The state is read from the resolved
+    //    graph, which is the document with its expressions evaluated.
+    { const W = 240, H = 160;
+      const gph = createGraph(W, H); gph.stateKey = "selftest-mvu-ship";
+      gph.output = shipAsData(gph, P);
+      const kb = new Keyboard();
+      let cpu = null, worst = 0, resolved = null;
+      resetGraphState(gph.stateKey);
+      for (let f = 0; f < 80; f++) {
+        pressFor(kb, script(f));
+        renderGraph(gph, {}, { keys: kb, reset: f === 0 });
+        cpu = shipStep(cpu, script, f, { ...P, aspect: W / H });
+        const st = paramState(gph.stateKey);
+        const pos = st["ship pos"], vel = st["ship vel"], turns = st["ship turns"];
+        worst = Math.max(worst, Math.abs(pos[0] - cpu.x), Math.abs(pos[1] - cpu.y),
+                                Math.abs(vel[0] - cpu.vx), Math.abs(vel[1] - cpu.vy), Math.abs(turns[0] - cpu.n));
+        resolved = { pos, vel, turns };
+      }
+      push({ group: "Model–Update–View", name: "the data ship's state equals the CPU integration, exactly", ok: worst < 1e-9,
+             detail: `80 frames, thrust and two turns: worst difference ${worst.toExponential(1)} across pos, vel and turns · pos ends (${resolved.pos.map((v) => v.toFixed(4)).join(", ")}) — read from the document, not from pixels` }); }
+
+    // 2. …and it draws where the texel ship draws. Same keys, two ships, one
+    //    holding state in a texel and one in data; the pictures agree.
+    { const W = 240, H = 160;
+      const centroid = (c) => { const d = px(c); let sx = 0, sy = 0, n = 0;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = (y * W + x) * 4; if (d[i + 3] > 128 && !(y === H - 1 && x < 2)) { sx += x; sy += y; n++; } }
+        return [sx / n, sy / n, n]; };
+      const run = (asData) => {
+        const gph = createGraph(W, H); gph.stateKey = `selftest-mvu-two-${asData}`;
+        if (asData) gph.output = shipAsData(gph, P, { params: { size: [0.25] } });
+        else { const ship = addNode(gph, "game.ship", { ...P, size: [0.25] }, [null], { name: "ship" }); feedback(gph, ship, 0, ship); gph.output = ship; }
+        const kb = new Keyboard();
+        let out;
+        for (let f = 0; f < 80; f++) { pressFor(kb, script(f)); out = renderGraph(gph, {}, { keys: kb, reset: f === 0 }); }
+        return centroid(out);
+      };
+      const a = run(true), b = run(false);
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      push({ group: "Model–Update–View", name: "the data ship and the texel ship draw in the same place", ok: d < 2.5 && a[2] > 50,
+             detail: `data ship at (${a[0].toFixed(1)}, ${a[1].toFixed(1)}), texel ship at (${b[0].toFixed(1)}, ${b[1].toFixed(1)}) — ${d.toFixed(2)} px apart · the texel one carries 32-bit rounding; the data one carries none` }); }
+
+    // 3. prev() before any frame is the written initial value; after one frame
+    //    it is last frame's result. Looking at the graph does not advance it.
+    { const gph = createGraph(16, 16); gph.stateKey = "selftest-mvu-prev";
+      const s0 = addNode(gph, "source");
+      gph.output = addNode(gph, "adjust.exposure", { stops: { expr: 'prev("stops") + 0.5', value: [1] } }, [s0], { name: "g" });
+      resetGraphState(gph.stateKey);
+      const look = () => resolveParams(gph, {}).nodes.find((n) => n.name === "g").params.stops[0];
+      const before = look(), beforeAgain = look();                // looking, twice
+      const src = document.createElement("canvas"); src.width = 16; src.height = 16;
+      renderGraph(gph, { [s0]: src }, {});                         // one frame
+      const afterOne = look();
+      renderGraph(gph, { [s0]: src }, { steps: 3 });               // three more, in one call
+      const afterFour = look();
+      resetGraphState(gph.stateKey);
+      const afterReset = look();
+      const ok = before === 1.5 && beforeAgain === 1.5 && afterOne === 2 && afterFour === 3.5 && afterReset === 1.5;
+      push({ group: "Model–Update–View", name: "prev() starts at the written value, advances per frame, and only when run", ok,
+             detail: `look: ${before}, look again: ${beforeAgain} (no advance) · after 1 frame: ${afterOne} · after 3 more in one call: ${afterFour} · after reset: ${afterReset}` }); }
+
+    // 4. key() reads the Keyboard handed to the runner, with the same three
+    //    rows the texture has.
+    { const gph = createGraph(16, 16); gph.stateKey = "selftest-mvu-key";
+      const s0 = addNode(gph, "source");
+      gph.output = addNode(gph, "adjust.exposure",
+        { stops: { expr: "key(32) * 1 + keyHit(32) * 10 + keyToggle(32) * 100" } }, [s0], { name: "g" });
+      const src = document.createElement("canvas"); src.width = 16; src.height = 16;
+      const kb = new Keyboard();
+      const read = () => resolveParams(gph, { keys: kb }).nodes.find((n) => n.name === "g").params.stops[0];
+      const quiet = read();
+      kb.press(32); const pressed = read();
+      kb.tick(); const held = read();
+      kb.release(32); const released = read();
+      const ok = quiet === 0 && pressed === 111 && held === 101 && released === 100;
+      push({ group: "Model–Update–View", name: "key(), keyHit() and keyToggle() see the keyboard", ok,
+             detail: `quiet ${quiet} · pressed ${pressed} · next frame ${held} · released ${released} — held + 10·hit + 100·toggle` }); }
+
+    // 5. A replay is a function of its inputs: same keys, same document, same
+    //    state, to the bit — and the model can be dumped to say so.
+    { const run = () => {
+        const gph = createGraph(64, 40); gph.stateKey = "selftest-mvu-replay";
+        gph.output = shipAsData(gph, P);
+        const kb = new Keyboard();
+        for (let f = 0; f < 50; f++) { kb.clear(); if (f > 3) kb.press(KEY.up); if (f % 7 < 3) kb.press(KEY.left); renderGraph(gph, {}, { keys: kb, reset: f === 0 }); }
+        return JSON.stringify(paramState(gph.stateKey));
+      };
+      const a = run(), b = run();
+      push({ group: "Model–Update–View", name: "a replay reproduces the model, byte for byte", ok: a === b,
+             detail: a === b ? `${a.length} bytes of state, identical across two runs of 50 frames` : "the two runs differ" }); }
+
+    // 6. The ejected shader says what the model was written as — the update
+    //    is in the text you read, beside the view.
+    { const gph = createGraph(64, 40); gph.stateKey = "selftest-mvu-eject";
+      gph.output = shipAsData(gph, P);
+      const text = ejectGraph(gph, { fuse: false });
+      const ok = /written as:/.test(text) && /prev\("pos", 0\)/.test(text) && /key\(38\)/.test(text);
+      push({ group: "Model–Update–View", name: "the ejected text carries the update beside the view", ok,
+             detail: ok ? `pos = wrap(prev("pos", 0) + ch("vel", 0), aspect) rides in the pass header with the shader that draws it` : "the expressions did not reach the ejected text" }); }
+
+    // 7. The graph view knows the difference.
+    { const gph = createGraph(64, 40);
+      shipAsData(gph, P); gph.output = gph.nodes[0].id;
+      const st = paramStats(gph);
+      push({ group: "Model–Update–View", name: "the summary counts states and inputs", ok: st.states === 3 && st.inputs >= 3,
+             detail: `${st.expressions} expressions, ${st.states} carrying state (turns, vel, pos), ${st.inputs} reading the keyboard` }); }
+  } catch (e) {
+    push({ group: "Model–Update–View", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

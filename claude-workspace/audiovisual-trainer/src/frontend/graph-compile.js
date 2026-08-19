@@ -18,7 +18,7 @@ import { getGL, isGL2, linkProgram, cachedImage, loadSketchImages } from "./shad
 import { nodeType, topo, validate, curveLut, resolveBypass, isBack, fedBack } from "./render-graph.js";
 import { planPasses } from "./graph-fuse.js";
 import { compileFields } from "./field-graph.js";
-import { resolveParams } from "./param-graph.js";
+import { resolveParams, resetParamState, hasDynamicParams } from "./param-graph.js";
 
 // ------------------------------------------------------------------ targets
 
@@ -321,8 +321,10 @@ export class GraphRunner {
     for (const t of [m.read, m.write]) { this.gl.deleteTexture(t.tex); this.gl.deleteFramebuffer(t.fbo); }
   }
 
-  /** Forget everything a graph remembered: its memory and its frame count. */
+  /** Forget everything a graph remembered: its memory, its parameters' last
+      values, and its frame count. */
   resetState(stateKey = "anonymous") {
+    resetParamState(stateKey);
     const prefix = `${stateKey}\u0000`;
     for (const [k, m] of [...this.memory]) {
       if (k.startsWith(prefix)) { this.freeMemory(m); this.memory.delete(k); }
@@ -351,14 +353,25 @@ export class GraphRunner {
     // pooling, tiling) sees an ordinary image graph of plain constants.
     const remembered = fedBack(graph);
     let frame = opts.frame ?? (this.frames.get(stateKey) || 0);
-    graph = resolveParams(graph, { t: opts.time || 0, frame, seed: opts.seed || 0 });
-    graph = compileFields(graph);
+    // A Keyboard object carries both the texture the shaders read and the
+    // arrays an expression's key() reads; a bare canvas carries only the first.
+    const keysObj = opts.keys && opts.keys.down ? opts.keys : null;
+    const written = graph;
+    // Resolving commits this frame's values as next frame's prev() — which
+    // is why it happens here, in the runner, and nowhere that merely looks.
+    const plan = (frameNo) => {
+      let g = resolveParams(written, { t: opts.time || 0, frame: frameNo, seed: opts.seed || 0,
+                                      keys: keysObj, commit: true });
+      g = compileFields(g);
+      // Fusion is on unless a caller wants the passes as written — the
+      // self-test wants both, to hold one against the other.
+      return { graph: g, steps: opts.fuse === false
+        ? topo(g).map((node) => ({ kind: "node", node })) : planPasses(g) };
+    };
+    let planned = plan(frame);
+    graph = planned.graph;
+    let steps = planned.steps;
     const W = graph.width, H = graph.height;
-    // Fusion is on unless a caller wants the passes as written — the self-test
-    // wants both, to hold one against the other.
-    const steps = opts.fuse === false
-      ? topo(graph).map((node) => ({ kind: "node", node }))
-      : planPasses(graph);
     const outputs = new Map();        // node id → { tex, w, h, target? }
     const owned = [];
     const passes = [];
@@ -385,7 +398,8 @@ export class GraphRunner {
     };
     // The keyboard, bound after a pass's own samplers so the unit is free.
     // Absent, a 1×1 blank: every key reads as up.
-    const keysTex = opts.keys ? (opts.keys.tex ? opts.keys : this.keysTexture(opts.keys)) : null;
+    const keysCanvas = opts.keys ? (opts.keys.texture ? opts.keys.texture() : opts.keys) : null;
+    const keysTex = keysCanvas ? (keysCanvas.tex ? keysCanvas : this.keysTexture(keysCanvas)) : null;
     const bindKeys = (u, unit) => {
       if (!u("u_keys")) return unit;
       gl.activeTexture(gl.TEXTURE0 + unit);
@@ -510,6 +524,9 @@ export class GraphRunner {
     const steps_ = Math.max(1, opts.steps | 0 || 1);
     let out = null;
     for (let s = 0; s < steps_; s++) {
+      // A later step is a later frame: a parameter that reads last frame
+      // has to be resolved again, against what this step just committed.
+      if (s > 0 && hasDynamicParams(written)) { planned = plan(frame); steps = planned.steps; }
       outputs.clear();
       passes.length = 0;
       for (const step of steps) {
@@ -525,7 +542,9 @@ export class GraphRunner {
         for (const [id, o] of outputs) if (o.target) this.pool.put(o.target);
       }
     }
-    if (remembered.size) this.frames.set(stateKey, frame);
+    // A graph with memory of either kind — a texture or a parameter — has a
+    // frame count; one without is the same picture every time and needs none.
+    if (remembered.size || hasDynamicParams(written)) this.frames.set(stateKey, frame);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     // Everything but the output's target goes back to the pool; the output

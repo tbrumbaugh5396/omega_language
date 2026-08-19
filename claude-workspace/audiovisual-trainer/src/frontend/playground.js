@@ -15,7 +15,7 @@ import { graphSummary } from "./graph-view.js";
 import { Keyboard } from "./keyboard.js";
 import "./field-nodes.js";
 import "./sim-nodes.js";
-import "./game-nodes.js";
+import { shipAsData } from "./game-nodes.js";
 
 /** A seed picture, drawn with the 2D canvas. */
 function seedCanvas(w, h, draw) {
@@ -32,8 +32,20 @@ function seedCanvas(w, h, draw) {
  */
 export const PLAY_DEMOS = [
   {
-    id: "ship", title: "Ship",
-    how: "Arrows or WASD: left and right turn, up thrusts. It wraps.",
+    id: "mvu", title: "Ship, as data",
+    how: "Arrows or WASD. The ship's position is a parameter written as an expression over prev() and key(); the shader only draws.",
+    build(W, H) {
+      const g = createGraph(W, H); g.stateKey = "play-mvu";
+      const ship = shipAsData(g);
+      const trail = addNode(g, "feedback.trail", { decay: [0.86] }, [ship, null], { name: "trail" });
+      feedback(g, trail, 1, trail);
+      g.output = trail;
+      return { graph: g, sources: {} };
+    },
+  },
+  {
+    id: "ship", title: "Ship, in a texel",
+    how: "The same ship with its state kept in the texel at (0,0) of its own last frame — Shadertoy's way.",
     build(W, H) {
       const g = createGraph(W, H); g.stateKey = "play-ship";
       const ship = addNode(g, "game.ship", {}, [null], { name: "ship" });
@@ -98,7 +110,7 @@ export const PLAY_DEMOS = [
 ];
 
 /** Open the playground on a demo. Returns a function that stops it. */
-export function playgroundDialog(startId = "ship") {
+export function playgroundDialog(startId = "mvu") {
   const W = 640, H = 360;
   const canvas = el("canvas", { width: W, height: H,
     style: { width: "100%", maxWidth: `${W}px`, aspectRatio: `${W} / ${H}`, background: "#0b0e16",
@@ -130,7 +142,7 @@ export function playgroundDialog(startId = "ship") {
     if (current) {
       const { graph, sources, stepsPerFrame } = current;
       try {
-        renderGraph(graph, sources, { keys: keyboard.texture(), steps: stepsPerFrame || 1,
+        renderGraph(graph, sources, { keys: keyboard, steps: stepsPerFrame || 1,
                                       time: performance.now() / 1000, into: ctx });
       } catch (e) {
         status.textContent = String(e.message).split("\n")[0];

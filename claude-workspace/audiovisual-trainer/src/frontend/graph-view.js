@@ -157,7 +157,9 @@ export function graphSummary(graph) {
   const ps = paramStats(graph);
   if (ps.expressions) {
     bits.push(`${ps.expressions} parameter${ps.expressions === 1 ? "" : "s"} computed`
-      + (ps.references.length ? `, ${ps.references.length} of them following another` : ""));
+      + (ps.references.length ? `, ${ps.references.length} of them following another` : "")
+      + (ps.states ? `, ${ps.states} carrying state from last frame` : "")
+      + (ps.inputs ? `, ${ps.inputs} reading the keyboard` : ""));
   }
   if (ps.tracks) bits.push(`${ps.tracks} keyed`);
   const mem = fedBack(graph).size;
