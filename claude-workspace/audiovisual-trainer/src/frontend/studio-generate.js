@@ -20,6 +20,8 @@ import { loadFontFile, registeredFonts } from "./font-file.js";
 import { fitPreview } from "./sdf-core.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
 import { Keyboard } from "./keyboard.js";
+import { hasSketchEffects, sketchFrame } from "./sketch-effects.js";
+import { LiveRig } from "./live-audio.js";
 import { registerNode, withNodeHeader, nodeShape, declaresNode, keepVersion,
          versionSummary, usersOfNode, nodeIdFor } from "./node-library.js";
 import { gridOverlay } from "./grid-overlay.js";
@@ -813,7 +815,27 @@ col += vec3(0.5, 0.7, 0.8) * max(-h0, 0.0) * 3.0;
 
 finish(col)` },
 
-  { id: "pong", label: "Bat and ball — a game, in one sketch", preview: [640, 400], steps: 1, source:
+  { id: "pong", label: "Bat and ball — a game, in one sketch, with sound", preview: [640, 400], steps: 1,
+    // What the host reads out of the sketch's own state, once a frame. The
+    // sketch writes its three events into one texel; naming them here is all
+    // it takes for a shader's decisions to become a document's effects.
+    probes: {
+      hitBat:  { texel: [2, 0], channel: "r" },
+      hitWall: { texel: [2, 0], channel: "g" },
+      missed:  { texel: [2, 0], channel: "b" },
+      score:   { texel: [1, 0], channel: "g" },
+      ballY:   { texel: [0, 0], channel: "g" },
+      batY:    { texel: [1, 0], channel: "r" },
+    },
+    instruments: { blip: { ref: "tone.blip" }, bell: { ref: "tone.bell" }, thud: { ref: "tone.pluck" } },
+    effects: [
+      { kind: "note", instrument: "blip", when: 'ch("hitBat") > 0.5',
+        hz: '440 * 2 ^ ((ch("ballY") - ch("batY")) * 6 / 12)', dur: "0.07" },
+      { kind: "note", instrument: "bell", when: 'ch("hitWall") > 0.5',
+        hz: '587 * 2 ^ (min(ch("score"), 10) / 12)', dur: "0.22" },
+      { kind: "note", instrument: "thud", when: 'ch("missed") > 0.5', hz: "110", dur: "0.45" },
+    ],
+    source:
 `// A game. Up and down (or W and S) move the bat; the ball bounces, and the
 // score is the bricks it has taken off the right wall. Everything lives in
 // three texels of the state: the ball, the bat, and the score. Every other
@@ -822,6 +844,11 @@ finish(col)` },
 // That is the whole Shadertoy trick — state in pixels, keys in a texture —
 // and it is playable here because the sketch runtime binds u_keys the way
 // the render graph does. Click the picture first so it has the keys.
+//
+// It also makes a sound, which a sketch has no way to do by itself: the
+// third register holds what happened this frame, the document names those
+// texels as probes, and the host reads them back and fires the notes. Turn
+// Sound on.
 uniform sampler2D u_keys;
 uniform float speed;     // @range 0.2 2 @default 0.9 @help how fast the ball travels
 uniform float batSpeed;  // @range 0.5 4 @default 2.2 @help how fast the bat moves
@@ -849,9 +876,10 @@ vec4 sim(vec2 uv) {
 
   vec2 pos = b.xy + b.zw * dt;
   vec2 vel = b.zw;
+  float hitBat = 0.0, hitWall = 0.0, missed = 0.0;
   if (pos.y >  1.0) { pos.y =  1.0; vel.y = -vel.y; }          // ceiling
   if (pos.y < -1.0) { pos.y = -1.0; vel.y = -vel.y; }          // floor
-  if (pos.x >  A - 0.04) { pos.x = A - 0.04; vel.x = -vel.x; s.y += 1.0; }   // the wall, a point
+  if (pos.x >  A - 0.04) { pos.x = A - 0.04; vel.x = -vel.x; s.y += 1.0; hitWall = 1.0; }
   // The bat: a hit takes the angle from where on the bat it landed.
   float batX = -A + 0.09;
   if (pos.x < batX && vel.x < 0.0) {
@@ -859,12 +887,18 @@ vec4 sim(vec2 uv) {
       pos.x = batX; vel.x = -vel.x;
       vel.y += (pos.y - h) / batLen * speed * 0.6;
       vel = normalize(vel) * length(vec2(speed, speed * 0.55));
+      hitBat = 1.0;
     } else if (pos.x < -A - 0.2) {                              // missed: serve again
       pos = vec2(0.0); vel = vec2(-speed, speed * 0.55); s.y = 0.0;
+      missed = 1.0;
     }
   }
   if (texel == vec2(0.0)) return vec4(pos, vel);
   if (texel == vec2(1.0, 0.0)) return vec4(h, s.y, 0.0, 1.0);
+  // The third register is what *happened* this frame, for whoever is
+  // listening: hit the bat, hit the wall, missed. A shader has no other way
+  // to tell anyone, and the host reads exactly these three numbers back.
+  if (texel == vec2(2.0, 0.0)) return vec4(hitBat, hitWall, missed, 1.0);
   return vec4(0.0);
 }
 
@@ -1164,6 +1198,12 @@ col` },
 export const newGenerateDoc = (preset = GENERATE_PRESETS[0]) => ({
   sketch: preset.source, preset: preset.id, uniforms: {}, seed: 0,
   preview: (preset.preview || [640, 640]).slice(), exportSize: [2048, 2048],
+  simSteps: preset.steps || 1,
+  // A sketch that wants to be heard says what to read out of its own state
+  // and what to do about it. Absent, nothing is read and nothing sounds.
+  ...(preset.probes ? { probes: preset.probes } : {}),
+  ...(preset.effects ? { effects: preset.effects } : {}),
+  ...(preset.instruments ? { instruments: preset.instruments } : {}),
 });
 
 const SIZES = [[512, 512], [640, 640], [800, 450], [1024, 576], [1080, 1080], [1080, 1920]];
@@ -1335,6 +1375,36 @@ export async function generateEditor(host) {
     gl.activeTexture(gl.TEXTURE0);
   }
 
+  // ---------------------------------------------------------------- sound
+  //
+  // Off until asked for, like the playground's: an AudioContext needs a
+  // gesture, and a page that starts humming on its own is one you close.
+  let rig = null, wantSound = false, soundNotes = 0, soundSaid = "";
+  const soundBtn = el("button", { hidden: !hasSketchEffects(doc) }, "Sound: off");
+  soundBtn.onclick = async () => {
+    wantSound = !wantSound;
+    soundBtn.textContent = wantSound ? "Sound: on" : "Sound: off";
+    if (!wantSound) { if (rig) { await rig.close(); rig = null; } return; }
+    try {
+      rig = await LiveRig.create({ instruments: doc.instruments });
+      await rig.resume();
+    } catch (e) { soundSaid = String(e.message).split("\n")[0]; wantSound = false; soundBtn.textContent = "Sound: off"; }
+  };
+
+  function soundFrame() {
+    if (!wantSound || !rig || !sim || !hasSketchEffects(doc)) return;
+    try {
+      // The state the sim just wrote is the one to look at.
+      const { fired, errors } = sketchFrame(gl, doc, feedback.read, {
+        stateKey: `generate-${host.doc.id || "doc"}`,
+        width: canvas.width, height: canvas.height,
+        time: timeNow(), frame: feedback.frame, keys: keyboard,
+      });
+      soundSaid = errors[0] || "";
+      if (fired.length) soundNotes += rig.perform(fired);
+    } catch (e) { soundSaid = String(e.message).split("\n")[0]; }
+  }
+
   let keysTex = null;
   function keysTexture() {
     if (!keysTex) {
@@ -1388,6 +1458,7 @@ export async function generateEditor(host) {
     if (display && gl && !paused) {
       if (sim) for (let i = 0; i < doc.simSteps; i++) stepSim();
       draw();
+      soundFrame();
       // "Went down this frame" lasts exactly one frame, whatever the sim
       // step count is — so it is cleared here rather than inside stepSim.
       keyboard.tick();
@@ -1397,6 +1468,10 @@ export async function generateEditor(host) {
     frames++;
     const now = performance.now();
     if (now - lastFpsAt > 500) {
+      if (hasSketchEffects(doc)) {
+        soundBtn.hidden = false;
+        soundBtn.title = soundSaid || (wantSound ? `${soundNotes} notes so far` : "");
+      }
       fpsLabel.textContent =
         `${Math.round((frames * 1000) / (now - lastFpsAt))} fps · ${canvas.width}×${canvas.height}`;
       frames = 0; lastFpsAt = now;
@@ -2221,7 +2296,7 @@ uniform bool  mirror;  // @toggle`),
               "statements before the final expression are allowed.",
           onResult: (res) => { editor.value = res.text; doc.uniforms = {}; run(); restart(); },
         }),
-        seedLabel, fpsLabel, stateLabel)),
+        seedLabel, fpsLabel, stateLabel, soundBtn)),
 
     el("div.lab-split", {},
       el("div.stack", {},

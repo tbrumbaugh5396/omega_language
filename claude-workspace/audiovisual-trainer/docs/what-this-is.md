@@ -61,7 +61,7 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
-library, and a **209-check self-test across 30 groups that runs inside the
+library, and a **213-check self-test across 31 groups that runs inside the
 app**.
 
 ---
@@ -204,7 +204,13 @@ with its patch and three notes to hear it.
 The Playground's pong is all of it in one document: fourteen parameters that
 are the game, expressions that are its rules, a view that keeps nothing, and
 three effects that make a noise on the game's own decisions — so a bat hit
-cannot sound unless the game agreed it happened. The ship's position
+cannot sound unless the game agreed it happened.
+
+A *sketch* can be heard too, by a smaller route: it names texels of its own
+state as **probes**, the host reads them back once a frame, and they become
+the parameters of the one node a sketch has. Pong-in-a-sketch writes its
+events into a third texel and the document names them — which is the whole of
+what turns a shader's decisions into sound. The ship's position
 is a number you can read off the graph, not a texel you have to decode; it
 equals the CPU integration of its own equations to 2e−15, and the ejected
 pass header prints the update beside the shader that draws it.

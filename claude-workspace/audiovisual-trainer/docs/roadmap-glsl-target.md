@@ -1604,6 +1604,58 @@ sides, and an explicit length check, and it is identical.
 ending anything. The Generate preset is still silent — a sketch has no
 effects, and giving it any would mean a sketch that is really a graph.
 
+### Phase 20 — A sketch with a voice *(S)* — **shipped**
+
+Last phase said a Generate sketch could not have effects because effects need
+parameters and a sketch has none. That was true and not interesting: a sketch
+keeps whatever it remembers in its own state texture, and the only thing
+missing was a way to look at it.
+
+**Probes.** A sketch document names texels of its own state:
+
+```js
+probes: { hitBat: { texel: [2, 0], channel: "r" },
+          score:  { texel: [1, 0], channel: "g" } }
+```
+
+They are read back once a frame and handed to the ordinary evaluator as the
+parameters of one node called `sketch`. From there everything a render graph
+can do, a sketch can — `prev()` works because the readings are committed like
+any parameter, `key()` works because the runtime binds the keyboard, and
+effects fire:
+
+```js
+effects: [{ kind: "note", instrument: "blip", when: 'ch("hitBat") > 0.5',
+            hz: '440 * 2 ^ ((ch("ballY") - ch("batY")) * 6 / 12)' }]
+```
+
+Bare names resolve against that one node — a graph may now say `effectNode`,
+and a sketch says `sketch`, because there is only one thing an unqualified
+name could mean. A render graph still says nothing, so a bare name there is
+still an error that names itself.
+
+**The sketch has to say what happened.** Pong kept its ball, bat and score in
+two texels; it now writes a third holding *this frame's events* — hit the bat,
+hit the wall, missed. A shader has no other way to tell anyone anything, and
+naming those three texels is the whole of what turns a shader's decisions into
+a document's sound.
+
+| held against | number |
+|---|---|
+| a new document from the preset | carries **6 probes, 3 effects, 3 instruments** |
+| played well vs not played, read from the probes | **score rose, never missed** vs **never hit the bat, score 0** |
+| the effects those probes fired | **2 blips, 1 bell, no thuds** vs **5 thuds, no blips** |
+| the rig fed frame by frame vs the batch bounce | **identical**, 579 200 samples × 3 channels |
+
+The cost is named rather than hidden: `readPixels` stalls until the frame it
+reads has finished. Six texels at sixty frames a second is small, and it is
+the only way for a host to learn what a shader decided.
+
+*Left:* a probe reports 0..1 on a byte target and its raw value on a float
+one, so a document that reads a counter wants a float state — true here, and
+not enforced. And the editor's sound needs the tab visible, because a paused
+`requestAnimationFrame` reads no probes.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1693,6 +1745,7 @@ effects, and giving it any would mean a sketch that is really a graph.
 | 17.1 | The instrument document: a patch that persists — **shipped** | M | 16.1 | an instrument that outlives its session |
 | 18.1 | The library listed; a playable game in Generate — **shipped** | S | 17.1 | you can see what you have, and play a sketch |
 | 19.1 | Pong, with sound, in the Playground — **shipped** | S | 18.1 | model, rules, view and sound in one document |
+| 20.1 | Probes: a sketch's own state, read back — **shipped** | S | 19.1 | a Generate sketch that can be heard |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

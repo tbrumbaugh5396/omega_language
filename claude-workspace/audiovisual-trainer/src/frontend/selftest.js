@@ -13,7 +13,7 @@
 // at, not a reason to block a save.
 
 import { el, clear, api } from "./ui.js";
-import { GENERATE_PRESETS } from "./studio-generate.js";
+import { GENERATE_PRESETS, newGenerateDoc } from "./studio-generate.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3 } from "./shader-uniforms.js";
 import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
@@ -26,6 +26,7 @@ import { lifeStep, grayScottStep } from "./sim-nodes.js";
 import { shipStep, shipAsData, menuAsData, pongAsData, pongEffects, PONG_INSTRUMENTS } from "./game-nodes.js";
 import { EventQueue, pointerEvents } from "./events.js";
 import { LiveRig, renderFired } from "./live-audio.js";
+import { readProbes, sketchFrame, hasSketchEffects } from "./sketch-effects.js";
 import { shipInstrument, toneInstrument, instrumentId, normalise, internInstruments,
          inlineInstruments, resolveInstruments, instrumentFor, forgetInstrument,
          instrumentNames, instrumentCount, instrumentBytes, defineInstrument,
@@ -2057,6 +2058,147 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                + ` · ${routed} notes routed, ${missed} unrouted` }); }
   } catch (e) {
     push({ group: "Pong", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // A sketch with a voice. A Generate document is one program with a state
+  // texture and no graph, so it had no parameters for an effect to fire on.
+  // Naming texels of its own state as probes gives it some: the host reads
+  // them back and the ordinary evaluator does the rest.
+  try {
+    const W = 320, H = 200, FPS = 60, FRAMES = 700, SR = 48000;
+    const game = GENERATE_PRESETS.find((g) => g.id === "pong");
+    const src = desugar(game.source, { es3: isGL2(gl) });
+    const doc = { probes: game.probes, effects: game.effects, instruments: game.instruments };
+
+    // The sketch, run the way the editor runs it, in this test's own context.
+    const play = (stateKey, chase) => {
+      const fb = new Feedback(gl);
+      fb.resize(W, H, 1);
+      const disp = linkProgram(gl, src), simP = linkProgram(gl, withDefine(src, "SIM_PASS"));
+      const quad = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const uniforms = parseUniforms(game.source);
+      const values = {};
+      for (const u of uniforms) if (u.value) values[u.name] = u.value;
+      const kb = new Keyboard();
+      const keysTex = gl.createTexture();
+      const bind = (prog, stateTex) => {
+        gl.useProgram(prog);
+        gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+        const loc = gl.getAttribLocation(prog, "a_pos");
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+        const u = (n) => gl.getUniformLocation(prog, n);
+        gl.uniform2f(u("u_resolution"), W, H);
+        gl.uniform1i(u("u_frame"), fb.frame);
+        gl.uniform1f(u("u_time"), 0);
+        gl.uniform2f(u("u_origin"), 0, 0);
+        gl.uniform1f(u("u_seed"), 0);
+        gl.uniform2f(u("u_mouse"), W / 2, H / 2);
+        gl.uniform1f(u("u_mouseDown"), 0);
+        applyUniforms(gl, prog, uniforms, values);
+        gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, stateTex);
+        if (u("u_state")) gl.uniform1i(u("u_state"), 7);
+        gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, stateTex);
+        if (u("u_prev")) gl.uniform1i(u("u_prev"), 6);
+        if (u("u_keys")) {
+          gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, keysTex);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, kb.texture());
+          gl.uniform1i(u("u_keys"), 4);
+        }
+        gl.activeTexture(gl.TEXTURE0);
+      };
+      const fired = [], errors = [], raw = [];
+      for (let f = 0; f < FRAMES; f++) {
+        const seen = readProbes(gl, fb.read, doc.probes);
+        kb.clear();
+        if (chase) {
+          if (seen.ballY > seen.batY + 0.02) kb.press(KEY.up);
+          else if (seen.ballY < seen.batY - 0.02) kb.press(KEY.down);
+        }
+        const w = fb.write, r = fb.read;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, w.fbo);
+        gl.viewport(0, 0, W, H);
+        bind(simP, r.tex);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        fb.swap();
+        const res = sketchFrame(gl, doc, fb.read, { stateKey, width: W, height: H, time: f / FPS, frame: f, keys: kb });
+        errors.push(...res.errors);
+        raw.push(res.probes);
+        fired.push(...res.fired.map((x) => ({ ...x, frame: f })));
+        kb.tick();
+      }
+      const kind = fb.read.kind;
+      gl.deleteProgram(disp); gl.deleteProgram(simP); gl.deleteBuffer(quad); gl.deleteTexture(keysTex);
+      fb.release && fb.release();
+      const count = {};
+      for (const x of fired) count[x.instrument] = (count[x.instrument] || 0) + 1;
+      return { fired, count, errors, raw, kind };
+    };
+
+    const good = play("selftest-sketchfx-good", true);
+    const bad = play("selftest-sketchfx-bad", false);
+
+    // 1. The document carries what it needs, and a new one from the preset
+    //    carries it too — a preset whose sound only worked in the preset
+    //    would be a preset nobody could edit.
+    { const made = newGenerateDoc(game);
+      const ok = hasSketchEffects(made) && Object.keys(made.probes).length === 6
+        && made.effects.length === 3 && Object.keys(made.instruments).length === 3;
+      push({ group: "Sketch effects", name: "a Generate document carries its probes, effects and instruments", ok,
+             detail: ok ? `probes ${Object.keys(made.probes).join(", ")} · 3 effects · instruments ${Object.keys(made.instruments).join(", ")}`
+                        : "newGenerateDoc dropped them" }); }
+
+    // 2. The probes read what the sketch wrote. The sketch's three events
+    //    live in one texel; a rally that never misses must never set the
+    //    third, and one that never plays must set only the third.
+    { const anyMissed = good.raw.some((p2) => p2.missed > 0.5);
+      const anyBat = bad.raw.some((p2) => p2.hitBat > 0.5);
+      const scoreRose = good.raw[good.raw.length - 1].score > 0;
+      push({ group: "Sketch effects", name: "the probes read what the shader decided", ok: !anyMissed && !anyBat && scoreRose,
+             detail: `the state is a ${good.kind} target, read back a texel at a time · played well: score reached ${good.raw[good.raw.length - 1].score}, never missed · `
+               + `not played: never hit the bat, score ${bad.raw[bad.raw.length - 1].score}` }); }
+
+    // 3. And the effects fire on them, once each, with the right instrument.
+    { const ok = good.count.blip > 0 && good.count.bell > 0 && good.count.thud === undefined
+        && bad.count.thud > 0 && bad.count.blip === undefined && !good.errors.length && !bad.errors.length;
+      const bells = good.fired.filter((f) => f.instrument === "bell").map((f) => Math.round(f.hz));
+      push({ group: "Sketch effects", name: "a sketch's effects fire on its own state", ok,
+             detail: `played well: ${good.count.blip} blips, ${good.count.bell} bells (${bells.join(", ")} Hz), no thuds · `
+               + `not played: ${bad.count.thud} thuds, no blips · bare ch("hitBat") resolved against the one node a sketch has` }); }
+
+    // 4. …and it sounds the same played as bounced, like everything else.
+    { const TAIL = 0.4, seconds = FRAMES / FPS + TAIL;
+      const names = Object.keys(doc.instruments);
+      const offline = new OfflineAudioContext(names.length, Math.round(seconds * SR), SR);
+      const rig = await LiveRig.create({ instruments: doc.instruments }, { ctx: offline, split: true });
+      for (let f = 0; f < FRAMES; f++) rig.perform(good.fired.filter((x) => x.frame === f), f / FPS);
+      const liveBuf = await offline.startRendering();
+      const { buffer: batchBuf } = await renderFired(good.fired, { instruments: doc.instruments,
+                                                                   fps: FPS, frames: FRAMES, sampleRate: SR,
+                                                                   tail: TAIL, split: true });
+      const sameLength = liveBuf.length === batchBuf.length;
+      let allSame = sameLength, heard = 0;
+      for (let c = 0; c < names.length && sameLength; c++) {
+        const a = liveBuf.getChannelData(c), b = batchBuf.getChannelData(c);
+        let e = 0;
+        for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) allSame = false; e += a[i] * a[i]; }
+        if (Math.sqrt(e / a.length) > 1e-5) heard++;
+      }
+      const routed = rig.notes, missed = rig.missed;
+      await rig.close();
+      push({ group: "Sketch effects", name: "a sketch's sound is the same played as bounced", ok: allSame && heard >= 2 && missed === 0,
+             detail: sameLength
+               ? `${liveBuf.length} samples on each of ${names.length} channels, ${allSame ? "identical" : "differing"} · ${heard} sounded · ${routed} notes routed, ${missed} unrouted`
+               : `lengths differ: ${liveBuf.length} vs ${batchBuf.length}` }); }
+  } catch (e) {
+    push({ group: "Sketch effects", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on
