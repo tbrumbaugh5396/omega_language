@@ -61,8 +61,8 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
-library, a WGSL emitter with a WebGPU runner, and a **220-check self-test
-across 32 groups that runs inside the app**.
+library, a WGSL emitter with a WebGPU runner, and a **226-check self-test
+across 33 groups that runs inside the app**.
 
 ---
 

@@ -15,7 +15,7 @@
 import { el, clear, api } from "./ui.js";
 import { GENERATE_PRESETS, newGenerateDoc } from "./studio-generate.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
-import { parseUniforms, desugar, hasSimPass, withDefine, isEs3 } from "./shader-uniforms.js";
+import { parseUniforms, desugar, hasSimPass, withDefine, isEs3, splitSketch, stripComments } from "./shader-uniforms.js";
 import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
 import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets } from "./shader-run.js";
 import { compileDesignFrame } from "./design-to-sdf.js";
@@ -2338,6 +2338,75 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
     }
   } catch (e) {
     push({ group: "WebGPU", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The three games that each keep their world somewhere new: snake in the
+  // grid it walks on, a platformer in a tilemap it looks up, and a raymarched
+  // world whose scene() asks the state texture where things are.
+  try {
+    const cases = [
+      { id: "snake", w: 320, h: 240, frames: 240,
+        drive: (kb, f) => { if (f === 40) kb.press(KEY.up); if (f === 120) kb.press(KEY.right); },
+        wants: ["ate", "died", "turned", "score"] },
+      { id: "platform", w: 400, h: 250, frames: 260,
+        drive: (kb, f) => { kb.press(KEY.right); if (f % 50 === 0) kb.press(KEY.space); },
+        wants: ["coin", "land", "jump", "score"] },
+      { id: "rover", w: 200, h: 120, frames: 90,
+        drive: (kb) => { kb.press(KEY.up); },
+        wants: ["got", "bump", "score", "speed"] },
+    ];
+    const rows = [];
+    for (const c of cases) {
+      const g = GENERATE_PRESETS.find((x) => x.id === c.id);
+      if (!g) { rows.push({ id: c.id, error: "no such preset" }); continue; }
+      // It has to compile for both passes before anything else is claimed.
+      const src = desugar(g.source, { es3: isGL2(gl) });
+      let linked = true, why = "";
+      for (const pass of [null, "SIM_PASS"]) {
+        try { const pr = linkProgram(gl, pass ? withDefine(src, pass) : src); gl.deleteProgram(pr); }
+        catch (e) { linked = false; why = String(e.message).split("\n")[0]; }
+      }
+      if (!linked) { rows.push({ id: c.id, error: why }); continue; }
+      const values = {};
+      for (const u of parseUniforms(g.source)) if (u.value) values[u.name] = u.value;
+      const kb = new Keyboard();
+      let moved = 0, last = null, out = null;
+      const doc = { probes: g.probes, effects: g.effects, instruments: g.instruments };
+      let sawProbe = {};
+      for (let f = 0; f < c.frames; f++) {
+        kb.clear(); c.drive(kb, f);
+        out = renderSketch(g.source, c.w, c.h, { keys: kb, values, steps: 1, reset: f === 0, time: f / 60 });
+        kb.tick();
+        const d = out.getContext("2d").getImageData(0, 0, c.w, c.h).data;
+        let hsh = 0;
+        for (let i = 0; i < d.length; i += 29) hsh = (hsh * 31 + d[i]) >>> 0;
+        if (last !== null && hsh !== last) moved++;
+        last = hsh;
+      }
+      const d = out.getContext("2d").getImageData(0, 0, c.w, c.h).data;
+      let lit = 0;
+      for (let i = 0; i < c.w * c.h; i++) if (d[i * 4] > 30) lit++;
+      const named = c.wants.every((n) => g.probes && g.probes[n]);
+      rows.push({ id: c.id, moved, lit, named, effects: (g.effects || []).length });
+    }
+    const bad = rows.filter((r) => r.error || !r.named || r.moved < 10 || r.lit < 50);
+    push({ group: "More games", name: "snake, a tilemap platformer and a raymarched world all run", ok: bad.length === 0,
+           detail: bad.length ? bad.map((r) => `${r.id}: ${r.error || `moved ${r.moved}, lit ${r.lit}`}`).join(" · ")
+             : rows.map((r) => `${r.id} changed on ${r.moved} frames, ${r.lit} lit pixels, ${r.effects} effects`).join(" · ") });
+
+    // The one that would have hung the GPU: a raymarched scene() must be
+    // arithmetic. Reading the state texture inside it costs a thousand
+    // fetches a pixel, and this is the check that it is not doing that.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "rover");
+      const parts = splitSketch(g.source);
+      const sceneFn = parts.declTexts.find((t) => /\bfloat\s+scene\s*\(\s*vec3/.test(stripComments(t))) || "";
+      const reads = (stripComments(sceneFn).match(/\bstate\s*\(|\btexture2D\s*\(/g) || []).length;
+      push({ group: "More games", name: "the raymarched scene() looks nothing up", ok: reads === 0,
+             detail: reads === 0
+               ? "scene() is arithmetic over globals the display body filled once — march calls it about 150 times a pixel, so a lookup in there is a thousand fetches to draw one dot"
+               : `${reads} texture reads inside scene()` }); }
+  } catch (e) {
+    push({ group: "More games", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

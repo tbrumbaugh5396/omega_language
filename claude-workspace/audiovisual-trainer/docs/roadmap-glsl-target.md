@@ -1733,6 +1733,59 @@ render without matching. And one sketch to one texture: nothing about the
 render graph — pooling, fusion, feedback, tiling — has a WebGPU path, and none
 of it should until the pixels are known to match.
 
+### Phase 22 — Three games that keep their world somewhere new *(M)* — **shipped**
+
+Pong, breakout and the flyer between them show state in a register, state in a
+row of texels and a course generated from a hash. These three each need
+somewhere else to put a world.
+
+**Snake — the grid the game walks on.** The snake is not a list: every cell of
+the board is one texel holding how many more steps it stays body. Each step
+every cell counts down and the head's cell is set to the length, so the tail
+disappears by arithmetic and nothing remembers where it was. The fade along
+the body is that same countdown, drawn — nothing extra is stored for it.
+
+**A platformer — the level as a texture.** Rows 1 upward hold the world one
+tile a texel, red solid and green a coin, generated once from a hash and then
+written back unchanged, so it is somewhere the game *looks things up* rather
+than something the shader recomputes. Collision is four lookups at the corners
+of the player's box, one axis at a time so a wall does not also stop a fall.
+A collected coin clears exactly one texel.
+
+**Rover — a raymarched world you drive.** One distance function, a soft shadow
+from a real occlusion march, ambient occlusion, a sky the ground picks up, and
+the tone-map-and-dither finish. `scene()` is a pure function of a point and the
+world is data — the rover's place and which beacons still stand come from the
+state texture.
+
+That last one had to be built twice. The first version read the state *inside*
+`scene()`, which `march` calls about a hundred and fifty times a pixel: a
+thousand texture fetches to draw one dot, and a GPU that stopped answering.
+The fix is the rule: **a raymarched `scene()` must be arithmetic**, and
+anything it needs is hoisted into globals the display body fills once. There
+is a check for it, because the failure mode is a hang rather than a wrong
+picture.
+
+Two more things it turned up. The shorthand did not treat `vec4 gRover;` as a
+declaration — only `const`, `uniform` and friends counted — so a file-scope
+variable landed *after* the function that used it. A declaration with **no
+initialiser** is unambiguous (it does nothing inside `main`), so it is one now;
+`vec3 col = mix(…)` is still a statement. And the platformer spawned the player
+inside a ledge, where the box could not move in any direction and the game was
+a still photograph — the first stretch of ground is solid now, and the check
+requires the picture to actually change.
+
+| held against | number |
+|---|---|
+| snake, driven for 240 frames | changed on **14** frames (it steps every seven), **736** lit pixels |
+| the platformer, running right and jumping | changed on **221** of 260 frames; reaches x=28 and **4 coins** |
+| the rover, driving forward | changed on **89** of 90 frames |
+| `scene()`, read for lookups | **0** — it is arithmetic |
+
+*Left:* snake's fruit can land under the snake on the fourth re-roll and sit
+there until the body passes; the platformer has no enemies and nothing to
+fall into but the void; and the rover's beacons respawn only on R.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1825,6 +1878,7 @@ of it should until the pixels are known to match.
 | 20.1 | Probes: a sketch's own state, read back — **shipped** | S | 19.1 | a Generate sketch that can be heard |
 | 21.1 | A WGSL emitter and a WebGPU runner — **40 translated** | L | 0.3 | 36 nodes identical on a second backend |
 | 21.2 | Three more games in Generate — **shipped** | S | 20.1 | breakout, a flyer, and pong |
+| 22.1 | Snake, a tilemap platformer, a raymarched rover — **shipped** | M | 21.2 | a grid, a tilemap and a lit 3-D world |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

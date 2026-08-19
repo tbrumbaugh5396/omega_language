@@ -446,6 +446,15 @@ const FUNC_DEF = new RegExp(
   "^\\s*(?!(?:if|for|while|do|else|switch|return)\\b)" +
   "[A-Za-z_]\\w*(?:\\s+[A-Za-z_]\\w*)*\\s+[A-Za-z_]\\w*\\s*\\([^)]*\\)\\s*\\{");
 const DECL_START = /^\s*(uniform|attribute|varying|const|struct|precision|invariant)\b/;
+// A file-scope variable — `vec4 gRover;`, `vec4 gB[8];`. Only without an
+// initialiser: `vec3 col = mix(…)` is a statement and belongs in main, but a
+// bare declaration does nothing there and is the only way a raymarched sketch
+// can hand scene() something it looked up, since the prelude calls scene(p)
+// with nothing else.
+const GLOBAL_DECL = new RegExp(
+  "^\\s*(?:lowp|mediump|highp)?\\s*" +
+  "(?:float|int|bool|vec[234]|ivec[234]|bvec[234]|mat[234])\\s+" +
+  "[A-Za-z_]\\w*\\s*(?:\\[\\s*\\d+\\s*\\])?\\s*;\\s*$");
 // A forward declaration — `float in0(vec2 p);` — which is how a field wire
 // declares the port it reads. Two identifiers before the parenthesis is what
 // separates it from a bare call statement, `mix(a, b);`, which has one.
@@ -498,7 +507,8 @@ export function splitSketch(sketch) {
     const text = src.slice(s, e);
     const code = bare.slice(s, e).trim();
     if (!code) continue;
-    const isDecl = DECL_START.test(code) || FUNC_DEF.test(code) || FUNC_PROTO.test(code);
+    const isDecl = DECL_START.test(code) || FUNC_DEF.test(code) || FUNC_PROTO.test(code)
+      || GLOBAL_DECL.test(code);
     // A chunk's slice begins right after the previous terminator, so it
     // usually opens with the tail of that line: a newline, maybe a comment.
     // Those blank lines are dropped, so the chunk's first emitted line is the

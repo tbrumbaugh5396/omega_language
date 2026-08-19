@@ -815,6 +815,428 @@ col += vec3(0.5, 0.7, 0.8) * max(-h0, 0.0) * 3.0;
 
 finish(col)` },
 
+  { id: "rover", label: "Rover — a raymarched world you drive, with shadows", preview: [640, 360], steps: 1,
+    probes: { got: { texel: [2, 0], channel: "r" }, bump: { texel: [2, 0], channel: "g" },
+              score: { texel: [1, 0], channel: "g" }, speed: { texel: [1, 0], channel: "b" } },
+    instruments: { chime: { ref: "tone.bell" }, knock: { ref: "tone.pluck" }, motor: { ref: "tone.blip" } },
+    effects: [
+      { kind: "note", instrument: "chime", when: 'ch("got") > 0.5',
+        hz: '659 * 2 ^ (min(ch("score"), 10) / 12)', dur: "0.35" },
+      { kind: "note", instrument: "knock", when: 'ch("bump") > 0.5', hz: "110", dur: "0.25" },
+    ],
+    source:
+`// A world you drive around, lit properly: one distance function raymarched,
+// a soft shadow from a real occlusion march, ambient occlusion, a sky that
+// the ground reflects a little, and the tone-map-and-dither finish. Arrows or
+// WASD steer; the eight beacons are the game.
+//
+// The trick worth reading: scene() is a pure function of a point, and it asks
+// the *state texture* where the rover and the beacons are. A shader's world
+// can be data without ceasing to be a function.
+uniform sampler2D u_keys;
+uniform float accel;    // @range 2 20 @default 8 @help how hard it pulls away
+uniform float turn;     // @range 0.5 4 @default 1.9 @help radians a second
+uniform float drag;     // @range 0.9 0.999 @default 0.965 @help speed kept each frame
+uniform float hour;     // @range 0 1 @default 0.28 @help sun height, 0 is dusk
+uniform vec3 sand;      // @color @default #9a744a
+uniform vec3 shell;     // @color @default #f4efe6
+
+const float BEACONS = 8.0;
+vec4 rover() { return state(vec2(0.5, 0.5) / u_resolution); }   // x, z, heading, speed
+vec4 meta()  { return state(vec2(1.5, 0.5) / u_resolution); }   // taken, score, speed, alive
+// Beacon k is a texel; r is 1 while it still stands.
+float standing(float k) { return state(vec2(4.5 + k, 0.5) / u_resolution).r; }
+vec2 beaconAt(float k) {
+  return (vec2(hash21(vec2(k * 3.1, 1.0)), hash21(vec2(k * 7.7, 2.0))) - 0.5) * 34.0;
+}
+// The ground: low rolling dunes, so the shadows have something to fall on.
+float ground(vec2 q) { return -1.0 + 0.55 * fbm(q * 0.09) + 0.18 * fbm(q * 0.31); }
+
+// The world's state, read *once* per pixel and kept here for scene() to use.
+// The first version of this sketch read the texture inside scene(), which the
+// marcher calls about a hundred and fifty times a pixel — a thousand texture
+// fetches to draw one dot, and a GPU that stops answering. A raymarcher's
+// scene() must be arithmetic; anything it needs to look up is hoisted.
+vec4 gRover;
+vec4 gB[8];               // x, z, standing, unused
+
+float scene(vec3 p) {
+  float d = p.y - ground(p.xz);
+  vec3 rp = p - vec3(gRover.x, ground(gRover.xy) + 0.42, gRover.y);
+  rp.xz = rot(-gRover.z) * rp.xz;
+  float car = sdBox3(rp, vec3(0.62, 0.20, 0.95)) - 0.10;
+  car = min(car, sdSphere(rp - vec3(0.0, 0.26, -0.10), 0.42));
+  d = min(d, car);
+  for (int i = 0; i < 8; i++) {
+    if (gB[i].z < 0.5) continue;
+    vec3 bp = p - vec3(gB[i].x, ground(gB[i].xy) + 0.9, gB[i].y);
+    d = min(d, min(sdCapsule3(bp, vec3(0.0, -0.9, 0.0), vec3(0.0, 0.55, 0.0), 0.10),
+                   sdSphere(bp - vec3(0.0, 0.78, 0.0), 0.26)));
+  }
+  return d;
+}
+
+vec4 sim(vec2 uvv) {
+  vec2 texel = floor(gl_FragCoord.xy);
+  bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
+  float dt = 1.0 / 60.0;
+  vec4 r = first ? vec4(0.0, 6.0, 3.14159, 0.0) : rover();
+  vec4 m = first ? vec4(0.0, 0.0, 0.0, 1.0) : meta();
+
+  float lf = max(keyDown(u_keys, 37.0), keyDown(u_keys, 65.0));
+  float rt = max(keyDown(u_keys, 39.0), keyDown(u_keys, 68.0));
+  float fw = max(keyDown(u_keys, 38.0), keyDown(u_keys, 87.0));
+  float bk = max(keyDown(u_keys, 40.0), keyDown(u_keys, 83.0));
+
+  float heading = r.z + (lf - rt) * turn * dt;
+  float speed = (r.w + (fw - bk) * accel * dt) * drag;
+  vec2 dir = vec2(sin(heading), cos(heading));
+  vec2 pos = r.xy + dir * speed * dt;
+  // The edge of the world pushes back rather than letting you leave it.
+  float bump = 0.0;
+  if (length(pos) > 22.0) { pos = normalize(pos) * 22.0; speed *= -0.35; bump = 1.0; }
+
+  float got = 0.0;
+  for (int i = 0; i < 8; i++) {
+    float k = float(i);
+    if (standing(k) < 0.5) continue;
+    if (length(pos - beaconAt(k)) < 1.1) { got = 1.0; m.y += 1.0; }
+  }
+
+  if (texel == vec2(0.0)) return vec4(pos, heading, speed);
+  if (texel == vec2(1.0, 0.0)) return vec4(m.x, m.y, abs(speed), 1.0);
+  if (texel == vec2(2.0, 0.0)) return vec4(got, bump, 0.0, 1.0);
+  // One texel a beacon: it stands until the rover reaches it.
+  if (texel.y == 0.0 && texel.x >= 4.0 && texel.x < 4.0 + BEACONS) {
+    float k = texel.x - 4.0;
+    float up = first ? 1.0 : standing(k);
+    if (!first && up > 0.5 && length(rover().xy + vec2(sin(rover().z), cos(rover().z)) * rover().w * dt - beaconAt(k)) < 1.1) up = 0.0;
+    return vec4(up, 0.0, 0.0, 1.0);
+  }
+  return vec4(0.0);
+}
+
+vec4 r = rover();
+vec4 m = meta();
+// Hoist the world into the globals scene() reads: nine texture fetches for
+// the whole pixel rather than nine per march step.
+gRover = r;
+for (int i = 0; i < 8; i++) {
+  vec2 b = beaconAt(float(i));
+  gB[i] = vec4(b, standing(float(i)), 0.0);
+}
+// A chase camera, behind and above, looking where the rover is going.
+vec2 dir = vec2(sin(r.z), cos(r.z));
+vec3 target = vec3(r.x, ground(r.xy) + 0.7, r.y);
+// Behind by five and up by two — the height must not be scaled by the
+// distance, or the camera ends up ten units overhead looking at its own
+// shadow, which is what the first version of this did.
+vec3 ro = target - vec3(dir.x * 5.4, -2.0, dir.y * 5.4);
+ro.y = max(ro.y, ground(ro.xz) + 1.2);
+mat3 cam = lookAt(ro, target);
+vec3 rd = cam * normalize(vec3(p, 1.5));
+vec3 sun = normalize(vec3(0.55, 0.35 + hour * 0.7, 0.42));
+
+vec3 col = sky(rd, sun);
+float t = march(ro, rd, 60.0);
+if (t > 0.0) {
+  vec3 hit = ro + rd * t;
+  vec3 n = normal3(hit);
+  float sh = softShadow(hit + n * 0.02, sun, 12.0);
+  float occ = ao(hit, n);
+  // Which thing was hit, from its distance to each — cheaper than an id and
+  // exact enough at these scales.
+  vec3 rp = hit - vec3(r.x, ground(r.xy) + 0.42, r.y);
+  rp.xz = rot(-r.z) * rp.xz;
+  float dCar = min(sdBox3(rp, vec3(0.62, 0.20, 0.95)) - 0.10,
+                   sdSphere(rp - vec3(0.0, 0.26, -0.10), 0.42));
+  float lit = max(dot(n, sun), 0.0);
+  vec3 albedo = sand * (0.75 + 0.35 * fbm(hit.xz * 1.6));
+  if (dCar < 0.02) albedo = shell;
+  // A beacon glows rather than only reflecting, so it reads at a distance.
+  float glow = 0.0;
+  for (int i = 0; i < 8; i++) {
+    if (gB[i].z < 0.5) continue;
+    glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB[i].x, ground(gB[i].xy) + 1.68, gB[i].y)));
+  }
+  vec3 lin = albedo * (lit * sh * vec3(1.0, 0.92, 0.78) * 1.15 + occ * vec3(0.13, 0.18, 0.28));
+  lin += vec3(1.0, 0.62, 0.28) * glow;
+  lin += vec3(1.0, 0.9, 0.75) * fresnel(max(dot(n, -rd), 0.0), 0.04) * sh * 0.35;
+  col = mix(sky(rd, sun), lin, exp(-t * 0.018));
+}
+// A beacon count along the bottom.
+float marks = min(m.y, BEACONS);
+if (uv.y < 0.035 && uv.x * BEACONS < marks) col = mix(col, vec3(1.0, 0.62, 0.28), 0.85);
+finish(col)`
+  },
+  { id: "snake", label: "Snake — the grid the game writes into itself", preview: [640, 480], steps: 1,
+    probes: { ate: { texel: [3, 0], channel: "r" }, died: { texel: [3, 0], channel: "g" },
+              turned: { texel: [3, 0], channel: "b" }, score: { texel: [1, 0], channel: "g" } },
+    instruments: { pip: { ref: "tone.blip" }, eat: { ref: "tone.bell" }, over: { ref: "tone.pluck" } },
+    effects: [
+      { kind: "note", instrument: "eat", when: 'ch("ate") > 0.5',
+        hz: '523 * 2 ^ (min(ch("score"), 12) / 12)', dur: "0.12" },
+      { kind: "note", instrument: "pip", when: 'ch("turned") > 0.5', hz: "294", dur: "0.04" },
+      { kind: "note", instrument: "over", when: 'ch("died") > 0.5', hz: "98", dur: "0.7" },
+    ],
+    source:
+`// Snake, and the snake is not a list — it is the grid. Every cell of the
+// board is one texel holding how many more steps it stays part of the body;
+// each step every cell counts down by one and the head's cell is set to the
+// length. A cell is snake while its number is above zero, so the tail
+// disappears by arithmetic and nothing has to remember where it was.
+//
+// That is the thing a texture can do that a variable cannot, and it is why
+// this is thirty lines rather than a linked list. Arrows or WASD. R restarts.
+uniform sampler2D u_keys;
+uniform float cell;    // @range 8 40 @step 1 @int @default 24 @help board width in cells
+uniform float every;   // @range 2 20 @step 1 @int @default 7 @help frames between steps
+uniform vec3 ink;      // @color @default #f4efe6
+uniform vec3 body;     // @color @default #6ee7c8
+uniform vec3 fruit;    // @color @default #ff7a3d
+
+float COLS() { return max(4.0, floor(cell)); }
+float ROWS() { return max(4.0, floor(COLS() * u_resolution.y / u_resolution.x)); }
+// Row 0 of the state is registers; the board starts at row 1.
+vec4 head()  { return state(vec2(0.5, 0.5) / u_resolution); }   // x, y, dx, dy
+vec4 meta()  { return state(vec2(1.5, 0.5) / u_resolution); }   // length, score, alive, timer
+vec4 food()  { return state(vec2(2.5, 0.5) / u_resolution); }   // x, y
+float at(vec2 c) { return state((vec2(c.x, c.y + 1.0) + 0.5) / u_resolution).r; }
+// Where the fruit goes next: a hash of the step number, re-rolled a few times
+// if it lands on the snake. Four tries is enough at these sizes and it can be
+// counted, which an unbounded loop cannot.
+vec2 place(float n) {
+  vec2 f = vec2(0.0);
+  for (int i = 0; i < 4; i++) {
+    f = floor(vec2(hash21(vec2(n * 3.7 + float(i), 11.0)),
+                   hash21(vec2(n * 5.1 + float(i), 23.0))) * vec2(COLS(), ROWS()));
+    if (at(f) < 0.5) return f;
+  }
+  return f;
+}
+
+vec4 sim(vec2 uvv) {
+  vec2 texel = floor(gl_FragCoord.xy);
+  bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
+  float C = COLS(), R = ROWS();
+
+  vec4 h = first ? vec4(floor(C * 0.5), floor(R * 0.5), 1.0, 0.0) : head();
+  vec4 m = first ? vec4(4.0, 0.0, 1.0, 0.0) : meta();
+  vec2 f = first ? vec2(floor(C * 0.75), floor(R * 0.5)) : food().xy;
+
+  // Turning is read every frame, so a press between steps is not lost.
+  float lf = max(keyHit(u_keys, 37.0), keyHit(u_keys, 65.0));
+  float rt = max(keyHit(u_keys, 39.0), keyHit(u_keys, 68.0));
+  float up = max(keyHit(u_keys, 38.0), keyHit(u_keys, 87.0));
+  float dn = max(keyHit(u_keys, 40.0), keyHit(u_keys, 83.0));
+  vec2 want = h.zw;
+  float turned = 0.0;
+  if (lf > 0.5 && h.z ==  0.0) { want = vec2(-1.0,  0.0); turned = 1.0; }
+  if (rt > 0.5 && h.z ==  0.0) { want = vec2( 1.0,  0.0); turned = 1.0; }
+  if (up > 0.5 && h.w ==  0.0) { want = vec2( 0.0,  1.0); turned = 1.0; }
+  if (dn > 0.5 && h.w ==  0.0) { want = vec2( 0.0, -1.0); turned = 1.0; }
+
+  float timer = m.w + 1.0;
+  bool step_ = timer >= max(2.0, floor(every)) && m.z > 0.5;
+  float ate = 0.0, died = 0.0;
+  vec2 np = h.xy;
+  if (step_) {
+    timer = 0.0;
+    np = h.xy + want;
+    if (np.x < 0.0 || np.y < 0.0 || np.x >= C || np.y >= R) { died = 1.0; }
+    else if (at(np) > 0.5) { died = 1.0; }
+    else if (np == f) { ate = 1.0; m.x += 1.0; m.y += 1.0; f = place(m.y); }
+  }
+  if (died > 0.5) { m.z = 0.0; }
+
+  if (texel == vec2(0.0)) return vec4(step_ && died < 0.5 ? np : h.xy, want);
+  if (texel == vec2(1.0, 0.0)) return vec4(m.x, m.y, m.z, timer);
+  if (texel == vec2(2.0, 0.0)) return vec4(f, 0.0, 1.0);
+  if (texel == vec2(3.0, 0.0)) return vec4(ate, died, turned, 1.0);
+  // The board. Every cell counts down; the head's cell is refilled.
+  if (texel.y >= 1.0 && texel.x < C && texel.y <= R) {
+    vec2 c = vec2(texel.x, texel.y - 1.0);
+    float life = first ? (c == vec2(floor(C * 0.5), floor(R * 0.5)) ? 4.0 : 0.0) : at(c);
+    if (step_ && died < 0.5) {
+      life = max(0.0, life - 1.0);
+      if (c == np) life = m.x;
+    }
+    return vec4(life, 0.0, 0.0, 1.0);
+  }
+  return vec4(0.0);
+}
+
+float C = COLS(), R = ROWS();
+vec2 cellUV = uv * vec2(C, R);
+vec2 c = floor(cellUV);
+vec2 inCell = fract(cellUV) - 0.5;
+vec4 m = meta();
+vec3 col = vec3(0.05, 0.06, 0.11);
+// A quiet grid, so the board reads as a board.
+col = mix(col, col * 1.5, step(0.46, max(abs(inCell.x), abs(inCell.y))));
+float life = at(c);
+if (life > 0.5) {
+  // The nose is brightest and the tail fades, which the countdown already
+  // encodes — nothing extra is stored to draw it.
+  float k = life / max(1.0, m.x);
+  col = mix(col * 1.2, body, 0.45 + 0.55 * k);
+  col = mix(col, ink, smoothstep(0.42, 0.30, max(abs(inCell.x), abs(inCell.y))) * 0.12);
+}
+if (c == food().xy) col = mix(col, fruit, 1.0 - smoothstep(0.18, 0.34, length(inCell)));
+if (m.z < 0.5) col *= 0.45;
+// The score along the top edge.
+float marks = min(m.y, C);
+if (c.y == R - 1.0 && c.x < marks) col = mix(col, fruit, 0.55);
+col`
+  },
+  { id: "platform", label: "Platformer — the level is a texture", preview: [640, 400], steps: 1,
+    probes: { coin: { texel: [3, 0], channel: "r" }, land: { texel: [3, 0], channel: "g" },
+              jump: { texel: [3, 0], channel: "b" }, score: { texel: [1, 0], channel: "g" } },
+    instruments: { hop: { ref: "tone.blip" }, ping: { ref: "tone.bell" }, thud: { ref: "tone.pluck" } },
+    effects: [
+      { kind: "note", instrument: "ping", when: 'ch("coin") > 0.5',
+        hz: '659 * 2 ^ (min(ch("score"), 12) / 12)', dur: "0.14" },
+      { kind: "note", instrument: "hop", when: 'ch("jump") > 0.5', hz: "392", dur: "0.06" },
+      { kind: "note", instrument: "thud", when: 'ch("land") > 0.5', hz: "147", dur: "0.09" },
+    ],
+    source:
+`// A platformer whose level is a texture. Row 1 upward of the state holds the
+// world one tile a texel — red is solid, green is a coin — generated once
+// from a hash and then written back unchanged, so the world is somewhere the
+// game can *look things up* rather than something the shader recomputes.
+// Collision is four lookups at the corners of the player's box.
+//
+// Left and right walk, space or up jumps. R restarts.
+uniform sampler2D u_keys;
+uniform float gravity;  // @range 20 90 @default 46 @help tiles per second squared
+uniform float runSpd;   // @range 3 14 @default 7.5 @help tiles per second
+uniform float jumpSpd;  // @range 6 22 @default 13.5 @help tiles per second
+uniform vec3 sky1;      // @color @default #1b2b4b
+uniform vec3 rock;      // @color @default #2f7d5b
+uniform vec3 ink;       // @color @default #f4efe6
+uniform vec3 gold;      // @color @default #ff7a3d
+
+const float MAPW = 64.0;
+const float MAPH = 18.0;
+const float VIEW = 16.0;      // tiles across the screen
+vec4 who()  { return state(vec2(0.5, 0.5) / u_resolution); }   // x, y, vx, vy
+vec4 meta() { return state(vec2(1.5, 0.5) / u_resolution); }   // onGround, score, alive, camX
+vec4 tile(vec2 t) {
+  if (t.x < 0.0 || t.y < 0.0 || t.x >= MAPW || t.y >= MAPH) return vec4(1.0, 0.0, 0.0, 1.0);
+  return state((vec2(t.x, t.y + 1.0) + 0.5) / u_resolution);
+}
+float solid(vec2 t) { return tile(t).r; }
+// What is under a tile, which decides where a coin can sit.
+float solidBelow(vec2 t) {
+  float gap = t.x < 6.0 ? 0.0 : step(0.82, hash21(vec2(floor(t.x / 3.0), 7.0)));
+  float ground = (t.y - 1.0) < 2.0 && (t.y - 1.0) >= 0.0 && gap < 0.5 ? 1.0 : 0.0;
+  float ledge = 0.0;
+  float yy = t.y - 1.0;
+  if (yy > 3.0 && mod(yy, 4.0) == 0.0) {
+    float h = hash21(vec2(floor(t.x / 5.0), floor(yy / 4.0) * 3.0 + 1.0));
+    ledge = h > 0.45 && mod(t.x, 5.0) < 3.0 ? 1.0 : 0.0;
+  }
+  return max(ground, ledge);
+}
+// The world, decided once and then stored. Two rows of ground with gaps, and
+// ledges above them; a coin sits over most ledges.
+vec4 makeTile(vec2 t) {
+  // The first stretch is always solid, so wherever the player starts there
+  // is something under it — a spawn inside geometry is a game that never
+  // moves, which is exactly what the first version of this did.
+  float gap = t.x < 6.0 ? 0.0 : step(0.82, hash21(vec2(floor(t.x / 3.0), 7.0)));
+  float ground = t.y < 2.0 && gap < 0.5 ? 1.0 : 0.0;
+  float ledge = 0.0;
+  float band = floor(t.y / 4.0);
+  if (t.y > 3.0 && mod(t.y, 4.0) == 0.0) {
+    float h = hash21(vec2(floor(t.x / 5.0), band * 3.0 + 1.0));
+    ledge = h > 0.45 && mod(t.x, 5.0) < 3.0 ? 1.0 : 0.0;
+  }
+  float sol = max(ground, ledge);
+  float coin = sol < 0.5 && solidBelow(t) > 0.5 && hash21(t + 5.0) > 0.55 ? 1.0 : 0.0;
+  return vec4(sol, coin, 0.0, 1.0);
+}
+// Is the player's box overlapping anything solid at this position?
+float hits(vec2 pos) {
+  vec2 lo = pos + vec2(-0.32, 0.0), hi = pos + vec2(0.32, 0.9);
+  return max(max(solid(floor(vec2(lo.x, lo.y))), solid(floor(vec2(hi.x, lo.y)))),
+             max(solid(floor(vec2(lo.x, hi.y))), solid(floor(vec2(hi.x, hi.y)))));
+}
+
+vec4 sim(vec2 uvv) {
+  vec2 texel = floor(gl_FragCoord.xy);
+  bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
+  float dt = 1.0 / 60.0;
+  vec4 w = first ? vec4(2.0, 2.2, 0.0, 0.0) : who();
+  vec4 m = first ? vec4(0.0, 0.0, 1.0, 0.0) : meta();
+
+  float lf = max(keyDown(u_keys, 37.0), keyDown(u_keys, 65.0));
+  float rt = max(keyDown(u_keys, 39.0), keyDown(u_keys, 68.0));
+  float jp = max(keyHit(u_keys, 32.0), keyHit(u_keys, 38.0));
+  float coin = 0.0, land = 0.0, jumped = 0.0;
+
+  float vx = (rt - lf) * runSpd;
+  float vy = w.w - gravity * dt;
+  if (jp > 0.5 && m.x > 0.5) { vy = jumpSpd; jumped = 1.0; }
+
+  // One axis at a time, so a wall does not also stop a fall.
+  vec2 pos = w.xy;
+  vec2 tryX = vec2(pos.x + vx * dt, pos.y);
+  if (hits(tryX) < 0.5) pos = tryX; else vx = 0.0;
+  vec2 tryY = vec2(pos.x, pos.y + vy * dt);
+  float onGround = 0.0;
+  if (hits(tryY) < 0.5) { pos = tryY; }
+  else {
+    if (vy < 0.0) { onGround = 1.0; if (m.x < 0.5) land = 1.0; }
+    vy = 0.0;
+  }
+  if (pos.y < -3.0) { pos = vec2(2.0, 2.2); vy = 0.0; }
+
+  vec2 onTile = floor(pos + vec2(0.0, 0.45));
+  if (tile(onTile).g > 0.5) { coin = 1.0; m.y += 1.0; }
+  float camX = clamp(pos.x - VIEW * 0.5, 0.0, MAPW - VIEW);
+
+  if (texel == vec2(0.0)) return vec4(pos, vx, vy);
+  if (texel == vec2(1.0, 0.0)) return vec4(onGround, m.y, 1.0, camX);
+  if (texel == vec2(3.0, 0.0)) return vec4(coin, land, jumped, 1.0);
+  if (texel.y >= 1.0 && texel.x < MAPW && texel.y <= MAPH) {
+    vec2 t = vec2(texel.x, texel.y - 1.0);
+    vec4 cur = first ? makeTile(t) : tile(t);
+    // A collected coin is cleared, and only that one texel changes.
+    if (!first && cur.g > 0.5 && t == onTile && coin > 0.5) cur.g = 0.0;
+    return cur;
+  }
+  return vec4(0.0);
+}
+
+vec4 w = who();
+vec4 m = meta();
+float aspect = u_resolution.x / u_resolution.y;
+// World coordinates under this pixel, from the camera.
+vec2 wp = vec2(m.w, 0.0) + uv * vec2(VIEW, VIEW / aspect);
+vec2 t = floor(wp);
+vec2 inT = fract(wp) - 0.5;
+
+vec3 col = mix(sky1 * 0.55, sky1, uv.y);
+vec4 tl = tile(t);
+if (tl.r > 0.5) {
+  // A little shading from the tile's own coordinates, so a wall of one
+  // colour still reads as tiles.
+  float edge = smoothstep(0.5, 0.42, max(abs(inT.x), abs(inT.y)));
+  col = mix(rock * 0.6, rock, edge);
+  col *= 0.85 + 0.3 * hash21(t);
+}
+if (tl.g > 0.5) col = mix(col, gold, 1.0 - smoothstep(0.12, 0.26, length(inT)));
+// The player: a rounded box, feet at its position.
+vec2 rel = wp - w.xy - vec2(0.0, 0.45);
+float d = sdBox(rel, vec2(0.3, 0.45)) - 0.08;
+col = mix(col, ink, aa(d));
+col = mix(col, sky1 * 0.4, aa(sdCircle(rel - vec2(sign(w.z) * 0.1, 0.2), 0.06)));
+// Score along the top.
+float marks = min(m.y, 20.0);
+if (uv.y > 0.94 && uv.x * 20.0 < marks) col = mix(col, gold, 0.8);
+col`
+  },
   { id: "breakout", label: "Breakout — a wall of bricks, in the texture", preview: [640, 400], steps: 1,
     // The bricks are not a variable: they are twenty-four texels of the
     // state, one per brick, and the ball reads the one it is over. A shader
