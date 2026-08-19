@@ -28,7 +28,10 @@ import { renderSketch, sketchUniforms } from "./shader-run.js";
 import { buildControls } from "./shader-controls.js";
 import { nodeType } from "./render-graph.js";
 import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
-import { applyEffects, documentGaps, documentGraph, effectCost, effectLabel, ejectEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
+import { userNodes, registerNode, withNodeHeader } from "./node-library.js";
+import { fusedSketch, planPasses } from "./graph-fuse.js";
+import { applyEffects, documentGaps, documentGraph, effectCost, effectLabel, ejectEffects,
+         freezeEffects, makeEffect, prepareEffects, sketchEffect } from "./canvas-graph.js";
 import { ejectGraph } from "./graph-compile.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
@@ -95,6 +98,9 @@ export async function canvasEditor(host) {
 
   const layers = [];
   for (const l of doc.layers) layers.push(await hydrate(l));
+  // A stack may carry pictures of its own (a mixer's second input); they have
+  // to be decoded before anything draws, because drawing cannot wait.
+  await prepareEffects(layers.flatMap((l) => l.effects || []));
   let active = 0;
   const L = () => layers[active];
 
@@ -1050,6 +1056,8 @@ export async function canvasEditor(host) {
         el("option", { value: "graph:adjust.curves" }, "Curves — shadows / mids / highlights"),
         ...GRAPH_FILTERS.filter((f) => !f.cpuOnly).map((f) =>
           el("option", { value: `gfilter:${f.id}` }, `${f.name} — on the GPU`))),
+      userNodes().length ? el("optgroup", { label: "Your nodes" },
+        ...userNodes().map((n) => el("option", { value: `graph:${n.id}` }, n.name))) : null,
       el("optgroup", { label: "Shader — Generate presets" }, ...shaderPresets.map((p) =>
         el("option", { value: `shader:preset:${p.id}` }, p.label))),
       shaderDocs.length ? el("optgroup", { label: "Shader — your Generate documents" },
@@ -1086,7 +1094,11 @@ export async function canvasEditor(host) {
         for (const [k, x] of Object.entries(graphNode.values)) flat[k] = Array.isArray(x) ? x[0] : x;
         return makeEffect("graph", graphNode.filter.id, flat);
       }
-      if (graphNode) return makeEffect("node", graphNode.type, graphNode.values);
+      if (graphNode) {
+        const e = makeEffect("node", graphNode.type, graphNode.values);
+        if (graphNode.inputs && Object.keys(graphNode.inputs).length) e.inputs = { ...graphNode.inputs };
+        return e;
+      }
       if (shader) return sketchEffect(shader.source, shader.values, shader.time, shader.name);
       return makeEffect("cpu", selBox.value, params);
     };
@@ -1198,6 +1210,32 @@ export async function canvasEditor(host) {
           const shown = t.params.filter((u) => !u.hidden && u.control !== "image");
           for (const u of shown) graphNode.values[u.name] = init && init[u.name] ? init[u.name].slice() : u.value.slice();
           controls.append(buildControls(shown, graphNode.values, recompute));
+          // Inputs past the first are pictures you choose: this is what makes
+          // a mixer or a transition usable as a layer effect.
+          graphNode.inputs = { ...((editing && editing.inputs) || {}) };
+          for (const name of t.inputs.slice(1)) {
+            const pick = el("input", { type: "file", accept: "image/*", hidden: true,
+              onchange: async (e) => {
+                const f = e.target.files[0];
+                e.target.value = "";
+                if (!f) return;
+                const url = await new Promise((res) => {
+                  const fr = new FileReader();
+                  fr.onload = () => res(String(fr.result));
+                  fr.readAsDataURL(f);
+                });
+                graphNode.inputs[name] = url;
+                await prepareEffects([{ inputs: graphNode.inputs }]);
+                recompute();
+              } });
+            controls.append(el("div.row.tight", {},
+              el("span.fine", { style: { flex: 1 } },
+                `${name} — ${graphNode.inputs[name] ? "a picture is set" : "not set; it will see the layer twice"}`),
+              el("button.ghost", { onclick: () => pick.click() }, "choose…"),
+              graphNode.inputs[name] ? el("button.ghost.danger", {
+                onclick: () => { delete graphNode.inputs[name]; recompute(); } }, "×") : null,
+              pick));
+          }
         }
         controls.append(el("p.fine", {}, `A render-graph node (${type}); its GLSL is what runs.`));
         recompute();
@@ -1463,6 +1501,7 @@ export async function canvasEditor(host) {
         el("span.fine", {}, cost ? `${cost.draws} GPU draw${cost.draws === 1 ? "" : "s"}${cost.cpu ? ` · ${cost.cpu} on the CPU` : ""}` : ""),
         el("div.row.tight", {},
           el("button.ghost", { title: "the GLSL this stack compiles to", onclick: () => showStackGlsl(l) }, "GLSL"),
+          el("button.ghost", { title: "turn this stack into one node you can reuse", onclick: () => freezeDialog(l) }, "freeze"),
           el("button.ghost", { title: "flatten the stack into the pixels", onclick: () => flattenEffects(l) }, "flatten"))));
   }
 
@@ -1502,6 +1541,51 @@ export async function canvasEditor(host) {
       el("div.row", { style: { justifyContent: "flex-end" } },
         el("button", { onclick: () => { navigator.clipboard.writeText(text); toast("Copied"); } }, "Copy"),
         el("button.primary", { onclick: closeModal }, "Close")));
+  }
+
+  /**
+   * Freeze: a stack that fuses into one pass *is* one shader, so it can become
+   * a node with a name — saved as a Generate document, which means it can then
+   * be opened and edited like anything else. The layer keeps the same picture,
+   * now made of one thing instead of five.
+   */
+  function freezeDialog(l) {
+    const res = freezeEffects(l.effects, { width: W, height: H });
+    if (res.error) { toast(`Cannot freeze: ${res.error}`); return; }
+    const nameIn = el("input", { value: `${l.name} look`, placeholder: "a name for the node" });
+    const replace = el("input", { type: "checkbox", checked: true, style: { width: "auto" } });
+    modal(el("h2", {}, "Freeze the stack into a node"),
+      el("p.fine", {}, `${res.from.length} effect${res.from.length === 1 ? "" : "s"} — ${res.from.join(" → ")} — `
+        + "as one shader, with the values you dialled written in as its defaults. It is saved as a "
+        + "Generate document, so it can be opened and edited afterwards, and it appears in the effect "
+        + "menus here and in Video."),
+      el("label", {}, "Name", nameIn),
+      el("label.row.tight", { style: { marginBottom: 0, fontSize: ".78rem" } }, replace,
+        "replace this layer's stack with the new node"),
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: closeModal }, "Cancel"),
+        el("button.primary", { onclick: async () => {
+          const name = nameIn.value.trim() || "frozen look";
+          const slug = name.toLowerCase().replace(/[^a-z0-9.-]+/g, "-").replace(/^-|-$/g, "") || "frozen";
+          const sketch = withNodeHeader(res.sketch, { node: slug, title: name });
+          try {
+            const made = await api("/api/studio/projects", { method: "POST",
+              body: { kind: "generate", name, data: { sketch, mode: "sketch", uniforms: {}, seed: 0,
+                                                      preview: [640, 640], exportSize: [2048, 2048] } } });
+            const entry = await registerNode(sketch, { docId: made.id, name });
+            if (entry.error) { toast(`Saved as a document, but it will not draw: ${entry.error}`); closeModal(); return; }
+            if (replace.checked) {
+              snapshot("effects");
+              const t = nodeType(entry.id);
+              const params = {};
+              for (const u of t.params) if (u.control !== "image") params[u.name] = u.value.slice();
+              l.effects = [makeEffect("node", entry.id, params)];
+              l.dirty = true;
+            }
+            closeModal(); render(); renderPanels(); persist();
+            toast(`"${name}" is a node now — in the effect menus, and a document you can edit.`);
+          } catch (e) { toast(`Could not save it: ${String(e.message).split("\n")[0]}`); }
+        } }, "Freeze")));
   }
 
   function showStackGlsl(l) {

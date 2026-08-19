@@ -67,6 +67,12 @@ async function boot() {
 }
 
 async function loadContent() {
+  // A user's own nodes are Generate documents with `@node` in the header, so
+  // the app goes and looks for them before any effect menu is built.
+  import("./node-library.js")
+    .then((m) => m.loadUserNodes())
+    .catch(() => { /* a node library is a nicety; never block the app for it */ });
+
   const [cur, lib, prefs] = await Promise.all([
     api("/api/curriculum"),
     api("/api/library"),

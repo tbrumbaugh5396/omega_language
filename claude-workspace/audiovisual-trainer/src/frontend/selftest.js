@@ -31,6 +31,10 @@ import { BLEND_ORDER } from "./composite-nodes.js";
 import { clipAt, evalTrack, frameGraph, gradeEffects, putKey, sourceTimeAt } from "./video-graph.js";
 import { parseCube } from "./lut-cube.js";
 import { compileTitleNode } from "./title-node.js";
+import { freezeEffects } from "./canvas-graph.js";
+import { registerNode, withNodeHeader, nodeIdFor, keepVersion, versionSummary,
+         MAX_VERSIONS, declaresNode } from "./node-library.js";
+import { nodeType } from "./render-graph.js";
 import { drawWaveform, drawHistogram, frameStats } from "./scopes.js";
 
 // ------------------------------------------------------------------ fixtures
@@ -883,6 +887,101 @@ export async function runSelfTest(report = () => {}) {
              detail: `at 0 it is the outgoing frame (${a0.mean}/255), at 1 the incoming one (${a1.mean}/255)` }); }
   } catch (e) {
     push({ group: "Video on the graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Generate as the node authoring environment: a sketch with one line in its
+  // header is a node, a stack that fuses is a node, and both have to survive
+  // the trip.
+  try {
+    const W = 120, H = 80;
+    const src = document.createElement("canvas"); src.width = W; src.height = H;
+    { const g = src.getContext("2d");
+      const gr = g.createLinearGradient(0, 0, W, H); gr.addColorStop(0, "#fff2dd"); gr.addColorStop(1, "#101a2e");
+      g.fillStyle = gr; g.fillRect(0, 0, W, H);
+      g.fillStyle = "#e04020"; g.beginPath(); g.arc(40, 40, 20, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "#1fa36c"; g.fillRect(80, 15, 30, 50); }
+    const px = (c) => c.getContext("2d").getImageData(0, 0, W, H).data;
+
+    // Freeze: a stack that fuses is one shader, and must look the same as one.
+    { const stack = [
+        makeEffect("graph", "duotone", { dark: "#10203a", light: "#f2e3c0" }),
+        makeEffect("graph", "vignette", { amount: 0.55, softness: 0.4 }),
+        makeEffect("node", "adjust.exposure", { stops: [0.6] }),
+      ];
+      const wanted = px(applyEffects(src, stack));
+      const fz = freezeEffects(stack, { width: W, height: H });
+      if (fz.error) {
+        push({ group: "Nodes from Generate", name: "a stack freezes into one node", ok: false, detail: fz.error });
+      } else {
+        const sketch = withNodeHeader(fz.sketch, { node: "selftest-frozen", title: "Frozen" });
+        const entry = await registerNode(sketch, { docId: 90001, name: "Frozen" });
+        if (entry.error) {
+          push({ group: "Nodes from Generate", name: "a stack freezes into one node", ok: false, detail: entry.error });
+        } else {
+          const t = nodeType(entry.id);
+          const params = {};
+          for (const u of t.params) if (u.control !== "image") params[u.name] = u.value.slice();
+          const got = px(applyEffects(src, [makeEffect("node", entry.id, params)]));
+          const r = compare(got, wanted, W, H, { thresh: 6 });
+          push({ group: "Nodes from Generate", name: "a stack freezes into one node that looks the same",
+                 ok: r.mean < 1.0,
+                 detail: `three effects → one node · mean ${r.mean}/255 · ${t.params.length} controls, ` +
+                         `their dialled values baked in as defaults · want <1.0` });
+        }
+      } }
+
+    // The header is the whole contract, and a user node cannot shadow a built-in.
+    { const bare = `// A test node.\n// @node adjust.exposure\nuniform sampler2D in0;\ntexture2D(in0, uv)`;
+      const mine = `// A test node.\n// @node my-thing\nuniform sampler2D in0;\nuniform float k;  // @range 0 2 @default 1\ntexture2D(in0, uv) * k`;
+      const idClash = nodeIdFor(bare, 90002);
+      const idMine = nodeIdFor(mine, 90003);
+      const entry = await registerNode(mine, { docId: 90003, name: "My thing" });
+      const drew = !entry.error && !!nodeType(entry.id);
+      const noHeader = await registerNode("uniform sampler2D in0;\ntexture2D(in0, uv)", { docId: 90004 });
+      push({ group: "Nodes from Generate", name: "a sketch with `@node` becomes a node type; a built-in cannot be shadowed",
+             ok: drew && idMine === "you.my-thing" && idClash !== "adjust.exposure" && !!noHeader.error,
+             detail: `"my-thing" → ${idMine} · one calling itself adjust.exposure → ${idClash} · ` +
+                     `${entry.params.length} control${entry.params.length === 1 ? "" : "s"} came with it · ` +
+                     `a sketch with no @node is refused ("${noHeader.error}")` }); }
+
+    // Two inputs: a mixer is a node like any other.
+    { const mixer = `// Mix two pictures.\n// @node selftest-mixer\n` +
+        `uniform sampler2D in0;\nuniform sampler2D in1;\nuniform float k;   // @range 0 1 @default 0.5\n` +
+        `mix(texture2D(in0, uv), texture2D(in1, uv), k)`;
+      const entry = await registerNode(mixer, { docId: 90005, name: "Mixer" });
+      let ok = !entry.error, detail = entry.error || "";
+      if (ok) {
+        const other = document.createElement("canvas"); other.width = W; other.height = H;
+        other.getContext("2d").fillStyle = "#ffffff";
+        other.getContext("2d").fillRect(0, 0, W, H);
+        const graph = createGraph(W, H);
+        const a = addNode(graph, "source"), b = addNode(graph, "source");
+        graph.output = addNode(graph, entry.id, { k: [0.5] }, [a, b]);
+        const got = px(renderGraph(graph, { [a]: src, [b]: other }));
+        const base = px(src);
+        // Half way to white, everywhere.
+        let worst = 0;
+        for (let i = 0; i < got.length; i += 4) worst = Math.max(worst, Math.abs(got[i] - (base[i] + 255) / 2));
+        ok = entry.inputs.length === 2 && worst < 3;
+        detail = `inputs ${entry.inputs.join(", ")} · half way to white everywhere, worst ${worst.toFixed(1)}/255`;
+      }
+      push({ group: "Nodes from Generate", name: "a two-input sketch works as a node", ok, detail }); }
+
+    // Versions: a ring, and a summary that says what moved.
+    { const data = {};
+      const v1 = "// @node v\nuniform sampler2D in0;\ntexture2D(in0, uv)";
+      const v2 = "// @node v\nuniform sampler2D in0;\nuniform float k; // @range 0 1\ntexture2D(in0, uv) * k";
+      keepVersion(data, v1, "first");
+      keepVersion(data, v1, "again");                 // no change: not kept twice
+      keepVersion(data, v2, "added k");
+      const afterTwo = data.versions.length;
+      for (let i = 0; i < MAX_VERSIONS + 5; i++) keepVersion(data, `${v2}\n// ${i}`);
+      const summary = versionSummary(v1, v2);
+      push({ group: "Nodes from Generate", name: "node text is versioned, capped, and the diff says what moved",
+             ok: afterTwo === 2 && data.versions.length === MAX_VERSIONS && /\+k/.test(summary),
+             detail: `saving the same text twice keeps one · capped at ${data.versions.length} · "${summary}"` }); }
+  } catch (e) {
+    push({ group: "Nodes from Generate", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

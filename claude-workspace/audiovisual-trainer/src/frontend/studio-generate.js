@@ -8,7 +8,7 @@
 import { el, clear, api, toast, modal, closeModal } from "./ui.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms, desugar, desugarMapped, mapErrors, hasSimPass, isEs3, withDefine,
-         bakeDefaults, embedImages, stripComments, SKETCH_VARS } from "./shader-uniforms.js";
+         bakeDefaults, embedImages, stripComments, sketchMeta, SKETCH_VARS } from "./shader-uniforms.js";
 import { getGL, isGL2, linkProgram } from "./shader-run.js";
 import { Feedback } from "./feedback.js";
 import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
@@ -17,6 +17,8 @@ import { muxMp4 } from "./video-mux.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { loadFontFile, registeredFonts } from "./font-file.js";
 import { fitPreview } from "./sdf-core.js";
+import { registerNode, withNodeHeader, nodeShape, declaresNode, keepVersion,
+         versionSummary, usersOfNode, nodeIdFor } from "./node-library.js";
 import { gridOverlay } from "./grid-overlay.js";
 
 const VERT = `attribute vec2 a_pos;
@@ -1496,6 +1498,92 @@ export async function generateEditor(host) {
         el("button.ghost", { onclick: closeModal }, "Close")));
   }
 
+  /**
+   * Save this sketch as a node: put `@node` in its header if it is not there,
+   * register it, and it appears in the Canvas and Video effect menus. The
+   * document *is* the node — editing this sketch later changes the node
+   * everywhere it is used, which is the point of not copying it.
+   */
+  async function saveAsNode() {
+    const src = source();
+    const shape = nodeShape(src);
+    const suggested = String(sketchMeta(src).node || "")
+      || (host.doc.name || "my node").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+      || "my-node";
+    const nameIn = el("input", { value: suggested, placeholder: "a name for the node" });
+    // The course modules, if the app has them loaded; a node that names one
+    // gets a link back to the lesson it belongs with.
+    let modules = [];
+    try { modules = (await api("/api/curriculum")).modules || []; } catch { /* offline */ }
+    const modIn = el("select", {},
+      el("option", { value: "" }, "— no course module —"),
+      ...modules.map((m) => el("option", { value: m.slug }, m.title)));
+    const already = declaresNode(src);
+    modal(el("h2", {}, "Save as a node"),
+      el("p.fine", {}, shape.inputs.length
+        ? `This sketch reads ${shape.inputs.join(", ")}, so it takes ${shape.inputs.length} input`
+          + `${shape.inputs.length > 1 ? "s" : ""}: the layer or clip it runs on`
+          + (shape.inputs.length > 1 ? ", and one more you choose when you use it." : ".")
+        : "This sketch reads no input, so it will be offered as something that draws rather than " +
+          "something that filters. Declare `uniform sampler2D in0;` and read it at `uv` to make it a filter."),
+      shape.foreignImages.length ? el("p.fine", { style: { color: "var(--warm)" } },
+        `Its image uniform${shape.foreignImages.length > 1 ? "s" : ""} ${shape.foreignImages.join(", ")} `
+        + "will not be filled by the graph — rename one to in0 for the layer, or embed a picture with @data.") : null,
+      shape.params.length ? el("p.fine", {}, `${shape.params.length} control${shape.params.length === 1 ? "" : "s"} `
+        + `come with it: ${shape.params.join(", ")}.`) : null,
+      el("label", {}, "Name", nameIn),
+      el("label", {}, "Course module it belongs to", modIn),
+      already ? el("p.fine", {}, "This sketch already declares a node; saving updates it.") : null,
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: closeModal }, "Cancel"),
+        el("button.primary", { onclick: async () => {
+          const slug = nameIn.value.trim().toLowerCase().replace(/[^a-z0-9.-]+/g, "-").replace(/^-|-$/g, "");
+          if (!slug) { toast("It needs a name."); return; }
+          const next = withNodeHeader(src, { node: slug, module: modIn.value || null,
+                                             title: host.doc.name || null });
+          if (doc.mode === "glsl") doc.glsl = next; else doc.sketch = next;
+          editor.value = next;
+          keepVersion(doc, next, already ? "updated" : "saved as a node");
+          await host.save(thumbnail());
+          const entry = await registerNode(next, { docId: host.doc.id, name: host.doc.name });
+          closeModal();
+          run(false);
+          if (entry.error) toast(`Saved, but it will not draw: ${entry.error}`);
+          else toast(`"${entry.name}" is now an effect in Canvas and Video.`);
+        } }, already ? "Update the node" : "Save as node")));
+  }
+
+  /**
+   * The versions of this node's text, and a way back to one. A node other
+   * documents depend on is not a thing to edit without that.
+   */
+  async function versionsDialog() {
+    const list = Array.isArray(doc.versions) ? doc.versions : [];
+    const src = source();
+    let used = [];
+    if (declaresNode(src)) used = await usersOfNode(nodeIdFor(src, host.doc.id));
+    modal(el("h2", {}, "Versions"),
+      el("p.fine", {}, list.length
+        ? `${list.length} kept, newest last. Restoring one puts it in the editor; it becomes the node when you save.`
+        : "Nothing kept yet — versions are recorded when you save this sketch as a node."),
+      used.length ? el("p.fine", { style: { color: "var(--warm)" } },
+        `${used.length} document${used.length === 1 ? " uses" : "s use"} this node: `
+        + used.map((u) => u.name).join(", ") + ". Editing it changes them.") : null,
+      el("div.stack", { style: { gap: ".25rem" } },
+        ...list.map((v, i) => el("div.spread", {},
+          el("span.fine", {}, `${new Date(v.at).toLocaleString()} · ${v.note || ""} · `
+            + versionSummary(i ? list[i - 1].source : null, v.source)),
+          el("button.ghost", { onclick: () => {
+            if (doc.mode === "glsl") doc.glsl = v.source; else doc.sketch = v.source;
+            editor.value = v.source;
+            closeModal();
+            run(true);
+            toast("Restored into the editor — save it to make it the node.");
+          } }, "restore"))).reverse()),
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button.primary", { onclick: closeModal }, "Close")));
+  }
+
   /** Current control values → @default annotations in the source. */
   function bake() {
     const baked = bakeDefaults(editor.value, uniforms, doc.uniforms);
@@ -1728,6 +1816,10 @@ uniform bool  mirror;  // @toggle`),
           host.save();
         } }, "Randomise"),
         el("button", { onclick: bake, title: "Write the current control values into the source as @default" }, "Bake"),
+        el("button", { onclick: saveAsNode,
+          title: "Offer this sketch as an effect in Canvas and Video" }, "Save as node"),
+        el("button.ghost", { onclick: versionsDialog,
+          title: "Earlier versions of this node's text" }, "Versions"),
         el("button", { title: "Write the chosen images into the source as @data, so the text carries its pictures",
           onclick: async () => {
             const out = await selfContained(editor.value);

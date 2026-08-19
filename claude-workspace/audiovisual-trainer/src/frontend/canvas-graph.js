@@ -19,9 +19,11 @@
 // stack is a single draw, exactly as if they had been written as one shader.
 
 import * as I from "./engine-image.js";
-import { createGraph, addNode, addBlur, nodeType } from "./render-graph.js";
+import { createGraph, addNode, addBlur } from "./render-graph.js";
 import { renderGraph, ejectGraph } from "./graph-compile.js";
-import { fuseStats } from "./graph-fuse.js";
+import { fuseStats, planPasses } from "./graph-fuse.js";
+import { parseUniforms, bakeDefaults } from "./shader-uniforms.js";
+import { nodeType } from "./render-graph.js";
 import { graphFilter, GRAPH_FILTERS } from "./filter-nodes.js";
 import { renderSketch, sketchUniforms } from "./shader-run.js";
 import { BLEND_ORDER } from "./composite-nodes.js";
@@ -36,6 +38,27 @@ const first = (v, d) => (Array.isArray(v) ? v[0] : (v === undefined || v === nul
 export function curveFromSliders(v) {
   const sh = first(v.shadows, 0), mi = first(v.mids, 0), hi = first(v.highs, 0);
   return { points: [[0, 0], [0.25, 0.25 + sh * 0.25], [0.5, 0.5 + mi * 0.25], [0.75, 0.75 + hi * 0.25], [1, 1]] };
+}
+
+// Pictures an effect carries — the second input of a mixer, say. Decoded once
+// and kept, because a synchronous render cannot wait for one.
+const EFFECT_IMAGES = new Map();
+
+export const effectImage = (url) => (url ? EFFECT_IMAGES.get(url) || null : null);
+
+/** Decode every picture a stack refers to. Call it before the first render. */
+export async function prepareEffects(effects) {
+  const urls = new Set();
+  for (const e of effects || []) {
+    for (const url of Object.values((e && e.inputs) || {})) if (url && !EFFECT_IMAGES.has(url)) urls.add(url);
+  }
+  await Promise.all([...urls].map((url) => new Promise((res) => {
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => { EFFECT_IMAGES.set(url, im); res(); };
+    im.onerror = () => res();
+    im.src = url;
+  })));
 }
 
 // A .cube parsed once and kept: a 33-cube is a hundred thousand bytes, and
@@ -101,7 +124,18 @@ export function effectNode(graph, input, eff, sources = null) {
     const vals = { ...(eff.params || {}) };
     if (eff.ref === "filter.blur") return addBlur(graph, input, first(vals.radius, 4));
     if (eff.ref === "adjust.curves" && vals.shadows) vals.curve = curveFromSliders(vals);
-    return addNode(graph, eff.ref, vals, [input]);
+    // A node with more than one input — a mixer, a transition — takes the
+    // layer as in0 and a picture you chose for the rest.
+    const t = nodeType(eff.ref);
+    const ins = [input];
+    for (const name of (t ? t.inputs : []).slice(1)) {
+      const im = effectImage(eff.inputs && eff.inputs[name]);
+      if (!im || !sources) { ins.push(input); continue; }   // nothing chosen: it sees itself
+      const sid = addNode(graph, "source");
+      sources[sid] = im;
+      ins.push(sid);
+    }
+    return addNode(graph, eff.ref, vals, ins);
   }
   throw new Error(`${eff.kind} is not a graph effect`);
 }
@@ -300,4 +334,73 @@ function hexToRgb(hex) {
   const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
   const n = parseInt(full || "ffffff", 16);
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+// ------------------------------------------------------------------ freezing
+//
+// A stack that fuses into one pass is, by definition, one shader. Freezing
+// writes that shader out as a sketch with the dialled values baked in as
+// `@default`s — so the look stops being a list of steps and becomes a thing
+// with a name, which can then be used, edited, and read.
+
+/**
+ * A stack as one node's source, or an explanation of why it cannot be one.
+ * A LUT in the stack travels with it, embedded in the source as `@data`, so
+ * the frozen node is self-contained rather than a reference to a file.
+ */
+export function freezeEffects(effects, { width = 1024, height = 1024 } = {}) {
+  const list = (effects || []).filter((e) => !e.bypass);
+  if (!list.length) return { error: "there is nothing in the stack to freeze" };
+  const outside = list.find((e) => !isGraphKind(e));
+  if (outside) {
+    return { error: `"${effectLabel(outside)}" runs outside the graph, so it cannot be part of one node` };
+  }
+  const graph = createGraph(width, height);
+  const src = addNode(graph, "source");
+  const sources = {};
+  const lutOf = new Map();          // source node id → the sheet it holds
+  let last = src;
+  for (const e of list) {
+    const before = new Set(Object.keys(sources));
+    last = effectNode(graph, last, e, sources);
+    if (e.kind === "lut") {
+      for (const k of Object.keys(sources)) if (!before.has(k)) lutOf.set(k, sources[k]);
+    }
+  }
+  graph.output = last;
+
+  const steps = planPasses(graph).filter((st) => st.kind === "fused" || st.node.type !== "source");
+  if (steps.length !== 1) {
+    const why = steps.map((st) => (st.kind === "fused" ? `${st.nodes.length} fused` : st.node.type)).join(", ");
+    return { error: `this stack is ${steps.length} passes (${why}); a node is one pass` };
+  }
+  const step = steps[0];
+
+  if (step.kind !== "fused") {
+    // A single node: freezing it means baking the values it is set to.
+    const n = step.node, t = nodeType(n.type);
+    const values = {};
+    for (const u of t.params) {
+      if (u.control === "image") continue;
+      const v = n.params[u.name];
+      values[u.name] = Array.isArray(v) ? v : (v !== undefined && v !== null ? [v] : u.value.slice());
+    }
+    return { sketch: bakeDefaults(t.source, t.uniforms, values), from: [effectLabel(list[0])] };
+  }
+
+  let sketch = step.sketch;
+  // Any sampler that was fed by a LUT sheet carries it now.
+  for (const smp of step.samplers) {
+    const sheet = lutOf.get(smp.from);
+    if (!sheet) continue;
+    const url = sheet.toDataURL("image/png");
+    sketch = sketch.replace(new RegExp(`uniform\\s+sampler2D\\s+${smp.name}\\s*;[^\n]*`),
+      `uniform sampler2D ${smp.name};   // @hidden the LUT, carried in this file @data ${url}`);
+  }
+  const stillNeeded = step.samplers.filter((smp) => !lutOf.has(smp.from) && smp.from !== src && !smp.lut);
+  if (stillNeeded.length) {
+    return { error: `it reads ${stillNeeded.length} texture(s) from outside the stack, which a node cannot carry` };
+  }
+  return { sketch: bakeDefaults(sketch, parseUniforms(sketch), step.values),
+           from: list.map(effectLabel) };
 }

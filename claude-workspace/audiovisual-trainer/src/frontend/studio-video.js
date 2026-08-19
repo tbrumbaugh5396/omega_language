@@ -32,6 +32,7 @@ import { clipAt, frameGraph, gradeEffects, hasKeys, keyablePaths, paramAt, putKe
          sourceTimeAt, sourceSpanOf, EASES, DEFAULT_GRADE } from "./video-graph.js";
 import { parseCube } from "./lut-cube.js";
 import { titleNode } from "./title-node.js";
+import { userNodes } from "./node-library.js";
 import { drawWaveform, drawVectorscope, drawHistogram, frameStats } from "./scopes.js";
 
 const PREVIEW_MAX = 900;
@@ -815,6 +816,8 @@ export async function videoEditor(host) {
         el("option", { value: "n:adjust.exposure" }, "Exposure"),
         el("option", { value: "n:adjust.curves" }, "Curves"),
         el("option", { value: "n:filter.blur" }, "Gaussian blur")),
+      userNodes().length ? el("optgroup", { label: "Your nodes" },
+        ...userNodes().map((n) => el("option", { value: `n:${n.id}` }, n.name))) : null,
       el("optgroup", { label: "Shader — Generate presets that take an image" },
         ...presets.map((p2) => el("option", { value: `s:${p2.id}` }, p2.label))));
     modal(el("h2", {}, "Clip effect"),

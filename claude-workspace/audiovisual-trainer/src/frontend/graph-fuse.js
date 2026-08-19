@@ -98,7 +98,11 @@ export function fusedSketch(types, carried) {
     // node's private `_lum` cannot simply be given a prefix.
     const fix = (s) => (rename ? String(s).replace(rename, (m) => pref + m.replace(/^_+/, "u")) : String(s));
     const carrier = new RegExp(`texture2D\\s*\\(\\s*${pref}in0\\s*,\\s*uv\\s*\\)`, "g");
-    const dropIn0 = new RegExp(`^uniform\\s+sampler2D\\s+${pref}in0\\s*;`);
+    const dropIn0 = new RegExp(`^uniform\\s+(?:sampler2D\\s+${pref}in0|vec2\\s+${pref}in0_size)\\s*;`);
+    // A carried input is always the size of the pass, so its `_size` uniform
+    // is u_resolution. Left as a uniform it would look like a control, and
+    // arrive as one when the fused text is registered as a node of its own.
+    const sizeOf = new RegExp(`\\b${pref}in0_size\\b`, "g");
 
     roster.push(`//   f${k} = ${typeId}${carried[k] ? "" : "   (reads its own input)"}`);
     for (const chunk of parts.declTexts) {
@@ -107,11 +111,13 @@ export function fusedSketch(types, carried) {
       if (carried[k] && dropIn0.test(code)) continue;      // its input is a register now
       // a helper of its own that reads the input has no register to read
       if (carried[k] && new RegExp(carrier.source).test(code)) { ok = false; return; }
-      decls.push(text);
+      decls.push(carried[k] ? text.replace(sizeOf, "u_resolution") : text);
     }
     // Only a carried node has a register to read; the first of a run keeps
     // its sampler and reads it as written.
-    const take = (s) => (carried[k] ? fix(s).replace(carrier, "_c") : fix(s));
+    const take = (s) => (carried[k]
+      ? fix(s).replace(carrier, "_c").replace(sizeOf, "u_resolution")
+      : fix(s));
     const stmts = parts.stmtTexts.map(take).join("\n");
     const expr = take(parts.expr || "vec3(0.0)");
     // Each node keeps its own rule about alpha — opaque unless it said
@@ -162,8 +168,10 @@ function buildFused(graph, run) {
           const i = +m[1];
           const isCarried = carried[k] && i === 0;
           if (!isCarried) samplers.push({ name: pref + u.name, from: n.inputs[i] });
-          if (new RegExp(`\\buniform\\s+vec2\\s+${u.name}_size\\b`).test(t.source)) {
-            sizes.push({ name: `${pref}${u.name}_size`, from: isCarried ? null : n.inputs[i] });
+          // A carried input's size became u_resolution when the text was
+          // written, so only a real sampler still needs one.
+          if (!isCarried && new RegExp(`\\buniform\\s+vec2\\s+${u.name}_size\\b`).test(t.source)) {
+            sizes.push({ name: `${pref}${u.name}_size`, from: n.inputs[i] });
           }
         } else if (u.lut) {
           samplers.push({ name: pref + u.name, lut: true, value: n.params[u.name] });
