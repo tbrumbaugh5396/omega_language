@@ -25,6 +25,7 @@ import { createGraph, addNode, addBlur, curveLut, NODE_TYPES } from "./render-gr
 import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
+import { planPasses, fuseStats, fusibleReason } from "./graph-fuse.js";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -341,6 +342,125 @@ export async function runSelfTest(report = () => {}) {
              detail: `${Math.round(text.length / 1024)} KB of GLSL${allLink ? ", every pass links on its own" : " — " + why}` }); }
   } catch (e) {
     push({ group: "Render graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Fusion: the same picture, fewer draws. Every check here compares the
+  // fused result against the same graph run one pass per node — the fused
+  // one is the more accurate of the two, since its intermediates never land
+  // in a half-float buffer, so the bar is "indistinguishable", not "equal".
+  try {
+    const W = 200, H = 120;
+    const src = document.createElement("canvas"); src.width = W; src.height = H;
+    const g = src.getContext("2d");
+    const gr = g.createLinearGradient(0, 0, W, H); gr.addColorStop(0, "#f4efe6"); gr.addColorStop(1, "#1b2b4b");
+    g.fillStyle = gr; g.fillRect(0, 0, W, H);
+    g.fillStyle = "#ff7a3d"; g.beginPath(); g.arc(70, 60, 32, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#2f7d5b"; g.fillRect(120, 30, 50, 60);
+    const px = (c) => c.getContext("2d").getImageData(0, 0, W, H).data;
+    const cmp = (a, b) => compare(a, b, W, H, { thresh: 8 });
+    // Both renderings, and what the GPU was actually asked to draw — a fused
+    // program that fails to link falls back to a pass per node, and the plan
+    // alone would not show it.
+    const both = (gph, sources) => {
+      let drew = [];
+      const fused = px(renderGraph(gph, sources, { onPasses: (ps) => { drew = ps; } }));
+      return [fused, px(renderGraph(gph, sources, { fuse: false })), drew];
+    };
+
+    // Five adjustments in a row: one draw instead of five.
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source");
+      let last = addNode(gph, "adjust.grade", { lift: [0.02], gamma: [1.1], gain: [1.05], sat: [1.2] }, [s0]);
+      last = addNode(gph, "adjust.hue", { deg: [40] }, [last]);
+      last = addNode(gph, "adjust.duotone", { dark: [0.1, 0.05, 0.2], light: [1, 0.9, 0.7], amount: [0.6] }, [last]);
+      last = addNode(gph, "filter.vignette", { amount: [0.4], softness: [0.6] }, [last]);
+      gph.output = addNode(gph, "adjust.invert", {}, [last]);
+      const st = fuseStats(gph);
+      const [fused, plain, drew] = both(gph, { [s0]: src });
+      const r = cmp(fused, plain);
+      push({ group: "Fusion", name: "five adjustments fuse into one draw", ok: st.after === 1 && drew.length === 1 && r.mean < 1.0,
+             detail: `${st.before} passes → ${drew.length} drawn · fused vs a pass per node: mean ${r.mean}/255, ${r.off} px off by >8 · want <1.0` }); }
+
+    // A neighbourhood pass in the middle stops the run, and is not swallowed.
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source");
+      const a = addNode(gph, "adjust.grade", { gain: [1.1] }, [s0]);
+      const b = addBlur(gph, a, 5);
+      const c = addNode(gph, "adjust.invert", {}, [b]);
+      gph.output = addNode(gph, "adjust.posterize", { levels: [6] }, [c]);
+      const st = fuseStats(gph);
+      const [fused, plain, drew] = both(gph, { [s0]: src });
+      const r = cmp(fused, plain);
+      const kept = st.kept.filter((k) => k.startsWith("filter.blur1d")).length;
+      push({ group: "Fusion", name: "a @pass node breaks the run and keeps its own pass", ok: drew.length === 4 && kept === 2 && r.mean < 1.0,
+             detail: `${st.before} → ${drew.length} drawn; the two blur passes stayed (${kept}) and the tail fused · mean ${r.mean}/255` }); }
+
+    // A second input from outside the run stays a sampler, read at uv.
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source"); const s1 = addNode(gph, "source");
+      const e = addNode(gph, "adjust.exposure", { stops: [0.6] }, [s0]);
+      gph.output = addNode(gph, "composite.blend", { mode: [1], opacity: [0.8] }, [e, s1]);
+      const st = fuseStats(gph);
+      const [fused, plain, drew] = both(gph, { [s0]: src, [s1]: src });
+      const r = cmp(fused, plain);
+      push({ group: "Fusion", name: "a two-input composite fuses, its other input stays a texture", ok: drew.length === 1 && r.mean < 1.0,
+             detail: `${st.before} → ${drew.length} drawn · mean ${r.mean}/255 vs a pass per node` }); }
+
+    // A LUT inside a fused run: the curve texture travels with its node.
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source");
+      const c = addNode(gph, "adjust.curves", { curve: { points: [[0, 0.1], [0.5, 0.4], [1, 1]] }, amount: [1] }, [s0]);
+      gph.output = addNode(gph, "adjust.hue", { deg: [25] }, [c]);
+      const st = fuseStats(gph);
+      const [fused, plain, drew] = both(gph, { [s0]: src });
+      const r = cmp(fused, plain);
+      // and the curve is actually applied: a 0.1 lift means nothing stays black
+      let darkest = 255;
+      for (let i = 0; i < fused.length; i += 4) darkest = Math.min(darkest, fused[i]);
+      push({ group: "Fusion", name: "a curve LUT survives fusion", ok: drew.length === 1 && r.mean < 1.0 && darkest >= 15,
+             detail: `${st.before} → ${drew.length} drawn · mean ${r.mean}/255 · darkest ${darkest} (the 0.1 lift is there)` }); }
+
+    // A run of every fusible catalogue filter at once — the stress case.
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source");
+      let last = s0, n = 0;
+      for (const gf of GRAPH_FILTERS) {
+        if (gf.cpuOnly || gf.id === "grain") continue;
+        const probe = { width: W, height: H, nodes: [{ id: "p", type: "source", params: {}, inputs: [], bypass: false }], output: null };
+        probe.output = gf.build(probe, "p", {});
+        // only the single-node per-pixel ones belong in one chain
+        const only = probe.nodes.filter((x) => x.type !== "source");
+        if (only.length !== 1 || fusibleReason(only[0])) continue;
+        last = addNode(gph, only[0].type, only[0].params, [last]); n++;
+      }
+      gph.output = last;
+      const st = fuseStats(gph);
+      const [fused, plain, drew] = both(gph, { [s0]: src });
+      const r = cmp(fused, plain);
+      push({ group: "Fusion", name: `${n} per-pixel filters chained`, ok: drew.length === 1 && r.mean < 2.0,
+             detail: `${st.before} → ${drew.length} drawn · mean ${r.mean}/255 vs a pass per node (the fused one keeps full precision between filters) · want <2.0` }); }
+
+    // The fused shader is what you read, and it links.
+    { const gph = createGraph(W, H); const s0 = addNode(gph, "source");
+      let last = addNode(gph, "adjust.grade", { sat: [1.3] }, [s0]);
+      last = addNode(gph, "adjust.hue", { deg: [30] }, [last]);
+      gph.output = addNode(gph, "filter.vignette", { amount: [0.5] }, [last]);
+      renderGraph(gph, { [s0]: src });
+      const parts = ejectGraph(gph, { parts: true }).filter((p2) => p2.glsl);
+      const plain = ejectGraph(gph, { parts: true, fuse: false }).filter((p2) => p2.glsl);
+      let ok = parts.length === 1 && plain.length === 3, why = "";
+      for (const part of parts) {
+        try { const p2 = linkProgram(gl, part.glsl); gl.deleteProgram(p2); }
+        catch (e) { ok = false; why = String(e.message).split("\n")[0]; }
+      }
+      const body = parts[0] ? parts[0].glsl : "";
+      const named = /f0_apply/.test(body) && /f1_apply/.test(body) && /f2_apply/.test(body);
+      push({ group: "Fusion", name: "eject: one shader for three nodes, and it links", ok: ok && named,
+             detail: ok ? `${plain.length} passes as written, 1 fused · ${Math.round(body.length / 1024)} KB, three apply() functions in it` : why || "wrong pass count" }); }
+
+    // Fusion is a promise about sampling, and the promise is checked.
+    { const declined = ["filter.blur1d", "filter.motion", "filter.pixelate", "filter.halftone"]
+        .map((t) => [t, fusibleReason({ type: t, inputs: ["x"], params: {} })]);
+      const allDeclined = declined.every(([, why]) => !!why);
+      push({ group: "Fusion", name: "neighbourhood nodes decline to fuse", ok: allDeclined,
+             detail: declined.map(([t, w]) => `${t.split(".")[1]}: ${w || "FUSED — should not have"}`).join(" · ") }); }
+  } catch (e) {
+    push({ group: "Fusion", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

@@ -1,20 +1,22 @@
 // The graph compiler: a render graph → passes → pixels.
 //
-// One pass per node, for now. Each node's sketch is compiled once per type
-// (through desugar, like any sketch), drawn into a framebuffer from a small
-// pool with its inputs bound as textures, and the framebuffer becomes the
-// input of whatever reads it. Sources are textures the host hands in. The
-// output node's framebuffer is what you get back.
+// A node's sketch is compiled once per type (through desugar, like any
+// sketch), drawn into a framebuffer from a small pool with its inputs bound as
+// textures, and the framebuffer becomes the input of whatever reads it.
+// Sources are textures the host hands in. The output node's framebuffer is
+// what you get back.
 //
-// Fusing consecutive per-pixel nodes into one shader is the next step
-// (roadmap 1.4); nothing here prevents it, because a node body only ever
-// reads in0 at uv unless it says @pass. Ejection needs no such step: the
-// passes are already text.
+// Not one pass per node, though: graph-fuse.js first collapses runs of
+// consecutive per-pixel nodes into a single sketch, so a stack of adjustments
+// is one draw with no buffers between. If a fused program will not compile,
+// the run falls back to a pass per node and says so — fusion may make the
+// picture faster, never different.
 
-import { desugar, isEs3, withDefine } from "./shader-uniforms.js";
+import { desugar, isEs3, withDefine, parseUniforms } from "./shader-uniforms.js";
 import { applyUniforms } from "./shader-controls.js";
 import { getGL, isGL2, linkProgram } from "./shader-run.js";
 import { nodeType, topo, validate, curveLut, resolveBypass } from "./render-graph.js";
+import { planPasses } from "./graph-fuse.js";
 
 // ------------------------------------------------------------------ targets
 
@@ -87,6 +89,7 @@ export class GraphRunner {
     this.gl = gl;
     this.pool = new TargetPool(gl);
     this.programs = new Map();      // type id → { prog }
+    this.fused = new Map();         // fused sketch → { prog, uniforms } or { error }
     this.luts = new Map();          // key → texture
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
@@ -108,6 +111,24 @@ export class GraphRunner {
     if (e) return e;
     e = { prog: linkProgram(this.gl, this.sourceFor(typeId)) };
     this.programs.set(typeId, e);
+    return e;
+  }
+
+  /**
+   * The program for a fused step, or null with the reason kept — a fused run
+   * that will not compile is a bug in fusion, not in the graph, so the runner
+   * draws the nodes one at a time instead and the picture is unaffected.
+   */
+  fusedProgram(step) {
+    let e = this.fused.get(step.key);
+    if (e) return e;
+    try {
+      e = { prog: linkProgram(this.gl, desugar(step.sketch, { es3: isGL2(this.gl) })),
+            uniforms: parseUniforms(step.sketch) };
+    } catch (err) {
+      e = { prog: null, error: String(err.message).split("\n")[0] };
+    }
+    this.fused.set(step.key, e);
     return e;
   }
 
@@ -154,28 +175,18 @@ export class GraphRunner {
     const errs = validate(graph);
     if (errs.length) throw new Error(errs.join("; "));
     const W = graph.width, H = graph.height;
-    const order = topo(graph);
+    // Fusion is on unless a caller wants the passes as written — the self-test
+    // wants both, to hold one against the other.
+    const steps = opts.fuse === false
+      ? topo(graph).map((node) => ({ kind: "node", node }))
+      : planPasses(graph);
     const outputs = new Map();        // node id → { tex, w, h, target? }
     const owned = [];
     const passes = [];
 
-    for (const n of order) {
-      if (n.type === "source") {
-        const s = sources[n.id];
-        if (!s) throw new Error(`no source supplied for ${n.id}`);
-        const t = s.tex ? { tex: s.tex, w: s.w, h: s.h } : this.textureFrom(s);
-        if (t.owned) owned.push(t);
-        outputs.set(n.id, t);
-        continue;
-      }
-      if (n.bypass) {
-        const from = resolveBypass(graph, n.id);
-        outputs.set(n.id, outputs.get(from ? from.id : n.inputs[0]) || { tex: this.blank, w: 1, h: 1 });
-        continue;
-      }
-      const type = nodeType(n.type);
-      const { prog } = this.programFor(n.type);
-      const target = this.pool.get(W, H);
+    // Common set-up for a draw: the full-screen triangle and the reserved
+    // uniforms, which mean the same thing in every pass.
+    const begin = (prog, target) => {
       gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo);
       gl.viewport(0, 0, W, H);
       gl.useProgram(prog);
@@ -190,6 +201,30 @@ export class GraphRunner {
       gl.uniform1f(u("u_seed"), opts.seed || 0);
       gl.uniform1i(u("u_frame"), 0);
       gl.uniform1f(u("u_mouseDown"), 0);
+      return u;
+    };
+    const lutBytes = (val) => (val && val.points ? curveLut(val.points)
+      : (val instanceof Uint8ClampedArray ? val : curveLut(null)));
+    const texOf = (id) => outputs.get(id) || { tex: this.blank, w: 1, h: 1 };
+
+    const drawNode = (n) => {
+      if (n.type === "source") {
+        const s = sources[n.id];
+        if (!s) throw new Error(`no source supplied for ${n.id}`);
+        const t = s.tex ? { tex: s.tex, w: s.w, h: s.h } : this.textureFrom(s);
+        if (t.owned) owned.push(t);
+        outputs.set(n.id, t);
+        return;
+      }
+      if (n.bypass) {
+        const from = resolveBypass(graph, n.id);
+        outputs.set(n.id, outputs.get(from ? from.id : n.inputs[0]) || { tex: this.blank, w: 1, h: 1 });
+        return;
+      }
+      const type = nodeType(n.type);
+      const { prog } = this.programFor(n.type);
+      const target = this.pool.get(W, H);
+      const u = begin(prog, target);
       // Parameters: the node's values, defaults for anything unset.
       const values = {};
       for (const p of type.params) {
@@ -201,7 +236,7 @@ export class GraphRunner {
       // Inputs on the first units, LUTs after.
       let unit = 0;
       type.inputs.forEach((name, i) => {
-        const src = outputs.get(n.inputs[i]) || { tex: this.blank, w: 1, h: 1 };
+        const src = texOf(n.inputs[i]);
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindTexture(gl.TEXTURE_2D, src.tex);
         if (u(name)) gl.uniform1i(u(name), unit);
@@ -209,10 +244,8 @@ export class GraphRunner {
         unit++;
       });
       for (const lname of type.luts) {
-        const val = n.params[lname];
-        const bytes = val && val.points ? curveLut(val.points) : (val instanceof Uint8ClampedArray ? val : curveLut(null));
         gl.activeTexture(gl.TEXTURE0 + unit);
-        gl.bindTexture(gl.TEXTURE_2D, this.lutTexture(bytes));
+        gl.bindTexture(gl.TEXTURE_2D, this.lutTexture(lutBytes(n.params[lname])));
         if (u(lname)) gl.uniform1i(u(lname), unit);
         unit++;
       }
@@ -220,6 +253,43 @@ export class GraphRunner {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       outputs.set(n.id, { tex: target.tex, w: W, h: H, target });
       passes.push({ node: n.id, type: n.type });
+    };
+
+    const drawFused = (step) => {
+      const { prog, uniforms, error } = this.fusedProgram(step);
+      if (!prog) {                       // the safety net: draw them one by one
+        if (!this.warned) { this.warned = new Set(); }
+        if (!this.warned.has(step.key)) {
+          this.warned.add(step.key);
+          console.warn(`fusion fell back to one pass per node: ${error}`);
+        }
+        for (const n of step.nodes) drawNode(n);
+        return;
+      }
+      const target = this.pool.get(W, H);
+      const u = begin(prog, target);
+      applyUniforms(gl, prog, uniforms, step.values);
+      let unit = 0;
+      for (const s of step.samplers) {
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, s.lut ? this.lutTexture(lutBytes(s.value)) : texOf(s.from).tex);
+        if (u(s.name)) gl.uniform1i(u(s.name), unit);
+        unit++;
+      }
+      for (const s of step.sizes) {
+        if (!u(s.name)) continue;
+        const src = s.from ? texOf(s.from) : null;
+        gl.uniform2f(u(s.name), src ? src.w : W, src ? src.h : H);
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      outputs.set(step.id, { tex: target.tex, w: W, h: H, target });
+      passes.push({ node: step.id, type: "fused", fused: step.nodes.map((n) => n.type) });
+    };
+
+    for (const step of steps) {
+      if (step.kind === "fused") drawFused(step);
+      else drawNode(step.node);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
@@ -256,12 +326,31 @@ export class GraphRunner {
 
   /**
    * Every pass, in order, as { node, type, header, glsl } — what "show me the
-   * shader" means for a graph. `ejectText` joins them for reading.
+   * shader" means for a graph. Fused runs eject as the one shader that
+   * actually runs, which is the point of fusing: what you read is what the GPU
+   * was given. `{fuse:false}` ejects the graph as written instead.
    */
-  eject(graph) {
-    const order = topo(graph);
+  eject(graph, { fuse = true } = {}) {
+    const es3 = isGL2(this.gl);
+    const rule = "// ================================================================";
+    const steps = fuse ? planPasses(graph) : topo(graph).map((node) => ({ kind: "node", node }));
     const parts = [];
-    for (const n of order) {
+    for (const step of steps) {
+      if (step.kind === "fused") {
+        const names = step.nodes.map((n) => `${n.id} (${n.type})`).join(" → ");
+        const params = step.nodes.map((n, k) => {
+          const ps = Object.entries(n.params).map(([k2, v]) => `${k2}=${JSON.stringify(v)}`).join(", ");
+          return `//   f${k} = ${n.id}: ${ps || "defaults"}`;
+        }).join("\n");
+        parts.push({
+          node: step.id, type: "fused", fused: step.nodes.map((n) => n.type),
+          header: `${rule}\n// pass: ${step.id}  ${step.nodes.length} nodes fused into one draw\n` +
+                  `// ${names}\n${params}\n${rule}`,
+          glsl: desugar(step.sketch, { es3 }), sketch: step.sketch,
+        });
+        continue;
+      }
+      const n = step.node;
       if (n.type === "source") {
         parts.push({ node: n.id, type: "source", header: `// ---- ${n.id}: source (a texture the host supplies)`, glsl: "" });
         continue;
@@ -270,22 +359,23 @@ export class GraphRunner {
       const params = Object.entries(n.params).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
       parts.push({
         node: n.id, type: n.type,
-        header: `// ================================================================\n` +
-                `// pass: ${n.id}  type: ${n.type}${t.pass ? "  (its own pass — reads a neighbourhood)" : ""}\n` +
+        header: `${rule}\n` +
+                `// pass: ${n.id}  type: ${n.type}${step.why ? `  (its own pass — ${step.why})` : ""}\n` +
                 `// inputs: ${n.inputs.join(", ") || "—"}\n// params: ${params || "defaults"}\n` +
-                `// ================================================================`,
+                rule,
         glsl: this.sourceFor(n.type),
       });
     }
     return parts;
   }
-  ejectText(graph) {
-    return this.eject(graph).map((p) => (p.glsl ? `${p.header}\n${p.glsl}` : p.header)).join("\n\n");
+  ejectText(graph, opts) {
+    return this.eject(graph, opts).map((p) => (p.glsl ? `${p.header}\n${p.glsl}` : p.header)).join("\n\n");
   }
 
   release() {
     const gl = this.gl;
     for (const { prog } of this.programs.values()) gl.deleteProgram(prog);
+    for (const { prog } of this.fused.values()) if (prog) gl.deleteProgram(prog);
     for (const t of this.luts.values()) gl.deleteTexture(t);
     if (this.lastOut) { gl.deleteTexture(this.lastOut.tex); gl.deleteFramebuffer(this.lastOut.fbo); }
     this.pool.release();
@@ -318,6 +408,7 @@ export function renderGraph(graph, sources, opts = {}) {
     canvas.width = graph.width; canvas.height = graph.height;
   }
   const out = runner.run(graph, sources, opts);
+  if (opts.onPasses) opts.onPasses(out.passes);
   runner.present(out, graph.width, graph.height);
   const c = document.createElement("canvas");
   c.width = graph.width; c.height = graph.height;
@@ -326,9 +417,9 @@ export function renderGraph(graph, sources, opts = {}) {
 }
 
 /** The ejected GLSL for a graph, on the shared context: text, or parts. */
-export function ejectGraph(graph, { parts = false } = {}) {
+export function ejectGraph(graph, { parts = false, fuse = true } = {}) {
   const r = sharedRunner().runner;
-  return parts ? r.eject(graph) : r.ejectText(graph);
+  return parts ? r.eject(graph, { fuse }) : r.ejectText(graph, { fuse });
 }
 
 /**
@@ -341,7 +432,7 @@ export function applyFilter(canvasIn, filter, params = {}) {
   const graph = { width: w, height: h, nodes: [], output: null };
   graph.nodes.push({ id: "src", type: "source", params: {}, inputs: [], bypass: false });
   graph.output = filter.build(graph, "src", params);
-  return renderGraph(graph, { src: canvasIn }, { seed: params.seed || 0 });
+  return renderGraph(graph, { src: canvasIn }, { seed: params.seed || 0, fuse: params.fuse !== false });
 }
 
 /**

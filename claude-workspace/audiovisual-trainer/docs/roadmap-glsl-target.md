@@ -306,7 +306,7 @@ The Generate stack is the seed of everything; make it load-bearing.
   (course link), `@group`, `@help`. `parseUniforms` learns them; nothing else
   changes yet.
 
-### Phase 1 — The render graph and compiler *(L; the keystone)* — **1.1–1.3 shipped; 1.4 (fusion) left**
+### Phase 1 — The render graph and compiler *(L; the keystone)* — **shipped**
 
 `render-graph.js` is the model: `defineNode(sketch)` registers a node type
 from sketch text — `sketchMeta` reads `@node/@module/@pass`, `parseUniforms`
@@ -354,8 +354,42 @@ The Canvas filter dialog lists all twenty as "… — on the GPU" with the CPU
 filter's own parameter ranges and colours, so both paths get identical
 controls; `applyFilter(canvas, entry, params)` is the one-call bridge. 66/66.
 
-**Left in Phase 1:** 1.4 fusion of per-pixel chains and ejection of a fused
-layer.
+**1.4, fusion** (`graph-fuse.js`): a run of consecutive nodes without `@pass`
+becomes one shader. Each node's sketch is turned into a function — its
+declarations renamed `f0_`, `f1_`, … so two nodes may both own an `amount`
+and both carry their own OKLab helpers — and the colour is passed from one to
+the next in a register instead of a framebuffer. `planPasses` walks the
+topological order and extends a run while the next node reads the tail, the
+tail is read by nothing else, and the node's other inputs come from outside
+the run (those stay real samplers, read at uv, which is how a two-input
+composite fuses). Sources and bypasses draw nothing, so they no longer break a
+run they merely sit between.
+
+`@pass` is a promise about sampling, and fusion checks it rather than trusting
+it: a node is left alone if it samples an input anywhere but `uv`, moves `uv`,
+keeps state, or takes a host image. Beyond that, a fused program that fails to
+compile falls back to a pass per node and logs why — **fusion can make the
+picture faster, never different**. The fused text is itself a sketch, so
+ejection shows the one shader the GPU was actually given (`{fuse:false}`
+ejects the graph as written, for comparison).
+
+**In the self-test** (Fusion group, 7 checks): five adjustments → 1 draw;
+a blur in the middle keeps its two passes and the tail still fuses (5 → 4);
+a two-input composite fuses with its second input as a texture; a curve LUT
+survives; eight per-pixel filters → 1 draw; the fused shader ejects and links
+with all three `apply()` functions in it; the four neighbourhood nodes decline
+and say why. Every check compares against the same graph run one pass per
+node and asserts on **what actually drew**, not on the plan — which is what
+caught the first version: the carrier substitution ran on the first node of a
+run too, so every fused program silently failed to link and fell back, and
+the parity checks were comparing the fallback with itself. The surviving
+differences (0.02–0.76/255) are the half-float intermediates the fused path
+skips; it is the more accurate of the two.
+
+Measured, seven adjustment nodes at 1920×1080: **14.4 ms → 1.4 ms, 10.4×**.
+The Canvas filter dialog now states the real cost of each catalogue filter —
+"1 draw", "4 draws" for bloom — which is the number a stack of them will add
+up to when layers become subgraphs in Phase 2.
 
 - `render-graph.js`: node model, schema loading from sketch text, validation.
 - `graph-compile.js`: passes, fusion, FBO pool, program cache, ejection.
@@ -644,7 +678,7 @@ authored as text) — is the right one, and it is a separate roadmap.
 | 1.1 | Render graph model + compiler (per-node passes) | L | 0.1, 0.3 | the keystone |
 | 1.2 | Built-in nodes: adjust + composite + geometry | M | 1.1 | non-destructive colour |
 | 1.3 | Port 21 filters to nodes, parity tests — **shipped** | M | 1.1 | one effect library |
-| 1.4 | Fusion + ejection | M | 1.1 | speed; readable GLSL per layer |
+| 1.4 | Fusion + ejection — **shipped** | M | 1.1 | speed; readable GLSL per layer |
 | 2.1 | Canvas layers as subgraphs; adjustment layers | L | 1.x | Photoshop's model |
 | 2.2 | Curves/Levels/HSL UI + histogram | M | 2.1 | the colourist's tools |
 | 2.3 | Shader layer; eject document; colour management | M | 2.1 | live generative layers |

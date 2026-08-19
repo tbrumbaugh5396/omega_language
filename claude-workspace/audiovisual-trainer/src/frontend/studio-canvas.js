@@ -29,6 +29,7 @@ import { buildControls } from "./shader-controls.js";
 import { applyNode, applyFilter } from "./graph-compile.js";
 import { nodeType } from "./render-graph.js";
 import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
+import { fuseStats } from "./graph-fuse.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
   "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
@@ -974,8 +975,18 @@ export async function canvasEditor(host) {
             el("input", { type: "color", value: def,
               oninput: (e) => { graphNode.values[name] = e.target.value; recompute(); } })));
         }
+        // How many draws this actually costs, after fusion — the number a
+        // stack of these will add up to when layers become subgraphs.
+        let cost = "";
+        try {
+          const probe = { width: 64, height: 64, nodes: [{ id: "p", type: "source", params: {}, inputs: [], bypass: false }], output: null };
+          probe.output = gf.build(probe, "p", graphNode.values);
+          const st = fuseStats(probe);
+          cost = st.before === st.after ? ` ${st.before} draw${st.before === 1 ? "" : "s"}.`
+               : ` ${st.before} nodes, fused into ${st.after} draw${st.after === 1 ? "" : "s"}.`;
+        } catch (e) { /* the note is a nicety; never block the dialog for it */ }
         controls.append(el("p.fine", {}, `The catalogue's ${cpu.name}, as a render-graph node — the same ` +
-          "mathematics on the GPU; the self-test holds it to the CPU version. Still bakes on Apply."));
+          `mathematics on the GPU; the self-test holds it to the CPU version.${cost} Still bakes on Apply.`));
         recompute();
         return;
       }
