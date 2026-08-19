@@ -16,7 +16,7 @@ import { el, clear, api } from "./ui.js";
 import { GENERATE_PRESETS } from "./studio-generate.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3 } from "./shader-uniforms.js";
-import { applyUniforms, randomise } from "./shader-controls.js";
+import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
 import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets } from "./shader-run.js";
 import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
@@ -37,7 +37,7 @@ import { auditNodes, portabilitySummary, auditSource } from "./wgsl-audit.js";
 import { zipStore, crc32 } from "./zip-store.js";
 import { graphStats } from "./graph-compile.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
-import { createDspGraph, addDspNode, defineDspNode, allocationReport, topoDsp } from "./dsp-graph.js";
+import { createDspGraph, addDspNode, defineDspNode, allocationReport, topoDsp, DSP_NODES } from "./dsp-graph.js";
 import { installGraph, sourceFor } from "./dsp-runtime.js";
 import { fftMag } from "./engine-audio.js";
 import { freezeEffects } from "./canvas-graph.js";
@@ -216,7 +216,10 @@ export async function runSelfTest(report = () => {}) {
       const feedsBack = hasSimPass(src)
         || /\b(?:u_prev|prev|prevAt)\s*\(|\bu_prev\b/.test(p.source.replace(/\/\/[^\n]*/g, ""));
       if (movable.length && !feedsBack) {
-        randomise(us, vals);
+        // Seeded, so this check gives the same answer every time it is run.
+        // It found a real thing once and a false alarm once, and only one of
+        // those is worth having.
+        randomise(us, vals, seededRandom(0x5eed));
         const b = draw(prog, us, vals);
         const d = differ(a, b);
         moves = ` · controls move ${d} px`;
@@ -1503,6 +1506,119 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
                + `and never goes below zero in ${ch.length} samples` }); }
   } catch (e) {
     push({ group: "Audio library", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The audio graph: feedback, which a shader graph cannot have, and voices,
+  // which is the same graph N times rather than N graphs.
+  try {
+    const SR = 48000;
+    const render = async (graph, secs, opts) => {
+      const ctx = new OfflineAudioContext(1, Math.round(SR * secs), SR);
+      const inst = await installGraph(ctx, graph, opts);
+      inst.node.connect(ctx.destination);
+      return (await ctx.startRendering()).getChannelData(0);
+    };
+
+    // A feedback comb built out of the graph itself: impulse into a summer,
+    // the delay's output wired back into it. The answer is known exactly —
+    // taps at g, g², g³ — so there is nothing to interpret.
+    { const gfb = 0.7, ms = 2;
+      const g = createDspGraph();
+      const imp = addDspNode(g, "src.impulse", {});
+      const sum = addDspNode(g, "mix.add", { inputs: { a: [imp, "y"] }, params: { gainA: 1, gainB: gfb } });
+      const dl = addDspNode(g, "delay.line", { inputs: { x: [sum, "y"] }, params: { ms, feedback: 0 } });
+      g.nodes.find((x) => x.id === sum).inputs.b = [dl, "y"];
+      g.output = sum;
+      const ch = await render(g, 0.05);
+      // The round trip is the delay plus the one sample a back edge costs,
+      // which is a fact about the compiler and worth stating rather than
+      // rounding away.
+      let period = 0;
+      for (let i = 1; i < 400; i++) if (Math.abs(ch[i]) > 0.5) { period = i; break; }
+      const taps = [];
+      for (let k = 0; k <= 3; k++) {
+        let best = 0;
+        for (let i = Math.max(0, k * period - 2); i <= k * period + 2 && i < ch.length; i++) {
+          best = Math.max(best, Math.abs(ch[i]));
+        }
+        taps.push(best);
+      }
+      const ok = taps.every((v, k) => Math.abs(v - Math.pow(gfb, k)) < 0.01);
+      push({ group: "Audio graph", name: "feedback through a delay decays exactly as the loop gain says", ok,
+             detail: `taps ${taps.map((v) => v.toFixed(3)).join(", ")} against ${[0, 1, 2, 3].map((k) => Math.pow(gfb, k).toFixed(3)).join(", ")} · `
+               + `the round trip is ${period} samples: ${Math.round(ms * 0.001 * SR)} of delay and one more, `
+               + "which is what a back edge costs and is said rather than hidden" }); }
+
+    // The same graph, four times, each with its own state.
+    { const N = 4096;
+      const g = createDspGraph();
+      const note = addDspNode(g, "voice.note", {});
+      g.output = addDspNode(g, "osc.sineHz",
+        { inputs: { hz: [note, "hz"], gate: [note, "gate"] }, params: { amp: 0.2 } });
+      const wanted = [0, 1, 2, 3].map((v) => (Math.round(1000 * N / SR) + v * 20) * SR / N);
+      const ch = await render(g, 0.3, { voices: 4,
+        voiceInit: { [`${note}_pitch`]: wanted, [`${note}_on`]: [1, 1, 1, 1] } });
+      const mag = fftMag(ch.subarray(4096, 4096 + N));
+      const peaks = [];
+      for (let i = 2; i < mag.length - 1; i++) {
+        if (mag[i] > mag[i - 1] && mag[i] >= mag[i + 1] && mag[i] > 0.02) peaks.push(i * SR / N);
+      }
+      const ok = peaks.length === 4 && wanted.every((w, k) => Math.abs(peaks[k] - w) < 1);
+      push({ group: "Audio graph", name: "four voices are four voices, each with its own state", ok,
+             detail: ok
+               ? `one graph compiled for four voices: peaks at ${peaks.map((p2) => p2.toFixed(0)).join(", ")} Hz, `
+                 + "exactly where each voice was told to sit — one loop over voices, not four graphs"
+               : `wanted ${wanted.map((w) => w.toFixed(0)).join(", ")}, found ${peaks.map((p2) => p2.toFixed(0)).join(", ")}` }); }
+
+    // Silence a voice and the others must not notice.
+    { const N = 4096;
+      const g = createDspGraph();
+      const note = addDspNode(g, "voice.note", {});
+      g.output = addDspNode(g, "osc.sineHz",
+        { inputs: { hz: [note, "hz"], gate: [note, "gate"] }, params: { amp: 0.2 } });
+      const wanted = [0, 1].map((v) => (Math.round(1000 * N / SR) + v * 40) * SR / N);
+      const both = await render(g, 0.2, { voices: 2,
+        voiceInit: { [`${note}_pitch`]: wanted, [`${note}_on`]: [1, 1] } });
+      const one = await render(g, 0.2, { voices: 2,
+        voiceInit: { [`${note}_pitch`]: wanted, [`${note}_on`]: [1, 0] } });
+      const solo = await render(g, 0.2, { voices: 1,
+        voiceInit: { [`${note}_pitch`]: [wanted[0]], [`${note}_on`]: [1] } });
+      let worst = 0;
+      for (let i = 1024; i < 8192; i++) worst = Math.max(worst, Math.abs(one[i] - solo[i]));
+      let differs = 0;
+      for (let i = 1024; i < 8192; i++) if (Math.abs(both[i] - one[i]) > 1e-4) differs++;
+      push({ group: "Audio graph", name: "one voice's state never leaks into another",
+             ok: worst < 1e-6 && differs > 1000,
+             detail: `gating the second voice off leaves the first bit-for-bit what it is alone `
+               + `(worst ${worst.toExponential(1)}), and the two together differ from one in `
+               + `${differs} of 7168 samples — so they are summing, not sharing` }); }
+
+    // Every node in the library compiles on its own. A broken node should be
+    // found when it is written, not when someone builds a graph with it.
+    { const broken = [];
+      for (const [id, t] of DSP_NODES) {
+        // The check above registers a deliberately-broken node to prove the
+        // allocation rule bites; it is not part of the library.
+        if (id.startsWith("bad.")) continue;
+        try {
+          const g = createDspGraph();
+          const inputs = {};
+          for (const port of t.ins) inputs[port.name] = 0;
+          g.output = addDspNode(g, id, { inputs });
+          const src = sourceFor(g);
+          // eslint-disable-next-line no-new-func
+          new Function(`"use strict"; const AudioWorkletProcessor = class {}; `
+            + `const registerProcessor = () => {}; const sampleRate = 48000; ${src.code}`);
+          if (src.findings.length) broken.push(`${id}: ${src.findings[0].why}`);
+        } catch (e) { broken.push(`${id}: ${String(e.message).split("\n")[0]}`); }
+      }
+      push({ group: "Audio graph", name: "every node in the library compiles on its own",
+             ok: broken.length === 0,
+             detail: broken.length ? broken.join("; ")
+               : `${DSP_NODES.size} nodes, each built into a one-node graph, parsed, and checked for `
+                 + "anything that would allocate in the loop" }); }
+  } catch (e) {
+    push({ group: "Audio graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

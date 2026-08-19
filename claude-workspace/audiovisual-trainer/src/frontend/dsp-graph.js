@@ -21,7 +21,7 @@
 // outputs, uniforms and state as ordinary locals. So there is no renaming, no
 // macro expansion, and what you read in the node is what runs.
 
-const DECL = /^\s*(in|out|state|coef|delay|uniform)\s+(float|int)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/;
+const DECL = /^\s*(in|out|state|coef|delay|uniform|perVoice)\s+(float|int)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/;
 
 /** Read `@` annotations off a trailing comment — the same grammar as sketches. */
 function annotations(comment) {
@@ -80,7 +80,7 @@ export function dspMeta(src) {
 export function parseDspNode(source) {
   const meta = dspMeta(source);
   const lines = String(source).split("\n");
-  const ins = [], outs = [], states = [], uniforms = [], coefs = [], delays = [];
+  const ins = [], outs = [], states = [], uniforms = [], coefs = [], delays = [], perVoice = [];
   let lastDecl = -1;
   lines.forEach((line, i) => {
     const m = DECL.exec(line.replace(/\/\/.*$/, ""));
@@ -101,6 +101,10 @@ export function parseDspNode(source) {
       // A delay line is memory, not a number. Its size is fixed at compile
       // time and rounded up to a power of two, so the wrap is a mask.
       else if (kind === "delay") delays.push({ name, size: Math.max(2, a.size ?? 4096) });
+      // A per-voice value: one number per voice, written from outside and
+      // read inside the voice loop. This is what makes polyphony the graph
+      // instantiated N times rather than N graphs.
+      else if (kind === "perVoice") perVoice.push({ name, value: a.default ?? 0, help: a.help || null });
       else {
         const opts = a.options || null;
         uniforms.push({
@@ -128,7 +132,7 @@ export function parseDspNode(source) {
   } else {
     sampleBody = rest.join("\n").trim();
   }
-  return { ...meta, source, ins, outs, states, coefs, delays, uniforms,
+  return { ...meta, source, ins, outs, states, coefs, delays, uniforms, perVoice,
            body: sampleBody, blockBody };
 }
 
@@ -216,7 +220,8 @@ const MATH = ["sin", "cos", "tan", "abs", "min", "max", "sqrt", "exp", "log",
  * compiler's fusion, and for the same reason: the buffer between two nodes is
  * pointless when both are per-sample.
  */
-export function compileDspGraph(graph) {
+export function compileDspGraph(graph, { voices = 1 } = {}) {
+  const V = Math.max(1, Math.min(64, voices | 0));
   const order = topoDsp(graph);
   const params = [];                 // AudioParam descriptors
   const stateSlots = [];             // one entry per state variable
@@ -224,7 +229,27 @@ export function compileDspGraph(graph) {
   const pre = [];                    // once a block, before the loop
   const coefDecls = [];              // coefficients, alive across the loop
   const buffers = [];                // delay lines, made in the constructor
+  const voiceArrays = [];            // one number per voice, written from outside
   const notes = [];
+
+  // A back edge — a wire from a node that has not been computed yet this
+  // sample — is a feedback path, and its value has to be *last* sample's.
+  // Holding it in a local would lose it at the end of every block and click
+  // 375 times a second, so it lives in state like anything else that has to
+  // survive.
+  const position = new Map(order.map((n, i) => [n.id, i]));
+  const feedback = new Map();          // "nX_out" → state slot
+  for (const n of order) {
+    for (const wire of Object.values(n.inputs)) {
+      if (!Array.isArray(wire)) continue;
+      if (position.get(wire[0]) < position.get(n.id)) continue;   // ordinary edge
+      const key = `${wire[0]}_${wire[1]}`;
+      if (feedback.has(key)) continue;
+      const slot = stateSlots.length;
+      stateSlots.push({ node: wire[0], name: `${wire[1]}__fb`, slot });
+      feedback.set(key, slot);
+    }
+  }
 
   for (const n of order) {
     const t = dspNode(n.type);
@@ -249,7 +274,13 @@ export function compileDspGraph(graph) {
       const bufName = `${px}${d.name}`;
       const idxSlot = stateSlots.length;
       stateSlots.push({ node: n.id, name: `${d.name}__w`, slot: idxSlot });
-      buffers.push({ name: bufName, size, mask: size - 1, idxSlot });
+      // Each voice gets its own stretch of the ring, so one voice's echoes
+      // are not another's.
+      buffers.push({ name: bufName, size, mask: size - 1, idxSlot, voices: V });
+    }
+    for (const pv of t.perVoice) {
+      voiceArrays.push({ name: `${px}${pv.name}`, node: n.id, port: pv.name,
+                         value: pv.value, voices: V });
     }
     if (t.blockBody) {
       pre.push(`    // ${n.id}: ${t.node} — once a block`);
@@ -286,11 +317,12 @@ export function compileDspGraph(graph) {
       lines.push(`        const ${u.name} = P_${pname}.length > 1 ? P_${pname}[i] : P_${pname}[0];`);
     }
     for (const c of t.coefs) lines.push(`        const ${c.name} = ${px}${c.name};`);
+    for (const pv of t.perVoice) lines.push(`        const ${pv.name} = VP_${px}${pv.name}[v];`);
     // State: read in, written back, one slot each.
     for (const s of t.states) {
       const slot = stateSlots.length;
       stateSlots.push({ node: n.id, name: s.name, slot });
-      lines.push(`        let ${s.name} = S[${slot}];`);
+      lines.push(`        let ${s.name} = S[vBase + ${slot}];`);
     }
     for (const o of t.outs) lines.push(`        let ${o.name} = 0;`);
     // A delay line's two operations are macros rather than calls: a call per
@@ -301,10 +333,10 @@ export function compileDspGraph(graph) {
       let outText = text;
       for (const d of t.delays) {
         const buf = buffers.find((x) => x.name === `${px}${d.name}`);
-        const w = `S[${buf.idxSlot}]`;
+        const w = `S[vBase + ${buf.idxSlot}]`;
         for (const [call, wrap] of [
-          [`${d.name}Read`, (arg) => `B_${buf.name}[((${w} - (${arg})) & ${buf.mask})]`],
-          [`${d.name}Write`, (arg) => `B_${buf.name}[${w}] = (${arg})`],
+          [`${d.name}Read`, (arg) => `B_${buf.name}[bBase_${buf.name} + ((${w} - (${arg})) & ${buf.mask})]`],
+          [`${d.name}Write`, (arg) => `B_${buf.name}[bBase_${buf.name} + ${w}] = (${arg})`],
         ]) {
           for (;;) {
             const at = outText.indexOf(`${call}(`);
@@ -324,13 +356,17 @@ export function compileDspGraph(graph) {
     for (const bodyLine of t.body.split("\n")) lines.push(`        ${macro(bodyLine)}`);
     for (const d of t.delays) {
       const buf = buffers.find((x) => x.name === `${px}${d.name}`);
-      lines.push(`        S[${buf.idxSlot}] = (S[${buf.idxSlot}] + 1) & ${buf.mask};`);
+      lines.push(`        S[vBase + ${buf.idxSlot}] = (S[vBase + ${buf.idxSlot}] + 1) & ${buf.mask};`);
     }
     for (const s of t.states) {
       const slot = stateSlots.find((x) => x.node === n.id && x.name === s.name).slot;
-      lines.push(`        S[${slot}] = ${s.name};`);
+      lines.push(`        S[vBase + ${slot}] = ${s.name};`);
     }
-    for (const o of t.outs) lines.push(`        ${px}${o.name} = ${o.name};`);
+    for (const o of t.outs) {
+      lines.push(`        ${px}${o.name} = ${o.name};`);
+      const slot = feedback.get(`${px}${o.name}`);
+      if (slot !== undefined) lines.push(`        S[vBase + ${slot}] = ${o.name};`);
+    }
     lines.push("      }");
   }
 
@@ -339,7 +375,9 @@ export function compileDspGraph(graph) {
   const declares = order.flatMap((n) => dspNode(n.type).outs.map((o) => `${n.id}_${o.name}`));
 
   return {
-    params, states: stateSlots, notes, buffers,
+    params, states: stateSlots, notes, buffers, voiceArrays, voices: V,
+    stateStride: stateSlots.length,
+    feedback: [...feedback.entries()],
     outExpr: `${outNode.id}_${outPort}`,
     declares,
     coefDecls: coefDecls.join("\n"),

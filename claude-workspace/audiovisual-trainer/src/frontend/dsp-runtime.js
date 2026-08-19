@@ -29,12 +29,32 @@ function nameFor(code) {
  *   - the meter goes out on the port at a low rate rather than per block,
  *     because the UI needs a number, not every number.
  */
-export function processorSource(compiled, name) {
-  const decls = compiled.declares.map((d) => `      let ${d} = 0;`).join("\n");
+export function processorSource(compiled, name, init = {}) {
+  // Every node output is a local, cleared each sample — except one a feedback
+  // path reads, which is primed from state so it carries last sample's value.
+  const fb = new Map(compiled.feedback);
+  const decls = compiled.declares.map((d) => (fb.has(d)
+    ? `        let ${d} = S[vBase + ${fb.get(d)}];`
+    : `        let ${d} = 0;`)).join("\n");
   const params = compiled.params.map((p) =>
     `    const P_${p.name} = parameters.${p.name};`).join("\n");
   const bufMake = compiled.buffers.map((b) =>
-    `    this.B_${b.name} = new Float32Array(${b.size});`).join("\n");
+    `    this.B_${b.name} = new Float32Array(${b.size * b.voices});`).join("\n");
+  // Initial per-voice values can be baked in. A live instrument sets them
+  // by message; an offline render cannot, because the message would arrive
+  // after the render had finished — so the values it starts with are part of
+  // the compiled processor.
+  const voiceMake = compiled.voiceArrays.map((v) => {
+    const given = init[v.name];
+    const line = `    this.VP_${v.name} = new Float32Array(${v.voices}).fill(${v.value});`;
+    if (!Array.isArray(given)) return line;
+    const vals = Array.from({ length: v.voices }, (_, k) => Number(given[k] ?? v.value));
+    return `${line}\n    this.VP_${v.name}.set([${vals.join(", ")}]);`;
+  }).join("\n");
+  const voiceBind = compiled.voiceArrays.map((v) =>
+    `    const VP_${v.name} = this.VP_${v.name};`).join("\n");
+  const bufBase = compiled.buffers.map((b) =>
+    `        const bBase_${b.name} = v * ${b.size};`).join("\n");
   const bufBind = compiled.buffers.map((b) =>
     `    const B_${b.name} = this.B_${b.name};`).join("\n");
   const bufClear = compiled.buffers.map((b) => `      this.B_${b.name}.fill(0);`).join("\n");
@@ -54,8 +74,11 @@ ${descriptors}
   constructor() {
     super();
     // Everything the loop touches is made here, once.
-    this.S = new Float64Array(${Math.max(1, compiled.states.length)});
+    // One stretch of state per voice: polyphony is this graph N times, not
+    // N graphs.
+    this.S = new Float64Array(${Math.max(1, compiled.stateStride * compiled.voices)});
 ${bufMake}
+${voiceMake}
     this.meter = new Float32Array(2);
     this.blocks = 0;
     this.running = true;
@@ -64,6 +87,12 @@ ${bufMake}
       if (d && d.reset) {
         this.S.fill(0);
 ${bufClear}
+      }
+      // A note lands as a number in a voice's slot: no allocation, and the
+      // audio thread never waits for it.
+      if (d && d.voice !== undefined && d.name !== undefined) {
+        const arr = this["VP_" + d.name];
+        if (arr && d.voice >= 0 && d.voice < arr.length) arr[d.voice] = d.value;
       }
       if (d && d.stop) this.running = false;
     };
@@ -75,6 +104,7 @@ ${bufClear}
     const R = out.length > 1 ? out[1] : null;
     const S = this.S;
 ${bufBind}
+${voiceBind}
     const n = L.length;
 ${math}
     const TAU = 6.283185307179586;
@@ -86,9 +116,17 @@ ${compiled.coefDecls}
 ${compiled.pre}
     let peak = 0, sum = 0;
     for (let i = 0; i < n; i++) {
+      let acc = 0;
+      // One pass per voice, summed. With one voice this is the same loop it
+      // always was, and costs the same.
+      for (let v = 0; v < ${compiled.voices}; v++) {
+        const vBase = v * ${Math.max(1, compiled.stateStride)};
+${bufBase}
 ${decls}
 ${compiled.loop}
-      const y = ${compiled.outExpr};
+        acc += ${compiled.outExpr};
+      }
+      const y = acc;
       L[i] = y;
       if (R !== null) R[i] = y;
       const a = y < 0 ? -y : y;
@@ -128,10 +166,11 @@ export function innerLoopOf(code) {
 }
 
 /** The compiled source for a graph, plus what the allocation rule found. */
-export function sourceFor(graph) {
-  const compiled = compileDspGraph(graph);
-  const name = nameFor(compiled.loop + compiled.outExpr);
-  const code = processorSource(compiled, name);
+export function sourceFor(graph, opts = {}) {
+  const compiled = compileDspGraph(graph, opts);
+  const init = opts.voiceInit || {};
+  const name = nameFor(compiled.loop + compiled.outExpr + JSON.stringify(init) + compiled.voices);
+  const code = processorSource(compiled, name, init);
   const findings = allocationReport(innerLoopOf(code));
   return { compiled, name, code, findings, loop: innerLoopOf(code) };
 }
@@ -141,8 +180,8 @@ export function sourceFor(graph) {
  * `ctx` may be an OfflineAudioContext, which is how this is tested without
  * making a sound.
  */
-export async function installGraph(ctx, graph) {
-  const { compiled, name, code, findings } = sourceFor(graph);
+export async function installGraph(ctx, graph, opts = {}) {
+  const { compiled, name, code, findings } = sourceFor(graph, opts);
   if (findings.length) {
     throw new Error(`the emitted loop would allocate: ${findings[0].why} (line ${findings[0].line})`);
   }
@@ -160,6 +199,10 @@ export async function installGraph(ctx, graph) {
   return {
     node, name, code, meter, compiled,
     param: (nodeId, uniform) => node.parameters.get(`${nodeId}_${uniform}`),
+    /** Set one per-voice value — a note's pitch, its gate. */
+    setVoice: (voice, nodeId, name, value) =>
+      node.port.postMessage({ voice, name: `${nodeId}_${name}`, value }),
+    voices: compiled.voices,
     reset: () => node.port.postMessage({ reset: true }),
     stop: () => node.port.postMessage({ stop: true }),
   };
@@ -411,3 +454,52 @@ const kd = 1 - exp(-1 / (max(decayMs, 0.1) * 0.001 * sampleRate));
 if (gate > 0.5) { armed = 1; level += (1.2 - level) * ka; }
 else if (armed > 0.5) { level += (0 - level) * kd; if (level < 0.0001) { level = 0; armed = 0; } }
 y = min(level, 1);`);
+
+// ------------------------------------------------------------------ Phase C
+//
+// The graph itself: something to sum with, and something to measure with.
+
+defineDspNode(`// One sample at full scale, then silence. Every impulse response starts here.
+// @node src.impulse
+// @module math-audio
+out float y;
+state float fired;
+
+y = fired > 0.5 ? 0 : 1;
+fired = 1;`);
+
+defineDspNode(`// Two signals in, one out, with a gain on each. The node a feedback loop
+// is closed with, and the reason the graph needs more than a chain.
+// @node mix.add
+// @module math-audio
+in float a, b;
+out float y;
+uniform float gainA;   // @range -2 2 @default 1 @help how much of the first
+uniform float gainB;   // @range -2 2 @default 1 @help how much of the second
+
+y = a * gainA + b * gainB;`);
+
+defineDspNode(`// A voice's note: the pitch and gate written from outside, one per voice.
+// Wiring this into an oscillator is what makes a graph polyphonic — the same
+// graph, N times, each with its own state.
+// @node voice.note
+// @module math-audio
+out float hz, gate;
+perVoice float pitch;   // @default 220 @help this voice's frequency in hertz
+perVoice float on;      // @default 0 @help 1 while the key is down
+
+hz = pitch;
+gate = on;`);
+
+defineDspNode(`// A sine whose frequency arrives as a signal rather than a parameter,
+// which is what a voice needs: a parameter is one number for the whole graph.
+// @node osc.sineHz
+// @module math-audio
+in float hz, gate;
+out float y;
+state float phase;
+uniform float amp;   // @range 0 1 @default 0.3 @help amplitude
+
+phase += hz / sampleRate;
+if (phase >= 1) phase -= floor(phase);
+y = sin(TAU * phase) * amp * gate;`);

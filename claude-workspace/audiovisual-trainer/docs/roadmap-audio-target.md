@@ -225,7 +225,7 @@ nodes, and oversampling the saturator — its −53.9 dB is what a hard curve
 does at 1×, and the fix is 4× oversampling around the curve rather than a
 better curve.
 
-### Phase C — The graph, and fusion *(M)*
+### Phase C — The graph, and fusion *(M)* — **shipped**
 
 - The same model: nodes, ports, one output; topological order; bypass.
 - **Feedback is legal here and is not in the visual graph.** A cycle through a
@@ -239,6 +239,52 @@ better curve.
   fall back to node-at-a-time rather than change the sound.
 - **Voices**: polyphony is the graph instantiated N times with its own state.
   The compiler emits one loop over voices, not N graphs.
+
+**Shipped**, and one of these turned out to be already true.
+
+**Fusion was never not there.** The audio compiler inlines every node into one
+loop by construction — there is no per-node buffer to remove, because there
+never was one. So the work in this phase was not fusing; it was the two things
+the visual roadmap's fusion lesson actually asks for. The emitted loop is
+annotated node by node and readable (`sourceFor(graph)` returns it), and every
+node in the library is compiled on its own in the self-test, so a node that
+will not build is found when it is written rather than when a graph uses it.
+  - **The node-at-a-time fallback is not built, deliberately.** In the visual
+    compiler that fallback existed because fusion was an optimisation over a
+    working per-node path. Here there is no per-node path to fall back *to*,
+    and building one purely as a safety net is a great deal of machinery for a
+    case the compile check catches first. Said here rather than left as a gap
+    someone finds later.
+
+**Feedback works, and costs one sample.** A back edge — a wire from a node not
+yet computed this sample — gets a state slot, is primed from it at the top of
+each sample and written back after. A local would have lost it at every block
+boundary and clicked 375 times a second. Measured with an impulse into a comb
+built out of the graph itself: taps at **1.000, 0.700, 0.490, 0.343** against
+g⁰…g³ exactly.
+  - The round trip is **N + 1 samples**: the delay line, plus the one sample a
+    back edge costs. That is a fact about the compiler, and the test states it
+    rather than rounding it away.
+  - The cycle rule from Phase A still refuses a loop with no delay, by name.
+    It could silently insert the sample of delay a back edge already implies —
+    and that would quietly turn the filter you designed into a different one.
+
+**Voices are the graph N times.** `perVoice float` declares a value written
+from outside, one per voice; state and delay buffers get a stride so each
+voice has its own; the loop runs over voices and sums. Four voices produce
+**peaks at 996, 1230, 1465, 1699 Hz**, exactly where each was told to sit, and
+gating one off leaves another **bit-for-bit** what it is alone.
+  - Initial per-voice values can be baked into the compiled processor, because
+    an offline render cannot receive a port message — it would arrive after
+    the render had finished. That is how the test sets pitches, and it is also
+    what a preset wants.
+
+**One more thing, off to the side.** The visual suite's preset probe randomised
+its controls, and it failed once in this phase's runs on a preset where the
+draw happened to change almost nothing. A check that fails once in twenty runs
+teaches people to ignore failures, which costs more than the check is worth —
+so `randomise` now takes a generator and the self-test seeds it. The suite
+gives the same answer every time it is run.
 
 ### Phase D — Music on the graph *(L)*
 

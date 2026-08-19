@@ -362,19 +362,34 @@ export function resumeVideos(cache) {
 
 /** New values for everything the Randomise button should move. Colours stay
     inside a pleasant band rather than going anywhere in the cube. */
-export function randomise(uniforms, values) {
+/**
+ * A seeded generator, for anything that needs the same "random" twice — the
+ * self-test, chiefly. A check that fails once in twenty runs teaches people
+ * to ignore failures, which costs more than the check is worth.
+ */
+export function seededRandom(seed) {
+  let s = (seed >>> 0) || 1;
+  return () => {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >> 17;
+    s ^= s << 5; s >>>= 0;
+    return s / 4294967296;
+  };
+}
+
+export function randomise(uniforms, values, rnd = Math.random) {
   for (const u of uniforms) {
     if (u.control === "image") continue;
     const v = values[u.name] || (values[u.name] = u.value.slice());
     if (u.control === "color") {
-      const h = Math.random(), s = 0.35 + Math.random() * 0.45, l = 0.35 + Math.random() * 0.4;
+      const h = rnd(), s = 0.35 + rnd() * 0.45, l = 0.35 + rnd() * 0.4;
       const rgb = hsl(h, s, l);
       for (let i = 0; i < Math.min(3, u.width); i++) v[i] = rgb[i];
     } else if (u.control === "toggle") {
-      v[0] = Math.random() < 0.5 ? 0 : 1;
+      v[0] = rnd() < 0.5 ? 0 : 1;
     } else {
       for (let i = 0; i < u.width; i++) {
-        const r = u.min + Math.random() * (u.max - u.min);
+        const r = u.min + rnd() * (u.max - u.min);
         v[i] = u.isInt ? Math.round(r) : r;
       }
     }
