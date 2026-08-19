@@ -24,7 +24,7 @@ import { Selection, wandMask } from "./canvas-selection.js";
 import { aiButton } from "./ai.js";
 import { gridOverlay } from "./grid-overlay.js";
 import { GENERATE_PRESETS } from "./studio-generate.js";
-import { sketchUniforms } from "./shader-run.js";
+import { renderSketch, sketchUniforms } from "./shader-run.js";
 import { buildControls } from "./shader-controls.js";
 import { nodeType } from "./render-graph.js";
 import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
@@ -89,6 +89,7 @@ export async function canvasEditor(host) {
       layer.maskCtx.fillRect(0, 0, W, H);
     }
     if (layer.type === "text") renderTextLayer(layer);
+    if (layer.type === "shader") { layer.shader = stored.shader ? { ...stored.shader } : null; renderShaderLayer(layer); }
     return layer;
   }
 
@@ -96,6 +97,26 @@ export async function canvasEditor(host) {
   for (const l of doc.layers) layers.push(await hydrate(l));
   let active = 0;
   const L = () => layers[active];
+
+  /**
+   * A shader layer: a Generate sketch as the layer's pixels. Its controls
+   * live in the layer panel, it takes the effect stack like any other layer,
+   * and if the sketch reads `t` it can be scrubbed. The sketch is the
+   * document — the pixels are a rendering of it, redone whenever it changes.
+   */
+  function renderShaderLayer(layer) {
+    const sh = layer.shader;
+    if (!sh || !sh.source) return;
+    try {
+      const out = renderSketch(sh.source, W, H, { values: sh.values || {}, time: sh.time || 0, steps: 8 });
+      layer.ctx.clearRect(0, 0, W, H);
+      layer.ctx.drawImage(out, 0, 0);
+      layer.shaderError = null;
+    } catch (e) {
+      layer.shaderError = String(e.message).split("\n")[0];
+    }
+    layer.dirty = true;
+  }
 
   function renderTextLayer(layer) {
     const t = layer.text || {};
@@ -422,6 +443,7 @@ export async function canvasEditor(host) {
         id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
         blend: l.blend, type: l.type,
         text: l.text ? { ...l.text } : null,
+        shader: l.shader ? { ...l.shader, values: { ...l.shader.values } } : null,
         effects: (l.effects || []).map((e) => ({ ...e })),
         data: l.canvas.toDataURL("image/png"),
         mask: l.maskCanvas ? l.maskCanvas.toDataURL("image/png") : null,
@@ -1268,6 +1290,58 @@ export async function canvasEditor(host) {
     filterDialog();
   }
 
+  /**
+   * A shader layer, from a Generate preset or one of your own documents. The
+   * sketch stays in the layer, so its sliders stay live: this is the same
+   * thing the Generate studio edits, sitting in a canvas document.
+   */
+  async function addShaderLayer() {
+    const presets = GENERATE_PRESETS.filter((p) => !/\bsampler2D\b/.test(p.source));
+    let docs = [];
+    try {
+      const { projects } = await api("/api/studio/projects");
+      docs = (projects || []).filter((p) => p.kind === "generate" && p.id !== host.doc.id);
+    } catch { /* offline: presets only */ }
+    const pick = el("select", {},
+      el("optgroup", { label: "Generate presets" },
+        ...presets.map((p) => el("option", { value: `preset:${p.id}` }, p.label))),
+      docs.length ? el("optgroup", { label: "your Generate documents" },
+        ...docs.map((d) => el("option", { value: `doc:${d.id}` }, d.name))) : null);
+    modal(el("h2", {}, "Shader layer"),
+      el("p.fine", {}, "A sketch as a layer. Its controls stay in the layer panel, it takes " +
+        "effects and a mask like any other layer, and nothing is baked."),
+      pick,
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: closeModal }, "Cancel"),
+        el("button.primary", { onclick: async () => {
+          const v = pick.value;
+          let source = null, name = "Shader";
+          if (v.startsWith("preset:")) {
+            const pr = presets.find((x) => x.id === v.slice(7));
+            source = pr.source; name = pr.label;
+          } else {
+            const d = await api(`/api/studio/projects/${v.slice(4)}`);
+            source = d.data && (d.data.mode === "glsl" ? d.data.glsl : d.data.sketch);
+            name = d.name;
+          }
+          if (!source) { toast("That document has no source yet."); return; }
+          closeModal();
+          snapshot("layer");
+          const id = Math.max(0, ...layers.map((x) => x.id)) + 1;
+          const c = I.makeCanvas(W, H);
+          const values = {};
+          for (const u of sketchUniforms(source)) if (u.control !== "image") values[u.name] = u.value.slice();
+          const layer = { id, name, visible: true, opacity: 1, blend: "source-over",
+            type: "shader", text: null, effects: [], shader: { source, values, time: 0 },
+            canvas: c, ctx: I.ctx2d(c), maskCanvas: null, maskCtx: null,
+            cache: I.makeCanvas(W, H), dirty: true };
+          layers.push(layer);
+          active = layers.length - 1;
+          renderShaderLayer(layer);
+          render(); renderPanels(); persist();
+        } }, "Add layer")));
+  }
+
   function addLayer(name = null, drawInto = null) {
     snapshot("layer");
     const c = I.makeCanvas(W, H);
@@ -1298,6 +1372,7 @@ export async function canvasEditor(host) {
               l.name),
             l.type === "text" ? el("span.tag", {}, "T") : null,
             l.type === "adjust" ? el("span.tag", { title: "applies to everything below" }, "adj") : null,
+            l.type === "shader" ? el("span.tag", { title: "a sketch, still editable" }, "gl") : null,
             l.maskCanvas ? el("span.tag " + (isActive && state.editingMask ? "bad" : ""), {}, "mask") : null,
             (l.effects || []).length ? el("span.tag", { title: "effects, not baked" }, `fx ${l.effects.length}`) : null),
           el("div.row.tight", {},
@@ -1327,8 +1402,30 @@ export async function canvasEditor(host) {
           l.type === "text" ? el("div.row.tight", {},
             el("button.ghost", { onclick: () => textDialog(0, 0, l.text) }, "edit text"),
             el("button.ghost", { onclick: rasterizeText }, "rasterise")) : null,
+          l.type === "shader" ? shaderControls(l) : null,
           effectStack(l)) : null));
     });
+  }
+
+  /** A shader layer's own controls: the sketch's uniforms, live. */
+  function shaderControls(l) {
+    if (!l.shader) return null;
+    const uniforms = sketchUniforms(l.shader.source).filter((u) => u.control !== "image" && !u.hidden);
+    const redraw = () => { renderShaderLayer(l); render(); persist(); };
+    const usesTime = /\bt\b|u_time/.test(l.shader.source);
+    return el("div.stack", { style: { marginTop: ".35rem", gap: ".2rem" } },
+      l.shaderError ? el("p.fine", { style: { color: "var(--bad, #e06c5a)" } }, l.shaderError) : null,
+      uniforms.length ? buildControls(uniforms, l.shader.values, redraw) : el("p.fine", {}, "This sketch has no controls."),
+      usesTime ? knob("time", { min: 0, max: 30, step: 0.05, value: l.shader.time || 0,
+        format: (v) => v.toFixed(2) + " s",
+        oninput: (v) => { l.shader.time = v; redraw(); } }) : null,
+      el("div.row.tight", {},
+        el("button.ghost", { title: "turn it into pixels and lose the controls",
+          onclick: () => {
+            snapshot("layer");
+            l.type = "raster"; l.shader = null;
+            render(); renderPanels(); persist();
+          } }, "rasterise")));
   }
 
   /**
@@ -1570,6 +1667,7 @@ export async function canvasEditor(host) {
         el("div.row.tight", { style: { marginTop: ".4rem" } },
           el("button", { onclick: () => addLayer() }, "+ Layer"),
           el("button", { title: "a stack that applies to everything below it", onclick: addAdjustLayer }, "+ Adjust"),
+          el("button", { title: "a Generate sketch as a live layer", onclick: addShaderLayer }, "+ Shader"),
           el("button", { onclick: () => fileInput.click() }, "Import"),
           el("button", { onclick: exportPng }, "PNG"),
           el("button", { title: "the whole document as one chain of shaders", onclick: documentGlsl }, "GLSL"),

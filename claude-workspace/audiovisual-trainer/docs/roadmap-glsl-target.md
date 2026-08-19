@@ -409,7 +409,7 @@ up to when layers become subgraphs in Phase 2.
 - *Done when:* the Canvas filter dialog runs every filter through the graph,
   and "GLSL for this filter" shows fused source that compiles.
 
-### Phase 2 — Canvas on the graph *(L)*
+### Phase 2 — Canvas on the graph *(L)* — **the structure shipped; four features left**
 
 - A layer becomes a subgraph: `source → [effects…] → composite`. Adjustment
   layers, clipping masks and group layers become plain nodes. **Filters stop
@@ -432,6 +432,71 @@ up to when layers become subgraphs in Phase 2.
 - *Done when:* a twelve-layer document with three adjustment layers renders at
   60 fps at 2k, every slider is live, undo/redo crosses node edits, and the
   ejected GLSL reproduces the composite within 2/255.
+
+**Shipped.** `canvas-graph.js` holds a layer's effect stack: catalogue
+filters, single nodes, CPU-only filters and Generate sketches, as plain data
+that survives a reload. Consecutive graph entries are collected into one
+graph before it runs, so fusion works across the boundary between one filter
+and the next — duotone + vignette in a stack is a single draw. `surface()`
+runs the stack then the mask, cached against the layer's dirty flag; a stroke
+in progress goes into the pixels, so it goes in *under* the stack.
+
+**Filters stopped baking.** The filter dialog's four result paths collapsed
+into one candidate effect — so the preview is the layer, not the filter — and
+Apply became Add effect / Update effect, with Bake alongside for when you
+actually want pixels. The layer panel lists the stack with bypass, reorder,
+re-open, flatten, and the GLSL it compiles to. Undo carries the stack.
+Verified in the browser: after two effects, the *stored* pixels are still the
+original while the view shows the filtered result.
+
+**Adjustment layers** are a stack with no pixels under it, applying to
+everything composited below, through a mask that a brush on the layer paints.
+`render()` only pays for the accumulator when one exists.
+
+**Shader layers**: a Generate preset or one of your own Generate documents as
+a layer, its uniforms live in the layer panel, `t` scrubbable, effects and a
+mask on top of it like any other layer, "rasterise" when you want to stop
+editing it.
+
+**The document compiles.** `composite-nodes.js` puts the browser's sixteen
+blend modes in the graph, to the CSS compositing spec: separable modes through
+B(Cb,Cs), the four non-separable ones through SetLum/SetSat, and the general
+formula carrying straight alpha. That needed alpha to survive a pass, so
+`@alpha` joined `@pass` in the header grammar — a sketch is opaque unless it
+says otherwise, because the alpha of an expression that happens to end in a
+texture read is rarely what the author meant. The graph premultiplies in
+`present()`, the one place its convention meets the canvas's.
+`documentGraph()` compiles background, layers, stacks, masks and blend modes
+into one chain, and the canvas toolbar's **GLSL** button ejects it.
+
+**Against the done-criteria**: all sixteen blend modes within **0.1/255** of
+the browser's own composite; a document with a masked layer, a two-effect
+stack and an adjustment layer at **0.24/255** (the bar was 2); every slider
+live; undo crosses effect edits; twelve layers at 2048² with three adjustment
+layers, composited, at **3.9 ms a frame** (the bar was 16.7). 76/76 in the
+self-test, including a new "Canvas on the graph" group.
+
+Fusion had been quietly discarding `@alpha` — every fused function forced 1 —
+which the masked-layer parity check caught, and its renamer could emit
+identifiers with two underscores, which GLSL reserves.
+
+**Left in Phase 2**, four features that are independent of "layers are
+subgraphs" rather than parts of it:
+
+- **Selections and strokes as structure nodes** (§2.4c): a selection of shapes
+  as an SDF node, a stroke log as a capsule chain. Today a selection is still
+  a mask texture and a stroke is still pixels.
+- **Curves / Levels / HSL / colour balance UI with a histogram.** The curve
+  *node* exists and takes control points; what is missing is the editor for
+  them and the GPU reduction behind it.
+- **Clone and heal brushes** (CPU).
+- **Colour management**: decode on input, blend in linear, an output
+  transform, with a per-document switch so existing files keep rendering as
+  they do. This one changes how every existing document looks, so it wants to
+  be a deliberate piece of work rather than a rider on this one.
+
+Group layers and clipping masks are also still to do; both are small next to
+the four above.
 
 ### Phase 3 — Video on the graph *(L)*
 
