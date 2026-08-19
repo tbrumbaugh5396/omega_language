@@ -21,7 +21,8 @@ import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets 
 import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
-import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate } from "./render-graph.js";
+import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback, findNode } from "./render-graph.js";
+import { lifeStep, grayScottStep } from "./sim-nodes.js";
 import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
@@ -857,6 +858,190 @@ vec4(vec3(0.106, 0.169, 0.294), aa(d))`, W, H, { time: 0 });
                                              : "the expression did not reach the ejected text" }); }
   } catch (e) {
     push({ group: "Parameter expressions", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Feedback: a wire that points backwards, and a node that remembers.
+  //
+  // Each simulation below is held against a CPU implementation of the same
+  // rule, written beside the sketch. Life is binary, so the bar is exact;
+  // the others are continuous in half float, so the bar is a fraction of a
+  // level. What is really being checked is the machinery — that the memory
+  // is the previous frame and not something else, that it persists between
+  // separate renders, and that forgetting forgets.
+  try {
+    const px = (c) => c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    const seedCanvas = (w, h, draw) => {
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const g = c.getContext("2d");
+      g.fillStyle = "#000"; g.fillRect(0, 0, w, h);
+      g.fillStyle = "#fff"; draw(g);
+      return c;
+    };
+    let stateN = 0;
+    const fresh = (g) => { g.stateKey = `selftest-feedback-${stateN++}`; return g; };
+
+    // 1. Life: a glider, against the CPU rule, exact.
+    { const W = 32, H = 32;
+      const cells = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
+      const seed = seedCanvas(W, H, (g) => { for (const [x, y] of cells) g.fillRect(x + 4, y + 4, 1, 1); });
+      let cpu = new Uint8Array(W * H);
+      for (const [x, y] of cells) cpu[(y + 4) * W + (x + 4)] = 1;
+      const gph = fresh(createGraph(W, H));
+      const s0 = addNode(gph, "source");
+      const life = addNode(gph, "sim.life", {}, [null, s0], { name: "life" });
+      feedback(gph, life, 0, life);
+      gph.output = life;
+      const GENS = 12;
+      // Frame 0 reads the seed; then GENS generations.
+      const out = px(renderGraph(gph, { [s0]: seed }, { steps: GENS + 1, reset: true }));
+      for (let i = 0; i < GENS; i++) cpu = lifeStep(cpu, W, H);
+      let wrong = 0, alive = 0;
+      for (let i = 0; i < W * H; i++) {
+        // The canvas is y-down and the graph is y-up; the seed went through
+        // the same flip on the way in, so row y of the output is row y of the seed.
+        const got = out[i * 4] > 127 ? 1 : 0;
+        if (got !== cpu[i]) wrong++;
+        alive += cpu[i];
+      }
+      push({ group: "Feedback", name: `Life: a glider, ${GENS} generations, vs the CPU rule`, ok: wrong === 0 && alive === 5,
+             detail: `${wrong} cells differ · ${alive} alive (a glider stays a glider) · one draw per generation, the memory is the generation before` }); }
+
+    // 2. The memory persists between separate renders, and reset forgets.
+    { const W = 32, H = 32;
+      const cells = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
+      const seed = seedCanvas(W, H, (g) => { for (const [x, y] of cells) g.fillRect(x + 4, y + 4, 1, 1); });
+      const build = () => {
+        const gph = fresh(createGraph(W, H));
+        const s0 = addNode(gph, "source");
+        const life = addNode(gph, "sim.life", {}, [null, s0], { name: "life" });
+        feedback(gph, life, 0, life);
+        gph.output = life;
+        return [gph, s0];
+      };
+      const [g1, a1] = build();
+      const once = px(renderGraph(g1, { [a1]: seed }, { steps: 7, reset: true }));
+      const [g2, a2] = build();
+      let many;
+      for (let i = 0; i < 7; i++) many = px(renderGraph(g2, { [a2]: seed }, { reset: i === 0 }));
+      const same = compare(once, many, W, H, { thresh: 1 });
+      // Forgetting: after reset, frame is 0 again, so the seed is read again.
+      const again = px(renderGraph(g2, { [a2]: seed }, { reset: true }));
+      const seedPx = px(seed);
+      const back = compare(again, seedPx, W, H, { thresh: 1 });
+      push({ group: "Feedback", name: "memory survives between renders; reset forgets", ok: same.off === 0 && back.off === 0,
+             detail: `7 steps in one call vs 7 separate renders: ${same.off} cells differ · after reset it reads the seed again: ${back.off} differ` }); }
+
+    // 3. Gray–Scott against the CPU stencil, 30 steps, in half float.
+    { const W = 64, H = 48;
+      const seed = seedCanvas(W, H, (g) => { g.fillRect(28, 20, 8, 8); g.fillRect(10, 8, 4, 4); });
+      const P = { feed: 0.055, kill: 0.062, dU: 1.0, dV: 0.5, dt: 1.0 };
+      let cpu = new Float32Array(W * H * 2);
+      const sp = px(seed);
+      for (let i = 0; i < W * H; i++) { cpu[i * 2] = 1; cpu[i * 2 + 1] = sp[i * 4] > 127 ? 1 : 0; }
+      const STEPS = 30;
+      for (let i = 0; i < STEPS; i++) cpu = grayScottStep(cpu, W, H, P);
+      const gph = fresh(createGraph(W, H));
+      const s0 = addNode(gph, "source");
+      const rd = addNode(gph, "sim.reactionDiffusion",
+        { feed: [P.feed], kill: [P.kill], dU: [P.dU], dV: [P.dV], dt: [P.dt] }, [null, s0], { name: "rd" });
+      feedback(gph, rd, 0, rd);
+      gph.output = rd;
+      const out = px(renderGraph(gph, { [s0]: seed }, { steps: STEPS + 1, reset: true }));
+      let sumU = 0, sumV = 0, maxU = 0, moved = 0;
+      for (let i = 0; i < W * H; i++) {
+        const du = Math.abs(out[i * 4] - cpu[i * 2] * 255), dv = Math.abs(out[i * 4 + 1] - cpu[i * 2 + 1] * 255);
+        sumU += du; sumV += dv; maxU = Math.max(maxU, du);
+        if (cpu[i * 2 + 1] > 0.05) moved++;
+      }
+      const meanU = sumU / (W * H), meanV = sumV / (W * H);
+      push({ group: "Feedback", name: `Gray–Scott, ${STEPS} steps, vs the CPU stencil`, ok: meanU < 1.0 && meanV < 1.0 && moved > 100,
+             detail: `u mean ${meanU.toFixed(2)}/255, v mean ${meanV.toFixed(2)}/255, worst u ${maxU.toFixed(0)} · want <1.0 (half-float state, thirty nonlinear steps) · v has spread to ${moved} cells` }); }
+
+    // 4. A trail's decay is a geometric series, and the series is the check.
+    { const W = 40, H = 30;
+      const src = seedCanvas(W, H, (g) => { g.fillStyle = "#c8643c"; g.fillRect(0, 0, W, H); });
+      const gph = fresh(createGraph(W, H));
+      const s0 = addNode(gph, "source");
+      const tr = addNode(gph, "feedback.trail", { decay: [0.9] }, [s0, null], { name: "trail" });
+      feedback(gph, tr, 1, tr);
+      gph.output = tr;
+      const N = 20;
+      const out = px(renderGraph(gph, { [s0]: src }, { steps: N, reset: true }));
+      const want = 1 - Math.pow(0.9, N);                // starts from nothing, fills toward the source
+      const s = px(src);
+      let sum = 0;
+      for (let i = 0; i < W * H; i++) for (let c = 0; c < 3; c++) sum += Math.abs(out[i * 4 + c] - s[i * 4 + c] * want);
+      const mean = sum / (W * H * 3);
+      push({ group: "Feedback", name: `a trail after ${N} frames is 1 − 0.9^${N} of the source`, ok: mean < 1.5,
+             detail: `mean ${mean.toFixed(2)}/255 against the closed form (${(want * 100).toFixed(1)}%) · want <1.5 in half float` }); }
+
+    // 5. A fused run can be the thing remembered. grade → trail fuses into one
+    //    draw whose id is the trail; that draw has to land in memory.
+    { const W = 40, H = 30;
+      const src = seedCanvas(W, H, (g) => {
+        const gr = g.createLinearGradient(0, 0, W, 0); gr.addColorStop(0, "#f4efe6"); gr.addColorStop(1, "#1b2b4b");
+        g.fillStyle = gr; g.fillRect(0, 0, W, H);
+      });
+      const build = () => {
+        const gph = fresh(createGraph(W, H));
+        const s0 = addNode(gph, "source");
+        const gr = addNode(gph, "adjust.grade", { sat: [1.4], gain: [1.1] }, [s0]);
+        const tr = addNode(gph, "feedback.trail", { decay: [0.8] }, [gr, null], { name: "trail" });
+        feedback(gph, tr, 1, tr);
+        gph.output = tr;
+        return [gph, s0];
+      };
+      const [g1, a1] = build();
+      let drew = [];
+      const fused = px(renderGraph(g1, { [a1]: src }, { steps: 10, reset: true, onPasses: (ps) => { drew = ps; } }));
+      const [g2, a2] = build();
+      const plain = px(renderGraph(g2, { [a2]: src }, { steps: 10, reset: true, fuse: false }));
+      const r = compare(fused, plain, W, H, { thresh: 4 });
+      const mem = drew.find((p2) => p2.memory);
+      push({ group: "Feedback", name: "a fused pass can be what is remembered", ok: drew.length === 1 && !!mem && r.mean < 1.0,
+             detail: `${drew.length} draw a frame (grade and trail fused, and the fused draw is the memory) · mean ${r.mean}/255 vs a pass per node` }); }
+
+    // 6. A cycle without a feedback mark is refused, with the remedy.
+    { const gph = createGraph(16, 16);
+      const s0 = addNode(gph, "source");
+      const a = addNode(gph, "adjust.exposure", {}, [s0]);
+      const b = addNode(gph, "adjust.exposure", {}, [a]);
+      findNode(gph, a).inputs[0] = b;                   // a reads b reads a, both this frame
+      gph.output = b;
+      const errs = validate(gph);
+      const said = errs.some((e) => /a cycle/.test(e) && /feedback/.test(e));
+      push({ group: "Feedback", name: "a cycle of this-frame edges is refused, with the fix in the message", ok: said,
+             detail: said ? errs.find((e) => /a cycle/.test(e)) : errs.join("; ") || "no error" }); }
+
+    // 7. A field has no last frame.
+    { const gph = createGraph(16, 16);
+      const c = addNode(gph, "field.circle", {});
+      const off = addNode(gph, "field.offset", {}, [c]);
+      feedback(gph, off, 0, c);
+      gph.output = addNode(gph, "field.shade", {}, [off]);
+      const errs = validate(gph);
+      const said = errs.some((e) => /cannot read last frame|has no last frame/.test(e));
+      push({ group: "Feedback", name: "a field port cannot read last frame", ok: said,
+             detail: said ? errs.find((e) => /last frame/.test(e)) : "not refused" }); }
+
+    // 8. What you read says so.
+    { const W = 16, H = 16;
+      const gph = fresh(createGraph(W, H));
+      const s0 = addNode(gph, "source");
+      const life = addNode(gph, "sim.life", {}, [null, s0], { name: "life" });
+      feedback(gph, life, 0, life);
+      gph.output = life;
+      const text = ejectGraph(gph, { fuse: false });
+      const ok = /last frame/.test(text) && /memory:/.test(text);
+      push({ group: "Feedback", name: "the ejected shader names the memory", ok,
+             detail: ok ? "the pass header marks the input as last frame and the pass as kept between frames" : "not said" }); }
+
+    // 9. The runner holds what it remembers, and no more than the cap.
+    { const st = graphStats();
+      push({ group: "Feedback", name: "memories are counted and capped", ok: st.memories > 0 && st.memories <= 32,
+             detail: `${st.memories} node memories held (cap 32), each a pair of ${st.precision}-float targets` }); }
+  } catch (e) {
+    push({ group: "Feedback", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

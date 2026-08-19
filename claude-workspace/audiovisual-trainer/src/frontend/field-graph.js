@@ -28,7 +28,7 @@
 
 import { splitSketch, sketchMeta } from "./shader-uniforms.js";
 import { prefixer } from "./sketch-rename.js";
-import { nodeType, defineDerived, findNode } from "./render-graph.js";
+import { nodeType, defineDerived, findNode, isBack } from "./render-graph.js";
 
 /** A short stable name for a piece of generated text. */
 function digest(text) {
@@ -81,7 +81,7 @@ export function fieldSketch(graph, consumer) {
 
   // Image ports are renumbered rather than prefixed: the generated sketch is a
   // node type like any other, and a node type's image inputs are in0, in1, …
-  const imageSources = [];
+  const imageSources = [], imageBacks = [];
 
   const emit = (n, k) => {
     const t = nodeType(n.type);
@@ -102,6 +102,7 @@ export function fieldSketch(graph, consumer) {
       if (t.fieldInputs.includes(name)) return;
       const slot = imageSources.length;
       imageSources.push(n.inputs[i]);
+      imageBacks.push(isBack(n, i));
       images.push([new RegExp(`\\b${pref}${name}\\b`, "g"), `in${slot}`]);
     });
     const wire = (s) => {
@@ -163,7 +164,7 @@ export function fieldSketch(graph, consumer) {
     body.expr,
   ].filter((l) => l !== null).join("\n");
 
-  return { sketch: sketch.replace("PLACEHOLDER", digest(sketch)), order, imageSources };
+  return { sketch: sketch.replace("PLACEHOLDER", digest(sketch)), order, imageSources, imageBacks };
 }
 
 /**
@@ -186,7 +187,7 @@ export function compileFields(graph) {
     if (t && t.field) continue;                       // folded into its consumer
     if (!t || !t.fieldInputs.length) { nodes.push(n); continue; }
 
-    const { sketch, order, imageSources } = fieldSketch(graph, n);
+    const { sketch, order, imageSources, imageBacks } = fieldSketch(graph, n);
     const type = defineDerived(sketch);
     // Every parameter of every node in the tree, under the prefix its text was
     // written with — so the program is cached by topology and a slider still
@@ -208,6 +209,8 @@ export function compileFields(graph) {
     });
     const out = { id: n.id, type: type.id, params, inputs: imageSources, bypass: n.bypass };
     if (n.name) out.name = n.name;
+    const back = imageBacks.map((b, i) => (b ? i : -1)).filter((i) => i >= 0);
+    if (back.length) out.back = back;
     if (Object.keys(exprs).length) out.exprs = exprs;
     nodes.push(out);
   }

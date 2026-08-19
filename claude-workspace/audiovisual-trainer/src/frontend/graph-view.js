@@ -8,7 +8,7 @@
 // answers questions.
 
 import { el } from "./ui.js";
-import { nodeType, topo } from "./render-graph.js";
+import { nodeType, topo, isBack, fedBack } from "./render-graph.js";
 import { planPasses, fuseStats } from "./graph-fuse.js";
 import { compileFields, fieldStats } from "./field-graph.js";
 import { resolveParams, paramStats } from "./param-graph.js";
@@ -31,9 +31,12 @@ export function graphSvg(graph, opts = {}) {
   const order = topo(graph);
   const depth = new Map();
   for (const n of order) {
-    const d = n.inputs.length ? Math.max(...n.inputs.map((i) => (depth.get(i) ?? 0) + 1)) : 0;
+    // Memory is not a dependency, so a back edge does not push a node right.
+    const fwd = n.inputs.filter((_, k) => !isBack(n, k));
+    const d = fwd.length ? Math.max(...fwd.map((i) => (depth.get(i) ?? 0) + 1)) : 0;
     depth.set(n.id, d);
   }
+  const remembered = fedBack(graph);
   const cols = new Map();
   for (const n of order) {
     const d = depth.get(n.id);
@@ -87,6 +90,18 @@ export function graphSvg(graph, opts = {}) {
       // along it and no buffer is allocated for it, so it is not shown as the
       // same kind of line.
       const isField = !!(t && t.fieldInputs.includes(t.inputs[i]));
+      if (isBack(n, i)) {
+        // Last frame: a loop out of the source's right side, over the top, and
+        // into the reader's left — it runs against the flow, and looks it.
+        const x1 = q.x + BOX_W, y1 = q.y + 8, x2 = p.x, y2 = p.y + 8;
+        const top = Math.min(q.y, p.y) - 16;
+        svg.append(svgEl("path", { d: `M${x1},${y1} C${x1 + 30},${top} ${x2 - 30},${top} ${x2},${y2}`,
+          fill: "none", stroke: "rgba(110,231,200,.8)", "stroke-dasharray": "2 3", "stroke-width": 1.4 }));
+        svg.append(svgEl("text", { x: (x1 + x2) / 2, y: top - 2, fill: "rgba(110,231,200,.9)", "font-size": 9,
+          "text-anchor": "middle", "font-family": "ui-monospace, monospace" },
+          document.createTextNode("last frame")));
+        continue;
+      }
       const x1 = q.x + BOX_W, y1 = q.y + BOX_H / 2, x2 = p.x, y2 = p.y + BOX_H / 2;
       const mid = (x1 + x2) / 2;
       svg.append(svgEl("path", { d: `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`,
@@ -122,7 +137,7 @@ export function graphSvg(graph, opts = {}) {
     const sub = isSource ? (opts.sourceNames && opts.sourceNames[n.id]) || "" : (params || (t ? `${t.inputs.length} in` : ""));
     g.append(svgEl("text", { x: 10, y: 34, fill: "#8b93ad", "font-size": 9,
       "font-family": "ui-monospace, monospace" }, document.createTextNode(String(sub).slice(0, 30))));
-    const tag = t && t.field ? "@field" : t && t.pass ? "@pass" : null;
+    const tag = remembered.has(n.id) ? "memory" : t && t.field ? "@field" : t && t.pass ? "@pass" : null;
     if (tag) {
       g.append(svgEl("text", { x: BOX_W - 10, y: 19, fill: "rgba(240,163,94,.9)", "font-size": 9,
         "text-anchor": "end", "font-family": "ui-monospace, monospace" }, document.createTextNode(tag)));
@@ -145,6 +160,8 @@ export function graphSummary(graph) {
       + (ps.references.length ? `, ${ps.references.length} of them following another` : ""));
   }
   if (ps.tracks) bits.push(`${ps.tracks} keyed`);
+  const mem = fedBack(graph).size;
+  if (mem) bits.push(`${mem} node${mem === 1 ? "" : "s"} remembered between frames`);
   if (st.saved > 0) bits.push(`${st.saved} saved by fusing`);
   if (st.kept.length) bits.push(`kept apart: ${st.kept.join("; ")}`);
   return bits.join(" · ");

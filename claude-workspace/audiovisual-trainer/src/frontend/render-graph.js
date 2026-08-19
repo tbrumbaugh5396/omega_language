@@ -116,27 +116,69 @@ export function addNode(graph, type, params = {}, inputs = [], opts = {}) {
   // — so renaming a node redirects every reference to it at once. Dots would
   // make the reference ambiguous, so they cannot be part of one.
   if (opts.name) node.name = String(opts.name).replace(/\./g, "_");
+  // `back: [i, …]` — these inputs read the *previous frame* of the node they
+  // name. That is the one way a wire may point backwards, and it is what
+  // turns a picture into a simulation.
+  if (opts.back && opts.back.length) node.back = opts.back.map((i) => i | 0);
   graph.nodes.push(node);
   return id;
 }
 
 export const findNode = (graph, id) => graph.nodes.find((n) => n.id === id) || null;
 
+/** Does input i of this node read last frame rather than this one? */
+export const isBack = (node, i) => !!(node.back && node.back.includes(i));
+
+/**
+ * Wire an input to read a node's previous frame. `from` may be the node
+ * itself — a node that reads what it drew last time is the commonest
+ * simulation there is — or anything downstream of it; the edge would be a
+ * cycle if it were read this frame, and reading last frame is what breaks
+ * the cycle.
+ */
+export function feedback(graph, id, inputIndex, from) {
+  const n = findNode(graph, id);
+  if (!n) throw new Error(`no node ${id}`);
+  while (n.inputs.length <= inputIndex) n.inputs.push(null);
+  n.inputs[inputIndex] = from;
+  n.back = [...new Set([...(n.back || []), inputIndex | 0])].sort((a, b) => a - b);
+  return n;
+}
+
+/** Every node some other node reads the previous frame of. */
+export function fedBack(graph) {
+  const ids = new Set();
+  for (const n of graph.nodes) (n.back || []).forEach((i) => { if (n.inputs[i]) ids.add(n.inputs[i]); });
+  return ids;
+}
+
 /**
  * Nodes in dependency order, from sources to the output, restricted to what
  * the output actually needs. A bypassed node stands in for its first input.
+ * A feedback edge does not count as a dependency — it reads memory, not a
+ * node drawn this frame — and a cycle of ordinary edges is refused by name,
+ * with the remedy in the message.
  */
 export function topo(graph) {
-  const order = [], seen = new Set();
-  const visit = (id) => {
-    if (!id || seen.has(id)) return;
+  const order = [], done = new Set(), open = new Set();
+  const visit = (id, path) => {
+    if (!id || done.has(id)) return;
+    if (open.has(id)) {
+      const cyc = path.slice(path.indexOf(id)).concat(id).join(" → ");
+      throw new Error(`a cycle: ${cyc} — mark one of those edges as feedback (back) to read last frame instead`);
+    }
     const n = findNode(graph, id);
     if (!n) throw new Error(`graph refers to missing node ${id}`);
-    seen.add(id);
-    for (const i of n.inputs) visit(i);
+    open.add(id);
+    n.inputs.forEach((i, k) => { if (!isBack(n, k)) visit(i, path.concat(id)); });
+    open.delete(id);
+    done.add(id);
     order.push(n);
   };
-  visit(graph.output);
+  visit(graph.output, []);
+  // A node that is only ever read as memory still has to be drawn, or its
+  // memory never changes. It goes after whatever it needs, like anything else.
+  for (const id of fedBack(graph)) visit(id, []);
   return order;
 }
 
@@ -165,7 +207,19 @@ export function validate(graph) {
         errors.push(`${n.id} (${n.type}): ${name} takes ${wants ? "a field" : "an image"}, `
                   + `but ${n.inputs[i]} gives ${gives ? "a field" : "an image"}`);
       }
+      // Memory is a texture. A field is a function, and has no last frame.
+      if (isBack(n, i) && wants) {
+        errors.push(`${n.id} (${n.type}): ${name} is a field port and cannot read last frame — only an image can be remembered`);
+      }
     });
+    for (const i of n.back || []) {
+      if (i >= t.inputs.length) errors.push(`${n.id} (${n.type}): feedback on input ${i}, which it does not have`);
+    }
+  }
+  for (const id of fedBack(graph)) {
+    const m = findNode(graph, id);
+    if (m && m.bypass) errors.push(`${id} is read as memory and cannot be bypassed — there would be nothing to remember`);
+    if (m && isField(graph, id)) errors.push(`${id} is a field, and a field has no last frame to read`);
   }
   try { topo(graph); } catch (e) { errors.push(e.message); }
   return errors;

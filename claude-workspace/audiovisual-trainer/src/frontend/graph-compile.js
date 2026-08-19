@@ -15,7 +15,7 @@
 import { desugar, isEs3, withDefine, parseUniforms } from "./shader-uniforms.js";
 import { applyUniforms } from "./shader-controls.js";
 import { getGL, isGL2, linkProgram, cachedImage, loadSketchImages } from "./shader-run.js";
-import { nodeType, topo, validate, curveLut, resolveBypass } from "./render-graph.js";
+import { nodeType, topo, validate, curveLut, resolveBypass, isBack, fedBack } from "./render-graph.js";
 import { planPasses } from "./graph-fuse.js";
 import { compileFields } from "./field-graph.js";
 import { resolveParams } from "./param-graph.js";
@@ -116,6 +116,11 @@ export class GraphRunner {
     this.fused = new Map();         // fused sketch → { prog, uniforms } or { error }
     this.own = new Map();           // @data url → texture the node carries itself
     this.luts = new Map();          // key → texture
+    // What a fed-back node drew last frame, kept between runs. Keyed by the
+    // graph's stateKey and the node's name (or id), so a graph rebuilt from
+    // its document every frame still finds its own memory.
+    this.memory = new Map();        // key → { read, write, w, h }
+    this.frames = new Map();        // stateKey → how many frames it has run
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
@@ -232,21 +237,80 @@ export class GraphRunner {
     return tex;
   }
 
+  // ------------------------------------------------------------ memory
+
+  static MEMORY_CAP = 32;
+
+  memoryKey(graph, node) {
+    return `${graph.stateKey || "anonymous"}\u0000${node.name || node.id}`;
+  }
+
+  /**
+   * The pair of targets a fed-back node persists in. Two, so the node can
+   * read last frame while it writes this one; cleared to zero when made, so
+   * "nothing yet" reads as nothing rather than as whatever the pool had.
+   */
+  memoryFor(graph, node, W, H) {
+    const key = this.memoryKey(graph, node);
+    let m = this.memory.get(key);
+    if (m && (m.w !== W || m.h !== H)) { this.freeMemory(m); this.memory.delete(key); m = null; }
+    if (m) {
+      this.memory.delete(key); this.memory.set(key, m);   // most recently wanted goes last
+      return m;
+    }
+    if (this.memory.size >= GraphRunner.MEMORY_CAP) {
+      const [oldest, old] = this.memory.entries().next().value;
+      this.freeMemory(old); this.memory.delete(oldest);
+    }
+    const gl = this.gl;
+    const make = () => {
+      const t = this.pool.make(W, H);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      return t;
+    };
+    m = { read: make(), write: make(), w: W, h: H };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.memory.set(key, m);
+    return m;
+  }
+
+  freeMemory(m) {
+    for (const t of [m.read, m.write]) { this.gl.deleteTexture(t.tex); this.gl.deleteFramebuffer(t.fbo); }
+  }
+
+  /** Forget everything a graph remembered: its memory and its frame count. */
+  resetState(stateKey = "anonymous") {
+    const prefix = `${stateKey}\u0000`;
+    for (const [k, m] of [...this.memory]) {
+      if (k.startsWith(prefix)) { this.freeMemory(m); this.memory.delete(k); }
+    }
+    this.frames.delete(stateKey);
+  }
+
   /**
    * Run the graph. `sources` maps a source node's id to a canvas/image or to
    * a {tex,w,h}. Returns { tex, w, h } — the output's framebuffer texture,
    * valid until the next run — plus a `passes` list for the record.
+   *
+   * A graph with feedback in it runs `opts.steps` times (default 1), each
+   * step reading what the one before drew; `opts.reset` forgets first.
    */
   run(graph, sources = {}, opts = {}) {
     const gl = this.gl;
     const errs = validate(graph);
     if (errs.length) throw new Error(errs.join("; "));
+    const stateKey = graph.stateKey || "anonymous";
+    if (opts.reset) this.resetState(stateKey);
     // Two rewrites before anything is planned, in this order. Expressions
     // become numbers first, because a field tree carries its parameters with
     // it and they have to be values by the time it does. Then fields become
     // one generated node type — so everything from here down (fusion,
     // pooling, tiling) sees an ordinary image graph of plain constants.
-    graph = resolveParams(graph, { t: opts.time || 0, frame: opts.frame || 0, seed: opts.seed || 0 });
+    const remembered = fedBack(graph);
+    let frame = opts.frame ?? (this.frames.get(stateKey) || 0);
+    graph = resolveParams(graph, { t: opts.time || 0, frame, seed: opts.seed || 0 });
     graph = compileFields(graph);
     const W = graph.width, H = graph.height;
     // Fusion is on unless a caller wants the passes as written — the self-test
@@ -273,13 +337,25 @@ export class GraphRunner {
       gl.uniform1f(u("u_time"), opts.time || 0);
       gl.uniform2f(u("u_mouse"), W / 2, H / 2);
       gl.uniform1f(u("u_seed"), opts.seed || 0);
-      gl.uniform1i(u("u_frame"), 0);
+      gl.uniform1i(u("u_frame"), frame);
       gl.uniform1f(u("u_mouseDown"), 0);
       return u;
     };
     const lutBytes = (val) => (val && val.points ? curveLut(val.points)
       : (val instanceof Uint8ClampedArray ? val : curveLut(null)));
-    const texOf = (id) => outputs.get(id) || { tex: this.blank, w: 1, h: 1 };
+    // A feedback read is last frame's memory; everything else is this frame.
+    const mems = new Map();
+    const memOf = (id) => {
+      let m = mems.get(id);
+      if (!m) { m = this.memoryFor(graph, resolveBypass(graph, id) || { id }, W, H); mems.set(id, m); }
+      return m;
+    };
+    const texOf = (id, back = false) => (back
+      ? { tex: memOf(id).read.tex, w: W, h: H }
+      : outputs.get(id) || { tex: this.blank, w: 1, h: 1 });
+    // Where a node draws: its own memory if something reads it back, else a
+    // target from the pool. Memory is never returned to the pool.
+    const targetFor = (id) => (remembered.has(id) ? memOf(id).write : this.pool.get(W, H));
 
     const drawNode = (n) => {
       if (n.type === "source") {
@@ -297,7 +373,7 @@ export class GraphRunner {
       }
       const type = nodeType(n.type);
       const { prog } = this.programFor(n.type);
-      const target = this.pool.get(W, H);
+      const target = targetFor(n.id);
       const u = begin(prog, target);
       // Parameters: the node's values, defaults for anything unset.
       const values = {};
@@ -310,7 +386,7 @@ export class GraphRunner {
       // Inputs on the first units, LUTs after.
       let unit = 0;
       type.inputs.forEach((name, i) => {
-        const src = texOf(n.inputs[i]);
+        const src = texOf(n.inputs[i], isBack(n, i));
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindTexture(gl.TEXTURE_2D, src.tex);
         if (u(name)) gl.uniform1i(u(name), unit);
@@ -340,8 +416,8 @@ export class GraphRunner {
       }
       gl.activeTexture(gl.TEXTURE0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      outputs.set(n.id, { tex: target.tex, w: W, h: H, target });
-      passes.push({ node: n.id, type: n.type });
+      outputs.set(n.id, { tex: target.tex, w: W, h: H, target: remembered.has(n.id) ? null : target });
+      passes.push({ node: n.id, type: n.type, memory: remembered.has(n.id) || undefined });
     };
 
     const drawFused = (step) => {
@@ -355,47 +431,64 @@ export class GraphRunner {
         for (const n of step.nodes) drawNode(n);
         return;
       }
-      const target = this.pool.get(W, H);
+      const target = targetFor(step.id);
       const u = begin(prog, target);
       applyUniforms(gl, prog, uniforms, step.values);
       let unit = 0;
       for (const s of step.samplers) {
         gl.activeTexture(gl.TEXTURE0 + unit);
-        gl.bindTexture(gl.TEXTURE_2D, s.lut ? this.lutTexture(lutBytes(s.value)) : texOf(s.from).tex);
+        gl.bindTexture(gl.TEXTURE_2D, s.lut ? this.lutTexture(lutBytes(s.value)) : texOf(s.from, s.back).tex);
         if (u(s.name)) gl.uniform1i(u(s.name), unit);
         unit++;
       }
       for (const s of step.sizes) {
         if (!u(s.name)) continue;
-        const src = s.from ? texOf(s.from) : null;
+        const src = s.from ? texOf(s.from, s.back) : null;
         gl.uniform2f(u(s.name), src ? src.w : W, src ? src.h : H);
       }
       gl.activeTexture(gl.TEXTURE0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      outputs.set(step.id, { tex: target.tex, w: W, h: H, target });
-      passes.push({ node: step.id, type: "fused", fused: step.nodes.map((n) => n.type) });
+      outputs.set(step.id, { tex: target.tex, w: W, h: H, target: remembered.has(step.id) ? null : target });
+      passes.push({ node: step.id, type: "fused", fused: step.nodes.map((n) => n.type),
+                    memory: remembered.has(step.id) || undefined });
     };
 
-    for (const step of steps) {
-      if (step.kind === "fused") drawFused(step);
-      else drawNode(step.node);
+    const steps_ = Math.max(1, opts.steps | 0 || 1);
+    let out = null;
+    for (let s = 0; s < steps_; s++) {
+      outputs.clear();
+      passes.length = 0;
+      for (const step of steps) {
+        if (step.kind === "fused") drawFused(step);
+        else drawNode(step.node);
+      }
+      out = outputs.get(graph.output);
+      // This frame's writes become next frame's reads. The swap is the whole
+      // of what "remember" means here.
+      for (const m of mems.values()) { const r = m.read; m.read = m.write; m.write = r; }
+      frame++;
+      if (s < steps_ - 1) {
+        for (const [id, o] of outputs) if (o.target) this.pool.put(o.target);
+      }
     }
+    if (remembered.size) this.frames.set(stateKey, frame);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     // Everything but the output's target goes back to the pool; the output
-    // stays alive until the next run, when it is reclaimed.
-    const out = outputs.get(graph.output);
+    // stays alive until the next run, when it is reclaimed. An output that is
+    // itself memory is simply its memory, and is kept by that.
     if (this.lastOut) this.pool.put(this.lastOut);
     for (const [id, o] of outputs) if (o.target && id !== graph.output) this.pool.put(o.target);
     this.lastOut = out && out.target ? out.target : null;
     for (const t of owned) gl.deleteTexture(t.tex);
-    return { tex: out.tex, w: out.w, h: out.h, passes };
+    return { tex: out.tex, w: out.w, h: out.h, passes, frame };
   }
 
   /** What this runner is holding, for anything that wants to say so. */
   stats() {
     return { programs: this.programs.size, fused: this.fused.size, luts: this.luts.size,
              ownTextures: this.own.size, pooled: this.pool.free.length,
+             memories: this.memory.size,
              targetsMade: this.pool.made, targetsEvicted: this.pool.evicted,
              precision: this.pool.kind };
   }
@@ -440,6 +533,7 @@ export class GraphRunner {
     const es3 = isGL2(this.gl);
     const rule = "// ================================================================";
     graph = compileFields(resolveParams(graph, opts.at || {}));
+    const remembered = fedBack(graph);
     const steps = fuse ? planPasses(graph) : topo(graph).map((node) => ({ kind: "node", node }));
     const parts = [];
     for (const step of steps) {
@@ -465,12 +559,15 @@ export class GraphRunner {
       const t = nodeType(n.type);
       const params = Object.entries(n.params).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
       const written = Object.entries(n.exprs || {}).map(([k, v]) => `//   ${k} = ${v}`).join("\n");
+      const ins = n.inputs.map((id, i) => (isBack(n, i) ? `${id} (last frame)` : id)).join(", ");
+      const mem = remembered.has(n.id)
+        ? `// memory: what this pass draws is kept, and read back next frame\n` : "";
       parts.push({
         node: n.id, type: n.type,
         header: `${rule}\n` +
                 `// pass: ${n.id}  type: ${n.type}${step.why ? `  (its own pass — ${step.why})` : ""}\n` +
-                `// inputs: ${n.inputs.join(", ") || "—"}\n// params: ${params || "defaults"}\n` +
-                (written ? `// written as:\n${written}\n` : "") +
+                `// inputs: ${ins || "—"}\n// params: ${params || "defaults"}\n` +
+                (written ? `// written as:\n${written}\n` : "") + mem +
                 rule,
         glsl: this.sourceFor(n.type),
       });
@@ -487,6 +584,7 @@ export class GraphRunner {
     for (const { prog } of this.fused.values()) if (prog) gl.deleteProgram(prog);
     for (const t of this.luts.values()) gl.deleteTexture(t);
     for (const t of this.own.values()) gl.deleteTexture(t.tex);
+    for (const m of this.memory.values()) this.freeMemory(m);
     if (this.lastOut) { gl.deleteTexture(this.lastOut.tex); gl.deleteFramebuffer(this.lastOut.fbo); }
     this.pool.release();
     if (this.blit) gl.deleteProgram(this.blit);
@@ -546,6 +644,11 @@ export async function prepareNode(typeId) {
 /** What the shared runner is holding: caches, pool, precision. */
 export function graphStats() {
   return sharedRunner().runner.stats();
+}
+
+/** Forget what a graph remembered, by its stateKey. */
+export function resetGraphState(stateKey) {
+  sharedRunner().runner.resetState(stateKey);
 }
 
 /** The ejected GLSL for a graph, on the shared context: text, or parts. */

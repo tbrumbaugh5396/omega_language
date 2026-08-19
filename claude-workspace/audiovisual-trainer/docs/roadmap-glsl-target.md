@@ -1053,6 +1053,57 @@ dependency and is ready for it. There is no expression *editor*; a parameter
 is written as an expression in the document, and the graph view shows it as
 written rather than offering a field to type in.
 
+### Phase 10 — Feedback in the graph *(M)* — **shipped**
+
+The visual graph was a DAG. The audio one has had back edges since its Phase
+C, where a wire pointing backwards becomes a state slot read before the
+sample is written. This is the same move for pictures: a wire may point
+backwards if it is marked as reading **last frame**, and what it reads is a
+half-float texture the runner keeps between runs.
+
+```js
+const life = addNode(g, "sim.life", {}, [null, seed], { name: "life" });
+feedback(g, life, 0, life);          // in0 is this node's own previous frame
+```
+
+**One mechanism, no special node.** Any node's input can be a feedback read,
+of itself or of anything downstream — it is only a cycle if read *this* frame,
+and reading last frame is what breaks the cycle. `topo` refuses a cycle of
+this-frame edges by naming it and saying what to mark. A node something reads
+back draws into its own memory rather than a pool target; the pair of targets
+swap after each frame, and that swap is the whole of what "remember" means. A
+graph runs `steps` frames in one call; `reset` forgets; `u_frame` counts.
+Memory is keyed by the graph's `stateKey` and the node's name, so a graph
+rebuilt from its document every frame still finds its own. Fusion, fields and
+expressions never learn any of this: a fused run whose last node is read back
+simply draws into memory, and the check that it does is in the test.
+
+**Four nodes** (`sim-nodes.js`): `feedback.trail`, `sim.life`,
+`sim.reactionDiffusion`, `sim.view`. The convention they share is that in0 is
+last frame and in1 is a seed read on frame 0, so the graph that runs the sim
+also starts it, and reset is nothing more than forgetting. The CPU
+implementations of Life and Gray–Scott sit in the same file, one screen from
+the sketches, so a change to a stencil is seen next to the other one.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| Life, a glider, 12 generations, vs the CPU rule | **0 cells differ** — and 5 alive |
+| 7 steps in one call vs 7 separate renders | **0 cells differ** |
+| after reset, vs the seed | **0 cells differ** |
+| Gray–Scott, 30 steps, vs the CPU stencil | u **0.62/255**, v **0.24/255**, worst 2 |
+| a trail after 20 frames vs 1 − 0.9²⁰ | **0.52/255** |
+| a fused, remembered pass vs a pass per node | **0.01/255** |
+
+Life is binary, so the bar is exact and it is met. The two continuous sims run
+in half float for thirty nonlinear steps and land under a level.
+
+*Left:* memory is one RGBA texture per node. The Generate sketchpad's `sim2`
+has MRT — two targets, velocity and dye — and the graph does not yet; a fluid
+wants it. Nothing in a graph reads the keyboard, so a simulation can be
+watched but not played; that is the next thing between this and a game.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1132,6 +1183,7 @@ written rather than offering a field to type in.
 | 6.x | Tiling, WebGPU decision, more exports, P3 | M | 1.x | scale |
 | 8.1 | Field wires: a port that carries a function — **shipped** | M | 1.x | geometry that composes |
 | 9.1 | Parameter expressions and references — **shipped** | M | 1.x | a graph that holds relationships |
+| 10.1 | Feedback: a wire that reads last frame — **shipped** | M | 1.x | simulation in the graph |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

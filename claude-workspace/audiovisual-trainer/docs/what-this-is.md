@@ -53,13 +53,14 @@ Underneath them, **two compilers sharing one discipline**:
 | node types registered | 57 | 15 |
 | fusion | runs of per-pixel nodes → one pass | inlined by construction |
 | what a wire carries | pixels, or a distance function | a sample, or a block |
+| a wire pointing backwards | last frame, in a half-float texture | last sample, in a state slot |
 | the hard constraint | a frame, ~16 ms; a miss stutters | a block, ~2.7 ms; a miss *clicks* |
 
 And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, and
-a **147-check self-test across 21 groups that runs inside the app**.
+a **156-check self-test across 22 groups that runs inside the app**.
 
 ---
 
@@ -111,6 +112,8 @@ behind it is a claim.
 | the browser's two `arc()` fills, a field union | **0.30/255** |
 | a circle offset by 0.1 vs a circle 0.1 bigger | **0 pixels differ at all** |
 | the JavaScript engine, 19 parameter expressions | **exact**, worst disagreement 0.0 |
+| Conway's Life, a glider, 12 generations, vs the CPU rule | **0 cells differ** |
+| Gray–Scott, 30 steps in half float, vs the CPU stencil | **0.62/255** |
 
 Every number above is what the self-test reports on this machine today, not
 what it reported when the feature landed — the two differ occasionally, because
@@ -153,6 +156,16 @@ It resolves on the CPU before anything is planned, which is why it costs
 nothing: by the time a value reaches a uniform it is a plain number, and the
 shader cannot tell it was computed.
 
+### The same answer to feedback, in both compilers
+
+The audio compiler made a back edge a state slot: read before the sample is
+written, written after. The visual graph now does the same with a frame: a
+wire marked as reading *last frame* reads a half-float texture the runner
+keeps between runs, and the node it points at draws into the other half of
+the pair. That single mechanism — no special node — is Life, reaction–diffusion
+and a motion trail, each held to a CPU implementation of the same rule written
+one screen away from the sketch. Life comes out exact.
+
 ### One evaluator across media
 
 Audio automation calls `evalTrack` from `video-graph.js` — literally the
@@ -188,6 +201,9 @@ Worth naming, because the combination is the claim and the parts are not.
   `dsp-graph.js` is 431 lines; Faust is a research language with a decade of
   optimisation behind it. This is a teaching-sized thing that shares the shape.
 - **Non-destructive layer effects** — Photoshop smart filters, 2007.
+- **Feedback buffers** — Shadertoy's Buffer A reading itself, every
+  ping-pong sim since the 1990s. The only claim here is that it is a marked
+  edge in a typed graph rather than a convention, and that it is measured.
 - **Parameter expressions and channel references** — Houdini's `ch()`, which
   this borrows including roughly the spelling; After Effects expressions;
   Blender drivers.
@@ -224,6 +240,9 @@ its course lesson are the same text.
 - **Reproducible exports.** A grade keyframed across a cut exports identically
   twice, frame for frame. A song bounces sample-exact, twice, about 9× faster
   than real time.
+- **Simulate, in the graph.** A node reads what it drew last frame; a seed
+  field tree starts it; reset is forgetting. One draw per generation, and the
+  ejected shader says which input is memory.
 - **Compose geometry, not pictures of geometry.** Union, subtract, offset,
   shell, repeat and a smoothing radius between any two shapes — as wires, at
   full precision, ending in one draw. A glow is a falloff in distance, which

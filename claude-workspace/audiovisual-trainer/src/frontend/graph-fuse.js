@@ -18,7 +18,7 @@
 // input anywhere but `uv`, moves `uv`, keeps state, or takes a host image.
 
 import { parseUniforms, splitSketch, stripComments, sketchMeta } from "./shader-uniforms.js";
-import { nodeType, topo } from "./render-graph.js";
+import { nodeType, topo, isBack } from "./render-graph.js";
 import { prefixer } from "./sketch-rename.js";
 import { compileFields } from "./field-graph.js";
 import { resolveParams } from "./param-graph.js";
@@ -125,7 +125,9 @@ export function fusedSketch(types, carried) {
 /** What the runner needs to draw one fused step. */
 function buildFused(graph, run) {
   const inRun = new Set(run.map((n) => n.id));
-  const carried = run.map((n) => inRun.has(n.inputs[0]));
+  // A carried input is this frame's colour in a register. Last frame's is a
+  // texture, whoever drew it, and stays a sampler.
+  const carried = run.map((n) => inRun.has(n.inputs[0]) && !isBack(n, 0));
   const types = run.map((n) => n.type);
   const sketch = fusedSketch(types, carried);
   if (!sketch) return null;
@@ -139,11 +141,11 @@ function buildFused(graph, run) {
         if (m) {
           const i = +m[1];
           const isCarried = carried[k] && i === 0;
-          if (!isCarried) samplers.push({ name: pref + u.name, from: n.inputs[i] });
+          if (!isCarried) samplers.push({ name: pref + u.name, from: n.inputs[i], back: isBack(n, i) });
           // A carried input's size became u_resolution when the text was
           // written, so only a real sampler still needs one.
           if (!isCarried && new RegExp(`\\buniform\\s+vec2\\s+${u.name}_size\\b`).test(t.source)) {
-            sizes.push({ name: `${pref}${u.name}_size`, from: n.inputs[i] });
+            sizes.push({ name: `${pref}${u.name}_size`, from: n.inputs[i], back: isBack(n, i) });
           }
         } else if (u.lut) {
           samplers.push({ name: pref + u.name, lut: true, value: n.params[u.name] });
@@ -195,7 +197,7 @@ export function planPasses(graph) {
     // A node joins the run when it reads the tail, the tail is read by nothing
     // else (its buffer is about to stop existing), and its other inputs come
     // from outside the run — those stay real samplers, read at uv.
-    const extend = tail && n.inputs[0] === tail.id && consumers.get(tail.id) === 1
+    const extend = tail && n.inputs[0] === tail.id && !isBack(n, 0) && consumers.get(tail.id) === 1
       && !n.inputs.slice(1).some((id) => run.some((r) => r.id === id));
     if (!extend) flush();
     run.push(n);
