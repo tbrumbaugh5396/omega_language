@@ -37,6 +37,9 @@ import { auditNodes, portabilitySummary, auditSource } from "./wgsl-audit.js";
 import { zipStore, crc32 } from "./zip-store.js";
 import { graphStats } from "./graph-compile.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
+import { createDspGraph, addDspNode, defineDspNode, allocationReport, topoDsp } from "./dsp-graph.js";
+import { installGraph, sourceFor } from "./dsp-runtime.js";
+import { fftMag } from "./engine-audio.js";
 import { freezeEffects } from "./canvas-graph.js";
 import { registerNode, withNodeHeader, nodeIdFor, keepVersion, versionSummary,
          MAX_VERSIONS, declaresNode } from "./node-library.js";
@@ -1244,6 +1247,109 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
                  + "goldens across machines are not attempted — two GPUs disagree in the last bit" }); }
   } catch (e) {
     push({ group: "Cross-cutting", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The audio worklet — the other roadmap's Phase A. Everything here is
+  // rendered offline, so the self-test never makes a sound.
+  try {
+    const db = (v) => 20 * Math.log10(Math.max(v, 1e-12));
+    const render = async (graph, sr, seconds) => {
+      const ctx = new OfflineAudioContext(1, Math.round(sr * seconds), sr);
+      const inst = await installGraph(ctx, graph);
+      inst.node.connect(ctx.destination);
+      return (await ctx.startRendering()).getChannelData(0);
+    };
+
+    // The bar Phase A sets: a sine at 1 kHz, at both rates, with nothing else
+    // in it. The frequency is nudged to sit exactly on an FFT bin — otherwise
+    // what you measure is the window's leakage rather than the oscillator.
+    { const rows = [];
+      for (const sr of [44100, 48000]) {
+        const N = 4096, hz = Math.round(1000 * N / sr) * sr / N;
+        const graph = createDspGraph();
+        graph.output = addDspNode(graph, "osc.sine", { params: { hz, amp: 1 } });
+        const ch = await render(graph, sr, 0.25);
+        const mag = fftMag(ch.subarray(2048, 2048 + N));
+        let peakBin = 0;
+        for (let i = 1; i < mag.length; i++) if (mag[i] > mag[peakBin]) peakBin = i;
+        let spur = -999;
+        for (let i = 0; i < mag.length; i++) {
+          if (Math.abs(i - peakBin) <= 3) continue;
+          spur = Math.max(spur, db(mag[i] / mag[peakBin]));
+        }
+        let peak = 0;
+        for (let i = 0; i < ch.length; i++) peak = Math.max(peak, Math.abs(ch[i]));
+        rows.push({ sr, hz, binHz: peakBin * sr / N, dbfs: db(peak), spur });
+      }
+      const ok = rows.every((r) => Math.abs(r.dbfs) < 0.1 && r.spur < -90
+                                   && Math.abs(r.binHz - r.hz) < 1);
+      push({ group: "Audio worklet", name: "a sine is a sine, at both sample rates", ok,
+             detail: rows.map((r) => `${r.sr / 1000}k: ${r.hz.toFixed(1)} Hz at `
+               + `${r.dbfs.toFixed(2)} dBFS, everything else below ${r.spur.toFixed(1)} dB`).join(" · ")
+               + " — want 0 dBFS and under −90" }); }
+
+    // The rule that keeps it clickless, and proof the rule can fail.
+    { const graph = createDspGraph();
+      graph.output = addDspNode(graph, "osc.sine", {});
+      const emitted = sourceFor(graph);
+      // A node written the way a person naturally would, and should not.
+      const badId = `bad.alloc${Math.random().toString(36).slice(2, 6)}`;
+      defineDspNode(`// Deliberately wrong, to prove the check bites.\n// @node ${badId}\n`
+        + "out float y;\nuniform float hz;   // @range 1 100 @default 1\n\n"
+        + "const bin = [1, 2, 3];\ny = bin[0] * hz;");
+      const bad = createDspGraph();
+      bad.output = addDspNode(bad, badId, {});
+      const badFindings = sourceFor(bad).findings;
+      push({ group: "Audio worklet", name: "nothing in the sample loop allocates, and the check bites",
+             ok: emitted.findings.length === 0 && badFindings.length > 0,
+             detail: emitted.findings.length
+               ? `the emitted loop would allocate: ${emitted.findings[0].why}`
+               : `the emitted loop is clean; a node with an array literal in it is caught `
+                 + `("${badFindings[0].why}") · the meter goes out once every sixteen blocks, `
+                 + "outside the loop, and is not pretended to be free" }); }
+
+    // Sample-rate independence, measured rather than asserted: the one-pole
+    // against its own analytic response, at both rates.
+    { const analytic = (f, fc, sr) => {
+        const c = Math.exp(-2 * Math.PI * fc / sr), b = 1 - c;
+        const w = 2 * Math.PI * f / sr;
+        return db(b / Math.hypot(1 - c * Math.cos(w), c * Math.sin(w)));
+      };
+      let worst = 0, corner = [];
+      for (const sr of [44100, 48000]) {
+        for (const f of [500, 1000, 4000]) {
+          const graph = createDspGraph();
+          const osc = addDspNode(graph, "osc.sine", { params: { hz: f, amp: 1 } });
+          graph.output = addDspNode(graph, "filter.onepole",
+            { inputs: { x: [osc, "y"] }, params: { cutoff: 1000 } });
+          const ch = await render(graph, sr, 0.2);
+          let peak = 0;
+          for (let i = ch.length >> 1; i < ch.length; i++) peak = Math.max(peak, Math.abs(ch[i]));
+          const got = db(peak), want = analytic(f, 1000, sr);
+          worst = Math.max(worst, Math.abs(got - want));
+          if (f === 1000) corner.push(`${sr / 1000}k ${got.toFixed(2)} dB`);
+        }
+      }
+      push({ group: "Audio worklet", name: "a filter's coefficients come from the sample rate",
+             ok: worst < 0.25,
+             detail: `the one-pole against its own analytic response, worst ${worst.toFixed(2)} dB across `
+               + `500/1000/4000 Hz at 44.1k and 48k · at its corner: ${corner.join(", ")} (want −3)` }); }
+
+    // A loop with no delay in it has no first sample, and the error has to
+    // say which nodes are in the loop rather than "cyclic graph".
+    { const graph = createDspGraph();
+      const a = addDspNode(graph, "gain.smooth", {});
+      const b = addDspNode(graph, "filter.onepole", { inputs: { x: [a, "y"] } });
+      const node = graph.nodes.find((n) => n.id === a);
+      node.inputs.x = [b, "y"];
+      graph.output = b;
+      let msg = "";
+      try { topoDsp(graph); } catch (e) { msg = e.message; }
+      push({ group: "Audio worklet", name: "a feedback loop with no delay is refused, by name",
+             ok: /no delay/.test(msg) && msg.includes(a) && msg.includes(b),
+             detail: msg || "the graph was accepted, which it should not have been" }); }
+  } catch (e) {
+    push({ group: "Audio worklet", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

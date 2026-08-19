@@ -109,7 +109,7 @@ Everything else is the same grammar: `@range`, `@default`, `@log`, `@help`,
 
 ## 3. Phases
 
-### Phase A — The worklet baseline *(M)*
+### Phase A — The worklet baseline *(M)* — **shipped**
 
 - One `AudioWorkletProcessor` that runs a compiled graph; a message port for
   parameter changes; a ring buffer for what the UI needs to draw.
@@ -122,6 +122,44 @@ Everything else is the same grammar: `@range`, `@default`, `@log`, `@help`,
   `sampleRate`, and the parity tests run at 44.1 k and 48 k both.
 - *Done when:* a sine at 1 kHz measures −0.0 dBFS at 1 kHz and below −90 dB
   everywhere else, at both rates, with no allocation in the audio callback.
+
+**Met.** `dsp-graph.js` is the grammar and the compiler; `dsp-runtime.js`
+generates the whole `AudioWorkletProcessor` as text and installs it from a
+blob, so **nothing is evaluated with `new Function` on the audio thread** and
+`sourceFor(graph)` returns exactly what the browser was given.
+
+A node's body goes into the loop **verbatim**, inside a block that declares
+its ports, uniforms and state as ordinary locals — the same move the visual
+compiler makes with a sketch, and for the same reason: what you read is what
+runs. Uniforms become **AudioParams**, not messages, which is sample-accurate,
+costs nothing per change, and is already the automation machinery Phase D
+will want.
+
+- **The tone.** At 44.1 k, 1001.3 Hz at **0.00 dBFS** with everything else
+  below **−95.8 dB**; at 48 k, 996.1 Hz, same numbers. The frequency is nudged
+  onto an exact FFT bin — otherwise what gets measured is the window's leakage
+  rather than the oscillator, which is the sort of thing that makes a good
+  number meaningless.
+- **The no-allocation rule is enforced and the enforcement is tested.** The
+  emitted loop is clean, and a node written the way a person naturally would —
+  with an array literal in it — is caught and named. The rule is scoped to the
+  *sample loop*: the constructor is meant to allocate, and the meter goes out
+  once every sixteen blocks, outside the loop, which is stated rather than
+  pretended away.
+- **Sample rate is a variable, and that is measured rather than asserted.**
+  The one-pole is held against its own analytic |H(e^{jω})|: **worst 0.02 dB**
+  across 500/1000/4000 Hz at both rates, −3.00 dB and −3.02 dB at its corner.
+  That is Phase B's method arriving early, on the one node Phase A needed.
+- **The cycle rule is in from the start.** A feedback loop with no delay in it
+  is refused with the nodes named — `n18 → n17 → n18` — rather than "cyclic
+  graph", which tells you nothing you can act on.
+- Three nodes ship: `osc.sine`, `gain.smooth` (a one-pole smoother, so a moved
+  fader does not step) and `filter.onepole`. Four checks, in the self-test's
+  **Audio worklet** group, all rendered offline so it never makes a sound.
+
+**Left for Phase B onward:** everything else. There is no UI for this yet —
+no panel, no meter on screen, nothing wired into the Music studio. Phase A is
+the floor being solid, not a room.
 
 ### Phase B — The node library, held to the mathematics *(L)*
 
