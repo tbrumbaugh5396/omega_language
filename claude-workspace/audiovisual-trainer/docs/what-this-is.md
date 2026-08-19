@@ -50,7 +50,7 @@ Underneath them, **two compilers sharing one discipline**:
 |---|---|---|
 | target | GLSL ES 3.00, with a 1.00 fallback | one `process()` loop on an AudioWorklet |
 | a node is | a sketch with `@node` in its header | a sketch with `@node` in its header |
-| node types registered | 57 | 15 |
+| node types registered | 67 | 17 |
 | fusion | runs of per-pixel nodes → one pass | inlined by construction |
 | what a wire carries | pixels, or a distance function | a sample, or a block |
 | a wire pointing backwards | last frame, in a half-float texture | last sample, in a state slot |
@@ -61,7 +61,7 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
-library, and a **193-check self-test across 27 groups that runs inside the
+library, and a **200-check self-test across 28 groups that runs inside the
 app**.
 
 ---
@@ -191,7 +191,14 @@ are renumbered in dependency order — so two built minutes apart are known to
 be the same one, and a document may reference `inst.1xlq9ni` instead of
 carrying it. A reference is an optimisation and never a dependency: a document
 that carries the copy as well plays where the library has never heard of it,
-and interning one is 92% smaller with the samples identical either way. The ship's position
+and interning one is 92% smaller with the samples identical either way.
+
+An instrument is authored as a **patch** — one line per DSP node,
+`name = type key=value …` — which is a document like any other, so it
+persists and every name in it is a part a document's effects can address.
+Written out and read back, a patch is the same instrument; so is one built in
+code. Identity deliberately excludes those names, because a name is not a
+sound. The ship's position
 is a number you can read off the graph, not a texel you have to decode; it
 equals the CPU integration of its own equations to 2e−15, and the ejected
 pass header prints the update beside the shader that draws it.
@@ -288,8 +295,8 @@ its course lesson are the same text.
   shell, repeat and a smoothing radius between any two shapes — as wires, at
   full precision, ending in one draw. A glow is a falloff in distance, which
   is simply not available once a shape has become pixels.
-- **Teach from the implementation.** 51 nodes link to the course module they
-  belong with, and all 57 describe themselves — the reference is generated
+- **Teach from the implementation.** 59 nodes link to the course module they
+  belong with, and all 61 describe themselves — the reference is generated
   from their annotations and reports its own gaps.
 
 ---

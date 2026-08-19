@@ -28,7 +28,10 @@ import { EventQueue, pointerEvents } from "./events.js";
 import { LiveRig, renderFired } from "./live-audio.js";
 import { shipInstrument, toneInstrument, instrumentId, normalise, internInstruments,
          inlineInstruments, resolveInstruments, instrumentFor, forgetInstrument,
-         instrumentNames, instrumentCount, instrumentBytes } from "./instrument-library.js";
+         instrumentNames, instrumentCount, instrumentBytes, defineInstrument,
+         loadUserInstruments } from "./instrument-library.js";
+import { parsePatch, toPatch } from "./instrument-doc.js";
+import { INSTRUMENT_STARTERS, instrumentNameFor } from "./studio-instrument.js";
 import { Keyboard, KEY } from "./keyboard.js";
 import { renderGraph, ejectGraph, applyFilter, resetGraphState } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
@@ -1757,6 +1760,132 @@ texel == vec2(0.0) ? vec4(v, 0.0, 0.0, 1.0) : vec4((v - 0.14) * 100.0, 0.0, 0.0,
              detail: `${named.length} named (${named.join(", ")}), ${instrumentCount()} distinct · ship.classic is also ${instrumentId(byName)}, and names its own hum node "${byName.hum}"` }); }
   } catch (e) {
     push({ group: "Instrument library", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The instrument document: a patch, which is the instrument, which is what
+  // persists. The claims are that the text and the declaration are the same
+  // thing in two forms, that a saved patch comes back as a library
+  // instrument, and that a document's effects can address an instrument's
+  // parts by the names the patch gave them.
+  try {
+    const SR = 48000, FPS = 60, FRAMES = 40;
+    const render = (instruments, fired) => renderFired(fired, { instruments, fps: FPS, frames: FRAMES, sampleRate: SR });
+    const identical = (x, y) => {
+      const a = x.getChannelData(0), b = y.getChannelData(0);
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    };
+    const oneNote = [{ kind: "note", instrument: "a", frame: 4, hz: 440, dur: 0.3 }];
+
+    // 1. Every starter the studio offers parses. A starting point that does
+    //    not is worse than none.
+    { const bad = INSTRUMENT_STARTERS.map((st) => [st.label, parsePatch(st.patch).errors]).filter(([, e]) => e.length);
+      push({ group: "Instrument document", name: `all ${INSTRUMENT_STARTERS.length} starter patches parse`, ok: bad.length === 0,
+             detail: bad.length ? bad.map(([l, e]) => `${l}: ${e[0]}`).join(" · ")
+               : INSTRUMENT_STARTERS.map((st) => `${st.label} (${parsePatch(st.patch).decl.graph.nodes.length} nodes)`).join(", ") }); }
+
+    // 2. Text and declaration are the same instrument in two forms: a patch
+    //    written out and read back is the same *sound*, held to samples.
+    { const rows = [];
+      for (const st of INSTRUMENT_STARTERS) {
+        const first = parsePatch(st.patch).decl;
+        const again = parsePatch(toPatch(first, { name: "x" })).decl;
+        rows.push([st.label, instrumentId(first) === instrumentId(again)]);
+      }
+      const ok = rows.every(([, same]) => same);
+      // And the one that makes a sound is held to samples rather than to its id.
+      const a = parsePatch(INSTRUMENT_STARTERS[0].patch).decl;
+      const b = parsePatch(toPatch(a, { name: "x" })).decl;
+      const ra = await render({ a }, oneNote), rb = await render({ a: b }, oneNote);
+      push({ group: "Instrument document", name: "a patch written out and read back is the same instrument", ok: ok && identical(ra.buffer, rb.buffer),
+             detail: ok ? `${rows.length} patches through toPatch and parsePatch, every id unchanged · ${ra.buffer.length} samples identical for ${INSTRUMENT_STARTERS[0].label}`
+               : rows.filter(([, s2]) => !s2).map(([l]) => l).join(", ") + " changed" }); }
+
+    // 3. An instrument built in code and its patch are the same instrument —
+    //    which is what makes the editor able to open one.
+    { const built = toneInstrument({ amp: 0.3, attackMs: 3, decayMs: 180, voices: 4 });
+      const text = toPatch(normalise(built), { name: "tone.mine" });
+      const read = parsePatch(text).decl;
+      push({ group: "Instrument document", name: "an instrument built in code writes out as a patch that reads back the same", ok: instrumentId(built) === instrumentId(read),
+             detail: `${instrumentId(built)} · the patch names its nodes ${Object.keys(parsePatch(text).parts).join(", ")} rather than n47` }); }
+
+    // 4. A patch that does not parse says why, per line, and yields whatever
+    //    did — an editor that goes blank on a typo is one you fight.
+    { const { decl, errors } = parsePatch(`// @instrument broken
+note = voice.note
+env  = env.ad      gate=note.gate  attackMs=3
+bad  = osc.nothing
+osc  = osc.sineHz  hz=note.hz  gate=env.z  amp=0.3
+out  = osc.sineHz  hz=note.hz  gate=env.y  wobble=2
+`);
+      const kinds = errors.join(" | ");
+      const ok = errors.length === 3 && /no DSP node called "osc.nothing"/.test(kinds)
+        && /no output called "z"/.test(kinds) && /no parameter called "wobble"/.test(kinds)
+        && decl && decl.graph.nodes.length === 4;
+      push({ group: "Instrument document", name: "a bad patch names each problem and keeps what parsed", ok,
+             detail: ok ? `3 problems, each with its line — and the 4 good nodes still made a declaration` : kinds || "no errors" }); }
+
+    // 5. Every name in a patch is a part, and an effect can address one — the
+    //    thing that makes a *reference* usable, since the library renumbers.
+    { const patch = `// @instrument hum.test
+// @voices 4
+note  = voice.note
+voice = osc.sineHz  hz=note.hz  gate=note.gate  amp=0.3
+low   = osc.saw     hz=55  amp=0.2  blep=1
+hum   = gain.smooth x=low.y  level=0  ms=20
+out   = mix.add     a=voice.y  b=hum.y  gainA=1  gainB=1
+`;
+      const decl = parsePatch(patch).decl;
+      const { id } = defineInstrument("you.humtest", decl);
+      const lib = instrumentFor("you.humtest");
+      // The library renumbered it; the part name did not move.
+      const renumbered = lib.parts.hum !== decl.parts.hum;
+      const fired = [{ kind: "param", instrument: "a", frame: 2, node: "hum", param: "level", value: 0.9 },
+                     { kind: "param", instrument: "a", frame: 20, node: "hum", param: "level", value: 0 }];
+      const r = await render({ a: { ref: "you.humtest" } }, fired);
+      const d = r.buffer.getChannelData(0);
+      const rms = (f0, f1) => { let e = 0, n = 0; for (let i = Math.round(f0 / FPS * SR); i < Math.round(f1 / FPS * SR); i++) { e += d[i] * d[i]; n++; } return Math.sqrt(e / Math.max(1, n)); };
+      const on = rms(4, 18), off = rms(30, 38);
+      push({ group: "Instrument document", name: 'an effect addresses "hum" by name, through a reference', ok: renumbered && on > 0.05 && off < on / 5,
+             detail: `the patch called it ${decl.parts.hum}, the library calls it ${lib.parts.hum} (${id}) — and { node: "hum" } moved the right one: rms ${on.toFixed(3)} while up, ${off.toFixed(3)} after` }); }
+
+    // 6. What persistence is: a saved document, read back the way the loader
+    //    reads it, is a library instrument a document can name.
+    { const saved = { patch: `// @instrument saved.one
+// @voices 2
+note = voice.note
+env  = env.ad      gate=note.gate  attackMs=2  decayMs=140
+out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
+` };
+      // The loader, with the API replaced by the one document.
+      const loaded = await loadUserInstruments({
+        api: async (path) => (path === "/api/studio/projects"
+          ? { projects: [{ id: 1, kind: "instrument", name: "Saved one" }] }
+          : { id: 1, name: "Saved one", data: saved }),
+        parsePatch, nameFor: instrumentNameFor,
+      });
+      const found = instrumentFor("saved.one");
+      const r = found ? await render({ a: { ref: "saved.one" } }, oneNote) : null;
+      let ink = 0;
+      if (r) { const d = r.buffer.getChannelData(0); for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 0.01) ink++; }
+      push({ group: "Instrument document", name: "a saved document comes back as an instrument a document can name", ok: loaded.length === 1 && !loaded[0].error && !!found && ink > 1000,
+             detail: found ? `one instrument document loaded as "${loaded[0].name}" (${loaded[0].nodes} nodes) · a document referencing it rendered ${ink} samples above silence`
+               : `loaded ${JSON.stringify(loaded[0])}` }); }
+
+    // 7. The name a document goes under: what the patch says, else the
+    //    project's own name, namespaced so it cannot shadow a built-in.
+    { const cases = [
+        [{ patch: "// @instrument tone.mine\nnote = voice.note\nout = osc.sineHz hz=note.hz gate=note.gate" }, "Whatever", "tone.mine"],
+        [{ patch: "// @instrument mine\nnote = voice.note\nout = osc.sineHz hz=note.hz gate=note.gate" }, "Whatever", "you.mine"],
+        [{ patch: "note = voice.note\nout = osc.sineHz hz=note.hz gate=note.gate" }, "My Best Sound", "you.my-best-sound"],
+      ];
+      const got = cases.map(([doc, name]) => instrumentNameFor(doc, name));
+      const want = cases.map((c) => c[2]);
+      push({ group: "Instrument document", name: "a document's instrument is named by its patch, or by the document", ok: JSON.stringify(got) === JSON.stringify(want),
+             detail: got.map((g, i) => `${g === want[i] ? "" : "✗ "}${g}`).join(" · ") + " — a bare name is namespaced so it cannot shadow a built-in" }); }
+  } catch (e) {
+    push({ group: "Instrument document", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

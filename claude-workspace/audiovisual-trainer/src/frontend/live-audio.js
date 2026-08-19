@@ -76,7 +76,7 @@ export class VoiceAllocator {
  */
 export class LiveInstrument {
   static async create({ graph, noteNode, voices = 8, gain = 1, ctx = null, lookahead = 0.03,
-                        voiceInit = {}, attach = null }) {
+                        voiceInit = {}, attach = null, parts = {} }) {
     const context = ctx || new (window.AudioContext || window.webkitAudioContext)();
     const inst = await installGraph(context, graph, { voices, voiceInit });
     // A per-instrument gain, so a document can balance two of them without
@@ -94,7 +94,7 @@ export class LiveInstrument {
     // bit-stable between renders.
     if (attach) attach(out); else out.connect(context.destination);
     const live = new LiveInstrument();
-    Object.assign(live, { ctx: context, inst, noteNode, voices, lookahead, gainNode,
+    Object.assign(live, { ctx: context, inst, noteNode, voices, lookahead, gainNode, parts,
                           alloc: new VoiceAllocator(voices), owned: !ctx, notes: 0, stolen: 0 });
     return live;
   }
@@ -120,7 +120,11 @@ export class LiveInstrument {
         this.notes++; if (stolen) this.stolen++;
         did++;
       } else if (fx.kind === "param") {
-        const pm = this.inst.param(String(fx.node), String(fx.param));
+        // An effect names a part of the instrument — "hum" — and the
+        // instrument says which node that is. A raw node id still works, for
+        // a graph built in code that never named anything.
+        const which = this.parts[String(fx.node)] || String(fx.node);
+        const pm = this.inst.param(which, String(fx.param));
         if (pm && Number.isFinite(+fx.value)) { pm.setValueAtTime(+fx.value, at); did++; }
       }
     }
@@ -168,7 +172,7 @@ export class LiveRig {
       const d = decls[name];
       players.set(name, await LiveInstrument.create({
         graph: d.graph, noteNode: d.noteNode, voices: d.voices || 8, gain: d.gain ?? 1,
-        voiceInit: d.voiceInit || {}, ctx: context, lookahead,
+        voiceInit: d.voiceInit || {}, parts: d.parts || {}, ctx: context, lookahead,
         attach: merger ? (out) => out.connect(merger, 0, i) : null }));
     }
     const rig = new LiveRig();
@@ -242,6 +246,7 @@ export async function renderFired(fired, { instruments, fps = 60, frames, sample
     if ((d.gain ?? 1) !== 1) { const gn = ctx.createGain(); gn.gain.value = d.gain; inst.node.connect(gn); out = gn; }
     if (merger) out.connect(merger, 0, i); else out.connect(ctx.destination);
 
+    const parts = d.parts || {};
     const notes = mine.filter((f) => f.kind === "note")
       .map((f) => ({ t: f.frame / fps, dur: Math.max(0.005, +f.dur || 0.2), hz: +f.hz || 440 }));
     // Param effects become exact points — a value set at a time and held —
@@ -249,8 +254,9 @@ export async function renderFired(fired, { instruments, fps = 60, frames, sample
     const byParam = new Map();
     for (const f of mine) {
       if (f.kind !== "param") continue;
-      const key = `${f.node} ${f.param}`;
-      if (!byParam.has(key)) byParam.set(key, { node: String(f.node), param: String(f.param), points: [] });
+      const which = parts[String(f.node)] || String(f.node);
+      const key = `${which} ${f.param}`;
+      if (!byParam.has(key)) byParam.set(key, { node: which, param: String(f.param), points: [] });
       byParam.get(key).points.push({ t: f.frame / fps, v: +f.value });
     }
     schedule(inst, { noteNode: d.noteNode, notes, automation: [...byParam.values()] });

@@ -1449,6 +1449,66 @@ instrument a document interned is remembered for the session and not past it —
 there is no place to keep one the way a Generate document keeps a node. And
 nothing shows the library: no browser, no audition button.
 
+### Phase 17 — The instrument document *(M)* — **shipped**
+
+The library was in memory and rebuilt from its built-ins at every load, so an
+instrument lasted exactly as long as the tab. The node library has never had
+that problem, because *the document is the node* — and an instrument had no
+document to be.
+
+**A patch.** One line per node, `name = type key=value …`, where a value is a
+number or `other.port`:
+
+```
+// A voice over a low saw whose level an effect can move.
+// @instrument hum
+// @voices 8
+
+note  = voice.note
+voice = osc.sineHz  hz=note.hz  gate=note.gate  amp=0.35
+low   = osc.saw     hz=55  amp=0.18  blep=1
+hum   = gain.smooth x=low.y  level=0  ms=60
+out   = mix.add     a=voice.y  b=hum.y  gainA=1  gainB=1
+```
+
+`out` is what you hear and the `voice.note` is where notes are written, both
+overridable by `@out` and `@note`. **Every other name is a part** the document
+can address — `{ kind: "param", node: "hum", … }` — which is what makes a
+*reference* usable at all, since the library renumbers what it stores. Parsing
+never throws: a patch with a bad line yields the nodes that did parse and a
+list of what did not, per line.
+
+**The document type.** `instrument` joins the studio's kinds; the editor is a
+text area, the errors, an audition keyboard and the id it registers under.
+`ensureUserInstruments` reads those documents at boot and registers each — the
+same arrangement, and the same three lines, as the node library's.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| the four starter patches | **all parse** — 3, 5, 5 and 5 nodes |
+| every patch written out and read back | **every id unchanged**; 44 000 samples identical for the first |
+| an instrument built in code, written as a patch and read back | **the same id** |
+| a patch with three mistakes | **three messages, each with its line**, and the 4 good nodes still made a declaration |
+| `{ node: "hum" }` through a reference the library renumbered | patch said `n165`, library says `i3` — **rms 0.410 while up, 0.000 after** |
+| a saved document, loaded the way boot loads it | back as `saved.one`, **32 432 samples above silence** |
+| a real document through the backend, forgotten and reloaded | back as `you.wobble`, 3 nodes, parts `note, env, out` |
+
+Two things it found, both mine. The starter patches named `cutoff` on
+`filter.svf` and `hz`/`feedback` on `filter.comb`; the parser said so before
+they ever shipped, which is what a validating parser is for. And more
+interestingly: **an instrument built in code and the same instrument written
+as a patch had different content ids**, because a patch names every line and
+`parts` was in the hash. A name is not a sound. Identity now excludes the
+names — and when the same sound arrives better labelled than the one on the
+shelf, the labels are kept.
+
+*Left:* the patch has no way to say a per-voice value, so an instrument's
+`voiceInit` is code-only. The editor has no waveform and no meter, and its
+audition is eight buttons rather than a keyboard you can play. And nothing
+lists the library — you reference an instrument by knowing its name.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1535,6 +1595,7 @@ nothing shows the library: no browser, no audition button.
 | 14.1 | Effects and the live audio path — **shipped** | M | 13.1, audio D | an event makes a sound; live equals the bounce |
 | 15.1 | The document names its instrument — **shipped** | S | 14.1 | a document that is whole, sound included |
 | 16.1 | The instrument library, content-addressed — **shipped** | S | 15.1 | one sound, one instrument, provably |
+| 17.1 | The instrument document: a patch that persists — **shipped** | M | 16.1 | an instrument that outlives its session |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

@@ -28,8 +28,10 @@
 // back, and a document put through both is the same document — held to
 // identical samples, not to an argument.
 
-import { topoDsp } from "./dsp-graph.js";
-import { createDspGraph, addDspNode } from "./dsp-graph.js";
+import { topoDsp, createDspGraph, addDspNode } from "./dsp-graph.js";
+// The DSP catalogue is registered by this module's side effects, and the
+// built-in instruments below are built at load — so it has to have run.
+import "./dsp-runtime.js";
 
 /** id or name → a normalised declaration. */
 const INSTRUMENTS = new Map();
@@ -86,20 +88,44 @@ export function normalise(decl) {
     gain: decl.gain ?? 1,
   };
   if (decl.voiceInit && Object.keys(decl.voiceInit).length) out.voiceInit = decl.voiceInit;
-  // Anything else the document hung on the declaration — `hum`, the id of a
-  // node an effect writes to — is a name for one of this instrument's own
-  // nodes, so it is renamed with them and is part of what this instrument is.
-  for (const k of sortedKeys(decl)) {
-    if (["graph", "noteNode", "voices", "gain", "voiceInit", "ref"].includes(k)) continue;
-    const v = decl[k];
-    out[k] = typeof v === "string" && rename.has(v) ? rename.get(v) : v;
+  // The names an instrument has for its own nodes. A patch gives every line
+  // one; code that builds a graph hangs the odd id on the declaration
+  // (`hum`). Either way they are renamed with the nodes, so a document's
+  // effect can say `node: "hum"` and mean the same thing before and after the
+  // library renumbers — which is the only way a reference can work at all.
+  const parts = {};
+  for (const k of sortedKeys(decl.parts || {})) {
+    const v = decl.parts[k];
+    if (rename.has(v)) parts[k] = rename.get(v);
   }
+  for (const k of sortedKeys(decl)) {
+    if (["graph", "noteNode", "voices", "gain", "voiceInit", "ref", "parts"].includes(k)) continue;
+    const v = decl[k];
+    if (typeof v === "string" && rename.has(v)) { parts[k] = rename.get(v); continue; }
+    out[k] = v;
+  }
+  if (Object.keys(parts).length) out.parts = parts;
   return out;
 }
 
+/**
+ * The form identity is computed from: everything `normalise` produces except
+ * the names.
+ *
+ * `parts` is how a document addresses an instrument's insides, and a name is
+ * not a sound. An instrument built in code names nothing and the same
+ * instrument written as a patch names every line, and those two are the same
+ * instrument — so the id cannot see the names, or "an instrument is what it
+ * sounds like" is not true.
+ */
+const identityForm = (norm) => {
+  const { parts, ...rest } = norm;
+  return rest;
+};
+
 /** What this instrument is, as an id: the same sound, the same id. */
 export function instrumentId(decl) {
-  return `inst.${digest(JSON.stringify(normalise(decl)))}`;
+  return `inst.${digest(JSON.stringify(identityForm(normalise(decl))))}`;
 }
 
 /**
@@ -111,8 +137,11 @@ export function instrumentId(decl) {
  */
 export function defineInstrument(name, decl) {
   const norm = normalise(decl);
-  const id = `inst.${digest(JSON.stringify(norm))}`;
-  const kept = INSTRUMENTS.get(id) || norm;
+  const id = `inst.${digest(JSON.stringify(identityForm(norm)))}`;
+  let kept = INSTRUMENTS.get(id) || norm;
+  // The same sound arriving with names when the one on the shelf has none is
+  // worth taking: it is the same instrument, better labelled.
+  if (kept !== norm && Object.keys(norm.parts || {}).length > Object.keys(kept.parts || {}).length) kept = norm;
   INSTRUMENTS.set(id, kept);
   if (name) INSTRUMENTS.set(name, kept);
   return { id, name: name || null, decl: kept };
@@ -207,8 +236,59 @@ export function shipInstrument() {
   const voice = addDspNode(g, "osc.sineHz", { inputs: { hz: [note, "hz"], gate: [note, "gate"] }, params: { amp: 0.35 } });
   const humOsc = addDspNode(g, "osc.saw", { params: { hz: 55, amp: 0.18, blep: 1 } });
   const hum = addDspNode(g, "gain.smooth", { inputs: { x: [humOsc, "y"] }, params: { level: 0, ms: 60 } });
-  g.output = addDspNode(g, "mix.add", { inputs: { a: [voice, "y"], b: [hum, "y"] }, params: { gainA: 1, gainB: 1 } });
-  return { graph: g, noteNode: note, voices: 8, hum };
+  const out = addDspNode(g, "mix.add", { inputs: { a: [voice, "y"], b: [hum, "y"] }, params: { gainA: 1, gainB: 1 } });
+  g.output = out;
+  return { graph: g, noteNode: note, voices: 8,
+           parts: { note, voice, humOsc, hum, out } };
+}
+
+// ------------------------------------------------------------------ documents
+//
+// The library above is rebuilt from the built-ins at every load, which made an
+// instrument last exactly as long as the tab. An `instrument` document is
+// where one is kept: its patch is the instrument, so loading the documents at
+// boot is all the persistence there is — the same arrangement the node library
+// has with Generate documents, and for the same reason. Nothing is copied.
+
+let loadingInstruments = null;
+
+/** Load the instrument documents once, whoever asks first. */
+export function ensureUserInstruments(deps) {
+  if (!loadingInstruments) loadingInstruments = loadUserInstruments(deps).catch(() => []);
+  return loadingInstruments;
+}
+
+/**
+ * Every `instrument` document, parsed and registered. `deps` carries the two
+ * things this needs from elsewhere — the API and the patch parser — so the
+ * library stays a file with no opinion about either.
+ */
+export async function loadUserInstruments({ api, parsePatch, nameFor }) {
+  let projects = [];
+  try {
+    const res = await api("/api/studio/projects");
+    projects = (res.projects || []).filter((p) => p.kind === "instrument");
+  } catch { return []; }
+  const out = [];
+  for (const p of projects) {
+    try {
+      const full = await api(`/api/studio/projects/${p.id}`);
+      const patch = (full.data && full.data.patch) || "";
+      const { decl, errors } = parsePatch(patch);
+      const name = nameFor(full.data || {}, full.name || p.name);
+      if (!decl || errors.length) { out.push({ name, docId: p.id, error: errors[0] || "nothing to parse" }); continue; }
+      const { id } = defineInstrument(name, decl);
+      out.push({ name, id, docId: p.id, nodes: decl.graph.nodes.length });
+    } catch (e) { out.push({ docId: p.id, error: String(e.message).split("\n")[0] }); }
+  }
+  return out;
+}
+
+/** Forget one, for a document that stopped being an instrument or went away. */
+export function unregisterInstrument(name) {
+  const decl = INSTRUMENTS.get(name);
+  INSTRUMENTS.delete(name);
+  if (decl) for (const [k, v] of [...INSTRUMENTS]) if (v === decl && k.startsWith("inst.")) INSTRUMENTS.delete(k);
 }
 
 export const BUILT_IN = {

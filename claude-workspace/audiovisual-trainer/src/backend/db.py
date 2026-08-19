@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS studio_projects (
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
     name TEXT NOT NULL DEFAULT 'untitled',
-    kind TEXT NOT NULL DEFAULT 'canvas',      -- canvas|music|video
+    kind TEXT NOT NULL DEFAULT 'canvas',      -- canvas|music|video|shader|design|generate|instrument
     data TEXT NOT NULL DEFAULT '{}',          -- the document, JSON
     thumb TEXT NOT NULL DEFAULT '',           -- small dataURL for the browser
     piece_id INTEGER,                         -- the week's piece, if this is it

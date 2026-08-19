@@ -13,12 +13,15 @@ import { videoEditor } from "./studio-video.js";
 import { shaderEditor, SHADER_PRESETS } from "./studio-shader.js";
 import { designEditor, newDesignDoc, FRAME_PRESETS } from "./studio-design.js";
 import { generateEditor, newGenerateDoc, GENERATE_PRESETS } from "./studio-generate.js";
+import { instrumentEditor, INSTRUMENT_STARTERS, instrumentNameFor } from "./studio-instrument.js";
+import { ensureUserInstruments } from "./instrument-library.js";
+import { parsePatch } from "./instrument-doc.js";
 import "./field-nodes.js";
 import "./sim-nodes.js";
 import "./game-nodes.js";
 
 const EDITORS = { canvas: canvasEditor, music: musicEditor, video: videoEditor,
-                  shader: shaderEditor, design: designEditor,
+                  shader: shaderEditor, design: designEditor, instrument: instrumentEditor,
                   generate: generateEditor };
 
 const KINDS = [
@@ -37,6 +40,9 @@ const KINDS = [
   { id: "shader", title: "Shader", blurb:
     "A GLSL sketchpad with The Book of Shaders' uniform names, so examples " +
     "from the book paste in and run unchanged. Chapter presets included." },
+  { id: "instrument", title: "Instrument", blurb:
+    "A patch — one line per DSP node — that any document can name and play. " +
+    "Saved here, it is in the library on the next reload." },
   { id: "generate", title: "Generate", blurb:
     "One colour expression, and every uniform you declare becomes a slider, " +
     "swatch or pad. Randomise, then export a PNG at print size." },
@@ -78,6 +84,10 @@ export async function studioView(ctx) {
   const nodeCard = el("div", {});
   root.append(nodeCard);
   ensureUserNodes().then(() => { clear(nodeCard); nodeCard.append(nodeLibraryCard(ctx)); });
+  // The instrument documents, likewise: an instrument is in the library once
+  // its document has been read, and a document that references one by name
+  // finds it from then on.
+  ensureUserInstruments({ api, parsePatch, nameFor: instrumentNameFor });
   return root;
 }
 
@@ -207,6 +217,9 @@ function presetsFor(kind) {
       label: p.label,
       data: () => newGenerateDoc(p),
     }));
+  }
+  if (kind === "instrument") {
+    return INSTRUMENT_STARTERS.map((st) => ({ label: st.label, data: () => ({ patch: st.patch }) }));
   }
   if (kind === "shader") {
     return SHADER_PRESETS.map((p) => ({
