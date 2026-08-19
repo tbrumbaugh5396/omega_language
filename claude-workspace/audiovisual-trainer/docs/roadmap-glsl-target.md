@@ -1700,9 +1700,38 @@ a preprocessor directive are each turned away with a reason. A translator that
 quietly emits something plausible is found by a customer; one that says which
 line it could not do is found by a test.
 
-*Left:* one sketch to one texture. Nothing about the render graph — pooling,
-fusion, feedback, tiling — has a WebGPU path, and none of it should until the
-pixels are known to match, which is what this phase was for.
+**Then the rest of them.** Twelve became **forty translated, thirty-six of
+them pixel-identical**, by adding the rules the failures named — one class at
+a time, measuring after each:
+
+| what was missing | what it was |
+|---|---|
+| `<sampler>_size`, `gl_FragCoord` | provided at the entry point, from `textureDimensions` and the builtin |
+| `vec3 a = X, b = Y;` | split into one declaration each |
+| `step(0.5, a.rgb)` | widen on the *widest* argument, not the first |
+| `sdCircle(…)` handed to `_rgb3` | a return-type table, so a distance is known to be a distance |
+| `min(hp(a), hp(b))` read as a vector | component-wise builtins take the widest of their arguments, and an unknown call claims nothing |
+| `float as = …` | WGSL keywords renamed |
+| a sampler inside a loop | `textureSampleLevel`, which has no uniformity rule |
+| `int mode` becoming `t mode` | `(?:in\|out\|inout\s+)?` was eating the `in` of `int` |
+| a helper reading `uv` or a size | refused with a reason — it would need a signature change, which is a rewrite |
+
+Two of those were found by the numbers going *down*: a refusal that matched a
+helper's own parameter called `m`, and a "widen" that did not recognise its
+own `vec3f(…)` and wrapped it until the parser gave up. Each was reverted to
+the last measured state and redone.
+
+And one wrong claim caught before it shipped: the detail line said the three
+nodes that rendered-but-differed "each use a hash", and `game.menu` uses none.
+They were `@alpha` nodes, and the GL side had been through `present()`, which
+premultiplies. Comparing straight alpha against premultiplied measures the
+host's convention rather than the translation — corrected, `game.shipView`
+went from 145.8/255 to **1.1/255**.
+
+*Left:* eight nodes still untranslated, in three named classes, and four that
+render without matching. And one sketch to one texture: nothing about the
+render graph — pooling, fusion, feedback, tiling — has a WebGPU path, and none
+of it should until the pixels are known to match.
 
 ### Cross-cutting
 
@@ -1794,7 +1823,7 @@ pixels are known to match, which is what this phase was for.
 | 18.1 | The library listed; a playable game in Generate — **shipped** | S | 17.1 | you can see what you have, and play a sketch |
 | 19.1 | Pong, with sound, in the Playground — **shipped** | S | 18.1 | model, rules, view and sound in one document |
 | 20.1 | Probes: a sketch's own state, read back — **shipped** | S | 19.1 | a Generate sketch that can be heard |
-| 21.1 | A WGSL emitter and a WebGPU runner — **first pixels** | L | 0.3 | 12 nodes identical on a second backend |
+| 21.1 | A WGSL emitter and a WebGPU runner — **40 translated** | L | 0.3 | 36 nodes identical on a second backend |
 | 21.2 | Three more games in Generate — **shipped** | S | 20.1 | breakout, a flyer, and pong |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,

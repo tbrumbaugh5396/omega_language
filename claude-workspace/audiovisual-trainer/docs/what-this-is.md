@@ -327,9 +327,9 @@ surprise:
   to what it buys.
 - **AI authoring of nodes** — the agents write briefs and critiques today.
 - **A second backend, mostly.** There is now a WGSL emitter and a WebGPU
-  runner, and **12 of the 64 node types render pixel-identically** to the GL
-  path on this machine. The other 40 are a named list of translation rules
-  still to write, not an unknown. Nothing about the render graph — pooling,
+  runner: **40 node types translate and 36 render pixel-identically** to the
+  GL path on this machine. The rest are a named list — eight untranslated in
+  three classes, four that render without matching — not an unknown. Nothing about the render graph — pooling,
   fusion, feedback, tiling — has a WebGPU path yet, and none of it should
   until the pixels are known to match.
 
