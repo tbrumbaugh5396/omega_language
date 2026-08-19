@@ -148,7 +148,100 @@ float a = row == index || row == selected ? max(fill, edge) : edge;
 float soft = inRange && row != index && row != selected ? fill * 0.12 : 0.0;
 vec4(col, max(a, soft))`);
 
-export const GAME_NODES = ["game.ship", "game.shipView", "game.menu", "input.keys"];
+defineNode(`// Bat, ball, wall and score, drawn where they are told. Keeps nothing: the
+// whole game is parameters on this node, written as expressions over prev()
+// and key(), so the ball's position is a number in the document and the
+// bounces are arithmetic a person can read. This is the View, and only that.
+// @node game.pongView
+// @module 07-shaders
+// @alpha
+uniform vec2  ball;    // @pad @range -2 2 @default 0 0 @help where the ball is
+uniform float bat;     // @range -1 1 @default 0 @help the bat's height
+uniform float score;   // @range 0 99 @step 1 @int @default 0 @help how many times the wall was hit
+uniform float batLen;  // @range 0.05 0.5 @default 0.22 @help half the bat's height
+uniform vec3  ink;     // @color @default #f4efe6
+uniform vec3  hot;     // @color @default #ff7a3d
+
+// Straight alpha, source over destination — the same rule every compositing
+// node here follows, so a trail behind this one behaves.
+vec4 over(vec4 s, vec4 d) {
+  float a = s.a + d.a * (1.0 - s.a);
+  return a > 0.0 ? vec4((s.rgb * s.a + d.rgb * d.a * (1.0 - s.a)) / a, a) : vec4(0.0);
+}
+
+float A = u_resolution.x / u_resolution.y;
+float aBall = aa(length(p - ball) - 0.035);
+float aBat  = aa(sdBox(p - vec2(-A + 0.06, bat), vec2(0.02, batLen)));
+float aWall = aa(sdBox(p - vec2(A - 0.03, 0.0), vec2(0.03, 1.0)));
+// The score, as a stack of marks up the right-hand side — there is no text
+// in a sketch, and a stack you can count is better than a number you cannot.
+float rows = min(score, 12.0);
+float aMark = p.y < -1.0 + rows * 0.16
+  ? aa(sdBox(vec2(abs(p.x - (A - 0.13)), mod(p.y + 1.0, 0.16) - 0.08), vec2(0.026, 0.026)))
+  : 0.0;
+
+vec4 c = vec4(0.0);
+c = over(vec4(ink * 0.35, aWall), c);
+c = over(vec4(hot, aMark), c);
+c = over(vec4(ink, aBat), c);
+c = over(vec4(hot, aBall), c);
+c`);
+
+export const GAME_NODES = ["game.ship", "game.shipView", "game.menu", "game.pongView", "input.keys"];
+
+/**
+ * Pong as data: every part of the game is a parameter on one View node, and
+ * the rules are expressions over `prev()` and `key()`. The intermediate
+ * decisions — did it hit the bat, the wall, the ceiling — are parameters too,
+ * because naming them makes the rules readable *and* gives the document's
+ * effects something to fire on: `when: ch("game.hitBat")`.
+ */
+export function pongAsData(graph, { speed = 0.024, batSpeed = 0.045, batLen = 0.22, name = "game" } = {}) {
+  const S = (v) => String(v);
+  return addNode(graph, "game.pongView", {
+    batLen: [batLen],
+    // The bat: up and down, or W and S.
+    batY: { expr: `clamp(prev("batY") + (key(38) - key(40) + key(87) - key(83)) * ${S(batSpeed)}, -1 + ${S(batLen)}, 1 - ${S(batLen)})`, value: [0] },
+    // Where the ball would go, before anything is decided about it.
+    nx: { expr: 'prev("ballX") + prev("velX")', value: [0] },
+    ny: { expr: 'prev("ballY") + prev("velY")', value: [0] },
+    // The four things that can happen, each its own readable line.
+    hitTop:  { expr: 'ch("ny") > 1 || ch("ny") < -1', value: [0] },
+    hitWall: { expr: 'ch("nx") > aspect - 0.045', value: [0] },
+    hitBat:  { expr: `ch("nx") < -aspect + 0.09 && abs(ch("ny") - ch("batY")) < ${S(batLen + 0.02)}`, value: [0] },
+    missed:  { expr: 'ch("nx") < -aspect - 0.02', value: [0] },
+    // The velocity, bounced; and off the bat, angled by where it landed.
+    velX: { expr: `ch("missed") ? ${S(-speed)} : (ch("hitWall") + ch("hitBat") > 0 ? -prev("velX") : prev("velX"))`, value: [-speed] },
+    velY: { expr: `ch("missed") ? ${S(speed * 0.6)} : (ch("hitTop") ? -prev("velY") : prev("velY") + ch("hitBat") * (ch("ny") - ch("batY")) * 0.03)`, value: [speed * 0.6] },
+    ballX: { expr: 'ch("missed") ? 0 : clamp(prev("ballX") + ch("velX"), -aspect, aspect - 0.045)', value: [0] },
+    ballY: { expr: 'ch("missed") ? 0 : clamp(prev("ballY") + ch("velY"), -1, 1)', value: [0] },
+    // What the shader actually reads.
+    ball: { expr: ['ch("ballX")', 'ch("ballY")'], value: [0, 0] },
+    bat: { expr: 'ch("batY")' },
+    score: { expr: 'ch("missed") ? 0 : prev("score") + ch("hitWall")', value: [0] },
+  }, [], { name });
+}
+
+/** The three sounds pong makes, as effects on the node `pongAsData` created. */
+export function pongEffects(name = "game") {
+  return [
+    // Off the bat: a short blip whose pitch follows where on the bat it hit.
+    { kind: "note", instrument: "blip", when: `ch("${name}.hitBat")`,
+      hz: `440 * 2 ^ ((ch("${name}.ballY") - ch("${name}.batY")) * 6 / 12)`, dur: "0.07" },
+    // Off the wall: a bell, rising with the score.
+    { kind: "note", instrument: "bell", when: `ch("${name}.hitWall")`,
+      hz: `587 * 2 ^ (min(ch("${name}.score"), 10) / 12)`, dur: "0.22" },
+    // Missed: low, and the score is gone.
+    { kind: "note", instrument: "thud", when: `ch("${name}.missed")`, hz: "110", dur: "0.45" },
+  ];
+}
+
+/** The instruments those effects name, all three from the library. */
+export const PONG_INSTRUMENTS = {
+  blip: { ref: "tone.blip" },
+  bell: { ref: "tone.bell" },
+  thud: { ref: "tone.pluck" },
+};
 
 /**
  * A menu as data: `index` and `selected` are states moved by events. Down

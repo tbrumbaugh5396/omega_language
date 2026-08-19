@@ -15,7 +15,7 @@ import { graphSummary } from "./graph-view.js";
 import { Keyboard } from "./keyboard.js";
 import "./field-nodes.js";
 import "./sim-nodes.js";
-import { shipAsData, menuAsData } from "./game-nodes.js";
+import { shipAsData, menuAsData, pongAsData, pongEffects, PONG_INSTRUMENTS } from "./game-nodes.js";
 import { EventQueue, keyboardEvents, pointerEvents } from "./events.js";
 import { LiveRig } from "./live-audio.js";
 import { instrumentFor } from "./instrument-library.js";
@@ -67,6 +67,21 @@ export const PLAY_DEMOS = [
         { kind: "param", instrument: "ship", node: inst.hum, param: "level",
           value: 'ch("ship.burning") * 0.9' },
       ];
+      return { graph: g, sources: {} };
+    },
+  },
+  {
+    id: "pong", title: "Pong",
+    how: "Up and down (or W and S) move the bat. Turn Sound on: the bat blips at a pitch set by where the ball hit it, the wall rings a bell that rises with your score, and a miss thuds. Every rule is an expression on one node — read them in the graph summary.",
+    build(W, H) {
+      const g = createGraph(W, H); g.stateKey = "play-pong";
+      const game = pongAsData(g);
+      // A short trail, so the ball reads as moving rather than teleporting.
+      const trail = addNode(g, "feedback.trail", { decay: [0.72] }, [game, null], { name: "trail" });
+      feedback(g, trail, 1, trail);
+      g.output = trail;
+      g.instruments = PONG_INSTRUMENTS;
+      g.effects = pongEffects();
       return { graph: g, sources: {} };
     },
   },
@@ -172,7 +187,7 @@ export const PLAY_DEMOS = [
 ];
 
 /** Open the playground on a demo. Returns a function that stops it. */
-export function playgroundDialog(startId = "mvu") {
+export function playgroundDialog(startId = "pong") {
   const W = 640, H = 360;
   const canvas = el("canvas", { width: W, height: H,
     style: { width: "100%", maxWidth: `${W}px`, aspectRatio: `${W} / ${H}`, background: "#0b0e16",

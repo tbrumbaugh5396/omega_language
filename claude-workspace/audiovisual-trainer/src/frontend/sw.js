@@ -1,6 +1,6 @@
 // Network-first everywhere (this is a local server, so the network is the
 // source of truth); the cache is only an offline fallback.
-const CACHE = "av-trainer-v38";
+const CACHE = "av-trainer-v39";
 const SHELL = ["/", "/static/styles.css", "/static/app.js", "/static/ui.js",
                "/static/engine-audio.js", "/static/engine-image.js",
                "/static/drills-audio.js", "/static/drills-visual.js",

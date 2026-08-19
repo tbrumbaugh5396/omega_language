@@ -1553,6 +1553,57 @@ here — no sound, because a Generate sketch has no effects to describe. The
 listing has no search and no way to delete. And the score is a stack of marks
 rather than a number, because there is no text in a sketch.
 
+### Phase 19 — Pong, with sound *(S)* — **shipped**
+
+The Generate preset was a game you could play and not hear, because a sketch
+has no effects to describe — effects belong to a render graph. So pong is now
+a Playground document as well, and there everything the last several phases
+built is in one place:
+
+- the **model** is fourteen parameters on one node, written as expressions
+  over `prev()` and `key()`;
+- the **rules** are those expressions, and the intermediate decisions are
+  parameters too — `hitBat`, `hitWall`, `missed` — because naming them makes
+  the rules readable *and* gives the effects something to fire on;
+- the **view** is `game.pongView`, which keeps nothing;
+- the **sound** is three effects naming three library instruments.
+
+```js
+hitBat: 'ch("nx") < -aspect + 0.09 && abs(ch("ny") - ch("batY")) < 0.24'
+velX:   'ch("missed") ? -0.024 : (ch("hitWall") + ch("hitBat") > 0 ? -prev("velX") : prev("velX"))'
+
+{ kind: "note", instrument: "blip", when: 'ch("game.hitBat")',
+  hz: '440 * 2 ^ ((ch("game.ballY") - ch("game.batY")) * 6 / 12)', dur: "0.07" }
+```
+
+The sounds are not a second copy of the rules — they fire on the game's own
+decisions, so a bat hit cannot make a noise the game did not agree happened.
+It is under the account menu → **Playground**, and it is the tab that opens.
+
+| held against | number |
+|---|---|
+| played well vs not played at all | **3 blips, 3 bells, score 3, no thuds** vs **10 thuds, no blips, score 0** |
+| the bell's pitch across a rally | **622, 659, 698 Hz** — one semitone a point |
+| the same keys twice, 700 frames | **405 bytes of model identical**, 6 notes at the same frames and pitches |
+| the rig fed frame by frame vs the batch bounce, per instrument | **identical** — 584 000 samples on each of 3 channels |
+
+`key()` also stopped throwing when a graph is merely inspected. A panel or a
+summary resolves a graph to look at it and has no hands; no keyboard now reads
+as no keys held, the same rule `prev()` follows before there is a last frame.
+
+Two failures on the way, both the test's own. The parity check printed
+"identical" in its detail unconditionally while asserting on something else —
+so it failed silently-looking, and the first fix was to make the sentence
+report what was measured. It then said the worst difference was **0.00e+0**
+while the samples compared unequal, which is only possible past the end of an
+array: the live context had half a second of tail and `renderFired` defaulted
+to a quarter, so twelve thousand indices read `undefined`. Same tail on both
+sides, and an explicit length check, and it is identical.
+
+*Left:* one bat, no opponent, and the score resets on a miss rather than
+ending anything. The Generate preset is still silent — a sketch has no
+effects, and giving it any would mean a sketch that is really a graph.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1641,6 +1692,7 @@ rather than a number, because there is no text in a sketch.
 | 16.1 | The instrument library, content-addressed — **shipped** | S | 15.1 | one sound, one instrument, provably |
 | 17.1 | The instrument document: a patch that persists — **shipped** | M | 16.1 | an instrument that outlives its session |
 | 18.1 | The library listed; a playable game in Generate — **shipped** | S | 17.1 | you can see what you have, and play a sketch |
+| 19.1 | Pong, with sound, in the Playground — **shipped** | S | 18.1 | model, rules, view and sound in one document |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

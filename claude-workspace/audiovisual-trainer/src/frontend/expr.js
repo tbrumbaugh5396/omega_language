@@ -270,7 +270,10 @@ function walk(node, env) {
         return 1;
       }
       if (node.name === "key" || node.name === "keyHit" || node.name === "keyToggle") {
-        if (!env.keys) throw new Error(`${node.name}() — no keyboard reaches this graph`);
+        // No keyboard is not an error, it is no keys held. A panel or a
+        // summary resolves a graph to look at it and has no hands; the same
+        // rule as `prev` before there is a last frame.
+        if (!env.keys) return 0;
         const code = Math.round(walk(node.args[0], env));
         const row = node.name === "key" ? env.keys.down : node.name === "keyHit" ? env.keys.hit : env.keys.toggle;
         return code >= 0 && code < row.length && row[code] ? 1 : 0;

@@ -23,7 +23,7 @@ import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
 import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback, findNode, defineNode } from "./render-graph.js";
 import { lifeStep, grayScottStep } from "./sim-nodes.js";
-import { shipStep, shipAsData, menuAsData } from "./game-nodes.js";
+import { shipStep, shipAsData, menuAsData, pongAsData, pongEffects, PONG_INSTRUMENTS } from "./game-nodes.js";
 import { EventQueue, pointerEvents } from "./events.js";
 import { LiveRig, renderFired } from "./live-audio.js";
 import { shipInstrument, toneInstrument, instrumentId, normalise, internInstruments,
@@ -1950,6 +1950,113 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
              detail: `the same sketch reads ${up} with the key up and ${down} with it down — u_keys is bound by the sketch runtime, not only by the graph` }); }
   } catch (e) {
     push({ group: "Library listing", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Pong with sound: the whole game as parameters on one node, its rules as
+  // expressions, and its noises as effects. Everything the last several
+  // phases built, in one document — so the checks are about the document
+  // being a game rather than about any one mechanism.
+  try {
+    const SR = 48000, FPS = 60, FRAMES = 700;
+    const build = (key) => {
+      const g = createGraph(320, 200); g.stateKey = key;
+      const game = pongAsData(g);
+      const trail = addNode(g, "feedback.trail", { decay: [0.72] }, [game, null], { name: "trail" });
+      feedback(g, trail, 1, trail);
+      g.output = trail;
+      g.instruments = PONG_INSTRUMENTS;
+      g.effects = pongEffects();
+      return g;
+    };
+    // `chase` plays well and never misses; without it the bat never moves.
+    const rally = (key, chase) => {
+      const g = build(key);
+      resetGraphState(key);
+      const kb = new Keyboard();
+      const fired = [];
+      for (let f = 0; f < FRAMES; f++) {
+        const st = paramState(key) || {};
+        const by = st["game ballY"] ? st["game ballY"][0] : 0;
+        const bt = st["game batY"] ? st["game batY"][0] : 0;
+        kb.clear();
+        if (chase) { if (by > bt + 0.02) kb.press(KEY.up); else if (by < bt - 0.02) kb.press(KEY.down); }
+        renderGraph(g, {}, { keys: kb, reset: f === 0, time: f / FPS,
+                             onFired: (fx) => fired.push(...fx.map((x) => ({ ...x, frame: f }))) });
+      }
+      const count = {};
+      for (const x of fired) count[x.instrument] = (count[x.instrument] || 0) + 1;
+      return { graph: g, fired, count, state: paramState(key) };
+    };
+
+    const good = rally("selftest-pong-good", true);
+    const bad = rally("selftest-pong-bad", false);
+
+    // 1. Playing well scores and never thuds; not playing misses and never
+    //    scores. The sounds follow the game because they are the game's own
+    //    decisions, not a second copy of the rules.
+    { const ok = good.count.thud === undefined && good.count.blip > 0 && good.count.bell > 0
+        && good.state["game score"][0] === good.count.bell
+        && bad.count.thud > 0 && bad.count.blip === undefined && bad.state["game score"][0] === 0;
+      push({ group: "Pong", name: "the sounds are the game's own decisions", ok,
+             detail: `played well: ${good.count.blip} blips off the bat, ${good.count.bell} bells off the wall, score ${good.state["game score"][0]}, no thuds · `
+               + `not played: ${bad.count.thud} thuds, no blips, score ${bad.state["game score"][0]}` }); }
+
+    // 2. The bell's pitch rises with the score, and the blip's follows where
+    //    on the bat the ball landed — both computed from the model, in the
+    //    effect, so nothing had to be told twice.
+    { const bells = good.fired.filter((f) => f.instrument === "bell").map((f) => Math.round(f.hz));
+      const rising = bells.every((h, i) => i === 0 || h > bells[i - 1]);
+      const blips = good.fired.filter((f) => f.instrument === "blip").map((f) => Math.round(f.hz));
+      const varied = new Set(blips).size > 1 || blips.length === 1;
+      push({ group: "Pong", name: "the pitches are computed from the model", ok: rising && varied && bells.length > 1,
+             detail: `bells ${bells.join(", ")} Hz — one semitone per point · blips ${blips.join(", ")} Hz, from where on the bat it hit` }); }
+
+    // 3. The same keys are the same game: a replay reproduces the model.
+    { const again = rally("selftest-pong-again", true);
+      const a = JSON.stringify(good.state), b = JSON.stringify(again.state);
+      const sameFired = JSON.stringify(good.fired.map((f) => [f.frame, f.instrument, Math.round(f.hz)]))
+        === JSON.stringify(again.fired.map((f) => [f.frame, f.instrument, Math.round(f.hz)]));
+      push({ group: "Pong", name: "the same keys are the same game, and the same notes", ok: a === b && sameFired,
+             detail: `${FRAMES} frames twice: ${a.length} bytes of model identical, and ${good.fired.length} notes at the same frames and pitches` }); }
+
+    // 4. And it sounds the same whether it is played or bounced — the
+    //    property the live path was built on, now on a game.
+    { // The same tail on both sides, or the shorter buffer's missing samples
+      // read as undefined and every one of them counts as a difference.
+      const TAIL = 0.5;
+      const seconds = FRAMES / FPS + TAIL;
+      const names = Object.keys(good.graph.instruments);
+      const offline = new OfflineAudioContext(names.length, Math.round(seconds * SR), SR);
+      const rig = await LiveRig.create(good.graph, { ctx: offline, split: true });
+      for (let f = 0; f < FRAMES; f++) rig.perform(good.fired.filter((x) => x.frame === f), f / FPS);
+      const liveBuf = await offline.startRendering();
+      const { buffer: batchBuf } = await renderFired(good.fired, { instruments: good.graph.instruments,
+                                                                   fps: FPS, frames: FRAMES, sampleRate: SR,
+                                                                   tail: TAIL, split: true });
+      const per = names.map((name, c) => {
+        const a = liveBuf.getChannelData(c), b = batchBuf.getChannelData(c);
+        let e = 0, worst = 0, same = true;
+        for (let i = 0; i < a.length; i++) {
+          const dd = Math.abs(a[i] - b[i]);
+          if (dd > worst) worst = dd;
+          if (a[i] !== b[i]) same = false;
+          e += a[i] * a[i];
+        }
+        return { name, same, worst, rms: Math.sqrt(e / a.length) };
+      });
+      const sameLength = liveBuf.length === batchBuf.length;
+      const allSame = sameLength && per.every((r) => r.same);
+      const heard = per.filter((r) => r.rms > 1e-5).length;
+      const routed = rig.notes, missed = rig.missed;
+      await rig.close();
+      push({ group: "Pong", name: "the game sounds the same played as bounced", ok: allSame && heard >= 2 && missed === 0,
+             detail: `${liveBuf.length} samples on each of ${names.length} instrument channels`
+               + (sameLength ? " · " : ` — but the bounce is ${batchBuf.length} · `)
+               + per.map((r) => `${r.name} ${r.same ? "identical" : `off by ${r.worst.toExponential(2)}`}`
+                                + ` (rms ${r.rms.toFixed(4)})`).join(", ")
+               + ` · ${routed} notes routed, ${missed} unrouted` }); }
+  } catch (e) {
+    push({ group: "Pong", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on
