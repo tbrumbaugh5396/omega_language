@@ -14,6 +14,7 @@ import { Feedback } from "./feedback.js";
 import { buildControls, applyUniforms, randomise, bindTextures, releaseTextures,
          mediaDims, seekVideos, resumeVideos } from "./shader-controls.js";
 import { muxMp4 } from "./video-mux.js";
+import { zipStore, pngBytes } from "./zip-store.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { loadFontFile, registeredFonts } from "./font-file.js";
 import { fitPreview } from "./sdf-core.js";
@@ -1090,7 +1091,10 @@ export const newGenerateDoc = (preset = GENERATE_PRESETS[0]) => ({
 });
 
 const SIZES = [[512, 512], [640, 640], [800, 450], [1024, 576], [1080, 1080], [1080, 1920]];
-const EXPORTS = [[1024, 1024], [2048, 2048], [4096, 4096], [1920, 1080], [3840, 2160], [1080, 1920]];
+// Sizes past a GPU's maximum are drawn in tiles, so the list is not bounded
+// by what fits in one render any more.
+const EXPORTS = [[1024, 1024], [2048, 2048], [4096, 4096], [8192, 8192], [16384, 16384],
+                 [1920, 1080], [3840, 2160], [7680, 4320], [1080, 1920]];
 
 export async function generateEditor(host) {
   const doc = host.data;
@@ -1211,7 +1215,11 @@ export async function generateEditor(host) {
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     const u = (n) => gl.getUniformLocation(prog, n);
-    gl.uniform2f(u("u_resolution"), canvas.width, canvas.height);
+    // A tile draws at its own size and thinks in the whole picture's, so a
+    // render past the GPU's maximum comes out identical to one that fitted.
+    const res = tileRes || [canvas.width, canvas.height];
+    gl.uniform2f(u("u_resolution"), res[0], res[1]);
+    gl.uniform2f(u("u_origin"), tileOrigin[0], tileOrigin[1]);
     gl.uniform2f(u("u_mouse"), mouse[0], mouse[1]);
     gl.uniform1f(u("u_time"), timeNow());
     gl.uniform1f(u("u_seed"), doc.seed);
@@ -1236,6 +1244,7 @@ export async function generateEditor(host) {
   // Decided when the program is compiled, not per frame: desugaring the
   // sketch to ask is not something to do sixty times a second.
   let wantChannels = 1;
+  let tileOrigin = [0, 0], tileRes = null;
 
   /** One state step: read a, write b, swap. */
   function stepSim() {
@@ -1325,15 +1334,34 @@ export async function generateEditor(host) {
   /** Render once at the export size. A simulation is its state, and its state
       is the preview's size — so with feedback in play the export is that size,
       not resampled to something the sim never ran at. */
+  /**
+   * Does this sketch read the last frame?
+   *
+   * Not a question to ask of the generated source: every prelude declares
+   * u_prev and every helper set defines prev(), so testing that says yes to
+   * everything — which is why an export has been quietly falling back to the
+   * preview size for every document, whatever size was chosen. Ask the text
+   * the author actually wrote, with the two helpers' own definitions taken
+   * out first so their bodies do not answer for them.
+   */
+  function readsPrevFrame() {
+    const src = stripComments(doc.mode === "glsl" ? (doc.glsl || "") : (doc.sketch || ""));
+    const withoutHelpers = src
+      .replace(/vec4\s+prev\s*\(\s*vec2[^)]*\)\s*\{[^}]*\}/g, " ")
+      .replace(/vec4\s+prevAt\s*\(\s*vec2[^)]*\)\s*\{[^}]*\}/g, " ");
+    return /\btexture2?D?\s*\(\s*u_prev\b|\bprev\s*\(|\bprevAt\s*\(/.test(withoutHelpers);
+  }
+
   function exportPng() {
-    const usesFeedback = !!sim || /\bu_prev\b/.test(stripComments(source()));
+    const usesFeedback = !!sim || readsPrevFrame();
     let [w, h] = doc.exportSize;
-    const maxDim = gl ? gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0] : 4096;
+    const maxDim = gl ? Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE),
+                                 gl.getParameter(gl.MAX_VIEWPORT_DIMS)[0]) : 4096;
     if (usesFeedback) { w = canvas.width; h = canvas.height; }
-    if (w > maxDim || h > maxDim) {
-      toast(`This GPU caps a render at ${maxDim}px. Pick a smaller size.`);
-      return;
-    }
+    // Past the GPU's maximum the picture is drawn in tiles. A simulation
+    // cannot be: a sim reads its neighbours, and a tile's neighbours are in
+    // the next tile — so those still export at the size their state is.
+    if (!usesFeedback && (w > maxDim || h > maxDim)) return exportTiled(w, h, maxDim);
     // 2×2 supersampling where the GPU has room: render at double size, then
     // average down. Hard edges — foam lines, grass, board rails — are where a
     // single sample per pixel reads as cheap. Capped so a 4096 export does
@@ -1375,6 +1403,93 @@ export async function generateEditor(host) {
   }
 
   /**
+   * Every frame as a PNG, in a zip. Stored rather than deflated, because a
+   * PNG is already compressed and running it through deflate again costs
+   * time for nothing. The archive is stamped with a fixed date so the same
+   * run produces the same bytes.
+   */
+  async function frameSequence(frames, fps, W, H, ui) {
+    exporting = true;
+    const [pw, ph] = [canvas.width, canvas.height];
+    if (W !== pw || H !== ph) { canvas.width = W; canvas.height = H; }
+    const files = [];
+    const pad = String(frames - 1).length;
+    try {
+      for (let f = 0; f < frames; f++) {
+        if (ui.cancelled()) break;
+        forcedTime = f / fps;
+        await seekVideos(textures, forcedTime);
+        if (sim) for (let i = 0; i < doc.simSteps; i++) stepSim();
+        draw();
+        files.push({ name: `frame_${String(f).padStart(pad, "0")}.png`, bytes: await pngBytes(canvas) });
+        if (f % 4 === 0) {
+          ui.status.textContent = `Frame ${f + 1} of ${frames}…`;
+          ui.bar.firstChild.style.width = `${Math.round((100 * f) / frames)}%`;
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+      if (ui.cancelled()) return;
+      ui.status.textContent = "Writing the archive…";
+      await new Promise((r) => setTimeout(r, 0));
+      const blob = zipStore(files);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${host.doc.name || "generate"}-${W}x${H}-${fps}fps.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      closeModal();
+      toast(`Exported ${files.length} frames, ${(blob.size / 1e6).toFixed(1)} MB.`);
+    } catch (e) {
+      ui.status.textContent = `Frames failed: ${String(e.message).split("\n")[0]}`;
+    } finally {
+      exporting = false; forcedTime = null;
+      canvas.width = pw; canvas.height = ph;
+      draw();
+    }
+  }
+
+  /**
+   * A render larger than the GPU will do in one go: draw it in pieces, each
+   * one told where it sits, and put them together on a 2D canvas. Identical
+   * to an untiled render rather than merely close, because every tile is
+   * given the whole picture's resolution and its own corner.
+   */
+  function exportTiled(w, h, maxDim) {
+    const step = Math.min(maxDim, 2048);
+    const out = document.createElement("canvas");
+    out.width = w; out.height = h;
+    const cx = out.getContext("2d");
+    const [pw, ph] = [canvas.width, canvas.height];
+    const tiles = Math.ceil(w / step) * Math.ceil(h / step);
+    toast(`Rendering ${w}×${h} in ${tiles} tiles…`);
+    try {
+      tileRes = [w, h];
+      for (let y = 0; y < h; y += step) {
+        for (let x = 0; x < w; x += step) {
+          const tw = Math.min(step, w - x), th = Math.min(step, h - y);
+          if (canvas.width !== tw || canvas.height !== th) { canvas.width = tw; canvas.height = th; }
+          // u_origin counts from the bottom, as gl_FragCoord does.
+          tileOrigin = [x, h - y - th];
+          draw();
+          cx.drawImage(canvas, x, y);
+        }
+      }
+    } catch (e) {
+      toast(`Tiled export failed: ${String(e.message).split("\n")[0]}`);
+      return;
+    } finally {
+      tileRes = null; tileOrigin = [0, 0];
+      canvas.width = pw; canvas.height = ph;
+      draw();
+    }
+    const a = document.createElement("a");
+    a.href = out.toDataURL("image/png");
+    a.download = `${host.doc.name || "generate"}-${w}x${h}.png`;
+    a.click();
+    toast(`Exported ${w}×${h} in ${tiles} tiles — past this GPU's ${maxDim}px limit.`);
+  }
+
+  /**
    * Render a run of frames at a fixed clock and write an MP4. Nothing is
    * recorded off the screen: each frame is drawn for exactly t = i/fps, a
    * sim is stepped once per frame (times steps/frame), and video textures
@@ -1386,7 +1501,7 @@ export async function generateEditor(host) {
       style: { width: "5rem" } });
     const fpsSel = el("select", {}, ...[24, 30, 60].map((f) =>
       el("option", { value: f, selected: f === (doc.videoFps || 30) }, `${f} fps`)));
-    const usesFeedback = !!sim || /\bu_prev\b/.test(stripComments(source()));
+    const usesFeedback = !!sim || readsPrevFrame();
     const sizeNote = usesFeedback
       ? `at the preview size, ${canvas.width}×${canvas.height} — a simulation is its state`
       : `at ${Math.min(doc.exportSize[0], 1920)}×${Math.min(doc.exportSize[1], 1920)}`;
@@ -1403,9 +1518,11 @@ export async function generateEditor(host) {
       status, bar,
       el("div.row", { style: { justifyContent: "flex-end" } },
         el("button", { onclick: () => { cancelled = true; closeModal(); } }, "Cancel"),
-        el("button.primary", { onclick: go }, "Render")));
+        el("button", { onclick: () => go({ frames: true }),
+          title: "every frame as a PNG, in a zip" }, "Frames (zip)"),
+        el("button.primary", { onclick: () => go({}) }, "Render")));
 
-    async function go() {
+    async function go({ frames: asFrames = false } = {}) {
       const secs = Math.max(1, Math.min(120, +durIn.value || 6));
       const fps = +fpsSel.value;
       doc.videoSecs = secs; doc.videoFps = fps; host.save();
@@ -1415,10 +1532,13 @@ export async function generateEditor(host) {
         W = Math.min(doc.exportSize[0], 1920); H = Math.min(doc.exportSize[1], 1920);
         W -= W % 2; H -= H % 2;                       // H.264 wants even sizes
       }
-      if (!("VideoEncoder" in window)) {
+      if (!asFrames && !("VideoEncoder" in window)) {
         status.textContent = "This browser has no WebCodecs; a video export needs Chrome, Edge or Safari 17+.";
         return;
       }
+      // An image sequence needs no encoder at all, which is the point of
+      // having it: whatever this browser will not encode, another tool can.
+      if (asFrames) return frameSequence(frames, fps, W, H, { status, bar, cancelled: () => cancelled });
       exporting = true;
       const [pw, ph] = [canvas.width, canvas.height];
       if (W !== pw || H !== ph) { canvas.width = W; canvas.height = H; }

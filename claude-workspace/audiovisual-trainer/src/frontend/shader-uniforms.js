@@ -14,7 +14,7 @@
 /** Supplied by the runtime, so they are driven rather than dialled. */
 export const RESERVED = new Set([
   "u_resolution", "u_mouse", "u_time", "u_seed",
-  "u_prev", "u_state", "u_state2", "u_frame", "u_mouseDown",
+  "u_prev", "u_state", "u_state2", "u_frame", "u_mouseDown", "u_origin",
 ]);
 
 // Scanned over the whole source rather than line by line: `uniform vec2 u_r;
@@ -347,7 +347,8 @@ uniform sampler2D u_prev;    // last frame — of the state if sim() exists, els
 uniform sampler2D u_state;   // this frame's state, once sim() has run
 uniform sampler2D u_state2;  // the second state, if the sketch defines sim2()
 uniform int   u_frame;       // frames since Restart; 0 on the first
-uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
+uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas
+uniform vec2  u_origin;      // this tile's corner, when a render is bigger than the GPU allows`;
 
 // GLSL ES 3.00, for a WebGL2 context. The version line must be the very first
 // line of the file, so a runtime that prepends `#define SIM_PASS` inserts it
@@ -370,7 +371,8 @@ uniform sampler2D u_prev;    // last frame — of the state if sim() exists, els
 uniform sampler2D u_state;   // this frame's state, once sim() has run
 uniform sampler2D u_state2;  // the second state, if the sketch defines sim2()
 uniform int   u_frame;       // frames since Restart; 0 on the first
-uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas`;
+uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas
+uniform vec2  u_origin;      // this tile's corner, when a render is bigger than the GPU allows`;
 
 // The two anti-aliasing helpers by GLSL version. Under 3.00 the width comes
 // from fwidth(d) — the exact rate the distance changes across this pixel — so
@@ -569,12 +571,19 @@ export function desugarMapped(sketch, opts = {}) {
   // has one colour buffer, and a shader declaring an output it has nowhere to
   // put is a shader some drivers refuse.
   if (opts.es3) emit("layout(location = 0) out vec4 fragColor;");
+  // Tiling: a render larger than the GPU's maximum is drawn in pieces, and
+  // every piece has to believe it is at its own place in the whole. Shifting
+  // gl_FragCoord once, here, means nothing downstream — not a helper, not a
+  // node body, not a preset — has to know that happened. The capture has to
+  // be declared before the name is redefined, or it would call itself.
+  emit("vec4 _fcRaw() { return gl_FragCoord; }\nvec4 _fc;\n#define gl_FragCoord _fc");
   if (hasSim2) emit("#ifdef SIM_PASS\nlayout(location = 1) out vec4 fragColor1;\n#endif");
   emit(vars.map(([ty, name]) => `${ty} ${name};`).join("\n"));
   emit(helpers);
   emit(COERCE);
   parts.declTexts.forEach((t, i) => emit(t, parts.declLines[i]));
   emit("void main() {");
+  emit("  _fc = _fcRaw() + vec4(u_origin, 0.0, 0.0);");
   emit(vars.map(([, name, init]) => `  ${name} = ${init};`).join("\n"));
   if (hasSim) emit(simBlock.replace(/\n$/, ""));
   parts.stmtTexts.forEach((t, i) => emit(t, parts.stmtLines[i]));

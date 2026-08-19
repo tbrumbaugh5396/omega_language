@@ -148,8 +148,12 @@ export function renderSketch(source, width, height, opts = {}) {
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     const u = (n) => gl.getUniformLocation(prog, n);
-    gl.uniform2f(u("u_resolution"), width, height);
-    const m = opts.mouse || [width / 2, height / 2];
+    // A tile draws at its own size but must think in the whole picture's, or
+    // every scale in the sketch would change with the tiling.
+    const res = opts.resolution || [width, height];
+    gl.uniform2f(u("u_resolution"), res[0], res[1]);
+    gl.uniform2f(u("u_origin"), (opts.origin || [0, 0])[0], (opts.origin || [0, 0])[1]);
+    const m = opts.mouse || [res[0] / 2, res[1] / 2];
     gl.uniform2f(u("u_mouse"), m[0], m[1]);
     gl.uniform1f(u("u_time"), opts.time || 0);
     gl.uniform1f(u("u_seed"), opts.seed || 0);
@@ -219,6 +223,60 @@ export function renderSketch(source, width, height, opts = {}) {
   out.width = width; out.height = height;
   out.getContext("2d").drawImage(canvas, 0, 0);
   return out;
+}
+
+/** The largest square this GPU will render in one go. */
+export function maxRenderSize(gl = null) {
+  const g = gl || (shared ? shared.gl : ctx().gl);
+  return Math.min(g.getParameter(g.MAX_TEXTURE_SIZE), g.getParameter(g.MAX_VIEWPORT_DIMS)[0]);
+}
+
+/**
+ * Render at any size, in tiles where the GPU will not do it in one go.
+ *
+ * Each tile draws with the *full* resolution in u_resolution and its own
+ * corner in u_origin, so every pixel believes it is where it will end up —
+ * which is what makes a tiled render identical to an untiled one rather than
+ * merely similar. Returns a 2D canvas.
+ *
+ * A sketch that keeps state cannot be tiled: a sim reads its neighbours, and
+ * a tile's neighbours are in another tile. Those come back untiled, and the
+ * caller is told the size it actually got.
+ */
+export function renderTiled(source, width, height, opts = {}) {
+  const s = ctx();
+  const max = maxRenderSize(s.gl);
+  const bare = String(source);
+  const keepsState = /\bvec4\s+sim\s*\(\s*vec2\b/.test(bare) || /\bu_prev\b/.test(bare);
+  // `tile` forces a step, which is how the self-test exercises the tiled path
+  // at a size the GPU would happily do in one go.
+  const forced = opts.tile ? Math.max(8, opts.tile | 0) : 0;
+  if (!forced && ((width <= max && height <= max) || keepsState)) {
+    const w = Math.min(width, max), h = Math.min(height, max);
+    const out = renderSketch(source, w, h, opts);
+    return { canvas: out, width: w, height: h, tiles: 1,
+             clamped: w !== width || h !== height,
+             why: keepsState && (width > max || height > max)
+               ? "a sketch that keeps state cannot be tiled — a tile's neighbours are in the next tile"
+               : null };
+  }
+  const out = document.createElement("canvas");
+  out.width = width; out.height = height;
+  const g = out.getContext("2d");
+  const step = forced || Math.min(max, 2048);
+  let tiles = 0;
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const tw = Math.min(step, width - x), th = Math.min(step, height - y);
+      // u_origin is in gl_FragCoord's frame, which counts up from the bottom.
+      const originY = height - y - th;
+      const tile = renderSketch(source, tw, th, {
+        ...opts, tile: 0, resolution: [width, height], origin: [x, originY] });
+      g.drawImage(tile, x, y);
+      tiles++;
+    }
+  }
+  return { canvas: out, width, height, tiles, clamped: false, why: null };
 }
 
 /** Does this sketch keep two fields? `vec4 sim2(vec2)` is how it says so. */

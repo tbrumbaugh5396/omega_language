@@ -32,6 +32,10 @@ import { clipAt, evalTrack, frameGraph, gradeEffects, putKey, sourceTimeAt } fro
 import { parseCube } from "./lut-cube.js";
 import { compileTitleNode } from "./title-node.js";
 import { readGsubForTest } from "./font-file.js";
+import { renderTiled, maxRenderSize } from "./shader-run.js";
+import { auditNodes, portabilitySummary, auditSource } from "./wgsl-audit.js";
+import { zipStore, crc32 } from "./zip-store.js";
+import { graphStats } from "./graph-compile.js";
 import { freezeEffects } from "./canvas-graph.js";
 import { registerNode, withNodeHeader, nodeIdFor, keepVersion, versionSummary,
          MAX_VERSIONS, declaresNode } from "./node-library.js";
@@ -1093,6 +1097,74 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
              detail: `saving the same text twice keeps one · capped at ${data.versions.length} · "${summary}"` }); }
   } catch (e) {
     push({ group: "Nodes from Generate", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Platform: the things that decide whether this runs anywhere and keeps
+  // running — tiling past the GPU's maximum, staying translatable, and not
+  // growing without bound.
+  try {
+    { const worst = [];
+      for (const id of ["rings", "cells", "beach"]) {
+        const preset = GENERATE_PRESETS.find((p2) => p2.id === id);
+        if (!preset) continue;
+        const W2 = 320, H2 = 240;
+        const one = renderSketch(preset.source, W2, H2, { time: 1.25 })
+          .getContext("2d").getImageData(0, 0, W2, H2).data;
+        const many = renderTiled(preset.source, W2, H2, { time: 1.25, tile: 96 });
+        const got = many.canvas.getContext("2d").getImageData(0, 0, W2, H2).data;
+        let diff = 0;
+        for (let i = 0; i < one.length; i += 4) if (one[i] !== got[i] || one[i + 1] !== got[i + 1] || one[i + 2] !== got[i + 2]) diff++;
+        worst.push({ id, diff, tiles: many.tiles });
+      }
+      const bad = worst.filter((w) => w.diff);
+      push({ group: "Platform", name: "a tiled render is identical to an untiled one", ok: !bad.length,
+             detail: bad.length
+               ? bad.map((b) => `${b.id}: ${b.diff} px differ`).join(", ")
+               : `${worst.map((w) => `${w.id} in ${w.tiles} tiles`).join(", ")} — not one pixel differs · `
+                 + `this GPU renders up to ${maxRenderSize()}px in one go` }); }
+
+    { const rows = auditNodes();
+      const sum = portabilitySummary(rows);
+      const host = auditSource(desugar("uniform sampler2D in0;\ntexture2D(in0, uv)", { es3: isGL2(gl) }),
+                               { bodyOnly: false });
+      push({ group: "Platform", name: "every node body is still translatable to WGSL",
+             ok: sum.clean === sum.total,
+             detail: sum.clean === sum.total
+               ? `${sum.total}/${sum.total} clean · the obstacles are all in the host's own text `
+                 + `(${host.findings.map((f) => `${f.id}×${f.count}`).join(", ") || "none"}), which a `
+                 + "WGSL backend would emit differently anyway"
+               : `${sum.clean}/${sum.total} clean · ` + sum.kinds.map((k) => `${k.id} in ${k.nodes}`).join(", ") }); }
+
+    { const enc = new TextEncoder();
+      const files = [
+        { name: "frame_00.txt", bytes: enc.encode("the first frame\n") },
+        { name: "nested/frame_01.bin", bytes: new Uint8Array(300).map((_, i) => i & 255) },
+      ];
+      const blob = zipStore(files, { stamp: new Date(2026, 0, 2, 3, 4, 5) });
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      const dv = new DataView(buf.buffer);
+      let at = 0, seen = 0, crcOk = true;
+      while (at + 4 <= buf.length && dv.getUint32(at, true) === 0x04034b50) {
+        const nameLen = dv.getUint16(at + 26, true), extra = dv.getUint16(at + 28, true);
+        const size = dv.getUint32(at + 18, true), stored = dv.getUint32(at + 14, true);
+        const data = buf.subarray(at + 30 + nameLen + extra, at + 30 + nameLen + extra + size);
+        if (crc32(data) !== stored) crcOk = false;
+        seen++;
+        at += 30 + nameLen + extra + size;
+      }
+      const end = dv.getUint32(buf.length - 22, true) === 0x06054b50;
+      push({ group: "Platform", name: "an image sequence's archive reads back", ok: seen === 2 && crcOk && end,
+             detail: `${seen} entries, every CRC-32 matches its bytes, and the end record is where it should be · `
+                     + `${buf.length} bytes stored rather than deflated, because a PNG already is` }); }
+
+    { const st = graphStats();
+      const ok = st.pooled <= 8 && st.fused <= 24 && st.ownTextures <= 17;
+      push({ group: "Platform", name: "the runner's caches and pool are capped", ok,
+             detail: `${st.pooled} targets pooled (cap 8, ${st.targetsMade} made, ${st.targetsEvicted} released), `
+                     + `${st.fused} fused programs (cap 24), ${st.luts} LUTs, ${st.ownTextures} embedded textures · `
+                     + `intermediates in ${st.precision || "—"}` }); }
+  } catch (e) {
+    push({ group: "Platform", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

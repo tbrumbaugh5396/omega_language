@@ -41,9 +41,15 @@ vec3 oklabToLin(vec3 c) {
 
 // Sample the way the CPU does: round the position to a pixel, clamp to the
 // image, read that texel's centre. Bilinear would be smoother and wrong.
-const NEAREST = `vec4 texel(sampler2D s, vec2 sz, vec2 px) {
+//
+// It reads in0 rather than taking a sampler, because a function that takes
+// one is the single thing in this library WGSL has no form of — a texture and
+// its sampler are separate objects there. Keeping the node bodies free of it
+// is what leaves a second backend cheap, and wgsl-audit.js checks that they
+// stay that way.
+const NEAREST = `vec4 texelIn0(vec2 sz, vec2 px) {
   vec2 p = clamp(floor(px + 0.5), vec2(0.0), sz - 1.0);
-  return texture2D(s, (p + 0.5) / sz);
+  return texture2D(in0, (p + 0.5) / sz);
 }`;
 
 const LUMA = `float lumaOf(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }`;

@@ -22,8 +22,11 @@ import { planPasses } from "./graph-fuse.js";
 
 /** A pool of framebuffers, one size, negotiated to the best precision. */
 class TargetPool {
+  static CAP = 8;
   constructor(gl) {
     this.gl = gl;
+    this.evicted = 0;
+    this.made = 0;
     this.gl2 = isGL2(gl);
     this.free = [];
     this.kind = null;
@@ -71,7 +74,7 @@ class TargetPool {
     const order = this.kind ? [this.kind] : ((this.gl2 ? this.ext : this.half) ? ["half", "byte"] : ["byte"]);
     for (const k of order) {
       const t = tryKind(k);
-      if (t) { this.kind = k; return t; }
+      if (t) { this.kind = k; this.made++; return t; }
     }
     throw new Error("could not allocate a render target");
   }
@@ -80,7 +83,21 @@ class TargetPool {
     if (i >= 0) return this.free.splice(i, 1)[0];
     return this.make(w, h);
   }
-  put(t) { if (t) this.free.push(t); }
+  /**
+   * Back to the pool, up to a point. A graph that widens and narrows can hand
+   * back more targets than it will ever want again, and at 4K each one is 32
+   * MB of half float — so past the cap they are released instead of kept.
+   */
+  put(t) {
+    if (!t) return;
+    if (this.free.length >= TargetPool.CAP) {
+      this.gl.deleteTexture(t.tex);
+      this.gl.deleteFramebuffer(t.fbo);
+      this.evicted++;
+      return;
+    }
+    this.free.push(t);
+  }
   release() {
     for (const t of this.free) { this.gl.deleteTexture(t.tex); this.gl.deleteFramebuffer(t.fbo); }
     this.free = [];
@@ -127,7 +144,17 @@ export class GraphRunner {
    */
   fusedProgram(step) {
     let e = this.fused.get(step.key);
-    if (e) return e;
+    if (e) {
+      // Touch it, so the one that goes is the one least recently wanted.
+      this.fused.delete(step.key);
+      this.fused.set(step.key, e);
+      return e;
+    }
+    if (this.fused.size >= 24) {
+      const [oldest, old] = this.fused.entries().next().value;
+      if (old && old.prog) this.gl.deleteProgram(old.prog);
+      this.fused.delete(oldest);
+    }
     try {
       e = { prog: linkProgram(this.gl, desugar(step.sketch, { es3: isGL2(this.gl) })),
             uniforms: parseUniforms(step.sketch) };
@@ -158,6 +185,11 @@ export class GraphRunner {
    * `prepareNode` has decoded it, so a synchronous render never has to wait.
    */
   ownTexture(src) {
+    if (this.own.size > 16 && !this.own.has(src)) {
+      const [oldest, t] = this.own.entries().next().value;
+      this.gl.deleteTexture(t.tex);
+      this.own.delete(oldest);
+    }
     let tex = this.own.get(src);
     const im = cachedImage(src);
     if (tex && (tex.filled || !im)) return tex.tex;
@@ -351,6 +383,14 @@ export class GraphRunner {
     return { tex: out.tex, w: out.w, h: out.h, passes };
   }
 
+  /** What this runner is holding, for anything that wants to say so. */
+  stats() {
+    return { programs: this.programs.size, fused: this.fused.size, luts: this.luts.size,
+             ownTextures: this.own.size, pooled: this.pool.free.length,
+             targetsMade: this.pool.made, targetsEvicted: this.pool.evicted,
+             precision: this.pool.kind };
+  }
+
   /**
    * Draw a texture to the context's own canvas, upright. The canvas is
    * premultiplied — that is what the browser assumes when it reads one back —
@@ -488,6 +528,11 @@ export async function prepareNode(typeId) {
   const t = nodeType(typeId);
   if (!t) return;
   await loadSketchImages(t.source);
+}
+
+/** What the shared runner is holding: caches, pool, precision. */
+export function graphStats() {
+  return sharedRunner().runner.stats();
 }
 
 /** The ejected GLSL for a graph, on the shared context: text, or parts. */
