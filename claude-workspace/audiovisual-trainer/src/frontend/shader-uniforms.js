@@ -62,9 +62,20 @@ function annotations(comment) {
       const s = num(1);
       if (s !== null) { out.step = s; i += 1; }
     } else if (key === "default") {
-      const d = [];
-      while (Number.isFinite(parseFloat(words[i + 1]))) { d.push(parseFloat(words[++i])); }
-      if (d.length) out.default = d;
+      // A colour's default is written the way a colour is written everywhere
+      // else here — `@default #f4efe6` — and a hex literal is not a number,
+      // so reading numbers alone silently found none and the control fell
+      // back to the palette. Both forms are accepted.
+      const hex6 = /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})$/.exec(words[i + 1] || "");
+      if (hex6) {
+        const h = hex6[1].length === 3 ? hex6[1].split("").map((c) => c + c).join("") : hex6[1];
+        out.default = [0, 2, 4].map((k) => parseInt(h.slice(k, k + 2), 16) / 255);
+        i += 1;
+      } else {
+        const d = [];
+        while (Number.isFinite(parseFloat(words[i + 1]))) { d.push(parseFloat(words[++i])); }
+        if (d.length) out.default = d;
+      }
     } else if (key === "label") {
       out.label = words.slice(i + 1).join(" ");
       i = words.length;

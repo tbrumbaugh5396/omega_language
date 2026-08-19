@@ -19,6 +19,7 @@ import { compileSvg } from "./svg-to-sdf.js";
 import { loadFontFile, registeredFonts } from "./font-file.js";
 import { fitPreview } from "./sdf-core.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
+import { Keyboard } from "./keyboard.js";
 import { registerNode, withNodeHeader, nodeShape, declaresNode, keepVersion,
          versionSummary, usersOfNode, nodeIdFor } from "./node-library.js";
 import { gridOverlay } from "./grid-overlay.js";
@@ -812,6 +813,80 @@ col += vec3(0.5, 0.7, 0.8) * max(-h0, 0.0) * 3.0;
 
 finish(col)` },
 
+  { id: "pong", label: "Bat and ball — a game, in one sketch", preview: [640, 400], steps: 1, source:
+`// A game. Up and down (or W and S) move the bat; the ball bounces, and the
+// score is the bricks it has taken off the right wall. Everything lives in
+// three texels of the state: the ball, the bat, and the score. Every other
+// texel reads those three and draws.
+//
+// That is the whole Shadertoy trick — state in pixels, keys in a texture —
+// and it is playable here because the sketch runtime binds u_keys the way
+// the render graph does. Click the picture first so it has the keys.
+uniform sampler2D u_keys;
+uniform float speed;     // @range 0.2 2 @default 0.9 @help how fast the ball travels
+uniform float batSpeed;  // @range 0.5 4 @default 2.2 @help how fast the bat moves
+uniform float batLen;    // @range 0.1 0.5 @default 0.22 @help half the bat's height
+uniform vec3 ink;        // @color @default #f4efe6
+uniform vec3 hot;        // @color @default #ff7a3d
+
+// The three registers, at the bottom-left corner of the state.
+vec4 ball() { return state(vec2(0.5, 0.5) / u_resolution); }   // xy = position, zw = velocity
+vec4 bat()  { return state(vec2(1.5, 0.5) / u_resolution); }   // x = height, y = score
+float ar() { return u_resolution.x / u_resolution.y; }
+
+vec4 sim(vec2 uv) {
+  vec2 texel = floor(gl_FragCoord.xy);
+  float up   = max(keyDown(u_keys, 38.0), keyDown(u_keys, 87.0));
+  float down = max(keyDown(u_keys, 40.0), keyDown(u_keys, 83.0));
+  float A = ar();
+
+  vec4 b = frame == 0 ? vec4(0.0, 0.0, -speed, speed * 0.55) : ball();
+  vec4 s = frame == 0 ? vec4(0.0, 0.0, 0.0, 0.0) : bat();
+  float dt = 1.0 / 60.0;
+
+  // The bat, clamped to the court.
+  float h = clamp(s.x + (up - down) * batSpeed * dt, -1.0 + batLen, 1.0 - batLen);
+
+  vec2 pos = b.xy + b.zw * dt;
+  vec2 vel = b.zw;
+  if (pos.y >  1.0) { pos.y =  1.0; vel.y = -vel.y; }          // ceiling
+  if (pos.y < -1.0) { pos.y = -1.0; vel.y = -vel.y; }          // floor
+  if (pos.x >  A - 0.04) { pos.x = A - 0.04; vel.x = -vel.x; s.y += 1.0; }   // the wall, a point
+  // The bat: a hit takes the angle from where on the bat it landed.
+  float batX = -A + 0.09;
+  if (pos.x < batX && vel.x < 0.0) {
+    if (abs(pos.y - h) < batLen) {
+      pos.x = batX; vel.x = -vel.x;
+      vel.y += (pos.y - h) / batLen * speed * 0.6;
+      vel = normalize(vel) * length(vec2(speed, speed * 0.55));
+    } else if (pos.x < -A - 0.2) {                              // missed: serve again
+      pos = vec2(0.0); vel = vec2(-speed, speed * 0.55); s.y = 0.0;
+    }
+  }
+  if (texel == vec2(0.0)) return vec4(pos, vel);
+  if (texel == vec2(1.0, 0.0)) return vec4(h, s.y, 0.0, 1.0);
+  return vec4(0.0);
+}
+
+float A = ar();
+vec2 q = p;
+vec4 b = ball();
+vec4 s = bat();
+
+float d = length(q - b.xy) - 0.035;                              // the ball
+float dbat = sdBox(q - vec2(-A + 0.06, s.x), vec2(0.02, batLen)); // the bat
+float dwall = sdBox(q - vec2(A - 0.03, 0.0), vec2(0.03, 1.0));    // the wall it scores off
+
+vec3 col = vec3(0.04, 0.05, 0.09);
+col = mix(col, hot, aa(d));
+col = mix(col, ink, aa(dbat));
+col = mix(col, ink * 0.35, aa(dwall));
+// The score, as a stack of marks up the right-hand side.
+float rows = min(s.y, 24.0);
+float mark = sdBox(vec2(abs(q.x - (A - 0.1)), mod(q.y + 1.0, 0.16) - 0.08), vec2(0.03, 0.03));
+if (q.y < -1.0 + rows * 0.16) col = mix(col, hot, aa(mark));
+col`
+  },
   { id: "life", label: "Life, with a trail", preview: [640, 640], steps: 1, source:
 `uniform float pace;      // @range 1 12 step 1 @default 4 — frames per generation
 uniform vec3  alive;     // @color @default 0.95 0.90 0.60
@@ -1107,6 +1182,10 @@ export async function generateEditor(host) {
   doc.mode ||= "sketch";                 // "sketch" | "glsl"
   doc.simSteps ||= 1;
 
+  // A sketch that declares `uniform sampler2D u_keys;` is played, not merely
+  // watched. Attached to the canvas rather than the document, so typing in
+  // the source does not also steer whatever is on screen.
+  const keyboard = new Keyboard();
   const canvas = el("canvas", { width: doc.preview[0], height: doc.preview[1],
     style: { width: "100%", height: "auto", display: "block", background: "#000",
              borderRadius: "8px", cursor: "crosshair" } });
@@ -1138,6 +1217,13 @@ export async function generateEditor(host) {
   canvas.addEventListener("pointerdown", (e) => { mouseDown = 1; canvas.setPointerCapture(e.pointerId); });
   canvas.addEventListener("pointerup", () => { mouseDown = 0; });
   canvas.addEventListener("pointercancel", () => { mouseDown = 0; });
+  // Keys go to the canvas, and only while it has focus — clicking it is how
+  // you pick the sketch up, and clicking away is how you put it down.
+  canvas.tabIndex = 0;
+  canvas.style.outline = "none";
+  canvas.addEventListener("pointerdown", () => canvas.focus());
+  keyboard.attach(canvas);
+  canvas.addEventListener("blur", () => keyboard.clear());
 
   /** The full GLSL that runs — generated from the sketch, or yours. A sketch is
       emitted for the context: ES 3.00 on WebGL2, 1.00 otherwise. */
@@ -1239,7 +1325,29 @@ export async function generateEditor(host) {
     gl.activeTexture(gl.TEXTURE5);
     gl.bindTexture(gl.TEXTURE_2D, stateTex2 || stateTex);
     if (u("u_state2")) gl.uniform1i(u("u_state2"), 5);
+    // The keyboard, so a sketch here can be played rather than only watched.
+    // Unit 4 is the one left between the sketch's own images and the state.
+    if (u("u_keys")) {
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, keysTexture());
+      gl.uniform1i(u("u_keys"), 4);
+    }
     gl.activeTexture(gl.TEXTURE0);
+  }
+
+  let keysTex = null;
+  function keysTexture() {
+    if (!keysTex) {
+      keysTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, keysTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, keysTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, keyboard.texture());
+    return keysTex;
   }
 
   // Decided when the program is compiled, not per frame: desugaring the
@@ -1280,6 +1388,9 @@ export async function generateEditor(host) {
     if (display && gl && !paused) {
       if (sim) for (let i = 0; i < doc.simSteps; i++) stepSim();
       draw();
+      // "Went down this frame" lasts exactly one frame, whatever the sim
+      // step count is — so it is cleared here rather than inside stepSim.
+      keyboard.tick();
     } else if (display && gl) {
       draw();
     }

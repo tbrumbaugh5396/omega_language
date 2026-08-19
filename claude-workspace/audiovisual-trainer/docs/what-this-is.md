@@ -61,7 +61,7 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
-library, and a **200-check self-test across 28 groups that runs inside the
+library, and a **205-check self-test across 29 groups that runs inside the
 app**.
 
 ---
@@ -198,7 +198,8 @@ An instrument is authored as a **patch** — one line per DSP node,
 persists and every name in it is a part a document's effects can address.
 Written out and read back, a patch is the same instrument; so is one built in
 code. Identity deliberately excludes those names, because a name is not a
-sound. The ship's position
+sound. The Studio page lists what the library has — each instrument once,
+with its patch and three notes to hear it. The ship's position
 is a number you can read off the graph, not a texel you have to decode; it
 equals the CPU integration of its own equations to 2e−15, and the ejected
 pass header prints the update beside the shader that draws it.

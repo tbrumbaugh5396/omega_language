@@ -138,6 +138,23 @@ export function renderSketch(source, width, height, opts = {}) {
   feedback.resize(width, height, dualTargets(source) ? 2 : 1);
   if (opts.reset !== false) feedback.reset();
 
+  // The keyboard picture, uploaded once per render and kept between them.
+  const keysTex = () => {
+    if (!s.keys) {
+      s.keys = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, s.keys);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    }
+    const src = opts.keys && opts.keys.texture ? opts.keys.texture() : opts.keys;
+    gl.bindTexture(gl.TEXTURE_2D, s.keys);
+    if (src) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+    return s.keys;
+  };
+
   // Image uniforms from the caller's canvases.
   const texByName = new Map();
   let unit = 0;
@@ -158,7 +175,7 @@ export function renderSketch(source, width, height, opts = {}) {
     gl.uniform1f(u("u_time"), opts.time || 0);
     gl.uniform1f(u("u_seed"), opts.seed || 0);
     gl.uniform1i(u("u_frame"), feedback.frame);
-    gl.uniform1f(u("u_mouseDown"), 0);
+    gl.uniform1f(u("u_mouseDown"), opts.mouseDown ? 1 : 0);
     applyUniforms(gl, prog, uniforms, values);
     unit = 0;
     for (const uni of uniforms) {
@@ -196,6 +213,14 @@ export function renderSketch(source, width, height, opts = {}) {
     gl.activeTexture(gl.TEXTURE0 + 5);
     gl.bindTexture(gl.TEXTURE_2D, stateTex2 || stateTex);
     if (u("u_state2")) gl.uniform1i(u("u_state2"), 5);
+    // The keyboard, on the one unit left between the images and the state.
+    // Absent, a blank: every key reads as up, which is what a sketch that
+    // asks about keys in a still export should see.
+    if (u("u_keys")) {
+      gl.activeTexture(gl.TEXTURE0 + 4);
+      gl.bindTexture(gl.TEXTURE_2D, keysTex());
+      gl.uniform1i(u("u_keys"), 4);
+    }
     gl.activeTexture(gl.TEXTURE0);
   };
 

@@ -204,6 +204,32 @@ export function inlineInstruments(graph) {
   return { ...graph, instruments: out };
 }
 
+/**
+ * Everything in the library, once each, with every name it answers to.
+ *
+ * The map holds a declaration under its content id and under any name given
+ * to it, so listing it means grouping by the declaration rather than by the
+ * key — otherwise every instrument appears twice and neither entry says the
+ * other exists.
+ */
+export function listInstruments() {
+  const byDecl = new Map();
+  for (const [key, decl] of INSTRUMENTS) {
+    if (!byDecl.has(decl)) byDecl.set(decl, { id: null, names: [], decl });
+    const row = byDecl.get(decl);
+    if (key.startsWith("inst.")) row.id = key; else row.names.push(key);
+  }
+  return [...byDecl.values()].map((row) => ({
+    ...row,
+    nodes: row.decl.graph.nodes.length,
+    voices: row.decl.voices,
+    gain: row.decl.gain,
+    parts: Object.keys(row.decl.parts || {}),
+    types: [...new Set(row.decl.graph.nodes.map((n) => n.type))],
+    builtIn: row.names.some((n) => Object.prototype.hasOwnProperty.call(BUILT_IN, n)),
+  })).sort((a, b) => (a.names[0] || a.id).localeCompare(b.names[0] || b.id));
+}
+
 /** Roughly how much of a document its instruments are, for the record. */
 export const instrumentBytes = (graph) => JSON.stringify((graph && graph.instruments) || {}).length;
 

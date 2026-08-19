@@ -29,7 +29,7 @@ import { LiveRig, renderFired } from "./live-audio.js";
 import { shipInstrument, toneInstrument, instrumentId, normalise, internInstruments,
          inlineInstruments, resolveInstruments, instrumentFor, forgetInstrument,
          instrumentNames, instrumentCount, instrumentBytes, defineInstrument,
-         loadUserInstruments } from "./instrument-library.js";
+         loadUserInstruments, listInstruments } from "./instrument-library.js";
 import { parsePatch, toPatch } from "./instrument-doc.js";
 import { INSTRUMENT_STARTERS, instrumentNameFor } from "./studio-instrument.js";
 import { Keyboard, KEY } from "./keyboard.js";
@@ -1886,6 +1886,70 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
              detail: got.map((g, i) => `${g === want[i] ? "" : "✗ "}${g}`).join(" · ") + " — a bare name is namespaced so it cannot shadow a built-in" }); }
   } catch (e) {
     push({ group: "Instrument document", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The library, listed, and a sketch you can play. Two small things with one
+  // property each worth holding: a listing that shows every instrument once
+  // however many names it answers to, and a Generate preset that is a game
+  // rather than a simulation you watch.
+  try {
+    // 1. Listing groups by the instrument, not by the key. An instrument
+    //    registered under a name *and* a content id is one row, not two.
+    { const decl = toneInstrument({ decayMs: 411 });
+      defineInstrument("you.listtest", decl);
+      const rows = listInstruments();
+      const mine = rows.filter((r) => r.names.includes("you.listtest"));
+      const dupes = rows.filter((r) => !r.id).length;
+      const everyOnce = new Set(rows.map((r) => r.id)).size === rows.length;
+      push({ group: "Library listing", name: "every instrument appears once, with the names it answers to", ok: mine.length === 1 && everyOnce && dupes === 0,
+             detail: `${rows.length} instruments, each with a content id and ${rows.filter((r) => r.names.length).length} of them named · `
+               + `you.listtest is ${mine.length} row, reading ${mine[0] ? mine[0].nodes : "?"} nodes and parts ${(mine[0] ? mine[0].parts : []).join(", ") || "none"}` }); }
+
+    // 2. Every row can show its patch, and that patch is the instrument —
+    //    the listing cannot print something that would not read back.
+    { const rows = listInstruments();
+      const bad = [];
+      for (const r of rows) {
+        const text = toPatch(r.decl, { name: r.names[0] || r.id });
+        const { decl, errors } = parsePatch(text);
+        if (errors.length || !decl || instrumentId(decl) !== instrumentId(r.decl)) bad.push(r.names[0] || r.id);
+      }
+      push({ group: "Library listing", name: "the patch each row shows reads back as that instrument", ok: bad.length === 0,
+             detail: bad.length ? `${bad.join(", ")} did not` : `${rows.length} instruments written out and read back, every id unchanged` }); }
+
+    // 3. The Generate presets: the game is there, it declares the keyboard,
+    //    and it compiles for both passes on this GPU.
+    { const game = GENERATE_PRESETS.find((g) => g.id === "pong");
+      let ok = !!game, why = "no preset called pong";
+      if (game) {
+        const asks = /uniform\s+sampler2D\s+u_keys/.test(game.source);
+        const sims = hasSimPass(desugar(game.source, { es3: isGL2(gl) }));
+        try {
+          for (const pass of [null, "SIM_PASS"]) {
+            const src = desugar(game.source, { es3: isGL2(gl) });
+            const prog = linkProgram(gl, pass ? withDefine(src, pass) : src);
+            gl.deleteProgram(prog);
+          }
+          ok = asks && sims;
+          why = asks ? (sims ? "" : "it keeps no state") : "it does not declare u_keys";
+        } catch (e) { ok = false; why = String(e.message).split("\n")[0]; }
+      }
+      push({ group: "Library listing", name: "Generate has a game, and it is playable rather than watched", ok,
+             detail: ok ? "pong: reads u_keys, keeps its ball, bat and score in three texels of its own state, and both passes link here"
+                        : why }); }
+
+    // 4. The keyboard reaches a sketch at all: a one-line sketch that paints
+    //    itself by whether a key is down, rendered with the key down and up.
+    { const src = `uniform sampler2D u_keys;\nvec3(keyDown(u_keys, 38.0))`;
+      const kb = new Keyboard();
+      const lit = (c) => c.getContext("2d").getImageData(4, 4, 1, 1).data[0];
+      const up = lit(renderSketch(src, 16, 16, { keys: kb }));
+      kb.press(38);
+      const down = lit(renderSketch(src, 16, 16, { keys: kb }));
+      push({ group: "Library listing", name: "a Generate sketch can read the keyboard", ok: up === 0 && down === 255,
+             detail: `the same sketch reads ${up} with the key up and ${down} with it down — u_keys is bound by the sketch runtime, not only by the graph` }); }
+  } catch (e) {
+    push({ group: "Library listing", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

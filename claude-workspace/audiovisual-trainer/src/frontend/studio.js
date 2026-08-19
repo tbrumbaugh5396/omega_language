@@ -14,7 +14,10 @@ import { shaderEditor, SHADER_PRESETS } from "./studio-shader.js";
 import { designEditor, newDesignDoc, FRAME_PRESETS } from "./studio-design.js";
 import { generateEditor, newGenerateDoc, GENERATE_PRESETS } from "./studio-generate.js";
 import { instrumentEditor, INSTRUMENT_STARTERS, instrumentNameFor } from "./studio-instrument.js";
-import { ensureUserInstruments } from "./instrument-library.js";
+import { ensureUserInstruments, listInstruments } from "./instrument-library.js";
+import { toPatch } from "./instrument-doc.js";
+import { LiveInstrument } from "./live-audio.js";
+import { noteHz } from "./dsp-song.js";
 import { parsePatch } from "./instrument-doc.js";
 import "./field-nodes.js";
 import "./sim-nodes.js";
@@ -84,10 +87,13 @@ export async function studioView(ctx) {
   const nodeCard = el("div", {});
   root.append(nodeCard);
   ensureUserNodes().then(() => { clear(nodeCard); nodeCard.append(nodeLibraryCard(ctx)); });
+  const instCard = el("div", {}, instrumentLibraryCard(ctx));
+  root.append(instCard);
   // The instrument documents, likewise: an instrument is in the library once
   // its document has been read, and a document that references one by name
   // finds it from then on.
-  ensureUserInstruments({ api, parsePatch, nameFor: instrumentNameFor });
+  ensureUserInstruments({ api, parsePatch, nameFor: instrumentNameFor })
+    .then(() => { clear(instCard); instCard.append(instrumentLibraryCard(ctx)); });
   return root;
 }
 
@@ -121,6 +127,76 @@ function nodeLibraryCard(ctx) {
     el("div.stack", { style: { gap: ".25rem" } }, ...mine.map(row)),
     ...broken.map((n) => el("p.fine", { style: { color: "var(--bad, #e06c5a)" } },
       `${n.name || n.id}: ${n.error}`)));
+}
+
+/**
+ * What the library has. Every instrument once, with the names it answers to,
+ * what it is made of, an audition, and the patch — because an instrument you
+ * cannot read or hear is one you will not use.
+ */
+function instrumentLibraryCard(ctx) {
+  const rows = listInstruments();
+  if (!rows.length) {
+    return el("div.card", {}, el("h2", {}, "Instruments"),
+      el("p.fine", {}, "None. The built-ins register at load, so this being empty is a bug."));
+  }
+  let live = null, current = null;
+  const play = async (row, midi) => {
+    try {
+      if (current !== row.decl) {
+        if (live) await live.close();
+        live = await LiveInstrument.create({ graph: row.decl.graph, noteNode: row.decl.noteNode,
+                                             voices: row.decl.voices, gain: row.decl.gain,
+                                             parts: row.decl.parts || {} });
+        await live.resume();
+        current = row.decl;
+      }
+      live.perform([{ kind: "note", hz: noteHz(midi), dur: 0.5 }]);
+    } catch (e) { toast(String(e.message).split("\n")[0]); }
+  };
+  const line = (row) => {
+    const named = row.names.length > 0;
+    const ref = named ? row.names[0] : row.id;
+    const patch = el("pre.fine", { hidden: true,
+      style: { margin: ".3rem 0 0", padding: ".5rem", background: "rgba(255,255,255,.04)",
+               borderRadius: "6px", overflowX: "auto", whiteSpace: "pre" } });
+    return el("div", { style: { padding: ".35rem 0", borderTop: "1px solid rgba(255,255,255,.06)" } },
+      el("div.spread", { style: { alignItems: "baseline", gap: ".5rem", flexWrap: "wrap" } },
+        el("div", {},
+          el("strong", {}, ref),
+          el("span.fine", {}, row.names.length > 1 ? `  also ${row.names.slice(1).join(", ")}` : ""),
+          // An instrument with no name is known only by what it sounds like,
+          // and printing that twice says nothing the first one did not.
+          el("span.fine", {}, named ? `  ${row.id}` : "")),
+        el("div.row", { style: { gap: ".2rem" } },
+          ...[60, 64, 67].map((m) => el("button.ghost", { style: { padding: ".1em .45em" },
+            onclick: () => play(row, m) }, "♪")),
+          el("button.ghost", { style: { padding: ".1em .45em" }, onclick: () => {
+            if (patch.hidden) patch.textContent = toPatch(row.decl, { name: named ? ref : null });
+            patch.hidden = !patch.hidden;
+          } }, "patch"))),
+      el("p.fine", { style: { margin: 0 } },
+        `${row.builtIn ? "built in" : named ? "yours" : "interned by a document this session"}`
+        + ` · ${row.nodes} nodes · ${row.voices} voices`
+        + (row.gain !== 1 ? ` · gain ${row.gain}` : "")
+        + ` · ${row.types.join(", ")}`
+        + (row.parts.length ? ` · parts: ${row.parts.join(", ")}` : "")),
+      patch);
+  };
+  // "Yours" is the ones a document of yours named. The nameless ones were
+  // interned by some document while it ran and are here for the session only.
+  const yours = rows.filter((r) => !r.builtIn && r.names.length).length;
+  const anon = rows.filter((r) => !r.names.length).length;
+  return el("div.card", {},
+    el("h2", {}, "Instruments", el("span.fine", {}, `${rows.length}`)),
+    el("p.fine", {}, "A document plays these by name — ",
+      el("code", {}, `{ ref: "tone.bell" }`),
+      " — or by what it sounds like, which is the ", el("code", {}, "inst."), " id and does not move when "
+      + "somebody renames it. Every part listed is a name an effect can address. "
+      + (yours ? `${yours} came from your own instrument documents. `
+               : "Make an Instrument document and it appears here on the next reload. ")
+      + (anon ? `${anon} more were interned by a document while it ran, and are here for this session only.` : "")),
+    el("div.stack", { style: { gap: 0 } }, ...rows.map(line)));
 }
 
 function projectTile(ctx, p) {

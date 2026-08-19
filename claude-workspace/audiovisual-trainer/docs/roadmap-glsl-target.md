@@ -1509,6 +1509,50 @@ shelf, the labels are kept.
 audition is eight buttons rather than a keyboard you can play. And nothing
 lists the library — you reference an instrument by knowing its name.
 
+### Phase 18 — The library, listed; and a game in Generate *(S)* — **shipped**
+
+Two things left over, and a bug found by doing them.
+
+**The library, listed.** A card on the Studio page beside "Your nodes": every
+instrument once, whatever it answers to. The map holds each declaration under
+its content id *and* under any name, so listing means grouping by the
+declaration rather than by the key — otherwise every instrument appears twice
+and neither row says the other exists. Each row shows where it came from
+(built in, yours, or interned by a document while it ran), what it is made of,
+the parts an effect can address, three notes to audition it, and its **patch**,
+because an instrument you cannot read or hear is one you will not use. The
+patch each row prints is checked to read back as that instrument.
+
+**A game in Generate.** There were simulations to watch — Life, Gray–Scott,
+the wave equation — and nothing to play, because `renderSketch` never bound
+`u_keys`. It does now, on the one texture unit left between a sketch's own
+images and its state, and the Generate editor attaches a keyboard to its
+canvas (focused, so typing in the source does not steer the picture). The
+`pong` preset keeps its ball, bat and score in three texels of its own state
+and reads the arrows — the Shadertoy arrangement, playable here because the
+sketch runtime now does what the render graph already did.
+
+**The bug.** Driving the game found that it drew a nearly invisible ball and
+the wrong colours, and the reason was old and everywhere: **`@color @default
+#f4efe6` had never worked.** `annotations()` reads `@default` by taking
+numbers, and a hex literal is not one — so every colour with a hex default
+silently fell back to the four-colour palette meant for colours that declare
+none. Sixteen declarations across the field, sim and game catalogues were
+affected. `@default` now accepts a hex colour, and the game's ink went from
+`#6c7348`-ish palette orange to the `#f4efe6` it asked for.
+
+| held against | number |
+|---|---|
+| the listing, with an instrument under a name and an id | **one row**, every instrument once |
+| every row's printed patch, read back | **every id unchanged** |
+| the `pong` preset | declares `u_keys`, keeps state, **both passes link** |
+| a one-line sketch reading `keyDown(u_keys, 38)` | **0** with the key up, **255** with it down |
+
+*Left:* the game is a bat and a ball, not a demo of what a game *could* be
+here — no sound, because a Generate sketch has no effects to describe. The
+listing has no search and no way to delete. And the score is a stack of marks
+rather than a number, because there is no text in a sketch.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1596,6 +1640,7 @@ lists the library — you reference an instrument by knowing its name.
 | 15.1 | The document names its instrument — **shipped** | S | 14.1 | a document that is whole, sound included |
 | 16.1 | The instrument library, content-addressed — **shipped** | S | 15.1 | one sound, one instrument, provably |
 | 17.1 | The instrument document: a patch that persists — **shipped** | M | 16.1 | an instrument that outlives its session |
+| 18.1 | The library listed; a playable game in Generate — **shipped** | S | 17.1 | you can see what you have, and play a sketch |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
