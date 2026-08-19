@@ -27,6 +27,8 @@ import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
 import { planPasses, fuseStats, fusibleReason } from "./graph-fuse.js";
 import { compileFields, fieldStats } from "./field-graph.js";
+import { resolveParams, paramProblems, paramStats } from "./param-graph.js";
+import { compileExpr, FUNCTIONS } from "./expr.js";
 import "./field-nodes.js";
 import { documentGraph, applyEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
 import { BLEND_ORDER } from "./composite-nodes.js";
@@ -694,6 +696,167 @@ vec4(vec3(0.106, 0.169, 0.294), aa(d))`, W, H, { time: 0 });
              detail: same ? `both radii compile to ${t1.type} · the value rides as f1_radius` : "two different programs" }); }
   } catch (e) {
     push({ group: "Field wires", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Parameter expressions: a parameter that is a relationship, not a number.
+  try {
+    const W = 220, H = 140;
+    const px = (c) => c.getContext("2d").getImageData(0, 0, W, H).data;
+
+    // 1. The language, against the JavaScript engine.
+    //
+    //    Every pair below means the same thing in both, so the engine is an
+    //    independent implementation of precedence, associativity and arity —
+    //    written by somebody else, long before this. The *test* is allowed to
+    //    build a function from a string; the runtime never does, which is
+    //    check 6 below.
+    { const pairs = [
+        ["2 + 3 * 4", "2 + 3 * 4"],
+        ["(2 + 3) * 4", "(2 + 3) * 4"],
+        ["10 / 4 - 1", "10 / 4 - 1"],
+        ["-3 + 10 * -2", "-3 + 10 * -2"],
+        ["2 < 3 ? 7 : 9", "2 < 3 ? 7 : 9"],
+        ["1 <= 1 ? sin(1) : 0", "1 <= 1 ? Math.sin(1) : 0"],
+        ["sin(1) + cos(2)", "Math.sin(1) + Math.cos(2)"],
+        ["sqrt(2) * pi", "Math.sqrt(2) * Math.PI"],
+        ["min(3, 7, 2)", "Math.min(3, 7, 2)"],
+        ["max(3, 7, 2) - abs(-4)", "Math.max(3, 7, 2) - Math.abs(-4)"],
+        ["floor(7.9) + ceil(0.1)", "Math.floor(7.9) + Math.ceil(0.1)"],
+        ["pow(2, 10)", "Math.pow(2, 10)"],
+        // Right-associative, and tighter than unary minus: 2^(3^2), and -(2^2).
+        ["2 ^ 3 ^ 2", "Math.pow(2, Math.pow(3, 2))"],
+        ["-2 ^ 2", "-Math.pow(2, 2)"],
+        ["hypot(3, 4)", "Math.hypot(3, 4)"],
+        ["atan2(1, 2) * 3", "Math.atan2(1, 2) * 3"],
+        ["exp(1) - e", "Math.exp(1) - Math.E"],
+        ["clamp(9, 0, 4) + smoothstep(0, 1, 0.5)", "Math.min(4, Math.max(0, 9)) + 0.5"],
+        ["t * 2 + w / h", "0.75 * 2 + 220 / 140"],
+      ];
+      const vars = { t: 0.75, w: W, h: H, frame: 0, seed: 0, aspect: W / H };
+      let worst = 0, bad = "";
+      for (const [mine, theirs] of pairs) {
+        const got = compileExpr(mine).value({ vars });
+        const want = Function(`"use strict"; return (${theirs});`)();
+        const d = Math.abs(got - want);
+        if (d > worst) { worst = d; if (d > 1e-12) bad = `${mine} → ${got}, wanted ${want}`; }
+      }
+      push({ group: "Parameter expressions", name: `${pairs.length} expressions vs the JS engine`, ok: worst <= 1e-12,
+             detail: worst <= 1e-12 ? `worst disagreement ${worst.toExponential(1)} — precedence, associativity and arity all agree`
+                                    : bad }); }
+
+    // 2. A parameter that follows another one, rendered. The reference is the
+    //    same graph with the number typed in, so this is exactly zero or it is
+    //    a bug — no antialiasing to hide behind.
+    { const build = (radius) => {
+        const g = createGraph(W, H);
+        addNode(g, "field.circle", { radius: [0.2] }, [], { name: "lead" });
+        const f = addNode(g, "field.circle", { centre: [0, 0], radius }, []);
+        g.output = addNode(g, "field.shade", { filled: [1], width: [0], glow: [0] }, [f]);
+        return g;
+      };
+      const followed = px(renderGraph(build({ expr: 'ch("lead.radius") * 2' }), {}));
+      const typed = px(renderGraph(build([0.4]), {}));
+      const r = compare(followed, typed, W, H, { thresh: 1 });
+      push({ group: "Parameter expressions", name: 'ch("lead.radius") * 2 is the number it names, doubled', ok: r.mean === 0 && r.off === 0,
+             detail: `${r.off} pixels differ from the same graph with 0.4 typed in · a reference by name, resolved on the CPU` }); }
+
+    // 3. …and the clock drives one, at the time the render was asked for.
+    { const g = createGraph(W, H);
+      const f = addNode(g, "field.circle", { centre: [0, 0], radius: { expr: "0.2 + 0.2 * t" } });
+      g.output = addNode(g, "field.shade", { filled: [1], width: [0], glow: [0] }, [f]);
+      const g2 = createGraph(W, H);
+      const f2 = addNode(g2, "field.circle", { centre: [0, 0], radius: [0.4] });
+      g2.output = addNode(g2, "field.shade", { filled: [1], width: [0], glow: [0] }, [f2]);
+      const at1 = px(renderGraph(g, {}, { time: 1 }));
+      const at0 = px(renderGraph(g, {}, { time: 0 }));
+      const want = px(renderGraph(g2, {}));
+      const same = compare(at1, want, W, H, { thresh: 1 });
+      const moved = compare(at0, at1, W, H, { thresh: 8 });
+      push({ group: "Parameter expressions", name: "0.2 + 0.2 * t at t=1 is 0.4", ok: same.off === 0 && moved.off > 200,
+             detail: `${same.off} pixels differ from the literal at t=1 · ${moved.off} pixels moved between t=0 and t=1` }); }
+
+    // 4. Per-component: one expression each for x and y.
+    { const g = createGraph(W, H);
+      const f = addNode(g, "field.box", { size: { expr: ["0.3", "0.3 / aspect"] }, corner: [0] });
+      g.output = addNode(g, "field.shade", { filled: [1] }, [f]);
+      const rp = resolveParams(g, { t: 0 });
+      const size = rp.nodes.find((n) => n.type === "field.box").params.size;
+      const want = 0.3 / (W / H);
+      push({ group: "Parameter expressions", name: "a vec2 takes one expression per component", ok: Math.abs(size[0] - 0.3) < 1e-9 && Math.abs(size[1] - want) < 1e-9,
+             detail: `size = ${size.map((v) => v.toFixed(4)).join(", ")} — the second one asked the frame how wide it is` }); }
+
+    // 5. A reference that comes back round to where it started is reported and
+    //    broken, not left to run out of stack.
+    { const g = createGraph(W, H);
+      const a = addNode(g, "adjust.exposure", { stops: { expr: 'ch("b.stops")' } }, [addNode(g, "source")], { name: "a" });
+      const b = addNode(g, "adjust.exposure", { stops: { expr: 'ch("a.stops")' } }, [a], { name: "b" });
+      g.output = b;
+      const errs = paramProblems(g);
+      const said = errs.some((e) => /depends on itself/.test(e));
+      push({ group: "Parameter expressions", name: "a cycle is named, not a hang", ok: said && errs.length > 0,
+             detail: said ? errs[0] : `${errs.length} problems, none of them the cycle` }); }
+
+    // 6. The runtime never builds a function from a string. A saved document
+    //    is data, and this is the property that keeps it that way.
+    { let src = "";
+      try { src = await (await fetch("/static/expr.js")).text(); } catch { /* offline */ }
+      const bad = /\bnew\s+Function\b|[^.\w]eval\s*\(|\bFunction\s*\(/.test(src.replace(/\/\/[^\n]*/g, ""));
+      push({ group: "Parameter expressions", name: "the evaluator never calls Function or eval", ok: src.length > 0 && !bad,
+             detail: src.length ? `${Math.round(src.length / 1024)} KB of tokeniser, parser and tree-walk — nothing compiled from a string`
+                                : "the source could not be fetched, so this was not checked" }); }
+
+    // 7. A typo in one parameter must not be a black frame.
+    { const g = createGraph(W, H);
+      const f = addNode(g, "field.circle", { centre: [0, 0], radius: { expr: "wobble(3" } }, [], { name: "dot" });
+      g.output = addNode(g, "field.shade", { filled: [1], width: [0], glow: [0] }, [f]);
+      const errs = paramProblems(g);
+      const out = px(renderGraph(g, {}));
+      let ink = 0;
+      for (let i = 0; i < out.length; i += 4) if (out[i + 3] > 128) ink++;
+      // The default radius is 0.4, so it draws the circle it would have drawn.
+      push({ group: "Parameter expressions", name: "a broken expression falls back and says so", ok: errs.length === 1 && ink > 1000,
+             detail: `${errs[0] || "no error reported"} · it still drew ${ink} pixels, at the value it would have used` }); }
+
+    // 8. Costs nothing at draw time: the same program, the same pass count.
+    //    An expression is resolved before anything is planned, so the shader
+    //    cannot tell that a number was computed.
+    { const build = (radius) => {
+        const g = createGraph(W, H);
+        const f = addNode(g, "field.circle", { centre: [0, 0], radius });
+        g.output = addNode(g, "field.shade", { filled: [1] }, [f]);
+        return g;
+      };
+      const a = compileFields(resolveParams(build({ expr: "0.1 + 0.3" }), {}));
+      const b = compileFields(resolveParams(build([0.4]), {}));
+      const ta = a.nodes.find((n) => n.type.startsWith("field.compiled"));
+      const tb = b.nodes.find((n) => n.type.startsWith("field.compiled"));
+      let drew = [];
+      renderGraph(build({ expr: "0.1 + 0.3" }), {}, { onPasses: (ps) => { drew = ps; } });
+      push({ group: "Parameter expressions", name: "an expression is not a second program", ok: ta.type === tb.type && drew.length === 1,
+             detail: `computed and typed both compile to ${ta.type} · ${drew.length} pass · the value arrives as a uniform` }); }
+
+    // 9. A keyed parameter goes through the video timeline's own evaluator,
+    //    which is the point: a parameter moving over time is one problem.
+    { const keys = [{ t: 0, v: 0.2, ease: "linear" }, { t: 2, v: 0.6, ease: "linear" }];
+      const g = createGraph(W, H);
+      addNode(g, "field.circle", { radius: { keys } });
+      const at = (time) => resolveParams(g, { t: time }).nodes[0].params.radius[0];
+      const ours = [0, 0.5, 1, 2].map(at);
+      const theirs = [0, 0.5, 1, 2].map((time) => evalTrack(keys, time));
+      const agree = ours.every((v, i) => Math.abs(v - theirs[i]) < 1e-12);
+      push({ group: "Parameter expressions", name: "a keyed parameter is evalTrack, not a second answer", ok: agree,
+             detail: `${ours.map((v) => v.toFixed(2)).join(", ")} — the same function the video timeline uses for a keyed grade` }); }
+
+    // 10. What a number was written as survives into the shader you read.
+    { const g = createGraph(W, H);
+      const s0 = addNode(g, "source");
+      g.output = addNode(g, "adjust.exposure", { stops: { expr: "sin(t) * 2" } }, [s0], { name: "grade" });
+      const text = ejectGraph(g, { fuse: false });
+      push({ group: "Parameter expressions", name: "the ejected shader says what the number was written as", ok: /written as/.test(text) && /sin\(t\) \* 2/.test(text),
+             detail: /written as/.test(text) ? "the pass header carries the expression beside the value it came out at"
+                                             : "the expression did not reach the ejected text" }); }
+  } catch (e) {
+    push({ group: "Parameter expressions", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

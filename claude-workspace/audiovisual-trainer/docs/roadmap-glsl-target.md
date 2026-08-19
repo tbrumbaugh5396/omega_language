@@ -991,6 +991,68 @@ built (`documentGraph`, `frameGraph`, `graphFilter`); the graph *view* draws
 field wires dashed and labels the nodes `@field`, but it still shows rather
 than edits.
 
+### Phase 9 — Parameter expressions *(M)* — **shipped**
+
+A parameter was an array of numbers. It can now also be an expression, a list
+of expressions one per component, or a keyframe track:
+
+```js
+radius: { expr: 'ch("beat.radius") * 1.7' }
+size:   { expr: ["0.3", "0.3 / aspect"] }
+stops:  { keys: [{ t: 0, v: 0 }, { t: 2, v: 1.5 }] }
+```
+
+`ch("node.param")` is Houdini's idea and roughly its spelling: a reference to
+another node's parameter, by the name you gave that node or by its id. That is
+the part that matters. Without it a graph is a pile of constants; with it a
+graph holds a *relationship*, and one number drives ten.
+
+**Not JavaScript, deliberately.** `new Function` on a string out of a saved
+document runs whatever the document says, and a document is data. So `expr.js`
+is a tokeniser, a precedence-climbing parser and a tree-walking evaluator —
+about the size of the thing it refuses to use, and it can report which
+parameters an expression depends on, which `new Function` cannot. The
+self-test reads the file back and fails if `Function` or `eval` ever appears
+in it.
+
+**Resolved on the CPU, before anything is planned.** `resolveParams` runs
+first, then `compileFields`, then `planPasses`. Three consequences, all of
+them the reason for that order: the shader is untouched, so expressions cost
+nothing at draw time and cannot interfere with fusion or field composition; a
+parameter is a plain number by the time it reaches a uniform, so it is
+inspectable and ejectable; and a field node, a filter and a keyed grade are
+all served by one resolution without any of them knowing.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| the JavaScript engine, 19 expressions | **exact** — worst disagreement 0.0 |
+| `ch("lead.radius") * 2` vs 0.4 typed in | **0 pixels differ at all** |
+| `0.2 + 0.2 * t` at t=1 vs 0.4 typed in | **0 pixels differ at all** |
+| a keyed parameter vs `evalTrack` itself | **exact**, four times |
+
+The first is worth dwelling on: every one of those nineteen expressions means
+the same thing in this language and in JavaScript, so the engine is an
+independent implementation of precedence, associativity and arity — written by
+somebody else, long before this. `2 ^ 3 ^ 2` is 512 and `-2 ^ 2` is −4 in both.
+
+**Failure is not a black frame.** A cycle is detected and named
+(`a.stops depends on itself`) rather than run out of stack. A typo falls back
+to the value the node would have used and is reported; the check renders a
+graph whose radius is the unclosed `wobble(3` and confirms it still draws the
+circle.
+
+**Ejection carries the source.** A pass header now says `written as: stops =
+sin(t) * 2` beside the number it came out at, so reading the shader still
+tells you what the graph meant, not only what it computed.
+
+*Left:* the audio side still automates through `evalTrack` alone —
+expressions do not reach a DSP parameter yet, though `expr.js` has no graph
+dependency and is ready for it. There is no expression *editor*; a parameter
+is written as an expression in the document, and the graph view shows it as
+written rather than offering a field to type in.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1069,6 +1131,7 @@ than edits.
 | 5.1 | Design effects via graph; SDF export | M | 1.x | designs as shaders |
 | 6.x | Tiling, WebGPU decision, more exports, P3 | M | 1.x | scale |
 | 8.1 | Field wires: a port that carries a function — **shipped** | M | 1.x | geometry that composes |
+| 9.1 | Parameter expressions and references — **shipped** | M | 1.x | a graph that holds relationships |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

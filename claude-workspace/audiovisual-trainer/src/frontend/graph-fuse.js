@@ -21,6 +21,7 @@ import { parseUniforms, splitSketch, stripComments, sketchMeta } from "./shader-
 import { nodeType, topo } from "./render-graph.js";
 import { prefixer } from "./sketch-rename.js";
 import { compileFields } from "./field-graph.js";
+import { resolveParams } from "./param-graph.js";
 
 const IN_RE = /^in(\d+)$/;
 
@@ -206,8 +207,9 @@ export function planPasses(graph) {
 /** Passes before and after, for the panel and the self-test. */
 export function fuseStats(graph) {
   // Counted on the graph that actually runs: a field tree is never passes, so
-  // counting the nodes as written would report draws that never happen.
-  graph = compileFields(graph);
+  // counting the nodes as written would report draws that never happen, and a
+  // parameter that is an expression is not a value until it is resolved.
+  graph = compileFields(resolveParams(graph));
   const steps = planPasses(graph);
   const drawn = topo(graph).filter((n) => n.type !== "source" && !n.bypass).length;
   const after = steps.filter((s) => s.kind === "fused" || (s.node.type !== "source" && !s.node.bypass)).length;

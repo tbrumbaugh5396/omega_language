@@ -11,6 +11,7 @@ import { el } from "./ui.js";
 import { nodeType, topo } from "./render-graph.js";
 import { planPasses, fuseStats } from "./graph-fuse.js";
 import { compileFields, fieldStats } from "./field-graph.js";
+import { resolveParams, paramStats } from "./param-graph.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const svgEl = (name, attrs = {}, ...kids) => {
@@ -53,7 +54,7 @@ export function graphSvg(graph, opts = {}) {
   // Which nodes ended up in the same draw.
   const fusedOf = new Map();
   let runs = 0;
-  for (const step of planPasses(compileFields(graph))) {
+  for (const step of planPasses(compileFields(resolveParams(graph)))) {
     if (step.kind !== "fused") continue;
     const tag = runs++;
     for (const n of step.nodes) fusedOf.set(n.id, tag);
@@ -107,12 +108,16 @@ export function graphSvg(graph, opts = {}) {
       stroke: n.id === graph.output ? "rgba(240,163,94,.9)"
             : isSource ? "rgba(124,156,255,.6)" : "rgba(255,255,255,.18)",
       "stroke-width": n.id === graph.output ? 2 : 1 }));
-    const label = isSource ? (n.type === "source.flat" ? "background" : "a texture") : n.type;
+    const label = n.name || (isSource ? (n.type === "source.flat" ? "background" : "a texture") : n.type);
     g.append(svgEl("text", { x: 10, y: 19, fill: "#e8ebf5", "font-size": 11,
       "font-family": "system-ui" }, document.createTextNode(label.slice(0, 24))));
     const params = Object.entries(n.params || {})
-      .filter(([, v]) => Array.isArray(v) && v.length <= 3)
-      .map(([k, v]) => `${k} ${v.map((x) => (+x).toFixed(2).replace(/\.00$/, "")).join(",")}`)
+      .filter(([, v]) => (Array.isArray(v) && v.length <= 3) || (v && v.expr !== undefined))
+      // An expression is shown as it was written. A number that is really a
+      // relationship should not read on the diagram as a constant.
+      .map(([k, v]) => (v && v.expr !== undefined
+        ? `${k} = ${[].concat(v.expr).join(", ")}`
+        : `${k} ${v.map((x) => (+x).toFixed(2).replace(/\.00$/, "")).join(",")}`))
       .join("  ");
     const sub = isSource ? (opts.sourceNames && opts.sourceNames[n.id]) || "" : (params || (t ? `${t.inputs.length} in` : ""));
     g.append(svgEl("text", { x: 10, y: 34, fill: "#8b93ad", "font-size": 9,
@@ -134,6 +139,12 @@ export function graphSummary(graph) {
   const bits = [`${st.before + fs.fields} node${st.before + fs.fields === 1 ? "" : "s"}`,
                 `${st.after} draw${st.after === 1 ? "" : "s"}`];
   if (fs.fields) bits.push(`${fs.fields} composed as functions, not passes`);
+  const ps = paramStats(graph);
+  if (ps.expressions) {
+    bits.push(`${ps.expressions} parameter${ps.expressions === 1 ? "" : "s"} computed`
+      + (ps.references.length ? `, ${ps.references.length} of them following another` : ""));
+  }
+  if (ps.tracks) bits.push(`${ps.tracks} keyed`);
   if (st.saved > 0) bits.push(`${st.saved} saved by fusing`);
   if (st.kept.length) bits.push(`kept apart: ${st.kept.join("; ")}`);
   return bits.join(" · ");

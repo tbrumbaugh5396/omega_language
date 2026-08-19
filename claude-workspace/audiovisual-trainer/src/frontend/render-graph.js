@@ -108,10 +108,15 @@ export function createGraph(width, height) {
  * Add a node. `type` is a registered id, or "source" for an external texture
  * (the host supplies it at run time, keyed by this node's id).
  */
-export function addNode(graph, type, params = {}, inputs = []) {
+export function addNode(graph, type, params = {}, inputs = [], opts = {}) {
   if (type !== "source" && !NODE_TYPES.has(type)) throw new Error(`no node type "${type}"`);
   const id = `n${nextId++}`;
-  graph.nodes.push({ id, type, params: { ...params }, inputs: inputs.slice(), bypass: false });
+  const node = { id, type, params: { ...params }, inputs: inputs.slice(), bypass: false };
+  // A name is what an expression elsewhere calls this node — `ch("blur.radius")`
+  // — so renaming a node redirects every reference to it at once. Dots would
+  // make the reference ambiguous, so they cannot be part of one.
+  if (opts.name) node.name = String(opts.name).replace(/\./g, "_");
+  graph.nodes.push(node);
   return id;
 }
 

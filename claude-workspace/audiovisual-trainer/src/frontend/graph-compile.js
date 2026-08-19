@@ -18,6 +18,7 @@ import { getGL, isGL2, linkProgram, cachedImage, loadSketchImages } from "./shad
 import { nodeType, topo, validate, curveLut, resolveBypass } from "./render-graph.js";
 import { planPasses } from "./graph-fuse.js";
 import { compileFields } from "./field-graph.js";
+import { resolveParams } from "./param-graph.js";
 
 // ------------------------------------------------------------------ targets
 
@@ -240,9 +241,12 @@ export class GraphRunner {
     const gl = this.gl;
     const errs = validate(graph);
     if (errs.length) throw new Error(errs.join("; "));
-    // Fields are resolved before anything is planned: a field tree cannot be
-    // passes, so it becomes one generated node type and everything from here
-    // down — fusion, pooling, tiling — sees an ordinary image graph.
+    // Two rewrites before anything is planned, in this order. Expressions
+    // become numbers first, because a field tree carries its parameters with
+    // it and they have to be values by the time it does. Then fields become
+    // one generated node type — so everything from here down (fusion,
+    // pooling, tiling) sees an ordinary image graph of plain constants.
+    graph = resolveParams(graph, { t: opts.time || 0, frame: opts.frame || 0, seed: opts.seed || 0 });
     graph = compileFields(graph);
     const W = graph.width, H = graph.height;
     // Fusion is on unless a caller wants the passes as written — the self-test
@@ -431,10 +435,11 @@ export class GraphRunner {
    * actually runs, which is the point of fusing: what you read is what the GPU
    * was given. `{fuse:false}` ejects the graph as written instead.
    */
-  eject(graph, { fuse = true } = {}) {
+  eject(graph, opts = {}) {
+    const { fuse = true } = opts;
     const es3 = isGL2(this.gl);
     const rule = "// ================================================================";
-    graph = compileFields(graph);
+    graph = compileFields(resolveParams(graph, opts.at || {}));
     const steps = fuse ? planPasses(graph) : topo(graph).map((node) => ({ kind: "node", node }));
     const parts = [];
     for (const step of steps) {
@@ -459,11 +464,13 @@ export class GraphRunner {
       }
       const t = nodeType(n.type);
       const params = Object.entries(n.params).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
+      const written = Object.entries(n.exprs || {}).map(([k, v]) => `//   ${k} = ${v}`).join("\n");
       parts.push({
         node: n.id, type: n.type,
         header: `${rule}\n` +
                 `// pass: ${n.id}  type: ${n.type}${step.why ? `  (its own pass — ${step.why})` : ""}\n` +
                 `// inputs: ${n.inputs.join(", ") || "—"}\n// params: ${params || "defaults"}\n` +
+                (written ? `// written as:\n${written}\n` : "") +
                 rule,
         glsl: this.sourceFor(n.type),
       });

@@ -200,7 +200,16 @@ export function compileFields(graph) {
           : (v !== undefined && v !== null ? [v] : (u.value ? u.value.slice() : null));
       }
     });
-    nodes.push({ id: n.id, type: type.id, params, inputs: imageSources, bypass: n.bypass });
+    // Whatever any of them was *written* as travels with it, under the same
+    // prefix as its value, so the ejected program still says so.
+    const exprs = {};
+    order.forEach((m, k) => {
+      for (const [name, text] of Object.entries(m.exprs || {})) exprs[`f${k}_${name}`] = text;
+    });
+    const out = { id: n.id, type: type.id, params, inputs: imageSources, bypass: n.bypass };
+    if (n.name) out.name = n.name;
+    if (Object.keys(exprs).length) out.exprs = exprs;
+    nodes.push(out);
   }
   return { ...graph, nodes };
 }

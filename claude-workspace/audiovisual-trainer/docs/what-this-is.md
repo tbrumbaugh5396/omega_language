@@ -58,8 +58,8 @@ Underneath them, **two compilers sharing one discipline**:
 And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
-reader, a store-only ZIP writer, a WGSL portability auditor, and a **137-check
-self-test across 20 groups that runs inside the app**.
+reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, and
+a **147-check self-test across 21 groups that runs inside the app**.
 
 ---
 
@@ -110,6 +110,7 @@ behind it is a claim.
 | a delay line vs direct convolution | **2.98e−8**, which is float32 |
 | the browser's two `arc()` fills, a field union | **0.30/255** |
 | a circle offset by 0.1 vs a circle 0.1 bigger | **0 pixels differ at all** |
+| the JavaScript engine, 19 parameter expressions | **exact**, worst disagreement 0.0 |
 
 Every number above is what the self-test reports on this machine today, not
 what it reported when the feature landed — the two differ occasionally, because
@@ -136,10 +137,27 @@ The evidence that the wire really carries a *distance* is an identity nothing
 rasterised can satisfy — offsetting a circle by 0.1 gives a circle 0.1 bigger,
 to zero pixels of difference.
 
+### A parameter can be a relationship
+
+`radius` can be `ch("beat.radius") * 1.7` — a reference to another node's
+parameter — or `0.2 + 0.2 * t`, or a keyframe track. That is the difference
+between a document and a system: one number drives ten, and a shape stays
+self-similar when you scale it rather than merely getting bigger.
+
+The language is not JavaScript on purpose. `new Function` on a string out of a
+saved document runs whatever the document says, and a document is data — so
+`expr.js` is a tokeniser, a parser and a tree-walk, and the self-test reads the
+file back and fails if `Function` or `eval` ever appears in it.
+
+It resolves on the CPU before anything is planned, which is why it costs
+nothing: by the time a value reaches a uniform it is a plain number, and the
+shader cannot tell it was computed.
+
 ### One evaluator across media
 
 Audio automation calls `evalTrack` from `video-graph.js` — literally the
-function the video timeline uses to evaluate a keyed grade. A parameter moving
+function the video timeline uses to evaluate a keyed grade, and now also what
+a keyed *parameter* on any node resolves through. A parameter moving
 over time is one problem, so it gets one answer to "what is it at 1.4 seconds".
 
 ### The scopes are render-graph nodes
@@ -170,6 +188,9 @@ Worth naming, because the combination is the claim and the parts are not.
   `dsp-graph.js` is 431 lines; Faust is a research language with a decade of
   optimisation behind it. This is a teaching-sized thing that shares the shape.
 - **Non-destructive layer effects** — Photoshop smart filters, 2007.
+- **Parameter expressions and channel references** — Houdini's `ch()`, which
+  this borrows including roughly the spelling; After Effects expressions;
+  Blender drivers.
 - **Composing distance fields in a shader** — the whole of Shadertoy, and
   Substance Designer and Houdini's SDF tools at production scale. `smin` is
   iq's, and so is the exact regular polygon. What is unusual here is only that
