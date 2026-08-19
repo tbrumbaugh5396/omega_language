@@ -161,7 +161,7 @@ will want.
 no panel, no meter on screen, nothing wired into the Music studio. Phase A is
 the floor being solid, not a room.
 
-### Phase B — The node library, held to the mathematics *(L)*
+### Phase B — The node library, held to the mathematics *(L)* — **shipped**
 
 The visual roadmap's leverage came from parity against a reference. Audio's
 references are better, because most of them are closed forms:
@@ -181,6 +181,49 @@ references are better, because most of them are closed forms:
 - **Envelopes, LFOs, sample-and-hold** — control rate.
 - *Done when:* every node in the library has a number attached to it in the
   self-test, in dB, against something that was not written for the occasion.
+
+**Met.** Nine nodes, six checks, every one a measurement:
+
+| node | held against | number |
+|---|---|---|
+| `filter.biquad` (7 forms) | the cookbook's response, typed out again in the test | **0.000 dB** worst, five forms × two frequencies |
+| `filter.svf` | a stability sweep at full-scale noise | worst sample **5.93**, bar ±10 |
+| `filter.comb` / `delay.line` | `x[n] + x[n−240]` computed directly | **2.98e−8**, which is float32 and not the delay |
+| `osc.saw` | an additive band-limited saw | **7.6 / 7.3 dB** better than the naive ramp |
+| `shape.tanh` | its own non-harmonic energy | **−53.9 dB**, reported rather than hidden |
+| `env.ad` | its own shape | reaches 1.000, clamped, never negative |
+
+The compiler grew the two things the library needed, and they are the two the
+`@rate` bullet was pointing at:
+
+- **`coef` and `// @block`.** A biquad's `tan`, `cos` and `pow` have no
+  business running forty-eight thousand times a second when the cutoff moved
+  once. Control-rate uniforms are read before the loop, the block section runs
+  there, and the coefficients are plain locals in the sample loop.
+- **`delay float d; // @size N`.** A ring buffer, made in the constructor,
+  rounded up to a power of two so the wrap is a mask. Its two operations are
+  *macros*, not calls — `dRead(n)` and `dWrite(v)` are rewritten by matching
+  the closing parenthesis — because a call per sample costs with nothing to
+  show for it, and the substitution is small enough to read in the emitted
+  source.
+
+Two things worth writing down, because both are the sort of measurement that
+looks right and is not:
+
+- **A naive saw measured "clean" at 3 kHz.** At 48 k that is exactly
+  `sr/16`, so every alias lands on top of a harmonic and hides. Classifying
+  bins as harmonic-or-alias is fragile for anything but an exactly periodic
+  signal; comparing against an additive band-limited waveform is not, because
+  the reference cannot alias by construction. That is what the test does now.
+- **The biquad's first pass read 0.073 dB** because the amplitude was taken
+  as a peak, and at 4 kHz a sine has twelve samples a period so the true crest
+  falls between two of them. RMS × √2 is exact regardless, and the error went
+  to zero.
+
+**Left for later in Phase B:** the ladder filter, granular and convolution
+nodes, and oversampling the saturator — its −53.9 dB is what a hard curve
+does at 1×, and the fix is 4× oversampling around the curve rather than a
+better curve.
 
 ### Phase C — The graph, and fusion *(M)*
 

@@ -1352,6 +1352,159 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
     push({ group: "Audio worklet", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
+  // The audio library, held to the mathematics. Every node here has a number
+  // against something that was not written for the occasion: the cookbook's
+  // own response, a convolution of the node's impulse, or the ideal
+  // band-limited waveform computed additively.
+  try {
+    const db = (v) => 20 * Math.log10(Math.max(v, 1e-12));
+    const SR = 48000;
+    const render = async (graph, secs) => {
+      const ctx = new OfflineAudioContext(1, Math.round(SR * secs), SR);
+      const inst = await installGraph(ctx, graph);
+      inst.node.connect(ctx.destination);
+      return (await ctx.startRendering()).getChannelData(0);
+    };
+    // A sine's amplitude from its RMS — exact, where a peak is only as good
+    // as the sampling happens to be near the crest.
+    const amplitudeOf = (ch) => {
+      let sum = 0, n = 0;
+      for (let i = ch.length >> 1; i < ch.length; i++) { sum += ch[i] * ch[i]; n++; }
+      return Math.sqrt(2 * sum / n);
+    };
+
+    // The cookbook's magnitude response, typed out here rather than imported,
+    // so this is not the implementation reading itself back.
+    const rbj = (type, f, fc, q, sr, gainDb) => {
+      const w0 = 2 * Math.PI * fc / sr, cw = Math.cos(w0), sw = Math.sin(w0), al = sw / (2 * q);
+      const A2 = Math.pow(10, gainDb / 40);
+      let B0, B1, B2, A0, A1, A22;
+      if (type === 0) { B0 = (1 - cw) / 2; B1 = 1 - cw; B2 = (1 - cw) / 2; A0 = 1 + al; A1 = -2 * cw; A22 = 1 - al; }
+      else if (type === 1) { B0 = (1 + cw) / 2; B1 = -(1 + cw); B2 = (1 + cw) / 2; A0 = 1 + al; A1 = -2 * cw; A22 = 1 - al; }
+      else if (type === 2) { B0 = al; B1 = 0; B2 = -al; A0 = 1 + al; A1 = -2 * cw; A22 = 1 - al; }
+      else if (type === 3) { B0 = 1; B1 = -2 * cw; B2 = 1; A0 = 1 + al; A1 = -2 * cw; A22 = 1 - al; }
+      else { B0 = 1 + al * A2; B1 = -2 * cw; B2 = 1 - al * A2; A0 = 1 + al / A2; A1 = -2 * cw; A22 = 1 - al / A2; }
+      const w = 2 * Math.PI * f / sr;
+      const c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
+      return db(Math.hypot(B0 + B1 * c1 + B2 * c2, -(B1 * s1 + B2 * s2))
+              / Math.hypot(A0 + A1 * c1 + A22 * c2, -(A1 * s1 + A22 * s2)));
+    };
+
+    { let worst = 0, worstAt = "";
+      for (const [type, name] of [[0, "lowpass"], [1, "highpass"], [2, "bandpass"], [3, "notch"], [4, "peaking"]]) {
+        for (const f of [200, 1000]) {
+          const g = createDspGraph();
+          const osc = addDspNode(g, "osc.sine", { params: { hz: f, amp: 1 } });
+          g.output = addDspNode(g, "filter.biquad",
+            { inputs: { x: [osc, "y"] }, params: { type, freq: 1000, q: 2, gainDb: 6 } });
+          const got = db(amplitudeOf(await render(g, 0.2)));
+          const want = rbj(type, f, 1000, 2, SR, 6);
+          if (Math.abs(got - want) > worst) { worst = Math.abs(got - want); worstAt = `${name} at ${f} Hz`; }
+        }
+      }
+      push({ group: "Audio library", name: "every biquad form against the cookbook's own response",
+             ok: worst < 0.2,
+             detail: `five forms at two frequencies each, worst ${worst.toFixed(3)} dB (${worstAt}) · `
+               + "the reference is typed out again in the test, not imported, so this is not the "
+               + "implementation reading itself back" }); }
+
+    { let peak = 0, at = "";
+      for (const freq of [40, 1000, 18000]) {
+        for (const q of [0.5, 20]) {
+          const g = createDspGraph();
+          const n2 = addDspNode(g, "noise.white", { params: { amp: 1 } });
+          g.output = addDspNode(g, "filter.svf", { inputs: { x: [n2, "y"] }, params: { freq, q } });
+          const ch = await render(g, 0.1);
+          for (let i = 0; i < ch.length; i++) {
+            if (Math.abs(ch[i]) > peak) { peak = Math.abs(ch[i]); at = `${freq} Hz, Q ${q}`; }
+          }
+        }
+      }
+      push({ group: "Audio library", name: "the state-variable filter stays bounded at every setting",
+             ok: peak < 10 && Number.isFinite(peak),
+             detail: `full-scale noise through six combinations of cutoff and resonance: worst sample `
+               + `${peak.toFixed(2)} at ${at} · the bar is ±10, and a filter that fails this one `
+               + "does not fail quietly" }); }
+
+    { const taps = Math.round(5 * 0.001 * SR);
+      const g1 = createDspGraph();
+      const n1 = addDspNode(g1, "noise.white", { params: { amp: 0.5 } });
+      g1.output = addDspNode(g1, "filter.comb", { inputs: { x: [n1, "y"] }, params: { ms: 5, mix: 1 } });
+      const got = await render(g1, 0.15);
+      const g2 = createDspGraph();
+      g2.output = addDspNode(g2, "noise.white", { params: { amp: 0.5 } });
+      const dry = await render(g2, 0.15);
+      let worst = 0;
+      for (let i = taps + 2; i < dry.length; i++) worst = Math.max(worst, Math.abs(got[i] - (dry[i] + dry[i - taps])));
+      push({ group: "Audio library", name: "a delay line is exactly its own impulse response", ok: worst < 1e-5,
+             detail: `the comb against x[n] + x[n−${taps}] computed directly: worst sample ${worst.toExponential(2)}, `
+               + "which is float32 and not the delay line" }); }
+
+    { const amp = 0.5, out2 = {};
+      for (const f of [220, 2333]) {
+        const dt = f / SR, K = Math.floor((SR / 2) / f);
+        const ideal = (i) => {
+          const phi = ((i + 1) * dt) % 1;
+          let acc = 0;
+          for (let k = 1; k <= K; k++) acc += Math.sin(2 * Math.PI * k * phi) / k;
+          return -(2 / Math.PI) * acc * amp;
+        };
+        for (const blep of [1, 0]) {
+          const g = createDspGraph();
+          g.output = addDspNode(g, "osc.saw", { params: { hz: f, amp, blep } });
+          const ch = await render(g, 0.2);
+          let es = 0, ss = 0;
+          for (let i = 2000; i < 8000; i++) { const d = ch[i] - ideal(i); es += d * d; ss += ideal(i) * ideal(i); }
+          out2[`${f}_${blep}`] = db(Math.sqrt(es) / Math.sqrt(ss));
+        }
+      }
+      const gain220 = out2["220_0"] - out2["220_1"], gain2333 = out2["2333_0"] - out2["2333_1"];
+      push({ group: "Audio library", name: "PolyBLEP is measurably better than the naive ramp",
+             ok: gain220 > 5 && gain2333 > 5,
+             detail: `against an additive band-limited saw — every harmonic below Nyquist and none above, `
+               + `so the reference cannot alias by construction: at 220 Hz `
+               + `${out2["220_1"].toFixed(1)} dB against ${out2["220_0"].toFixed(1)}, at 2333 Hz `
+               + `${out2["2333_1"].toFixed(1)} against ${out2["2333_0"].toFixed(1)} — better by `
+               + `${gain220.toFixed(1)} and ${gain2333.toFixed(1)} dB` }); }
+
+    { const f = 2000;
+      const g = createDspGraph();
+      const osc = addDspNode(g, "osc.sine", { params: { hz: f, amp: 1 } });
+      g.output = addDspNode(g, "shape.tanh", { inputs: { x: [osc, "y"] }, params: { drive: 20, level: 1 } });
+      const ch = await render(g, 0.25);
+      const N = 4096;
+      const mag = fftMag(ch.subarray(4096, 4096 + N));
+      let harm = 0, alias = 0;
+      for (let i = 4; i < mag.length; i++) {
+        const k = (i * SR / N) / f;
+        if (Math.abs(k - Math.round(k)) < 0.03 && Math.round(k) >= 1) harm = Math.max(harm, mag[i]);
+        else alias = Math.max(alias, mag[i]);
+      }
+      const floor = db(alias / harm);
+      push({ group: "Audio library", name: "the saturator's aliasing is measured rather than hoped about",
+             ok: floor < -35,
+             detail: `driven twenty times into a tanh curve, everything that is not a harmonic of the input `
+               + `sits at ${floor.toFixed(1)} dB · that is aliasing, it is what a hard curve does at 1× , `
+               + "and oversampling it is Phase B's next job rather than a thing to be quiet about" }); }
+
+    { const g = createDspGraph();
+      const gate = addDspNode(g, "osc.sine", { params: { hz: 2, amp: 1 } });
+      g.output = addDspNode(g, "env.ad", { inputs: { gate: [gate, "y"] },
+                                           params: { attackMs: 5, decayMs: 80 } });
+      const ch = await render(g, 0.6);
+      let peak = 0, ends = 0;
+      for (let i = 0; i < ch.length; i++) peak = Math.max(peak, ch[i]);
+      for (let i = ch.length - 200; i < ch.length; i++) ends = Math.max(ends, ch[i]);
+      let below = 0;
+      for (let i = 0; i < ch.length; i++) if (ch[i] < 0) below++;
+      push({ group: "Audio library", name: "the envelope rises, falls, and never goes negative",
+             ok: peak > 0.95 && peak <= 1.0001 && below === 0,
+             detail: `a 2 Hz gate, 5 ms up and 80 ms down: it reaches ${peak.toFixed(3)}, is clamped at 1, `
+               + `and never goes below zero in ${ch.length} samples` }); }
+  } catch (e) {
+    push({ group: "Audio library", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
   gl.deleteBuffer(quad);
   const lose = gl.getExtension("WEBGL_lose_context");
   if (lose) lose.loseContext();

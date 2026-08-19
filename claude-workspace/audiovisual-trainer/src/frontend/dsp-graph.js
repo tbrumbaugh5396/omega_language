@@ -21,7 +21,7 @@
 // outputs, uniforms and state as ordinary locals. So there is no renaming, no
 // macro expansion, and what you read in the node is what runs.
 
-const DECL = /^\s*(in|out|state|uniform)\s+(float)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/;
+const DECL = /^\s*(in|out|state|coef|delay|uniform)\s+(float|int)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*;/;
 
 /** Read `@` annotations off a trailing comment — the same grammar as sketches. */
 function annotations(comment) {
@@ -39,6 +39,12 @@ function annotations(comment) {
     } else if (key === "default") {
       const d = parseFloat(words[i + 1]);
       if (Number.isFinite(d)) { out.default = d; i += 1; }
+    } else if (key === "size") {
+      const n = parseInt(words[i + 1], 10);
+      if (Number.isFinite(n)) { out.size = n; i += 1; }
+    } else if (key === "options") {
+      out.options = String(words[i + 1] || "").split(",").map((w2) => w2.trim()).filter(Boolean);
+      i += 1;
     } else if (key === "help") {
       let j = i + 1;
       while (j < words.length && words[j][0] !== "@") j++;
@@ -74,7 +80,7 @@ export function dspMeta(src) {
 export function parseDspNode(source) {
   const meta = dspMeta(source);
   const lines = String(source).split("\n");
-  const ins = [], outs = [], states = [], uniforms = [];
+  const ins = [], outs = [], states = [], uniforms = [], coefs = [], delays = [];
   let lastDecl = -1;
   lines.forEach((line, i) => {
     const m = DECL.exec(line.replace(/\/\/.*$/, ""));
@@ -87,19 +93,43 @@ export function parseDspNode(source) {
       if (kind === "in") ins.push({ name, help: a.help || null });
       else if (kind === "out") outs.push({ name, help: a.help || null });
       else if (kind === "state") states.push({ name });
+      // A coefficient is worked out once a block and read every sample. That
+      // is the whole point of @rate: a biquad's tan() and cos() have no
+      // business running forty-eight thousand times a second when the cutoff
+      // only moved once.
+      else if (kind === "coef") coefs.push({ name });
+      // A delay line is memory, not a number. Its size is fixed at compile
+      // time and rounded up to a power of two, so the wrap is a mask.
+      else if (kind === "delay") delays.push({ name, size: Math.max(2, a.size ?? 4096) });
       else {
+        const opts = a.options || null;
         uniforms.push({
           name,
-          min: a.min ?? 0, max: a.max ?? 1,
+          min: a.min ?? 0, max: a.max ?? (opts ? opts.length - 1 : 1),
           value: a.default ?? (a.min !== undefined ? a.min : 0),
-          log: a.flags.has("log"), help: a.help || null,
-          rate: a.flags.has("control") ? "control" : meta.rate,
+          log: a.flags.has("log"), help: a.help || null, options: opts,
+          // A choice and a coefficient source are control-rate by nature; a
+          // node may say so for anything else.
+          rate: (a.flags.has("control") || opts) ? "control" : meta.rate,
         });
       }
     }
   });
-  const body = lines.slice(lastDecl + 1).join("\n").trim();
-  return { ...meta, source, ins, outs, states, uniforms, body };
+  // The body may be in two parts: what runs once a block, and what runs
+  // every sample. `// @block` opens the first, `// @sample` the second; a
+  // node with neither is all sample, which is what Phase A's nodes are.
+  const rest = lines.slice(lastDecl + 1);
+  let blockBody = "", sampleBody = "";
+  const bStart = rest.findIndex((l) => /^\s*\/\/\s*@block\s*$/.test(l));
+  const sStart = rest.findIndex((l) => /^\s*\/\/\s*@sample\s*$/.test(l));
+  if (bStart >= 0 && sStart > bStart) {
+    blockBody = rest.slice(bStart + 1, sStart).join("\n").trim();
+    sampleBody = rest.slice(sStart + 1).join("\n").trim();
+  } else {
+    sampleBody = rest.join("\n").trim();
+  }
+  return { ...meta, source, ins, outs, states, coefs, delays, uniforms,
+           body: sampleBody, blockBody };
 }
 
 // ------------------------------------------------------------------ registry
@@ -110,6 +140,9 @@ export function defineDspNode(source) {
   const t = parseDspNode(source);
   if (!t.node) throw new Error("a DSP node needs `// @node <id>` in its header");
   if (!t.outs.length) throw new Error(`${t.node}: a node with no out port produces nothing`);
+  if (t.coefs.length && !t.blockBody) {
+    throw new Error(`${t.node}: it declares coefficients but has no // @block section to work them out in`);
+  }
   if (!t.body) throw new Error(`${t.node}: no body — the code after the declarations is what runs`);
   DSP_NODES.set(t.node, t);
   return t;
@@ -187,12 +220,48 @@ export function compileDspGraph(graph) {
   const order = topoDsp(graph);
   const params = [];                 // AudioParam descriptors
   const stateSlots = [];             // one entry per state variable
-  const lines = [];
+  const lines = [];                  // the per-sample loop
+  const pre = [];                    // once a block, before the loop
+  const coefDecls = [];              // coefficients, alive across the loop
+  const buffers = [];                // delay lines, made in the constructor
   const notes = [];
 
   for (const n of order) {
     const t = dspNode(n.type);
-    const pre = `${n.id}_`;
+    const px = `${n.id}_`;
+
+    // Control-rate uniforms are read once, before the loop: a k-rate
+    // AudioParam hands over one number for the whole block anyway.
+    const controls = t.uniforms.filter((u) => u.rate === "control");
+    for (const u of controls) {
+      const pname = `${px}${u.name}`;
+      const given = n.params[u.name];
+      params.push({
+        name: pname, defaultValue: Number.isFinite(given) ? given : u.value,
+        minValue: u.min, maxValue: u.max, automationRate: "k-rate",
+      });
+      pre.push(`    const ${px}${u.name} = P_${pname}[0];`);
+    }
+    // Delay lines: a power-of-two ring each, plus its write index in state.
+    for (const d of t.delays) {
+      let size = 2;
+      while (size < d.size) size *= 2;
+      const bufName = `${px}${d.name}`;
+      const idxSlot = stateSlots.length;
+      stateSlots.push({ node: n.id, name: `${d.name}__w`, slot: idxSlot });
+      buffers.push({ name: bufName, size, mask: size - 1, idxSlot });
+    }
+    if (t.blockBody) {
+      pre.push(`    // ${n.id}: ${t.node} — once a block`);
+      pre.push("    {");
+      for (const u of controls) pre.push(`      const ${u.name} = ${px}${u.name};`);
+      for (const c of t.coefs) coefDecls.push(`    let ${px}${c.name} = 0;`);
+      for (const c of t.coefs) pre.push(`      let ${c.name} = 0;`);
+      for (const bodyLine of t.blockBody.split("\n")) pre.push(`      ${bodyLine}`);
+      for (const c of t.coefs) pre.push(`      ${px}${c.name} = ${c.name};`);
+      pre.push("    }");
+    }
+
     lines.push(`      // ${n.id}: ${t.node}${t.title ? ` — ${t.title}` : ""}`);
     lines.push("      {");
     // Inputs: a wire, a constant, or silence.
@@ -203,18 +272,20 @@ export function compileDspGraph(graph) {
                  : "0";
       lines.push(`        const ${port.name} = ${expr};`);
     }
-    // Uniforms become AudioParams: sample-accurate, and no message per change.
+    // Audio-rate uniforms are read per sample; control-rate ones were read
+    // before the loop and are simply brought into scope here.
     for (const u of t.uniforms) {
-      const pname = `${pre}${u.name}`;
+      if (u.rate === "control") { lines.push(`        const ${u.name} = ${px}${u.name};`); continue; }
+      const pname = `${px}${u.name}`;
       const given = n.params[u.name];
       params.push({
         name: pname,
         defaultValue: Number.isFinite(given) ? given : u.value,
-        minValue: u.min, maxValue: u.max,
-        automationRate: u.rate === "control" ? "k-rate" : "a-rate",
+        minValue: u.min, maxValue: u.max, automationRate: "a-rate",
       });
       lines.push(`        const ${u.name} = P_${pname}.length > 1 ? P_${pname}[i] : P_${pname}[0];`);
     }
+    for (const c of t.coefs) lines.push(`        const ${c.name} = ${px}${c.name};`);
     // State: read in, written back, one slot each.
     for (const s of t.states) {
       const slot = stateSlots.length;
@@ -222,12 +293,44 @@ export function compileDspGraph(graph) {
       lines.push(`        let ${s.name} = S[${slot}];`);
     }
     for (const o of t.outs) lines.push(`        let ${o.name} = 0;`);
-    for (const bodyLine of t.body.split("\n")) lines.push(`        ${bodyLine}`);
+    // A delay line's two operations are macros rather than calls: a call per
+    // sample costs with nothing to show for it. The rewrite matches the
+    // closing parenthesis rather than guessing at it, because `dRead(fi + 1)`
+    // and `dRead(n)` must both come out right.
+    const macro = (text) => {
+      let outText = text;
+      for (const d of t.delays) {
+        const buf = buffers.find((x) => x.name === `${px}${d.name}`);
+        const w = `S[${buf.idxSlot}]`;
+        for (const [call, wrap] of [
+          [`${d.name}Read`, (arg) => `B_${buf.name}[((${w} - (${arg})) & ${buf.mask})]`],
+          [`${d.name}Write`, (arg) => `B_${buf.name}[${w}] = (${arg})`],
+        ]) {
+          for (;;) {
+            const at = outText.indexOf(`${call}(`);
+            if (at < 0) break;
+            let depth = 0, k = at + call.length;
+            for (; k < outText.length; k++) {
+              if (outText[k] === "(") depth++;
+              else if (outText[k] === ")" && --depth === 0) break;
+            }
+            const arg = outText.slice(at + call.length + 1, k);
+            outText = outText.slice(0, at) + wrap(arg) + outText.slice(k + 1);
+          }
+        }
+      }
+      return outText;
+    };
+    for (const bodyLine of t.body.split("\n")) lines.push(`        ${macro(bodyLine)}`);
+    for (const d of t.delays) {
+      const buf = buffers.find((x) => x.name === `${px}${d.name}`);
+      lines.push(`        S[${buf.idxSlot}] = (S[${buf.idxSlot}] + 1) & ${buf.mask};`);
+    }
     for (const s of t.states) {
       const slot = stateSlots.find((x) => x.node === n.id && x.name === s.name).slot;
       lines.push(`        S[${slot}] = ${s.name};`);
     }
-    for (const o of t.outs) lines.push(`        ${pre}${o.name} = ${o.name};`);
+    for (const o of t.outs) lines.push(`        ${px}${o.name} = ${o.name};`);
     lines.push("      }");
   }
 
@@ -236,9 +339,11 @@ export function compileDspGraph(graph) {
   const declares = order.flatMap((n) => dspNode(n.type).outs.map((o) => `${n.id}_${o.name}`));
 
   return {
-    params, states: stateSlots, notes,
+    params, states: stateSlots, notes, buffers,
     outExpr: `${outNode.id}_${outPort}`,
     declares,
+    coefDecls: coefDecls.join("\n"),
+    pre: pre.join("\n"),
     loop: lines.join("\n"),
     math: MATH,
   };
