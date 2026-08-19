@@ -159,11 +159,16 @@ export function frameGraph(clips, { width, height, background = "#000000", alpha
   const sources = {};
   const bg = hexToRgb(background);
   let acc = addNode(graph, "source.flat", { colour: bg, alpha: [1] }, []);
-  for (const { clip, pixels, transition, preApplied } of clips) {
-    if (!pixels) continue;
-    const sid = addNode(graph, "source");
-    sources[sid] = pixels;
-    let out = sid;
+  for (const { clip, pixels, node, transition, preApplied } of clips) {
+    if (!pixels && !node) continue;
+    // A compiled title is a node with no inputs: the source *is* the shader.
+    let out;
+    if (node) {
+      out = addNode(graph, node, {}, []);
+    } else {
+      out = addNode(graph, "source");
+      sources[out] = pixels;
+    }
     // A chain with a CPU or sketch step in it cannot be expressed as nodes, so
     // the caller ran it and hands over the result; everything else is compiled.
     if (!preApplied) {

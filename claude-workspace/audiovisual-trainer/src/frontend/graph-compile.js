@@ -14,7 +14,7 @@
 
 import { desugar, isEs3, withDefine, parseUniforms } from "./shader-uniforms.js";
 import { applyUniforms } from "./shader-controls.js";
-import { getGL, isGL2, linkProgram } from "./shader-run.js";
+import { getGL, isGL2, linkProgram, cachedImage, loadSketchImages } from "./shader-run.js";
 import { nodeType, topo, validate, curveLut, resolveBypass } from "./render-graph.js";
 import { planPasses } from "./graph-fuse.js";
 
@@ -90,6 +90,7 @@ export class GraphRunner {
     this.pool = new TargetPool(gl);
     this.programs = new Map();      // type id → { prog }
     this.fused = new Map();         // fused sketch → { prog, uniforms } or { error }
+    this.own = new Map();           // @data url → texture the node carries itself
     this.luts = new Map();          // key → texture
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
@@ -145,6 +146,33 @@ export class GraphRunner {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     return { tex, w: src.width || src.naturalWidth, h: src.height || src.naturalHeight, owned: true };
+  }
+
+  /**
+   * A texture for a sampler the node carries in its own source. Blank until
+   * `prepareNode` has decoded it, so a synchronous render never has to wait.
+   */
+  ownTexture(src) {
+    let tex = this.own.get(src);
+    const im = cachedImage(src);
+    if (tex && (tex.filled || !im)) return tex.tex;
+    const gl = this.gl;
+    if (!tex) { tex = { tex: gl.createTexture(), filled: false }; this.own.set(src, tex); }
+    if (im) {
+      gl.bindTexture(gl.TEXTURE_2D, tex.tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      tex.filled = true;
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, tex.tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
+    }
+    return tex.tex;
   }
 
   /** A 256×1 lookup texture from a byte array, cached by content. */
@@ -247,6 +275,21 @@ export class GraphRunner {
         gl.activeTexture(gl.TEXTURE0 + unit);
         gl.bindTexture(gl.TEXTURE_2D, this.lutTexture(lutBytes(n.params[lname])));
         if (u(lname)) gl.uniform1i(u(lname), unit);
+        unit++;
+      }
+      // A sampler the node carries itself — `@data`, a glyph atlas in the
+      // source. Nothing outside the node knows about it, so nothing outside
+      // has to be asked; it just has to have been decoded first.
+      for (const own of type.uniforms) {
+        if (own.control !== "image" || !own.src) continue;
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, this.ownTexture(own.src));
+        if (u(own.name)) gl.uniform1i(u(own.name), unit);
+        if (u(`${own.name}_size`)) {
+          const im = cachedImage(own.src);
+          gl.uniform2f(u(`${own.name}_size`), im ? (im.width || im.naturalWidth || 0) : 0,
+                                              im ? (im.height || im.naturalHeight || 0) : 0);
+        }
         unit++;
       }
       gl.activeTexture(gl.TEXTURE0);
@@ -385,6 +428,7 @@ export class GraphRunner {
     for (const { prog } of this.programs.values()) gl.deleteProgram(prog);
     for (const { prog } of this.fused.values()) if (prog) gl.deleteProgram(prog);
     for (const t of this.luts.values()) gl.deleteTexture(t);
+    for (const t of this.own.values()) gl.deleteTexture(t.tex);
     if (this.lastOut) { gl.deleteTexture(this.lastOut.tex); gl.deleteFramebuffer(this.lastOut.fbo); }
     this.pool.release();
     if (this.blit) gl.deleteProgram(this.blit);
@@ -429,6 +473,16 @@ export function renderGraph(graph, sources, opts = {}) {
   c.width = graph.width; c.height = graph.height;
   c.getContext("2d").drawImage(canvas, 0, 0);
   return c;
+}
+
+/**
+ * Decode whatever a node type carries in its own source, so the next
+ * synchronous render can bind it. Call it once, when the type is registered.
+ */
+export async function prepareNode(typeId) {
+  const t = nodeType(typeId);
+  if (!t) return;
+  await loadSketchImages(t.source);
 }
 
 /** The ejected GLSL for a graph, on the shared context: text, or parts. */

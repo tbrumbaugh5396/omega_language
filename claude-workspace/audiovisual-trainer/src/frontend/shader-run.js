@@ -221,6 +221,9 @@ export function sketchUniforms(source) {
 
 const imageCache = new Map();      // url → HTMLImageElement, decoded
 
+/** What loadSketchImages has decoded, for anything that binds its own samplers. */
+export const cachedImage = (src) => imageCache.get(src) || null;
+
 /**
  * Resolve every sampler the source declares with `@data` or `@asset` into a
  * decoded image, so a later renderSketch can bind it. Sources carry their own

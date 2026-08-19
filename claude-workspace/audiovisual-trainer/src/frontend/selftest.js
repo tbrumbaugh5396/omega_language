@@ -30,6 +30,7 @@ import { documentGraph, applyEffects, makeEffect, sketchEffect } from "./canvas-
 import { BLEND_ORDER } from "./composite-nodes.js";
 import { clipAt, evalTrack, frameGraph, gradeEffects, putKey, sourceTimeAt } from "./video-graph.js";
 import { parseCube } from "./lut-cube.js";
+import { compileTitleNode } from "./title-node.js";
 import { drawWaveform, drawHistogram, frameStats } from "./scopes.js";
 
 // ------------------------------------------------------------------ fixtures
@@ -830,6 +831,40 @@ export async function runSelfTest(report = () => {}) {
       push({ group: "Video on the graph", name: "the scopes measure the frame they are given", ok,
              detail: `half black, half white: mean ${(st.mean * 100).toFixed(0)} IRE, ${(st.crushed * 100).toFixed(0)}% crushed, ` +
                      `${(st.clipped * 100).toFixed(0)}% clipped · the waveform has ${top} columns at the top, ${bot} at the bottom, ${mid} in the middle` }); }
+
+    // A title, compiled: the same words, from a field rather than the text
+    // engine. They will not agree to the pixel — two rasterisers never do —
+    // so what is checked is that the ink lands in the same place.
+    { const clip = { kind: "title", text: "TITLE", size: 64, color: "#ffffff", bg: "none",
+                     family: "system-ui, sans-serif", weight: 600 };
+      const id = await compileTitleNode(clip, W, H);
+      if (!id) {
+        push({ group: "Video on the graph", name: "a title compiles to a distance field", ok: false,
+               detail: "no atlas could be built for the title" });
+      } else {
+        const { graph, sources } = frameGraph(
+          [{ clip: { grade: {}, effects: [], opacity: 1, start: 0 }, node: id }],
+          { width: W, height: H, background: "#000000", scale: 1, alphaOf: () => 1 });
+        const got = renderGraph(graph, sources).getContext("2d").getImageData(0, 0, W, H).data;
+        const ref = document.createElement("canvas"); ref.width = W; ref.height = H;
+        const rg = ref.getContext("2d");
+        rg.fillStyle = "#000"; rg.fillRect(0, 0, W, H);
+        rg.fillStyle = "#fff"; rg.textAlign = "center"; rg.textBaseline = "middle";
+        rg.font = "600 64px system-ui, sans-serif";
+        rg.fillText("TITLE", W / 2, H / 2);
+        const rd = rg.getImageData(0, 0, W, H).data;
+        // Coverage, and how far the two agree about which pixels are ink.
+        let both = 0, onlyA = 0, onlyB = 0;
+        for (let i = 0; i < got.length; i += 4) {
+          const a2 = got[i] > 128, b2 = rd[i] > 128;
+          if (a2 && b2) both++; else if (a2) onlyA++; else if (b2) onlyB++;
+        }
+        const iou = both / Math.max(1, both + onlyA + onlyB);
+        push({ group: "Video on the graph", name: "a title compiles to a distance field, and lands where the text engine put it",
+               ok: both > 300 && iou > 0.8,
+               detail: `${both} px of ink in both, ${onlyA} only in the field, ${onlyB} only in the canvas — ` +
+                       `agreement ${(iou * 100).toFixed(1)}% (want >80; two rasterisers never match exactly)` });
+      } }
 
     // The transition node at its two ends is the two clips, exactly.
     { const two = (progress) => {

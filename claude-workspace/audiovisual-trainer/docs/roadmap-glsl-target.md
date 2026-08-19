@@ -498,7 +498,7 @@ subgraphs" rather than parts of it:
 Group layers and clipping masks are also still to do; both are small next to
 the four above.
 
-### Phase 3 — Video on the graph *(L)*
+### Phase 3 — Video on the graph *(L)* — **shipped**
 
 - A clip is a time-varying source; its effect chain is the same node types.
 - **Keyframes**: any param may have a track `[{t, value, ease}]`; the compiler
@@ -511,6 +511,73 @@ the four above.
   audio from Music muxes as today.
 - *Done when:* a grade keyframed across a cut exports identically twice, and a
   Generate sim runs as a clip effect.
+
+**Both halves of that pass**, and the group in the self-test says so: seven
+frames of a keyed grade across a dissolve, rendered twice, byte for byte; and
+the "ink stirred out of the picture" preset — a sim seeded by the clip, so the
+same frame always comes out the same way — running as a clip effect.
+
+**The frame is a graph.** The timeline used to composite with the 2D canvas
+and grade with a CSS filter string. Both are exact things, so they compile
+rather than get approximated: `filter.cssGrade` writes out the Filter Effects
+matrices for brightness, contrast, saturate and hue-rotate, and a CSS blur is
+three box blurs of the size the spec prescribes, so `filter.box1d` is that.
+Against the browser's own filter string, worst **1.18/255**. A side effect
+worth knowing: the blur is now in document pixels rather than preview pixels,
+so the preview and the export blur by the same visible amount, which the
+CSS-filter path never did.
+
+**Keyframes.** Any parameter carries a track of `{t, v, ease}` in *local clip
+time*, so a keyed grade survives being moved or trimmed. The evaluator is
+pure and both the preview and the export call it, which is what makes an
+export repeatable. A diamond beside every control keys it at the playhead;
+moving a keyed control writes a key rather than a constant; the keys are
+drawn on the clip; effect parameters key the same way. Eases: linear, hold,
+smooth, in, out — chosen per track, not dragged on a curve (see below).
+
+**A clip takes the same effect stack a layer does** — catalogue filters,
+nodes, Generate sketches — and a **transition is a two-input node** living in
+the overlap between two clips, so the outgoing frame is a real input rather
+than something faded over: dissolve, wipe, dip to colour, push.
+
+**LUTs**: `filter.lut3d` samples a cube laid out as a tile sheet, half a texel
+in from each tile's edge so linear filtering never crosses one. `lut-cube.js`
+reads a `.cube` including the two things that get it wrong in practice —
+DOMAIN_MIN/MAX, which a log LUT moves, and 1D LUTs, which are widened into a
+cube. The bytes travel in the document as base64, so a look is part of the
+file. An identity cube changes nothing (0/255); a known channel rotation
+matches the same thing done in JS (0/255).
+
+**Scopes**: waveform, vectorscope and histogram, on the frame that was
+actually composited, so what they measure is what will be exported. Rec. 709,
+75% primaries boxed, the skin-tone line drawn, and a line of numbers for what
+is crushed, what is clipped, and how far the channels have drifted apart.
+
+**Speed ramps**: at a constant speed the source time is a multiplication;
+keyed, it is the integral of the track, at a fixed step so the preview and the
+export agree exactly. A 1×→3× ramp over four seconds covers eight seconds of
+source — the mean rate, not either end.
+
+**Titles compile.** `title-node.js` turns a title into a node whose glyphs are
+a distance field carried in its own source: in the frame's ejected GLSL, sharp
+at any export size, and a *shape* an effect downstream can read. It is opt-in
+per clip, because two rasterisers never agree to the pixel — the compiled one
+lands on the canvas one to 90.2% of its ink, after the browser was asked where
+its "middle" baseline actually is (the middle of the em square, not half the
+font's bounding box, which is four pixels at 64px).
+
+To make that work the graph runner learned to bind a sampler a node carries in
+its own source (`@data`) — roadmap §2.4's "the pixels live in the shader",
+now true for graph nodes and not just sketches.
+
+The video toolbar has a **GLSL** button: the frame at the playhead as one
+chain of shaders. Export is unchanged and still frame-exact, because it calls
+the same `renderAt` the preview does. 86/86.
+
+**Left in Phase 3:** the keyframe UI is a list of tracks with an ease per
+track and prev/next navigation — not the **draggable curve editor in the
+timeline** the bullet asks for. The model is ready for it (per-key eases are
+already stored per key); it is the editor that is missing.
 
 ### Phase 4 — Generate as the node authoring environment *(M)*
 

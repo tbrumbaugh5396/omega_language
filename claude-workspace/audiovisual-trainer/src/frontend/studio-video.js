@@ -31,6 +31,7 @@ import { GENERATE_PRESETS } from "./studio-generate.js";
 import { clipAt, frameGraph, gradeEffects, hasKeys, keyablePaths, paramAt, putKey,
          sourceTimeAt, sourceSpanOf, EASES, DEFAULT_GRADE } from "./video-graph.js";
 import { parseCube } from "./lut-cube.js";
+import { titleNode } from "./title-node.js";
 import { drawWaveform, drawVectorscope, drawHistogram, frameStats } from "./scopes.js";
 
 const PREVIEW_MAX = 900;
@@ -197,16 +198,22 @@ export async function videoEditor(host) {
         if (t < clip.start || t >= clipEnd(clip)) return;
         const local = t - clip.start;
         const at = clipAt(clip, local);
-        let pixels = clipPixels(clip, i++, target);
+        // A compiled title goes in as a node; until its atlas is built, the
+        // text engine draws it, so nothing ever waits for a frame.
+        let node = null;
+        if (clip.kind === "title" && clip.compiled) {
+          node = titleNode(clip, W, H, () => { renderAt(playhead); });
+        }
+        let pixels = node ? null : clipPixels(clip, i++, target);
         // A sketch or CPU step cannot be a node, so that chain is run here and
         // the frame graph takes the result as it stands.
         const fx = (at.effects || []).filter((e) => !e.bypass);
-        const preApplied = fx.some((e) => e.kind !== "graph" && e.kind !== "node");
+        const preApplied = !node && fx.some((e) => e.kind !== "graph" && e.kind !== "node" && e.kind !== "lut");
         if (preApplied) {
           const scale = target.w / W;
           pixels = applyEffects(pixels, [...gradeEffects(at.grade, scale), ...fx]);
         }
-        entries.push({ clip: at, pixels, preApplied, transition: transitionAt(ordered, idx, t) });
+        entries.push({ clip: at, pixels, node, preApplied, transition: transitionAt(ordered, idx, t) });
       });
     }
     return entries;
@@ -895,7 +902,16 @@ export async function videoEditor(host) {
             oninput: (e) => { c.bg = e.target.value; renderAt(playhead); host.save(); } })),
           el("button.ghost", { onclick: () => { c.bg = "none"; renderAt(playhead); host.save(); renderInspector(); } }, "no bg")),
         knob("size", { min: 16, max: 240, step: 1, value: c.size || 64,
-          format: (v) => v.toFixed(0), oninput: (v) => { c.size = v; renderAt(playhead); host.save(); } }));
+          format: (v) => v.toFixed(0), oninput: (v) => { c.size = v; renderAt(playhead); host.save(); } }),
+        el("label.row.tight", { style: { marginBottom: 0, fontSize: ".75rem" } },
+          el("input", { type: "checkbox", checked: !!c.compiled, style: { width: "auto" },
+            onchange: (e) => { c.compiled = e.target.checked; renderAt(playhead); renderInspector(); host.save(); } }),
+          "compile the type to a distance field"),
+        el("p.fine", {}, c.compiled
+          ? "The glyphs are a field in the shader now: this title is in the frame's GLSL, it is sharp at any " +
+            "export size, and an effect after it reads a shape rather than pixels. The two rasterisers do not " +
+            "agree to the pixel, so a title already placed may shift a little."
+          : "Drawn by the text engine. Tick the box to compile it instead."));
     }
 
     append(inspector,
