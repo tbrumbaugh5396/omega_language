@@ -322,6 +322,7 @@ export async function musicEditor(host) {
   function tick() {
     if (!playing) return;
     if (view === "arrange") drawArrange(); else if (view === "edit") drawGrid();
+    updateScopes();
     requestAnimationFrame(tick);
   }
   const playheadSec = () => {
@@ -884,6 +885,121 @@ export async function musicEditor(host) {
     }
   }
 
+  // ---------------------------------------------------------------- scopes
+
+  /**
+   * The scopes, reading the audio that is actually playing.
+   *
+   * The rule from the video scopes, unchanged: measure what will be exported.
+   * Here that is literally true — the meters read the rendered mix at the
+   * playhead, which is the same buffer the WAV is written from, so a number
+   * on screen is a number about the file.
+   *
+   * The pictures are drawn by the render graph. A spectrum is a picture, and
+   * the app has a whole compiler for those.
+   */
+  const scopeCanvas = {
+    spectrum: el("canvas", { width: 480, height: 130, style: { width: "100%", borderRadius: "6px", display: "block" } }),
+    spectrogram: el("canvas", { width: 480, height: 150, style: { width: "100%", borderRadius: "6px", display: "block" } }),
+    wave: el("canvas", { width: 480, height: 90, style: { width: "100%", borderRadius: "6px", display: "block" } }),
+    correlation: el("canvas", { width: 480, height: 34, style: { width: "100%", borderRadius: "6px", display: "block" } }),
+  };
+  const scopeNumbers = el("p.fine", {}, "Press play.");
+  let scopeTools = null, scopesOn = false, scopeDue = 0, spectro = null;
+  // Integrated loudness and true peak are measurements of the whole mix, and
+  // both cost about a hundred operations a sample. Computing them every frame
+  // is what made the first version of this panel hang the page — so they are
+  // computed once per render and cached against the buffer they describe.
+  let scopeStats = { forBuffer: null, lufs: -Infinity, tp: -Infinity, busy: false };
+
+  async function ensureScopeTools() {
+    if (scopeTools) return scopeTools;
+    const [AS, RG, GC] = await Promise.all([
+      import("./audio-scopes.js"), import("./render-graph.js"), import("./graph-compile.js"),
+    ]);
+    await import("./scope-nodes.js");
+    scopeTools = { AS, RG, GC };
+    spectro = AS.spectrogram(256, 192);
+    return scopeTools;
+  }
+
+  /** One node, one canvas — the shortest path from a measurement to a picture. */
+  function drawScope(tools, canvas, type, sourceCanvas, params = {}) {
+    const { RG, GC } = tools;
+    const g = RG.createGraph(canvas.width, canvas.height);
+    let out;
+    if (sourceCanvas) {
+      const src = RG.addNode(g, "source");
+      out = RG.addNode(g, type, params, [src]);
+      g.output = out;
+      GC.renderGraph(g, { [src]: sourceCanvas }, { into: canvas.getContext("2d") });
+    } else {
+      g.output = RG.addNode(g, type, params, []);
+      GC.renderGraph(g, {}, { into: canvas.getContext("2d") });
+    }
+  }
+
+  let lastCorrelation = 0;
+  function writeScopeNumbers(corr) {
+    const lufsText = scopeStats.forBuffer === rendered
+      ? `${scopeStats.lufs === -Infinity ? "—" : scopeStats.lufs.toFixed(1)} LUFS integrated · `
+        + `${scopeStats.tp.toFixed(1)} dBTP true peak`
+      : "measuring loudness…";
+    scopeNumbers.textContent = `${lufsText} · correlation ${corr.toFixed(2)} · `
+      + "measured on the rendered mix, which is the buffer the WAV is written from";
+  }
+
+  async function updateScopes() {
+    if (!scopesOn || !rendered) return;
+    const now = performance.now();
+    if (now < scopeDue) return;
+    scopeDue = now + 70;
+    const tools = await ensureScopeTools();
+    const { AS } = tools;
+    const sr = rendered.sampleRate;
+    const L = rendered.getChannelData(0);
+    const R = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : L;
+    const at = Math.min(L.length - 2048, Math.max(0, Math.floor(playheadSec() * sr)));
+    const win = L.subarray(at, at + 2048);
+    const mag = A.fftMag(win);
+
+    drawScope(tools, scopeCanvas.spectrum, "scope.spectrum",
+      AS.rowTexture(AS.packSpectrum(mag, { width: scopeCanvas.spectrum.width })));
+    spectro.push(mag);
+    drawScope(tools, scopeCanvas.spectrogram, "scope.spectrogram", spectro.canvas,
+      { head: [spectro.head] });
+    drawScope(tools, scopeCanvas.wave, "scope.wave",
+      AS.rowTexture(AS.packWaveform(L.subarray(at, at + 8192), { width: scopeCanvas.wave.width })));
+    const corr = AS.correlation(L.subarray(at, at + 8192), R.subarray(at, at + 8192));
+    drawScope(tools, scopeCanvas.correlation, "scope.correlation", null, { value: [corr] });
+
+    // The numbers are about the whole mix, not the window: loudness is
+    // integrated by definition, and a peak you have already passed still
+    // clipped. So they are measured once for this buffer, not once a frame.
+    if (scopeStats.forBuffer !== rendered && !scopeStats.busy) {
+      scopeStats.busy = true;
+      setTimeout(() => {
+        try {
+          const loud = AS.loudnessLUFS([L, R], sr);
+          scopeStats = { forBuffer: rendered, lufs: loud.lufs, tp: AS.truePeakDb([L, R]), busy: false };
+          // Say so at once. Waiting for the next frame means never, when
+          // nothing is playing — which is exactly when someone opens the
+          // panel to read the numbers.
+          writeScopeNumbers(lastCorrelation);
+        } catch (e) { scopeStats.busy = false; }
+      }, 0);
+    }
+    lastCorrelation = corr;
+    writeScopeNumbers(corr);
+  }
+
+  const scopePanel = el("div.card", { style: { display: "none" } },
+    el("h3", {}, "Scopes"),
+    el("p.fine", {}, "Spectrum and spectrogram are logarithmic in frequency, because hearing is. "
+      + "The pictures are render-graph nodes — the same compiler the canvas and video studios draw with."),
+    scopeCanvas.spectrum, scopeCanvas.spectrogram, scopeCanvas.wave, scopeCanvas.correlation,
+    scopeNumbers);
+
   /**
    * The pattern, rendered through the compiled DSP graph rather than the
    * built-in synth: notes scheduled onto voices, the whole thing bounced
@@ -1071,6 +1187,17 @@ export async function musicEditor(host) {
         el("button", { onclick: exportWav }, "WAV"),
         el("button.ghost", { title: "render this pattern through the compiled DSP graph",
           onclick: bounceGraph }, "Bounce (graph)"),
+        el("button.ghost", { title: "spectrum, spectrogram, waveform and correlation",
+          onclick: async (e) => {
+            scopesOn = !scopesOn;
+            scopePanel.style.display = scopesOn ? "" : "none";
+            e.target.classList.toggle("on", scopesOn);
+            if (scopesOn) {
+              if (!rendered) rendered = await renderMix();
+              scopeDue = 0;
+              await updateScopes();
+            }
+          } }, "Scopes"),
         audioInput,
         aiButton("Pattern…", {
           task: "music",
@@ -1108,7 +1235,7 @@ export async function musicEditor(host) {
         }))),
 
     el("div.lab-split", { style: { gridTemplateColumns: "minmax(0,1fr) 250px" } },
-      stageWrap, sidePanel));
+      el("div.stack", {}, stageWrap, scopePanel), sidePanel));
 
   root._cleanup = () => document.removeEventListener("keydown", onKey);
 

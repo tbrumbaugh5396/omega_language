@@ -70,3 +70,25 @@ float ticks = 1.0 - smoothstep(0.0, 2.0 / u_resolution.x, abs(fract(uv.x * 4.0 +
 vec3 col = mix(paper, vec3(0.28), ticks * 0.5);
 col = mix(col, value < 0.0 ? bad : good, within * band);
 vec4(col, 1.0)`);
+
+defineNode(`// A spectrogram: time across, frequency up, loudness as colour. The history
+// is a ring, so nothing scrolls — the newest column is wherever the head is,
+// and this unwraps it.
+// @node scope.spectrogram
+// @module 05-display
+// @alpha
+uniform sampler2D in0;      // the ring: one column per frame
+uniform float head;         // @range 0 1 @default 0 @hidden where the newest column sits
+uniform float gain;         // @range 0.5 4 @default 1.6 @help how hard the colour is driven
+uniform vec3  cool;         // @color @default 0.04 0.05 0.09 @help the quiet end
+uniform vec3  warm;         // @color @default 0.98 0.86 0.45 @help the loud end
+
+// Unwrap: the column just left of the head is the newest, so it belongs at
+// the right-hand edge.
+float x = fract(uv.x + head);
+float v = clamp(texture2D(in0, vec2(x, 1.0 - uv.y)).r * gain, 0.0, 1.0);
+// Through a warm ramp rather than a raw grey: two colours make a level
+// readable at a glance where one only makes it visible.
+vec3 mid = vec3(0.29, 0.55, 0.62);
+vec3 col = v < 0.5 ? mix(cool, mid, v * 2.0) : mix(mid, warm, (v - 0.5) * 2.0);
+vec4(col, 1.0)`);

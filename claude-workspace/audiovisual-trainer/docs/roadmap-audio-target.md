@@ -381,11 +381,36 @@ axis adjacent columns skip bins — so a narrow peak fell straight through the
 gap and vanished. Each column takes the loudest bin it covers now, which is
 what every real analyser does and why.
 
-**Left in Phase E:** the spectrogram, which wants a scrolling history and is
-therefore a feedback sketch rather than a plain node — the Generate studio has
-`prev()` and it would be a good demonstration. And there is no scopes *panel*
-in the Music studio yet: the nodes and the measurements exist and are tested,
-but nothing on screen shows them.
+**The spectrogram and the panel are in too.**
+
+**The spectrogram is a ring, not a feedback sketch** — and that is a change of
+mind worth recording. The obvious way to scroll a picture is to draw last
+frame shifted by a column, and the Generate runtime has `prev()` for exactly
+that. It is the wrong choice here: that runtime's context is shared with the
+canvas filters and the design bakes, and a panel that quietly loses its
+history when someone opens a filter dialog is worse than no panel. So nothing
+is copied at all — the newest column simply moves, and `scope.spectrogram`
+unwraps by where the head is. Scrolling costs one number. Checked: forty
+columns into a sixty-four-wide ring stores the loud one at 39 and draws it at
+the right-hand edge, 64 rows of 64 bright there and none at the left.
+
+**The panel** is in the Music studio behind a **Scopes** button: spectrum,
+spectrogram, waveform and correlation, each a render-graph node, plus
+integrated loudness and true peak as numbers. It reads the rendered mix at the
+playhead — which is *literally* the buffer the WAV is written from, so the
+video scopes' rule ("measure what will be exported") is not an analogy here
+but the same buffer. On a three-track demo it reads −13.0 LUFS and −0.6 dBTP.
+  - The first version hung the page: it recomputed integrated loudness and
+    true peak — about a hundred operations a sample, over the whole mix — on
+    every animation frame. Both are measurements *of the whole mix* by
+    definition, so they are computed once per render and cached against the
+    buffer they describe. The window-sized work (an FFT, a correlation) is
+    what runs per frame.
+
+**Left in Phase E:** the panel reads the rendered mix rather than a live
+graph tap, because Phase D left the graph engine as a bounce beside the
+built-in synth rather than the thing you hear. The tap exists and is wired;
+nothing plays through it yet.
 
 ---
 

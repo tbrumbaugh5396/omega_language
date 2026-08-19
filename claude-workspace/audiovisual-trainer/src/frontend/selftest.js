@@ -40,7 +40,7 @@ import { nodeReference, referenceGaps } from "./node-docs.js";
 import { createDspGraph, addDspNode, defineDspNode, allocationReport, topoDsp, DSP_NODES } from "./dsp-graph.js";
 import { installGraph, sourceFor } from "./dsp-runtime.js";
 import { renderSong, patternToNotes, allocateVoices, noteHz, toWav } from "./dsp-song.js";
-import { loudnessLUFS, truePeakDb, correlation, packSpectrum, packWaveform, rowTexture } from "./audio-scopes.js";
+import { loudnessLUFS, truePeakDb, correlation, packSpectrum, packWaveform, rowTexture, spectrogram } from "./audio-scopes.js";
 import "./scope-nodes.js";
 import { fftMag } from "./engine-audio.js";
 import { freezeEffects } from "./canvas-graph.js";
@@ -1794,6 +1794,35 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
                + `axis puts it (${want}) · each column takes the loudest bin it covers, because at the top `
                + "of a log axis adjacent columns skip bins and a point sample drops narrow peaks through "
                + "the gap — which this check found" }); }
+
+    // The spectrogram's history is a ring, so the newest column is wherever
+    // the head is and the node unwraps it. If those two disagree the picture
+    // is right but scrolls the wrong way, which is exactly the kind of thing
+    // that looks fine until it does not.
+    { const sg = spectrogram(64, 32);
+      const quiet = new Float32Array(256);
+      const loud = new Float32Array(256).fill(1);
+      for (let k = 0; k < 40; k++) sg.push(k === 39 ? loud : quiet);
+      const px = sg.canvas.getContext("2d").getImageData(0, 0, 64, 32).data;
+      // 40 pushes into 64 columns: the newest sits at 39, the head just past it.
+      const brightAt = [];
+      for (let x = 0; x < 64; x++) if (px[(16 * 64 + x) * 4] > 200) brightAt.push(x);
+      const W3 = 128, H3 = 64;
+      const g = createGraph(W3, H3);
+      const src = addNode(g, "source");
+      g.output = addNode(g, "scope.spectrogram", { head: [sg.head] }, [src]);
+      const d = renderGraph(g, { [src]: sg.canvas }).getContext("2d").getImageData(0, 0, W3, H3).data;
+      // Unwrapped, the newest column must be at the right-hand edge.
+      let rightBright = 0, leftBright = 0;
+      for (let y = 0; y < H3; y++) {
+        if (d[(y * W3 + W3 - 2) * 4] > 150) rightBright++;
+        if (d[(y * W3 + 1) * 4] > 150) leftBright++;
+      }
+      push({ group: "Audio scopes", name: "the spectrogram's ring unwraps to the right edge",
+             ok: brightAt.length === 1 && brightAt[0] === 39 && rightBright > H3 * 0.7 && leftBright === 0,
+             detail: `40 columns pushed into a 64-wide ring: the loud one is stored at ${brightAt[0]}, and `
+               + `the node draws it at the right-hand edge (${rightBright} of ${H3} rows bright there, `
+               + `${leftBright} at the left) · nothing is copied to scroll — the head is a number` }); }
 
     { const W2 = 128;
       const wave = new Float32Array(4096);

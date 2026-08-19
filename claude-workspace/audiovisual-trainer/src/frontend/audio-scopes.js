@@ -198,3 +198,59 @@ export function rowTexture(row) {
   c.getContext("2d").putImageData(new ImageData(row, width, 1), 0, 0);
   return c;
 }
+
+// ------------------------------------------------------------------ history
+//
+// A spectrogram wants a scrolling picture. The obvious way is a feedback
+// sketch — draw last frame shifted by a column — and the Generate runtime has
+// prev() for exactly that. It is the wrong choice here: that runtime's
+// context is shared with the canvas filters and the design bakes, and a panel
+// that quietly loses its history when someone opens a filter dialog is worse
+// than no panel.
+//
+// So the history is a ring, and nothing is ever copied: the newest column
+// simply moves, and the node wraps its lookup by where the head is. Scrolling
+// costs one number.
+
+export function spectrogram(width = 256, height = 256) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width; canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, width, height);
+  const column = new ImageData(1, height);
+  let head = 0;
+
+  return {
+    canvas, width, height,
+    /** Where the newest column sits, 0 to 1 — the node needs it to unwrap. */
+    get head() { return head / width; },
+    /**
+     * Add one column from a magnitude spectrum. Frequency runs up the
+     * picture and is logarithmic, for the same reason the spectrum plot is:
+     * an octave should take the same space wherever it sits.
+     */
+    push(mag, { floorDb = -96 } = {}) {
+      const binAt = (t) => Math.min(mag.length - 1, Math.max(0, Math.pow(mag.length, t) - 1));
+      for (let y = 0; y < height; y++) {
+        const t = 1 - y / (height - 1);                 // top of the picture is high
+        const lo = Math.floor(binAt(Math.max(0, t - 0.5 / height)));
+        const hi = Math.ceil(binAt(Math.min(1, t + 0.5 / height)));
+        let m = 0;
+        for (let b = lo; b <= hi && b < mag.length; b++) if (mag[b] > m) m = mag[b];
+        const db = 20 * Math.log10(Math.max(m, 1e-12));
+        const v = Math.max(0, Math.min(1, (db - floorDb) / -floorDb));
+        const i = y * 4;
+        column.data[i] = column.data[i + 1] = column.data[i + 2] = Math.round(v * 255);
+        column.data[i + 3] = 255;
+      }
+      ctx.putImageData(column, head, 0);
+      head = (head + 1) % width;
+    },
+    clear() {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, width, height);
+      head = 0;
+    },
+  };
+}
