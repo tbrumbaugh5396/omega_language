@@ -643,7 +643,7 @@ allocation failing; it drains first now.
 document in GLSL mode, then Save as node" — there is no drop-a-`.glsl`-here.
 92/92.
 
-### Phase 5 — Design meets the target *(M)*
+### Phase 5 — Design meets the target *(M)* — **shipped**
 
 SVG is the best case for §2.4c, because it is already structure: nothing has
 to be recovered, only translated. Every primitive has a direct SDF —
@@ -771,11 +771,49 @@ Generate already has applies to it.
   - The magnitude-based error correction pass (median against the true
     distance, truth winning past a pixel) is what finally cleared the specks
     from serif letterforms. A sign-based version, tried first, never fired.
-- **What is left here**: GSUB shaping (ligatures, contextual alternates) —
-  kerning is read, substitution is not; and WOFF2 outlines, which wait on a
-  Brotli decoder. Neither blocks anything: **Phase 5 is otherwise done, and the
-  work now moves to Phase 0 and the render graph**, which is where the rest of
-  the roadmap lives.
+- **GSUB ligatures — shipped.** The `liga` and `clig` features, ligature
+  substitution (type 4) and single substitution (type 1), through extension
+  lookups. A **token** is now what one glyph draws — usually a character, but
+  `fi` where the font has that ligature — and advances, kerning, outlines and
+  the atlas all take tokens, so a ligature needs no special case anywhere
+  except where it is resolved. On Avenir Next, "office flag" shapes to
+  `o f fi c e / fl a g`, the atlas holds `fi` and `fl` as single glyphs, and
+  the shaped line measures 311.68 px against 313.02 laid out per character.
+  - Worth knowing for anyone testing this: **on macOS most families keep their
+    Latin ligatures in Apple's `morx`, not GSUB.** A scan of every system font
+    turns up very few — Arial's `liga` covers Arabic forms only; Georgia and
+    Baskerville have none at all. So the self-test reads a GSUB table built by
+    hand rather than depending on a font being installed.
+  - **Still not applied:** chained contextual lookups (types 5 and 6), which is
+    where `calt` lives. Those need a matching engine rather than a table read,
+    and the families that depend on them are mostly scripts.
+- **The strain case is handled.** Past the edge budget a shape used to be
+  *dropped*, which is a visible failure. It bakes to a distance field now —
+  rasterised, distance-transformed with the same exact EDT the glyph atlas
+  uses, and carried in the source as `@data` — so the picture is always
+  produced. It stops being editable geometry, and the import notes say which
+  shapes went that way. **A 900-edge polygon at a 400-edge budget reads
+  0.67/255 against the browser's own rasterisation**, 10 pixels of 90,000 off
+  by more than 60.
+- **WOFF2 outlines** stay out, for the reason above: Brotli needs a decoder
+  and its static dictionary, which is out of proportion to what it buys here.
+- **Effects on design layers through the graph — shipped.** A design node
+  carries an effect stack. The geometry stays vector — this is a compile
+  target, not a raster tool — but a blur or a grade is not geometry, and the
+  graph is where those belong: the node's own subtree is rasterised on its
+  own, the stack runs over it, and the result composites back in its place.
+  Baking is asynchronous so the plain drawing stands in until it lands, and
+  the raster is padded, because a blur does not stay inside the box the shape
+  occupies.
+  - That found a fault reaching well past Design. **Every node in the
+    catalogue already computed a correct alpha** — `c.a`, `o.a`, the source's
+    — and `desugar` was overwriting all of them with 1, because none of them
+    said `@alpha`. Putting a blur on a design node turned its clear surround
+    into an opaque box; the same fault would have eaten the transparency of
+    any canvas layer you blurred. They all say `@alpha` now, and the two
+    blurs premultiply, because blurring straight alpha drags whatever sits
+    under the transparency out into the edge — which, with nothing behind it,
+    is black.
 - **Generate → Design** is not attempted (the boundary of §2.3 again).
 - Effects on design layers through the graph.
 - **Text via an SDF glyph atlas — shipped** (`glyph-atlas.js`). No font file is
