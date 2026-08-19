@@ -24,12 +24,11 @@ import { Selection, wandMask } from "./canvas-selection.js";
 import { aiButton } from "./ai.js";
 import { gridOverlay } from "./grid-overlay.js";
 import { GENERATE_PRESETS } from "./studio-generate.js";
-import { renderSketch, sketchUniforms } from "./shader-run.js";
+import { sketchUniforms } from "./shader-run.js";
 import { buildControls } from "./shader-controls.js";
-import { applyNode, applyFilter } from "./graph-compile.js";
 import { nodeType } from "./render-graph.js";
 import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
-import { fuseStats } from "./graph-fuse.js";
+import { applyEffects, effectCost, effectLabel, ejectEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
   "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
@@ -69,6 +68,9 @@ export async function canvasEditor(host) {
       opacity: stored.opacity ?? 1, blend: stored.blend || "source-over",
       type: stored.type || "raster",
       text: stored.text ? { ...stored.text } : null,
+      // The effect stack: filters that have not been baked, and will not be
+      // unless asked. Plain data, so it survives a reload.
+      effects: (stored.effects || []).map((e) => ({ ...e })),
       canvas: c, ctx: I.ctx2d(c),
       maskCanvas: null, maskCtx: null,
       cache: I.makeCanvas(W, H), dirty: true,
@@ -122,19 +124,59 @@ export async function canvasEditor(host) {
   }
 
   /** The layer as it participates in the composite: pixels through its mask. */
+  const liveFx = (layer) => (layer.effects || []).filter((e) => !e.bypass);
+
+  /**
+   * The layer as it composites: its pixels through its effect stack, then
+   * through its mask. Cached, because a stack is only recomputed when the
+   * layer changes — not on every repaint.
+   */
   function surface(layer) {
-    if (!layer.maskCanvas) return layer.canvas;
+    const fx = liveFx(layer);
+    if (!layer.maskCanvas && !fx.length) return layer.canvas;
     if (layer.dirty) {
+      let src = layer.canvas;
+      if (fx.length) {
+        try { src = applyEffects(layer.canvas, fx); }
+        catch (e) {
+          if (!layer.fxWarned) { layer.fxWarned = true; toast(`Effects on ${layer.name}: ${String(e.message).split("\n")[0]}`); }
+          src = layer.canvas;
+        }
+      }
       const g = I.ctx2d(layer.cache);
       g.clearRect(0, 0, W, H);
-      g.drawImage(layer.canvas, 0, 0);
-      g.save();
-      g.globalCompositeOperation = "destination-in";
-      g.drawImage(layer.maskCanvas, 0, 0);
-      g.restore();
+      g.drawImage(src, 0, 0);
+      if (layer.maskCanvas) {
+        g.save();
+        g.globalCompositeOperation = "destination-in";
+        g.drawImage(layer.maskCanvas, 0, 0);
+        g.restore();
+      }
       layer.dirty = false;
     }
     return layer.cache;
+  }
+
+  /**
+   * The same, for pixels that only exist for this frame — a stroke in
+   * progress, a transform being dragged. A GPU stack is fast enough to re-run
+   * on every pointer move; a stack with a CPU step is not, so during a stroke
+   * it waits for the commit and the preview is the stroke over the last
+   * finished result.
+   */
+  function surfaceLive(layer, raw) {
+    const fx = liveFx(layer);
+    let out = raw;
+    if (fx.length && fx.every((e) => e.kind === "graph" || e.kind === "node")) {
+      try { out = applyEffects(raw, fx); } catch (e) { out = raw; }
+    }
+    if (!layer.maskCanvas) return out;
+    const tmp = I.makeCanvas(W, H);
+    const g = I.ctx2d(tmp);
+    g.drawImage(out, 0, 0);
+    g.globalCompositeOperation = "destination-in";
+    g.drawImage(layer.maskCanvas, 0, 0);
+    return tmp;
   }
 
   // ------------------------------------------------------------ state
@@ -165,7 +207,10 @@ export async function canvasEditor(host) {
     const l = L();
     return {
       kind, index: active,
-      pixels: kind === "selection" ? null : I.getImage(l.canvas),
+      // The stack is small and cheap; carrying it on every snapshot means undo
+      // crosses the line between editing pixels and editing the document.
+      effects: JSON.parse(JSON.stringify(l.effects || [])),
+      pixels: kind === "selection" || kind === "effects" ? null : I.getImage(l.canvas),
       mask: l.maskCanvas ? I.getImage(l.maskCanvas) : null,
       text: l.text ? { ...l.text } : null,
       selection: sel.active ? I.getImage(sel.canvas) : null,
@@ -174,6 +219,7 @@ export async function canvasEditor(host) {
   }
   function applyState(s) {
     const l = layers[s.index] || L();
+    if (s.effects) l.effects = s.effects.map((e) => ({ ...e }));
     if (s.pixels) I.putImage(l.canvas, s.pixels);
     if (s.mask && l.maskCanvas) I.putImage(l.maskCanvas, s.mask);
     if (s.text) l.text = { ...s.text };
@@ -220,21 +266,22 @@ export async function canvasEditor(host) {
 
       if (l === L() && strokeCanvas && !state.editingMask) {
         // Preview the in-progress stroke composited into this layer, so what
-        // you see during the stroke is what lands when you let go.
+        // you see during the stroke is what lands when you let go — the stroke
+        // goes into the pixels, so it goes in *under* the effect stack.
         const tmp = I.makeCanvas(W, H);
         const tg = I.ctx2d(tmp);
-        tg.drawImage(surface(l), 0, 0);
+        tg.drawImage(l.canvas, 0, 0);
         const clipped = sel.clip(copyOf(strokeCanvas));
         tg.globalAlpha = state.opacity;
         tg.globalCompositeOperation = state.tool === "eraser" ? "destination-out" : "source-over";
         tg.drawImage(clipped, 0, 0);
-        vg.drawImage(tmp, 0, 0);
+        vg.drawImage(surfaceLive(l, tmp), 0, 0);
       } else if (l === L() && transform) {
         const tmp = I.makeCanvas(W, H);
         const tg = I.ctx2d(tmp);
-        tg.drawImage(surface(l), 0, 0);
+        tg.drawImage(l.canvas, 0, 0);
         drawTransform(tg);
-        vg.drawImage(tmp, 0, 0);
+        vg.drawImage(surfaceLive(l, tmp), 0, 0);
       } else {
         vg.drawImage(surface(l), 0, 0);
       }
@@ -284,6 +331,7 @@ export async function canvasEditor(host) {
         id: l.id, name: l.name, visible: l.visible, opacity: l.opacity,
         blend: l.blend, type: l.type,
         text: l.text ? { ...l.text } : null,
+        effects: (l.effects || []).map((e) => ({ ...e })),
         data: l.canvas.toDataURL("image/png"),
         mask: l.maskCanvas ? l.maskCanvas.toDataURL("image/png") : null,
       }));
@@ -858,7 +906,7 @@ export async function canvasEditor(host) {
 
   // ------------------------------------------------------------ filters
 
-  async function filterDialog() {
+  async function filterDialog(editing = null) {
     const l = L();
     if (l.type === "text") { toast("Rasterise the text layer first"); return; }
     // Shader filters: any Generate sketch that takes an image. The layer is
@@ -885,74 +933,100 @@ export async function canvasEditor(host) {
     const controls = el("div.stack");
     const preview = el("canvas", { width: 320, height: Math.round((320 * H) / W),
       style: { width: "100%", borderRadius: "8px", background: "#000" } });
-    const source = I.getImage(l.canvas);
-    let params = {}, result = null, resultCanvas = null;
-    let shader = null;                        // { source, uniforms, values, imageName, time }
-    let graphNode = null;                     // { type, values }
+    // What this dialog is about to put in the stack. Every kind of filter —
+    // catalogue, node, CPU, sketch — ends up as one of these, so there is a
+    // single path from "the sliders moved" to "the preview".
+    let params = {};                          // a CPU filter's parameters
+    let shader = null;                        // { source, uniforms, values, imageName, time, name }
+    let graphNode = null;                     // { filter } or { type }, plus values
+    let cand = null, resultCanvas = null;
 
+    // What the stack will cost once this effect is in it.
+    const costLine = el("p.fine", {});
     const paintPreview = (tmp) => {
       const pg = preview.getContext("2d");
       pg.fillStyle = doc.background || "#fff";
       pg.fillRect(0, 0, preview.width, preview.height);
       pg.drawImage(tmp, 0, 0, preview.width, preview.height);
     };
-    const recompute = () => {
+    // The stack as it would be with this effect in it: editing replaces an
+    // entry where it stands, a new one goes on top. So the preview is the
+    // layer, not the filter — which is what you are actually deciding about.
+    const stackWith = (e) => (editing
+      ? (l.effects || []).map((x) => (x.id === editing.id ? e : x))
+      : [...(l.effects || []), e]);
+
+    const candidate = () => {
       if (graphNode && graphNode.filter) {
-        try {
-          const flat = {};
-          for (const [k, v] of Object.entries(graphNode.values)) flat[k] = Array.isArray(v) ? v[0] : v;
-          resultCanvas = applyFilter(l.canvas, graphNode.filter, flat);
-          result = null;
-        } catch (e) { toast(`Graph failed: ${String(e.message).split("\n")[0]}`); return; }
-        paintPreview(resultCanvas);
-        return;
+        const flat = {};
+        for (const [k, x] of Object.entries(graphNode.values)) flat[k] = Array.isArray(x) ? x[0] : x;
+        return makeEffect("graph", graphNode.filter.id, flat);
       }
-      if (graphNode) {
-        try {
-          const vals = { ...graphNode.values };
-          if (graphNode.type === "adjust.curves") {
-            // three sliders → a curve through (0,0), (0.25,s), (0.5,m), (0.75,h), (1,1)
-            const [sh, mi, hi] = [vals.shadows[0], vals.mids[0], vals.highs[0]];
-            vals.curve = { points: [[0, 0], [0.25, 0.25 + sh * 0.25], [0.5, 0.5 + mi * 0.25], [0.75, 0.75 + hi * 0.25], [1, 1]] };
-          }
-          resultCanvas = applyNode(l.canvas, graphNode.type, vals);
-          result = null;
-        } catch (e) { toast(`Graph failed: ${String(e.message).split("\n")[0]}`); return; }
-        paintPreview(resultCanvas);
-        return;
-      }
-      if (shader) {
-        try {
-          resultCanvas = renderSketch(shader.source, W, H, {
-            images: { [shader.imageName]: l.canvas }, values: shader.values,
-            time: shader.time, steps: 8 });
-          result = null;
-        } catch (e) { toast(`Shader failed: ${String(e.message).split("\n")[0]}`); return; }
-        paintPreview(resultCanvas);
-        return;
-      }
-      const f = I.FILTERS.find((x) => x.id === selBox.value);
-      try { result = f.fn(source, params); }
-      catch (e) { toast(`Filter failed: ${e.message}`); return; }
-      resultCanvas = null;
-      paintPreview(I.putImage(I.makeCanvas(W, H), result));
+      if (graphNode) return makeEffect("node", graphNode.type, graphNode.values);
+      if (shader) return sketchEffect(shader.source, shader.values, shader.time, shader.name);
+      return makeEffect("cpu", selBox.value, params);
     };
-    const buildShader = async (src) => {
+    const recompute = () => {
+      try {
+        cand = candidate();
+        if (editing) { cand.id = editing.id; cand.bypass = editing.bypass; }
+        resultCanvas = applyEffects(l.canvas, stackWith(cand));
+      } catch (e) { toast(`Filter failed: ${String(e.message).split("\n")[0]}`); return; }
+      paintPreview(resultCanvas);
+      showCost();
+    };
+
+    const commitEffect = () => {
+      if (!cand) return;
+      snapshot("effects");
+      const i = editing ? l.effects.findIndex((x) => x.id === editing.id) : -1;
+      if (i >= 0) l.effects[i] = cand; else l.effects.push(cand);
+      l.dirty = true;
+      closeModal(); render(); renderPanels(); persist();
+    };
+    const bake = () => {
+      if (!cand || !resultCanvas) return;
+      snapshot();
+      if (sel.active) {
+        // Inside a selection, only this filter goes into the pixels; the rest
+        // of the stack has no business being flattened in part.
+        const only = copyOf(applyEffects(l.canvas, [cand]));
+        sel.clip(only);
+        l.ctx.drawImage(only, 0, 0);
+      } else {
+        l.ctx.clearRect(0, 0, W, H);
+        l.ctx.drawImage(resultCanvas, 0, 0);
+        l.effects = [];
+      }
+      l.dirty = true;
+      closeModal(); render(); renderPanels(); persist();
+    };
+
+    // `init` prefills the controls when an existing entry is being edited.
+    const init = editing ? (editing.params || {}) : null;
+    const iv = (name, def) => {
+      if (!init || init[name] === undefined) return def;
+      return Array.isArray(init[name]) ? init[name][0] : init[name];
+    };
+
+    const buildShader = async (src, name) => {
       const uniforms = sketchUniforms(src);
       const img = uniforms.find((u) => u.control === "image");
       if (!img) { toast("That sketch takes no image, so it cannot filter a layer."); return; }
-      shader = { source: src, uniforms, values: {}, imageName: img.name, time: 0 };
-      // Seed defaults; images are the layer, so their controls are not shown.
-      for (const u of uniforms) if (u.control !== "image") shader.values[u.name] = u.value.slice();
+      shader = { source: src, uniforms, values: {}, imageName: img.name, time: (editing && editing.time) || 0, name: name || "Shader" };
+      for (const u of uniforms) {
+        if (u.control === "image") continue;
+        shader.values[u.name] = init && init[u.name] ? init[u.name].slice() : u.value.slice();
+      }
       clear(controls);
       controls.append(el("p.fine", {}, `The layer is passed as \`${img.name}\`.`));
-      controls.append(buildControls(uniforms.filter((u) => u.control !== "image"),
-        shader.values, recompute));
-      controls.append(knob("time", { min: 0, max: 20, step: 0.05, value: 0,
+      controls.append(buildControls(uniforms.filter((u) => u.control !== "image"), shader.values, recompute));
+      controls.append(knob("time", { min: 0, max: 20, step: 0.05, value: shader.time,
         format: (v) => v.toFixed(2) + " s",
         oninput: (v) => { shader.time = v; recompute(); } }));
       recompute();
     };
+
     const build = async () => {
       const v = selBox.value;
       shader = null; graphNode = null;
@@ -964,29 +1038,19 @@ export async function canvasEditor(host) {
         clear(controls);
         graphNode = { filter: gf, values: {} };
         for (const [name, min, max, def] of cpu.params) {
-          graphNode.values[name] = def;
-          controls.append(knob(name, { min, max, step: (max - min) / 100, value: def,
+          graphNode.values[name] = iv(name, def);
+          controls.append(knob(name, { min, max, step: (max - min) / 100, value: iv(name, def),
             format: (x) => (Math.abs(x) >= 10 ? x.toFixed(0) : x.toFixed(2)),
             oninput: (x) => { graphNode.values[name] = x; recompute(); } }));
         }
         for (const [name, def] of cpu.colors || []) {
-          graphNode.values[name] = def;
+          graphNode.values[name] = iv(name, def);
           controls.append(el("label", {}, name,
-            el("input", { type: "color", value: def,
+            el("input", { type: "color", value: iv(name, def),
               oninput: (e) => { graphNode.values[name] = e.target.value; recompute(); } })));
         }
-        // How many draws this actually costs, after fusion — the number a
-        // stack of these will add up to when layers become subgraphs.
-        let cost = "";
-        try {
-          const probe = { width: 64, height: 64, nodes: [{ id: "p", type: "source", params: {}, inputs: [], bypass: false }], output: null };
-          probe.output = gf.build(probe, "p", graphNode.values);
-          const st = fuseStats(probe);
-          cost = st.before === st.after ? ` ${st.before} draw${st.before === 1 ? "" : "s"}.`
-               : ` ${st.before} nodes, fused into ${st.after} draw${st.after === 1 ? "" : "s"}.`;
-        } catch (e) { /* the note is a nicety; never block the dialog for it */ }
         controls.append(el("p.fine", {}, `The catalogue's ${cpu.name}, as a render-graph node — the same ` +
-          `mathematics on the GPU; the self-test holds it to the CPU version.${cost} Still bakes on Apply.`));
+          "mathematics on the GPU; the self-test holds it to the CPU version."));
         recompute();
         return;
       }
@@ -995,76 +1059,85 @@ export async function canvasEditor(host) {
         clear(controls);
         graphNode = { type, values: {} };
         if (type === "adjust.curves") {
-          graphNode.values = { shadows: [0], mids: [0], highs: [0], amount: [1] };
+          graphNode.values = { shadows: [iv("shadows", 0)], mids: [iv("mids", 0)],
+                               highs: [iv("highs", 0)], amount: [iv("amount", 1)] };
           for (const [k, lab] of [["shadows", "shadows"], ["mids", "midtones"], ["highs", "highlights"]]) {
-            controls.append(knob(lab, { min: -1, max: 1, step: 0.01, value: 0, format: (x) => x.toFixed(2),
+            controls.append(knob(lab, { min: -1, max: 1, step: 0.01, value: graphNode.values[k][0],
+              format: (x) => x.toFixed(2),
               oninput: (x) => { graphNode.values[k] = [x]; recompute(); } }));
           }
-          controls.append(knob("amount", { min: 0, max: 1, step: 0.01, value: 1, format: (x) => x.toFixed(2),
+          controls.append(knob("amount", { min: 0, max: 1, step: 0.01, value: graphNode.values.amount[0],
+            format: (x) => x.toFixed(2),
             oninput: (x) => { graphNode.values.amount = [x]; recompute(); } }));
         } else {
           const t = nodeType(type === "filter.blur" ? "filter.blur1d" : type);
           const shown = t.params.filter((u) => !u.hidden && u.control !== "image");
-          for (const u of shown) graphNode.values[u.name] = u.value.slice();
+          for (const u of shown) graphNode.values[u.name] = init && init[u.name] ? init[u.name].slice() : u.value.slice();
           controls.append(buildControls(shown, graphNode.values, recompute));
         }
-        controls.append(el("p.fine", {}, `A render-graph node (${type}); its GLSL is what runs. ` +
-          "Filters here still bake on Apply — the layer stack becomes a live graph in the next phase."));
+        controls.append(el("p.fine", {}, `A render-graph node (${type}); its GLSL is what runs.`));
         recompute();
         return;
       }
       if (v.startsWith("shader:preset:")) {
         const p = shaderPresets.find((x) => x.id === v.slice(14));
-        return buildShader(p.source);
+        return buildShader(p.source, p.label);
       }
       if (v.startsWith("shader:doc:")) {
         const d = await api(`/api/studio/projects/${v.slice(11)}`);
         const src = d.data && (d.data.mode === "glsl" ? d.data.glsl : d.data.sketch);
         if (!src) { toast("That document has no source yet."); return; }
-        return buildShader(src);
+        return buildShader(src, d.name);
       }
       const f = I.FILTERS.find((x) => x.id === v);
       params = {};
       clear(controls);
       for (const [name, min, max, def] of f.params) {
-        params[name] = def;
-        controls.append(knob(name, { min, max, step: (max - min) / 100, value: def,
-          format: (v) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(2)),
-          oninput: (v) => { params[name] = v; recompute(); } }));
+        params[name] = iv(name, def);
+        controls.append(knob(name, { min, max, step: (max - min) / 100, value: iv(name, def),
+          format: (x) => (Math.abs(x) >= 10 ? x.toFixed(0) : x.toFixed(2)),
+          oninput: (x) => { params[name] = x; recompute(); } }));
       }
       for (const [name, def] of f.colors || []) {
-        params[name] = def;
+        params[name] = iv(name, def);
         controls.append(el("label", {}, name,
-          el("input", { type: "color", value: def,
+          el("input", { type: "color", value: iv(name, def),
             oninput: (e) => { params[name] = e.target.value; recompute(); } })));
       }
+      const gf = GRAPH_FILTERS.find((x) => x.cpu === v && !x.cpuOnly);
+      if (gf) controls.append(el("p.fine", {}, `This one has a GPU form too — "${gf.name} — on the GPU" in the list ` +
+        "above. Same numbers, and it fuses with the effects around it."));
       recompute();
     };
     selBox.onchange = build;
 
-    modal(el("h2", {}, "Filter", el("span.fine", {}, ` — ${l.name}`)),
+    const showCost = () => {
+      try {
+        const c = effectCost(cand ? stackWith(cand) : l.effects);
+        costLine.textContent = `${c.effects} effect${c.effects === 1 ? "" : "s"} · `
+          + `${c.draws} GPU draw${c.draws === 1 ? "" : "s"}${c.cpu ? ` · ${c.cpu} on the CPU` : ""}`
+          + " — recomputed when the layer changes, never baked unless you ask.";
+      } catch (e) { costLine.textContent = ""; }
+    };
+
+    modal(el("h2", {}, editing ? "Edit effect" : "Filter", el("span.fine", {}, ` — ${l.name}`)),
       sel.active ? el("p.fine", { style: { color: "var(--warm)" } },
-        "A selection is active, so this applies inside it only.") : null,
-      selBox, preview, controls,
+        "A selection is active. An effect covers the whole layer; Bake goes into the pixels inside the selection only.") : null,
+      selBox, preview, controls, costLine,
       el("div.row", { style: { justifyContent: "flex-end" } },
         el("button", { onclick: closeModal }, "Cancel"),
-        el("button.primary", {
-          onclick: () => {
-            if (!result && !resultCanvas) return;
-            snapshot();
-            const filtered = resultCanvas || I.putImage(I.makeCanvas(W, H), result);
-            if (sel.active) {
-              sel.clip(filtered);
-              l.ctx.drawImage(filtered, 0, 0);
-            } else {
-              l.ctx.clearRect(0, 0, W, H);
-              l.ctx.drawImage(filtered, 0, 0);
-            }
-            l.dirty = true;
-            closeModal(); render(); persist();
-          },
-        }, "Apply")));
-    build();
+        el("button", { title: "flatten into the layer's pixels", onclick: bake }, "Bake"),
+        el("button.primary", { onclick: commitEffect }, editing ? "Update effect" : "Add effect")));
+
+    // Editing an entry: put the list on it, and fill the controls from it.
+    if (editing) {
+      if (editing.kind === "graph") selBox.value = `gfilter:${editing.ref}`;
+      else if (editing.kind === "node") selBox.value = `graph:${editing.ref}`;
+      else if (editing.kind === "cpu") selBox.value = editing.ref;
+      if (editing.kind === "sketch") await buildShader(editing.source, editing.name);
+      else await build();
+    } else await build();
+    showCost();
   }
 
   // ------------------------------------------------------------ layers UI
@@ -1075,7 +1148,7 @@ export async function canvasEditor(host) {
     if (drawInto) I.ctx2d(c).drawImage(drawInto, 0, 0, W, H);
     const id = Math.max(0, ...layers.map((l) => l.id)) + 1;
     layers.push({ id, name: name || `Layer ${id}`, visible: true, opacity: 1,
-      blend: "source-over", type: "raster", text: null, canvas: c, ctx: I.ctx2d(c),
+      blend: "source-over", type: "raster", text: null, effects: [], canvas: c, ctx: I.ctx2d(c),
       maskCanvas: null, maskCtx: null, cache: I.makeCanvas(W, H), dirty: true });
     active = layers.length - 1;
     render(); renderPanels(); persist();
@@ -1098,7 +1171,8 @@ export async function canvasEditor(host) {
               onclick: () => { active = idx; state.editingMask = false; render(); renderPanels(); } },
               l.name),
             l.type === "text" ? el("span.tag", {}, "T") : null,
-            l.maskCanvas ? el("span.tag " + (isActive && state.editingMask ? "bad" : ""), {}, "mask") : null),
+            l.maskCanvas ? el("span.tag " + (isActive && state.editingMask ? "bad" : ""), {}, "mask") : null,
+            (l.effects || []).length ? el("span.tag", { title: "effects, not baked" }, `fx ${l.effects.length}`) : null),
           el("div.row.tight", {},
             el("button.ghost", { title: "up", onclick: () => moveLayer(idx, 1) }, "↑"),
             el("button.ghost", { title: "down", onclick: () => moveLayer(idx, -1) }, "↓"),
@@ -1123,8 +1197,71 @@ export async function canvasEditor(host) {
             l.maskCanvas ? el("button.ghost.danger", { onclick: () => removeMask(false) }, "drop") : null),
           l.type === "text" ? el("div.row.tight", {},
             el("button.ghost", { onclick: () => textDialog(0, 0, l.text) }, "edit text"),
-            el("button.ghost", { onclick: rasterizeText }, "rasterise")) : null) : null));
+            el("button.ghost", { onclick: rasterizeText }, "rasterise")) : null,
+          effectStack(l)) : null));
     });
+  }
+
+  /**
+   * The layer's effect stack, as a list you can reorder, switch off and
+   * re-open. Nothing here has been applied to the pixels; the stack runs on
+   * every draw, so a filter added an hour ago is still a filter.
+   */
+  function effectStack(l) {
+    const fx = l.effects || [];
+    if (!fx.length) return null;
+    const cost = (() => { try { return effectCost(fx); } catch (e) { return null; } })();
+    const move = (i, dir) => {
+      const j = i + dir;
+      if (j < 0 || j >= fx.length) return;
+      snapshot("effects");
+      [fx[i], fx[j]] = [fx[j], fx[i]];
+      l.dirty = true; render(); renderPanels(); persist();
+    };
+    return el("div.stack", { style: { marginTop: ".35rem", gap: ".2rem" } },
+      el("p.fine", { style: { margin: 0 } }, "Effects — top of this list runs first"),
+      ...fx.map((e, i) => el("div.spread", { style: { gap: ".3rem" } },
+        el("div.row.tight", {},
+          el("input", { type: "checkbox", checked: !e.bypass, style: { width: "auto" },
+            title: "switch this effect off without losing it",
+            onchange: (ev) => { snapshot("effects"); e.bypass = !ev.target.checked; l.dirty = true; render(); renderPanels(); persist(); } }),
+          el("button.ghost", { style: { padding: ".1em .4em", opacity: e.bypass ? 0.5 : 1 },
+            title: "open its controls again",
+            onclick: () => filterDialog(e) }, effectLabel(e))),
+        el("div.row.tight", {},
+          el("button.ghost", { title: "earlier", onclick: () => move(i, -1) }, "↑"),
+          el("button.ghost", { title: "later", onclick: () => move(i, 1) }, "↓"),
+          el("button.ghost.danger", {
+            onclick: () => { snapshot("effects"); fx.splice(i, 1); l.dirty = true; render(); renderPanels(); persist(); } }, "×")))),
+      el("div.spread", {},
+        el("span.fine", {}, cost ? `${cost.draws} GPU draw${cost.draws === 1 ? "" : "s"}${cost.cpu ? ` · ${cost.cpu} on the CPU` : ""}` : ""),
+        el("div.row.tight", {},
+          el("button.ghost", { title: "the GLSL this stack compiles to", onclick: () => showStackGlsl(l) }, "GLSL"),
+          el("button.ghost", { title: "flatten the stack into the pixels", onclick: () => flattenEffects(l) }, "flatten"))));
+  }
+
+  function flattenEffects(l) {
+    if (!(l.effects || []).length) return;
+    snapshot();
+    const flat = copyOf(applyEffects(l.canvas, l.effects));
+    l.ctx.clearRect(0, 0, W, H);
+    l.ctx.drawImage(flat, 0, 0);
+    l.effects = [];
+    l.dirty = true;
+    render(); renderPanels(); persist();
+  }
+
+  function showStackGlsl(l) {
+    let text;
+    try { text = ejectEffects(l.effects, W, H); }
+    catch (e) { text = `// ${String(e.message).split("\n")[0]}`; }
+    modal(el("h2", {}, "The stack, as GLSL", el("span.fine", {}, ` — ${l.name}`)),
+      el("p.fine", {}, "Every pass this layer's effects compile to, in order, after fusion. " +
+        "This is the text the GPU was given, not a description of it."),
+      el("textarea", { rows: 18, readonly: true, style: { fontFamily: "ui-monospace, monospace", fontSize: ".72rem" }, value: text }),
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: () => { navigator.clipboard.writeText(text); toast("Copied"); } }, "Copy"),
+        el("button.primary", { onclick: closeModal }, "Close")));
   }
 
   function moveLayer(idx, dir) {
@@ -1273,7 +1410,7 @@ export async function canvasEditor(host) {
         el("div.row.tight", {},
           el("button", { onclick: () => step(undo, redo) }, "Undo"),
           el("button", { onclick: () => step(redo, undo) }, "Redo"),
-          el("button", { onclick: filterDialog }, "Filter…")),
+          el("button", { onclick: () => filterDialog() }, "Filter…")),
         el("div.row.tight", { style: { marginTop: ".4rem" } },
           el("button", { onclick: () => addLayer() }, "+ Layer"),
           el("button", { onclick: () => fileInput.click() }, "Import"),
