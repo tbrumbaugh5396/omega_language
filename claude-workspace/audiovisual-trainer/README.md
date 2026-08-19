@@ -71,7 +71,13 @@ output.
 ## The studio
 
 The trainer builds the eye and ear; the **Studio** tab is where the work
-actually gets made. Five document types, one asset store, one AI layer.
+actually gets made. Six document types, one asset store, one AI layer.
+
+Underneath them is a render graph: every effect is a *node*, a node is a
+sketch with its schema in a comment, and a document compiles to the GLSL that
+draws it. [`docs/what-this-is.md`](docs/what-this-is.md) says what that
+machinery is and what is unusual about it; the two roadmaps beside it record
+how it got there, with the number each step was held to.
 
 | Document | What it is |
 |---|---|
@@ -86,19 +92,22 @@ actually gets made. Five document types, one asset store, one AI layer.
 Worth being straight about, because the gap is real. These are sketchpad-tier
 tools, not production ones:
 
-- **Canvas is not Photoshop.** It now has selections, transform, masks and
-  live text — but no adjustment layers, clipping masks, layer groups, paths
-  or pen tool, clone/heal, gradients, guides and snapping, or non-destructive
-  filter stacks. Undo is 18 deep and canvas size is fixed at creation.
+- **Canvas is not Photoshop.** It now has selections, transform, masks, live
+  text, adjustment layers, shader layers and non-destructive effect stacks —
+  but no clipping masks, layer groups, paths or pen tool, clone/heal,
+  gradients, guides and snapping, or colour management. Undo is 18 deep and
+  canvas size is fixed at creation.
 - **Music is not a DAW.** It has patterns, clips, automation, solo and a
   mixer, but no audio clips on the timeline (samplers are played from the
   roll), no per-note velocity, no time signatures other than 4/4, no
   sidechain routing and no plugin format.
 - **Video is not an NLE.** It has multiple tracks, trimming, splitting,
-  snapping and a frame-exact MP4 export, but no keyframed effects, no speed
-  or time remapping, no transitions beyond fades, no waveform display on
-  audio clips, and no nested sequences. Export seeks each source frame by
-  frame, so long timelines with video sources take a while.
+  snapping, keyframes on any parameter, transitions as two-input nodes,
+  speed ramps, LUTs, scopes and a frame-exact MP4 export — but the keyframe
+  UI is a list with an ease per track rather than a draggable curve editor,
+  and there is no waveform display on audio clips and no nested sequences.
+  Export seeks each source frame by frame, so long timelines with video
+  sources take a while.
 - **Design is not Figma.** No components or variants, no constraints, no
   prototyping, no shared styles, no pen tool or boolean ops, no multiplayer.
   It has the parts that matter for learning layout — grid, snapping,
@@ -117,10 +126,14 @@ path as play — so what you hear is exactly what lands in the file. The cost is
 that a parameter cannot be nudged mid-note: it re-renders instead, which at
 sketch lengths is imperceptible.
 
-The video grade is the one place that deliberately does *not* use
-`engine-image`: it uses the canvas `filter` property, because a 30fps preview
-cannot afford a per-frame JS pass over half a million pixels, and a grade you
-cannot scrub against is not a grade you can judge.
+The video grade used to be the one place that deliberately did *not* use
+`engine-image`: it used the canvas `filter` property, because a 30fps preview
+cannot afford a per-frame JS pass over half a million pixels. That constraint
+was real and the answer turned out to be neither — the grade compiles to
+render-graph nodes now, with the CSS filter functions written out as the
+matrices the spec gives and a blur that is the same three box passes the spec
+prescribes. It agrees with the browser's own filter string to 1.18/255, and
+it runs on the GPU, so it scrubs.
 
 `video-mux.js` is a minimal MP4 muxer. Browsers will encode H.264 and AAC
 through WebCodecs but ship no container writer, so the encoded chunks have to

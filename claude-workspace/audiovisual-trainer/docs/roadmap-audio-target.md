@@ -5,6 +5,9 @@ does not compile to GLSL, that the analogous move is Music as an AudioWorklet
 DSP graph with the same schema discipline, and that it is a separate roadmap.
 This is that roadmap.*
 
+*What the whole system is, visual and audio together, is in
+[`what-this-is.md`](what-this-is.md).*
+
 ---
 
 ## 1. Why this is not the visual roadmap with different words

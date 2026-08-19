@@ -4,6 +4,10 @@
 studio from five editors that happen to share a codebase into one system in
 which every edit that produces pixels compiles to GLSL.*
 
+*What the system described here actually became — the idea, what is unusual
+about it, and what it is not — is in [`what-this-is.md`](what-this-is.md).
+This document is the record of how it got there.*
+
 ---
 
 ## 0. The thesis, and whether it makes sense
