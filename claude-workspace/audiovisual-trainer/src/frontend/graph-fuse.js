@@ -17,7 +17,7 @@
 // The promise is checked, not trusted. A node is left alone if it samples an
 // input anywhere but `uv`, moves `uv`, keeps state, or takes a host image.
 
-import { parseUniforms, splitSketch, stripComments } from "./shader-uniforms.js";
+import { parseUniforms, splitSketch, stripComments, sketchMeta } from "./shader-uniforms.js";
 import { nodeType, topo } from "./render-graph.js";
 
 const IN_RE = /^in(\d+)$/;
@@ -94,7 +94,9 @@ export function fusedSketch(types, carried) {
     const pref = `f${k}_`;
     const names = declaredNames(t.source, parts);
     const rename = names.size ? new RegExp(`\\b(${[...names].join("|")})\\b`, "g") : null;
-    const fix = (s) => (rename ? String(s).replace(rename, (m) => pref + m) : String(s));
+    // GLSL reserves any identifier with two consecutive underscores, so a
+    // node's private `_lum` cannot simply be given a prefix.
+    const fix = (s) => (rename ? String(s).replace(rename, (m) => pref + m.replace(/^_+/, "u")) : String(s));
     const carrier = new RegExp(`texture2D\\s*\\(\\s*${pref}in0\\s*,\\s*uv\\s*\\)`, "g");
     const dropIn0 = new RegExp(`^uniform\\s+sampler2D\\s+${pref}in0\\s*;`);
 
@@ -112,8 +114,11 @@ export function fusedSketch(types, carried) {
     const take = (s) => (carried[k] ? fix(s).replace(carrier, "_c") : fix(s));
     const stmts = parts.stmtTexts.map(take).join("\n");
     const expr = take(parts.expr || "vec3(0.0)");
+    // Each node keeps its own rule about alpha — opaque unless it said
+    // `@alpha` — so a mask in the middle of a fused run still masks.
+    const ret = sketchMeta(t.source).alpha ? `_rgba(${expr})` : `vec4(_rgb(${expr}), 1.0)`;
     bodies.push(`// ${typeId}, as a function\nvec4 ${pref}apply(${carried[k] ? "vec4 _c" : ""}) {\n` +
-                `${stmts ? stmts + "\n" : ""}  return vec4(_rgb(${expr}), 1.0);\n}`);
+                `${stmts ? stmts + "\n" : ""}  return ${ret};\n}`);
     calls.push(`_c = ${pref}apply(${carried[k] ? "_c" : ""});`);
   });
   const sketch = !ok ? null : [
@@ -122,6 +127,8 @@ export function fusedSketch(types, carried) {
     ...roster,
     `// Compiled from the graph. Nothing here was written by hand.`,
     `// @node fused.${types.length}`,
+    // The functions decide their own alpha; the pass must not overrule them.
+    `// @alpha`,
     "",
     decls.join("\n"),
     "",

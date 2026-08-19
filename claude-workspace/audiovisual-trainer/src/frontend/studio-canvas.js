@@ -28,7 +28,8 @@ import { sketchUniforms } from "./shader-run.js";
 import { buildControls } from "./shader-controls.js";
 import { nodeType } from "./render-graph.js";
 import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
-import { applyEffects, effectCost, effectLabel, ejectEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
+import { applyEffects, documentGaps, documentGraph, effectCost, effectLabel, ejectEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
+import { ejectGraph } from "./graph-compile.js";
 
 const BLEND_MODES = ["source-over", "multiply", "screen", "overlay", "darken",
   "lighten", "color-dodge", "color-burn", "hard-light", "soft-light",
@@ -81,6 +82,12 @@ export async function canvasEditor(host) {
       layer.maskCtx = I.ctx2d(layer.maskCanvas);
       if (m) layer.maskCtx.drawImage(m, 0, 0);
     }
+    if (layer.type === "adjust" && !layer.maskCanvas) {
+      layer.maskCanvas = I.makeCanvas(W, H);
+      layer.maskCtx = I.ctx2d(layer.maskCanvas);
+      layer.maskCtx.fillStyle = "#fff";
+      layer.maskCtx.fillRect(0, 0, W, H);
+    }
     if (layer.type === "text") renderTextLayer(layer);
     return layer;
   }
@@ -125,6 +132,39 @@ export async function canvasEditor(host) {
 
   /** The layer as it participates in the composite: pixels through its mask. */
   const liveFx = (layer) => (layer.effects || []).filter((e) => !e.bypass);
+
+  /** A layer's mask with any stroke in progress on it, so painting one shows. */
+  function maskLive(l) {
+    if (!(l === L() && strokeCanvas && paintTarget().canvas === l.maskCanvas)) return l.maskCanvas;
+    const m = I.makeCanvas(W, H);
+    const g = I.ctx2d(m);
+    g.drawImage(l.maskCanvas, 0, 0);
+    const clipped = sel.clip(copyOf(strokeCanvas));
+    g.globalAlpha = state.opacity;
+    g.globalCompositeOperation = state.tool === "eraser" ? "destination-out" : "source-over";
+    g.drawImage(clipped, 0, 0);
+    return m;
+  }
+
+  /**
+   * The pixels a layer's stack applies to: its own, or — for an adjustment
+   * layer — everything composited below it.
+   */
+  function stackBase(layer) {
+    if (layer.type !== "adjust") return layer.canvas;
+    const c = I.makeCanvas(W, H);
+    const g = I.ctx2d(c);
+    g.fillStyle = doc.background || "#ffffff";
+    g.fillRect(0, 0, W, H);
+    for (const l of layers) {
+      if (l === layer) break;
+      if (!l.visible || l.type === "adjust") continue;
+      g.globalAlpha = l.opacity;
+      g.globalCompositeOperation = l.blend || "source-over";
+      g.drawImage(surface(l), 0, 0);
+    }
+    return c;
+  }
 
   /**
    * The layer as it composites: its pixels through its effect stack, then
@@ -253,16 +293,32 @@ export async function canvasEditor(host) {
 
   let strokeCanvas = null, strokeCtx = null;
 
+  // An adjustment layer needs to see what is under it, so the stack is
+  // composited into this and blitted at the end. Without one, the layers go
+  // straight to the view as they always did — the copy is not free.
+  let flatC = null, fgc = null;
+  const hasAdjust = () => layers.some((l) => l.visible && l.type === "adjust");
+
   function render() {
-    vg.save();
-    vg.globalCompositeOperation = "source-over";
-    vg.globalAlpha = 1;
-    vg.fillStyle = doc.background || "#ffffff";
-    vg.fillRect(0, 0, W, H);
+    const adjusting = hasAdjust();
+    if (adjusting && !flatC) { flatC = I.makeCanvas(W, H); fgc = I.ctx2d(flatC); }
+    const g0 = adjusting ? fgc : vg;
+    g0.save();
+    g0.globalCompositeOperation = "source-over";
+    g0.globalAlpha = 1;
+    g0.fillStyle = doc.background || "#ffffff";
+    g0.fillRect(0, 0, W, H);
     for (const l of layers) {
       if (!l.visible) continue;
-      vg.globalAlpha = l.opacity;
-      vg.globalCompositeOperation = l.blend || "source-over";
+      if (l.type === "adjust") {
+        // Everything below, through this layer's stack, back through its mask.
+        g0.globalAlpha = 1;
+        g0.globalCompositeOperation = "source-over";
+        applyAdjustLayer(g0, l);
+        continue;
+      }
+      g0.globalAlpha = l.opacity;
+      g0.globalCompositeOperation = l.blend || "source-over";
 
       if (l === L() && strokeCanvas && !state.editingMask) {
         // Preview the in-progress stroke composited into this layer, so what
@@ -283,11 +339,46 @@ export async function canvasEditor(host) {
         drawTransform(tg);
         vg.drawImage(surfaceLive(l, tmp), 0, 0);
       } else {
-        vg.drawImage(surface(l), 0, 0);
+        g0.drawImage(surface(l), 0, 0);
       }
     }
-    vg.restore();
+    g0.restore();
+    if (adjusting) {
+      vg.save();
+      vg.globalCompositeOperation = "source-over";
+      vg.globalAlpha = 1;
+      vg.clearRect(0, 0, W, H);
+      vg.drawImage(flatC, 0, 0);
+      vg.restore();
+    }
     renderOverlay();
+  }
+
+  /**
+   * An adjustment layer: no pixels of its own, a stack that applies to
+   * everything composited below it, through its mask and its opacity. The
+   * classic non-destructive move, and now just another subgraph.
+   */
+  function applyAdjustLayer(g, l) {
+    const below = I.makeCanvas(W, H);
+    I.ctx2d(below).drawImage(g.canvas, 0, 0);
+    let out;
+    try { out = applyEffects(below, l.effects || []); }
+    catch (e) {
+      if (!l.fxWarned) { l.fxWarned = true; toast(`Effects on ${l.name}: ${String(e.message).split("\n")[0]}`); }
+      return;
+    }
+    if (out === below) return;                      // nothing enabled
+    const tmp = I.makeCanvas(W, H);
+    const tg = I.ctx2d(tmp);
+    tg.drawImage(out, 0, 0);
+    if (l.maskCanvas) {
+      tg.globalCompositeOperation = "destination-in";
+      tg.drawImage(maskLive(l), 0, 0);
+    }
+    g.globalAlpha = l.opacity;
+    g.drawImage(tmp, 0, 0);
+    g.globalAlpha = 1;
   }
 
   const copyOf = (c) => {
@@ -352,12 +443,20 @@ export async function canvasEditor(host) {
   }
 
   /** Where a paint stroke lands: the mask when editing it, else the layer. */
-  const paintTarget = () => (state.editingMask && L().maskCanvas)
-    ? { canvas: L().maskCanvas, ctx: L().maskCtx } : { canvas: L().canvas, ctx: L().ctx };
+  // An adjustment layer has no pixels, so a brush on one paints its mask —
+  // which is what you wanted anyway: the adjustment, here but not there.
+  const paintTarget = () => {
+    const l = L();
+    if (l.type === "adjust" || (state.editingMask && l.maskCanvas)) {
+      if (!l.maskCanvas) return { canvas: l.canvas, ctx: l.ctx };
+      return { canvas: l.maskCanvas, ctx: l.maskCtx };
+    }
+    return { canvas: l.canvas, ctx: l.ctx };
+  };
 
   function stamp(g, x, y) {
     const r = state.size / 2;
-    const col = state.editingMask
+    const col = (state.editingMask || L().type === "adjust")
       ? (state.tool === "eraser" ? "#000000" : "#ffffff")
       : state.color;
     if (state.hardness >= 0.99) {
@@ -909,6 +1008,9 @@ export async function canvasEditor(host) {
   async function filterDialog(editing = null) {
     const l = L();
     if (l.type === "text") { toast("Rasterise the text layer first"); return; }
+    // An adjustment layer's stack applies to the composite below it, so that
+    // is what the preview and the parameters are decided against.
+    const base = stackBase(l);
     // Shader filters: any Generate sketch that takes an image. The layer is
     // handed in as its first sampler, so a photo grade written there applies
     // here, with the same controls.
@@ -970,7 +1072,7 @@ export async function canvasEditor(host) {
       try {
         cand = candidate();
         if (editing) { cand.id = editing.id; cand.bypass = editing.bypass; }
-        resultCanvas = applyEffects(l.canvas, stackWith(cand));
+        resultCanvas = applyEffects(base, stackWith(cand));
       } catch (e) { toast(`Filter failed: ${String(e.message).split("\n")[0]}`); return; }
       paintPreview(resultCanvas);
       showCost();
@@ -990,7 +1092,7 @@ export async function canvasEditor(host) {
       if (sel.active) {
         // Inside a selection, only this filter goes into the pixels; the rest
         // of the stack has no business being flattened in part.
-        const only = copyOf(applyEffects(l.canvas, [cand]));
+        const only = copyOf(applyEffects(base, [cand]));
         sel.clip(only);
         l.ctx.drawImage(only, 0, 0);
       } else {
@@ -1121,12 +1223,15 @@ export async function canvasEditor(host) {
     };
 
     modal(el("h2", {}, editing ? "Edit effect" : "Filter", el("span.fine", {}, ` — ${l.name}`)),
-      sel.active ? el("p.fine", { style: { color: "var(--warm)" } },
+      l.type === "adjust" ? el("p.fine", {}, "An adjustment layer: this applies to everything below it, " +
+        "through its mask. Paint on the layer to say where.") : null,
+      sel.active && l.type !== "adjust" ? el("p.fine", { style: { color: "var(--warm)" } },
         "A selection is active. An effect covers the whole layer; Bake goes into the pixels inside the selection only.") : null,
       selBox, preview, controls, costLine,
       el("div.row", { style: { justifyContent: "flex-end" } },
         el("button", { onclick: closeModal }, "Cancel"),
-        el("button", { title: "flatten into the layer's pixels", onclick: bake }, "Bake"),
+        l.type === "adjust" ? null
+          : el("button", { title: "flatten into the layer's pixels", onclick: bake }, "Bake"),
         el("button.primary", { onclick: commitEffect }, editing ? "Update effect" : "Add effect")));
 
     // Editing an entry: put the list on it, and fill the controls from it.
@@ -1141,6 +1246,27 @@ export async function canvasEditor(host) {
   }
 
   // ------------------------------------------------------------ layers UI
+
+  /**
+   * An adjustment layer: a stack with no pixels under it, applying to
+   * everything below. Its mask starts white — the adjustment everywhere —
+   * and a brush on the layer paints that mask.
+   */
+  function addAdjustLayer() {
+    snapshot("layer");
+    const id = Math.max(0, ...layers.map((l) => l.id)) + 1;
+    const c = I.makeCanvas(W, H);
+    const mask = I.makeCanvas(W, H);
+    const mg = I.ctx2d(mask);
+    mg.fillStyle = "#fff";
+    mg.fillRect(0, 0, W, H);
+    layers.push({ id, name: `Adjust ${id}`, visible: true, opacity: 1,
+      blend: "source-over", type: "adjust", text: null, effects: [], canvas: c, ctx: I.ctx2d(c),
+      maskCanvas: mask, maskCtx: mg, cache: I.makeCanvas(W, H), dirty: true });
+    active = layers.length - 1;
+    render(); renderPanels(); persist();
+    filterDialog();
+  }
 
   function addLayer(name = null, drawInto = null) {
     snapshot("layer");
@@ -1171,6 +1297,7 @@ export async function canvasEditor(host) {
               onclick: () => { active = idx; state.editingMask = false; render(); renderPanels(); } },
               l.name),
             l.type === "text" ? el("span.tag", {}, "T") : null,
+            l.type === "adjust" ? el("span.tag", { title: "applies to everything below" }, "adj") : null,
             l.maskCanvas ? el("span.tag " + (isActive && state.editingMask ? "bad" : ""), {}, "mask") : null,
             (l.effects || []).length ? el("span.tag", { title: "effects, not baked" }, `fx ${l.effects.length}`) : null),
           el("div.row.tight", {},
@@ -1186,7 +1313,9 @@ export async function canvasEditor(host) {
               style: { flex: 1 },
               oninput: (e) => { l.opacity = +e.target.value; render(); },
               onchange: persist })),
-          el("div.row.tight", {},
+          l.type === "adjust" ? el("p.fine", { style: { margin: 0 } },
+            "Applies to everything below. Paint on it to mask where — white shows, the eraser hides.")
+          : el("div.row.tight", {},
             l.maskCanvas
               ? el("button.ghost", { class: state.editingMask ? "on" : "",
                   onclick: () => { state.editingMask = !state.editingMask; render(); renderPanels(); } },
@@ -1242,6 +1371,7 @@ export async function canvasEditor(host) {
 
   function flattenEffects(l) {
     if (!(l.effects || []).length) return;
+    if (l.type === "adjust") { toast("An adjustment layer has no pixels to flatten into."); return; }
     snapshot();
     const flat = copyOf(applyEffects(l.canvas, l.effects));
     l.ctx.clearRect(0, 0, W, H);
@@ -1249,6 +1379,32 @@ export async function canvasEditor(host) {
     l.effects = [];
     l.dirty = true;
     render(); renderPanels(); persist();
+  }
+
+  /**
+   * The whole document as one chain of shaders: the background, then every
+   * layer — its pixels, its stack, its mask — composited with the browser's
+   * own blend formulas. The self-test holds this against the 2D composite to
+   * a quarter of a level out of 255, so it is the document, not a sketch of it.
+   */
+  function documentGlsl() {
+    let text, gaps = [];
+    try {
+      gaps = documentGaps(layers);
+      const { graph } = documentGraph(layers, {
+        width: W, height: H, background: doc.background || "#ffffff",
+        pixelsOf: (l) => l.canvas, maskOf: (l) => l.maskCanvas });
+      text = ejectGraph(graph);
+    } catch (e) { text = `// ${String(e.message).split("\n")[0]}`; }
+    modal(el("h2", {}, "The document, as GLSL"),
+      el("p.fine", {}, `${layers.filter((l) => l.visible).length} visible layers, their effect stacks and their ` +
+        "blend modes, compiled and fused. Layer pixels arrive as textures; everything else is in the text."),
+      ...gaps.map((g) => el("p.fine", { style: { color: "var(--warm)" } }, g)),
+      el("textarea", { rows: 18, readonly: true,
+        style: { fontFamily: "ui-monospace, monospace", fontSize: ".72rem" }, value: text }),
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: () => { navigator.clipboard.writeText(text); toast("Copied"); } }, "Copy"),
+        el("button.primary", { onclick: closeModal }, "Close")));
   }
 
   function showStackGlsl(l) {
@@ -1413,8 +1569,10 @@ export async function canvasEditor(host) {
           el("button", { onclick: () => filterDialog() }, "Filter…")),
         el("div.row.tight", { style: { marginTop: ".4rem" } },
           el("button", { onclick: () => addLayer() }, "+ Layer"),
+          el("button", { title: "a stack that applies to everything below it", onclick: addAdjustLayer }, "+ Adjust"),
           el("button", { onclick: () => fileInput.click() }, "Import"),
           el("button", { onclick: exportPng }, "PNG"),
+          el("button", { title: "the whole document as one chain of shaders", onclick: documentGlsl }, "GLSL"),
           grid.button,
           fileInput),
         el("div.row.tight", { style: { marginTop: ".4rem" } },

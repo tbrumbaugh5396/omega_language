@@ -303,15 +303,23 @@ export class GraphRunner {
     return { tex: out.tex, w: out.w, h: out.h, passes };
   }
 
-  /** Draw a texture to the context's own canvas, upright. */
+  /**
+   * Draw a texture to the context's own canvas, upright. The canvas is
+   * premultiplied — that is what the browser assumes when it reads one back —
+   * and the graph carries straight alpha, so the multiplication happens here,
+   * at the one place the two conventions meet.
+   */
   present(texInfo, w, h) {
     const gl = this.gl;
     if (!this.blit) {
-      const src = desugar(`uniform sampler2D in0;\ntexture2D(in0, uv)`, { es3: isGL2(gl) });
+      const src = desugar(`uniform sampler2D in0;\nvec4 c = texture2D(in0, uv);\nvec4(c.rgb * c.a, c.a)`,
+                          { es3: isGL2(gl), alpha: true });
       this.blit = linkProgram(gl, src);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(this.blit);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     const loc = gl.getAttribLocation(this.blit, "a_pos");

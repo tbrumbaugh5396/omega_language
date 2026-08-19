@@ -319,7 +319,11 @@ mat3 lookAt(vec3 ro, vec3 ta){
 const COERCE = `vec3 _rgb(vec3 c){ return c; }
 vec3 _rgb(vec4 c){ return c.rgb; }
 vec3 _rgb(vec2 c){ return vec3(c, 0.0); }
-vec3 _rgb(float g){ return vec3(g); }`;
+vec3 _rgb(float g){ return vec3(g); }
+vec4 _rgba(vec4 c){ return c; }
+vec4 _rgba(vec3 c){ return vec4(c, 1.0); }
+vec4 _rgba(vec2 c){ return vec4(c, 0.0, 1.0); }
+vec4 _rgba(float g){ return vec4(vec3(g), 1.0); }`;
 
 // highp where the GPU offers it: raymarched water and hashes of large
 // coordinates fall apart in mediump.
@@ -550,9 +554,14 @@ export function desugarMapped(sketch, opts = {}) {
   emit(vars.map(([, name, init]) => `  ${name} = ${init};`).join("\n"));
   if (hasSim) emit(simBlock.replace(/\n$/, ""));
   parts.stmtTexts.forEach((t, i) => emit(t, parts.stmtLines[i]));
-  emit("  gl_FragColor = vec4(_rgb(");
+  // A sketch is opaque unless it says otherwise: the alpha of an expression
+  // that happens to end in a texture read is rarely what the author meant.
+  // `@alpha` in the header opts in, and is how the compositing nodes carry
+  // transparency through a chain of passes.
+  const keepsAlpha = opts.alpha || sketchMeta(sketch).alpha;
+  emit(keepsAlpha ? "  gl_FragColor = _rgba(" : "  gl_FragColor = vec4(_rgb(");
   emit(colour, parts.exprLine);
-  emit("  ), 1.0);" + simEnd);
+  emit(keepsAlpha ? "  );" + simEnd : "  ), 1.0);" + simEnd);
   emit("}");
   emit("");
   // expandHex works per line and never adds or removes newlines, so the map
@@ -591,16 +600,16 @@ export function mapErrors(log, mapped, sketchText) {
  *   // @space encoded   — linear is the default working space
  */
 export function sketchMeta(src) {
-  const meta = { node: null, module: null, pass: false, precision: null, space: null, title: null };
+  const meta = { node: null, module: null, pass: false, alpha: false, precision: null, space: null, title: null };
   for (const raw of String(src).split("\n")) {
     const line = raw.trim();
     if (!line) continue;
     if (!line.startsWith("//")) break;                 // the header ends at the first code
     const body = line.replace(/^\/\/\s?/, "");
     if (meta.title === null && !body.startsWith("@")) meta.title = body;
-    const m = /@(node|module|pass|precision|space)\b\s*(\S*)/.exec(body);
+    const m = /@(node|module|pass|alpha|precision|space)\b\s*(\S*)/.exec(body);
     if (!m) continue;
-    if (m[1] === "pass") meta.pass = true;
+    if (m[1] === "pass" || m[1] === "alpha") meta[m[1]] = true;
     else meta[m[1]] = m[2] || null;
   }
   return meta;

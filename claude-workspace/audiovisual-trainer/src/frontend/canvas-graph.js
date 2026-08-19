@@ -24,6 +24,7 @@ import { renderGraph, ejectGraph } from "./graph-compile.js";
 import { fuseStats } from "./graph-fuse.js";
 import { graphFilter, GRAPH_FILTERS } from "./filter-nodes.js";
 import { renderSketch, sketchUniforms } from "./shader-run.js";
+import { BLEND_ORDER } from "./composite-nodes.js";
 
 const first = (v, d) => (Array.isArray(v) ? v[0] : (v === undefined || v === null ? d : v));
 
@@ -162,4 +163,83 @@ export function sketchEffect(source, values, time, name) {
   const img = uniforms.find((u) => u.control === "image");
   if (!img) throw new Error("that sketch takes no image, so it cannot filter a layer");
   return makeEffect("sketch", "", values, { source, imageName: img.name, time: time || 0, name: name || "Shader" });
+}
+
+// ------------------------------------------------------------------ the document
+//
+// A whole canvas document as one graph: the background, then each layer —
+// its pixels, its stack, its mask — composited with the browser's own blend
+// formulas. This is what "eject the document" means, and it is the same
+// object the compositor could run if it were not the 2D canvas.
+
+/**
+ * `layers` are the editor's live layers; `pixelsOf(layer)` hands back the
+ * layer's own pixels (a canvas), `maskOf(layer)` its mask or null. Returns
+ * `{ graph, sources }` ready for renderGraph.
+ */
+export function documentGraph(layers, { width, height, background = "#ffffff", pixelsOf, maskOf }) {
+  const graph = createGraph(width, height);
+  const sources = {};
+  const rgb = hexToRgb(background);
+  let acc = addNode(graph, "source.flat", { colour: rgb, alpha: [1] }, []);
+  for (const l of layers) {
+    if (!l.visible) continue;
+    if (l.type === "adjust") {
+      // No pixels: the stack runs on everything composited so far, and the
+      // result comes back through the mask at the layer's opacity.
+      let out = acc;
+      for (const e of (l.effects || []).filter((x) => !x.bypass)) out = effectNode(graph, out, e);
+      if (out === acc) continue;
+      const mask = maskOf(l);
+      if (mask) {
+        const mid = addNode(graph, "source");
+        sources[mid] = mask;
+        out = addNode(graph, "composite.mask", {}, [out, mid]);
+      }
+      acc = addNode(graph, "composite.layer", { mode: [0], opacity: [l.opacity ?? 1] }, [acc, out]);
+      continue;
+    }
+    const pix = pixelsOf(l);
+    if (!pix) continue;
+    const sid = addNode(graph, "source");
+    sources[sid] = pix;
+    let out = sid;
+    for (const e of (l.effects || []).filter((x) => !x.bypass)) {
+      if (e.kind !== "graph" && e.kind !== "node") { out = null; break; }   // CPU steps cannot be in the graph
+      out = effectNode(graph, out, e);
+    }
+    if (out === null) continue;
+    const mask = maskOf(l);
+    if (mask) {
+      const mid = addNode(graph, "source");
+      sources[mid] = mask;
+      out = addNode(graph, "composite.mask", {}, [out, mid]);
+    }
+    const mode = Math.max(0, BLEND_ORDER.indexOf(l.blend || "source-over"));
+    acc = addNode(graph, "composite.layer", { mode: [mode], opacity: [l.opacity ?? 1] }, [acc, out]);
+  }
+  graph.output = acc;
+  return { graph, sources };
+}
+
+/** Which layers a document graph cannot express, and why. */
+export function documentGaps(layers) {
+  const out = [];
+  for (const l of layers) {
+    if (!l.visible) continue;
+    if (l.type === "text") continue;                    // its pixels are already rendered
+    for (const e of (l.effects || []).filter((x) => !x.bypass)) {
+      if (e.kind !== "graph" && e.kind !== "node") {
+        out.push(`${l.name}: "${effectLabel(e)}" runs on the CPU, so that layer is left out`);
+      }
+    }
+  }
+  return out;
+}
+
+function hexToRgb(hex) {
+  const h = String(hex).replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full || "ffffff", 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }

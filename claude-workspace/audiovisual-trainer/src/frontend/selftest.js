@@ -26,6 +26,8 @@ import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
 import { planPasses, fuseStats, fusibleReason } from "./graph-fuse.js";
+import { documentGraph, applyEffects, makeEffect } from "./canvas-graph.js";
+import { BLEND_ORDER } from "./composite-nodes.js";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -529,6 +531,125 @@ export async function runSelfTest(report = () => {}) {
     }
   } catch (e) {
     push({ group: "Catalogue: CPU vs graph node", name: "setup", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The document on the graph: the browser composites a canvas document, and
+  // now so can the graph. The browser is the reference — these are its own
+  // blend modes, so anything but agreement is a bug in the node.
+  try {
+    const W = 120, H = 80;
+    const mk = (paint) => {
+      const c = document.createElement("canvas"); c.width = W; c.height = H;
+      paint(c.getContext("2d"));
+      return c;
+    };
+    // A backdrop with every tone, and a layer with holes and soft edges.
+    const back = mk((g) => {
+      const gr = g.createLinearGradient(0, 0, W, 0);
+      gr.addColorStop(0, "#0b0d12"); gr.addColorStop(0.5, "#8a6b4f"); gr.addColorStop(1, "#f7f2e8");
+      g.fillStyle = gr; g.fillRect(0, 0, W, H);
+      g.fillStyle = "#2f7d5b"; g.fillRect(0, 50, W, 12);
+      g.fillStyle = "#c03a2b"; g.beginPath(); g.arc(30, 25, 16, 0, Math.PI * 2); g.fill();
+    });
+    const over = mk((g) => {
+      const gr = g.createLinearGradient(0, 0, 0, H);
+      gr.addColorStop(0, "rgba(255,120,40,1)"); gr.addColorStop(1, "rgba(40,120,255,0.15)");
+      g.fillStyle = gr; g.fillRect(10, 5, W - 20, H - 10);
+      g.clearRect(45, 20, 22, 22);
+      g.fillStyle = "rgba(255,255,255,0.55)"; g.beginPath(); g.arc(90, 55, 18, 0, Math.PI * 2); g.fill();
+    });
+    const mask = mk((g) => {
+      g.fillStyle = "#fff"; g.fillRect(0, 0, W, H);
+      g.clearRect(0, 0, 26, H);
+      g.globalAlpha = 0.4; g.fillStyle = "#fff"; g.fillRect(26, 0, 18, H);
+    });
+
+    // The browser's own composite, which is what the graph has to reproduce.
+    const composite2d = (layers, pixelsOf, maskOf) => {
+      const c = document.createElement("canvas"); c.width = W; c.height = H;
+      const g = c.getContext("2d");
+      g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
+      for (const l of layers) {
+        if (!l.visible) continue;
+        let px = pixelsOf(l);
+        if (l.type === "adjust") {
+          const below = document.createElement("canvas"); below.width = W; below.height = H;
+          below.getContext("2d").drawImage(c, 0, 0);
+          px = applyEffects(below, l.effects || []);
+        } else if ((l.effects || []).length) {
+          px = applyEffects(px, l.effects);
+        }
+        const m = maskOf(l);
+        if (m) {
+          const t = document.createElement("canvas"); t.width = W; t.height = H;
+          const tg = t.getContext("2d");
+          tg.drawImage(px, 0, 0);
+          tg.globalCompositeOperation = "destination-in";
+          tg.drawImage(m, 0, 0);
+          px = t;
+        }
+        g.globalAlpha = l.opacity ?? 1;
+        g.globalCompositeOperation = l.type === "adjust" ? "source-over" : (l.blend || "source-over");
+        g.drawImage(px, 0, 0);
+      }
+      return c.getContext("2d").getImageData(0, 0, W, H).data;
+    };
+    const onGraph = (layers, pixelsOf, maskOf) => {
+      const { graph, sources } = documentGraph(layers, { width: W, height: H, background: "#ffffff", pixelsOf, maskOf });
+      return renderGraph(graph, sources).getContext("2d").getImageData(0, 0, W, H).data;
+    };
+
+    // Every blend mode the layer panel offers, at an opacity that is not 1.
+    const worst = [];
+    for (const mode of BLEND_ORDER) {
+      const layers = [
+        { name: "back", visible: true, opacity: 1, blend: "source-over", type: "raster", effects: [] },
+        { name: "over", visible: true, opacity: 0.8, blend: mode, type: "raster", effects: [] },
+      ];
+      const pixelsOf = (l) => (l.name === "back" ? back : over);
+      const r = compare(onGraph(layers, pixelsOf, () => null), composite2d(layers, pixelsOf, () => null), W, H, { thresh: 6 });
+      worst.push([mode, r.mean]);
+    }
+    worst.sort((a, b) => b[1] - a[1]);
+    push({ group: "Canvas on the graph", name: `${BLEND_ORDER.length} blend modes vs the browser's own`,
+           ok: worst[0][1] < 2.0,
+           detail: `worst ${worst[0][0]} ${worst[0][1]}/255 · then ${worst.slice(1, 4).map(([m, v]) => `${m} ${v}`).join(", ")} · want <2.0` });
+
+    // A mask, an effect stack and an adjustment layer — a document, not a pair.
+    { const layers = [
+        { name: "back", visible: true, opacity: 1, blend: "source-over", type: "raster", effects: [] },
+        { name: "over", visible: true, opacity: 0.75, blend: "multiply", type: "raster",
+          effects: [makeEffect("graph", "duotone", { dark: "#10203a", light: "#f2e3c0", amount: 0.7 }),
+                    makeEffect("node", "adjust.exposure", { stops: [0.4] })] },
+        { name: "adj", visible: true, opacity: 0.9, blend: "source-over", type: "adjust",
+          effects: [makeEffect("graph", "vignette", { amount: 0.5, softness: 0.6 })] },
+      ];
+      const pixelsOf = (l) => (l.name === "back" ? back : over);
+      const maskOf = (l) => (l.name === "over" ? mask : null);
+      const r = compare(onGraph(layers, pixelsOf, maskOf), composite2d(layers, pixelsOf, maskOf), W, H, { thresh: 6 });
+      push({ group: "Canvas on the graph", name: "a masked layer, a two-effect stack and an adjustment layer",
+             ok: r.mean < 2.0,
+             detail: `mean ${r.mean}/255 · ${r.off} px off by >6 (${r.pct}%) · want <2.0 — the roadmap's own bar for this phase` }); }
+
+    // And the whole thing ejects as GLSL that links.
+    { const layers = [
+        { name: "back", visible: true, opacity: 1, blend: "source-over", type: "raster", effects: [] },
+        { name: "over", visible: true, opacity: 0.8, blend: "soft-light", type: "raster",
+          effects: [makeEffect("graph", "grade", { lift: 0.02, gamma: 1.1, gain: 1.05, sat: 1.2 })] },
+      ];
+      const { graph } = documentGraph(layers, { width: W, height: H, background: "#ffffff",
+        pixelsOf: (l) => (l.name === "back" ? back : over), maskOf: () => null });
+      const parts = ejectGraph(graph, { parts: true }).filter((p2) => p2.glsl);
+      let ok = parts.length > 0, why = "";
+      for (const part of parts) {
+        try { const p2 = linkProgram(gl, part.glsl); gl.deleteProgram(p2); }
+        catch (e) { ok = false; why = String(e.message).split("\n")[0]; }
+      }
+      const text = ejectGraph(graph);
+      push({ group: "Canvas on the graph", name: "the document ejects as GLSL, and every pass links", ok,
+             detail: ok ? `${parts.length} passes, ${Math.round(text.length / 1024)} KB — a document, compiled` : why }); }
+  } catch (e) {
+    push({ group: "Canvas on the graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);
