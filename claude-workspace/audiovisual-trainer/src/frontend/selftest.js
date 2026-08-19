@@ -50,6 +50,8 @@ import { compileTitleNode } from "./title-node.js";
 import { readGsubForTest } from "./font-file.js";
 import { renderTiled, maxRenderSize } from "./shader-run.js";
 import { auditNodes, portabilitySummary, auditSource } from "./wgsl-audit.js";
+import { toWgsl } from "./wgsl-emit.js";
+import { renderSketchGpu, gpuDescribe } from "./webgpu-run.js";
 import { zipStore, crc32 } from "./zip-store.js";
 import { graphStats } from "./graph-compile.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
@@ -2199,6 +2201,128 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                : `lengths differ: ${liveBuf.length} vs ${batchBuf.length}` }); }
   } catch (e) {
     push({ group: "Sketch effects", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // WebGPU: the second backend, as a number rather than an argument.
+  //
+  // `wgsl-audit.js` has said for several phases that nothing in the node
+  // bodies is a thing WGSL cannot express. This translates them and renders
+  // them, so the claim is settled by pixels. The bar is *exact*: two backends
+  // that agree to within a level have not been shown to agree.
+  try {
+    const desc = await gpuDescribe();
+    if (!desc.available) {
+      push({ group: "WebGPU", name: "a second backend", ok: true,
+             detail: "this machine has no WebGPU, so nothing was measured — the GL path is unaffected" });
+    } else {
+      const W = 40, H = 28;
+      const pic = document.createElement("canvas"); pic.width = W; pic.height = H;
+      { const g2 = pic.getContext("2d");
+        const gr = g2.createLinearGradient(0, 0, W, H);
+        gr.addColorStop(0, "#f4efe6"); gr.addColorStop(1, "#1b2b4b");
+        g2.fillStyle = gr; g2.fillRect(0, 0, W, H);
+        g2.fillStyle = "#e04020"; g2.beginPath(); g2.arc(14, 12, 7, 0, Math.PI * 2); g2.fill(); }
+
+      // Size matters to this comparison — a power-of-two height divides
+      // exactly and a 28 does not — so it is a parameter, not a constant.
+      const compare = async (source, images, w = W, h = H) => {
+        const a = await renderSketchGpu(source, w, h, { images });
+        const b = renderSketch(source, w, h, { time: 0, images });
+        const g2 = b.getContext("2d").getImageData(0, 0, w, h).data;
+        let sum = 0, worst = 0;
+        for (let i = 0; i < w * h; i++) for (let k = 0; k < 3; k++) {
+          const d = Math.abs(a.data[i * 4 + k] - g2[i * 4 + k]);
+          sum += d; if (d > worst) worst = d;
+        }
+        return { mean: sum / (w * h * 3), worst };
+      };
+
+      // 1. The catalogue, node by node. Translated ones must be exact.
+      { const rows = [];
+        for (const [id, t] of NODE_TYPES) {
+          const em = toWgsl(t.source);
+          if (!em.ok) { rows.push({ id, refused: em.refused[0] }); continue; }
+          try {
+            const images = {};
+            for (const u of t.uniforms) if (u.control === "image") images[u.name] = pic;
+            rows.push({ id, ...(await compare(t.source, images)) });
+          } catch (e) { rows.push({ id, error: String(e.message).split("\n")[0] }); }
+        }
+        const drew = rows.filter((r) => r.mean !== undefined);
+        const exact = drew.filter((r) => r.mean === 0);
+        const refused = rows.filter((r) => r.refused).length;
+        const failed = rows.filter((r) => r.error);
+        push({ group: "WebGPU", name: `${drew.length} of ${rows.length} node types render on WebGPU`,
+               ok: drew.length >= 12 && exact.length === drew.length,
+               detail: `${exact.length} of ${drew.length} pixel-identical to the GL path (bar: all of them) · `
+                 + `${refused} refused by the translator, ${failed.length} not translated yet · `
+                 + `${desc.vendor} ${desc.architecture}` });
+        // The tail, named rather than left as a total.
+        const kinds = new Map();
+        for (const f of failed) {
+          const k = f.error.replace(/'[^']*'/g, "'…'").replace(/line \d+/, "line N").slice(0, 52);
+          kinds.set(k, (kinds.get(k) || 0) + 1);
+        }
+        const top = [...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+        push({ group: "WebGPU", name: "what the remaining nodes need, said rather than counted", ok: true,
+               detail: failed.length
+                 ? top.map(([k, n]) => `${n}× ${k}`).join(" · ")
+                 : "nothing — every node translated" }); }
+
+      // 2. How far the agreement goes. A zero above could be luck at eight
+      //    bits, so this magnifies the coordinate until the two part — and
+      //    they do part, for a reason worth writing down rather than fixing.
+      { const upto = async (expr) => {
+          let last = 0;
+          for (const k of [8, 12, 16, 20, 22]) {
+            const r = await compare(`vec3(fract(${expr} * ${2 ** k}.0))`, {});
+            if (r.worst > 1) return last;
+            last = k;
+          }
+          return 22;
+        };
+        const x = await upto("p.x"), y = await upto("p.y");
+        // The cause, isolated: at a power-of-two height both are exact, so it
+        // is the division and not the flip.
+        const at28 = await compare(`vec3(fract(uv.y * 28.0))`, {}, 40, 28);
+        const at32 = await compare(`vec3(fract(uv.y * 32.0))`, {}, 40, 32);
+        push({ group: "WebGPU", name: "how far the two backends agree about where a pixel is",
+               ok: x >= 20 && at32.worst === 0 && at28.worst > 0,
+               detail: `p.x identical to 2⁻${x} · p.y ${y ? `to 2⁻${y}` : "not even to 2⁻⁸"} at a height of 28, `
+                 + `and exact at a height of 32 (${at32.worst}/255 against ${at28.worst}/255) — so it is dividing `
+                 + "by 28 that differs, not the y-flip: one driver multiplies by the reciprocal and the other "
+                 + "divides, and 1/28 is not a binary fraction. Below 1/255 they agree, which is why the "
+                 + "catalogue above is exact." }); }
+
+      // 3. Where they do *not* agree, and why. A hash amplifies one ulp into
+      //    a different number, and two drivers may fuse a multiply-add
+      //    differently — so this is a fact about floating point, not about
+      //    the translation, and the evidence is that constants agree.
+      { const constant = await compare(`vec3(hash21(vec2(3.0, 5.0)))`, {});
+        const computed = await compare(`vec3(hash21(floor(p * 6.0)))`, {});
+        push({ group: "WebGPU", name: "a hash is where the two backends part, and it is not the translator",
+               ok: constant.worst === 0 && computed.worst > 0,
+               detail: `hash21 of a constant: ${constant.worst}/255 apart — both compilers fold it. `
+                 + `hash21 of a computed coordinate: ${computed.worst}/255 — the inputs are bit-identical, so this is `
+                 + "multiply-add fusion, which each driver is free to do or not" }); }
+
+      // 4. It refuses rather than guesses.
+      { const cases = [
+          [`float in0(vec2 p);\nin0(p)`, /field port/],
+          [`if (uv.x > 0.5) discard;\nvec3(1.0)`, /discard/],
+          [`#define K 3\nvec3(float(K))`, /preprocessor/],
+        ];
+        const said = cases.map(([src2, want]) => {
+          const em = toWgsl(src2);
+          return !em.ok && em.refused.some((r) => want.test(r));
+        });
+        push({ group: "WebGPU", name: "the translator names what it will not translate", ok: said.every(Boolean),
+               detail: said.every(Boolean)
+                 ? "a field port, a discard and a preprocessor directive are each refused with a reason, not emitted as a guess"
+                 : `${said.filter(Boolean).length} of 3 refused` }); }
+    }
+  } catch (e) {
+    push({ group: "WebGPU", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

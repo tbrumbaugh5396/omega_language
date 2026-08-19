@@ -61,8 +61,8 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
-library, and a **213-check self-test across 31 groups that runs inside the
-app**.
+library, a WGSL emitter with a WebGPU runner, and a **220-check self-test
+across 32 groups that runs inside the app**.
 
 ---
 
@@ -326,10 +326,12 @@ surprise:
   needs a Brotli decoder and its static dictionary, which is out of proportion
   to what it buys.
 - **AI authoring of nodes** — the agents write briefs and critiques today.
-- **A second backend.** The WGSL audit says 41 of 41 node bodies are clean and
-  the only obstacles are in the host's own text, so the door is verifiably
-  open — but staying on GLSL ES 3.00 is the current decision, and WebGPU's
-  compatibility layer is the expected route.
+- **A second backend, mostly.** There is now a WGSL emitter and a WebGPU
+  runner, and **12 of the 64 node types render pixel-identically** to the GL
+  path on this machine. The other 40 are a named list of translation rules
+  still to write, not an unknown. Nothing about the render graph — pooling,
+  fusion, feedback, tiling — has a WebGPU path yet, and none of it should
+  until the pixels are known to match.
 
 The sketchpad-tier caveats in [`../README.md`](../README.md) still apply to the
 studios as tools. This document is about the machinery underneath them.

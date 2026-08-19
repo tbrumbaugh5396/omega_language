@@ -815,6 +815,223 @@ col += vec3(0.5, 0.7, 0.8) * max(-h0, 0.0) * 3.0;
 
 finish(col)` },
 
+  { id: "breakout", label: "Breakout — a wall of bricks, in the texture", preview: [640, 400], steps: 1,
+    // The bricks are not a variable: they are twenty-four texels of the
+    // state, one per brick, and the ball reads the one it is over. A shader
+    // has no arrays, and it does not need any — the texture is the array.
+    probes: {
+      hitBrick: { texel: [3, 0], channel: "r" },
+      hitWall:  { texel: [3, 0], channel: "g" },
+      missed:   { texel: [3, 0], channel: "b" },
+      score:    { texel: [1, 0], channel: "g" },
+      ballX:    { texel: [0, 0], channel: "r" },
+    },
+    instruments: { brick: { ref: "tone.blip" }, wall: { ref: "tone.pluck" }, lose: { ref: "tone.bell" } },
+    effects: [
+      { kind: "note", instrument: "brick", when: 'ch("hitBrick") > 0.5',
+        hz: '523 * 2 ^ (min(ch("score"), 12) / 12)', dur: "0.09" },
+      { kind: "note", instrument: "wall", when: 'ch("hitWall") > 0.5', hz: "196", dur: "0.06" },
+      { kind: "note", instrument: "lose", when: 'ch("missed") > 0.5', hz: "147", dur: "0.6" },
+    ],
+    source:
+`// A wall of bricks, and the wall lives in the texture. Row 1 of the state
+// holds twenty-four texels, one a brick, 1 while it stands; the ball reads
+// the texel under it and that texel reads whether the ball is over it. No
+// arrays, no lists — a shader has neither, and with a texture it needs
+// neither. Left and right, or A and D. Click first so it has the keys.
+uniform sampler2D u_keys;
+uniform float speed;    // @range 0.3 2 @default 0.85 @help ball speed
+uniform float batLen;   // @range 0.08 0.4 @default 0.16 @help half the bat's width
+uniform vec3 ink;       // @color @default #f4efe6
+uniform vec3 hot;       // @color @default #ff7a3d
+uniform vec3 brickCol;  // @color @default #6ee7c8
+
+const float COLS = 12.0;
+const float ROWS = 2.0;
+float A() { return u_resolution.x / u_resolution.y; }
+vec4 reg()  { return state(vec2(0.5, 0.5) / u_resolution); }        // ball xy, vel xy
+vec4 bat()  { return state(vec2(1.5, 0.5) / u_resolution); }        // bat x, score
+// Brick k is texel (k, 1) — a row of the state used as an array.
+float brick(float k) { return state(vec2(k + 0.5, 1.5) / u_resolution).r; }
+// Which brick a point is over, or -1.
+float brickAt(vec2 q) {
+  float top = 0.95, h = 0.16, w = 2.0 * A() / COLS;
+  if (q.y > top || q.y < top - ROWS * h) return -1.0;
+  float col = floor((q.x + A()) / w);
+  float row = floor((top - q.y) / h);
+  if (col < 0.0 || col >= COLS || row < 0.0 || row >= ROWS) return -1.0;
+  return row * COLS + col;
+}
+
+vec4 sim(vec2 uvv) {
+  vec2 texel = floor(gl_FragCoord.xy);
+  float left  = max(keyDown(u_keys, 37.0), keyDown(u_keys, 65.0));
+  float right = max(keyDown(u_keys, 39.0), keyDown(u_keys, 68.0));
+  float aa2 = A();
+  bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
+
+  vec4 b = first ? vec4(0.0, -0.4, speed * 0.55, speed * 0.6) : reg();
+  vec4 s = first ? vec4(0.0, 0.0, 0.0, 1.0) : bat();
+  float dt = 1.0 / 60.0;
+
+  float bx = clamp(s.x + (right - left) * 1.6 * dt, -aa2 + batLen, aa2 - batLen);
+  vec2 pos = b.xy + b.zw * dt;
+  vec2 vel = b.zw;
+  float hitBrick = 0.0, hitWall = 0.0, missed = 0.0;
+
+  if (pos.x >  aa2 - 0.02) { pos.x =  aa2 - 0.02; vel.x = -vel.x; hitWall = 1.0; }
+  if (pos.x < -aa2 + 0.02) { pos.x = -aa2 + 0.02; vel.x = -vel.x; hitWall = 1.0; }
+  if (pos.y >  1.0) { pos.y = 1.0; vel.y = -vel.y; hitWall = 1.0; }
+  // The bat.
+  if (pos.y < -0.86 && vel.y < 0.0 && abs(pos.x - bx) < batLen) {
+    pos.y = -0.86; vel.y = -vel.y;
+    vel.x += (pos.x - bx) / batLen * speed * 0.5;
+  }
+  // A brick, if the ball is over one that still stands.
+  float k = brickAt(pos);
+  if (k >= 0.0 && brick(k) > 0.5) { vel.y = -vel.y; s.y += 1.0; hitBrick = 1.0; }
+  if (pos.y < -1.1) { pos = vec2(0.0, -0.4); vel = vec2(speed * 0.55, speed * 0.6); missed = 1.0; }
+
+  if (texel == vec2(0.0)) return vec4(pos, vel);
+  if (texel == vec2(1.0, 0.0)) return vec4(bx, s.y, 0.0, 1.0);
+  if (texel == vec2(3.0, 0.0)) return vec4(hitBrick, hitWall, missed, 1.0);
+  // The wall itself. A brick stands until the ball is over it.
+  if (texel.y == 1.0 && texel.x < COLS * ROWS) {
+    float me = first ? 1.0 : brick(texel.x);
+    if (hitBrick > 0.5 && abs(texel.x - k) < 0.5) me = 0.0;
+    // Every brick gone: put them all back and keep the score.
+    return vec4(me, 0.0, 0.0, 1.0);
+  }
+  return vec4(0.0);
+}
+
+float aa2 = A();
+vec4 b = reg();
+vec4 s = bat();
+vec3 col = vec3(0.04, 0.05, 0.09);
+// The wall, read back out of the texture one brick at a time.
+float k = brickAt(p);
+if (k >= 0.0 && brick(k) > 0.5) {
+  float w = 2.0 * aa2 / COLS, h = 0.16;
+  vec2 c = vec2(-aa2 + (mod(k, COLS) + 0.5) * w, 0.95 - (floor(k / COLS) + 0.5) * h);
+  float d = sdBox(p - c, vec2(w * 0.42, h * 0.36));
+  col = mix(col, brickCol * (0.7 + 0.3 * (1.0 - floor(k / COLS) / ROWS)), aa(d));
+}
+col = mix(col, hot, aa(length(p - b.xy) - 0.028));
+col = mix(col, ink, aa(sdBox(p - vec2(s.x, -0.93), vec2(batLen, 0.022))));
+// The score, as marks along the bottom.
+float marks = min(s.y, 24.0);
+float m2 = sdBox(vec2(mod(p.x + aa2, 0.09) - 0.045, p.y + 0.99), vec2(0.02, 0.012));
+if (p.x < -aa2 + marks * 0.09) col = mix(col, hot * 0.8, aa(m2));
+col`
+  },
+  { id: "flappy", label: "One-key flyer — pipes, and a score you can hear", preview: [640, 400], steps: 1,
+    probes: {
+      passed: { texel: [2, 0], channel: "r" },
+      died:   { texel: [2, 0], channel: "g" },
+      flap:   { texel: [2, 0], channel: "b" },
+      score:  { texel: [1, 0], channel: "g" },
+    },
+    instruments: { wing: { ref: "tone.blip" }, point: { ref: "tone.bell" }, crash: { ref: "tone.pluck" } },
+    effects: [
+      { kind: "note", instrument: "wing", when: 'ch("flap") > 0.5', hz: "330", dur: "0.05" },
+      { kind: "note", instrument: "point", when: 'ch("passed") > 0.5',
+        hz: '523 * 2 ^ (min(ch("score"), 10) / 12)', dur: "0.18" },
+      { kind: "note", instrument: "crash", when: 'ch("died") > 0.5', hz: "110", dur: "0.5" },
+    ],
+    source:
+`// One key. Space or up flaps; everything else is gravity. The pipes are not
+// objects — there is one pipe pattern scrolling, and its gap height comes
+// from a hash of which pipe it is, so an unbounded course costs two texels.
+// Click the picture first so it has the keys.
+uniform sampler2D u_keys;
+uniform float gravity;  // @range 1 6 @default 3.2 @help how hard it falls
+uniform float flapUp;   // @range 0.4 2 @default 1.05 @help how hard a flap pushes
+uniform float gap;      // @range 0.2 0.7 @default 0.42 @help half the gap height
+uniform float pace;     // @range 0.2 1.5 @default 0.62 @help how fast the course moves
+uniform vec3 ink;       // @color @default #f4efe6
+uniform vec3 hot;       // @color @default #ff7a3d
+uniform vec3 pipeCol;   // @color @default #2f7d5b
+
+float A() { return u_resolution.x / u_resolution.y; }
+vec4 reg() { return state(vec2(0.5, 0.5) / u_resolution); }   // y, vy, x travelled, alive
+vec4 sc()  { return state(vec2(1.5, 0.5) / u_resolution); }   // last pipe counted, score
+// Where the gap sits for pipe number n. A hash, so the course is endless and
+// remembers nothing.
+float gapAt(float n) { return (hash21(vec2(n * 7.31, 3.0)) - 0.5) * 1.1; }
+// Where pipe n is on screen. The sim and the picture must not each have their
+// own idea of this, or the bird dies where nothing is drawn — so there is one
+// function and both call it.
+const float UNIT = 1.1;      // world distance between pipes
+const float SCALE = 1.6;     // world units to screen units
+const float BIRD_X = -0.55;
+float pipeX(float n, float travelled) { return BIRD_X + (n * UNIT - travelled) * SCALE; }
+// The pipe the bird is nearest, in pipe numbers.
+float nearestPipe(float travelled) { return floor(travelled / UNIT) + 1.0; }
+
+vec4 sim(vec2 uvv) {
+  vec2 texel = floor(gl_FragCoord.xy);
+  float dt = 1.0 / 60.0;
+  float up = max(keyHit(u_keys, 32.0), keyHit(u_keys, 38.0));
+  bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
+
+  vec4 b = first ? vec4(0.0, 0.0, 0.0, 1.0) : reg();
+  vec4 s = first ? vec4(-1.0, 0.0, 0.0, 1.0) : sc();
+  float passed = 0.0, died = 0.0, flapped = 0.0;
+
+  float vy = b.y - gravity * dt;
+  if (up > 0.5 && b.w > 0.5) { vy = flapUp; flapped = 1.0; }
+  float y = b.x + vy * dt;
+  float travelled = b.z + pace * dt;
+
+  // The pipe the bird is nearest, and where it is on screen — the same
+  // function the picture uses, so what kills you is what you can see.
+  float n = nearestPipe(travelled);
+  float g = gapAt(n);
+  float dx = abs(pipeX(n, travelled) - BIRD_X);
+  if (dx < 0.09 + 0.07 && abs(y - g) > gap && b.w > 0.5) { died = 1.0; }
+  // Counted once, when the pipe has gone by.
+  if (pipeX(n, travelled) < BIRD_X - 0.16 && n > s.x + 0.5 && b.w > 0.5) { passed = 1.0; s.x = n; s.y += 1.0; }
+  if (y < -1.0 || y > 1.0) { died = 1.0; }
+
+  float alive = b.w;
+  if (died > 0.5) { alive = 0.0; }
+  if (alive < 0.5 && !first) { y = b.x; vy = 0.0; travelled = b.z; }
+  if (first) { s = vec4(-1.0, 0.0, 0.0, 1.0); }
+
+  if (texel == vec2(0.0)) return vec4(y, vy, travelled, alive);
+  if (texel == vec2(1.0, 0.0)) return vec4(s.x, s.y, 0.0, 1.0);
+  if (texel == vec2(2.0, 0.0)) return vec4(passed, died, flapped, 1.0);
+  return vec4(0.0);
+}
+
+float aa2 = A();
+vec4 b = reg();
+vec4 s = sc();
+vec3 col = mix(vec3(0.06, 0.09, 0.16), vec3(0.10, 0.14, 0.24), uv.y);
+// The pipes: one shape repeated, its gap read from the hash, its place from
+// the same pipeX() the collision uses.
+float travelled = b.z;
+float n0 = nearestPipe(travelled);
+for (int i = -1; i < 3; i++) {
+  float n = n0 + float(i);
+  float xAt = pipeX(n, travelled);
+  float g = gapAt(n);
+  float dTop = sdBox(p - vec2(xAt, g + gap + 1.0), vec2(0.09, 1.0));
+  float dBot = sdBox(p - vec2(xAt, g - gap - 1.0), vec2(0.09, 1.0));
+  col = mix(col, pipeCol, aa(min(dTop, dBot)));
+}
+// The bird, tilted by how fast it is falling.
+vec2 q = rot(clamp(b.y * 0.5, -0.9, 0.9)) * (p - vec2(BIRD_X, b.x));
+float body = sdEllipse(q, vec2(0.075, 0.055));
+col = mix(col, b.w > 0.5 ? hot : vec3(0.4, 0.2, 0.2), aa(body));
+col = mix(col, ink, aa(sdCircle(q - vec2(0.035, 0.02), 0.012)));
+// The score, as marks across the top.
+float marks = min(s.y, 20.0);
+float m2 = sdBox(vec2(mod(p.x + aa2, 0.1) - 0.05, p.y - 0.93), vec2(0.02, 0.014));
+if (p.x < -aa2 + marks * 0.1) col = mix(col, ink, aa(m2));
+col`
+  },
   { id: "pong", label: "Bat and ball — a game, in one sketch, with sound", preview: [640, 400], steps: 1,
     // What the host reads out of the sketch's own state, once a frame. The
     // sketch writes its three events into one texel; naming them here is all

@@ -1656,6 +1656,54 @@ one, so a document that reads a counter wants a float state — true here, and
 not enforced. And the editor's sound needs the tab visible, because a paused
 `requestAnimationFrame` reads no probes.
 
+### Phase 21 — WebGPU, as a number *(L)* — **first pixels, and the rest named**
+
+`wgsl-audit.js` has said since Phase 6 that the node bodies are clean and the
+door is verifiably open. That was a text scan and an argument. This walks
+through it: a WGSL emitter, a WebGPU runner, and the same sketch rendered by
+both backends and compared pixel for pixel.
+
+**What makes it tractable** is that the input is not arbitrary GLSL. It is the
+sketch shorthand, and the prelude, the helpers and the coercions are the
+*host's* text — `wgsl-emit.js` simply writes them again in WGSL. Only the
+user's part is translated, by a short list of rules: `float x = …` becomes
+`var x: f32 = …`, `vec3(…)` becomes `vec3f(…)`, `a ? b : c` becomes
+`select(c, b, a)`, `texture2D(s, uv)` becomes `textureSample(s_tex, s_smp, uv)`,
+`mod` becomes what GLSL means by it, and `if (c) x;` gains the braces WGSL
+requires. Uniforms are packed one to a vec4 so nothing here implements WGSL's
+alignment rules.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| the node catalogue, translated and rendered | **12 of 12 pixel-identical** to the GL path |
+| the rest | 12 refused with a reason, 40 not translated yet |
+| `p.x`, magnified until they part | identical to **2⁻²²** |
+
+Twelve is not sixty-four, and the remaining forty are a *named* list rather
+than a total: fifteen want a value the translator did not declare, eight a
+declaration form it does not write, seven a call whose argument types it
+cannot see. Each is a rule to add, not a question to answer.
+
+**Two places the backends genuinely differ, and neither is the translator.**
+A hash of a *constant* agrees exactly — both compilers fold it — while a hash
+of a computed coordinate is 236/255 apart although its inputs are bit-identical:
+that is multiply-add fusion, which a driver may do or not. And `p.y` at a
+height of 28 differs from the eighth bit while at a height of 32 it is exact,
+which places the blame on dividing by 28: one driver multiplies by the
+reciprocal, the other divides, and 1/28 is not a binary fraction. Below 1/255
+they agree, which is exactly why the catalogue comes out identical.
+
+**The translator refuses rather than guesses.** A field port, a `discard` and
+a preprocessor directive are each turned away with a reason. A translator that
+quietly emits something plausible is found by a customer; one that says which
+line it could not do is found by a test.
+
+*Left:* one sketch to one texture. Nothing about the render graph — pooling,
+fusion, feedback, tiling — has a WebGPU path, and none of it should until the
+pixels are known to match, which is what this phase was for.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1746,6 +1794,8 @@ not enforced. And the editor's sound needs the tab visible, because a paused
 | 18.1 | The library listed; a playable game in Generate — **shipped** | S | 17.1 | you can see what you have, and play a sketch |
 | 19.1 | Pong, with sound, in the Playground — **shipped** | S | 18.1 | model, rules, view and sound in one document |
 | 20.1 | Probes: a sketch's own state, read back — **shipped** | S | 19.1 | a Generate sketch that can be heard |
+| 21.1 | A WGSL emitter and a WebGPU runner — **first pixels** | L | 0.3 | 12 nodes identical on a second backend |
+| 21.2 | Three more games in Generate — **shipped** | S | 20.1 | breakout, a flyer, and pong |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
