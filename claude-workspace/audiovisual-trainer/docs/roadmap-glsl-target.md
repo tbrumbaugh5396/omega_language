@@ -1222,6 +1222,54 @@ into data made the view fusible.
 once and remember that it happened" except by arithmetic on `keyHit`. That
 is enough for a ship and not for a menu.
 
+### Phase 13 — Events: every one, exactly once, in order *(M)* — **shipped**
+
+The keyboard texture says what is held *now*. It cannot say that two keys
+went down between this frame and the last, or which went first, and at a low
+frame rate it forgets a press. `keyHit` is a snapshot; a menu needs a queue.
+
+**`events.js`.** An `EventQueue` of small records — `{ kind, code, x, y, t,
+… }` — pushed in the order they happened. `keyboardEvents(queue, {keyboard})`
+is one listener feeding both the queue and the keyboard texture, so the two
+cannot disagree; `pointerEvents(queue, element)` reports a click in the
+sketch's own `p` coordinates, so `field.circle` at `ev("x"), ev("y")` lands
+under the finger with no conversion in the expression. A record is data; a
+log of them plus the graph is a replay.
+
+**Delivery.** The runner drains the queue once per frame and hands each event
+to `resolveParams` on its own, in order, as an *event pass*: only the
+parameters that **listen** — whose expression mentions `ev()` or `on()` — are
+evaluated; everything else is held at its last value, so physics does not
+step on a keypress. Then the frame is delivered as an event too,
+`{ kind: "frame", dt }`, and everything is evaluated. That rule is what makes
+"do this once when the key goes down, and remember" a line of arithmetic:
+
+```js
+index:    { expr: 'clamp(prev("index") + on("keydown", 40) - on("keydown", 38), 0, 3)', value: [0] },
+selected: { expr: 'on("keydown", 13) ? ch("index") : prev("selected")', value: [-1] },
+pulse:    { expr: 'on("keydown", 32) ? 0.0 : prev("pulse") + 0.03 * on("frame")', value: [9] },
+```
+
+`game.menu` is the view for the first two; the ship's pulse ring is the third
+— held for thirty frames, it fires once.
+
+**What it is held to:**
+
+| held against | number |
+|---|---|
+| two keydowns delivered in one frame | the menu moved **2**; the texture's hit row saw **1** |
+| Down,Enter vs Enter,Down | chose **1** vs **0** — order is meaning |
+| 100 events in one frame vs the same 100 over seven | **100** and **100** |
+| ten frames of thrust with 0 events a frame vs 5 | y = **0.371200** both — physics stepped once, not six times |
+| `on("frame")` across three renders with a keydown between | **3**; `ev("dt")` **0.050 s** |
+| a log of 17 events replayed into a fresh graph | **198 bytes of model, identical** |
+| a click at the centre / top-right / bottom-left of a 2:1 canvas | **(0,0) / (2,1) / (−2,−1)** |
+
+*Left:* events are delivered once per frame, in a batch — there is no
+"between frames" with a different picture for each; an event's `t` is there
+but nothing schedules by it. And nothing yet makes a sound on one: the live
+audio path is still the gap.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -1304,6 +1352,7 @@ is enough for a ship and not for a menu.
 | 10.1 | Feedback: a wire that reads last frame — **shipped** | M | 1.x | simulation in the graph |
 | 11.1 | Input: the keyboard as a texture, a ship you fly — **shipped** | M | 10.1 | a simulation you can play |
 | 12.1 | `prev()` and `key()` in expressions: the model is data — **shipped** | S | 9.1, 11.1 | Model–Update–View, all three readable |
+| 13.1 | Events: a queue, delivered once each, in order — **shipped** | M | 12.1 | a menu; a replay that is a log |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

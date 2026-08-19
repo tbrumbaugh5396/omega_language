@@ -15,7 +15,8 @@ import { graphSummary } from "./graph-view.js";
 import { Keyboard } from "./keyboard.js";
 import "./field-nodes.js";
 import "./sim-nodes.js";
-import { shipAsData } from "./game-nodes.js";
+import { shipAsData, menuAsData } from "./game-nodes.js";
+import { EventQueue, keyboardEvents, pointerEvents } from "./events.js";
 
 /** A seed picture, drawn with the 2D canvas. */
 function seedCanvas(w, h, draw) {
@@ -33,13 +34,48 @@ function seedCanvas(w, h, draw) {
 export const PLAY_DEMOS = [
   {
     id: "mvu", title: "Ship, as data",
-    how: "Arrows or WASD. The ship's position is a parameter written as an expression over prev() and key(); the shader only draws.",
+    how: "Arrows or WASD; space sends a pulse. The ship's position is a parameter written as an expression over prev() and key(); the pulse starts on the keydown event, once per press; the shader only draws.",
     build(W, H) {
       const g = createGraph(W, H); g.stateKey = "play-mvu";
-      const ship = shipAsData(g);
+      const ship = shipAsData(g, undefined, { params: {
+        // A ring that restarts on the keydown *event* — once per press, however
+        // long the key is held — and grows on each frame.
+        pulse: { expr: 'on("keydown", 32) ? 0.0 : prev("pulse") + 0.03 * on("frame")', value: [9] },
+      } });
       const trail = addNode(g, "feedback.trail", { decay: [0.86] }, [ship, null], { name: "trail" });
       feedback(g, trail, 1, trail);
-      g.output = trail;
+      const ring = addNode(g, "field.circle",
+        { centre: { expr: ['ch("ship.pos", 0)', 'ch("ship.pos", 1)'] }, radius: { expr: 'ch("ship.pulse")' } });
+      const shell = addNode(g, "field.shell", { thickness: [0.012] }, [ring]);
+      const ink = addNode(g, "field.shade", { fill: [1, 0.5, 0.25], filled: [1], width: [0], glow: [0] }, [shell]);
+      g.output = addNode(g, "composite.blend", { mode: [0], opacity: [1] }, [trail, ink]);
+      return { graph: g, sources: {} };
+    },
+  },
+  {
+    id: "menu", title: "Menu",
+    how: "Up and down move, Enter chooses, Escape clears. Each press is an event delivered once, in order — type two downs fast and it moves two.",
+    build(W, H) {
+      const g = createGraph(W, H); g.stateKey = "play-menu";
+      g.output = menuAsData(g, 4);
+      return { graph: g, sources: {} };
+    },
+  },
+  {
+    id: "pointer", title: "Pointer",
+    how: "Click to put the dot there; each click also starts a ring. The place arrives in the event, in the sketch's own coordinates.",
+    build(W, H) {
+      const g = createGraph(W, H); g.stateKey = "play-pointer";
+      const dot = addNode(g, "field.circle", {
+        centre: { expr: ['on("pointerdown") ? ev("x") : prev("centre", 0)', 'on("pointerdown") ? ev("y") : prev("centre", 1)'], value: [0, 0] },
+        radius: [0.05],
+      }, [], { name: "dot" });
+      const ring = addNode(g, "field.circle", {
+        centre: { expr: ['ch("dot.centre", 0)', 'ch("dot.centre", 1)'] },
+        radius: { expr: 'on("pointerdown") ? 0.05 : prev("radius") + 0.02 * on("frame")', value: [9] },
+      }, [], { name: "ring" });
+      const both = addNode(g, "field.union", { k: [0] }, [dot, addNode(g, "field.shell", { thickness: [0.01] }, [ring])]);
+      g.output = addNode(g, "field.shade", { fill: [0.43, 0.9, 0.78], filled: [1], width: [0], glow: [0.08], glowColour: [0.43, 0.9, 0.78] }, [both]);
       return { graph: g, sources: {} };
     },
   },
@@ -120,6 +156,7 @@ export function playgroundDialog(startId = "mvu") {
   const how = el("p.fine", {}, "");
   const summary = el("p.fine", { style: { opacity: 0.7 } }, "");
   const keyboard = new Keyboard();
+  const queue = new EventQueue();
   let current = null, raf = 0, frames = 0, lastAt = performance.now(), fps = 0, running = true;
 
   const pick = (id) => {
@@ -130,7 +167,7 @@ export function playgroundDialog(startId = "mvu") {
     how.textContent = demo.how;
     summary.textContent = graphSummary(current.graph);
     ctx.imageSmoothingEnabled = !current.pixelated;
-    keyboard.clear();
+    keyboard.clear(); queue.drain();
     for (const b of tabs.children) b.classList.toggle("primary", b.dataset.id === id);
   };
 
@@ -142,7 +179,7 @@ export function playgroundDialog(startId = "mvu") {
     if (current) {
       const { graph, sources, stepsPerFrame } = current;
       try {
-        renderGraph(graph, sources, { keys: keyboard, steps: stepsPerFrame || 1,
+        renderGraph(graph, sources, { keys: keyboard, events: queue, steps: stepsPerFrame || 1,
                                       time: performance.now() / 1000, into: ctx });
       } catch (e) {
         status.textContent = String(e.message).split("\n")[0];
@@ -160,7 +197,7 @@ export function playgroundDialog(startId = "mvu") {
   const stop = () => {
     running = false;
     cancelAnimationFrame(raf);
-    keyboard.detach && keyboard.detach();
+    stopKeys(); stopPointer();
     if (current) resetGraphState(current.graph.stateKey);
   };
 
@@ -172,7 +209,10 @@ export function playgroundDialog(startId = "mvu") {
       el("button", { onclick: () => { if (current) { resetGraphState(current.graph.stateKey); keyboard.clear(); } } }, "Reset"),
       el("button.primary", { onclick: () => { stop(); closeModal(); } }, "Close")));
   canvas.tabIndex = 0;
-  keyboard.attach(document);
+  // One listener feeds both the keyboard texture and the queue, so the two
+  // cannot disagree about what happened.
+  const stopKeys = keyboardEvents(queue, { target: document, keyboard });
+  const stopPointer = pointerEvents(queue, canvas);
   canvas.focus();
   pick(startId);
   raf = requestAnimationFrame(frame);

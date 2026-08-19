@@ -60,8 +60,8 @@ And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
-keyboard as a texture, and a **170-check self-test across 24 groups that runs
-inside the app**.
+keyboard as a texture, an event queue, and a **178-check self-test across 25
+groups that runs inside the app**.
 
 ---
 
@@ -170,10 +170,13 @@ one screen away from the sketch. Life comes out exact.
 
 ### Model, Update and View are all three readable
 
-`prev("pos")` is a parameter as it was last frame; `key(38)` is the keyboard.
-With those two, a parameter that reads its own last value is a state, the
-expression over it is the update, and the shader that draws the result is
-purely the view — and all three are text in the document. The ship's position
+`prev("pos")` is a parameter as it was last frame; `key(38)` is the keyboard;
+`on("keydown", 13)` is the event being delivered, and an expression that
+mentions it runs once per event, in order, before the frame. With those, a
+parameter that reads its own last value is a state, the expression over it is
+the update, and the shader that draws the result is purely the view — and all
+three are text in the document. A log of events plus the graph is a replay,
+to the byte. The ship's position
 is a number you can read off the graph, not a texel you have to decode; it
 equals the CPU integration of its own equations to 2e−15, and the ejected
 pass header prints the update beside the shader that draws it.

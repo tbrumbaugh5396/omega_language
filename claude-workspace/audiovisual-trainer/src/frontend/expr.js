@@ -180,6 +180,15 @@ function parse(tokens, src) {
 
 // ------------------------------------------------------------------ walking
 
+/** Does this tree read the event being delivered? */
+function listensTo(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.k === "call" && (node.name === "ev" || node.name === "on")) return true;
+  for (const key of ["cond", "a", "b"]) if (node[key] && listensTo(node[key])) return true;
+  for (const arg of node.args || []) if (listensTo(arg)) return true;
+  return false;
+}
+
 /** Every `ch("…")` and `prev("…")` with a literal name, so dependencies are known before it runs. */
 function referencesOf(node, into = []) {
   if (!node || typeof node !== "object") return into;
@@ -238,6 +247,28 @@ function walk(node, env) {
         const comp = node.args.length > 1 ? walk(node.args[1], env) : 0;
         return look(String(path), Math.round(comp));
       }
+      // The event being delivered, if this resolution is delivering one.
+      // `ev("kind")` is its name, `ev("code")` its key, `ev("x")`/`ev("y")` its
+      // place; `on("keydown", 37)` is the common test in one call. An
+      // expression that mentions either is an update *for* events, and runs
+      // once per event in order — see param-graph.js.
+      if (node.name === "ev") {
+        const field = String(walk(node.args[0], env));
+        const e = env.event || {};
+        const v = e[field];
+        return v === undefined || v === null ? 0 : v;
+      }
+      if (node.name === "on") {
+        const e = env.event || {};
+        const kind = String(walk(node.args[0], env));
+        if (e.kind !== kind) return 0;
+        if (node.args.length > 1) {
+          const want = walk(node.args[1], env);
+          const have = e.code !== undefined ? e.code : e.name;
+          return have === want || String(have) === String(want) ? 1 : 0;
+        }
+        return 1;
+      }
       if (node.name === "key" || node.name === "keyHit" || node.name === "keyToggle") {
         if (!env.keys) throw new Error(`${node.name}() — no keyboard reaches this graph`);
         const code = Math.round(walk(node.args[0], env));
@@ -268,12 +299,12 @@ function walk(node, env) {
 export function compileExpr(text) {
   const src = String(text ?? "");
   const fail = (msg) => ({
-    text: src, refs: [], error: msg, runtimeError: null, value() { return 0; },
+    text: src, refs: [], listens: false, error: msg, runtimeError: null, value() { return 0; },
   });
   let tree;
   try { tree = parse(tokenise(src), src); } catch (e) { return fail(e.message); }
   const out = {
-    text: src, refs: referencesOf(tree), error: null, runtimeError: null,
+    text: src, refs: referencesOf(tree), listens: listensTo(tree), error: null, runtimeError: null,
     value(env = {}) {
       try {
         const v = walk(tree, env);
@@ -295,4 +326,5 @@ export const VOCABULARY = {
   reference: 'ch("node.param") — another node\'s parameter, by name or by id; "param" alone is this node\'s',
   state: 'prev("node.param") — the same, as it was last frame; its stored value before the first',
   input: "key(code), keyHit(code), keyToggle(code) — the keyboard, by key code",
+  events: 'ev("kind" | "code" | "x" | "y" | "t" | "dt" | "name" | "value"), on("keydown", 37) — the event being delivered; an expression that mentions either runs once per event, in order',
 };

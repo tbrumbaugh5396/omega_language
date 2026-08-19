@@ -23,7 +23,8 @@ import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
 import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate, feedback, findNode, defineNode } from "./render-graph.js";
 import { lifeStep, grayScottStep } from "./sim-nodes.js";
-import { shipStep, shipAsData } from "./game-nodes.js";
+import { shipStep, shipAsData, menuAsData } from "./game-nodes.js";
+import { EventQueue, pointerEvents } from "./events.js";
 import { Keyboard, KEY } from "./keyboard.js";
 import { renderGraph, ejectGraph, applyFilter, resetGraphState } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
@@ -1357,6 +1358,152 @@ texel == vec2(0.0) ? vec4(v, 0.0, 0.0, 1.0) : vec4((v - 0.14) * 100.0, 0.0, 0.0,
              detail: `${st.expressions} expressions, ${st.states} carrying state (turns, vel, pos), ${st.inputs} reading the keyboard` }); }
   } catch (e) {
     push({ group: "Model–Update–View", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Events: every one, exactly once, in order. The checks are about delivery,
+  // not about drawing — what a menu's index is after two presses in one
+  // frame, whether order matters, whether a frame with five key events steps
+  // physics once or six times, and whether a log replays to the byte.
+  try {
+    const src16 = document.createElement("canvas"); src16.width = 16; src16.height = 16;
+    const menuGraph = (key) => { const g = createGraph(32, 32); g.stateKey = key; g.output = menuAsData(g, 4); return g; };
+    const state = (g) => paramState(g.stateKey);
+
+    // 1. Two presses in one frame move by two. The keyboard texture's "went
+    //    down this frame" row would have said one.
+    { const g = menuGraph("selftest-ev-two");
+      const kb = new Keyboard();
+      renderGraph(g, {}, { reset: true, keys: kb });
+      kb.press(KEY.down);                                           // what the texture sees: one press
+      const evs = [{ kind: "keydown", code: KEY.down }, { kind: "keyup", code: KEY.down },
+                   { kind: "keydown", code: KEY.down }];            // what actually happened: two
+      renderGraph(g, {}, { keys: kb, events: evs });
+      const idx = state(g)["menu index"][0];
+      const hitSaw = kb.hit[KEY.down] ? 1 : 0;
+      push({ group: "Events", name: "two presses in one frame move the menu by two", ok: idx === 2 && hitSaw === 1,
+             detail: `index ${idx} after two keydowns delivered in one frame · the texture's hit row saw ${hitSaw} — a queue keeps what a snapshot loses` }); }
+
+    // 2. Order is meaning: Down then Enter chooses 1; Enter then Down chooses 0.
+    { const run = (order) => {
+        const g = menuGraph("selftest-ev-order-" + order.join(""));
+        renderGraph(g, {}, { reset: true });
+        renderGraph(g, {}, { events: order.map((code) => ({ kind: "keydown", code })) });
+        return state(g)["menu selected"][0];
+      };
+      const a = run([KEY.down, KEY.enter]), b = run([KEY.enter, KEY.down]);
+      push({ group: "Events", name: "delivery order is the meaning: Down,Enter ≠ Enter,Down", ok: a === 1 && b === 0,
+             detail: `Down then Enter chose ${a}; Enter then Down chose ${b}` }); }
+
+    // 3. Exactly once, and over any framing: 100 events in one frame and the
+    //    same 100 spread over 7 frames land on the same model.
+    { const mk = (key) => { const g = createGraph(16, 16); g.stateKey = key;
+        const s0 = addNode(g, "source");
+        g.output = addNode(g, "adjust.exposure", { stops: { expr: 'prev("stops") + on("msg")', value: [0] } }, [s0], { name: "c" });
+        return [g, s0]; };
+      const evs = Array.from({ length: 100 }, (_, i) => ({ kind: "msg", name: "tick", value: i }));
+      const [g1, a1] = mk("selftest-ev-100a");
+      renderGraph(g1, { [a1]: src16 }, { reset: true, events: evs });
+      const one = state(g1)["c stops"][0];
+      const [g2, a2] = mk("selftest-ev-100b");
+      renderGraph(g2, { [a2]: src16 }, { reset: true });
+      for (let f = 0; f < 7; f++) renderGraph(g2, { [a2]: src16 }, { events: evs.slice(f * 15, f * 15 + 15) });
+      const seven = state(g2)["c stops"][0];
+      push({ group: "Events", name: "100 events count to 100, in one frame or seven", ok: one === 100 && seven === 100,
+             detail: `one frame: ${one} · seven frames: ${seven} — every event once, however they are framed` }); }
+
+    // 4. An event pass does not step the frame. The ship, held with thrust on,
+    //    moves the same distance in a frame with no events and in a frame
+    //    with five — because its physics listens to the frame, not to keys.
+    { const run = (withEvents) => {
+        const g = createGraph(120, 80); g.stateKey = "selftest-ev-nostep-" + withEvents;
+        g.output = shipAsData(g);
+        const kb = new Keyboard(); kb.press(KEY.up);
+        renderGraph(g, {}, { reset: true, keys: kb });
+        for (let f = 0; f < 10; f++) {
+          const evs = withEvents ? Array.from({ length: 5 }, () => ({ kind: "keydown", code: 90 })) : [];
+          renderGraph(g, {}, { keys: kb, events: evs });
+        }
+        return state(g)["ship pos"][1];
+      };
+      const a = run(false), b = run(true);
+      push({ group: "Events", name: "a frame with five events steps the physics once, not six times", ok: Math.abs(a - b) < 1e-12 && a > 0,
+             detail: `10 frames of thrust: y = ${a.toFixed(6)} with no events, ${b.toFixed(6)} with five a frame — identical` }); }
+
+    // 5. The frame is an event: on("frame") counts frames and ev("dt") is the
+    //    time between them.
+    { const g = createGraph(16, 16); g.stateKey = "selftest-ev-frame";
+      const s0 = addNode(g, "source");
+      g.output = addNode(g, "adjust.exposure",
+        { stops: { expr: 'prev("stops") + on("frame")', value: [0] }, offset: { expr: 'ev("dt")' } }, [s0], { name: "f" });
+      renderGraph(g, { [s0]: src16 }, { reset: true, time: 1.0 });
+      renderGraph(g, { [s0]: src16 }, { time: 1.25, events: [{ kind: "keydown", code: 1 }] });
+      renderGraph(g, { [s0]: src16 }, { time: 1.3 });
+      const st = state(g);
+      const frames = st["f stops"][0], dt = st["f offset"][0];
+      push({ group: "Events", name: "the frame is an event with a dt", ok: frames === 3 && Math.abs(dt - 0.05) < 1e-9,
+             detail: `on("frame") counted ${frames} frames across three renders (a keydown between them did not count) · ev("dt") on the last was ${dt.toFixed(3)} s` }); }
+
+    // 6. A replay is a log. Record 60 frames of scripted events into a queue,
+    //    then replay the log into a fresh graph: the model is the same bytes.
+    { const run = (log) => {
+        const g = createGraph(120, 80); g.stateKey = "selftest-ev-replay-" + (log ? "b" : "a");
+        const ship = shipAsData(g, undefined, { params: {
+          pulse: { expr: 'on("keydown", 32) ? 0.0 : prev("pulse") + 0.03 * on("frame")', value: [9] } } });
+        g.output = ship;
+        const q = new EventQueue();
+        const recorded = log ? null : q.record();
+        const kb = new Keyboard();
+        for (let f = 0; f < 60; f++) {
+          if (!log) {
+            if (f % 9 === 0) { q.push({ kind: "keydown", code: 32 }); kb.press(32); }
+            if (f % 9 === 2) { q.push({ kind: "keyup", code: 32 }); kb.release(32); }
+            if (f === 4) { q.push({ kind: "keydown", code: KEY.up }); kb.press(KEY.up); }
+            if (f === 20) { q.push({ kind: "keydown", code: KEY.left }); kb.press(KEY.left); }
+            if (f === 30) { q.push({ kind: "keyup", code: KEY.left }); kb.release(KEY.left); }
+          } else {
+            // Replay: the same events at the same frames, and the keyboard
+            // texture follows them — which is what a recorder would store.
+            for (const e of log.filter((e2) => e2.frame === f)) {
+              q.push(e); if (e.kind === "keydown") kb.press(e.code); if (e.kind === "keyup") kb.release(e.code);
+            }
+          }
+          if (!log) for (const e of q.items) if (e.frame === undefined) e.frame = f;
+          renderGraph(g, {}, { keys: kb, events: q, reset: f === 0, time: f / 60 });
+        }
+        return { model: JSON.stringify(state(g)), log: recorded };
+      };
+      const first = run(null);
+      const again = run(first.log);
+      push({ group: "Events", name: "a replay of the event log reproduces the model, byte for byte", ok: first.model === again.model && first.log.length > 5,
+             detail: `${first.log.length} events recorded over 60 frames; replayed, ${first.model.length} bytes of model identical` }); }
+
+    // 7. The pointer arrives in the sketch's own coordinates.
+    { const q = new EventQueue();
+      const el2 = document.createElement("canvas"); el2.width = 200; el2.height = 100;
+      el2.style.cssText = "position:fixed;left:0;top:0;width:200px;height:100px;opacity:0;pointer-events:none";
+      document.body.append(el2);
+      const stop = pointerEvents(q, el2);
+      const r = el2.getBoundingClientRect();
+      const fire = (fx, fy) => el2.dispatchEvent(new PointerEvent("pointerdown", { clientX: r.left + fx * 200, clientY: r.top + fy * 100, bubbles: true }));
+      fire(0.5, 0.5); fire(1, 0); fire(0, 1);
+      stop(); el2.remove();
+      const evs = q.drain();
+      const near = (a, b) => Math.abs(a - b) < 1e-6;
+      const ok = evs.length === 3
+        && near(evs[0].x, 0) && near(evs[0].y, 0)
+        && near(evs[1].x, 2) && near(evs[1].y, 1)
+        && near(evs[2].x, -2) && near(evs[2].y, -1);
+      push({ group: "Events", name: "a click arrives as p: centre is (0,0), the top-right corner is (aspect, 1)", ok,
+             detail: ok ? "three clicks: (0,0), (2,1), (−2,−1) on a 2:1 canvas — the same frame the shader's p uses"
+                        : evs.map((e) => `(${e.x.toFixed(2)},${e.y.toFixed(2)})`).join(" ") }); }
+
+    // 8. The summary knows who is listening.
+    { const g = menuGraph("selftest-ev-stats");
+      const st = paramStats(g);
+      push({ group: "Events", name: "the summary counts listeners", ok: st.listeners === 2,
+             detail: `${st.listeners} parameters listening for events (index, selected), ${st.states} carrying state` }); }
+  } catch (e) {
+    push({ group: "Events", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on

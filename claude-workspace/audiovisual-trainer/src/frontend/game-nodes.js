@@ -119,7 +119,50 @@ float body = aa(d);
 float ex = burning * aa(length(q - vec2(-size * 0.7 - 0.35 * size * hash21(vec2(frame, 1.0)), 0.0)) - size * 0.16);
 vec4(mix(flame, hull, body), max(body, ex))`);
 
-export const GAME_NODES = ["game.ship", "game.shipView", "input.keys"];
+defineNode(`// A menu: a column of boxes, one highlighted, one perhaps chosen. Draws
+// only. Which one is highlighted and which is chosen are parameters, and
+// the graph moves them with expressions over events — on("keydown", 40) —
+// so two presses that land in one frame move it by two, and Enter chooses
+// exactly once no matter how long it is held.
+// @node game.menu
+// @module 07-shaders
+// @alpha
+uniform float count;      // @range 1 8 @step 1 @int @default 3 @help how many entries
+uniform float index;      // @range 0 7 @step 1 @int @default 0 @help the highlighted one, from the top
+uniform float selected;   // @range -1 7 @step 1 @int @default -1 @help the chosen one, or -1
+uniform vec3  ink;        // @color @default #f4efe6
+uniform vec3  mark;       // @color @default #6ee7c8
+uniform vec3  chosen;     // @color @default #ff7a3d
+
+float n = max(count, 1.0);
+float rowH = min(0.32, 1.6 / n);
+float top = (n - 1.0) * rowH * 0.5;
+float row = floor((top + rowH * 0.5 - p.y) / rowH);
+float cy = top - row * rowH;
+float d = sdBox(p - vec2(0.0, cy), vec2(0.55, rowH * 0.38)) - 0.03;
+bool inRange = row >= 0.0 && row < n;
+float fill = inRange ? aa(d) : 0.0;
+float edge = inRange ? aa(abs(d) - 0.006) : 0.0;
+vec3 col = row == selected ? chosen : row == index ? mark : ink;
+float a = row == index || row == selected ? max(fill, edge) : edge;
+// Entries that are neither keep an outline and a soft centre.
+float soft = inRange && row != index && row != selected ? fill * 0.12 : 0.0;
+vec4(col, max(a, soft))`);
+
+export const GAME_NODES = ["game.ship", "game.shipView", "game.menu", "input.keys"];
+
+/**
+ * A menu as data: `index` and `selected` are states moved by events. Down
+ * and Up move, Enter chooses, Escape clears. The view is game.menu.
+ */
+export function menuAsData(graph, count = 3, extra = {}) {
+  return addNode(graph, "game.menu", {
+    count: [count],
+    index:    { expr: `clamp(prev("index") + on("keydown", 40) - on("keydown", 38), 0, ${count - 1})`, value: [0] },
+    selected: { expr: 'on("keydown", 13) ? ch("index") : (on("keydown", 27) ? -1 : prev("selected"))', value: [-1] },
+    ...(extra.params || {}),
+  }, [], { name: extra.name || "menu" });
+}
 
 /**
  * The ship as data: a node named `ship` whose parameters are its model and

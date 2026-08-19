@@ -134,6 +134,7 @@ export class GraphRunner {
     // its document every frame still finds its own memory.
     this.memory = new Map();        // key → { read, write, w, h }
     this.frames = new Map();        // stateKey → how many frames it has run
+    this.lastTime = new Map();      // stateKey → the time of its last frame, for dt
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
@@ -325,6 +326,7 @@ export class GraphRunner {
       values, and its frame count. */
   resetState(stateKey = "anonymous") {
     resetParamState(stateKey);
+    this.lastTime.delete(stateKey);
     const prefix = `${stateKey}\u0000`;
     for (const [k, m] of [...this.memory]) {
       if (k.startsWith(prefix)) { this.freeMemory(m); this.memory.delete(k); }
@@ -357,11 +359,29 @@ export class GraphRunner {
     // arrays an expression's key() reads; a bare canvas carries only the first.
     const keysObj = opts.keys && opts.keys.down ? opts.keys : null;
     const written = graph;
+    const dynamic = hasDynamicParams(written);
+    // Events since last frame — an EventQueue, or an array the caller built.
+    // Each is delivered to the graph on its own, in order, before the frame.
+    let pending = [];
+    if (opts.events && dynamic) {
+      pending = Array.isArray(opts.events) ? opts.events.slice()
+        : typeof opts.events.drain === "function" ? opts.events.drain() : [];
+    }
+    const now = opts.time || 0;
+    const lastT = this.lastTime.get(stateKey);
+    const dt = lastT === undefined ? 0 : Math.max(0, now - lastT);
     // Resolving commits this frame's values as next frame's prev() — which
     // is why it happens here, in the runner, and nowhere that merely looks.
     const plan = (frameNo) => {
-      let g = resolveParams(written, { t: opts.time || 0, frame: frameNo, seed: opts.seed || 0,
-                                      keys: keysObj, commit: true });
+      if (dynamic && pending.length) {
+        for (const ev of pending) {
+          resolveParams(written, { t: now, frame: frameNo, seed: opts.seed || 0,
+                                   keys: keysObj, event: ev, eventPass: true, commit: true });
+        }
+        pending = [];
+      }
+      let g = resolveParams(written, { t: now, frame: frameNo, seed: opts.seed || 0, keys: keysObj,
+                                      event: { kind: "frame", frame: frameNo, t: now, dt }, commit: true });
       g = compileFields(g);
       // Fusion is on unless a caller wants the passes as written — the
       // self-test wants both, to hold one against the other.
@@ -544,7 +564,7 @@ export class GraphRunner {
     }
     // A graph with memory of either kind — a texture or a parameter — has a
     // frame count; one without is the same picture every time and needs none.
-    if (remembered.size || hasDynamicParams(written)) this.frames.set(stateKey, frame);
+    if (remembered.size || dynamic) { this.frames.set(stateKey, frame); this.lastTime.set(stateKey, now); }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 
     // Everything but the output's target goes back to the pool; the output
