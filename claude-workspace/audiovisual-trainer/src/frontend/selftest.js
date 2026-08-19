@@ -40,6 +40,8 @@ import { nodeReference, referenceGaps } from "./node-docs.js";
 import { createDspGraph, addDspNode, defineDspNode, allocationReport, topoDsp, DSP_NODES } from "./dsp-graph.js";
 import { installGraph, sourceFor } from "./dsp-runtime.js";
 import { renderSong, patternToNotes, allocateVoices, noteHz, toWav } from "./dsp-song.js";
+import { loudnessLUFS, truePeakDb, correlation, packSpectrum, packWaveform, rowTexture } from "./audio-scopes.js";
+import "./scope-nodes.js";
 import { fftMag } from "./engine-audio.js";
 import { freezeEffects } from "./canvas-graph.js";
 import { registerNode, withNodeHeader, nodeIdFor, keepVersion, versionSummary,
@@ -1725,6 +1727,88 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
                + "samples rendered" }); }
   } catch (e) {
     push({ group: "Audio song", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // The scopes: the measurements, and the fact that the pictures are drawn by
+  // the same render graph everything else is.
+  try {
+    const SR = 48000, n = SR * 2;
+    const sine = (hz, amp, phase = 0) => {
+      const a = new Float32Array(n);
+      for (let i = 0; i < n; i++) a[i] = amp * Math.sin(2 * Math.PI * hz * i / SR + phase);
+      return a;
+    };
+
+    // The standard's own calibration point, which is the only way to know a
+    // loudness meter is right rather than merely consistent.
+    { const amp = Math.pow(10, -20 / 20);
+      const L = sine(997, amp), R = sine(997, amp);
+      const stereo = loudnessLUFS([L, R], SR).lufs;
+      const quieter = loudnessLUFS([sine(997, amp / 2), sine(997, amp / 2)], SR).lufs;
+      push({ group: "Audio scopes", name: "loudness reads BS.1770's calibration point exactly",
+             ok: Math.abs(stereo + 20) < 0.15 && Math.abs((stereo - quieter) - 6.02) < 0.05,
+             detail: `997 Hz at −20 dBFS on both channels: ${stereo.toFixed(2)} LUFS, which is what the `
+               + `standard says it must be · halving it moves the meter ${(stereo - quieter).toFixed(2)} LU, `
+               + "so it is linear as well as calibrated · K-weighting derived from the analogue "
+               + "prototype at this rate, not the 48 kHz coefficients reused" }); }
+
+    // True peak exists to catch what a sample peak cannot see.
+    { const tricky = sine(SR / 4, 1.0, Math.PI / 4);
+      let samplePeak = 0;
+      for (let i = 0; i < tricky.length; i++) samplePeak = Math.max(samplePeak, Math.abs(tricky[i]));
+      const sampleDb = 20 * Math.log10(samplePeak);
+      const tp = truePeakDb([tricky]);
+      push({ group: "Audio scopes", name: "true peak catches a crest that falls between samples",
+             ok: sampleDb < -2.5 && tp > -0.2,
+             detail: `a full-scale sine at a quarter of the rate, offset so no sample lands on the crest: `
+               + `the sample meter reads ${sampleDb.toFixed(2)} dBFS and says there are three decibels `
+               + `spare, and the true peak is ${tp.toFixed(2)} dBTP — it would clip a converter` }); }
+
+    { const a = sine(997, 0.5), b = sine(997, 0.5, Math.PI);
+      const same = correlation(a, a), opposite = correlation(a, b);
+      push({ group: "Audio scopes", name: "correlation says what will survive a fold to mono",
+             ok: Math.abs(same - 1) < 1e-3 && Math.abs(opposite + 1) < 1e-3,
+             detail: `identical channels ${same.toFixed(3)}, inverted ${opposite.toFixed(3)} — `
+               + "the second cancels completely, which is the thing the meter is there to warn about" }); }
+
+    // And the pictures: drawn by the render graph, from the packed analysis.
+    { const W2 = 256, H2 = 128;
+      const mag = new Float32Array(512);
+      mag[107] = 1;
+      const row = packSpectrum(mag, { width: W2 });
+      const g = createGraph(W2, H2);
+      const src = addNode(g, "source");
+      g.output = addNode(g, "scope.spectrum", {}, [src]);
+      const d = renderGraph(g, { [src]: rowTexture(row) }).getContext("2d").getImageData(0, 0, W2, H2).data;
+      let topCol = -1, topY = H2;
+      for (let x = 0; x < W2; x++) {
+        for (let y = 0; y < H2; y++) {
+          const i = (y * W2 + x) * 4;
+          if (d[i + 1] > 150 && d[i] < 160) { if (y < topY) { topY = y; topCol = x; } break; }
+        }
+      }
+      const want = Math.round(Math.log(108) / Math.log(512) * (W2 - 1));
+      push({ group: "Audio scopes", name: "a scope is a render-graph node, and draws where the data is",
+             ok: Math.abs(topCol - want) <= 1 && topY <= 1,
+             detail: `one loud bin at 107 of 512 draws its peak in column ${topCol} of ${W2}, where a log `
+               + `axis puts it (${want}) · each column takes the loudest bin it covers, because at the top `
+               + "of a log axis adjacent columns skip bins and a point sample drops narrow peaks through "
+               + "the gap — which this check found" }); }
+
+    { const W2 = 128;
+      const wave = new Float32Array(4096);
+      for (let i = 0; i < wave.length; i++) wave[i] = Math.sin(2 * Math.PI * 8 * i / wave.length);
+      const row = packWaveform(wave, { width: W2 });
+      // The packed row holds each column's top and bottom; at the extremes of
+      // a sine they should reach the rails.
+      let hi = 0, lo = 255;
+      for (let x = 0; x < W2; x++) { hi = Math.max(hi, row[x * 4]); lo = Math.min(lo, row[x * 4 + 1]); }
+      push({ group: "Audio scopes", name: "a waveform packs its extremes, not its average",
+             ok: hi > 250 && lo < 5,
+             detail: `a full-scale sine decimated to ${W2} columns still reaches ${hi} and ${lo} of 255 — `
+               + "min and max per column, because an average would show a quiet signal where there is a loud one" }); }
+  } catch (e) {
+    push({ group: "Audio scopes", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

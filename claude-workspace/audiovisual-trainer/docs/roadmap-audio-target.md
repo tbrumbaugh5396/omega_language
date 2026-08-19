@@ -333,7 +333,7 @@ when you press play. Per-track effect chains and an automation *editor* are
 model-level only — the model takes them (a track is a graph, and a track's
 automation is a keyframe list), and there is no UI for either yet.
 
-### Phase E — What you can see *(M)*
+### Phase E — What you can see *(M)* — **shipped**
 
 The visual studios earn their trust by showing the numbers. The audio ones
 should too, and this is where the two sides finally rejoin:
@@ -343,6 +343,49 @@ should too, and this is where the two sides finally rejoin:
   pictures, and there is a whole render graph for pictures already.
 - **The analyser reads the audio graph's own taps**, so what is measured is
   what will be exported, exactly as the video scopes read the composited frame.
+
+**Shipped, and this is where the two roadmaps meet.** A spectrum is a picture,
+and the app has a render graph for pictures — with a schema in a comment,
+fusion, ejection, and a self-test that holds every node to a number. So a
+scope is not a bespoke canvas routine: `scope.spectrum`, `scope.wave` and
+`scope.correlation` are **render-graph nodes** like any other, taking the
+packed analysis as a texture. `audio-scopes.js` computes and packs;
+`scope-nodes.js` draws; neither does the other's job.
+
+**The measurements, each against the standard rather than against itself:**
+
+- **Loudness reads BS.1770's own calibration point exactly.** 997 Hz at
+  −20 dBFS on both channels measures **−20.00 LUFS**, which is what the
+  standard says it must be, and halving it moves the meter **6.02 LU** — so it
+  is calibrated as well as linear. The K-weighting is re-derived from the
+  analogue prototype at whatever rate is in use, rather than reusing the
+  48 kHz coefficients the standard prints, which is the usual bug. Both gates
+  are in: absolute at −70, then relative at −10 below what survives.
+- **True peak catches what a sample peak cannot.** A full-scale sine at a
+  quarter of the rate, offset so no sample lands on the crest, reads
+  **−3.01 dBFS** on a sample meter — three decibels of headroom, apparently —
+  and **+0.10 dBTP** true. It would clip a converter. Four-times oversampled
+  with a windowed sinc, as the standard asks.
+- **Correlation**: +1.000 identical, −1.000 inverted.
+
+**The tap.** The processor keeps a pool of buffers and hands one over when it
+fills, so the scopes read the samples the graph actually produced — the same
+rule the video scopes follow with the composited frame. Without
+`SharedArrayBuffer`, which needs a cross-origin isolation this app does not
+have, a copy per chunk is the best available; it happens outside the sample
+loop, and the pool exists so no allocation happens on the audio thread at all.
+
+**One thing the check found**, which is the sort of thing these tests are for:
+the spectrum packer took a *point sample* per column, and at the top of a log
+axis adjacent columns skip bins — so a narrow peak fell straight through the
+gap and vanished. Each column takes the loudest bin it covers now, which is
+what every real analyser does and why.
+
+**Left in Phase E:** the spectrogram, which wants a scrolling history and is
+therefore a feedback sketch rather than a plain node — the Generate studio has
+`prev()` and it would be a good demonstration. And there is no scopes *panel*
+in the Music studio yet: the nodes and the measurements exist and are tested,
+but nothing on screen shows them.
 
 ---
 

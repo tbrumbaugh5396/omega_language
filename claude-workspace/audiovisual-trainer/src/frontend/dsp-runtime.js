@@ -86,6 +86,18 @@ ${descriptors}
 ${bufMake}
 ${voiceMake}
     this.meter = new Float32Array(2);
+    // The tap the scopes read. A pool of buffers rather than one, because
+    // postMessage copies and the copy must not race the next fill; and a pool
+    // rather than a fresh array each time, because allocating on the audio
+    // thread is the thing this whole design is arranged to avoid. Without
+    // SharedArrayBuffer — which needs cross-origin isolation this app does
+    // not have — a copy per chunk is the best there is, and it happens
+    // outside the sample loop.
+    this.tapSize = 2048;
+    this.taps = [new Float32Array(this.tapSize), new Float32Array(this.tapSize),
+                 new Float32Array(this.tapSize), new Float32Array(this.tapSize)];
+    this.tapAt = 0;
+    this.tapWhich = 0;
     this.blocks = 0;
     this.running = true;
     this.port.onmessage = (e) => {
@@ -142,6 +154,21 @@ ${compiled.loop}
     }
     // A meter every 16 blocks: often enough to look live, rare enough that
     // the message channel is not part of the hot path.
+    // The tap: fill the current buffer, and when it is full hand it over and
+    // move to the next in the pool.
+    const tap = this.taps[this.tapWhich];
+    let at = this.tapAt;
+    for (let i = 0; i < n; i++) {
+      tap[at++] = L[i];
+      if (at >= this.tapSize) {
+        this.port.postMessage({ tap, meter: this.meter });
+        this.tapWhich = (this.tapWhich + 1) & 3;
+        at = 0;
+        break;
+      }
+    }
+    this.tapAt = at;
+
     this.blocks++;
     if ((this.blocks & 15) === 0) {
       this.meter[0] = peak;
@@ -212,9 +239,23 @@ export async function installGraph(ctx, graph, opts = {}) {
   const node = new AudioWorkletNode(ctx, name, { numberOfInputs: 0, numberOfOutputs: 1,
                                                  outputChannelCount: [2] });
   const meter = { peak: 0, rms: 0 };
-  node.port.onmessage = (e) => { meter.peak = e.data[0]; meter.rms = e.data[1]; };
+  // The most recent 2048 samples the graph actually produced. The scopes read
+  // this, not a separate analyser, so what they measure is what the bounce
+  // will contain — the same rule the video scopes follow with the composited
+  // frame.
+  const tap = { samples: new Float32Array(2048), at: 0 };
+  node.port.onmessage = (e) => {
+    const d = e.data;
+    if (d && d.tap) {
+      tap.samples.set(d.tap);
+      tap.at++;
+      if (d.meter) { meter.peak = d.meter[0]; meter.rms = d.meter[1]; }
+      return;
+    }
+    if (d && d.length >= 2) { meter.peak = d[0]; meter.rms = d[1]; }
+  };
   return {
-    node, name, code, meter, compiled,
+    node, name, code, meter, tap, compiled,
     param: (nodeId, uniform) => node.parameters.get(`${nodeId}_${uniform}`),
     /**
      * Set one per-voice value at a time — a note's pitch, its gate. It is an
