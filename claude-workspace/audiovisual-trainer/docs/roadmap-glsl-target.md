@@ -920,6 +920,77 @@ a reference nobody wrote for the occasion, and fusion. Its grammar adds
 exactly three ideas to the one here: `state`, named `in`/`out` ports, and
 `@rate`.
 
+### Phase 8 — Field wires *(M)* — **shipped**
+
+Until now every wire in the graph carried pixels. That is exact for colour and
+lossy for geometry: a shape becomes pixels early, and from then on it is a
+photo of a shape. You cannot ask a photo how far its edge is, so you cannot
+offset it, round it, hollow it, or smoothly weld it to another one.
+
+A **field wire** carries the distance function itself. A field node does not
+draw; it emits
+
+```glsl
+float f3_field(vec2 p) { return length(p - f3_centre) - f3_radius; }
+```
+
+and the node downstream of it emits a function that calls that one. The wire
+becomes a call, and the graph's topology becomes the call graph.
+
+**The port is a prototype.** A field input is declared the way GLSL declares
+any function it means to call — `float in0(vec2 p);` — which is both the
+honest description and exactly the text that gets satisfied. Ports share one
+namespace with image inputs, so `n.inputs[i]` means the same thing whichever
+kind it is and nothing downstream had to learn a second convention.
+
+**It has to be a text operation, and that is the whole design.** GLSL ES 3.00
+has no function pointers and no first-class functions, so two distance
+functions cannot be combined at run time by binding anything — only by being
+written into one file together. So a field tree is never several passes:
+`compileFields` rewrites the graph before planning, folding each field tree
+and the node that shades it into one generated node type. Fusion, ejection,
+the target pool and tiling never learn that fields exist.
+
+**Sixteen nodes** (`field-nodes.js`): circle, box, ellipse, segment, polygon;
+union, subtract, intersect, each with a smoothing radius; offset, shell,
+transform, repeat, mirror, warp; and two ways to look at the result — `shade`
+(glow under fill under stroke) and `contours`, which draws the field itself so
+that a node returning something that is *not* a distance is visible rather
+than merely wrong downstream.
+
+**What it is held to.** The composition is judged by the browser's own
+rasteriser, and the claim that the wire carries a *distance* is judged by
+identities a raster pipeline cannot satisfy:
+
+| held against | number |
+|---|---|
+| the browser's two `arc()` fills, hard union | **0.30/255** |
+| the browser's `roundRect` | **0.06/255** |
+| the same maths written as one sketch by hand | **0.21/255** |
+| `offset(0.1)` of r=0.3 vs a circle of r=0.4 | **0 pixels differ at all** |
+| `shell(0.1)` of r=0.4 vs (r=0.45) minus (r=0.35) | **0 pixels differ at all** |
+
+Those last two are the ones that matter. Nothing that has become pixels can
+pass them.
+
+**Three bugs it turned up, all older than it.** `sketchMeta` gained a `field`
+key but the pattern that reads the header was never extended, so `@field`
+parsed as nothing. `desugar` read `vec2 p` inside a function's *parameter
+list* as the sketch declaring its own `p`, and then neither declared nor
+assigned it — every sketch with a helper taking `vec2 p` would have failed to
+compile, and the naming conventions elsewhere had been quietly dodging it. And
+the renamer that puts two sketches in one file matched on a word boundary
+alone, so a node declaring a uniform called `x` would have had `p.x` rewritten
+to `p.f3_x`; fusion had the same hole. The renamer is now one shared module
+(`sketch-rename.js`) rather than a copy in each compiler.
+
+*Left:* fields are 2-D only — the same machinery in 3-D is a raymarch loop in
+the shade node and nothing else changes. There is no click-to-wire editor, so
+a field graph is built in code, which is how every other graph in this app is
+built (`documentGraph`, `frameGraph`, `graphFilter`); the graph *view* draws
+field wires dashed and labels the nodes `@field`, but it still shows rather
+than edits.
+
 ### Cross-cutting
 
 - **Course integration — shipped.** Every built-in node carries `@module`,
@@ -997,6 +1068,7 @@ exactly three ideas to the one here: `state`, named `in`/`out` ports, and
 | 4.1 | Save-as-node, Freeze, multi-in/out | M | 1.x | authoring |
 | 5.1 | Design effects via graph; SDF export | M | 1.x | designs as shaders |
 | 6.x | Tiling, WebGPU decision, more exports, P3 | M | 1.x | scale |
+| 8.1 | Field wires: a port that carries a function — **shipped** | M | 1.x | geometry that composes |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

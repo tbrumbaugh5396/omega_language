@@ -15,6 +15,7 @@
 import { parseUniforms, sketchMeta } from "./shader-uniforms.js";
 import { NODE_TYPES } from "./render-graph.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
+import "./field-nodes.js";
 import { isUserNode } from "./node-library.js";
 
 /** One node, as documentation. */

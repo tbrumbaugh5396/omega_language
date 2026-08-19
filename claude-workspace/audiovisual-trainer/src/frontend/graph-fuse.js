@@ -19,6 +19,8 @@
 
 import { parseUniforms, splitSketch, stripComments, sketchMeta } from "./shader-uniforms.js";
 import { nodeType, topo } from "./render-graph.js";
+import { prefixer } from "./sketch-rename.js";
+import { compileFields } from "./field-graph.js";
 
 const IN_RE = /^in(\d+)$/;
 
@@ -44,33 +46,6 @@ export function fusibleReason(node) {
   return null;
 }
 
-// ------------------------------------------------------------------ renaming
-
-/**
- * Every name a sketch declares at file scope. Two nodes in one shader would
- * otherwise collide on `amount`, or on a helper they both carry.
- */
-function declaredNames(source, parts) {
-  const names = new Set();
-  const bare = stripComments(source);
-  const res = [
-    /#\s*define\s+([A-Za-z_]\w*)/g,
-    /\buniform\s+(?:lowp|mediump|highp)?\s*\w+\s+([A-Za-z_]\w*)/g,
-    /\bconst\s+(?:lowp|mediump|highp)?\s*\w+\s+([A-Za-z_]\w*)/g,
-    /\bstruct\s+([A-Za-z_]\w*)/g,
-  ];
-  for (const re of res) { let m; while ((m = re.exec(bare))) names.add(m[1]); }
-  for (const chunk of parts.declTexts) {
-    const code = stripComments(chunk).trim();
-    let m = /^(?:lowp|mediump|highp)?\s*[A-Za-z_]\w*\s+([A-Za-z_]\w*)\s*\(/.exec(code);
-    if (m) { names.add(m[1]); continue; }
-    m = /^(?:lowp|mediump|highp)?\s*(?:float|int|bool|vec[234]|ivec[234]|bvec[234]|mat[234])\s+([A-Za-z_]\w*)\s*[=;]/.exec(code);
-    if (m) names.add(m[1]);
-  }
-  names.delete("main");
-  return names;
-}
-
 // ------------------------------------------------------------------ the text
 
 // The sketch for a run depends only on the node types and on which of them
@@ -92,11 +67,7 @@ export function fusedSketch(types, carried) {
     const t = nodeType(typeId);
     const parts = splitSketch(t.source);
     const pref = `f${k}_`;
-    const names = declaredNames(t.source, parts);
-    const rename = names.size ? new RegExp(`\\b(${[...names].join("|")})\\b`, "g") : null;
-    // GLSL reserves any identifier with two consecutive underscores, so a
-    // node's private `_lum` cannot simply be given a prefix.
-    const fix = (s) => (rename ? String(s).replace(rename, (m) => pref + m.replace(/^_+/, "u")) : String(s));
+    const fix = prefixer(t.source, parts, pref);
     const carrier = new RegExp(`texture2D\\s*\\(\\s*${pref}in0\\s*,\\s*uv\\s*\\)`, "g");
     const dropIn0 = new RegExp(`^uniform\\s+(?:sampler2D\\s+${pref}in0|vec2\\s+${pref}in0_size)\\s*;`);
     // A carried input is always the size of the pass, so its `_size` uniform
@@ -234,6 +205,9 @@ export function planPasses(graph) {
 
 /** Passes before and after, for the panel and the self-test. */
 export function fuseStats(graph) {
+  // Counted on the graph that actually runs: a field tree is never passes, so
+  // counting the nodes as written would report draws that never happen.
+  graph = compileFields(graph);
   const steps = planPasses(graph);
   const drawn = topo(graph).filter((n) => n.type !== "source" && !n.bypass).length;
   const after = steps.filter((s) => s.kind === "fused" || (s.node.type !== "source" && !s.node.bypass)).length;

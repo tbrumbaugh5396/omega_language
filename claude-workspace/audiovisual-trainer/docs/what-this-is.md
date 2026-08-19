@@ -50,15 +50,16 @@ Underneath them, **two compilers sharing one discipline**:
 |---|---|---|
 | target | GLSL ES 3.00, with a 1.00 fallback | one `process()` loop on an AudioWorklet |
 | a node is | a sketch with `@node` in its header | a sketch with `@node` in its header |
-| node types registered | 41 | 15 |
+| node types registered | 57 | 15 |
 | fusion | runs of per-pixel nodes → one pass | inlined by construction |
+| what a wire carries | pixels, or a distance function | a sample, or a block |
 | the hard constraint | a frame, ~16 ms; a miss stutters | a block, ~2.7 ms; a miss *clicks* |
 
 And the machinery that feeds them: SVG → SDF and Design → SDF compilers, a
 glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
-reader, a store-only ZIP writer, a WGSL portability auditor, and a **127-check
-self-test across 19 groups that runs inside the app**.
+reader, a store-only ZIP writer, a WGSL portability auditor, and a **137-check
+self-test across 20 groups that runs inside the app**.
 
 ---
 
@@ -107,12 +108,33 @@ behind it is a claim.
 | an additive band-limited saw | PolyBLEP **7.3–7.6 dB** better than naive |
 | BS.1770's own calibration point | **−20.00 LUFS** |
 | a delay line vs direct convolution | **2.98e−8**, which is float32 |
+| the browser's two `arc()` fills, a field union | **0.30/255** |
+| a circle offset by 0.1 vs a circle 0.1 bigger | **0 pixels differ at all** |
 
 Every number above is what the self-test reports on this machine today, not
 what it reported when the feature landed — the two differ occasionally, because
 a later phase changes something and the check re-measures rather than
 remembering. The checks run in the app, not in CI, because the thing being
 measured is a GPU and an audio thread on *this* machine.
+
+### A port can carry a function, not only pixels
+
+Everywhere else a wire is pixels, which is exact for colour and lossy for
+geometry — a shape becomes pixels early and is a photo of a shape thereafter.
+A **field wire** carries the distance function instead: `field.circle` emits
+`float f3_field(vec2 p)`, and `field.union` emits a function that calls it. The
+wire is a call; the graph's topology is the call graph.
+
+It cannot work any other way. GLSL has no function pointers, so two distance
+functions can only be combined by being written into one file together — which
+means a field tree is never several passes, and the composition is a text
+operation by necessity rather than by preference. The rest of the compiler
+never learns fields exist: they are folded into one generated node type before
+anything is planned.
+
+The evidence that the wire really carries a *distance* is an identity nothing
+rasterised can satisfy — offsetting a circle by 0.1 gives a circle 0.1 bigger,
+to zero pixels of difference.
 
 ### One evaluator across media
 
@@ -148,6 +170,11 @@ Worth naming, because the combination is the claim and the parts are not.
   `dsp-graph.js` is 431 lines; Faust is a research language with a decade of
   optimisation behind it. This is a teaching-sized thing that shares the shape.
 - **Non-destructive layer effects** — Photoshop smart filters, 2007.
+- **Composing distance fields in a shader** — the whole of Shadertoy, and
+  Substance Designer and Houdini's SDF tools at production scale. `smin` is
+  iq's, and so is the exact regular polygon. What is unusual here is only that
+  the composition is a *typed port in a graph* rather than something you write
+  by hand, so a mis-wire is refused by name before any GLSL is generated.
 
 No individual technique here is new. What is unusual is the *combination and
 the discipline*: one annotation grammar spanning two compilers and the
@@ -176,8 +203,12 @@ its course lesson are the same text.
 - **Reproducible exports.** A grade keyframed across a cut exports identically
   twice, frame for frame. A song bounces sample-exact, twice, about 9× faster
   than real time.
-- **Teach from the implementation.** 35 nodes link to the course module they
-  belong with, and all 41 describe themselves — the reference is generated
+- **Compose geometry, not pictures of geometry.** Union, subtract, offset,
+  shell, repeat and a smoothing radius between any two shapes — as wires, at
+  full precision, ending in one draw. A glow is a falloff in distance, which
+  is simply not available once a shape has become pixels.
+- **Teach from the implementation.** 51 nodes link to the course module they
+  belong with, and all 57 describe themselves — the reference is generated
   from their annotations and reports its own gaps.
 
 ---

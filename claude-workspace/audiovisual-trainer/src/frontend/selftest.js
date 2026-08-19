@@ -21,11 +21,13 @@ import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets 
 import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
-import { createGraph, addNode, addBlur, curveLut, NODE_TYPES } from "./render-graph.js";
+import { createGraph, addNode, addBlur, curveLut, NODE_TYPES, validate } from "./render-graph.js";
 import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
 import { planPasses, fuseStats, fusibleReason } from "./graph-fuse.js";
+import { compileFields, fieldStats } from "./field-graph.js";
+import "./field-nodes.js";
 import { documentGraph, applyEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
 import { BLEND_ORDER } from "./composite-nodes.js";
 import { clipAt, evalTrack, frameGraph, gradeEffects, putKey, sourceTimeAt } from "./video-graph.js";
@@ -486,6 +488,212 @@ export async function runSelfTest(report = () => {}) {
              detail: declined.map(([t, w]) => `${t.split(".")[1]}: ${w || "FUSED — should not have"}`).join(" · ") }); }
   } catch (e) {
     push({ group: "Fusion", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Field wires: the port that carries a function.
+  //
+  // Two things have to be true and neither is obvious. The composition has to
+  // be right — a union of two circles has to be the union of two circles, and
+  // the browser's own rasteriser is the judge of that. And the wire has to be
+  // carrying a *distance*, not a picture of one: the offset checks are the
+  // ones a raster pipeline cannot pass, because you cannot offset a photo of
+  // a shape by asking it how far away its edge is.
+  try {
+    const W = 220, H = 140;
+    // p is centred and aspect-corrected, y up; the canvas is y down. One
+    // conversion, used by every reference below.
+    const toPx = (x, y) => [(x * H + W) / 2, (H - y * H) / 2];
+    const onWhite = (c) => {
+      const w = document.createElement("canvas"); w.width = W; w.height = H;
+      const cx = w.getContext("2d");
+      cx.fillStyle = "#ffffff"; cx.fillRect(0, 0, W, H);
+      cx.drawImage(c, 0, 0);
+      return cx.getImageData(0, 0, W, H).data;
+    };
+    const ref = (draw) => {
+      const c = document.createElement("canvas"); c.width = W; c.height = H;
+      const cx = c.getContext("2d");
+      cx.fillStyle = "#ffffff"; cx.fillRect(0, 0, W, H);
+      cx.fillStyle = "#1b2b4b";
+      draw(cx);
+      return cx.getImageData(0, 0, W, H).data;
+    };
+    const shaded = (build) => {
+      const gph = createGraph(W, H);
+      const f = build(gph);
+      gph.output = addNode(gph, "field.shade",
+        { fill: [0.106, 0.169, 0.294], filled: [1], width: [0], glow: [0] }, [f]);
+      let drew = [];
+      const out = renderGraph(gph, {}, { onPasses: (ps) => { drew = ps; } });
+      return { px: onWhite(out), drew, gph };
+    };
+    const cmp = (a, b) => compare(a, b, W, H, { thresh: 40 });
+
+    // 1. A whole field tree is one draw, because it has to be: GLSL cannot
+    //    pass a function to a shader, so composing them is a text operation.
+    { const { drew, gph } = shaded((g) => {
+        const a = addNode(g, "field.circle", { centre: [-0.25, 0], radius: [0.4] });
+        const b = addNode(g, "field.box", { centre: [0.25, 0], size: [0.35, 0.28], corner: [0.08] });
+        return addNode(g, "field.union", { k: [0.12] }, [a, b]);
+      });
+      const fs = fieldStats(gph);
+      push({ group: "Field wires", name: "three field nodes, one draw", ok: drew.length === 1 && fs.fields === 3,
+             detail: `${fs.fields} fields folded into the shade node · ${drew.length} pass · ${fs.passesSaved} buffers never allocated` }); }
+
+    // 2. A hard union against the browser's own rasteriser. k = 0 is plain
+    //    min(), so this is the browser's two circles or nothing.
+    { const got = shaded((g) => {
+        const a = addNode(g, "field.circle", { centre: [-0.3, 0], radius: [0.45] });
+        const b = addNode(g, "field.circle", { centre: [0.3, 0.1], radius: [0.35] });
+        return addNode(g, "field.union", { k: [0] }, [a, b]);
+      }).px;
+      const truth = ref((cx) => {
+        cx.beginPath();
+        let c = toPx(-0.3, 0); cx.moveTo(c[0] + 0.45 * H / 2, c[1]);
+        cx.arc(c[0], c[1], 0.45 * H / 2, 0, Math.PI * 2);
+        c = toPx(0.3, 0.1); cx.moveTo(c[0] + 0.35 * H / 2, c[1]);
+        cx.arc(c[0], c[1], 0.35 * H / 2, 0, Math.PI * 2);
+        cx.fill();
+      });
+      const r = cmp(got, truth);
+      push({ group: "Field wires", name: "hard union vs the browser's two circles", ok: r.mean < 3.0,
+             detail: `mean ${r.mean}/255 · ${r.pct}% of pixels off by >40 — all of them on the two edges · want <3.0` }); }
+
+    // 3. A rounded rectangle against the browser's roundRect.
+    if (document.createElement("canvas").getContext("2d").roundRect) {
+      const got = shaded((g) => addNode(g, "field.box",
+        { centre: [0, 0], size: [0.55, 0.34], corner: [0.12] })).px;
+      const truth = ref((cx) => {
+        const [x0, y0] = toPx(-0.55, 0.34);
+        cx.beginPath();
+        cx.roundRect(x0, y0, 0.55 * H, 0.34 * H, 0.12 * H / 2);
+        cx.fill();
+      });
+      const r = cmp(got, truth);
+      push({ group: "Field wires", name: "rounded box vs the browser's roundRect", ok: r.mean < 3.0,
+             detail: `mean ${r.mean}/255 · ${r.pct}% off by >40 · want <3.0` });
+    }
+
+    // 4. THE check. Offset a circle by 0.1 and you get a circle 0.1 bigger —
+    //    which is only true if the wire is carrying a distance. Nothing in a
+    //    raster pipeline can answer this, and a field graph answers it exactly.
+    { const viaOffset = shaded((g) => {
+        const a = addNode(g, "field.circle", { centre: [0, 0], radius: [0.3] });
+        return addNode(g, "field.offset", { amount: [0.1] }, [a]);
+      }).px;
+      const direct = shaded((g) => addNode(g, "field.circle", { centre: [0, 0], radius: [0.4] })).px;
+      const r = compare(viaOffset, direct, W, H, { thresh: 1 });
+      push({ group: "Field wires", name: "offset(0.1) of r=0.3 is exactly r=0.4", ok: r.mean < 0.01 && r.off === 0,
+             detail: `mean ${r.mean}/255 · ${r.off} pixels differ at all — the wire carries the distance, not the picture` }); }
+
+    // 5. …and the same for a shell, which is a shape it has no other way to make.
+    { const viaShell = shaded((g) => {
+        const a = addNode(g, "field.circle", { centre: [0, 0], radius: [0.4] });
+        return addNode(g, "field.shell", { thickness: [0.1] }, [a]);
+      }).px;
+      const viaBoolean = shaded((g) => {
+        const outer = addNode(g, "field.circle", { centre: [0, 0], radius: [0.45] });
+        const inner = addNode(g, "field.circle", { centre: [0, 0], radius: [0.35] });
+        return addNode(g, "field.subtract", { k: [0] }, [outer, inner]);
+      }).px;
+      const r = compare(viaShell, viaBoolean, W, H, { thresh: 1 });
+      push({ group: "Field wires", name: "a shell is a ring is a subtraction", ok: r.mean < 0.01 && r.off === 0,
+             detail: `mean ${r.mean}/255 · ${r.off} pixels differ · abs(d)-t/2 and (r+t/2) minus (r-t/2) are the same set` }); }
+
+    // 6. Union at k = 0 is min(), against a hand-written sketch that says so.
+    //    This is the emitter on trial, not the geometry.
+    { const got = shaded((g) => {
+        const a = addNode(g, "field.circle", { centre: [-0.25, 0.05], radius: [0.4] });
+        const b = addNode(g, "field.box", { centre: [0.2, -0.05], size: [0.3, 0.3], corner: [0.05] });
+        return addNode(g, "field.union", { k: [0] }, [a, b]);
+      }).px;
+      const byHand = renderSketch(`// @alpha
+float a = sdCircle(p - vec2(-0.25, 0.05), 0.4);
+float b = sdBox(p - vec2(0.2, -0.05), max(vec2(0.3, 0.3) - 0.05, 0.0)) - 0.05;
+float d = min(a, b);
+vec4(vec3(0.106, 0.169, 0.294), aa(d))`, W, H, { time: 0 });
+      const r = compare(got, onWhite(byHand), W, H, { thresh: 2 });
+      push({ group: "Field wires", name: "the composed program equals the one written by hand", ok: r.mean < 0.6,
+             detail: `mean ${r.mean}/255 vs the same maths in a single sketch · ${r.off} pixels off by >2 · want <0.6` }); }
+
+    // 7. A wire that carries the wrong thing is caught by name, in the graph,
+    //    before a line of GLSL is generated. That is what typing a port buys.
+    { const g1 = createGraph(W, H);
+      const img = addNode(g1, "source");
+      g1.output = addNode(g1, "field.shade", {}, [img]);
+      const e1 = validate(g1);
+
+      const g2 = createGraph(W, H);
+      g2.output = addNode(g2, "field.circle", { radius: [0.4] });
+      const e2 = validate(g2);
+
+      const g3 = createGraph(W, H);
+      const c = addNode(g3, "field.circle", { radius: [0.4] });
+      g3.output = addNode(g3, "adjust.exposure", { stops: [1] }, [c]);
+      const e3 = validate(g3);
+
+      const said = (errs, want) => errs.some((x) => x.includes(want));
+      const ok = said(e1, "takes a field") && said(e2, "not pixels") && said(e3, "takes an image");
+      push({ group: "Field wires", name: "a mis-wired port is refused, by name", ok,
+             detail: ok ? `image→field, field as output, field→image: all three named the port and the mismatch`
+                        : `${e1[0] || "—"} / ${e2[0] || "—"} / ${e3[0] || "—"}` }); }
+
+    // 8. The renamer must not touch a swizzle. field.mirror declares uniforms
+    //    called x and y and reads p.x — if `\bx\b` were the rule, this would
+    //    compile to p.f1_x and the whole program would fail to link.
+    { const { px, drew } = shaded((g) => {
+        const a = addNode(g, "field.circle", { centre: [0.35, 0.25], radius: [0.25] });
+        return addNode(g, "field.mirror", { x: [1], y: [1] }, [a]);
+      });
+      // Four circles, so all four quadrants have ink in them.
+      const inked = (qx, qy) => {
+        let n = 0;
+        for (let y = qy * H / 2 | 0; y < (qy + 1) * H / 2; y++)
+          for (let x = qx * W / 2 | 0; x < (qx + 1) * W / 2; x++)
+            if (px[(y * W + x) * 4] < 200) n++;
+        return n;
+      };
+      const quads = [inked(0, 0), inked(1, 0), inked(0, 1), inked(1, 1)];
+      const even = Math.max(...quads) - Math.min(...quads) < Math.max(...quads) * 0.05;
+      push({ group: "Field wires", name: "a uniform called x does not eat p.x", ok: drew.length === 1 && Math.min(...quads) > 100 && even,
+             detail: `mirrored into four quadrants: ${quads.join(", ")} pixels — within 5% of each other` }); }
+
+    // 9. What you read is what ran: one program, and it links on its own.
+    { const gph = createGraph(W, H);
+      const a = addNode(gph, "field.polygon", { centre: [0, 0], sides: [6], radius: [0.5], corner: [0.06] });
+      const b = addNode(gph, "field.circle", { centre: [0, 0], radius: [0.3] });
+      const cut = addNode(gph, "field.subtract", { k: [0.04] }, [a, b]);
+      const rep = addNode(gph, "field.repeat", { cell: [0.9, 0.9], count: [1, 0] }, [cut]);
+      gph.output = addNode(gph, "field.shade", { width: [0.01], glow: [0.15] }, [rep]);
+      renderGraph(gph, {});
+      const parts = ejectGraph(gph, { parts: true }).filter((x) => x.glsl);
+      let ok = parts.length === 1, why = "";
+      if (ok) {
+        try { const pr = linkProgram(gl, parts[0].glsl); gl.deleteProgram(pr); }
+        catch (e) { ok = false; why = String(e.message).split("\n")[0]; }
+      }
+      const body = parts[0] ? parts[0].glsl : "";
+      const funcs = (body.match(/float f\d+_field\(vec2 p\) \{/g) || []).length;
+      push({ group: "Field wires", name: "eject: four fields as four functions in one program", ok: ok && funcs === 4,
+             detail: ok ? `${funcs} field functions, ${Math.round(body.length / 1024)} KB, links on its own`
+                        : why || `${parts.length} programs, ${funcs} functions` }); }
+
+    // 10. A slider must not be a recompile: the program is keyed by topology,
+    //     so moving a parameter has to land on the same generated type.
+    { const build = (r) => {
+        const g = createGraph(W, H);
+        const a = addNode(g, "field.circle", { centre: [0, 0], radius: [r] });
+        g.output = addNode(g, "field.shade", {}, [a]);
+        return compileFields(g);
+      };
+      const t1 = build(0.3).nodes.find((n) => n.type.startsWith("field.compiled"));
+      const t2 = build(0.45).nodes.find((n) => n.type.startsWith("field.compiled"));
+      const same = t1 && t2 && t1.type === t2.type;
+      const moved = t1 && t2 && String(t1.params.f1_radius) !== String(t2.params.f1_radius);
+      push({ group: "Field wires", name: "moving a parameter is a uniform, not a recompile", ok: same && moved,
+             detail: same ? `both radii compile to ${t1.type} · the value rides as f1_radius` : "two different programs" }); }
+  } catch (e) {
+    push({ group: "Field wires", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   // The catalogue: every CPU filter against its node, default parameters, on
@@ -1226,15 +1434,29 @@ vec3(state(uv).r, state2(uv).g, 0.0) * k`;
       for (const [id, t] of NODE_TYPES) {
         if (t.inputs.length !== 1 || generated(id)) continue;
         try {
+          // A node whose one input is a field cannot be handed a picture. It
+          // gets a circle to work on instead, and is shaded if it hands a
+          // field back — the promise being tested is the same either way.
+          const onField = t.fieldInputs.length === 1;
           const graph = createGraph(W2, H2);
-          const s0 = addNode(graph, "source");
-          graph.output = addNode(graph, id, {}, [s0]);
-          const a1 = renderGraph(graph, { [s0]: src2 }).getContext("2d").getImageData(0, 0, W2, H2).data;
-          const a2 = renderGraph(graph, { [s0]: src2 }).getContext("2d").getImageData(0, 0, W2, H2).data;
+          let s0 = null, last;
+          if (onField) {
+            last = addNode(graph, id, {}, [addNode(graph, "field.circle", { centre: [0.1, 0], radius: [0.4] })]);
+            if (t.field) last = addNode(graph, "field.shade", {}, [last]);
+          } else {
+            s0 = addNode(graph, "source");
+            last = addNode(graph, id, {}, [s0]);
+          }
+          graph.output = last;
+          const sources = s0 ? { [s0]: src2 } : {};
+          const a1 = renderGraph(graph, sources).getContext("2d").getImageData(0, 0, W2, H2).data;
+          const a2 = renderGraph(graph, sources).getContext("2d").getImageData(0, 0, W2, H2).data;
           let same = true, moved = 0;
           for (let i = 0; i < a1.length; i += 4) {
             if (a1[i] !== a2[i] || a1[i + 1] !== a2[i + 1]) same = false;
-            if (Math.abs(a1[i] - base[i]) > 2) moved++;
+            // With no source to have changed, "it did something" means it put
+            // a shape there rather than a flat field of one colour.
+            if (Math.abs(a1[i] - (onField ? a1[0] : base[i])) > 2) moved++;
           }
           if (!same) flaky.push(id);
           else if (!moved) stuck.push(id);

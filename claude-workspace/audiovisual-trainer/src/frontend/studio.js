@@ -13,6 +13,7 @@ import { videoEditor } from "./studio-video.js";
 import { shaderEditor, SHADER_PRESETS } from "./studio-shader.js";
 import { designEditor, newDesignDoc, FRAME_PRESETS } from "./studio-design.js";
 import { generateEditor, newGenerateDoc, GENERATE_PRESETS } from "./studio-generate.js";
+import "./field-nodes.js";
 
 const EDITORS = { canvas: canvasEditor, music: musicEditor, video: videoEditor,
                   shader: shaderEditor, design: designEditor,

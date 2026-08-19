@@ -425,6 +425,12 @@ const FUNC_DEF = new RegExp(
   "^\\s*(?!(?:if|for|while|do|else|switch|return)\\b)" +
   "[A-Za-z_]\\w*(?:\\s+[A-Za-z_]\\w*)*\\s+[A-Za-z_]\\w*\\s*\\([^)]*\\)\\s*\\{");
 const DECL_START = /^\s*(uniform|attribute|varying|const|struct|precision|invariant)\b/;
+// A forward declaration — `float in0(vec2 p);` — which is how a field wire
+// declares the port it reads. Two identifiers before the parenthesis is what
+// separates it from a bare call statement, `mix(a, b);`, which has one.
+const FUNC_PROTO = new RegExp(
+  "^\\s*(?!(?:if|for|while|do|else|switch|return)\\b)" +
+  "[A-Za-z_]\\w*\\s+[A-Za-z_]\\w*\\s*\\([^)]*\\)\\s*;\\s*$");
 // A real directive, not a `#f80` colour literal that happens to start a line.
 const DIRECTIVE = /^[ \t]*#\s*(define|undef|if|ifdef|ifndef|else|elif|endif|extension|version|pragma|line|error)\b[^\n]*/gm;
 
@@ -471,7 +477,7 @@ export function splitSketch(sketch) {
     const text = src.slice(s, e);
     const code = bare.slice(s, e).trim();
     if (!code) continue;
-    const isDecl = DECL_START.test(code) || FUNC_DEF.test(code);
+    const isDecl = DECL_START.test(code) || FUNC_DEF.test(code) || FUNC_PROTO.test(code);
     // A chunk's slice begins right after the previous terminator, so it
     // usually opens with the tail of that line: a newline, maybe a comment.
     // Those blank lines are dropped, so the chunk's first emitted line is the
@@ -512,8 +518,15 @@ export function desugarMapped(sketch, opts = {}) {
   const { preamble, body, expr } = parts;
   const colour = expr || "vec3(0.0)";
   const declared = stripComments(preamble);
+  // A parameter is not a declaration. `float shade(vec2 p) {…}` in the
+  // preamble must not convince this that the sketch supplied its own `p` —
+  // it would then be neither declared nor assigned, and every use of it in
+  // main would fail to compile. Innermost-first, a few passes deep, which
+  // clears nested calls in initialisers too.
+  let outer = declared;
+  for (let i = 0; i < 4; i++) outer = outer.replace(/\([^()]*\)/g, " ");
   const defines = (name) =>
-    new RegExp(`\\b(?:float|int|bool|vec2|vec3|vec4|mat2)\\s+${name}\\b`).test(declared);
+    new RegExp(`\\b(?:float|int|bool|vec2|vec3|vec4|mat2)\\s+${name}\\b`).test(outer);
 
   let helpers = HELPERS
     .filter(([name]) => name !== "aa"
@@ -629,20 +642,22 @@ export function mapErrors(log, mapped, sketchText) {
  *   // @node adjust.exposure
  *   // @module 05-display
  *   // @pass            — never fused with its neighbours (reads a neighbourhood)
+ *   // @field           — answers a distance, not a colour: it is a function
  *   // @precision float — half is the default intermediate
  *   // @space encoded   — linear is the default working space
  */
 export function sketchMeta(src) {
-  const meta = { node: null, module: null, pass: false, alpha: false, precision: null, space: null, title: null };
+  const meta = { node: null, module: null, pass: false, alpha: false, field: false,
+                 precision: null, space: null, title: null };
   for (const raw of String(src).split("\n")) {
     const line = raw.trim();
     if (!line) continue;
     if (!line.startsWith("//")) break;                 // the header ends at the first code
     const body = line.replace(/^\/\/\s?/, "");
     if (meta.title === null && !body.startsWith("@")) meta.title = body;
-    const m = /@(node|module|pass|alpha|precision|space)\b\s*(\S*)/.exec(body);
+    const m = /@(node|module|pass|alpha|field|precision|space)\b\s*(\S*)/.exec(body);
     if (!m) continue;
-    if (m[1] === "pass" || m[1] === "alpha") meta[m[1]] = true;
+    if (m[1] === "pass" || m[1] === "alpha" || m[1] === "field") meta[m[1]] = true;
     else meta[m[1]] = m[2] || null;
   }
   return meta;

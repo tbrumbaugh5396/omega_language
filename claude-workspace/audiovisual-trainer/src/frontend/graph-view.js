@@ -10,6 +10,7 @@
 import { el } from "./ui.js";
 import { nodeType, topo } from "./render-graph.js";
 import { planPasses, fuseStats } from "./graph-fuse.js";
+import { compileFields, fieldStats } from "./field-graph.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const svgEl = (name, attrs = {}, ...kids) => {
@@ -52,7 +53,7 @@ export function graphSvg(graph, opts = {}) {
   // Which nodes ended up in the same draw.
   const fusedOf = new Map();
   let runs = 0;
-  for (const step of planPasses(graph)) {
+  for (const step of planPasses(compileFields(graph))) {
     if (step.kind !== "fused") continue;
     const tag = runs++;
     for (const n of step.nodes) fusedOf.set(n.id, tag);
@@ -77,13 +78,21 @@ export function graphSvg(graph, opts = {}) {
 
   for (const n of order) {
     const p = at.get(n.id);
-    for (const inId of n.inputs) {
+    const t = nodeType(n.type);
+    for (const [i, inId] of n.inputs.entries()) {
       const q = at.get(inId);
       if (!q) continue;
+      // A field wire carries a function, not a texture — nothing is drawn
+      // along it and no buffer is allocated for it, so it is not shown as the
+      // same kind of line.
+      const isField = !!(t && t.fieldInputs.includes(t.inputs[i]));
       const x1 = q.x + BOX_W, y1 = q.y + BOX_H / 2, x2 = p.x, y2 = p.y + BOX_H / 2;
       const mid = (x1 + x2) / 2;
       svg.append(svgEl("path", { d: `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`,
-        fill: "none", stroke: "rgba(168,176,200,.55)", "stroke-width": 1.4 }));
+        fill: "none",
+        stroke: isField ? "rgba(240,163,94,.75)" : "rgba(168,176,200,.55)",
+        "stroke-dasharray": isField ? "4 3" : null,
+        "stroke-width": 1.4 }));
     }
   }
 
@@ -93,7 +102,8 @@ export function graphSvg(graph, opts = {}) {
     const t = nodeType(n.type);
     const g = svgEl("g", { transform: `translate(${p.x},${p.y})` });
     g.append(svgEl("rect", { width: BOX_W, height: BOX_H, rx: 8,
-      fill: isSource ? "rgba(124,156,255,.14)" : "rgba(255,255,255,.05)",
+      fill: t && t.field ? "rgba(240,163,94,.10)"
+          : isSource ? "rgba(124,156,255,.14)" : "rgba(255,255,255,.05)",
       stroke: n.id === graph.output ? "rgba(240,163,94,.9)"
             : isSource ? "rgba(124,156,255,.6)" : "rgba(255,255,255,.18)",
       "stroke-width": n.id === graph.output ? 2 : 1 }));
@@ -107,9 +117,10 @@ export function graphSvg(graph, opts = {}) {
     const sub = isSource ? (opts.sourceNames && opts.sourceNames[n.id]) || "" : (params || (t ? `${t.inputs.length} in` : ""));
     g.append(svgEl("text", { x: 10, y: 34, fill: "#8b93ad", "font-size": 9,
       "font-family": "ui-monospace, monospace" }, document.createTextNode(String(sub).slice(0, 30))));
-    if (t && t.pass) {
+    const tag = t && t.field ? "@field" : t && t.pass ? "@pass" : null;
+    if (tag) {
       g.append(svgEl("text", { x: BOX_W - 10, y: 19, fill: "rgba(240,163,94,.9)", "font-size": 9,
-        "text-anchor": "end", "font-family": "ui-monospace, monospace" }, document.createTextNode("@pass")));
+        "text-anchor": "end", "font-family": "ui-monospace, monospace" }, document.createTextNode(tag)));
     }
     svg.append(g);
   }
@@ -119,7 +130,10 @@ export function graphSvg(graph, opts = {}) {
 /** The one-line summary that goes under the picture. */
 export function graphSummary(graph) {
   const st = fuseStats(graph);
-  const bits = [`${st.before} node${st.before === 1 ? "" : "s"}`, `${st.after} draw${st.after === 1 ? "" : "s"}`];
+  const fs = fieldStats(graph);
+  const bits = [`${st.before + fs.fields} node${st.before + fs.fields === 1 ? "" : "s"}`,
+                `${st.after} draw${st.after === 1 ? "" : "s"}`];
+  if (fs.fields) bits.push(`${fs.fields} composed as functions, not passes`);
   if (st.saved > 0) bits.push(`${st.saved} saved by fusing`);
   if (st.kept.length) bits.push(`kept apart: ${st.kept.join("; ")}`);
   return bits.join(" · ");

@@ -17,6 +17,7 @@ import { applyUniforms } from "./shader-controls.js";
 import { getGL, isGL2, linkProgram, cachedImage, loadSketchImages } from "./shader-run.js";
 import { nodeType, topo, validate, curveLut, resolveBypass } from "./render-graph.js";
 import { planPasses } from "./graph-fuse.js";
+import { compileFields } from "./field-graph.js";
 
 // ------------------------------------------------------------------ targets
 
@@ -239,6 +240,10 @@ export class GraphRunner {
     const gl = this.gl;
     const errs = validate(graph);
     if (errs.length) throw new Error(errs.join("; "));
+    // Fields are resolved before anything is planned: a field tree cannot be
+    // passes, so it becomes one generated node type and everything from here
+    // down — fusion, pooling, tiling — sees an ordinary image graph.
+    graph = compileFields(graph);
     const W = graph.width, H = graph.height;
     // Fusion is on unless a caller wants the passes as written — the self-test
     // wants both, to hold one against the other.
@@ -429,6 +434,7 @@ export class GraphRunner {
   eject(graph, { fuse = true } = {}) {
     const es3 = isGL2(this.gl);
     const rule = "// ================================================================";
+    graph = compileFields(graph);
     const steps = fuse ? planPasses(graph) : topo(graph).map((node) => ({ kind: "node", node }));
     const parts = [];
     for (const step of steps) {

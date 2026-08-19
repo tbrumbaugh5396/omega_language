@@ -12,34 +12,89 @@
 // A graph is nodes with parameters and input references, and one output.
 // Nothing here draws; graph-compile.js turns a graph into passes.
 
-import { parseUniforms, sketchMeta } from "./shader-uniforms.js";
+import { parseUniforms, sketchMeta, stripComments } from "./shader-uniforms.js";
 
 // ------------------------------------------------------------------ types
 
 export const NODE_TYPES = new Map();
 
-/** Register a node type from its sketch text. Returns the type. */
-export function defineNode(source, extra = {}) {
+// Types the compiler writes for itself — one per distinct field topology, from
+// field-graph.js. They are node types in every respect the runner cares about,
+// and in none that the library cares about: nothing authored them, so they are
+// kept out of NODE_TYPES and out of the node reference.
+const DERIVED_TYPES = new Map();
+const DERIVED_CAP = 64;
+
+const IN_NAME = /^in\d+$/;
+// A field port is declared the way GLSL declares any function it intends to
+// call: `float in0(vec2 p);`. The graph reads that prototype as a port, and
+// the compiler satisfies it with the function its upstream node emitted.
+const FIELD_PORT = /\bfloat\s+(in\d+)\s*\(\s*vec2\s*[A-Za-z_]\w*\s*\)\s*;/g;
+
+/** The field ports a sketch declares, in index order. */
+export function fieldPorts(source) {
+  const bare = stripComments(String(source));
+  const found = new Set();
+  FIELD_PORT.lastIndex = 0;
+  let m;
+  while ((m = FIELD_PORT.exec(bare))) found.add(m[1]);
+  return [...found].sort((a, b) => +a.slice(2) - +b.slice(2));
+}
+
+const byIndex = (a, b) => +a.slice(2) - +b.slice(2);
+
+function makeType(source, extra = {}) {
   const meta = sketchMeta(source);
   if (!meta.node) throw new Error("a node type needs `// @node <id>` in its header");
   const uniforms = parseUniforms(source);
-  const inputs = uniforms.filter((u) => u.control === "image" && /^in\d+$/.test(u.name))
-    .map((u) => u.name).sort();
-  const params = uniforms.filter((u) => !(u.control === "image" && /^in\d+$/.test(u.name)));
-  const type = {
+  const images = uniforms.filter((u) => u.control === "image" && IN_NAME.test(u.name)).map((u) => u.name);
+  const fields = fieldPorts(source);
+  const clash = fields.find((f) => images.includes(f));
+  if (clash) throw new Error(`${meta.node}: ${clash} is declared as both an image and a field`);
+  // Both kinds of port share one namespace, so `n.inputs[i]` means the same
+  // thing whatever the port carries and nothing downstream has to ask.
+  const inputs = images.concat(fields).sort(byIndex);
+  const params = uniforms.filter((u) => !(u.control === "image" && IN_NAME.test(u.name)));
+  return {
     id: meta.node, title: extra.title || meta.title || meta.node,
     module: meta.module, pass: meta.pass, precision: meta.precision, space: meta.space,
     source, uniforms, inputs, params,
+    // A field node answers a distance rather than a colour. It is never a pass
+    // of its own — GLSL has no function pointers, so a field can only be
+    // composed by the text generator, never by binding a buffer at run time.
+    field: meta.field, fieldInputs: fields,
     // Parameters that are textures the host builds from a value, e.g. a curve
     // LUT from control points. Declared with @lut on the sampler.
     luts: uniforms.filter((u) => u.control === "image" && u.lut).map((u) => u.name),
     ...extra,
   };
+}
+
+/** Register a node type from its sketch text. Returns the type. */
+export function defineNode(source, extra = {}) {
+  const type = makeType(source, extra);
   NODE_TYPES.set(type.id, type);
   return type;
 }
 
-export const nodeType = (id) => NODE_TYPES.get(id) || null;
+/** Register a type the compiler generated. Same contract, different shelf. */
+export function defineDerived(source, extra = {}) {
+  const type = makeType(source, { ...extra, derived: true });
+  if (DERIVED_TYPES.has(type.id)) return DERIVED_TYPES.get(type.id);
+  if (DERIVED_TYPES.size >= DERIVED_CAP) DERIVED_TYPES.delete(DERIVED_TYPES.keys().next().value);
+  DERIVED_TYPES.set(type.id, type);
+  return type;
+}
+
+export const nodeType = (id) => NODE_TYPES.get(id) || DERIVED_TYPES.get(id) || null;
+
+/** Does this node hand on a distance field rather than pixels? */
+export function isField(graph, id) {
+  const n = findNode(graph, id);
+  if (!n || n.type === "source") return false;
+  const t = nodeType(n.type);
+  return !!(t && t.field);
+}
 
 // ------------------------------------------------------------------ graph
 
@@ -84,13 +139,27 @@ export function topo(graph) {
 export function validate(graph) {
   const errors = [];
   if (!graph.output) errors.push("no output node");
+  // A field is a function, not a picture. Asking for one as the output is the
+  // commonest way to get this wrong, and it is worth saying so in those words
+  // rather than failing later inside the compiler.
+  else if (isField(graph, graph.output)) {
+    errors.push(`${graph.output} answers a distance, not pixels — shade it before it can be the output`);
+  }
   for (const n of graph.nodes) {
     if (n.type === "source") continue;
     const t = nodeType(n.type);
     if (!t) { errors.push(`${n.id}: unknown type ${n.type}`); continue; }
     t.inputs.forEach((name, i) => {
-      if (!n.inputs[i]) errors.push(`${n.id} (${n.type}): input ${name} is not connected`);
-      else if (!findNode(graph, n.inputs[i])) errors.push(`${n.id}: input ${name} refers to a missing node`);
+      if (!n.inputs[i]) { errors.push(`${n.id} (${n.type}): input ${name} is not connected`); return; }
+      if (!findNode(graph, n.inputs[i])) { errors.push(`${n.id}: input ${name} refers to a missing node`); return; }
+      // The whole point of typing a port: a wire that carries the wrong thing
+      // is caught here, by name, before a line of GLSL is written.
+      const wants = t.fieldInputs.includes(name);
+      const gives = isField(graph, n.inputs[i]);
+      if (wants !== gives) {
+        errors.push(`${n.id} (${n.type}): ${name} takes ${wants ? "a field" : "an image"}, `
+                  + `but ${n.inputs[i]} gives ${gives ? "a field" : "an image"}`);
+      }
     });
   }
   try { topo(graph); } catch (e) { errors.push(e.message); }
