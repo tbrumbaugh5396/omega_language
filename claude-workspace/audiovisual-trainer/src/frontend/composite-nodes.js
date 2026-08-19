@@ -112,3 +112,90 @@ defineNode(`// A flat colour, alpha and all: what a document sits on.
 uniform vec3  colour;    // @color @default 1 1 1
 uniform float alpha;     // @range 0 1 @default 1
 vec4(colour, alpha)`);
+
+// ------------------------------------------------------------------ video
+//
+// The CSS filter functions, which is what the video studio's grade has always
+// been, written out as the matrices the Filter Effects spec gives. The order
+// is the order the shorthand applies them in, and each step clamps, because
+// each is its own filter primitive.
+
+defineNode(`// brightness, contrast, saturate and hue-rotate — the CSS filter functions, to the spec.
+// @node filter.cssGrade
+// @module 01-light-and-exposure
+// @alpha
+uniform sampler2D in0;
+uniform float brightness;   // @range 0.2 2 @default 1
+uniform float contrast;     // @range 0.2 2.5 @default 1
+uniform float saturation;   // @range 0 2.5 @default 1
+uniform float hue;          // @range -180 180 @default 0 @help degrees
+
+vec4 c = texture2D(in0, uv);
+vec3 x = clamp(c.rgb * brightness, 0.0, 1.0);
+x = clamp(x * contrast + (0.5 - 0.5 * contrast), 0.0, 1.0);
+float s = saturation;
+mat3 sm = mat3(0.213 + 0.787 * s, 0.213 - 0.213 * s, 0.213 - 0.213 * s,
+               0.715 - 0.715 * s, 0.715 + 0.285 * s, 0.715 - 0.715 * s,
+               0.072 - 0.072 * s, 0.072 - 0.072 * s, 0.072 + 0.928 * s);
+x = clamp(sm * x, 0.0, 1.0);
+float a = radians(hue), cs = cos(a), sn = sin(a);
+mat3 hm = mat3(0.213 + cs * 0.787 - sn * 0.213, 0.213 - cs * 0.213 + sn * 0.143, 0.213 - cs * 0.213 - sn * 0.787,
+               0.715 - cs * 0.715 - sn * 0.715, 0.715 + cs * 0.285 + sn * 0.140, 0.715 - cs * 0.715 + sn * 0.715,
+               0.072 - cs * 0.072 + sn * 0.928, 0.072 - cs * 0.072 - sn * 0.283, 0.072 + cs * 0.928 + sn * 0.072);
+x = clamp(hm * x, 0.0, 1.0);
+vec4(x, c.a)`);
+
+defineNode(`// One box blur along one axis, taps lo..hi. Three of these per axis are what a CSS blur is.
+// @node filter.box1d
+// @module 05-display
+// @pass
+// @alpha
+uniform sampler2D in0;
+uniform vec2  in0_size;
+uniform float lo;      // @range -64 0 @default -1 @hidden
+uniform float hi;      // @range 0 64 @default 1 @hidden
+uniform vec2  dir;     // @hidden
+
+vec4 acc = vec4(0.0);
+float n = 0.0;
+for (int i = -64; i <= 64; i++) {
+  float f = float(i);
+  if (f < lo || f > hi) continue;
+  acc += texture2D(in0, uv + dir * f / in0_size);
+  n += 1.0;
+}
+n > 0.0 ? acc / n : texture2D(in0, uv)`);
+
+defineNode(`// A transition between what is already there (in0) and what is arriving (in1).
+// @node transition.mix
+// @module 03-additive-subtractive
+// @alpha
+uniform sampler2D in0;
+uniform sampler2D in1;
+uniform int   mode;       // @options dissolve,wipe,dip,push @default 0
+uniform float progress;   // @range 0 1 @default 0
+uniform float angle;      // @range 0 360 @default 0 @help the wipe's direction, degrees
+uniform vec3  colour;     // @color @default 0 0 0 @help what a dip passes through
+uniform float softness;   // @range 0 0.5 @default 0.08
+
+vec4 a = texture2D(in0, uv);
+vec4 b = texture2D(in1, uv);
+vec4 outc = mix(a, b, progress);
+if (mode == 1) {
+  float th = radians(angle);
+  float d = dot(uv - 0.5, vec2(cos(th), sin(th))) + 0.5;
+  float k = smoothstep(progress - softness, progress + softness, d);
+  outc = mix(b, a, k);
+} else if (mode == 2) {
+  // Through a colour and out the other side: two half-length dissolves.
+  vec4 mid = vec4(colour, 1.0);
+  outc = progress < 0.5 ? mix(a, mid, progress * 2.0) : mix(mid, b, (progress - 0.5) * 2.0);
+} else if (mode == 3) {
+  float th = radians(angle);
+  vec2 off = vec2(cos(th), sin(th)) * progress;
+  vec4 aa = texture2D(in0, uv + off);
+  vec4 bb = texture2D(in1, uv + off - vec2(cos(th), sin(th)));
+  float d = dot(uv - 0.5, vec2(cos(th), sin(th))) + 0.5;
+  outc = d < progress ? bb : aa;
+}
+outc`);

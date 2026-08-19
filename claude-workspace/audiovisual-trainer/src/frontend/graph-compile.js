@@ -418,6 +418,13 @@ export function renderGraph(graph, sources, opts = {}) {
   const out = runner.run(graph, sources, opts);
   if (opts.onPasses) opts.onPasses(out.passes);
   runner.present(out, graph.width, graph.height);
+  // `into` draws straight into a caller's context: a timeline at 60 fps should
+  // not allocate a canvas a frame.
+  if (opts.into) {
+    opts.into.clearRect(0, 0, opts.into.canvas.width, opts.into.canvas.height);
+    opts.into.drawImage(canvas, 0, 0, opts.into.canvas.width, opts.into.canvas.height);
+    return null;
+  }
   const c = document.createElement("canvas");
   c.width = graph.width; c.height = graph.height;
   c.getContext("2d").drawImage(canvas, 0, 0);

@@ -67,7 +67,8 @@ function applyOther(canvas, eff) {
   }
   if (eff.kind === "sketch") {
     return renderSketch(eff.source, canvas.width, canvas.height, {
-      images: { [eff.imageName]: canvas }, values: eff.params || {}, time: eff.time || 0, steps: 8 });
+      images: { [eff.imageName]: canvas }, values: eff.params || {},
+      time: eff.time || 0, steps: eff.steps || 8 });
   }
   throw new Error(`unknown effect kind "${eff.kind}"`);
 }
@@ -158,11 +159,12 @@ export function makeEffect(kind, ref, params, extra = {}) {
 }
 
 /** A sketch used as a filter needs to know which uniform is the layer. */
-export function sketchEffect(source, values, time, name) {
+export function sketchEffect(source, values, time, name, steps) {
   const uniforms = sketchUniforms(source);
   const img = uniforms.find((u) => u.control === "image");
   if (!img) throw new Error("that sketch takes no image, so it cannot filter a layer");
-  return makeEffect("sketch", "", values, { source, imageName: img.name, time: time || 0, name: name || "Shader" });
+  return makeEffect("sketch", "", values, { source, imageName: img.name,
+                                            time: time || 0, steps: steps || 8, name: name || "Shader" });
 }
 
 // ------------------------------------------------------------------ the document

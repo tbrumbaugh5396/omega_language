@@ -877,6 +877,36 @@ vec3 col = state(uv).rgb + vec3(0.02, 0.02, 0.03);
 
 finish(col)` },
 
+  { id: "clipink", label: "Video — ink stirred out of the picture", preview: [640, 360], steps: 6, source:
+`// Ink stirred out of what the picture is showing: the frame seeds a flow,
+// the flow carries it, and the result is mixed back over the frame. Written
+// to be a clip effect — the layer or clip arrives as \`src\`, and because the
+// state is rebuilt from that seed every frame, the same frame always comes
+// out the same way, which is what an export needs.
+// @module 07-motion
+uniform sampler2D src;     // the clip, or the layer
+uniform float stir;        // @range 0 4 @default 1.6 @help how far the flow carries the ink each step
+uniform float spread;      // @range 0 2 @default 0.9 @help how much it diffuses as it goes
+uniform float amount;      // @range 0 1 @default 0.6 @help how much of it you see over the picture
+
+vec2 flow(vec2 q) {
+  float a = fbm(q * 2.5 + vec2(t * 0.07, -t * 0.05)) * 6.28318;
+  return vec2(cos(a), sin(a)) * stir;
+}
+
+vec4 sim(vec2 q) {
+  vec4 seed = texture2D(src, q);
+  if (frame == 0) return seed;
+  vec4 carried = texture2D(u_state, q - flow(q) / u_resolution);
+  vec4 spread4 = (stateAt(vec2(1.0, 0.0)) + stateAt(vec2(-1.0, 0.0))
+                + stateAt(vec2(0.0, 1.0)) + stateAt(vec2(0.0, -1.0))) * 0.25;
+  return mix(carried, spread4, spread * 0.3) * 0.995 + seed * 0.02;
+}
+
+vec3 c = texture2D(src, uv).rgb;
+vec3 ink = state(uv).rgb;
+mix(c, max(c * 0.6, ink), amount)` },
+
   { id: "trails", label: "Trails — feedback without a sim", preview: [640, 640], source:
 `uniform float persist;   // @range 0.8 0.995 @default 0.96 — how long a trail lasts
 uniform float zoom;      // @range 0.98 1.02 @default 1.004 — feedback zoom per frame

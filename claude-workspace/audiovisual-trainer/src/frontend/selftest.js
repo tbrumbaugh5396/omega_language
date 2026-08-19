@@ -26,8 +26,9 @@ import { renderGraph, ejectGraph, applyFilter } from "./graph-compile.js";
 import { blurFast, getImage, FILTERS } from "./engine-image.js";
 import { GRAPH_FILTERS } from "./filter-nodes.js";
 import { planPasses, fuseStats, fusibleReason } from "./graph-fuse.js";
-import { documentGraph, applyEffects, makeEffect } from "./canvas-graph.js";
+import { documentGraph, applyEffects, makeEffect, sketchEffect } from "./canvas-graph.js";
 import { BLEND_ORDER } from "./composite-nodes.js";
+import { clipAt, evalTrack, frameGraph, gradeEffects, putKey } from "./video-graph.js";
 
 // ------------------------------------------------------------------ fixtures
 
@@ -650,6 +651,138 @@ export async function runSelfTest(report = () => {}) {
              detail: ok ? `${parts.length} passes, ${Math.round(text.length / 1024)} KB — a document, compiled` : why }); }
   } catch (e) {
     push({ group: "Canvas on the graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
+  // Video on the graph: the grade is the CSS filter functions, so the browser
+  // is again the reference; the keyframes are pure; and an export has to be
+  // repeatable, which is the phase's own bar.
+  try {
+    const W = 160, H = 100;
+    const paint = (c, a, b) => {
+      const g = c.getContext("2d");
+      const gr = g.createLinearGradient(0, 0, W, H); gr.addColorStop(0, a); gr.addColorStop(1, b);
+      g.fillStyle = gr; g.fillRect(0, 0, W, H);
+      g.fillStyle = "#e04020"; g.beginPath(); g.arc(50, 50, 26, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "#1fa36c"; g.fillRect(95, 20, 40, 60);
+      return c;
+    };
+    const mk = (a, b) => paint(Object.assign(document.createElement("canvas"), { width: W, height: H }), a, b);
+    const shotA = mk("#fff2dd", "#101a2e"), shotB = mk("#dfe9ff", "#2e1010");
+
+    // The grade, against the browser's own filter string.
+    { const cases = [
+        { brightness: 1.25, contrast: 1, saturate: 1, hue: 0, blur: 0 },
+        { brightness: 1, contrast: 1.6, saturate: 1, hue: 0, blur: 0 },
+        { brightness: 1, contrast: 1, saturate: 1.8, hue: 0, blur: 0 },
+        { brightness: 1, contrast: 1, saturate: 1, hue: 75, blur: 0 },
+        { brightness: 1.1, contrast: 1.2, saturate: 1.3, hue: -40, blur: 0 },
+        { brightness: 1, contrast: 1, saturate: 1, hue: 0, blur: 4 },
+        { brightness: 1.1, contrast: 1.15, saturate: 1.2, hue: 20, blur: 6 },
+      ];
+      let worst = 0, worstName = "";
+      for (const g2 of cases) {
+        const ref = document.createElement("canvas"); ref.width = W; ref.height = H;
+        const rg = ref.getContext("2d");
+        rg.filter = `brightness(${g2.brightness}) contrast(${g2.contrast}) saturate(${g2.saturate}) `
+                  + `hue-rotate(${g2.hue}deg)` + (g2.blur ? ` blur(${g2.blur}px)` : "");
+        rg.drawImage(shotA, 0, 0);
+        const got = applyEffects(shotA, gradeEffects(g2, 1)).getContext("2d").getImageData(0, 0, W, H).data;
+        // The browser's blur handles the frame edge its own way; judge the middle.
+        const r = compare(got, rg.getImageData(0, 0, W, H).data, W, H,
+          { thresh: 6, skip: (x, y) => x < 12 || y < 12 || x >= W - 12 || y >= H - 12 });
+        if (r.mean > worst) { worst = r.mean; worstName = `b${g2.brightness} c${g2.contrast} s${g2.saturate} h${g2.hue} blur${g2.blur}`; }
+      }
+      push({ group: "Video on the graph", name: "the grade, against the browser's own CSS filters", ok: worst < 2.0,
+             detail: `worst ${worst}/255 on ${worstName} · want <2.0 — a CSS blur is three box blurs, and these are the same three` }); }
+
+    // Keyframes are arithmetic, so they can simply be checked.
+    { const tr = putKey(putKey(putKey([], 0, 0), 1, 10), 2, 10, "hold");
+      const linear = evalTrack(tr, 0.5) === 5;
+      const holdsBefore = evalTrack(tr, -3) === 0, holdsAfter = evalTrack(tr, 9) === 10;
+      const smooth = putKey(putKey([], 0, 0, "smooth"), 1, 10);
+      const sm = evalTrack(smooth, 0.25);
+      const held = putKey(putKey([], 0, 0, "hold"), 1, 10);
+      const hd = evalTrack(held, 0.99) === 0 && evalTrack(held, 1) === 10;
+      const ok = linear && holdsBefore && holdsAfter && hd && Math.abs(sm - 1.5625) < 1e-6;
+      push({ group: "Video on the graph", name: "keyframe tracks: linear, smooth, hold, and holding at the ends", ok,
+             detail: `midpoint ${evalTrack(tr, 0.5)} · smooth at ¼ ${sm.toFixed(4)} (want 1.5625) · hold jumps at its next key · ` +
+                     `before the first key ${evalTrack(tr, -3)}, after the last ${evalTrack(tr, 9)}` }); }
+
+    // The bar for this phase: a grade keyframed across a cut, exported twice.
+    { const clipA = { id: "a", kind: "video", start: 0, dur: 2, opacity: 1, fadeIn: 0, fadeOut: 0.4,
+                      grade: { brightness: 1, contrast: 1, saturate: 1, hue: 0, blur: 0 },
+                      keys: { "grade.brightness": [{ t: 0, v: 0.7, ease: "linear" }, { t: 2, v: 1.4, ease: "linear" }] },
+                      effects: [] };
+      const clipB = { id: "b", kind: "video", start: 1.6, dur: 2, opacity: 1, fadeIn: 0, fadeOut: 0,
+                      grade: { brightness: 1, contrast: 1, saturate: 1.2, hue: 0, blur: 0 },
+                      keys: { "grade.hue": [{ t: 0, v: -30, ease: "smooth" }, { t: 2, v: 60, ease: "smooth" }] },
+                      transition: { mode: 0 }, effects: [] };
+      const fade = (c, local) => {
+        let a = c.opacity ?? 1;
+        if (c.fadeIn > 0) a *= Math.min(1, Math.max(0, local / c.fadeIn));
+        if (c.fadeOut > 0) a *= Math.min(1, Math.max(0, (c.dur - local) / c.fadeOut));
+        return a;
+      };
+      const frameAt = (t) => {
+        const entries = [];
+        for (const [clip, pixels] of [[clipA, shotA], [clipB, shotB]]) {
+          if (t < clip.start || t >= clip.start + clip.dur) continue;
+          const local = t - clip.start;
+          const at = clipAt(clip, local);
+          const overlap = clip === clipB ? (clipA.start + clipA.dur) - clipB.start : 0;
+          const transition = (clip === clipB && overlap > 0 && t < clipA.start + clipA.dur)
+            ? { mode: 0, progress: Math.min(1, Math.max(0, (t - clip.start) / overlap)), angle: 0, softness: 0.08, colour: [0, 0, 0] }
+            : null;
+          entries.push({ clip: at, pixels, transition });
+        }
+        const { graph, sources } = frameGraph(entries, { width: W, height: H, background: "#000000",
+          scale: 1, alphaOf: (c) => fade(c, 0.5) });
+        return renderGraph(graph, sources).getContext("2d").getImageData(0, 0, W, H).data;
+      };
+      const times = [0, 0.5, 1.0, 1.7, 1.9, 2.2, 3.0];
+      const pass1 = times.map(frameAt);
+      const pass2 = times.map(frameAt);
+      let identical = true, moved = 0;
+      for (let i = 0; i < times.length; i++) {
+        for (let k = 0; k < pass1[i].length; k++) if (pass1[i][k] !== pass2[i][k]) { identical = false; break; }
+      }
+      for (let k = 0; k < pass1[0].length; k += 4) if (pass1[0][k] !== pass1[2][k]) { moved++; }
+      push({ group: "Video on the graph", name: "a grade keyframed across a cut exports identically twice", ok: identical && moved > 1000,
+             detail: identical ? `${times.length} frames, byte for byte, twice over — and ${moved} pixels differ between t=0 and t=1, so the key really moved`
+                               : "two passes over the same frames disagreed" }); }
+
+    // And a Generate sim as a clip effect.
+    { const preset = GENERATE_PRESETS.find((p2) => p2.id === "clipink");
+      const values = {};
+      for (const u of parseUniforms(preset.source)) if (u.control !== "image") values[u.name] = u.value.slice();
+      const eff = sketchEffect(preset.source, values, 0.4, preset.label, preset.steps);
+      const once = applyEffects(shotA, [eff]).getContext("2d").getImageData(0, 0, W, H).data;
+      const twice = applyEffects(shotA, [eff]).getContext("2d").getImageData(0, 0, W, H).data;
+      let same = true, differs = 0;
+      const base = shotA.getContext("2d").getImageData(0, 0, W, H).data;
+      for (let k = 0; k < once.length; k++) if (once[k] !== twice[k]) { same = false; break; }
+      for (let k = 0; k < once.length; k += 4) if (Math.abs(once[k] - base[k]) > 6) differs++;
+      push({ group: "Video on the graph", name: "a Generate sim runs as a clip effect, and repeats", ok: same && differs > 500,
+             detail: same ? `${preset.steps} steps a frame, seeded from the clip · ${differs} pixels changed by it · identical when run again`
+                          : "the same frame came out differently the second time" }); }
+
+    // The transition node at its two ends is the two clips, exactly.
+    { const two = (progress) => {
+        const entries = [
+          { clip: { grade: {}, effects: [], opacity: 1, start: 0 }, pixels: shotA },
+          { clip: { grade: {}, effects: [], opacity: 1, start: 0 }, pixels: shotB,
+            transition: { mode: 0, progress, angle: 0, softness: 0.08, colour: [0, 0, 0] } },
+        ];
+        const { graph, sources } = frameGraph(entries, { width: W, height: H, background: "#000000",
+          scale: 1, alphaOf: () => 1 });
+        return renderGraph(graph, sources).getContext("2d").getImageData(0, 0, W, H).data;
+      };
+      const a0 = compare(two(0), shotA.getContext("2d").getImageData(0, 0, W, H).data, W, H, { thresh: 6 });
+      const a1 = compare(two(1), shotB.getContext("2d").getImageData(0, 0, W, H).data, W, H, { thresh: 6 });
+      push({ group: "Video on the graph", name: "a dissolve at 0 and 1 is exactly the two clips", ok: a0.mean < 1 && a1.mean < 1,
+             detail: `at 0 it is the outgoing frame (${a0.mean}/255), at 1 the incoming one (${a1.mean}/255)` }); }
+  } catch (e) {
+    push({ group: "Video on the graph", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
   gl.deleteBuffer(quad);

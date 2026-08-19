@@ -17,12 +17,21 @@
 // preview cannot afford a per-frame JS pass over half a million pixels, and a
 // grade you cannot scrub against is not a grade you can judge.
 
-import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, clamp } from "./ui.js";
+import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, clamp, api } from "./ui.js";
 import { muxMp4 } from "./video-mux.js";
 import { aiButton } from "./ai.js";
+import { renderGraph, ejectGraph } from "./graph-compile.js";
+import { applyEffects, effectCost, effectLabel, makeEffect, sketchEffect } from "./canvas-graph.js";
+import { GRAPH_FILTERS, graphFilter } from "./filter-nodes.js";
+import { FILTERS } from "./engine-image.js";
+import { nodeType } from "./render-graph.js";
+import { buildControls } from "./shader-controls.js";
+import { sketchUniforms } from "./shader-run.js";
+import { GENERATE_PRESETS } from "./studio-generate.js";
+import { clipAt, frameGraph, gradeEffects, hasKeys, keyablePaths, paramAt, putKey,
+         EASES, DEFAULT_GRADE } from "./video-graph.js";
 
 const PREVIEW_MAX = 900;
-const DEFAULT_GRADE = { brightness: 1, contrast: 1, saturate: 1, hue: 0, blur: 0 };
 const RULER_H = 24, ROW_H = 54, GUTTER = 116;
 
 let uid = Date.now() % 1e5;
@@ -110,12 +119,6 @@ export async function videoEditor(host) {
     style: { width: "100%", height: "auto", background: "#000", borderRadius: "8px", display: "block" } });
   const cg = canvas.getContext("2d");
 
-  const filterFor = (clip) => {
-    const g = { ...DEFAULT_GRADE, ...(clip.grade || {}) };
-    return `brightness(${g.brightness}) contrast(${g.contrast}) saturate(${g.saturate}) ` +
-           `hue-rotate(${g.hue}deg)` + (g.blur ? ` blur(${g.blur}px)` : "");
-  };
-
   const fadeAlpha = (clip, local) => {
     let a = clip.opacity ?? 1;
     if (clip.fadeIn > 0) a *= clamp(local / clip.fadeIn, 0, 1);
@@ -123,10 +126,27 @@ export async function videoEditor(host) {
     return a;
   };
 
-  function paintClip(g, clip, local, target = { w: pw, h: ph }) {
+  // One canvas per clip slot, reused: a timeline at 30 fps should not
+  // allocate a frame's worth of canvases every frame.
+  const slots = [];
+  function slot(i, w, h) {
+    let c = slots[i];
+    if (!c) { c = slots[i] = document.createElement("canvas"); }
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    return c;
+  }
+
+  /** A clip's pixels at the target size: the media, letterboxed, or the title. */
+  function clipPixels(clip, i, target) {
+    const c = slot(i, target.w, target.h);
+    const g = c.getContext("2d");
+    g.clearRect(0, 0, target.w, target.h);
+    paintClip(g, clip, target);
+    return c;
+  }
+
+  function paintClip(g, clip, target = { w: pw, h: ph }) {
     g.save();
-    g.globalAlpha = fadeAlpha(clip, local);
-    g.filter = filterFor(clip);
     if (clip.kind === "title") {
       if (clip.bg && clip.bg !== "none") { g.fillStyle = clip.bg; g.fillRect(0, 0, target.w, target.h); }
       g.fillStyle = clip.color || "#ffffff";
@@ -149,22 +169,65 @@ export async function videoEditor(host) {
     g.restore();
   }
 
-  /** Composite every video track at time t. Later tracks draw on top. */
+  /**
+   * A frame of the timeline, composited through the graph: every clip on
+   * every video track, resolved to this instant, graded by the CSS filter
+   * functions written out as nodes, through its own effect chain, and blended
+   * by the same compositor the canvas studio uses. The preview and the export
+   * call this same function — which is what keeps an export reproducible.
+   */
   function renderAt(t, g = cg, target = { w: pw, h: ph }) {
-    g.save();
-    g.filter = "none";
-    g.globalAlpha = 1;
-    g.fillStyle = "#000";
-    g.fillRect(0, 0, target.w, target.h);
-    g.restore();
+    const entries = [];
+    let i = 0;
     for (const tr of doc.tracks) {
       if (tr.kind !== "video" || tr.mute) continue;
-      for (const clip of tr.clips) {
-        if (t < clip.start || t >= clipEnd(clip)) continue;
-        paintClip(g, clip, t - clip.start, target);
-      }
+      const ordered = [...tr.clips].sort((a, b) => a.start - b.start);
+      ordered.forEach((clip, idx) => {
+        if (t < clip.start || t >= clipEnd(clip)) return;
+        const local = t - clip.start;
+        const at = clipAt(clip, local);
+        let pixels = clipPixels(clip, i++, target);
+        // A sketch or CPU step cannot be a node, so that chain is run here and
+        // the frame graph takes the result as it stands.
+        const fx = (at.effects || []).filter((e) => !e.bypass);
+        const preApplied = fx.some((e) => e.kind !== "graph" && e.kind !== "node");
+        if (preApplied) {
+          const scale = target.w / W;
+          pixels = applyEffects(pixels, [...gradeEffects(at.grade, scale), ...fx]);
+        }
+        entries.push({ clip: at, pixels, preApplied, transition: transitionAt(ordered, idx, t) });
+      });
     }
+    const { graph, sources } = frameGraph(entries, {
+      width: target.w, height: target.h, background: "#000000", scale: target.w / W,
+      alphaOf: (c) => fadeAlpha(c, t - c.start) });
+    renderGraph(graph, sources, { into: g });
   }
+
+  /**
+   * Two clips that overlap on a track are a cut with a transition in it: the
+   * outgoing frame is everything composited so far, the incoming one is this
+   * clip, and the overlap is the whole of the transition's time.
+   */
+  function transitionAt(ordered, idx, t) {
+    const clip = ordered[idx], prev = ordered[idx - 1];
+    if (!prev || !clip.transition) return null;
+    const overlap = clipEnd(prev) - clip.start;
+    if (!(overlap > 0) || t >= clipEnd(prev)) return null;
+    return {
+      mode: clip.transition.mode | 0,
+      progress: clamp((t - clip.start) / Math.max(1e-3, overlap), 0, 1),
+      angle: clip.transition.angle || 0,
+      softness: clip.transition.softness ?? 0.08,
+      colour: hexToRgb(clip.transition.colour || "#000000"),
+    };
+  }
+  const hexToRgb = (hex) => {
+    const h = String(hex).replace("#", "");
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    const n = parseInt(full || "000000", 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+  };
 
   async function seekTo(t) {
     playhead = clamp(t, 0, duration());
@@ -285,6 +348,33 @@ export async function videoEditor(host) {
           tg.strokeStyle = "rgba(240,163,94,.9)";
           tg.beginPath(); tg.moveTo(x + cw - clip.fadeOut * pxPerSec, y + 6);
           tg.lineTo(x + cw, y + ROW_H - 10); tg.stroke();
+        }
+        // Keys, at the local times they hold. Every track's keys land on the
+        // same row: what matters here is when the clip changes, not which
+        // parameter did.
+        const keyTimes = new Set();
+        for (const track of Object.values(clip.keys || {})) for (const k of track) keyTimes.add(k.t);
+        for (const kt of keyTimes) {
+          const kx = x + kt * pxPerSec;
+          if (kx < x || kx > x + cw) continue;
+          tg.fillStyle = "#6ee7c8";
+          tg.beginPath();
+          tg.moveTo(kx, y + ROW_H - 16); tg.lineTo(kx + 3.5, y + ROW_H - 12);
+          tg.lineTo(kx, y + ROW_H - 8); tg.lineTo(kx - 3.5, y + ROW_H - 12);
+          tg.closePath(); tg.fill();
+        }
+        // The overlap with the clip before it, when that overlap is a transition.
+        if (clip.transition) {
+          const before = tr.clips.filter((o) => o !== clip && o.start < clip.start)
+            .sort((a2, b2) => a2.start - b2.start).pop();
+          const ov = before ? clipEnd(before) - clip.start : 0;
+          if (ov > 0) {
+            tg.fillStyle = "rgba(124,156,255,.28)";
+            tg.fillRect(x, y + 5, ov * pxPerSec, ROW_H - 14);
+            tg.strokeStyle = "rgba(124,156,255,.9)";
+            tg.beginPath();
+            tg.moveTo(x, y + ROW_H - 10); tg.lineTo(x + ov * pxPerSec, y + 6); tg.stroke();
+          }
         }
       }
     });
@@ -452,6 +542,200 @@ export async function videoEditor(host) {
   // ---------------------------------------------------------------- inspector
 
   const inspector = el("div.stack");
+  // ---------------------------------------------------------------- keyframes
+
+  const localOf = (c) => playhead - c.start;
+  const insideClip = (c) => playhead >= c.start && playhead < clipEnd(c);
+
+  /** Put a key for `path` at the playhead, holding `v`. */
+  function keyHere(c, path, v) {
+    if (!insideClip(c)) { toast("Move the playhead inside the clip first"); return; }
+    c.keys = c.keys || {};
+    c.keys[path] = putKey(c.keys[path], localOf(c), v, (c.keys[path] || []).length ? "linear" : "linear");
+    drawTimeline(); renderInspector(); renderAt(playhead); host.save();
+  }
+  function clearKeys(c, path) {
+    if (!c.keys) return;
+    delete c.keys[path];
+    drawTimeline(); renderInspector(); renderAt(playhead); host.save();
+  }
+
+  /**
+   * A control with a keyframe diamond beside it. Moving a keyed control writes
+   * a key at the playhead rather than a constant — which is what you meant by
+   * moving it while it was keyed.
+   */
+  function keyed(c, path, label, opts, read, write) {
+    const on = hasKeys(c, path);
+    const shown = on ? paramAt(c, path, read(), localOf(c)) : read();
+    const k = knob(label, { ...opts, value: shown,
+      oninput: (v) => {
+        write(v);
+        if (on && insideClip(c)) c.keys[path] = putKey(c.keys[path], localOf(c), v);
+        renderAt(playhead); host.save();
+      } });
+    return el("div.row.tight", { style: { alignItems: "center", gap: ".25rem" } },
+      el("div", { style: { flex: 1 } }, k),
+      el("button.ghost", {
+        title: on ? `keyed (${c.keys[path].length}) — click to set one here, shift-click to clear`
+                  : "keyframe this parameter at the playhead",
+        style: { padding: ".05em .3em", color: on ? "var(--good, #6ee7c8)" : "var(--dim, #6e7794)" },
+        onclick: (e) => (e.shiftKey ? clearKeys(c, path) : keyHere(c, path, shown)),
+      }, on ? "◆" : "◇"));
+  }
+
+  /** Every key on the clip, so a track can be seen and eased and undone. */
+  function keyPanel(c) {
+    const paths = Object.keys(c.keys || {}).filter((p2) => (c.keys[p2] || []).length);
+    if (!paths.length) return null;
+    return el("div.stack", { style: { gap: ".2rem", marginTop: ".4rem" } },
+      el("h4", { style: { margin: 0 } }, "Keyframes"),
+      ...paths.map((p2) => el("div.spread", {},
+        el("span.fine", {}, `${p2} · ${c.keys[p2].length}`),
+        el("div.row.tight", {},
+          el("select", { style: { width: "auto", fontSize: ".7rem" },
+            title: "how this track leaves each key",
+            onchange: (e) => { for (const k of c.keys[p2]) k.ease = e.target.value; renderAt(playhead); host.save(); } },
+            ...EASES.map((x) => el("option", { value: x, selected: x === (c.keys[p2][0].ease || "linear") }, x))),
+          el("button.ghost", { title: "previous key",
+            onclick: () => { const ks = c.keys[p2].map((k) => k.t + c.start).filter((t) => t < playhead - 1e-3);
+                             if (ks.length) seekTo(Math.max(...ks)); } }, "‹"),
+          el("button.ghost", { title: "next key",
+            onclick: () => { const ks = c.keys[p2].map((k) => k.t + c.start).filter((t) => t > playhead + 1e-3);
+                             if (ks.length) seekTo(Math.min(...ks)); } }, "›"),
+          el("button.ghost.danger", { onclick: () => clearKeys(c, p2) }, "×")))));
+  }
+
+  /**
+   * A transition lives in the overlap between two clips on one track: drag a
+   * clip so it starts before the one before it ends, and that overlap is the
+   * whole of the transition's time. It is a two-input node, so the outgoing
+   * frame is a real input rather than something faded over.
+   */
+  function transitionPanel(c) {
+    const tr = trackOf(c);
+    if (!tr) return null;
+    const before = tr.clips.filter((o) => o !== c && o.start < c.start)
+      .sort((a, b) => a.start - b.start).pop();
+    const overlap = before ? clipEnd(before) - c.start : 0;
+    if (!(overlap > 0)) {
+      return c.transition ? el("p.fine", { style: { color: "var(--warm)" } },
+        "This clip has a transition but no overlap — drag it back over the clip before it.") : null;
+    }
+    const t = c.transition || (c.transition = { mode: 0, angle: 0, softness: 0.08, colour: "#000000" });
+    return el("div.stack", { style: { gap: ".2rem", marginTop: ".4rem" } },
+      el("h4", { style: { margin: 0 } }, "Transition"),
+      el("p.fine", {}, `${overlap.toFixed(2)}s of overlap with ${before.name || before.kind}.`),
+      el("select", { onchange: (e) => { t.mode = +e.target.value; renderAt(playhead); drawTimeline(); renderInspector(); host.save(); } },
+        ...["dissolve", "wipe", "dip to colour", "push"].map((n, i) =>
+          el("option", { value: i, selected: i === (t.mode | 0) }, n))),
+      (t.mode === 1 || t.mode === 3) ? knob("angle", { min: 0, max: 360, step: 1, value: t.angle || 0,
+        format: (v) => `${v.toFixed(0)}°`, oninput: (v) => { t.angle = v; renderAt(playhead); host.save(); } }) : null,
+      t.mode === 1 ? knob("softness", { min: 0, max: 0.5, step: 0.005, value: t.softness ?? 0.08,
+        format: (v) => v.toFixed(3), oninput: (v) => { t.softness = v; renderAt(playhead); host.save(); } }) : null,
+      t.mode === 2 ? el("label.design-num", {}, "through",
+        el("input", { type: "color", value: t.colour || "#000000",
+          oninput: (e) => { t.colour = e.target.value; renderAt(playhead); host.save(); } })) : null,
+      el("button.ghost", { onclick: () => { c.transition = null; drawTimeline(); renderAt(playhead); renderInspector(); host.save(); } },
+        "no transition (fade over instead)"));
+  }
+
+  // ---------------------------------------------------------------- clip effects
+
+  function effectPanel(c) {
+    const fx = c.effects || [];
+    const cost = (() => { try { return effectCost(fx); } catch (e) { return null; } })();
+    const move = (i, d) => {
+      const j = i + d;
+      if (j < 0 || j >= fx.length) return;
+      [fx[i], fx[j]] = [fx[j], fx[i]];
+      renderInspector(); renderAt(playhead); host.save();
+    };
+    return el("div.stack", { style: { gap: ".2rem", marginTop: ".4rem" } },
+      el("div.spread", {},
+        el("h4", { style: { margin: 0 } }, "Effects"),
+        el("button.ghost", { onclick: () => effectDialog(c) }, "+ effect")),
+      ...fx.map((e, i) => el("div.spread", {},
+        el("div.row.tight", {},
+          el("input", { type: "checkbox", checked: !e.bypass, style: { width: "auto" },
+            onchange: (ev) => { e.bypass = !ev.target.checked; renderAt(playhead); host.save(); } }),
+          el("span.fine", { style: { opacity: e.bypass ? 0.5 : 1 } }, effectLabel(e))),
+        el("div.row.tight", {},
+          el("button.ghost", { title: "earlier", onclick: () => move(i, -1) }, "↑"),
+          el("button.ghost", { title: "later", onclick: () => move(i, 1) }, "↓"),
+          el("button.ghost.danger", {
+            onclick: () => { fx.splice(i, 1); renderInspector(); renderAt(playhead); host.save(); } }, "×")))),
+      ...fx.flatMap((e) => Object.entries(e.params || {})
+        .filter(([, v]) => typeof v === "number" || (Array.isArray(v) && v.length === 1))
+        .map(([k, v]) => keyed(c, `fx.${e.id}.${k}`, `${effectLabel(e)} · ${k}`,
+          { min: paramRange(e, k)[0], max: paramRange(e, k)[1], step: (paramRange(e, k)[1] - paramRange(e, k)[0]) / 100,
+            format: (x) => (Math.abs(x) >= 10 ? x.toFixed(0) : x.toFixed(2)) },
+          () => (Array.isArray(v) ? v[0] : v),
+          (x) => { e.params[k] = Array.isArray(v) ? [x] : x; }))),
+      fx.length && cost ? el("p.fine", {}, `${cost.draws} GPU draw${cost.draws === 1 ? "" : "s"}` +
+        `${cost.cpu ? ` · ${cost.cpu} outside the graph` : ""} on top of the grade`) : null);
+  }
+
+  /** A parameter's sensible range, from the CPU filter or the node it came from. */
+  function paramRange(e, name) {
+    if (e.kind === "graph") {
+      const gf = GRAPH_FILTERS.find((f) => f.id === e.ref);
+      const cpu = gf && FILTERS.find((f) => f.id === gf.cpu);
+      const row = cpu && cpu.params.find((p2) => p2[0] === name);
+      if (row) return [row[1], row[2]];
+    }
+    if (e.kind === "node") {
+      const t = nodeType(e.ref);
+      const u = t && t.params.find((p2) => p2.name === name);
+      if (u) return [u.min, u.max];
+    }
+    return [0, 1];
+  }
+  async function effectDialog(c) {
+    const presets = GENERATE_PRESETS.filter((p2) => /\bsampler2D\b/.test(p2.source));
+    const pick = el("select", {},
+      el("optgroup", { label: "Catalogue (GPU)" },
+        ...GRAPH_FILTERS.filter((f) => !f.cpuOnly).map((f) => el("option", { value: `g:${f.id}` }, f.name))),
+      el("optgroup", { label: "Render graph nodes" },
+        el("option", { value: "n:adjust.exposure" }, "Exposure"),
+        el("option", { value: "n:adjust.curves" }, "Curves"),
+        el("option", { value: "n:filter.blur" }, "Gaussian blur")),
+      el("optgroup", { label: "Shader — Generate presets that take an image" },
+        ...presets.map((p2) => el("option", { value: `s:${p2.id}` }, p2.label))));
+    modal(el("h2", {}, "Clip effect"),
+      el("p.fine", {}, "The same node types the canvas studio uses. A catalogue filter or a " +
+        "node fuses into the clip's grade — one draw for the lot. A sketch runs as its own pass, " +
+        "and if it keeps state it steps deterministically from the frame's time, so an export repeats."),
+      pick,
+      el("div.row", { style: { justifyContent: "flex-end" } },
+        el("button", { onclick: closeModal }, "Cancel"),
+        el("button.primary", { onclick: () => {
+          const v = pick.value, kind = v[0], ref = v.slice(2);
+          let e = null;
+          if (kind === "g") {
+            const gf = graphFilter(ref);
+            const params = {};
+            const cpu = FILTERS.find((f) => f.id === gf.cpu);
+            for (const [n2, , , def] of (cpu ? cpu.params : [])) params[n2] = def;
+            for (const [n2, def] of (cpu && cpu.colors) || []) params[n2] = def;
+            e = makeEffect("graph", ref, params);
+          } else if (kind === "n") {
+            const t = nodeType(ref === "filter.blur" ? "filter.blur1d" : ref);
+            const params = {};
+            for (const u of t.params.filter((u2) => !u2.hidden && u2.control !== "image")) params[u.name] = u.value.slice();
+            e = makeEffect("node", ref, params);
+          } else {
+            const pr = presets.find((x) => x.id === ref);
+            const values = {};
+            for (const u of sketchUniforms(pr.source)) if (u.control !== "image") values[u.name] = u.value.slice();
+            e = sketchEffect(pr.source, values, 0, pr.label, pr.steps);
+          }
+          c.effects = c.effects || [];
+          c.effects.push(e);
+          closeModal(); renderInspector(); renderAt(playhead); host.save();
+        } }, "Add")));
+  }
+
   function renderInspector() {
     clear(inspector);
     const c = selected;
@@ -508,14 +792,16 @@ export async function videoEditor(host) {
 
     append(inspector,
       el("h4", { style: { marginTop: ".5rem" } }, "Grade"),
+      el("p.fine", {}, "The CSS filter functions, compiled to nodes — ◇ keyframes one at the playhead."),
       ...[["brightness", 0.2, 2, 0.01], ["contrast", 0.2, 2.5, 0.01],
           ["saturate", 0, 2.5, 0.01], ["hue", -180, 180, 1], ["blur", 0, 20, 0.5]]
-        .map(([key, min, max, step]) => knob(key, {
-          min, max, step, value: g[key],
-          format: (v) => (key === "hue" ? `${v.toFixed(0)}°` : v.toFixed(2)),
-          oninput: (v) => { g[key] = v; renderAt(playhead); host.save(); },
-        })),
-      el("div.row.tight", {},
+        .map(([key, min, max, step]) => keyed(c, `grade.${key}`, key,
+          { min, max, step, format: (v) => (key === "hue" ? `${v.toFixed(0)}°` : v.toFixed(2)) },
+          () => g[key], (v) => { g[key] = v; })),
+      effectPanel(c),
+      transitionPanel(c),
+      keyPanel(c),
+      el("div.row.tight", { style: { marginTop: ".4rem" } },
         el("button.ghost", { onclick: () => { c.grade = { ...DEFAULT_GRADE }; renderInspector(); renderAt(playhead); host.save(); } }, "Reset"),
         el("button.ghost", {
           onclick: () => {
