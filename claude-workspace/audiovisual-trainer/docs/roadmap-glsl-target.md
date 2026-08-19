@@ -835,7 +835,7 @@ Generate already has applies to it.
 - Geometry stays vector in the Design document; this is a compile target, not
   a replacement for the vector model.
 
-### Phase 6 — Platform and performance *(M, continuous)*
+### Phase 6 — Platform and performance *(M, continuous)* — **decided and shipped**
 
 - **WebGPU/WGSL as a second target** only if the node templates are kept
   small enough to translate; otherwise stay GLSL ES 3.00 and use WebGPU's
@@ -846,6 +846,59 @@ Generate already has applies to it.
 - Export: image sequences (zip), WebM (VP9/AV1 via WebCodecs), MP4 with audio
   from the video studio's mixer for Generate too.
 - Wide-gamut output (P3 canvas) once colour management exists.
+
+**The WGSL question, answered with evidence.** `wgsl-audit.js` reads every
+registered node type and reports what a translation would have to deal with:
+no preprocessor, no function overloading, no loose uniforms, and no way to
+pass a texture and its sampler as one thing. **37 of 37 node bodies are
+clean.** The only obstacles are in the *host's* own text — four preprocessor
+sites and four overloaded helpers (`palette`, `aa`, `_rgb`, `_rgba`) — and a
+WGSL backend would emit its own versions of those anyway.
+
+So: **stay on GLSL ES 3.00**, and use WebGPU's compat layer when it lands. A
+second backend is a real body of work with no user-visible gain today, and
+the condition the roadmap set for reconsidering — that the node templates
+stay small enough to translate — is now a *checked property* rather than an
+intention. One helper took a `sampler2D` as a parameter, the single thing in
+the library WGSL has no form of; it reads `in0` directly now.
+  - The checker deliberately does not flag mixed int/float arithmetic. Telling
+    `float(x) - 1` from `int(x) - 1` needs types, and the first version
+    reported five exponents (`1e-6`) as integer literals. A checker that cries
+    wolf is worse than one that says what it cannot see.
+
+**Tiling — shipped.** A render past the GPU's maximum is drawn in pieces.
+Every tile is given the whole picture's resolution and its own corner, and
+`gl_FragCoord` is shifted once in the prelude, so nothing downstream — not a
+helper, not a node body, not a preset — has to know it happened. **A tiled
+render is byte-identical to an untiled one**: rings, cells and the raymarched
+beach, in twelve tiles each, not one pixel different. Generate offers 8192 and
+16384 instead of refusing; an 8192 square renders in 64 tiles on a GPU
+claiming a 1024px limit. A simulation still cannot be tiled — a sim reads its
+neighbours and a tile's neighbours are in the next tile — and says so.
+  - That exposed a bug that had been there all along: `usesFeedback` tested
+    the *generated* source for `u_prev`, and every prelude declares it — so
+    **every Generate PNG export had been falling back to the preview size**,
+    whatever size was chosen. It asks the author's own text now.
+
+**Caps — shipped.** The target pool holds eight (141 made and 132 released
+over a full self-test, where before it grew without bound); fused programs
+evict least-recently-used at 24; embedded textures at 16. Intermediates were
+already half-float by default.
+
+**Image sequences — shipped.** `zip-store.js` writes STORED rather than
+deflated, because a PNG already is, with a fixed stamp so the same run
+produces the same bytes. Verified against the system `unzip`: CRCs, sizes,
+nested paths and the DOS timestamp all round-trip.
+
+**What is left here, and why:**
+- **WebM (VP9/AV1)** is not written. MP4 already comes out of WebCodecs
+  through our own muxer; WebM would need a second muxer (EBML) for a
+  container most tools accept less readily. The image sequence covers the
+  "give me the frames" case that WebM was there for.
+- **MP4 with audio for Generate** waits on Generate having audio to mux.
+  The mixer belongs to the video timeline, and a sketch has no track.
+- **P3 output** stays gated exactly where the bullet puts it: on colour
+  management, which is Phase 2's remaining item.
 
 ### Phase 7 — What stays outside *(note)*
 
