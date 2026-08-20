@@ -2897,7 +2897,8 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                  + "window with its shape kept, a viewport fills, an editor is left alone with somewhere to "
                  + "scroll, and a figure that redraws itself is not resized. Escape puts every one back in its "
                  + "own slot with every style byte for byte"
-               : problems.join(" · ") }); }
+               : problems.join(" · ") });
+    }
 
     // The open world: infinite terrain, and biomes that are data rather than
     // branches. Three claims, three numbers.
@@ -2918,7 +2919,7 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
       //    forty-five metres 7.4, because the rays in a warp disagree about
       //    which side of forty-five metres they are on and the branch is paid
       //    for while both sides run anyway.
-      const bodies = ["scene", "ground", "thingAt"].map((n) => {
+      const bodies = ["scene", "ground", "thingAt", "birdsAt"].map((n) => {
         const re = new RegExp(`\\b(float|vec[234])\\s+${n}\\s*\\(`);
         return stripComments(parts.declTexts.find((t) => re.test(stripComments(t))) || "");
       }).join("\n");
@@ -2928,9 +2929,11 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
              ok: reads === 2 && !noisy,
              detail: reads === 2 && !noisy
                ? "one fetch for the ground and one for the cell that decides what grows on it — the height a "
-                 + "tree stands on and the climate that put it there are the same texel, which is why two kinds "
-                 + "of thing cost what one kind costs. No fbm anywhere a march step can reach it"
-               : `${reads} reads across scene(), ground() and thingAt()${noisy ? ", and noise in there too" : ""}` }); }
+                 + "tree stands on and the climate that put it there are the same texel, which is why a tree, a "
+                 + "boulder and something grazing cost what one of them costs. The birds need no fetch at all: "
+                 + "they are at a height they chose, not on the ground. No fbm anywhere a march step can reach it"
+               : `${reads} reads across scene(), ground(), thingAt() and birdsAt()`
+                 + `${noisy ? ", and noise in there too" : ""}` }); }
 
     // 2. It has no edge, and it is several places rather than one.
     //
@@ -3106,6 +3109,52 @@ c`;
                + `horizon comes in, the ground darkens and the streaks fall across it. Between two consecutive `
                + `frames the wind moves ${windyMove.toFixed(2)}/255 where still air moves ${stillMove.toFixed(2)}: `
                + "each tree has its own phase from the hash that placed it, so a wood does not sway as one thing" }); }
+
+    // 6. And there is something alive in it. Both kinds are sparse on purpose
+    //    — a field with a deer in every cell is a farm — so this walks and
+    //    asks how often each shows up, rather than demanding both in one frame
+    //    and being flaky about it.
+    //
+    //    One walk, three variants rendered side by side each frame, small. The
+    //    first version walked the whole thing twice at 200x120 and blocked the
+    //    page for twenty seconds, which is a self-test nobody will run.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const W2 = 96, H2 = 64;
+      const base = {};
+      for (const u of parseUniforms(g.source)) if (u.value) base[u.name] = u.value;
+      const values = { ...base, weather: [0], windAmt: [0.6], wildlife: [1], walk: [22] };
+      const noBirds = g.source.replace("if (h > 0.34 * wildlife) return 1e9;", "return 1e9;");
+      const noHerd = g.source.replace("h3 < green * 0.62 + 0.10 * wildlife", "false");
+      const kb = new Keyboard();
+      const seen = { birds: 0, animals: 0 }, most = { birds: 0, animals: 0 };
+      const marks = new Set([90, 180, 270, 360]);
+      const px = (c) => c.getContext("2d").getImageData(0, 0, W2, H2).data;
+      for (let f = 0; f <= 360; f++) {
+        kb.clear(); kb.press(KEY.up);
+        const opt = { keys: kb, values, steps: 1, reset: f === 0, time: f / 60 };
+        const all = renderSketch(g.source, W2, H2, opt);
+        const nb = renderSketch(noBirds, W2, H2, opt);
+        const nh = renderSketch(noHerd, W2, H2, opt);
+        kb.tick();
+        if (!marks.has(f)) continue;
+        const a = px(all), b = px(nb), h = px(nh);
+        let pb = 0, pa = 0;
+        for (let i = 0; i < W2 * H2; i++) {
+          if (Math.abs(a[i * 4] - b[i * 4]) > 8 || Math.abs(a[i * 4 + 2] - b[i * 4 + 2]) > 8) pb++;
+          if (Math.abs(a[i * 4] - h[i * 4]) > 8 || Math.abs(a[i * 4 + 2] - h[i * 4 + 2]) > 8) pa++;
+        }
+        if (pb > 0) seen.birds++;
+        if (pa > 0) seen.animals++;
+        most.birds = Math.max(most.birds, pb);
+        most.animals = Math.max(most.animals, pa);
+      }
+      push({ group: "More games", name: "something alive in it: a herd on the ground and gulls over it",
+             ok: seen.animals >= 2 && seen.birds >= 1 && most.animals > 10 && most.birds > 5,
+             detail: `walking, sampled four times: something grazing in ${seen.animals} of them (up to `
+               + `${most.animals} pixels of ${W2 * H2}) and birds in ${seen.birds} (up to ${most.birds}). `
+               + "The herd is 0.4 ms because it lives in the cell the terrain had already been asked about; "
+               + "the birds are 1.4 ms and simpler, because a bird is at a height it chose and needs no fetch "
+               + "at all, which is the same fact from the other side" }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is

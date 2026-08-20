@@ -2212,7 +2212,7 @@ two cannot disagree.
 *Left:* nothing that moves but the sea and the walker. No creatures, no
 weather, and nothing to do — this is a world to be in rather than a game.
 
-### Phase 29 — Weather, and what an endless world costs to remember *(M)* — **shipped**
+### Phase 29 — Weather, wildlife, and what an endless world costs to remember *(M)* — **shipped**
 
 **Weather.** Wind and rain, both living in a register and drifting with time,
 so the weather is something the world is *doing* rather than a slider you are
@@ -2275,10 +2275,52 @@ sweeps 0..1 across it and every existing sim sketch is untouched.
 | rain against no rain | 30/255 of a different picture |
 | the wind moving things between consecutive frames | several times what still air moves |
 
-*Left:* still nothing alive in it. And the map is rebuilt every frame even
-standing still — a toroidal clipmap would rebuild only the strip that moved,
-which is worth doing the day the bake shows up in a measurement rather than
-before.
+**And something alive in it.** A herd on the ground and gulls over it, and the
+two cost very different things for a reason worth writing down.
+
+*The grazing herd is almost free* — measured at **0.4 ms** of the frame —
+because it lives in the cell the terrain had already been asked about. The
+height it walks on and the grass it is eating are the texel that decided
+whether a tree grows there. It wanders, and it turns to face where it is going,
+because an animal that slides sideways is a prop; its head goes down to the
+grass and up to look around on its own clock; and it has four legs made from
+one capsule by mirroring the space it stands in.
+
+*The birds cost more* — **1.4 ms** — despite being simpler, and that is the
+same fact from the other side. Everything on the ground needs to know where the
+ground is, and that is a fetch; a bird does not, because it is at a height it
+chose. The whole flock is a hash and two capsules with no lookup at all. It
+drifts downwind, which is both free and true, and each circles inside its own
+cell so a flock is not a lattice.
+
+**Three things measured.**
+
+*Density is the cost, and it is not linear.* A flock at one bird per 19 m was
+2.8 ms; at one per 22 m with two thirds the chance it is under one. Scattered
+geometry does not cost what it draws — it costs the **shorter steps the marcher
+takes everywhere near it**.
+
+*Correct and pointless is a real failure mode.* At their first size the animals
+were forty-odd pixels of a hundred thousand: a true fact about the world that
+nobody could see. Deer-sized rather than dog-sized.
+
+*And the birds were unreachable by arithmetic.* At 35 m up they were never in
+shot: the camera looks down about seven degrees and its vertical half-angle is
+eighteen, so the top of the frame is eleven degrees up, and a bird is only ever
+in view if its altitude is under a fifth of its distance. At 35 m that is 180 m
+away — past the fog. They are gulls now, not eagles, and the camera's pitch
+came up a little to meet them.
+
+| | |
+|---|---|
+| a frame at 640×360, everything on | **12.8 ms — 78 fps** |
+| the herd | +0.4 ms |
+| the flock | +1.4 ms |
+| walking, sampled six times | grazing in most, birds in most, sometimes one close enough to fill a corner |
+
+*Left:* the map is rebuilt every frame even standing still — a toroidal clipmap
+would rebuild only the strip that moved, which is worth doing the day the bake
+shows up in a measurement rather than before.
 
 ## 4. Decisions and risks
 
@@ -2349,6 +2391,7 @@ before.
 | 28.1 | An open world — infinite, four biomes — **shipped** | L | 25.1 | 4.3 ms; scene() is one fetch of a map that follows you |
 | 28.2 | Trees, boulders and grass — **shipped** | M | 28.1 | 9.1 ms; one grid, and the cell decides what grows |
 | 29.1 | Weather, and `@state` — **shipped** | M | 28.2 | 11.9 ms; 132 MB of state becomes 12.9 |
+| 29.2 | A herd and a flock — **shipped** | S | 29.1 | 12.8 ms; the herd 0.4, the birds 1.4 and no fetch |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

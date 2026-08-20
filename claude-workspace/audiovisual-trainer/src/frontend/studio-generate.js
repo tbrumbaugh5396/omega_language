@@ -1170,6 +1170,8 @@ uniform vec3  waterC;    // @color @default #163c50
 uniform vec3  leafC;     // @color @default #3f6d2e
 uniform float weather;   // @range 0 1 @default 0.5 @help how much weather there is
 uniform float windAmt;   // @range 0 2 @default 1 @help how hard it blows
+uniform float wildlife;  // @range 0 1 @default 0.6 @help how much of it is alive
+uniform vec3  hideC;     // @color @default #6b4f31
 
 // How much world the map holds. Larger than the far plane on purpose: the
 // edge of the map is then always further away than the fog, so nothing ever
@@ -1323,6 +1325,38 @@ float thingAt(vec3 p, out float kind) {
     // tree and does not walk through the bark.
     return min(trunk, crown) * 0.85;
   }
+  // Something grazing. It costs almost nothing, because the cell it stands in
+  // has already been fetched to decide whether a tree grows there — the height
+  // it walks on and the grass it is eating are that same texel. Measured: the
+  // whole herd is 0.4 ms of a 10.9 ms frame.
+  if (h3 > green * 0.62 && h3 < green * 0.62 + 0.10 * wildlife) {
+    kind = 2.0;
+    float ph = h1 * 6.28;
+    // It wanders, and it faces where it is going — an animal that slides
+    // sideways is a prop. The wander stays well inside its own cell, because
+    // this asks the cell the ray is in and no others.
+    vec2 amble = vec2(sin(t * 0.21 + ph), cos(t * 0.17 + ph * 1.7)) * 1.9;
+    vec2 look = vec2(cos(t * 0.21 + ph), -sin(t * 0.17 + ph * 1.7) * 0.85);
+    vec3 ap = rp - vec3(amble.x, 0.0, amble.y);
+    ap.xz = rot(atan(look.y, look.x)) * ap.xz;
+    // Deer-sized rather than dog-sized. At the first scale they were correct
+    // and pointless: forty-odd pixels of a hundred thousand, which is a fact
+    // about the world and not something anybody can see.
+    float sz = 1.45 + h2 * 0.5;
+    // Head down to the grass, up to look around, on its own clock.
+    float graze = smoothstep(0.2, 0.8, sin(t * 0.33 + ph * 2.1) * 0.5 + 0.5);
+    vec3 bp = ap - vec3(0.0, 0.66 * sz, 0.0);
+    bp.z /= 0.62;
+    float body = (length(bp) - 0.42 * sz) * 0.62;
+    vec3 hd = vec3(0.42, 0.72 - graze * 0.62, 0.0) * sz;
+    float neck = sdCapsule3(ap - vec3(0.0, 0.66 * sz, 0.0), vec3(0.0), hd, 0.09 * sz);
+    float head = sdSphere(ap - vec3(0.0, 0.66 * sz, 0.0) - hd, 0.15 * sz);
+    // Four legs from one capsule, by mirroring the space it stands in.
+    vec3 lp = ap; lp.xz = abs(lp.xz) - vec2(0.26, 0.17) * sz;
+    float legs = sdCapsule3(lp, vec3(0.0), vec3(0.0, 0.66 * sz, 0.0), 0.05 * sz);
+    gThingSize = sz;
+    return min(min(body, neck), min(head, legs));
+  }
   if (h3 > 1.0 - stone * 0.5) {                     // a boulder
     kind = 1.0;
     float sz = 0.5 + h1 * 0.9;
@@ -1334,11 +1368,54 @@ float thingAt(vec3 p, out float kind) {
   return 1e9;
 }
 
+/**
+ * Birds, which are the cheapest thing in the world to have.
+ *
+ * Everything else on the ground needs to know where the ground is, and that is
+ * a fetch. A bird does not: it is at a height it chose, so the whole flock is
+ * a hash and two capsules with no lookup at all. Measured at 1.4 ms of a
+ * 10.9 ms frame — more than the grazing herd, which is only 0.4, precisely
+ * because the herd reuses a fetch that had already been paid for.
+ *
+ * The flock drifts downwind, which is both free and true.
+ */
+float birdsAt(vec3 p) {
+  vec3 q = p;
+  q.xz -= gWind * t * 1.4;
+  vec2 id = floor(q.xz / 22.0);
+  float h = hash21(id * 5.7);
+  // Density is the whole cost here, and it is not linear: a flock at one
+  // bird per 19 m was 2.8 ms of the frame and at one per 22 m with two thirds
+  // the chance it is under one. Scattered geometry does not cost what it draws
+  // — it costs the shorter steps the marcher takes everywhere near it.
+  if (h > 0.34 * wildlife) return 1e9;
+  float ph = h * 39.0;
+  // A slow circle inside its own cell, so a flock is not a lattice.
+  vec2 c = (id + 0.5) * 22.0 + vec2(sin(t * 0.23 + ph), cos(t * 0.19 + ph)) * 3.6;
+  // Low, and that is arithmetic rather than taste. The camera looks down
+  // about seven degrees and its vertical half-angle is eighteen, so the top of
+  // the frame is eleven degrees up — a bird is only ever in shot if its
+  // altitude is under a fifth of its distance. At thirty-five metres up the
+  // whole flock was past the fog before it rose into view, which is a great
+  // deal of work to render nothing. These are gulls, not eagles.
+  float y = 6.0 + h * 15.0 + sin(t * 0.7 + ph) * 2.0;
+  vec3 bp = vec3(q.x - c.x, q.y - y, q.z - c.y);
+  // Turned to face the way it is circling.
+  bp.xz = rot(t * 0.23 + ph + 1.57) * bp.xz;
+  float body = sdCapsule3(bp, vec3(-0.3, 0.0, 0.0), vec3(0.32, 0.0, 0.0), 0.105);
+  // Two wings from one capsule, and the flap is the wing rising along its own
+  // span — which is what makes a distant bird read as a bird at all.
+  vec3 wp = bp; wp.z = abs(wp.z);
+  wp.y -= wp.z * sin(t * 6.5 + ph) * 0.6;
+  float wing = sdCapsule3(wp, vec3(0.0), vec3(-0.12, 0.0, 1.15), 0.055);
+  return min(body, wing);
+}
+
 float scene(vec3 p) {
   float land = p.y - ground(p.xz);
   float sea = p.y - gWave;
   float kind;
-  return min(min(land, sea), thingAt(p, kind));
+  return min(min(land, sea), min(thingAt(p, kind), birdsAt(p)));
 }
 
 // The sea is flat enough to march as a plane and detailed enough to look wet,
@@ -1556,7 +1633,7 @@ gWave = 0.0;
 vec3 fwd = vec3(sin(w.z), 0.0, cos(w.z));
 float standing = ground(w.xy);
 vec3 ro = vec3(w.x, max(standing, gWave) + 1.75, w.y);
-mat3 cam = lookAt(ro, ro + fwd + vec3(0.0, -0.12, 0.0));
+mat3 cam = lookAt(ro, ro + fwd + vec3(0.0, -0.07, 0.0));
 vec3 rd = cam * normalize(vec3(p, 1.55));
 vec3 sun = normalize(vec3(0.42, 0.16 + hour * 0.8, 0.36));
 // Rain takes the sun away and brings the horizon in. Most of what makes a wet
@@ -1577,8 +1654,10 @@ if (tHit > 0.0) {
   // times in scene().
   float kind = 0.0;
   float dThing = thingAt(hit, kind);
+  float dBird = birdsAt(hit);
   float dLand = hit.y - ground(hit.xz);
-  bool onThing = dThing < min(dLand, hit.y - gWave) + 0.02;
+  bool onBird = dBird < min(min(dThing, dLand), hit.y - gWave) + 0.02;
+  bool onThing = !onBird && dThing < min(dLand, hit.y - gWave) + 0.02;
 
   vec4 land = state2(mapUv(hit.xz));
   // Wetness rather than wet. At a hundred metres one pixel covers several
@@ -1597,7 +1676,13 @@ if (tHit > 0.0) {
     // the whole field, which is what makes a trunk round.
     n = normal3(hit);
     gWet = 0.0;
-    if (kind > 0.5) {
+    if (kind > 1.5) {
+      // A hide, and a different one per animal — a herd of the same brown is
+      // one animal drawn several times.
+      vec2 id = floor(hit.xz / CELL);
+      albedo = srgbToLinear(hideC) * (0.7 + 0.85 * hash21(id * 2.3 + 7.7))
+             * (0.85 + 0.3 * noise(hit.xz * 14.0 + hit.y * 5.0));
+    } else if (kind > 0.5) {
       // Lighter than the ground it sits on, and mottled: a boulder the colour
       // of its own shadow is a hole in the picture.
       albedo = srgbToLinear(rockC) * (2.4 + 1.1 * noise(hit.xz * 2.6 + hit.y));
@@ -1613,10 +1698,19 @@ if (tHit > 0.0) {
     }
   }
 
+  if (onBird) {
+    // A bird against the sky is a silhouette: there is nothing behind it to
+    // bounce light back, so what you see is its shape and not its colour.
+    n = normal3(hit);
+    gWet = 0.0;
+    gW = vec4(0.0);
+    albedo = vec3(0.035, 0.033, 0.030);
+  }
   float sh = softShadow(hit + n * 0.06, sun, 9.0);
   float lit = max(dot(n, sun), 0.0);
   float occ = mix(ao(hit, n), 1.0, gWet);
   if (onThing) occ = mix(occ, 1.0, 0.45);          // leaves are not a cave
+  if (onBird) occ = 1.0;                           // and nothing occludes the sky
   // Wet ground is darker and shinier: the water fills the pores, so less light
   // comes back diffusely and more of it comes back in one direction.
   albedo *= 1.0 - gRain * 0.35 * (1.0 - gWet);
@@ -1628,7 +1722,8 @@ if (tHit > 0.0) {
   // What the biome does with the light, rather than only with the pigment:
   // snow and water throw it back, sand and grass do not.
   float gloss = gW.w * 0.75 + gWet * 0.95 + gW.z * 0.12;
-  if (onThing) gloss = 0.05;                       // bark and stone are matt
+  if (onThing) gloss = 0.05;                       // bark, stone and hide are matt
+  if (onBird) gloss = 0.0;
   gloss = max(gloss, gRain * 0.55 * (1.0 - gWet));
   vec3 hv = normalize(sun - rd);
   lin += pow(max(dot(n, hv), 0.0), mix(30.0, 260.0, gloss)) * sh * gloss * 1.8 * sunDim;
