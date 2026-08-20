@@ -7,6 +7,7 @@
 // this is where you run it.
 
 import { el, clear, api, toast, modal, closeModal, knob } from "./ui.js";
+import { expandButton } from "./expand.js";
 import { LAB_SOURCE } from "./labs-content.js";
 import * as A from "./engine-audio.js";
 import * as I from "./engine-image.js";
@@ -56,6 +57,26 @@ function openLab(ctx, lab, container, saves) {
   let stop = null;
 
   const out = el("canvas", { width: OUT_W, height: OUT_H });
+  // The lab's picture, filling the window. The editor and the goals stay
+  // behind it: what you want larger is the thing the code is making.
+  const stage = el("div", { style: { position: "relative", display: "flex",
+                                     alignItems: "center", justifyContent: "center" } }, out);
+  // …and it renders at the larger size rather than being blown up. Every
+  // runtime here reads `canvas.width` on the frame it draws — the GLSL one
+  // sets its viewport and u_res from it, the canvas2d one is handed it — so
+  // resizing the backing store is enough and nothing has to be re-run.
+  //
+  // 480×300 is an internal constant rather than something anybody chose, which
+  // is why overriding it is fair game. A studio's preview size *is* a choice,
+  // and those still scale up.
+  const ex = expandButton(stage, {
+    onChange: (big) => {
+      const box = stage.getBoundingClientRect();
+      const w = big ? Math.max(OUT_W, Math.min(1920, Math.round(box.width))) : OUT_W;
+      const h = big ? Math.round((w * OUT_H) / OUT_W) : OUT_H;
+      if (out.width !== w || out.height !== h) { out.width = w; out.height = h; }
+    },
+  });
   const log = el("div.lab-log");
   const editor = el("textarea.editor", { spellcheck: false, value: source });
   const scope = el("canvas", { width: OUT_W, height: 110, style: { width: "100%", display: "block" } });
@@ -79,10 +100,11 @@ function openLab(ctx, lab, container, saves) {
         def.runtime === "dsp" && el("button.primary", { onclick: () => run(true) }, "Render & play"),
         el("button.ghost", { onclick: () => saveDialog() }, "Save"),
         el("button.ghost", { onclick: () => { editor.value = def.source; run(); } }, "Reset"),
+        ex.button,
         el("button.ghost", { onclick: () => { teardown(); ctx.go("lab"); } }, "Close"))),
     el("div.lab-split", {},
       el("div.stack", {},
-        el("div.lab-out", {}, out, log),
+        el("div.lab-out", {}, stage, log),
         knobRow,
         (def.runtime === "audio" || def.runtime === "dsp")
           ? el("div.lab-out", {}, scope) : null,

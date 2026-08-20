@@ -9,6 +9,7 @@
 // self-test asserts.
 
 import { el, modal, closeModal } from "./ui.js";
+import { expandButton, OVER_MODAL } from "./expand.js";
 import { createGraph, addNode, feedback } from "./render-graph.js";
 import { renderGraph, resetGraphState } from "./graph-compile.js";
 import { graphSummary } from "./graph-view.js";
@@ -193,6 +194,12 @@ export function playgroundDialog(startId = "pong") {
     style: { width: "100%", maxWidth: `${W}px`, aspectRatio: `${W} / ${H}`, background: "#0b0e16",
              borderRadius: "8px", display: "block" } });
   const ctx = canvas.getContext("2d");
+  // Opened from a modal, so it has to clear the modal's own layer to be seen.
+  // The keyboard follows the canvas rather than the dialog, so a game stays
+  // playable at whatever size it is.
+  const stage = el("div", { style: { position: "relative", display: "flex",
+                                     alignItems: "center", justifyContent: "center" } }, canvas);
+  const ex = expandButton(stage, { layer: OVER_MODAL, onChange: () => canvas.focus() });
   const status = el("p.fine", {}, "");
   const how = el("p.fine", {}, "");
   const summary = el("p.fine", { style: { opacity: 0.7 } }, "");
@@ -260,6 +267,7 @@ export function playgroundDialog(startId = "pong") {
   };
 
   const stop = () => {
+    ex.collapse();
     running = false;
     cancelAnimationFrame(raf);
     stopKeys(); stopPointer();
@@ -270,9 +278,9 @@ export function playgroundDialog(startId = "pong") {
   modal(el("h2", {}, "Playground"),
     el("p.fine", {}, "A graph, every frame, with the keyboard fed in as a texture and the memory " +
       "left alone between frames. Click the picture first so it has the keys."),
-    tabs, canvas, how, summary, status,
+    tabs, stage, how, summary, status,
     el("div.row", { style: { justifyContent: "flex-end" } },
-      soundBtn,
+      soundBtn, ex.button,
       el("button", { onclick: () => { if (current) { resetGraphState(current.graph.stateKey); keyboard.clear(); } } }, "Reset"),
       el("button.primary", { onclick: () => { stop(); closeModal(); } }, "Close")));
   canvas.tabIndex = 0;

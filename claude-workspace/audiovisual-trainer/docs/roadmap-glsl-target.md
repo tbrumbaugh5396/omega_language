@@ -2035,10 +2035,11 @@ arguments never mention the point found one more thing worth taking, in the
 rover: `rot(-gRover.z)`, two sines and two cosines, rebuilt at every march step
 for a heading that cannot change during a pixel.
 
-### Phase 27 — The picture, filling the window *(S)* — **shipped**
+### Phase 27 — The picture, filling the window *(M)* — **shipped**
 
-`expand.js`. One button, seven studios, and what varies is only *what* expands
-and how it wants the room — which a studio knows better than a shared file
+`expand.js`. One button, ten places — seven studios, the Lab, the Playground
+and every course figure — and what varies is only *what* expands and how it
+wants the room — which a studio knows better than a shared file
 does, so it hands over the element and says which.
 
 | studio | the stage | fit |
@@ -2050,6 +2051,9 @@ does, so it hands over the element and says which.
 | Design | the SVG surface | **fill** — a viewport with its own pan and zoom wants more room, not a bigger copy |
 | Music | whichever view is up | **none** — a scrolling editor gets a bigger window onto the same thing |
 | Instrument | the whole editor — patch, problems, keyboard | **none**, on the app's own surface rather than black, the patch area grown to fill the height |
+| Lab | the lab's output canvas | contain, and it **re-renders**: every runtime here reads `canvas.width` on the frame it draws, so resizing the backing store is enough |
+| Playground | the game | contain, at **layer 85** — it is opened from a modal and has to clear it |
+| Course figures | the figure, caption and knobs | **refit** — a figure draws one canvas pixel per device pixel and must never be CSS-scaled, so it redraws at the new size |
 
 **This was the browser's Fullscreen API for about an hour, and that was the
 wrong tool.** What a studio wants is the *canvas* at the size of the window —
@@ -2068,12 +2072,31 @@ permission gates and no listener outlives. It sits at **70** — above the stick
 header at 40 and the menus at 50, below the modals at 80 and the toasts at 90,
 so a dialog still opens over the top of it.
 
-**Two things that only showed up once it could be watched.** A fixed box keeps
-its margin, and the margin comes off the size `inset` gave it: Music's stage is
-a card with a rem underneath, and it filled the window fifteen pixels short
-until that was measured. And `position: fixed` takes the stage out of the flow,
-so the page behind would reflow and put you somewhere else on the way back — a
-placeholder of the same height holds the slot open.
+**The stage moves into a backdrop rather than becoming one.** That is the
+detail worth keeping. A studio's overlays — a selection marquee, a grid, a
+crosshair — are positioned absolutely against the stage, so the stage has to go
+on being the same box as the picture; make the stage fill the window and every
+overlay lands somewhere the picture is not. So a backdrop is created, the stage
+moves into it, and the stage is sized to the picture's shape fitted to the
+window.
+
+**Four things that only showed up once it could be watched**, which is the
+point of the change as much as the permission was.
+
+*A box keeps its margin*, and the margin comes off the size it is given:
+Music's stage is a card with a rem underneath and sat a rem short.
+
+*`position: fixed` takes the stage out of the flow*, so the page behind reflows
+and puts you somewhere else on the way back — a placeholder holds the slot.
+
+*"Contain" only ever shrank.* A lab canvas is 480×300 and a window is not, so
+the first version put a small picture in the middle of a large black field.
+Fitting means growing as well.
+
+*A figure lifted its own cap and overflowed.* `fit()` measured `clientWidth`,
+which counts padding — invisible while `maxWidth` capped the answer below it,
+and the moment an expanded figure was allowed the full width the right-hand end
+of every curve went missing.
 
 **What the check is now.** It used to stub `document.fullscreenElement`,
 because whether a request is *granted* is not something a test can decide.
@@ -2148,7 +2171,7 @@ every style to coming back byte for byte.
 | 24.1 | The render graph on WebGPU — **shipped** | L | 23.1 | pool, fusion, feedback and 32-bit registers, identical |
 | 25.1 | Tiling on WebGPU; the rover's terrain as data | M | 24.1 | past the device's maximum, byte-identical; 74 fps |
 | 26.1 | Fullscreen; the same care for the other 3D sketches | S | 25.1 | bounce 9.3 → 2.8 ms, and lit like the still life |
-| 27.1 | The picture filling the window, seven studios | S | 26.1 | in-page, no permission to be refused; three fits |
+| 27.1 | The picture filling the window, ten places | S | 26.1 | in-page, no permission to be refused; four fits |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

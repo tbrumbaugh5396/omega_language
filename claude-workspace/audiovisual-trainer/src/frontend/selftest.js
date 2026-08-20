@@ -2789,7 +2789,7 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                  + "screen renders 1080×1080 rather than being stretched to fit"
                : wrong.map(([a, w, h, want]) => `${a.toFixed(2)} into ${w}×${h} → ${fitAspect(a, w, h)}, wanted ${want}`).join(" · ") }); }
 
-    // Filling the window, seven studios over, written once.
+    // Filling the window, ten places over, written once.
     //
     // This began as the browser's Fullscreen API and the check had to stub
     // `document.fullscreenElement`, because whether a request is *granted* is
@@ -2797,24 +2797,24 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
     // there is nothing left to fake: this expands a real stage and collapses
     // it again, and every assertion is about what actually happened.
     { const problems = [];
-      for (const fit of ["contain", "fill", "none"]) {
+      for (const fit of ["contain", "fill", "none", "refit"]) {
         const kid = document.createElement("canvas");
-        kid.width = 320; kid.height = 180;
+        kid.width = 480; kid.height = 300;              // a shape of its own
         kid.style.width = "100%";
         kid.style.height = "auto";
         const stage = document.createElement("div");
         stage.style.position = "relative";
-        stage.append(kid);
-        // A margin, because a fixed box keeps one and it comes off the size
-        // `inset` gave it — Music's stage is a card with a rem underneath and
-        // filled the window fifteen pixels short until that was noticed.
+        // A margin, because a box keeps one and it comes off the size it is
+        // given — Music's stage is a card with a rem underneath and sat a rem
+        // short until that was noticed.
         stage.style.margin = "0 0 1rem";
+        stage.append(kid);
         const holder = document.createElement("div");
         holder.style.height = "140px";
         holder.append(stage);
         document.body.append(holder);
         const before = { stage: stage.getAttribute("style"), kid: kid.getAttribute("style"),
-                         siblings: holder.children.length };
+                         parent: stage.parentElement, siblings: holder.children.length };
         let told = null;
         const bg = fit === "none" ? "rgb(13, 15, 24)" : undefined;
         const ex = expandButton(stage, { fit, background: bg, onChange: (b) => { told = b; } });
@@ -2823,41 +2823,58 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
         if (told !== true) problems.push(`${fit}: expanding did not report`);
         if (!ex.isExpanded()) problems.push(`${fit}: did not think it had expanded`);
         if (ex.button.textContent !== "Exit fullscreen") problems.push(`${fit}: the button did not relabel`);
-        // The window, not the screen: fixed to every edge, and layered above
-        // the header and below the modals.
-        if (stage.style.position !== "fixed" || stage.style.inset !== "0px") {
-          problems.push(`${fit}: not pinned to the window (${stage.style.position} ${stage.style.inset})`);
+
+        // A backdrop covering the window, at a layer between the menus and
+        // the modals — and the stage inside it, not being it.
+        const back = document.querySelector("[data-expand-backdrop]");
+        if (!back) { problems.push(`${fit}: no backdrop`); holder.remove(); continue; }
+        const bb = back.getBoundingClientRect();
+        if (Math.round(bb.width) !== window.innerWidth || Math.round(bb.height) !== window.innerHeight) {
+          problems.push(`${fit}: the backdrop is ${Math.round(bb.width)}×${Math.round(bb.height)} of `
+            + `${window.innerWidth}×${window.innerHeight}`);
         }
-        const box = stage.getBoundingClientRect();
-        if (Math.round(box.width) !== window.innerWidth || Math.round(box.height) !== window.innerHeight) {
-          problems.push(`${fit}: ${Math.round(box.width)}×${Math.round(box.height)} of `
-            + `${window.innerWidth}×${window.innerHeight} — it did not fill the window`);
+        if (+back.style.zIndex <= 50 || +back.style.zIndex >= 80) {
+          problems.push(`${fit}: layered at ${back.style.zIndex}, not between the menus and the modals`);
         }
-        if (+stage.style.zIndex <= 50 || +stage.style.zIndex >= 80) {
-          problems.push(`${fit}: layered at ${stage.style.zIndex}, which is not between the menus and the modals`);
+        if (back.style.background !== (bg || "rgb(0, 0, 0)")) {
+          problems.push(`${fit}: backdrop is ${back.style.background || "nothing"}`);
         }
-        if (stage.style.background !== (bg || "rgb(0, 0, 0)")) {
-          problems.push(`${fit}: backdrop is ${stage.style.background || "nothing"}`);
+        if (stage.parentElement !== back) problems.push(`${fit}: the stage did not move into the backdrop`);
+
+        // The stage stays the picture's box, so an overlay drawn against it
+        // still lands on the picture. For "contain" that box is the window
+        // with the picture's aspect fitted into it — grown, not only shrunk.
+        const sb = stage.getBoundingClientRect();
+        if (fit === "contain") {
+          const want = Math.min(window.innerWidth / (480 / 300), window.innerHeight);
+          if (Math.abs(sb.height - want) > 2 || Math.abs(sb.width / sb.height - 480 / 300) > 0.02) {
+            problems.push(`${fit}: ${Math.round(sb.width)}×${Math.round(sb.height)} is not the `
+              + "picture's shape fitted to the window");
+          }
+          if (sb.width <= 480) problems.push("contain: a small picture was not grown to fill");
+          if (kid.style.width !== "100%" || kid.style.height !== "100%") {
+            problems.push("contain: the picture does not fill the stage it was given");
+          }
+        } else if (Math.round(sb.width) !== window.innerWidth) {
+          problems.push(`${fit}: the stage is ${Math.round(sb.width)} wide, not the window`);
         }
-        const centred = stage.style.display === "flex";
-        if (fit === "none" && centred) problems.push("none: a scrolling editor was centred");
-        if (fit !== "none" && !centred) problems.push(`${fit}: the picture was not centred`);
         if (fit === "none" && (!stage.style.padding || stage.style.overflow !== "auto")) {
           problems.push("none: an editor got no padding or nowhere to scroll");
         }
-        if (fit === "fill" && kid.style.width !== "100%") problems.push("fill: the viewport did not fill");
-        if (fit === "contain" && kid.style.maxHeight !== "100%") problems.push("contain: not bounded by height");
-        // A placeholder holds the slot open, so the page behind does not
-        // reflow and lose where you were.
-        if (holder.children.length !== before.siblings + 1) problems.push(`${fit}: no placeholder for the slot`);
-        // A way out that does not need the button, which is under the picture.
-        const exitBtn = [...stage.children].find((c) => c.dataset && c.dataset.expandChrome !== undefined);
-        if (!exitBtn) problems.push(`${fit}: no way out from inside`);
+        if (fit === "refit" && kid.style.width !== "100%") {
+          problems.push("refit: the canvas was resized rather than left to redraw itself");
+        }
+        if (holder.children.length !== before.siblings) problems.push(`${fit}: no placeholder for the slot`);
+        if (![...back.children].some((c) => /Esc/.test(c.textContent || ""))) {
+          problems.push(`${fit}: no way out from inside`);
+        }
 
-        // Escape comes back.
+        // Escape comes back — to the same slot, with the same styles.
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         if (told !== false) problems.push(`${fit}: Escape did not collapse it`);
         if (ex.button.textContent !== "Fullscreen") problems.push(`${fit}: the button stayed relabelled`);
+        if (stage.parentElement !== before.parent) problems.push(`${fit}: it did not go back to its slot`);
+        if (document.querySelector("[data-expand-backdrop]")) problems.push(`${fit}: the backdrop outlived it`);
         if (stage.getAttribute("style") !== before.stage) {
           problems.push(`${fit}: the stage kept ${stage.getAttribute("style")}`);
         }
@@ -2872,12 +2889,12 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
       push({ group: "More games", name: "expanding a stage fills the window, and collapsing puts it all back",
              ok: problems.length === 0,
              detail: problems.length === 0
-               ? "three fits — a picture with a size of its own is centred and bounded by both dimensions, a "
-                 + "viewport fills, a scrolling editor is left alone with padding and somewhere to scroll — each "
-                 + "pinned to every edge of the window at a layer above the menus and below the modals, each with "
-                 + "a placeholder holding its slot so the page does not lose where you were, each measured as "
-                 + "filling the window exactly even with a margin of its own, and each putting "
-                 + "every style back byte for byte when Escape collapses it"
+               ? "four fits over a backdrop pinned to every edge at a layer above the menus and below the modals. "
+                 + "The stage moves into the backdrop rather than becoming it, so it stays the picture's box and "
+                 + "an overlay drawn against it still lands on the picture; a 480×300 picture is *grown* to the "
+                 + "window with its shape kept, a viewport fills, an editor is left alone with somewhere to "
+                 + "scroll, and a figure that redraws itself is not resized. Escape puts every one back in its "
+                 + "own slot with every style byte for byte"
                : problems.join(" · ") }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly

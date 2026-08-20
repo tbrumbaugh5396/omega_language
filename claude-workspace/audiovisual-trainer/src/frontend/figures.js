@@ -18,6 +18,7 @@
 //   · prefers-reduced-motion renders a single frame and offers a play button.
 
 import { el, clear } from "./ui.js";
+import { expandButton } from "./expand.js";
 
 // ------------------------------------------------------------------ colour
 //
@@ -294,6 +295,24 @@ export function mountFigure(host, fig, { width = 720 } = {}) {
     },
   }, "Play");
 
+  // Filling the window *refits* rather than stretching. These figures render
+  // one canvas pixel per device pixel on purpose — a figure scaled by CSS
+  // afterwards shows the browser's resampler rather than the signal, which is
+  // the one thing they must not do — so the canvas is redrawn at the new size
+  // instead of being blown up. The ResizeObserver below already watches `wrap`,
+  // which is what expands, so it does the work; this only flips the cap.
+  let expanded = false;
+  // Room under the picture for the caption, the knobs and the buttons. A
+  // constant, because the obvious alternative — measuring what the figure is
+  // currently using — is circular: the wrap's height is decided by the canvas
+  // whose height is what this is working out.
+  const CHROME = 140;
+  // The row the play button and the expand button share. Built first, filled
+  // once `wrap` exists — the button needs the element it expands, and the
+  // element needs the row the button sits in.
+  const figRow = el("div.row.tight", { style: { marginTop: ".3rem" } },
+                    fig.animated ? playBtn : null);
+
   const wrap = el("figure.course-figure", {},
     canvas,
     err,
@@ -301,7 +320,21 @@ export function mountFigure(host, fig, { width = 720 } = {}) {
     el("figcaption", {},
       el("span", {}, fig.caption || ""),
       fig.note ? el("span.fine", { style: { display: "block", marginTop: ".3rem" } }, fig.note) : null,
-      fig.animated ? el("div.row.tight", { style: { marginTop: ".3rem" } }, playBtn) : null));
+      figRow));
+  const ex = expandButton(wrap, {
+    fit: "refit", background: "#0b0e16",
+    // Refit and redraw here rather than waiting for the ResizeObserver. The
+    // observer does fire, but only if the *box* changed — and lifting the
+    // maximum width is a change to what the figure may draw at, not to the
+    // box it was handed. A figure already as wide as its cap would otherwise
+    // expand to a full-window backdrop and stay exactly the size it was.
+    onChange: (big) => {
+      expanded = big;
+      fit();
+      draw(fig.animated ? (performance.now() - state.t0) / 1000 : 0);
+    },
+  });
+  figRow.append(ex.button);
   host.append(wrap);
 
   // Size from the width the figure actually got, not from a guess. An exact
@@ -309,9 +342,27 @@ export function mountFigure(host, fig, { width = 720 } = {}) {
   // the layout box disagree, the artifact on screen is the browser's resampler
   // rather than the signal, which is the one thing these figures must not do.
   function fit() {
-    const avail = Math.max(200, Math.floor(wrap.clientWidth - 2));
-    const cssW = Math.min(avail, fig.maxWidth || avail);
-    const cssH = Math.round(cssW * (fig.aspect || 0.42));
+    // `clientWidth` counts the padding, and a figure has some. That never
+    // showed while `maxWidth` capped the answer below it; lifting the cap for
+    // an expanded figure made it draw a couple of dozen pixels wider than the
+    // box it sits in, and the right-hand end of every curve went missing.
+    const cs = getComputedStyle(wrap);
+    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const avail = Math.max(200, Math.floor(wrap.clientWidth - pad - 2));
+    // A figure has a maximum width in the page, because a diagram three
+    // thousand pixels across is not more readable. Filling the window is the
+    // one time that cap is the wrong answer: the whole reason to ask for it is
+    // to see the thing larger. The height then becomes the binding constraint,
+    // less the room the caption and the knobs need under it.
+    const cap = expanded ? avail : (fig.maxWidth || avail);
+    let cssW = Math.min(avail, cap);
+    let cssH = Math.round(cssW * (fig.aspect || 0.42));
+    if (expanded) {
+      // The window's height, not the wrap's: the wrap is sized by its contents
+      // while it is expanded, so asking it would be asking the answer.
+      const availH = Math.max(160, window.innerHeight - CHROME);
+      if (cssH > availH) { cssH = availH; cssW = Math.round(cssH / (fig.aspect || 0.42)); }
+    }
     const bw = Math.round(cssW * dpr), bh = Math.round(cssH * dpr);
     if (canvas.width === bw && canvas.height === bh) return false;
     canvas.width = bw;
@@ -347,7 +398,7 @@ export function mountFigure(host, fig, { width = 720 } = {}) {
   }, { rootMargin: "120px" });
   io.observe(canvas);
 
-  return () => { io.disconnect(); ro.disconnect(); pause(); teardownRuntime(); };
+  return () => { ex.collapse(); io.disconnect(); ro.disconnect(); pause(); teardownRuntime(); };
 }
 
 function buildProgram(gl, fragSource) {

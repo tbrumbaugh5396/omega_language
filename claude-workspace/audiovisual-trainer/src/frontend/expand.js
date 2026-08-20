@@ -13,10 +13,16 @@
 // than the element, so every studio ever opened leaves a listener behind
 // unless somebody remembers to take it off.
 //
-// Filling the window is `position: fixed; inset: 0` and a z-index, which no
-// permission gates and no listener outlives. It sits at 70: above the sticky
-// header at 40 and the dropdowns at 50, below the modals at 80 and the toasts
-// at 90, so a dialog still opens over the top of it.
+// Filling the window is a backdrop — `position: fixed; inset: 0` and a
+// z-index — which no permission gates and no listener outlives. It sits at 70:
+// above the sticky header at 40 and the dropdowns at 50, below the modals at
+// 80 and the toasts at 90, so a dialog still opens over the top of it.
+//
+// The stage *moves into* that backdrop rather than becoming one. That is the
+// detail worth keeping: a studio's overlays — a selection marquee, a grid, a
+// crosshair — are positioned absolutely against the stage, so the stage has to
+// go on being the same box as the picture. Make the stage fill the window and
+// every overlay ends up somewhere the picture is not.
 //
 // What varies between studios is only *what* expands, and how it wants the
 // room — which a studio knows better than this file does, so it hands over the
@@ -24,6 +30,8 @@
 
 /** Above the header and the menus, below the modals and the toasts. */
 const LAYER = 70;
+/** …and above a modal, for a picture that was opened from inside one. */
+export const OVER_MODAL = 85;
 
 /**
  * An expand button for one element.
@@ -48,7 +56,15 @@ export function expandButton(stage, opts = {}) {
           //               patch, whose contents are already the size the
           //               document makes them. It gets a bigger window onto
           //               the same thing, and nothing is centred or resized.
+          //   "refit"   — contents that resize *themselves*, like a course
+          //               figure, which draws one canvas pixel per device
+          //               pixel and must never be scaled by CSS afterwards.
+          //               Centred like a picture, but its size is left to it.
           fit = "contain",
+          // Above what. 70 clears the header and the menus and stays under
+          // the modals; something opened *from* a modal has to clear that too,
+          // and the toasts at 90 stay on top of everything.
+          layer = LAYER,
           // Black is right behind a picture and wrong behind text: a patch on
           // a black field is a different, worse editor.
           background = "#000" } = opts;
@@ -59,83 +75,109 @@ export function expandButton(stage, opts = {}) {
   button.title = title;
 
   let expanded = false;
-  let placeholder = null, exitBtn = null;
+  let placeholder = null, exitBtn = null, backdrop = null;
   const saved = {};
-  const KEYS = ["position", "inset", "zIndex", "background", "width", "height", "margin",
-                "display", "alignItems", "justifyContent", "padding", "overflow"];
+  const KEYS = ["width", "height", "margin", "padding", "overflow", "flex"];
 
   const isExpanded = () => expanded;
 
   const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); collapse(); } };
 
+  /**
+   * The picture's shape. A canvas carries it in its attributes — those are the
+   * pixels it actually has — and anything else is measured. Used to size the
+   * stage, rather than to letterbox the canvas inside it: an overlay is
+   * positioned against the *stage*, so the stage has to stay the same box as
+   * the picture or the selection marquee and the grid land somewhere else.
+   */
+  const aspectOf = () => {
+    const pic = stage.firstElementChild;
+    if (pic && pic.width > 0 && pic.height > 0) return pic.width / pic.height;
+    const box = (pic || stage).getBoundingClientRect();
+    return box.height > 0 ? box.width / box.height : 16 / 9;
+  };
+
   const dressKids = (big) => {
+    if (fit === "none" || fit === "refit") return;      // they size themselves
     for (const kid of stage.children) {
-      if (!kid.style || kid.dataset.expandChrome !== undefined) continue;   // not the exit button
+      if (!kid.style) continue;
       if (big) {
         kid.dataset.exW = kid.style.width;
         kid.dataset.exH = kid.style.height;
-        kid.dataset.exMaxW = kid.style.maxWidth;
-        kid.dataset.exMaxH = kid.style.maxHeight;
-        if (fit === "fill") {
-          kid.style.width = "100%"; kid.style.height = "100%";
-          kid.style.maxWidth = ""; kid.style.maxHeight = "";
-        } else if (fit === "contain") {
-          kid.style.width = "auto"; kid.style.height = "auto";
-          kid.style.maxWidth = "100%"; kid.style.maxHeight = "100%";
-        }
+        kid.style.width = "100%";
+        kid.style.height = "100%";
       } else if (kid.dataset.exW !== undefined) {
         kid.style.width = kid.dataset.exW;
         kid.style.height = kid.dataset.exH;
-        kid.style.maxWidth = kid.dataset.exMaxW;
-        kid.style.maxHeight = kid.dataset.exMaxH;
         delete kid.dataset.exW; delete kid.dataset.exH;
-        delete kid.dataset.exMaxW; delete kid.dataset.exMaxH;
       }
     }
   };
 
+  /** The stage's size inside the backdrop, for whichever fit. */
+  const layOut = () => {
+    if (fit === "contain") {
+      // Grown as well as shrunk. A lab canvas is 480×300 and a window is not;
+      // leaving it at its intrinsic size would put a small picture in the
+      // middle of a large black field, which is not what asking for this
+      // means. The aspect is kept, so the picture is never stretched.
+      const a = aspectOf();
+      const byWidth = [window.innerWidth, window.innerWidth / a];
+      const [w, h] = byWidth[1] <= window.innerHeight
+        ? byWidth : [window.innerHeight * a, window.innerHeight];
+      stage.style.width = `${Math.round(w)}px`;
+      stage.style.height = `${Math.round(h)}px`;
+    } else if (fit === "refit") {
+      // Full width so the contents have the window to measure themselves
+      // against, and auto height so the backdrop can centre what they decide
+      // on. Full height would pin a wide figure to the top of the screen.
+      stage.style.width = "100%";
+      stage.style.height = "auto";
+    } else {
+      stage.style.width = "100%";
+      stage.style.height = "100%";
+    }
+  };
+
+  const onResize = () => { if (expanded) layOut(); };
+
   function expand() {
     if (expanded) return;
-    // `position: fixed` takes the stage out of the flow, so the page behind
-    // would reflow and lose its scroll position while nobody can see it — and
-    // put you somewhere else on the way back. A placeholder of the same height
-    // holds the slot open.
+    // The stage moves into a backdrop rather than becoming one. Keeping the
+    // stage the same box as its picture is what lets an absolutely positioned
+    // overlay — a selection marquee, a grid — stay where it was drawn.
     const box = stage.getBoundingClientRect();
     placeholder = document.createElement("div");
     placeholder.style.height = `${Math.round(box.height)}px`;
     stage.after(placeholder);
 
+    backdrop = document.createElement("div");
+    backdrop.dataset.expandBackdrop = "";
+    backdrop.style.cssText = `position:fixed;inset:0;z-index:${layer};background:${background};`
+      + "display:flex;align-items:center;justify-content:center;";
+    document.body.append(backdrop);
+
     for (const k of KEYS) saved[k] = stage.style[k];
-    stage.style.position = "fixed";
-    stage.style.inset = "0";
-    stage.style.zIndex = String(LAYER);
-    stage.style.background = background;
-    stage.style.width = "";               // inset already says how wide
-    stage.style.height = "";
-    // A margin still applies to a fixed box, and comes off the size `inset`
-    // gave it: Music's stage is a card with a rem underneath it, and it filled
-    // the window fifteen pixels short until this line.
+    // A margin still applies here and would come off the box: Music's stage is
+    // a card with a rem underneath, and it sat a rem short until this line.
     stage.style.margin = "0";
-    if (fit === "none") {
-      stage.style.padding = "1rem";
-      stage.style.overflow = "auto";
-    } else {
-      stage.style.display = "flex";
-      stage.style.alignItems = "center";
-      stage.style.justifyContent = "center";
-    }
+    if (fit === "none") { stage.style.padding = "1rem"; stage.style.overflow = "auto"; }
+    backdrop.append(stage);
+    layOut();
     dressKids(true);
 
-    // A way out that does not depend on knowing about Esc, and does not
-    // depend on the button that opened it — that one is under the picture now.
+    // A way out that does not depend on knowing about Esc, and does not depend
+    // on the button that opened it — that one is behind the backdrop now. It
+    // lives on the backdrop rather than the stage, so nothing that dresses the
+    // stage's children can reach it.
     exitBtn = document.createElement("button");
-    exitBtn.dataset.expandChrome = "";
     exitBtn.textContent = "Exit (Esc)";
     exitBtn.style.cssText = "position:absolute;top:.6rem;right:.6rem;z-index:1;opacity:.75";
     exitBtn.onclick = collapse;
-    stage.append(exitBtn);
+    backdrop.append(exitBtn);
 
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
     expanded = true;
     button.textContent = exitLabel;
     if (onChange) onChange(true);
@@ -144,10 +186,14 @@ export function expandButton(stage, opts = {}) {
   function collapse() {
     if (!expanded) return;
     document.removeEventListener("keydown", onKey);
+    window.removeEventListener("resize", onResize);
     dressKids(false);
     for (const k of KEYS) stage.style[k] = saved[k] || "";
-    if (exitBtn) { exitBtn.remove(); exitBtn = null; }
-    if (placeholder) { placeholder.remove(); placeholder = null; }
+    // Back into the slot the placeholder held open, so the page is where it
+    // was rather than wherever the reflow left it.
+    if (placeholder) { placeholder.replaceWith(stage); placeholder = null; }
+    if (backdrop) { backdrop.remove(); backdrop = null; }
+    exitBtn = null;
     expanded = false;
     button.textContent = label;
     if (onChange) onChange(false);
