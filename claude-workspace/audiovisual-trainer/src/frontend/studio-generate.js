@@ -1125,6 +1125,320 @@ float marks = min(m.y, BEACONS);
 if (uv.y < 0.035 && uv.x * BEACONS < marks) col = mix(col, vec3(1.0, 0.62, 0.28), 0.85);
 finish(col)`
   },
+  { id: "world", label: "Open world — infinite terrain, biomes, a map that follows you",
+    preview: [640, 360], steps: 1,
+    source:
+`// An open world: terrain with no edge, biomes that decide what a place is
+// made of, and a map of the land that follows you.
+//
+// The trick that makes it affordable is the rover's, taken further. march()
+// calls scene() about a hundred times a pixel, so nothing in scene() may be
+// arithmetic worth the name — and an open world's terrain is a great deal of
+// arithmetic. So the land near you is *baked*: one pass writes a height map
+// into the second state target, centred on wherever you are standing, and
+// scene() is one filtered fetch.
+//
+// That is what makes it infinite rather than large. The map does not cover
+// the world; it covers a hundred and eighty metres of it, and it follows you.
+// Walk a thousand metres and the map has been rebuilt a thousand times, each
+// time from the world's own functions at your new position — there is no
+// stored world to run out of.
+//
+// The biomes are the same idea. Two low-frequency fields — how high the land
+// wants to be, and how wet — decide everything: which height function shapes
+// the ground, which surface is on it, how it takes the light. They are baked
+// into the map alongside the height, so choosing a biome costs a fetch too,
+// and the shading picks up a *blend* of the ones nearby rather than switching
+// at a line. One program, several looks: a single view sees four biomes at
+// once, so they cannot be separate shaders, but they are separate functions
+// and they read like it.
+uniform sampler2D u_keys;
+uniform float walk;      // @range 3 40 @default 13 @help metres a second
+uniform float turn;      // @range 0.5 3 @default 1.7 @help radians a second
+uniform float hour;      // @range 0 1 @default 0.32 @help sun height
+uniform float fogFar;    // @range 30 160 @default 86 @help where the air closes in
+uniform vec3  sandC;     // @color @default #cbab72
+uniform vec3  grassC;    // @color @default #466b34
+uniform vec3  rockC;     // @color @default #6d655a
+uniform vec3  snowC;     // @color @default #eef3f8
+uniform vec3  waterC;    // @color @default #163c50
+
+// How much world the map holds. Larger than the far plane on purpose: the
+// edge of the map is then always further away than the fog, so nothing ever
+// sees where it stops.
+const vec2 WORLD = vec2(190.0, 190.0);
+
+float fbmN(vec2 p, int n) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 7; i++) { if (i >= n) break; v += a * noise(p); p *= 2.03; a *= 0.5; }
+  return v;
+}
+
+// ------------------------------------------------------------ the world
+// Everything below is evaluated once per *texel of the map*, never per march
+// step. That is the whole budget argument: a hundred and eighty metres of
+// terrain costs one pass, and looking at it costs one fetch.
+
+// Where the land wants to be high, and where it wants to be wet. Two fields
+// at very different scales, which is all a climate needs to be interesting.
+// The scales are the design. At 0.0043 the continents came out two hundred
+// metres across, which is an archipelago of stepping stones rather than
+// somewhere to walk; the wavelength is now about six hundred, so a landmass
+// takes a minute to cross and the sea is something you arrive at.
+float landAt(vec2 q)  { return fbmN(q * 0.0017, 5); }
+float moistAt(vec2 q) { return fbmN(q * 0.0052 + vec2(37.2, 11.9), 3); }
+
+/**
+ * One texel of the map: (height in metres, moisture, mountain-ness, 1).
+ * Sea level is y = 0, so "under water" is just a negative height.
+ */
+vec4 landform(vec2 q) {
+  float c = landAt(q);
+  float m = moistAt(q);
+  float e = (c - 0.415) * 104.0;                     // metres above the sea
+  // Mountains sharpen where the land is already high, which is why ranges
+  // have foothills rather than walls.
+  float mtn = smoothstep(10.0, 44.0, e);
+  e += mtn * (fbmN(q * 0.0115, 4) - 0.35) * 52.0;
+  // Dunes where it is dry and low; a gentler ripple everywhere else.
+  float dry = (1.0 - m) * (1.0 - smoothstep(4.0, 22.0, e));
+  e += dry * (fbmN(q * 0.055, 3) - 0.5) * 6.5;
+  e += (1.0 - mtn) * (fbmN(q * 0.032, 3) - 0.5) * 2.6;
+  // The shore flattens out, so a beach is a beach rather than a cliff.
+  e *= smoothstep(-3.0, 6.0, e) * 0.35 + 0.65;
+  return vec4(e, m, mtn, 1.0);
+}
+
+// ------------------------------------------------------------ the map
+// Centred on the walker, so the world scrolls under the map rather than the
+// map moving through the world.
+vec2 gEye2;                 // where the map is centred, this frame
+vec2 mapUv(vec2 q) { return (q - gEye2) / WORLD + 0.5; }
+
+float gWave;                // the sea's height this frame, once per pixel
+// How much of the fine detail survives at this distance — set once per pixel,
+// from how far the ray went. Declared here because the sea wants it too.
+float gNear;
+float ground(vec2 q) { return state2(mapUv(q)).r; }
+
+float scene(vec3 p) {
+  float land = p.y - ground(p.xz);
+  float sea = p.y - gWave;
+  return min(land, sea);
+}
+
+// The sea is flat enough to march as a plane and detailed enough to look wet,
+// which is a normal's job rather than a distance function's.
+vec3 seaNormal(vec2 q) {
+  float e = 0.35;
+  float h0 = sin(q.x * 0.7 + t * 1.1) * 0.05 + sin(q.y * 0.9 - t * 0.8) * 0.04
+           + noise(q * 0.6 + t * 0.2) * 0.06;
+  float hx = sin((q.x + e) * 0.7 + t * 1.1) * 0.05 + sin(q.y * 0.9 - t * 0.8) * 0.04
+           + noise(vec2(q.x + e, q.y) * 0.6 + t * 0.2) * 0.06;
+  float hy = sin(q.x * 0.7 + t * 1.1) * 0.05 + sin((q.y + e) * 0.9 - t * 0.8) * 0.04
+           + noise(vec2(q.x, q.y + e) * 0.6 + t * 0.2) * 0.06;
+  // Flattened with distance for the same reason the land's detail is: a wave
+  // whose crest is narrower than a pixel is not a wave, it is a shimmer, and
+  // at a grazing angle near the horizon every wave is.
+  vec3 n = normalize(vec3(h0 - hx, e, h0 - hy));
+  return normalize(mix(vec3(0.0, 1.0, 0.0), n, gNear * 0.75 + 0.25));
+}
+
+// The ground's normal, from the map rather than from the sum. Two texels
+// across, which is wide enough to be smooth and narrow enough to keep the
+// hills. The fine detail arrives as a perturbation at shading time, which is
+// six samples a pixel rather than a hundred.
+vec3 landNormal(vec2 q) {
+  vec2 e = WORLD / u_resolution * 1.5;
+  float hx = ground(q + vec2(e.x, 0.0)) - ground(q - vec2(e.x, 0.0));
+  float hy = ground(q + vec2(0.0, e.y)) - ground(q - vec2(0.0, e.y));
+  return normalize(vec3(-hx, 2.0 * e.x, -hy));
+}
+
+// ------------------------------------------------------------ the biomes
+// Each is a weight, and each weight is a look. Nothing switches: a shore is
+// sand becoming grass over a few metres, because the weights say so.
+vec4 gW;                    // sand, grass, rock, snow
+float gWet;                 // …and how much of this pixel is water
+
+void weigh(float h, float m, float mtn, float slope) {
+  float snow = smoothstep(26.0, 42.0, h) * smoothstep(0.62, 0.3, slope);
+  float rock = max(smoothstep(14.0, 30.0, h), smoothstep(0.45, 0.75, slope)) * (1.0 - snow);
+  float shore = 1.0 - smoothstep(0.4, 3.4, h);
+  float grass = smoothstep(0.25, 0.55, m) * (1.0 - rock) * (1.0 - snow) * (1.0 - shore * 0.75);
+  float sand = max(shore, (1.0 - smoothstep(0.2, 0.5, m)) * (1.0 - rock) * (1.0 - snow));
+  gW = vec4(sand, grass, rock, snow);
+  gW /= max(gW.x + gW.y + gW.z + gW.w, 1e-4);
+}
+
+// Every high-frequency term below is a lie at range: a ripple whose wavelength
+// is a third of a pixel does not read as sand, it reads as static, and it
+// crawls when you walk. One sample cannot average what it cannot see, so the
+// detail is faded out instead — which is what a mip chain does for a texture
+// and what nothing does for a function unless it is asked.
+
+// What each biome does to the surface it is on. This is the part that reads
+// as "a different shader over there": wind ripples in the sand, a fine mottle
+// in the grass, strata in the rock, and snow left smooth so it takes the sun.
+vec3 detailNormal(vec3 n, vec2 q, float h) {
+  if (gNear < 0.01) return n;
+  float ripple = sin(q.x * 1.7 + q.y * 0.7 + noise(q * 0.3) * 6.0) * 0.5 + 0.5;
+  vec3 sandN = n + vec3(ripple - 0.5, 0.0, (ripple - 0.5) * 0.4) * 0.4;
+  // Coarser and shallower than it was. Grass at a wavelength of twenty
+  // centimetres is not grass at walking distance, it is noise on a hill —
+  // what reads as a field is the patch, not the blade.
+  vec3 grassN = n + (vec3(noise(q * 2.6), 0.0, noise(q * 2.6 + 5.1)) - 0.5) * 0.26;
+  float strata = fract(h * 0.55 + noise(q * 0.7) * 0.6);
+  vec3 rockN = n + vec3(strata - 0.5, 0.0, noise(q * 2.2) - 0.5) * 0.55;
+  // Snow drifts: long and shallow, and the only thing that gives a white
+  // field any shape at all. Left flat, snow is the tone map's problem — every
+  // pixel over one, and a mountain reads as a sheet of paper.
+  float drift = noise(q * 0.42 + vec2(0.0, noise(q * 0.11) * 3.0));
+  vec3 snowN = n + vec3(drift - 0.5, 0.0, (drift - 0.5) * 0.5) * 0.3;
+  vec3 mixed = sandN * gW.x + grassN * gW.y + rockN * gW.z + snowN * gW.w;
+  return normalize(mix(n, mixed, gNear));
+}
+
+vec3 albedoOf(vec2 q, float h) {
+  // The same argument for the pigment: at range every one of these averages
+  // to its own mean, so it is mixed toward that rather than sampled.
+  float n1 = mix(0.5, noise(q * 1.7), gNear);
+  float n2 = mix(0.5, noise(q * 0.31) * 0.7 + noise(q * 1.9) * 0.3, gNear);
+  float n3 = mix(0.5, noise(q * 7.0), gNear);
+  float n4 = mix(0.5, fract(h * 0.55 + noise(q * 0.7) * 0.6), gNear);
+  float n5 = mix(0.5, noise(q * 4.0), gNear);
+  vec3 sand = srgbToLinear(sandC) * (0.86 + 0.24 * n1);
+  // Patches of it, at field scale, and a little of the sand it grows out of —
+  // a single green is a billiard table.
+  vec3 grass = mix(srgbToLinear(grassC), srgbToLinear(sandC) * 0.5, 0.18 + 0.3 * n2)
+             * (0.86 + 0.28 * n2) + vec3(0.02, 0.035, 0.0) * n3;
+  vec3 rock = srgbToLinear(rockC) * (0.74 + 0.42 * n4);
+  // Bright, not white. Snow's albedo really is near 0.9, but a surface at 0.9
+  // under a sun at 2.35 is three stops over and the tone map hands back paper.
+  // It is carried by the specular instead, which is what actually makes snow
+  // look like snow.
+  vec3 snow = srgbToLinear(snowC) * (0.55 + 0.12 * n5);
+  return sand * gW.x + grass * gW.y + rock * gW.z + snow * gW.w;
+}
+
+/**
+ * Somewhere to start.
+ *
+ * The world is a function rather than a place, so where the land *is* is not
+ * known until something asks. The first version put the walker at the origin
+ * and the origin turned out to be a hundred metres of open sea — which is a
+ * fair thing for a procedural world to do and a poor way to begin.
+ *
+ * So: a golden-angle spiral outward from the origin, taking the first point
+ * that is comfortably above the sea and not up a mountain. Forty-eight
+ * evaluations, once, in four texels.
+ *
+ * The radius has to be read against the world's own scale. The first version
+ * searched a hundred and twenty metres, which was plenty while the continents
+ * were two hundred across and found nothing at all once they were six
+ * hundred: every view for the first four hundred metres of walking was open
+ * sea. It now reaches two kilometres, which is past several coastlines.
+ */
+vec2 spawnPoint() {
+  for (int i = 1; i < 49; i++) {
+    float a = float(i) * 2.399963;
+    float r = 300.0 * sqrt(float(i));
+    vec2 q = vec2(cos(a), sin(a)) * r;
+    float h = landform(q).x;
+    if (h > 4.0 && h < 22.0) return q;
+  }
+  return vec2(0.0);
+}
+
+// ------------------------------------------------------------ the walker
+vec4 who()  { return state(vec2(0.5, 0.5) / u_resolution); }   // x, z, heading, speed
+vec4 meta() { return state(vec2(1.5, 0.5) / u_resolution); }   // metres walked, biome, -, -
+
+vec4 sim(vec2 uvv) {
+  vec2 texel = floor(gl_FragCoord.xy);
+  if (texel.y > 0.5 || texel.x > 3.5) return vec4(0.0);
+  bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
+  float dt = 1.0 / 60.0;
+  vec4 w = first ? vec4(spawnPoint(), 0.6, 0.0) : who();
+  vec4 m = first ? vec4(0.0) : meta();
+
+  float lf = max(keyDown(u_keys, 37.0), keyDown(u_keys, 65.0));
+  float rt = max(keyDown(u_keys, 39.0), keyDown(u_keys, 68.0));
+  float fw = max(keyDown(u_keys, 38.0), keyDown(u_keys, 87.0));
+  float bk = max(keyDown(u_keys, 40.0), keyDown(u_keys, 83.0));
+  float run = 1.0 + keyDown(u_keys, 16.0) * 1.6;
+
+  float heading = w.z + (lf - rt) * turn * dt;
+  float sp = (fw - bk) * walk * run;
+  vec2 dir = vec2(sin(heading), cos(heading));
+  vec2 pos = w.xy + dir * sp * dt;
+
+  if (texel.x < 0.5) return vec4(pos, heading, sp);
+  if (texel.x < 1.5) return vec4(m.x + abs(sp) * dt, 0.0, 0.0, 1.0);
+  return vec4(0.0);
+}
+
+// One texel of the map, baked around where the walker is now. Every texel,
+// every frame: the map is a hundred and eighty metres wide and the walker
+// moves, so nothing in it can be reused for long — and one fbm per texel is
+// a great deal cheaper than a hundred per pixel.
+vec4 sim2(vec2 q) {
+  vec2 eye = frame == 0 ? spawnPoint() : who().xy;
+  return landform(eye + (q - 0.5) * WORLD);
+}
+
+// ------------------------------------------------------------ the picture
+vec4 w = who();
+gEye2 = w.xy;
+gWave = 0.0;
+
+vec3 fwd = vec3(sin(w.z), 0.0, cos(w.z));
+float standing = ground(w.xy);
+vec3 ro = vec3(w.x, max(standing, gWave) + 1.75, w.y);
+mat3 cam = lookAt(ro, ro + fwd + vec3(0.0, -0.12, 0.0));
+vec3 rd = cam * normalize(vec3(p, 1.55));
+vec3 sun = normalize(vec3(0.42, 0.16 + hour * 0.8, 0.36));
+
+vec3 col = sky(rd, sun);
+float tHit = march(ro, rd, fogFar);
+if (tHit > 0.0) {
+  vec3 hit = ro + rd * tHit;
+  gNear = 1.0 - smoothstep(9.0, 52.0, tHit);
+  vec4 land = state2(mapUv(hit.xz));
+  // Wetness rather than wet. At a hundred metres one pixel covers several
+  // metres of shoreline, and a hard test there makes the coast a dotted line
+  // — the ray lands on the sea or on the sand depending on nothing. Over a
+  // band, the coast is a coast.
+  gWet = smoothstep(0.35, -0.15, land.x - gWave);
+  vec3 nLand = landNormal(hit.xz);
+  float slope = 1.0 - nLand.y;
+  weigh(land.x, land.y, land.z, slope);
+
+  vec3 n = normalize(mix(detailNormal(nLand, hit.xz, land.x), seaNormal(hit.xz), gWet));
+  vec3 albedo = mix(albedoOf(hit.xz, land.x), srgbToLinear(waterC), gWet);
+
+  float sh = softShadow(hit + n * 0.06, sun, 9.0);
+  float lit = max(dot(n, sun), 0.0);
+  float occ = mix(ao(hit, n), 1.0, gWet);
+  vec3 lin = albedo * (lit * sh * vec3(1.0, 0.94, 0.84) * 2.35
+                     // Snow's shadows are the sky's colour, which is why they
+                     // are blue and why nothing else on the ground is.
+                     + occ * mix(vec3(0.13, 0.19, 0.31), vec3(0.20, 0.30, 0.52), gW.w)
+                       * (0.5 + 0.5 * n.y));
+  // What the biome does with the light, rather than only with the pigment:
+  // snow and water throw it back, sand and grass do not.
+  float gloss = gW.w * 0.75 + gWet * 0.95 + gW.z * 0.12;
+  vec3 hv = normalize(sun - rd);
+  lin += pow(max(dot(n, hv), 0.0), mix(30.0, 260.0, gloss)) * sh * gloss * 1.8;
+  float fr = fresnel(max(dot(n, -rd), 0.0), 0.02);
+  lin = mix(lin, sky(reflect(rd, n), sun), fr * (gWet * 0.85 + gW.w * 0.25));
+  // Air, not milk: enough to say "far away" and not so much that the middle
+  // distance loses its shape.
+  col = mix(sky(rd, sun), lin, exp(-pow(tHit / fogFar, 1.6) * 2.4));
+}
+
+finish(col)` },
+
   { id: "snake", label: "Snake — the grid the game writes into itself", preview: [640, 480], steps: 1,
     probes: { ate: { texel: [3, 0], channel: "r" }, died: { texel: [3, 0], channel: "g" },
               turned: { texel: [3, 0], channel: "b" }, score: { texel: [1, 0], channel: "g" } },

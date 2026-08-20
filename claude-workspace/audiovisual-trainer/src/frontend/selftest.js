@@ -2897,6 +2897,112 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                  + "own slot with every style byte for byte"
                : problems.join(" · ") }); }
 
+    // The open world: infinite terrain, and biomes that are data rather than
+    // branches. Three claims, three numbers.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const parts = splitSketch(g.source);
+      const bare = stripComments(g.source);
+
+      // 1. scene() is still one fetch. This is the whole reason an open world
+      //    is affordable here: march() calls it about a hundred times a pixel,
+      //    and everything it would otherwise have to work out — the height,
+      //    the climate, which biome — was baked into the map by one pass.
+      const sceneFn = parts.declTexts.find((t) => /\bfloat\s+scene\s*\(\s*vec3/.test(stripComments(t))) || "";
+      const groundFn = parts.declTexts.find((t) => /\bfloat\s+ground\s*\(\s*vec2/.test(stripComments(t))) || "";
+      const reads = ((stripComments(sceneFn) + stripComments(groundFn))
+        .match(/\bstate2?\s*\(|\btexture2D\s*\(/g) || []).length;
+      const fbmInScene = /\bfbmN?\s*\(|\bnoise\s*\(/.test(stripComments(sceneFn) + stripComments(groundFn));
+      push({ group: "More games", name: "an open world whose scene() is one fetch", ok: reads === 1 && !fbmInScene,
+             detail: reads === 1 && !fbmInScene
+               ? "the terrain, the climate and the biome weights are baked into the second state target once a "
+                 + "frame; scene() reads one texel of it. The alternative is a hundred fbm evaluations a pixel, "
+                 + "which is the mistake this codebase has now made once and measured twice"
+               : `${reads} reads in scene()/ground()${fbmInScene ? ", and noise in there too" : ""}` }); }
+
+    // 2. It has no edge, and it is several places rather than one.
+    //
+    //    Both are decided by the *climate*, not by the walker, so both are
+    //    asked of the climate directly: sample four square kilometres of it,
+    //    at the origin and then twenty and two hundred kilometres out. A world
+    //    that runs out looks like sea everywhere, or like one biome, or like
+    //    the same picture twice — and none of those is what comes back.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const cut = g.source.indexOf("// ---------------------------------"
+        + "--------------------------- the walker");
+      const S = 96;
+      const censusAt = (ox, oz) => {
+        const probe = g.source.slice(0, cut) + `
+vec2 q = (uv - 0.5) * 4000.0 + vec2(${ox}.0, ${oz}.0);
+vec4 L = landform(q);
+weigh(L.x, L.y, L.z, 0.15);
+vec3 c = vec3(1.0, 0.0, 0.0) * gW.x + vec3(0.0, 1.0, 0.0) * gW.y
+       + vec3(0.0, 0.0, 1.0) * gW.z + vec3(1.0, 1.0, 1.0) * gW.w;
+if (L.x < 0.0) c = vec3(0.0);
+c`;
+        const d = renderSketch(probe, S, S, { time: 0 }).getContext("2d").getImageData(0, 0, S, S).data;
+        const t = { sea: 0, sand: 0, grass: 0, rock: 0, snow: 0 };
+        let sig = 0;
+        for (let i = 0; i < S * S; i++) {
+          const r = d[i * 4], gg = d[i * 4 + 1], b = d[i * 4 + 2];
+          sig = (sig * 31 + r + gg * 3 + b * 7) >>> 0;
+          if (r < 20 && gg < 20 && b < 20) t.sea++;
+          else if (r > 150 && gg > 150 && b > 150) t.snow++;
+          else if (r >= gg && r >= b) t.sand++;
+          else if (gg >= b) t.grass++;
+          else t.rock++;
+        }
+        return { t, sig, pc: (n) => (100 * n) / (S * S) };
+      };
+      const here = censusAt(0, 0), far = censusAt(20000, -20000), further = censusAt(200000, 140000);
+      const all = [here, far, further];
+      // Every biome happens somewhere, nowhere is all sea, and no two of these
+      // are the same picture.
+      const kinds = ["sea", "sand", "grass", "rock", "snow"];
+      const missing = kinds.filter((k) => all.every((c) => c.pc(c.t[k]) < 0.4));
+      const drowned = all.filter((c) => c.pc(c.t.sea) > 80).length;
+      const same = here.sig === far.sig || far.sig === further.sig || here.sig === further.sig;
+      push({ group: "More games", name: "a world with no edge, and more than one kind of place in it",
+             ok: missing.length === 0 && drowned === 0 && !same,
+             detail: missing.length === 0 && drowned === 0 && !same
+               ? `four square kilometres at the origin: `
+                 + kinds.map((k) => `${k} ${here.pc(here.t[k]).toFixed(0)}%`).join(", ")
+                 + `; twenty kilometres out: ${far.pc(far.t.sea).toFixed(0)}% sea, `
+                 + `${far.pc(far.t.grass).toFixed(0)}% grass; two hundred kilometres out: `
+                 + `${further.pc(further.t.sea).toFixed(0)}% sea, ${further.pc(further.t.rock).toFixed(0)}% rock. `
+                 + "Three different places, because the world is a function of where you are and not a stored map"
+               : same ? "two samples two hundred kilometres apart are the same picture"
+               : missing.length ? `${missing.join(", ")} never occurs anywhere`
+               : "somewhere is nothing but sea" }); }
+
+    // 3. And the walker actually walks: the map is rebuilt around wherever it
+    //    is, so the picture has to keep changing as it goes.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const values = {};
+      for (const u of parseUniforms(g.source)) if (u.value) values[u.name] = u.value;
+      values.walk = [40];                                   // the fastest it goes
+      const kb = new Keyboard();
+      let changed = 0, last = null, lit = 0;
+      const W2 = 96, H2 = 64;
+      for (let f = 0; f < 300; f++) {
+        kb.clear(); kb.press(KEY.up); kb.press(16);         // forward, running
+        const out = renderSketch(g.source, W2, H2, { keys: kb, values, steps: 1, reset: f === 0, time: f / 60 });
+        kb.tick();
+        const d = out.getContext("2d").getImageData(0, 0, W2, H2).data;
+        let hsh = 0;
+        for (let i = 0; i < d.length; i += 23) hsh = (hsh * 31 + d[i]) >>> 0;
+        if (last !== null && hsh !== last) changed++;
+        last = hsh;
+        if (f === 299) for (let i = 0; i < W2 * H2; i++) if (d[i * 4] > 30) lit++;
+      }
+      // 40 m/s running for 300 frames is about three hundred metres, which is
+      // more than the map is wide — so every texel of it has been rebuilt from
+      // somewhere the walker had not been when it started.
+      push({ group: "More games", name: "the map follows the walker, and is rebuilt from scratch as it goes",
+             ok: changed > 240 && lit > 200,
+             detail: `the picture changed on ${changed} of 299 frames over about three hundred metres — further `
+               + "than the map is wide, so nothing on screen at the end was on the map at the start. "
+               + "One fbm per texel per frame, against a hundred per pixel if scene() did the arithmetic itself" }); }
+
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is
     // √(budget / measured) — snapped down to a step, and never above 1.

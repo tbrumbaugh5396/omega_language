@@ -2106,6 +2106,74 @@ confirms the placeholder, confirms there is a way out from inside that does not
 depend on the button now underneath the picture, presses Escape, and holds
 every style to coming back byte for byte.
 
+### Phase 28 — An open world *(L)* — **shipped**
+
+A first-person world with no edge: terrain, a sea, four biomes, and a map of
+the land that follows you. `world` in Generate.
+
+**The whole design is one idea repeated.** `march()` calls `scene()` about a
+hundred times a pixel, and an open world's terrain is a great deal of
+arithmetic — so none of it happens there. One pass bakes a hundred and ninety
+metres of land into the second state target, centred on wherever the walker is
+standing, and `scene()` is a single filtered fetch. That is the rover's lesson
+from Phase 25, and it is what makes the world *infinite* rather than large: the
+map does not cover the world, it covers what you can see of it, and it is
+rebuilt every frame from the world's own functions at your new position. Walk
+four kilometres and it has been rebuilt fourteen thousand times. There is no
+stored world to run out of.
+
+The biomes are the same trick. Two low-frequency fields — how high the land
+wants to be, and how wet — decide which height function shapes the ground,
+which surface is on it, and how it takes the light. They are baked into the map
+beside the height, so choosing a biome costs a fetch too, and the shading picks
+up a *blend* of the ones nearby rather than switching at a line: a shore is sand
+becoming grass over a few metres.
+
+**One program, several looks.** A single view sees four biomes at once, so they
+cannot be separate shaders — but they are separate functions and they read like
+it: wind ripples in the sand, patches at field scale in the grass, strata in the
+rock, long shallow drifts in the snow, and a sea with its own normal and its own
+fresnel.
+
+| held to | number |
+|---|---|
+| a frame at 640×360, Intel HD 6000 | **4.5 ms — 222 fps** |
+| the same at 800×450 | 7.4 ms — 136 fps |
+| `scene()` and `ground()` together | **one** texture read, and no noise |
+| four square kilometres at the origin | 42% sea, 18% sand, 22% grass, 18% rock, 1% snow |
+| the same twenty and two hundred kilometres out | three different places, no two the same picture |
+
+**Four things measured rather than assumed**, each of which had gone wrong
+first.
+
+*The origin was a hundred metres of open sea.* The world is a function rather
+than a place, so where the land *is* is not known until something asks — the
+walker now spirals outward until it finds ground comfortably above the sea.
+The first version searched a hundred and twenty metres, which was plenty while
+the continents were two hundred across and found nothing at all once they were
+six hundred: every view for the first four hundred metres of walking was water.
+
+*The continents were stepping stones.* At a wavelength of two hundred metres a
+biome map is an archipelago you cross in ten seconds. Six hundred gives a
+landmass that takes a minute, and a coastline you arrive at rather than fall
+off.
+
+*The detail was static.* A ripple whose wavelength is a third of a pixel does
+not read as sand; it reads as fizz, and it crawls when you walk. One sample
+cannot average what it cannot see, so every high-frequency term — normal and
+pigment both — is faded toward its own mean with distance. That is what a mip
+chain does for a texture and what nothing does for a function unless it is
+asked.
+
+*Snow was a sheet of paper.* Its albedo really is near 0.9, and 0.9 under a sun
+at 2.35 is three stops over: the tone map hands back white with no shape at
+all. It is carried by the specular instead, with drifts for form and the sky's
+own colour in its shadows, which is what makes snow look like snow.
+
+*Left:* nothing on the land but the land — no trees, no rocks, no creatures.
+Scatter geometry is a per-march-step cost in a marcher that currently pays for
+one fetch, so it wants measuring before it is written, not after.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2172,6 +2240,7 @@ every style to coming back byte for byte.
 | 25.1 | Tiling on WebGPU; the rover's terrain as data | M | 24.1 | past the device's maximum, byte-identical; 74 fps |
 | 26.1 | Fullscreen; the same care for the other 3D sketches | S | 25.1 | bounce 9.3 → 2.8 ms, and lit like the still life |
 | 27.1 | The picture filling the window, ten places | S | 26.1 | in-page, no permission to be refused; four fits |
+| 28.1 | An open world — infinite, four biomes — **shipped** | L | 25.1 | 4.5 ms; scene() is one fetch of a map that follows you |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
