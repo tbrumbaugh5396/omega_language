@@ -2722,6 +2722,58 @@ two drawn rings rather than geometry; and the can floats, because rotating
 about its own centre and standing on a floor are different requirements and it
 was asked to do the first.
 
+### Phase 36 — A can whose size you can change, and a picture that survives it *(S)* — **shipped**
+
+Height and radius were already sliders. What they were not was *safe to move*:
+widen the can and the label stretched with it, silently, because the band was
+two numbers and the picture was squashed into whatever they said.
+
+**The picture's shape now decides the band, not the other way round.** In
+`undistorted` — the default — the label goes round exactly once per turn and
+keeps its own proportions; its height on the can follows from the can's
+circumference. Too tall for the can and it is cropped; too short and there is
+bare metal above and below it, which is what a real label does.
+
+Measured, straight on and still: doubling the radius takes the band from **31
+pixels to 66**, a factor of **2.13** — the circumference doubled, so an
+undistorted picture had to get twice as tall. Stretched to the sliders
+instead, the same change gives **57 to 60**, a factor of **1.05**, which is
+the perspective and nothing else. Double the radius again and the label runs
+off the ends, so it is cropped rather than squashed and stops at **85**.
+
+`stretch` is still there, one click away, because a label that must fill a
+band is a real thing to want. It is not the default because its failure is
+silent.
+
+**The join.** The host binds a chosen image `CLAMP_TO_EDGE`, which is right
+for a picture pasted flat and wrong for one wrapped round something: at the
+seam the last column is blended with itself instead of with the first, and the
+seam is exactly where a wrap has to be invisible. `REPEAT` would fix it and is
+not available — a picture you choose is not guaranteed to be a power of two,
+and GLSL ES 1.00 will not repeat one that is not.
+
+So the two columns either side of the sample are fetched by hand, wrapped with
+`mod`, and mixed. Sampling at exact texel centres in x means the hardware's
+own filtering does nothing there and everything in y, which is what is wanted:
+the seam is a horizontal problem only. Measured against letting the host do
+it, with a test picture whose first and last columns are opposite colours:
+**540 pixels** differ, and they are all at the join.
+
+**The floor follows.** A fixed plane was fine while the height slider stopped
+at 2.4 and became a can cut off at the knees the moment it went further.
+
+**Two small parser lessons, both found by using it.** `@options` splits on
+commas and takes a *single token*, so `stretch,wrap true` arrived as
+`stretch,wrap` and the rest went on the floor — one word an option. And the
+stand-in's circle needed the label patch's real proportions passed in, or it
+became an oval the moment the radius moved: the one thing on the can that
+checks the wrapping would have been the first thing to start lying about it.
+
+*Left:* `@options` still swallows a multi-word option silently, which is the
+same class of bug as the `@label` one fixed last phase and deserves the same
+treatment; and the crop is centred, with no way to say which part of a tall
+picture to keep.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2798,6 +2850,7 @@ was asked to do the first.
 | 33.1 | Footsteps, collision, a map, a body — **shipped** | L | 32.1 | blocked 16/2400 frames; body 2.5%; map 5.5× cheaper |
 | 34.1 | Things to pick up, and a bag — **shipped** | L | 33.1 | table in row 1, 421 slots; +0.29 ms; 1,989 px gone |
 | 35.1 | A can, solved rather than marched — **shipped** | M | — | yaw moves 0 silhouette pixels; @label parser fixed |
+| 36.1 | A can you can resize — **shipped** | S | 35.1 | band 31→66 px with radius (×2.13); seam 540 px |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

@@ -3606,6 +3606,80 @@ c`;
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 
+    // …and the same can, resized.
+    try {
+      const g = GENERATE_PRESETS.find((x) => x.id === "can");
+      const CW = 300, CH = 220;
+      const us = parseUniforms(g.source);
+      const base = {};
+      for (const u of us) if (u.value) base[u.name] = u.value.slice();
+      // Straight on and still, so nothing here is measuring the animation.
+      const flat = { yaw: [0], pitch: [0], roll: [0], spin: [0], rays: [1] };
+
+      // The label band on its own — white where the picture is, black
+      // everywhere else. Counting saturated pixels instead was a measurement
+      // of the stand-in's cream stripes, which are very nearly grey.
+      const bandSrc = g.source
+        .replace("vec3 col = mix(vec3(0.075, 0.082, 0.10), vec3(0.014, 0.016, 0.024), smoothstep(-0.9, 1.1, pp.y));",
+                 "vec3 col = vec3(0.0);")
+        .replace("col = base * (0.16 + 1.5 * lit) * srgbToLinear(lightC);", "col = vec3(0.0);")
+        .replace("  col = lin;", "  col = albedo;")
+        .replace("    return metal * (0.72 + 0.5 * smoothstep(0.86, 0.99, rr));", "    return vec3(0.0);")
+        .replace("    return metal * (0.78 + 0.34 * smoothstep(0.0, 0.06, abs(v - 0.5)));", "    return vec3(0.0);")
+        .replace("  return label_size.x > 0.5\n    ? srgbToLinear(wrapSample(vec2(u, 1.0 - lv)).rgb)\n    : standIn(vec2(u, lv), asp);",
+                 "  return vec3(1.0);");
+      const bandH = (over) => {
+        const d = renderSketch(bandSrc, CW, CH, { frame: 0, time: 0, values: { ...base, ...flat, ...over } })
+          .getContext("2d").getImageData(0, 0, CW, CH).data;
+        let n = 0;
+        for (let y = 0; y < CH; y++) if (d[(y * CW + (CW >> 1)) * 4] > 150) n++;
+        return n;
+      };
+      const uSmall = bandH({ radius: [0.21] }), uBig = bandH({ radius: [0.42] });
+      const sSmall = bandH({ radius: [0.21], fit: [0] }), sBig = bandH({ radius: [0.42], fit: [0] });
+      const clamped = bandH({ radius: [0.84] });
+
+      // The join. A test picture whose first and last columns are opposite
+      // colours, and the same sketch sampling it the host's way instead.
+      const im = document.createElement("canvas");
+      im.width = 16; im.height = 8;
+      const icx = im.getContext("2d");
+      for (let x = 0; x < 16; x++) {
+        icx.fillStyle = x === 0 ? "#ff2020" : (x === 15 ? "#2040ff" : "#909090");
+        icx.fillRect(x, 0, 1, 8);
+      }
+      const plainSrc = g.source.replace("srgbToLinear(wrapSample(vec2(u, 1.0 - lv)).rgb)",
+                                        "srgbToLinear(texture2D(label, vec2(u, 1.0 - lv)).rgb)");
+      // A quarter turn brings the join round to the front, where it can be seen.
+      const seamAt = { ...flat, yaw: [1.5707963], fit: [0] };
+      const shotI = (src) => renderSketch(src, CW, CH,
+        { frame: 0, time: 0, values: { ...base, ...seamAt }, images: { label: im } })
+        .getContext("2d").getImageData(0, 0, CW, CH).data;
+      const a2 = shotI(g.source), b2 = shotI(plainSrc);
+      let seam = 0;
+      for (let i = 0; i < CW * CH; i++) {
+        if (Math.abs(a2[i * 4] - b2[i * 4]) + Math.abs(a2[i * 4 + 1] - b2[i * 4 + 1])
+          + Math.abs(a2[i * 4 + 2] - b2[i * 4 + 2]) > 10) seam++;
+      }
+
+      const grew = uBig / Math.max(uSmall, 1), stayed = sBig / Math.max(sSmall, 1);
+      const ok = grew > 1.7 && grew < 2.4 && stayed > 0.8 && stayed < 1.25
+        && clamped > uBig && clamped < uBig * 1.5 && seam > 40;
+      push({ group: "Generate presets", name: "a picture that stays a picture when the can changes size", ok,
+             detail: `doubling the radius doubles the circumference, so an undistorted label has to get `
+               + `twice as tall: ${uSmall} pixels to ${uBig}, a factor of ${grew.toFixed(2)}. Stretched to `
+               + `the sliders' band instead it goes ${sSmall} to ${sBig} — ${stayed.toFixed(2)}, which is `
+               + `the perspective and nothing else, and which is the mode's silent failure: the picture `
+               + `distorts and nothing says so. Double it again and the label runs off the ends of the can, `
+               + `so it is cropped rather than squashed and stops at ${clamped}. And the join: ${seam} `
+               + `pixels differ from letting the host sample it, because the host clamps an image at its `
+               + `edges — right for a picture pasted flat, wrong for one wrapped round something, and the `
+               + `join is exactly where a wrap has to be invisible` });
+    } catch (e) {
+      push({ group: "Generate presets", name: "a picture that stays a picture when the can changes size",
+             ok: false, detail: String(e.message).split("\n")[0] });
+    }
+
     // An annotation that ate the ones after it.
     { const one = parseUniforms("uniform float k; // @toggle @label the switch @default 1 @help why");
       const two = parseUniforms("uniform float k; // @range 0 4 @label a name @step 2");

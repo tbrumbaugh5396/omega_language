@@ -1174,9 +1174,24 @@ uniform float roll;       // @range -3.15 3.15 @default -0.15 @help lean it over
 uniform float spin;       // @range -1 1 @default 0.12 @help and keep turning, radians a second
 uniform vec2  slide;      // @pad @default 0.5 0.5 @help where it stands, across and up
 uniform float depth;      // @range -2.5 2.5 @default 0 @help and how far away
-uniform float radius;     // @range 0.2 0.9 @default 0.42
-uniform float height;     // @range 0.4 2.4 @default 1.15
-uniform float wraps;      // @range 0.5 4 @default 1 @step 0.5 @help times the picture goes round
+uniform float radius;     // @range 0.15 1.4 @default 0.42
+uniform float height;     // @range 0.3 3.2 @default 1.15
+uniform float wraps;      // @range 1 4 @default 1 @step 1 @int @help times the picture goes round
+// How the picture meets a can whose size you are allowed to change.
+//
+//   stretch    the label fills the band between the two sliders, whatever
+//              that does to the picture's proportions.
+//   undistorted  it goes round exactly, once per turn, and keeps its own
+//                shape: its height on the can follows from the can's
+//                circumference. Too tall for the can and the top and bottom
+//                are cropped; too short and there is metal above and below
+//                it, which is what a real label does.
+//
+// The second is the default because the first mode's failure is silent — you
+// widen the can, the picture stretches with it, and nothing tells you.
+// (One word an option: @options splits on commas and takes a single token,
+// so "wrap true" arrived as "wrap" and the rest went on the floor.)
+uniform float fit;        // @options stretch,undistorted @default 1 @label the picture
 uniform float bandLo;     // @range 0 0.5 @default 0.09 @help where the label starts up the can
 uniform float bandHi;     // @range 0.5 1 @default 0.9
 uniform float lightTurn;  // @range -3.15 3.15 @default -1.35 @help where the lamp is
@@ -1198,6 +1213,52 @@ uniform float shadowOn;   // @toggle @label shadow @default 1
 uniform float rays;       // @range 1 3 @step 1 @int @default 2 @help rays a pixel, squared
 
 const float TAU = 6.2831853;
+
+/** The picture's own proportions, or the stand-in's. */
+float imgAspect() {
+  return label_size.x > 0.5 ? label_size.x / max(label_size.y, 1.0) : 2.6;
+}
+
+// The host clamps an image at its edges, which is right for a picture pasted
+// flat and wrong for one wrapped round something: at the join the last column
+// is blended with itself instead of with the first, and the join is precisely
+// where a wrap has to be invisible. REPEAT would fix it and is not available —
+// a picture you choose is not guaranteed to be a power of two, and GLSL ES
+// 1.00 will not repeat one that is not.
+//
+// So the two columns either side of the sample are fetched by hand, wrapped
+// with mod, and mixed. Sampling at exact texel centres in x means the
+// hardware's own filtering does nothing there and everything in y, which is
+// what is wanted: the seam is a horizontal problem only.
+vec4 wrapSample(vec2 st) {
+  float wpx = max(label_size.x, 1.0);
+  float x = st.x * wpx - 0.5;
+  float f = fract(x);
+  float i0 = floor(x);
+  vec2 a = vec2((mod(i0, wpx) + 0.5) / wpx, st.y);
+  vec2 b = vec2((mod(i0 + 1.0, wpx) + 0.5) / wpx, st.y);
+  return mix(texture2D(label, a), texture2D(label, b), f);
+}
+
+/**
+ * Where the label sits up the wall, as a pair of fractions, and how much of
+ * the picture's height is used.
+ *
+ * The whole reason this is a function rather than two sliders is that the
+ * can's size is meant to be changed. Widen it and the circumference grows;
+ * a picture that keeps its proportions must then get taller, and if it runs
+ * off the ends of the can it must be cropped rather than squashed.
+ */
+vec3 labelBand(float rad, float hgt) {
+  float lo = min(bandLo, bandHi), hi = max(bandLo, bandHi);
+  if (fit < 0.5) return vec3(lo, hi, 1.0);          // stretch: exactly as told
+  float arc = TAU * rad / max(wraps, 1.0);          // what one copy has to cover
+  float tall = arc / max(imgAspect(), 0.01) / max(hgt, 1e-4);
+  float crop = 1.0;
+  if (tall > 1.0) { crop = 1.0 / tall; tall = 1.0; }   // taller than the can: crop it
+  float mid = clamp((lo + hi) * 0.5, tall * 0.5, 1.0 - tall * 0.5);
+  return vec3(mid - tall * 0.5, mid + tall * 0.5, crop);
+}
 
 // Where a ray meets a can, exactly.
 //
@@ -1257,11 +1318,15 @@ mat3 spinOf(float ya, float pi, float ro_) {
 // the proportions a drinks can actually uses. A grey rectangle would tell you
 // nothing about whether the wrapping is right; this tells you at a glance,
 // because a circle that comes out an oval is a circle that came out wrong.
-vec3 standIn(vec2 q) {
+vec3 standIn(vec2 q, float asp) {
   vec3 c = mix(vec3(0.72, 0.10, 0.14), vec3(0.36, 0.05, 0.09), q.y);
   c = mix(c, vec3(0.96, 0.93, 0.86), smoothstep(0.017, 0.0, abs(q.y - 0.72) - 0.035));
   c = mix(c, vec3(0.96, 0.93, 0.86), smoothstep(0.017, 0.0, abs(q.y - 0.20) - 0.018));
-  vec2 d = (q - vec2(0.75, 0.46)) * vec2(1.0, 0.62);
+  // asp is the label patch's real proportions on the can — its arc over its
+  // height. Without it the circle is an oval the moment you touch the radius
+  // slider, which would make the one thing here that checks the wrapping the
+  // first thing to start lying about it.
+  vec2 d = (q - vec2(0.75, 0.46)) * vec2(1.0, 1.0 / max(asp, 0.05));
   c = mix(c, vec3(0.97, 0.87, 0.32), smoothstep(0.006, -0.006, length(d) - 0.115));
   c = mix(c, vec3(0.20, 0.05, 0.07), smoothstep(0.006, -0.006, length(d) - 0.072));
   c *= 0.94 + 0.12 * noise(q * 60.0);
@@ -1269,7 +1334,7 @@ vec3 standIn(vec2 q) {
 }
 
 // What the can is made of at this point on it, and how shiny that is.
-vec3 skinOf(float part, vec3 pl, float rad, float hh, out float gloss) {
+vec3 skinOf(float part, vec3 pl, float rad, float hh, vec3 band, out float gloss) {
   gloss = 1.0;
   vec3 metal = srgbToLinear(metalC);
   if (part > 0.5) {
@@ -1289,17 +1354,22 @@ vec3 skinOf(float part, vec3 pl, float rad, float hh, out float gloss) {
   // The wall. Height first, because it decides whether there is a label here
   // at all — the bare metal above and below it is most of what says "can".
   float v = (pl.y + hh) / max(2.0 * hh, 1e-4);
-  float inBand = step(bandLo, v) * step(v, bandHi);
-  if (inBand < 0.5) { gloss = 1.0; return metal * (0.78 + 0.34 * smoothstep(0.0, 0.06, abs(v - 0.5))); }
+  if (v < band.x || v > band.y) {
+    gloss = 1.0;
+    return metal * (0.78 + 0.34 * smoothstep(0.0, 0.06, abs(v - 0.5)));
+  }
   // And the angle, which is the whole point: atan gives the way round, and
-  // the way round is the picture's x. One turn of the can is one width of the
-  // picture, unless you ask for more.
+  // the way round is the picture's x. It goes round exactly — u runs 0 to 1
+  // over a full turn — so the picture meets itself, and wrapSample makes the
+  // meeting invisible.
   float u = fract((atan(pl.z, pl.x) / TAU + 0.5) * wraps);
-  float lv = (v - bandLo) / max(bandHi - bandLo, 1e-4);
+  float lv = (v - band.x) / max(band.y - band.x, 1e-4);
+  lv = (lv - 0.5) * band.z + 0.5;                  // cropped, if it was too tall
   gloss = 0.30;                                    // paper is not aluminium
+  float asp = TAU * rad / max(wraps, 1.0) / max((band.y - band.x) * 2.0 * hh, 1e-4);
   return label_size.x > 0.5
-    ? srgbToLinear(texture2D(label, vec2(u, 1.0 - lv)).rgb)
-    : standIn(vec2(u, lv));
+    ? srgbToLinear(wrapSample(vec2(u, 1.0 - lv)).rgb)
+    : standIn(vec2(u, lv), asp);
 }
 
 // ------------------------------------------------------------ the picture
@@ -1332,10 +1402,14 @@ vec3 col = mix(vec3(0.075, 0.082, 0.10), vec3(0.014, 0.016, 0.024), smoothstep(-
 // run backwards — from the floor towards the lamp — which is the other thing
 // a closed form gives you: one routine, and shadows are free of any of the
 // approximations a marched one has to make.
-float tFloor = rd.y < -1e-4 ? (-1.15 - ro.y) / rd.y : -1.0;
+// The floor keeps its distance from whatever size the can now is. A fixed
+// plane was fine while the height slider went to 2.4 and became a can cut off
+// at the knees the moment it went further.
+float floorY = -max(1.15, hh + 0.30);
+float tFloor = rd.y < -1e-4 ? (floorY - ro.y) / rd.y : -1.0;
 if (tFloor > 0.0 && (tCan < 0.0 || tFloor < tCan)) {
   vec3 fp = ro + rd * tFloor;
-  float fade = 1.0 - smoothstep(1.6, 7.5, length(fp.xz - centre.xz));
+  float fade = 1.0 - smoothstep(1.6 + radius, 7.5 + radius, length(fp.xz - centre.xz));
   vec3 base = srgbToLinear(floorC) * (0.22 + 0.78 * fade);
   float lit = 1.0;
   if (shadowOn > 0.5) {
@@ -1369,7 +1443,7 @@ if (tCan > 0.0) {
   vec3 hit = ro + rd * tCan;
 
   float gloss;
-  vec3 albedo = skinOf(part, pl, radius, hh, gloss);
+  vec3 albedo = skinOf(part, pl, radius, hh, labelBand(radius, 2.0 * hh), gloss);
 
   vec3 l = normalize(lightAt - hit);
   float dist = length(lightAt - hit);
