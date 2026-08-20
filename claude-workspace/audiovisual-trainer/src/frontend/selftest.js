@@ -13,7 +13,7 @@
 // at, not a reason to block a save.
 
 import { el, clear, api } from "./ui.js";
-import { GENERATE_PRESETS, newGenerateDoc } from "./studio-generate.js";
+import { GENERATE_PRESETS, newGenerateDoc, scaleForBudget } from "./studio-generate.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3, splitSketch, stripComments } from "./shader-uniforms.js";
 import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
@@ -2475,6 +2475,39 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
              detail: reads === 0
                ? "scene() is arithmetic over globals the display body filled once — march calls it about 150 times a pixel, so a lookup in there is a thousand fetches to draw one dot"
                : `${reads} texture reads inside scene()` }); }
+
+    // The same argument, one level down. ground() is two fbm, which is seven
+    // noise, which is twenty-eight hashes — and scene() used to call it ten
+    // times: once for the terrain under the point, and nine more for things
+    // whose positions were already hoisted into globals and could not move
+    // during a pixel. Measured on this machine, that one mistake was 420 ms a
+    // frame against 37.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "rover");
+      const parts = splitSketch(g.source);
+      const sceneFn = parts.declTexts.find((t) => /\bfloat\s+scene\s*\(\s*vec3/.test(stripComments(t))) || "";
+      const bare = stripComments(sceneFn);
+      const grounds = (bare.match(/\bground\s*\(/g) || []).length;
+      // …and no array indexed by a running variable, which is memory rather
+      // than registers on most drivers and cost a quarter of the frame.
+      const indexed = /\b\w+\s*\[\s*[a-zA-Z_]\w*\s*\]/.test(bare);
+      push({ group: "More games", name: "the raymarched scene() computes the terrain once and indexes nothing",
+             ok: grounds === 1 && !indexed,
+             detail: grounds === 1 && !indexed
+               ? "one ground() for the point it was asked about; the rover's and the beacons' heights are constants for the pixel, so they are hoisted, "
+                 + "and the eight beacons are eight names rather than an array"
+               : `${grounds} ground() calls in scene()${indexed ? ", and an array indexed by a variable" : ""}` }); }
+
+    // The render scale, as a rule rather than a feeling. Cost is very nearly
+    // proportional to pixel count, so the scale that fits a budget is
+    // √(budget / measured) — snapped down to a step, and never above 1.
+    { const cases = [[16.0, 1, 1], [20, 1, 0.85], [28.9, 1, 0.75], [40, 1, 0.6], [400, 1, 0.5], [8, 1, 1]];
+      const wrong = cases.filter(([ms, at, want]) => scaleForBudget(ms, at) !== want);
+      push({ group: "More games", name: "the render scale is chosen from the frame time, not guessed",
+             ok: wrong.length === 0,
+             detail: wrong.length === 0
+               ? "28.9 ms at full size asks for 0.75, which is 480×270 of 640×360 — measured at 18.5 ms, which is the budget. "
+                 + "A sketch already inside the budget stays at 1: a scale above it would be inventing detail"
+               : wrong.map(([ms, at, want]) => `${ms}ms → ${scaleForBudget(ms, at)}, wanted ${want}`).join(" · ") }); }
   } catch (e) {
     push({ group: "More games", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }

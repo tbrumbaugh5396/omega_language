@@ -29,6 +29,31 @@ import { gridOverlay } from "./grid-overlay.js";
 const VERT = `attribute vec2 a_pos;
 void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }`;
 
+/**
+ * The steps the render scale may take. Not a continuum: a picture whose
+ * resolution drifts every second reads as a fault, and the difference between
+ * 0.78 and 0.75 is not worth seeing it move.
+ */
+export const SCALE_STEPS = [1, 0.85, 0.75, 0.6, 0.5];
+
+/**
+ * The scale a sketch needs to hold a frame budget, given what it measured at
+ * the scale it is running now.
+ *
+ * A fragment shader's cost is very nearly proportional to the pixel count —
+ * measured on the rover at 640×360 and 480×270 it was 28.9 ms and 16.5 ms for
+ * 0.5625 of the pixels, which is 0.571 of the time — so the scale that fits a
+ * budget is `atScale × √(budget / measured)`, snapped down to a step. Never
+ * above 1: a sketch is authored at its preview size, and a scale that
+ * invented pixels would be inventing detail.
+ */
+export function scaleForBudget(ms, atScale = 1, budgetMs = 16.7) {
+  if (!(ms > 0) || !(atScale > 0)) return 1;
+  const want = Math.min(1, atScale * Math.sqrt(budgetMs / ms));
+  for (const s of SCALE_STEPS) if (s <= want + 1e-9) return s;
+  return SCALE_STEPS[SCALE_STEPS.length - 1];
+}
+
 export const GENERATE_PRESETS = [
   { id: "field", label: "Warm noise field", source:
 `uniform float scale;   // @range 1 12 step 0.1 @default 3 — how tight the noise is
@@ -850,30 +875,76 @@ vec2 beaconAt(float k) {
   return (vec2(hash21(vec2(k * 3.1, 1.0)), hash21(vec2(k * 7.7, 2.0))) - 0.5) * 34.0;
 }
 // The ground: low rolling dunes, so the shadows have something to fall on.
-float ground(vec2 q) { return -1.0 + 0.55 * fbm(q * 0.09) + 0.18 * fbm(q * 0.31); }
+float fbmN(vec2 p, int n) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 6; i++) { if (i >= n) break; v += a * noise(p); p *= 2.02; a *= 0.5; }
+  return v;
+}
+float ground(vec2 q) { return -1.0 + 0.55 * fbmN(q * 0.09, 4) + 0.18 * fbmN(q * 0.31, 3); }
 
 // The world's state, read *once* per pixel and kept here for scene() to use.
 // The first version of this sketch read the texture inside scene(), which the
 // marcher calls about a hundred and fifty times a pixel — a thousand texture
 // fetches to draw one dot, and a GPU that stops answering. A raymarcher's
 // scene() must be arithmetic; anything it needs to look up is hoisted.
+//
+// The same argument applies twice over to ground(): it is two fbm, which is
+// six octaves each, which is twenty-four hashes each — forty-eight hashes a
+// call. The rover and the beacons do not move during a pixel, so their ground
+// heights are constants, and computing them inside scene() made every one of
+// the ~110 marching steps pay for nine of them. They are hoisted into the
+// globals too, and scene() calls ground() exactly once, for the terrain
+// under the point it was actually asked about.
 vec4 gRover;
-vec4 gB[8];               // x, z, standing, unused
+float gRoverY;            // the ground under the rover, once per pixel
+// Eight beacons, and eight *names* rather than an array. An array indexed by
+// a running variable is not a register file on most drivers — it is memory,
+// and scene() reads it about a hundred times a pixel. Written out it costs
+// nothing; measured on this machine, the array cost a quarter of the frame.
+vec4 gB0; vec4 gB1; vec4 gB2; vec4 gB3;
+vec4 gB4; vec4 gB5; vec4 gB6; vec4 gB7;   // x, z, standing, ground height
+
+// One beacon, with a sphere round it first: while the point is outside that
+// sphere its distance is a lower bound on the true one, which is exactly what
+// sphere tracing needs, and it skips two SDFs for the seven beacons that are
+// never near.
+float beacon(vec3 p, vec4 b) {
+  if (b.z < 0.5) return 1e9;
+  vec3 bp = p - vec3(b.x, b.w + 0.9, b.y);
+  float bound = length(bp) - 1.10;
+  if (bound > 0.2) return bound;
+  return min(sdCapsule3(bp, vec3(0.0, -0.9, 0.0), vec3(0.0, 0.55, 0.0), 0.10),
+             sdSphere(bp - vec3(0.0, 0.78, 0.0), 0.26));
+}
 
 float scene(vec3 p) {
   float d = p.y - ground(p.xz);
-  vec3 rp = p - vec3(gRover.x, ground(gRover.xy) + 0.42, gRover.y);
+  vec3 rp = p - vec3(gRover.x, gRoverY + 0.42, gRover.y);
   rp.xz = rot(-gRover.z) * rp.xz;
   float car = sdBox3(rp, vec3(0.62, 0.20, 0.95)) - 0.10;
   car = min(car, sdSphere(rp - vec3(0.0, 0.26, -0.10), 0.42));
   d = min(d, car);
-  for (int i = 0; i < 8; i++) {
-    if (gB[i].z < 0.5) continue;
-    vec3 bp = p - vec3(gB[i].x, ground(gB[i].xy) + 0.9, gB[i].y);
-    d = min(d, min(sdCapsule3(bp, vec3(0.0, -0.9, 0.0), vec3(0.0, 0.55, 0.0), 0.10),
-                   sdSphere(bp - vec3(0.0, 0.78, 0.0), 0.26)));
-  }
+  d = min(d, beacon(p, gB0)); d = min(d, beacon(p, gB1));
+  d = min(d, beacon(p, gB2)); d = min(d, beacon(p, gB3));
+  d = min(d, beacon(p, gB4)); d = min(d, beacon(p, gB5));
+  d = min(d, beacon(p, gB6)); d = min(d, beacon(p, gB7));
   return d;
+}
+
+// The sketch's own shadow march. The prelude's takes forty steps with a floor
+// of one centimetre, which is right for a still life on a table and wrong for
+// a desert twenty units across: twenty-four steps with a floor of five
+// centimetres is the same picture here and a third of the cost.
+float shadow(vec3 ro, vec3 rd) {
+  float res = 1.0, t = 0.05;
+  for (int i = 0; i < 24; i++) {
+    float h = scene(ro + rd * t);
+    if (h < 0.002) return 0.0;
+    res = min(res, 12.0 * h / t);
+    t += clamp(h, 0.05, 0.6);
+    if (t > 11.0) break;
+  }
+  return clamp(res, 0.0, 1.0);
 }
 
 vec4 sim(vec2 uvv) {
@@ -918,16 +989,22 @@ vec4 sim(vec2 uvv) {
 
 vec4 r = rover();
 vec4 m = meta();
-// Hoist the world into the globals scene() reads: nine texture fetches for
-// the whole pixel rather than nine per march step.
+// Hoist the world into the globals scene() reads: nine texture fetches and
+// nine ground() heights for the whole pixel, rather than nine of each per
+// march step.
 gRover = r;
-for (int i = 0; i < 8; i++) {
-  vec2 b = beaconAt(float(i));
-  gB[i] = vec4(b, standing(float(i)), 0.0);
-}
+gRoverY = ground(r.xy);
+{ vec2 b = beaconAt(0.0); gB0 = vec4(b, standing(0.0), ground(b)); }
+{ vec2 b = beaconAt(1.0); gB1 = vec4(b, standing(1.0), ground(b)); }
+{ vec2 b = beaconAt(2.0); gB2 = vec4(b, standing(2.0), ground(b)); }
+{ vec2 b = beaconAt(3.0); gB3 = vec4(b, standing(3.0), ground(b)); }
+{ vec2 b = beaconAt(4.0); gB4 = vec4(b, standing(4.0), ground(b)); }
+{ vec2 b = beaconAt(5.0); gB5 = vec4(b, standing(5.0), ground(b)); }
+{ vec2 b = beaconAt(6.0); gB6 = vec4(b, standing(6.0), ground(b)); }
+{ vec2 b = beaconAt(7.0); gB7 = vec4(b, standing(7.0), ground(b)); }
 // A chase camera, behind and above, looking where the rover is going.
 vec2 dir = vec2(sin(r.z), cos(r.z));
-vec3 target = vec3(r.x, ground(r.xy) + 0.7, r.y);
+vec3 target = vec3(r.x, gRoverY + 0.7, r.y);
 // Behind by five and up by two — the height must not be scaled by the
 // distance, or the camera ends up ten units overhead looking at its own
 // shadow, which is what the first version of this did.
@@ -942,23 +1019,27 @@ float t = march(ro, rd, 60.0);
 if (t > 0.0) {
   vec3 hit = ro + rd * t;
   vec3 n = normal3(hit);
-  float sh = softShadow(hit + n * 0.02, sun, 12.0);
+  float lit = max(dot(n, sun), 0.0);
+  float sh = lit > 0.0 ? shadow(hit + n * 0.02, sun) : 0.0;
   float occ = ao(hit, n);
   // Which thing was hit, from its distance to each — cheaper than an id and
   // exact enough at these scales.
-  vec3 rp = hit - vec3(r.x, ground(r.xy) + 0.42, r.y);
+  vec3 rp = hit - vec3(r.x, gRoverY + 0.42, r.y);
   rp.xz = rot(-r.z) * rp.xz;
   float dCar = min(sdBox3(rp, vec3(0.62, 0.20, 0.95)) - 0.10,
                    sdSphere(rp - vec3(0.0, 0.26, -0.10), 0.42));
-  float lit = max(dot(n, sun), 0.0);
   vec3 albedo = sand * (0.75 + 0.35 * fbm(hit.xz * 1.6));
   if (dCar < 0.02) albedo = shell;
   // A beacon glows rather than only reflecting, so it reads at a distance.
   float glow = 0.0;
-  for (int i = 0; i < 8; i++) {
-    if (gB[i].z < 0.5) continue;
-    glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB[i].x, ground(gB[i].xy) + 1.68, gB[i].y)));
-  }
+  if (gB0.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB0.x, gB0.w + 1.68, gB0.y)));
+  if (gB1.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB1.x, gB1.w + 1.68, gB1.y)));
+  if (gB2.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB2.x, gB2.w + 1.68, gB2.y)));
+  if (gB3.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB3.x, gB3.w + 1.68, gB3.y)));
+  if (gB4.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB4.x, gB4.w + 1.68, gB4.y)));
+  if (gB5.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB5.x, gB5.w + 1.68, gB5.y)));
+  if (gB6.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB6.x, gB6.w + 1.68, gB6.y)));
+  if (gB7.z > 0.5) glow += 0.55 / (1.0 + 12.0 * length(hit - vec3(gB7.x, gB7.w + 1.68, gB7.y)));
   vec3 lin = albedo * (lit * sh * vec3(1.0, 0.92, 0.78) * 1.15 + occ * vec3(0.13, 0.18, 0.28));
   lin += vec3(1.0, 0.62, 0.28) * glow;
   lin += vec3(1.0, 0.9, 0.75) * fresnel(max(dot(n, -rd), 0.0), 0.04) * sh * 0.35;
@@ -1875,6 +1956,7 @@ export async function generateEditor(host) {
     style: { minHeight: "420px" } });
 
   let gl = null, raf = null, t0 = performance.now();
+  let lastFrameAt = 0;
   let display = null, sim = null;         // the two programs; sim is null without a state pass
   let quad = null;
   let uniforms = [];
@@ -1887,6 +1969,45 @@ export async function generateEditor(host) {
   const fpsLabel = el("span.fine");
   const stateLabel = el("span.fine");
   let frames = 0, lastFpsAt = performance.now();
+  // The render scale. The canvas is styled `width: 100%`, so its backing store
+  // and the size it is seen at are already two different things — rendering
+  // fewer pixels and letting the browser scale them up costs one line here and
+  // is the only lever that works on a sketch whose cost is the shader itself.
+  const scaleSel = el("select", { style: { width: "auto" },
+    title: "how many pixels the sketch actually renders; the canvas is shown at its full size either way" });
+  let deltas = [];              // recent frame-to-frame times, for the auto scale
+  let settled = false;          // auto has chosen, and stops choosing
+  const wantScale = () => (doc.renderScale === undefined ? "auto" : doc.renderScale);
+  const applyScale = (scale) => {
+    const w = Math.max(16, Math.round(doc.preview[0] * scale));
+    const h = Math.max(16, Math.round(doc.preview[1] * scale));
+    if (canvas.width === w && canvas.height === h) return false;
+    canvas.width = w; canvas.height = h;
+    // The state is the size of the picture, so changing the size is the end of
+    // this run of the simulation. Said plainly rather than left to look like a
+    // glitch: the sketch restarts, once, at the start.
+    if (feedback) feedback.resize(w, h, feedback.channels || 1);
+    restart();
+    return true;
+  };
+  const rescale = () => {
+    deltas = []; settled = false;
+    const s = wantScale();
+    applyScale(s === "auto" ? 1 : s);
+  };
+  for (const [value, label] of [["auto", "scale: auto (60 fps)"],
+                                ...SCALE_STEPS.map((v) => [String(v), `scale: ${Math.round(v * 100)}%`])]) {
+    scaleSel.append(el("option", { value, selected: String(wantScale()) === value }, label));
+  }
+  // Coming back to the foreground throws the samples away and asks again —
+  // the ones taken on the way out are the browser's rate, not the sketch's.
+  const onVisible = () => { if (!document.hidden && wantScale() === "auto") { deltas = []; lastFrameAt = 0; } };
+  document.addEventListener("visibilitychange", onVisible);
+  scaleSel.onchange = (e) => {
+    doc.renderScale = e.target.value === "auto" ? "auto" : Number(e.target.value);
+    rescale();
+    host.save();
+  };
 
   canvas.addEventListener("pointermove", (e) => {
     const r = canvas.getBoundingClientRect();
@@ -2106,13 +2227,32 @@ export async function generateEditor(host) {
     }
     frames++;
     const now = performance.now();
+    // Auto: watch a couple of dozen frames at full size, then pick the scale
+    // that fits the budget and stop. Adapting continuously would resize the
+    // state texture — which is the simulation — every time the view got busy.
+    // Not while the tab is in the background: a hidden document's animation
+    // frames arrive at whatever rate the browser feels like — five a second
+    // here — and a scale chosen from that is a measurement of the browser.
+    if (!settled && wantScale() === "auto" && display && gl && !paused && !document.hidden) {
+      if (lastFrameAt) deltas.push(now - lastFrameAt);
+      if (deltas.length >= 24) {
+        const sorted = deltas.slice(4).sort((a, b) => a - b);
+        const median = sorted[sorted.length >> 1];
+        const scale = scaleForBudget(median, canvas.width / doc.preview[0]);
+        settled = true;
+        applyScale(scale);
+      }
+    }
+    lastFrameAt = now;
     if (now - lastFpsAt > 500) {
       if (hasSketchEffects(doc)) {
         soundBtn.hidden = false;
         soundBtn.title = soundSaid || (wantSound ? `${soundNotes} notes so far` : "");
       }
+      const scale = canvas.width / doc.preview[0];
       fpsLabel.textContent =
-        `${Math.round((frames * 1000) / (now - lastFpsAt))} fps · ${canvas.width}×${canvas.height}`;
+        `${Math.round((frames * 1000) / (now - lastFpsAt))} fps · ${canvas.width}×${canvas.height}`
+        + (scale < 0.999 ? ` · ${Math.round(scale * 100)}% of ${doc.preview[0]}×${doc.preview[1]}` : "");
       frames = 0; lastFpsAt = now;
     }
     raf = requestAnimationFrame(frame);
@@ -2773,6 +2913,7 @@ uniform bool  mirror;  // @toggle`),
       doc.uniforms = {};            // a new sketch means new free variables
       if (p.preview) {              // scenes are landscape; patterns are square
         doc.preview = p.preview.slice();
+        queueMicrotask(rescale);
         canvas.width = doc.preview[0]; canvas.height = doc.preview[1];
         sizeSel.value = `${doc.preview[0]}x${doc.preview[1]}`;
       }
@@ -2786,7 +2927,7 @@ uniform bool  mirror;  // @toggle`),
   const sizeSel = el("select", { style: { width: "auto" },
     onchange: (e) => {
       doc.preview = e.target.value.split("x").map(Number);
-      canvas.width = doc.preview[0]; canvas.height = doc.preview[1];
+      rescale();
       host.save();
     } }, ...SIZES.concat(SIZES.some(([w, h]) => w === doc.preview[0] && h === doc.preview[1])
                           ? [] : [doc.preview.slice()])            // a compiled design keeps its aspect
@@ -2935,7 +3076,7 @@ uniform bool  mirror;  // @toggle`),
               "statements before the final expression are allowed.",
           onResult: (res) => { editor.value = res.text; doc.uniforms = {}; run(); restart(); },
         }),
-        seedLabel, fpsLabel, stateLabel, soundBtn)),
+        scaleSel, seedLabel, fpsLabel, stateLabel, soundBtn)),
 
     el("div.lab-split", {},
       el("div.stack", {},
