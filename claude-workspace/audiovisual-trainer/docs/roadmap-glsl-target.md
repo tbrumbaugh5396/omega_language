@@ -2574,6 +2574,96 @@ sweep test rather than a push); the third-person camera pulls in on terrain
 but not on trunks; and there is no fog of war, because a local map has nothing
 to hide.
 
+### Phase 34 — Things to pick up, and a bag that remembers you did *(L)* — **shipped**
+
+**The one thing in this world that has to be remembered.** Everything else is
+a function of position: the terrain, the trees, the herd, the weather, the
+birds. Ask again and you get the same answer, which is why walking costs
+nothing to remember. A mushroom you have already eaten cannot be recomputed,
+and a list of them would grow without bound in a world that has no bound.
+
+So: a **direct-mapped table in row 1 of the state**, which was zeros until
+now. 421 slots. The cell's own coordinates go in the slot beside the flag, so
+a collision is *detectable* rather than silent — a slot holding someone else's
+id reads as "not taken", and the older entry is simply overwritten.
+
+That is the honest failure, and it is a choice rather than an oversight: pick
+up more than a few hundred things and the earliest of them grow back.
+Constant memory buys forgetting, and forgetting is the right thing to give up
+in a world you can walk out of.
+
+Measured: after six pickups the table held **six entries in six distinct
+slots** — (−6,−49), (13,−55), (6,−40), (5,−39), (10,−42), … each with the
+right kind beside it.
+
+**One band more of the same hash.** Items sit between the animals and the
+boulders. A cell that grows a tree does not also grow a mushroom — not a rule
+imposed on the scatter but the arithmetic of a band: the hash is one number
+and it lands in one place. What *kind* is decided by the ground rather than by
+another hash, so what you find tells you where you are: shells on the sand,
+mushrooms where it is damp, crystal on the high rock, berries in between.
+
+The first density shipped at 0.11 and put **one item in 520 metres**. Nothing
+wrong with the mechanism and nothing anybody would ever find. 0.30.
+
+**A clever route that did not survive measurement.** The map pass bakes every
+texel anyway and `landform` had a spare channel, so the first version wrote
+"this ground has been picked over" there and let `scene()` read it out of the
+fetch it had already paid for — the same move that paid for the walker, the
+weather, the herd and the occlusion. The flag reached the texture (361 texels
+of a 14,336-texel band carried it) and did not survive being sampled back:
+forcing the test off changed **exactly zero pixels**, twice, by two different
+measurements.
+
+So the question is asked directly and paid for. The saving grace is that it is
+asked *inside the band* — only a ray whose cell grows something reaches the
+fetch — and a warp is a patch of neighbouring pixels, so its rays agree about
+which cell they are in. That is the exact opposite of the distance guard Phase
+28 had to delete, where they never agreed about anything.
+
+**Measured: 3.34 ms without items, 3.63 ms with them, at 320×180.** 0.29 ms,
+8.7% — and that is the whole feature, geometry included, not just the lookup.
+
+**It really is gone.** Rendered the same frame twice, once with the taken test
+switched off: **1,989 pixels** the world still draws when you have not picked
+it up, centred just below the reticle in third person — which is where your
+feet are, and why this had to be measured from the third-person camera. A
+first-person frame does not contain your own feet.
+
+*And a long detour worth recording:* four earlier attempts at this measurement
+read zero, and the shader was innocent every time. At thirteen metres a second
+you leave the 95-metre map seven seconds after picking anything up, so every
+pickup but the newest was **outside the baked map**, and the newest was under
+the map's own arrow. The instrument was wrong, not the thing being measured.
+Four rounds of increasingly baroque shader variants before checking where the
+walker actually was.
+
+**A panel, and a font to count with.** Four slots along the bottom, in the
+picture's own pixels and scaled by its height — the argument the reticle
+settled and the map's arrow had to be taught the hard way. Empty slots are
+drawn dim rather than left out, so the shapes do not move as you fill them.
+
+There is a real glyph atlas in this studio — EDT, MSDF, a font-file parser,
+GPOS kerning — and **none of it is reachable from inside a sketch**, which is
+one program with a state texture and no graph. A count you cannot read is not
+a count, so: a 3×5 font, fifteen bits to a digit, thirty bytes, chosen with an
+`if` chain because a constant array with a computed index is another thing
+GLSL ES 1.00 does not promise. Measured: **4,368 pixels** of panel, of which
+**490** differ from what an empty bag would show.
+
+**A pulse a thing, and never a second one.** Over a walk, the count of pulses
+and the count in the bag agreed exactly, and walking back over ground you have
+picked over does nothing at all. That agreement is the whole claim the table
+exists to make.
+
+The bell goes up a scale as the bag fills, and each kind starts from its own
+note, so a run of mushrooms and a run of crystal are not the same run.
+
+*Left:* nothing to *do* with what you are carrying — no crafting, no
+dropping, no use; the tally caps at 99 because the font draws two digits; and
+picking up is automatic on walking near, which is friendlier than a key and
+means you cannot decline.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2648,6 +2738,7 @@ to hide.
 | 31.1 | Dawn sounds and ambient noise — **shipped** | M | 30.1 | beds by param, pulses by shader; 6 levels, 2 notes |
 | 32.1 | Occlusion, and an FPS feel — **shipped** | M | 31.1 | exposure 0.69–1.00 over a walk; roll self-levels |
 | 33.1 | Footsteps, collision, a map, a body — **shipped** | L | 32.1 | blocked 16/2400 frames; body 2.5%; map 5.5× cheaper |
+| 34.1 | Things to pick up, and a bag — **shipped** | L | 33.1 | table in row 1, 421 slots; +0.29 ms; 1,989 px gone |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

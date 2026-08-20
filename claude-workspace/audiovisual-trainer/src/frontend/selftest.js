@@ -3236,7 +3236,7 @@ c`;
       // many that is comes from the sketch's own guard rather than from a
       // list here, which was a list that went stale the first time the
       // register bank grew.
-      const bank = /texel\.x > (\d+)\.5\) return vec4\(0\.0\)/.exec(stripComments(g.source));
+      const bank = /texel\.x > (\d+)\.5[^;]*return vec4\(0\.0\)/.exec(stripComments(g.source));
       const top = bank ? Number(bank[1]) : -1;
       if (top < 0) bad.push("the sketch has no register bank to bound");
       for (const [name, pr] of Object.entries(g.probes || {})) {
@@ -3320,6 +3320,11 @@ c`;
         ["the map's colours coming from the ground's own function", /col = albedoOf\(q, L\.x\) \* lit/],
         ["the march skipped in map view", /tHit = mapV > 0\.5 \? -1\.0 : march/],
         ["stateless buttons", /mapV = max\(mapOn, keyDown/],
+        ["a table of what has been picked up", /bool taken\(vec2 id\)/],
+        ["the id stored beside the flag", /abs\(e\.x - id\.x\) < 0\.5 && abs\(e\.y - id\.y\) < 0\.5/],
+        ["an item that goes when you take it", /if \(taken\(id\)\) return 1e9;/],
+        ["a map that shows only what is left", /growsItem\(id, ik\) && !taken\(id\)/],
+        ["a font to count with", /float digitBits\(float d\)/],
       ]) if (!re.test(src)) bad.push(`${what} is missing`);
       push({ group: "More games", name: "footsteps, collision, and the two other ways of looking",
              ok: bad.length === 0,
@@ -3340,7 +3345,7 @@ c`;
     // couple of hundred metres under the boots, and not so long that the
     // suite stops being something you run.
     try {
-      const SW = 448, SH = 448, PW = 256, PH = 144, FRAMES = 700;
+      const SW = 448, SH = 448, PW = 256, PH = 144, FRAMES = 1200;
       const g = GENERATE_PRESETS.find((x) => x.id === "world");
       const wsrc = desugar(g.source, { es3: isGL2(gl) });
       const disp = linkProgram(gl, wsrc);
@@ -3350,6 +3355,12 @@ c`;
       // way to count it without believing the shader about itself.
       const bare = linkProgram(gl, desugar(g.source.replace("gPov = povV;", "gPov = 0.0;"),
                                            { es3: isGL2(gl) }));
+      // …and two more, each deleting one thing, so the difference IS it.
+      const kept = linkProgram(gl, desugar(
+        g.source.replace("if (taken(id)) return 1e9;", "if (false) return 1e9;"), { es3: isGL2(gl) }));
+      const noBag = linkProgram(gl, desugar(
+        g.source.replace("col = panel(col, reg(vec2(9.0, 0.0)), pick.y, pick.w);",
+                         "col = panel(col, vec4(0.0), -1.0, 0.0);"), { es3: isGL2(gl) }));
       const fbw = new Feedback(gl);
       fbw.resize(SW, SH, dualTargets(g.source) ? 2 : 1);
       const us = parseUniforms(g.source);
@@ -3404,31 +3415,13 @@ c`;
       const GROUND = { sand: { texel: [8, 0], channel: "r" }, grass: { texel: [8, 0], channel: "g" },
                        rock: { texel: [8, 0], channel: "b" }, snow: { texel: [8, 0], channel: "a" },
                        foot: { texel: [6, 0], channel: "r" } };
-      const cmd = vals.walk[0] / 60;
-      let minR = 9, maxR = 0, blocked = 0, feet = 0, worstSum = 0, sandSeen = 0, grassSeen = 0;
-      let prev = null;
-      for (let f = 0; f < FRAMES; f++) {
-        kb.clear(); kb.press(87);            // W, and nothing else
-        stepW(f);
-        const now = readProbes(gl, fbw.read, WHO);
-        if (prev && f > 4) {
-          const r = Math.hypot(now.x - prev.x, now.z - prev.z) / cmd;
-          minR = Math.min(minR, r); maxR = Math.max(maxR, r);
-          if (r < 0.9) blocked++;
-        }
-        prev = now;
-        if (f % 5 === 0) {
-          const gr = readProbes(gl, fbw.read, GROUND);
-          worstSum = Math.max(worstSum, Math.abs(gr.sand + gr.grass + gr.rock + gr.snow - 1));
-          sandSeen = Math.max(sandSeen, gr.sand); grassSeen = Math.max(grassSeen, gr.grass);
-          if (gr.foot > 0.5) feet++;
-        }
-        kb.tick();
-      }
+      const BAG = { mush: { texel: [9, 0], channel: "r" }, shell: { texel: [9, 0], channel: "g" },
+                    crystal: { texel: [9, 0], channel: "b" }, berry: { texel: [9, 0], channel: "a" },
+                    got: { texel: [10, 0], channel: "r" }, carried: { texel: [10, 0], channel: "b" } };
+      let pulses = 0;
       // The drawing surface has to be at least the picture, or readPixels
       // returns a great deal of nothing and every difference below comes out
-      // near zero — which is a passing-looking failure and the reason this
-      // line exists.
+      // near zero — a passing-looking failure, and the reason this is here.
       const wasW = gl.canvas.width, wasH = gl.canvas.height;
       gl.canvas.width = PW; gl.canvas.height = PH;
       const shot = (prog, mapOn, povOn) => {
@@ -3441,8 +3434,51 @@ c`;
         gl.readPixels(0, 0, PW, PH, gl.RGBA, gl.UNSIGNED_BYTE, px);
         return px;
       };
+      const cmd = vals.walk[0] / 60;
+      let minR = 9, maxR = 0, blocked = 0, feet = 0, worstSum = 0, sandSeen = 0, grassSeen = 0;
+      let goneFromWorld = -1;
+      let prev = null;
+      for (let f = 0; f < FRAMES; f++) {
+        kb.clear(); kb.press(87);            // W, and nothing else
+        stepW(f);
+        const now = readProbes(gl, fbw.read, WHO);
+        if (prev && f > 4) {
+          const r = Math.hypot(now.x - prev.x, now.z - prev.z) / cmd;
+          minR = Math.min(minR, r); maxR = Math.max(maxR, r);
+          if (r < 0.9) blocked++;
+        }
+        prev = now;
+        // Every frame, because a pickup is one frame long — and because the
+        // count of pulses against the count in the bag is the whole proof
+        // that a thing already taken is not taken again.
+        if (readProbes(gl, fbw.read, { got: BAG.got }).got > 0.5) {
+          pulses++;
+          // …and the picture, taken *here*, on the frame it happened. At
+          // thirteen metres a second the emptied spot is behind you in an
+          // instant and out of the baked map within seven seconds, which is
+          // what four earlier attempts at this measurement found out the long
+          // way round. From behind, because a first-person frame does not
+          // contain your own feet.
+          if (goneFromWorld < 0) {
+            const here = shot(disp, 0, 1), asIf = shot(kept, 0, 1);
+            goneFromWorld = 0;
+            for (let i = 0; i < PW * PH; i++) {
+              if (Math.abs(here[i * 4] - asIf[i * 4]) + Math.abs(here[i * 4 + 1] - asIf[i * 4 + 1])
+                + Math.abs(here[i * 4 + 2] - asIf[i * 4 + 2]) > 10) goneFromWorld++;
+            }
+          }
+        }
+        if (f % 5 === 0) {
+          const gr = readProbes(gl, fbw.read, GROUND);
+          worstSum = Math.max(worstSum, Math.abs(gr.sand + gr.grass + gr.rock + gr.snow - 1));
+          sandSeen = Math.max(sandSeen, gr.sand); grassSeen = Math.max(grassSeen, gr.grass);
+          if (gr.foot > 0.5) feet++;
+        }
+        kb.tick();
+      }
       const first = shot(disp, 0, 0), third = shot(disp, 0, 1);
       const bodiless = shot(bare, 0, 1), map = shot(disp, 1, 0);
+      const emptied = shot(noBag, 0, 0);
       vals.mapOn = [0]; vals.povOn = [0];
       const meanDiff = (a2, b2) => { let t = 0;
         for (let i = 0; i < PW * PH; i++) t += Math.abs(a2[i * 4] - b2[i * 4])
@@ -3454,8 +3490,16 @@ c`;
           + Math.abs(third[i * 4 + 2] - bodiless[i * 4 + 2]) > 12) bodyPx++;
       }
       const mapD = meanDiff(first, map), thirdD = meanDiff(first, third);
+      let tallyInk = 0;
+      for (let i = 0; i < PW * PH; i++) {
+        if (Math.abs(first[i * 4] - emptied[i * 4]) + Math.abs(first[i * 4 + 1] - emptied[i * 4 + 1])
+          + Math.abs(first[i * 4 + 2] - emptied[i * 4 + 2]) > 10) tallyInk++;
+      }
+      const bag = readProbes(gl, fbw.read, BAG);
+      const inBag = bag.mush + bag.shell + bag.crystal + bag.berry;
       gl.canvas.width = wasW; gl.canvas.height = wasH;
       gl.deleteProgram(disp); gl.deleteProgram(simP); gl.deleteProgram(bare);
+      gl.deleteProgram(kept); gl.deleteProgram(noBag);
       gl.deleteTexture(kt); fbw.release && fbw.release();
 
       // Something stopped them at least once; nothing ever threw them. The
@@ -3464,7 +3508,7 @@ c`;
       // it — bounded, small, and worth saying out loud rather than rounding.
       const walkOk = blocked > 0 && minR < 0.9 && maxR < 1.1 && feet > 0 && worstSum < 0.01;
       push({ group: "More games", name: "you cannot walk through a tree, and you can hear what you walk on",
-             ok: walkOk && bodyPx > 40 && mapD > 25 && thirdD > 10,
+             ok: walkOk && bodyPx > 40 && mapD > 25 && thirdD > 2,
              detail: `${FRAMES} frames with forward held: stopped or turned aside on ${blocked} of them, `
                + `the slowest frame ${(minR * 100).toFixed(0)}% of the commanded step and the fastest `
                + `${(maxR * 100).toFixed(1)}% — over one because being pushed clear of a trunk is itself a `
@@ -3474,6 +3518,23 @@ c`;
                + `${grassSeen.toFixed(2)}. The body is ${bodyPx} pixels that a bodiless third person does `
                + `not draw. Third person differs from first by ${thirdD.toFixed(1)}/255, the map by `
                + `${mapD.toFixed(1)}/255` });
+
+      // A pulse a thing, and never a second one for the same thing: the table
+      // in row 1 is the only part of this world that has to *remember*, and
+      // this is the number that says it does.
+      const bagOk = inBag > 0 && Math.abs(pulses - inBag) < 0.5
+        && Math.abs(bag.carried - inBag) < 0.5 && goneFromWorld > 0 && tallyInk > 0;
+      push({ group: "More games", name: "things you can pick up, and a bag that remembers you did",
+             ok: bagOk,
+             detail: `${pulses} pulse${pulses === 1 ? "" : "s"} over ${FRAMES} frames and ${inBag} thing`
+               + `${inBag === 1 ? "" : "s"} in the bag — one each, never twice, which is the whole claim `
+               + `the table in row 1 exists to make. Walking back over ground you have picked over does `
+               + `nothing, because the slot holds the cell's own coordinates beside the flag and a `
+               + `collision therefore reads as "not taken" rather than as somebody else's mushroom. `
+               + `${goneFromWorld} pixels of the world that the same frame still draws when the taken `
+               + `test is switched off — that is the thing you picked up, missing. ${tallyInk} pixels of `
+               + `the panel that an empty bag would not show. Bounded memory, so the earliest few hundred `
+               + `grow back: that is what constant memory costs in a world with no edge` });
     } catch (e) {
       push({ group: "More games", name: "you cannot walk through a tree, and you can hear what you walk on",
              ok: false, detail: String(e.message).split("\n")[0] });

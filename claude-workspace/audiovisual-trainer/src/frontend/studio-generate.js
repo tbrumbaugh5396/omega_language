@@ -1168,6 +1168,10 @@ finish(col)`
       foot: { texel: [6, 0], channel: "r" },
       wet:  { texel: [6, 0], channel: "b" },
       // What is underfoot: the same four weights the ground is painted with.
+      // The tally, and the moment it changes.
+      got:   { texel: [10, 0], channel: "r" },
+      gotKind: { texel: [10, 0], channel: "g" },
+      carried: { texel: [10, 0], channel: "b" },
       sand:  { texel: [8, 0], channel: "r" },
       grass: { texel: [8, 0], channel: "g" },
       rock:  { texel: [8, 0], channel: "b" },
@@ -1181,6 +1185,9 @@ finish(col)`
       surf: airInstrument(240, 1.4, "bp"),
       bird: { ref: "tone.bell" },
       step: { ref: "tone.pluck" },
+      // Finding something. A bell, because the one sound a game has to get
+      // right is the one that says yes.
+      find: { ref: "tone.bell" },
       // The second half of a footstep: what the ground does *after* the weight
       // lands. Sand and snow give, so they hiss; rock does not, so it does not.
       scuff: { ref: "tone.pluck" },
@@ -1206,6 +1213,12 @@ finish(col)`
       { kind: "note", instrument: "step", when: 'ch("foot") > 0.5',
         hz: '62 + ch("rock") * 165 + ch("snow") * 78 + ch("grass") * 26 - ch("wet") * 18',
         dur: '0.055 + ch("sand") * 0.045 + ch("wet") * 0.05' },
+      // Up a scale as the bag fills — the fourth thing you find rings a
+      // fourth above the first — and each kind starts from its own note, so a
+      // run of mushrooms and a run of crystal are not the same run.
+      { kind: "note", instrument: "find", when: 'ch("got") > 0.5',
+        hz: '392 * 2 ^ ((ch("gotKind") * 3 + min(ch("carried"), 12)) / 12)',
+        dur: "0.34" },
       // …and the hiss of ground that gives under you. Loose or wet only: a
       // scuff on bare rock is a sound that is not there. It is a second note
       // rather than a louder first one because a note carries no velocity —
@@ -1261,6 +1274,7 @@ uniform vec3  leafC;     // @color @default #3f6d2e
 uniform float weather;   // @range 0 1 @default 0.5 @help how much weather there is
 uniform float windAmt;   // @range 0 2 @default 1 @help how hard it blows
 uniform float wildlife;  // @range 0 1 @default 0.6 @help how much of it is alive
+uniform float items;     // @range 0 1 @default 0.55 @help how much there is to find
 uniform vec3  hideC;     // @color @default #6b4f31
 // The two other ways of looking, as buttons. Hold M or V for a moment; tick
 // the box to stay there.
@@ -1405,6 +1419,7 @@ float gNear;
 // they are only ever visible underfoot, and asking for them at forty metres
 // is asking for the fizz that Phase 28 spent a round removing.
 float gClose;
+vec3 gGlow;                 // what a thing gives off, rather than reflects
 float ground(vec2 q) { return state2(mapUv(q)).r; }
 
 // ------------------------------------------------------------ what grows
@@ -1536,6 +1551,91 @@ float walkerAt(vec3 p) {
   return min(min(body, head), min(leg, arm));
 }
 
+// -------------------------------------------------- things to pick up
+// One more band of the same hash, between the animals and the boulders. A
+// cell that grows a tree does not also grow a mushroom, which is not a rule
+// imposed on the scatter but the arithmetic of a band: the hash is one number
+// and it lands in one place.
+//
+// What kind is decided by the ground rather than by another hash, so what you
+// find tells you where you are: shells on the beach, mushrooms where it is
+// damp, crystal on the high rock, berries in between.
+float itemLo(vec4 L)  { return treeChance(L) * 0.62 + 0.10 * wildlife; }
+float itemKind(vec4 L) {
+  if (L.x < 3.4) return 1.0;                        // a shell, on the sand
+  if (L.x > 15.0) return 2.0;                       // a crystal, up on the rock
+  if (L.y > 0.46) return 0.0;                       // a mushroom, where it is damp
+  return 3.0;                                       // and berries in between
+}
+/** Whether this cell holds something, ignoring whether it is still there. */
+bool growsItem(vec2 id, out float kind) {
+  vec4 L = state2(mapUv(thingSpot(id)));
+  kind = itemKind(L);
+  if (L.x < 1.2) return false;
+  float h3 = hash21(id * 3.1 - 4.7);
+  float lo = itemLo(L);
+  return h3 > lo && h3 < lo + 0.30 * items && h3 < 1.0 - stoneChance(L) * 0.5;
+}
+
+// What has been picked up, in a texture that does not grow.
+//
+// This is the one thing in the world that genuinely has to be *remembered*.
+// Everything else is a function of position and can be recomputed; a mushroom
+// you have already eaten cannot be, and a list of them would grow without
+// bound in a world that has no bound.
+//
+// So: a direct-mapped table in row 1 of the state, which was zeros until now.
+// The cell's own coordinates go in the slot beside the flag, so a collision
+// is *detectable* rather than silent — a slot holding someone else's id reads
+// as "not taken", and the older entry is simply overwritten. That is the
+// honest failure: pick up more than a few hundred things and the earliest of
+// them grow back. Constant memory buys forgetting, and forgetting is the
+// right thing to give up in a world you can walk out of.
+const float SLOTS = 421.0;                          // prime, and under the state's width
+float slotOf(vec2 id) {
+  return floor(mod(abs(id.x * 7919.0 + id.y * 104729.0 + 3.0), SLOTS));
+}
+bool taken(vec2 id) {
+  vec4 e = reg(vec2(slotOf(id), 1.0));
+  return e.z > 0.5 && abs(e.x - id.x) < 0.5 && abs(e.y - id.y) < 0.5;
+}
+
+/** The nearest unclaimed thing within arm's reach, if any. First found
+    rather than nearest, which is the same answer here: one thing to a cell
+    and cells eight metres apart, so two of them cannot both be within two. */
+const float REACH = 2.3;
+bool reachFor(vec2 at, out vec2 id, out float kind) {
+  vec2 id0 = floor(at / CELL);
+  id = id0; kind = 0.0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 c = id0 + vec2(float(dx), float(dy));
+      float k;
+      if (!growsItem(c, k)) continue;
+      if (length(at - thingSpot(c)) > REACH) continue;
+      if (taken(c)) continue;
+      id = c; kind = k; return true;
+    }
+  }
+  return false;
+}
+
+/** One of four as a vector. A dynamic index into a vec4 is a thing GLSL ES
+    1.00 does not promise, and this sketch is meant to run there. */
+vec4 oneHot(float k) {
+  return vec4(step(abs(k), 0.4), step(abs(k - 1.0), 0.4),
+              step(abs(k - 2.0), 0.4), step(abs(k - 3.0), 0.4));
+}
+
+/** What each kind looks like. Read by the world, the map and the panel, so
+    a crystal is the same colour wherever you meet it. */
+vec3 itemColour(float k) {
+  if (k < 0.5) return vec3(0.86, 0.78, 0.62);       // a mushroom
+  if (k < 1.5) return vec3(0.94, 0.82, 0.80);       // a shell
+  if (k < 2.5) return vec3(0.42, 0.86, 0.95);       // a crystal
+  return vec3(0.78, 0.16, 0.26);                    // berries
+}
+
 vec3 gThing;                // where the thing in this cell stands
 float gThingKind;           // 0 a tree, 1 a boulder
 float gThingSize;
@@ -1604,6 +1704,51 @@ float thingAt(vec3 p, out float kind) {
     float legs = sdCapsule3(lp, vec3(0.0), vec3(0.0, 0.66 * sz, 0.0), 0.05 * sz);
     gThingSize = sz;
     return min(min(body, neck), min(head, legs));
+  }
+  // Something to pick up, and whether it is still there.
+  //
+  // The first version tried to get this for nothing: the map pass has a spare
+  // channel and bakes every texel anyway, so it wrote the answer there and
+  // scene() read it out of the fetch it had already paid for. That is the
+  // move this whole world is built on and it is the right instinct — it is
+  // simply not what the measurement said. The flag reached the texture (361
+  // texels of a 14,336-texel band carried it) and did not survive being
+  // sampled back: forcing the test off changed exactly zero pixels of the
+  // map, twice, by two different measurements.
+  //
+  // So the question is asked directly, and paid for. The saving grace is that
+  // it is asked *inside* the band — only a ray whose cell grows something
+  // reaches the fetch — and a warp is a patch of neighbouring pixels, so the
+  // rays in it agree about which cell they are in. That is the opposite of
+  // the distance guard Phase 28 had to delete, where they never agreed about
+  // anything. Measured below at no cost I can distinguish from zero.
+  float lo = green * 0.62 + 0.10 * wildlife;
+  if (h3 > lo && h3 < lo + 0.30 * items && h3 < 1.0 - stone * 0.5) {
+    if (taken(id)) return 1e9;                      // it is in your bag now
+    kind = 3.0;
+    gThingSize = itemKind(L);                       // the display wants to know which
+    float sz = 0.85 + h1 * 0.4;
+    vec3 ip = rp;
+    // Four shapes, and they are small on purpose: a thing you pick up should
+    // want looking for. The marcher still bounds them correctly — a small
+    // object is a small distance, not a missed one — so they cost what their
+    // silhouette costs and nothing for being little.
+    if (gThingSize < 0.5) {                         // a mushroom
+      float stem = sdCapsule3(ip, vec3(0.0), vec3(0.0, 0.30 * sz, 0.0), 0.045 * sz);
+      vec3 cp = ip - vec3(0.0, 0.30 * sz, 0.0); cp.y *= 2.2;
+      return min(stem, (length(cp) - 0.17 * sz) / 2.2);
+    }
+    if (gThingSize < 1.5) {                         // a shell
+      vec3 cp = ip - vec3(0.0, 0.06 * sz, 0.0); cp.y *= 3.0;
+      return (length(cp) - 0.19 * sz) / 3.0;
+    }
+    if (gThingSize < 2.5) {                         // a crystal
+      vec3 cp = ip - vec3(0.0, 0.24 * sz, 0.0);
+      return (abs(cp.x) + abs(cp.y) * 0.5 + abs(cp.z) - 0.27 * sz) * 0.5;
+    }
+    vec3 cp = ip - vec3(0.0, 0.15 * sz, 0.0);       // berries
+    cp.xz = abs(cp.xz) - 0.08 * sz;
+    return length(cp) - 0.11 * sz;
   }
   if (h3 > 1.0 - stone * 0.5) {                     // a boulder
     kind = 1.0;
@@ -1855,6 +2000,100 @@ vec4 meta() { return reg(vec2(1.0, 0.0)); }   // metres walked, -, -, -
 vec4 airOf() { return reg(vec2(2.0, 0.0)); }  // wind x, wind z, rain, gust
 vec4 view()  { return reg(vec2(3.0, 0.0)); }  // pitch, roll, time of day, -
 
+// ------------------------------------------------------------ the panel
+// A three-by-five font, fifteen bits to a digit, chosen with a chain rather
+// than an array because a constant array with a computed index is a thing
+// GLSL ES 1.00 does not promise either.
+//
+// The studio has a real glyph atlas — EDT and MSDF, a font-file parser, the
+// lot — and none of it is reachable from inside a sketch, which is one
+// program with a state texture and no graph. A count you cannot read is not
+// a count, so: thirty bytes of font.
+float digitBits(float d) {
+  if (d < 0.5) return 31599.0;
+  if (d < 1.5) return 29850.0;
+  if (d < 2.5) return 29671.0;
+  if (d < 3.5) return 31207.0;
+  if (d < 4.5) return 18925.0;
+  if (d < 5.5) return 31183.0;
+  if (d < 6.5) return 31695.0;
+  if (d < 7.5) return 18727.0;
+  if (d < 8.5) return 31727.0;
+  return 31215.0;
+}
+/** One cell of one digit. c is in font cells, y downward from the cap line. */
+float digitPix(float d, vec2 c) {
+  if (c.x < 0.0 || c.x >= 3.0 || c.y < 0.0 || c.y >= 5.0) return 0.0;
+  float bit = floor(c.y) * 3.0 + floor(c.x);
+  return mod(floor(digitBits(d) / pow(2.0, bit)), 2.0);
+}
+/** Up to two of them, the units column fixed so the number does not walk
+    sideways as it passes nine. */
+float numberPix(float n, vec2 c) {
+  n = clamp(floor(n), 0.0, 99.0);
+  float tens = floor(n / 10.0);
+  float ink = digitPix(n - tens * 10.0, c - vec2(4.0, 0.0));
+  if (tens > 0.5) ink = max(ink, digitPix(tens, c));
+  return ink;
+}
+
+/** What each kind looks like flat, as a distance. Deliberately not the same
+    shapes as the world's: an icon read at twenty pixels is a silhouette, and
+    a mushroom's silhouette is a cap, not a mushroom. */
+float itemIcon(float k, vec2 c) {
+  if (k < 0.5) {                                     // a mushroom
+    float cap = max(length(vec2(c.x, (c.y - 0.05) * 1.8)) - 0.74, -(c.y - 0.05));
+    float stem = max(abs(c.x) - 0.17, abs(c.y + 0.42) - 0.44);
+    return min(cap, stem);
+  }
+  if (k < 1.5) {                                     // a shell
+    float fan = max(length(vec2(c.x * 0.92, c.y + 0.55)) - 0.98, -(c.y + 0.55));
+    float notch = abs(fract(c.x * 2.2 + 0.5) - 0.5) - 0.30;
+    return max(fan, notch * 0.5 - 0.12);
+  }
+  if (k < 2.5) return abs(c.x) * 1.55 + abs(c.y) * 0.82 - 0.66;   // a crystal
+  vec2 b = c; b.x = abs(b.x) - 0.28;                 // berries
+  return length(b - vec2(0.0, -0.06)) - 0.36;
+}
+
+/**
+ * Four slots along the bottom. Drawn in the picture's own pixels and scaled
+ * by its height, so the panel is the same size on a thumbnail and on a wall
+ * — the same argument the reticle settled, and the same one the map's arrow
+ * had to be taught the hard way.
+ */
+vec3 panel(vec3 col, vec4 inv, float flashKind, float flash) {
+  float S = max(floor(u_resolution.y / 200.0), 1.0);
+  float cw = 42.0 * S, chh = 26.0 * S, gap = 4.0 * S;
+  vec2 o = vec2(9.0 * S, 9.0 * S);
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    vec2 q = gl_FragCoord.xy - o - vec2(fi * (cw + gap), 0.0);
+    if (q.x < 0.0 || q.x > cw || q.y < 0.0 || q.y > chh) continue;
+    float have = dot(inv, oneHot(fi));
+    // A plate you can see the world through: an opaque bar across the bottom
+    // of a first-person view is a letterbox, not a panel.
+    col = mix(col, vec3(0.006, 0.008, 0.012), 0.62);
+    // …and the slot you just filled lights up, because a tally that changes
+    // silently is a tally nobody notices changing.
+    float lit = abs(flashKind - fi) < 0.4 ? flash : 0.0;
+    col = mix(col, itemColour(fi) * 0.5, lit * 0.55);
+    float edge = min(min(q.x, cw - q.x), min(q.y, chh - q.y));
+    col = mix(col, vec3(0.30, 0.33, 0.40), (1.0 - smoothstep(0.0, S, edge)) * 0.5);
+
+    vec2 ic = (q - vec2(13.0 * S, 13.0 * S)) / (9.0 * S);
+    float d = itemIcon(fi, ic);
+    // Empty slots are drawn dim rather than left out: a panel whose shapes
+    // move as you fill it is a panel you have to read again every time.
+    vec3 tint = itemColour(fi) * (have > 0.5 ? 1.0 : 0.22);
+    col = mix(col, tint, smoothstep(1.2 / (9.0 * S), -0.6 / (9.0 * S), d));
+
+    vec2 nc = floor(vec2(q.x - 25.0 * S, (chh - 8.0 * S) - q.y) / (2.6 * S));
+    col = mix(col, vec3(0.94, 0.95, 0.97) * (have > 0.5 ? 1.0 : 0.35), numberPix(have, nc));
+  }
+  return col;
+}
+
 // ------------------------------------------------------------ the map
 // A map you can only have because the world already keeps one.
 //
@@ -1912,6 +2151,13 @@ vec3 mapPicture(vec2 pp, vec4 wk) {
     vec3 ink = kind > 1.5 ? srgbToLinear(rockC) * 2.1 : srgbToLinear(leafC) * 1.7;
     col = mix(col, ink, smoothstep(0.4, -0.4, d));
   }
+  // What is left to find, and only what is left. A map that still shows what
+  // you are carrying is a map that lies.
+  float ik;
+  if (growsItem(id, ik) && !taken(id)) {
+    float d = length(q - thingSpot(id)) - mpp * 2.1;
+    col = mix(col, itemColour(ik) * 2.4, smoothstep(0.5, -0.5, d) * 0.9);
+  }
 
   // Twenty metres a square: the ruler and the scale bar in one, at a width
   // measured in pixels so it stays a hairline whatever the window does.
@@ -1942,7 +2188,9 @@ vec3 mapPicture(vec2 pp, vec4 wk) {
 
 vec4 sim(vec2 uvv) {
   vec2 texel = floor(gl_FragCoord.xy);
-  if (texel.y > 0.5 || texel.x > 8.5) return vec4(0.0);
+  // Row 0 is the register bank and row 1 is the table of what has been
+  // picked up. Everything below them is still the zeros it always was.
+  if (texel.y > 1.5 || (texel.y < 0.5 && texel.x > 10.5)) return vec4(0.0);
   bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
   float dt = 1.0 / 60.0;
   vec4 w = first ? vec4(spawnPoint(), 0.6, 0.0) : who();
@@ -2011,6 +2259,22 @@ vec4 sim(vec2 uvv) {
   // head bob and the metres walked are all made of.
   sp = sign(sp) * length(pos - w.xy) / dt;
 
+  // What is within arm's reach, worked out once and needed by three texels:
+  // the table that remembers it, the tally, and the pulse that plays the
+  // sound. Each recomputes it rather than reading a neighbour's answer,
+  // because a texel that reads its neighbour is reading last frame's.
+  vec2 gotId; float gotKind;
+  bool got = !first && reachFor(pos, gotId, gotKind);
+
+  if (texel.y > 0.5) {
+    // Row 1. A slot keeps what it had unless this is the frame its cell was
+    // claimed; the cell's own coordinates go in beside the flag so that a
+    // collision reads as "not taken" rather than as somebody else's mushroom.
+    if (first) return vec4(0.0);
+    if (got && abs(slotOf(gotId) - texel.x) < 0.5) return vec4(gotId, 1.0, gotKind);
+    return reg(vec2(texel.x, 1.0));
+  }
+
   if (texel.x < 0.5) return vec4(pos, heading, sp);
   if (texel.x < 1.5) return vec4(mt.x + abs(sp) * dt, 0.0, 0.0, 1.0);
   // The weather, worked out before the branches rather than inside one of
@@ -2073,6 +2337,21 @@ vec4 sim(vec2 uvv) {
     float sings = step(1.0 - 0.34 * dawn * wildlife, h) * step(0.45, open);
     float fresh = abs(slot - mem.z) > 0.5 ? 1.0 : 0.0;
     return vec4(sings * fresh, hash21(vec2(slot, 8.1)), slot, dawn);
+  }
+  if (texel.x > 9.5) {
+    // The pulse, and how long ago. One frame of "picked", which is a thing a
+    // shader can say and an expression cannot, and a fading number beside it
+    // that the panel uses to light the slot you just filled.
+    vec4 inv = first ? vec4(0.0) : reg(vec2(9.0, 0.0));
+    vec4 was = first ? vec4(0.0) : reg(vec2(10.0, 0.0));
+    float total = inv.x + inv.y + inv.z + inv.w + (got ? 1.0 : 0.0);
+    float flash = got ? 1.0 : max(was.w - dt * 2.6, 0.0);
+    return vec4(got ? 1.0 : 0.0, gotKind, total, flash);
+  }
+  if (texel.x > 8.5) {
+    // The tally itself: four kinds, one texel, and nothing that grows.
+    vec4 inv = first ? vec4(0.0) : reg(vec2(9.0, 0.0));
+    return inv + (got ? oneHot(gotKind) : vec4(0.0));
   }
   if (texel.x > 7.5) {
     // What is underfoot, as the four weights the ground itself is painted
@@ -2220,6 +2499,7 @@ vec3 skyCol = mapV > 0.5 ? vec3(0.0) : mix(skyAt(rd), grey * (0.55 + 0.45 * smoo
                   gRain * 0.8);
 float sunDim = 1.0 - gRain * 0.72;
 
+gGlow = vec3(0.0);
 vec3 col = skyCol;
 // Nothing to march when you are looking at the map, and nothing to pay for
 // it either — the ternary is the whole saving, because a frame that marches
@@ -2256,7 +2536,14 @@ if (tHit > 0.0) {
     // the whole field, which is what makes a trunk round.
     n = normal3(hit);
     gWet = 0.0;
-    if (kind > 1.5) {
+    if (kind > 2.5) {
+      // Something to pick up. It gets a little light of its own — not because
+      // anything here glows, but because a thing the size of a fist in a
+      // hundred and ninety metres of grass is otherwise a thing nobody ever
+      // finds. The crystal gets most of it, which is at least an excuse.
+      albedo = srgbToLinear(itemColour(gThingSize)) * 1.15;
+      gGlow = itemColour(gThingSize) * (gThingSize > 1.5 && gThingSize < 2.5 ? 0.55 : 0.16);
+    } else if (kind > 1.5) {
       // A hide, and a different one per animal — a herd of the same brown is
       // one animal drawn several times.
       vec2 id = floor(hit.xz / CELL);
@@ -2310,6 +2597,7 @@ if (tHit > 0.0) {
   gloss = max(gloss, gRain * 0.55 * (1.0 - gWet));
   vec3 hv = normalize(sun - rd);
   lin += pow(max(dot(n, hv), 0.0), mix(30.0, 260.0, gloss)) * sh * gloss * 1.8 * sunDim;
+  lin += gGlow;
   float fr = fresnel(max(dot(n, -rd), 0.0), 0.02);
   lin = mix(lin, skyCol, fr * (gWet * 0.85 + gW.w * 0.25 + gRain * 0.3));
   // Air, not milk: enough to say "far away" and not so much that the middle
@@ -2364,6 +2652,14 @@ if (mapV < 0.5) {
 }
 
 if (mapV > 0.5) col = mapPicture(p, w);
+
+// What you are carrying, over whichever view you are in — the map included,
+// because "what have I got" and "where am I" are the same question asked
+// twice, and the answer should not move between them.
+{
+  vec4 pick = reg(vec2(10.0, 0.0));
+  col = panel(col, reg(vec2(9.0, 0.0)), pick.y, pick.w);
+}
 
 finish(col)` },
 
