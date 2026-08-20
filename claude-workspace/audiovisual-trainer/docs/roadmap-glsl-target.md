@@ -1935,9 +1935,69 @@ five: a hash amplifying one ulp through multiply-add fusion (`filter.grain`,
 8.8/255), and `p.y` at a height that is not a power of two, where one driver
 multiplies by the reciprocal and the other divides.
 
-*Left:* tiling, which lives in `renderTiled` at the sketch level rather than in
-the graph, and a WebGPU path for the studios themselves — this runs the graph
-and hands back a texture, and every studio still draws through GL.
+*Left:* a WebGPU path for the studios themselves — this runs the graph and
+hands back a texture, and every studio still draws through GL.
+
+### Phase 25 — Tiling on WebGPU, and the terrain as data *(M)* — **shipped**
+
+**Tiling.** `renderTiledGpu` and `maxRenderSizeGpu`. The rule that makes a
+tiled render *identical* rather than merely similar is the same one the GL path
+uses: a tile draws at its own size while thinking in the whole picture's — the
+resolution stays the whole picture's, and the origin says which piece this is.
+The emitter now adds `U.origin` to the fragment position, which is the one line
+that makes it work, and which only reads cleanly because Phase 24 removed the
+flip: the origin is in the fragment's own frame, and both backends now count
+that frame up from the bottom.
+
+| held against | number |
+|---|---|
+| five sketches, nine tiles each, vs the same sketch in one go | **byte-identical** |
+| the same, vs the GL path's own tiled render | identical but for the hash the two backends already disagree about |
+| 8592×64 on a device whose limit is 8192 | 5 tiles, nothing clamped, `uv.x` sweeping 0→255 across the whole picture |
+
+The GL version has a branch for a sketch that keeps state — a simulation reads
+its neighbours and a tile's neighbours are in the next tile. There is no such
+branch here, because there is nothing for it to do: this translator refuses a
+`sim()` sketch outright, and a stateful sketch belongs to `webgpu-graph.js`,
+which does feedback properly and does not tile at all. Refusing with that said
+beats a branch that cannot be reached.
+
+**The terrain as data.** The rover was still 16 fps on the user's machine — an
+Intel HD 6000 — after the arithmetic pass of Phase 22b. Measured on that class
+of GPU at 640×360:
+
+| the ground is… | frame |
+|---|---|
+| four octaves and two, as arithmetic | 28.7 ms |
+| three and two | 24.2 ms |
+| two and one | 19.3 ms |
+| **one filtered texture fetch** | **11.2 ms** |
+| nothing at all — a flat plane | 11.1 ms |
+
+One fetch costs what having no terrain costs. So the dunes are baked once into
+the second state target and read back as a single filtered sample: **28.5 ms →
+13.5 ms**, and the picture moves by 0.31/255.
+
+This is the sketch's own lesson one step further, not a trick bolted onto it.
+`scene()` already asked the state texture where the rover and the beacons were;
+now it asks where the ground is, and it is still a pure function of a point.
+The one place the map is not good enough is the **normal**: a bilinear map is
+flat inside a texel and a flat normal is a facet, so `normal3` switches back to
+the analytic sum — six calls a pixel rather than a hundred.
+
+**And a rule this work had wrong.** Phase 22 shipped a check asserting that a
+raymarched `scene()` looks *nothing* up. That was the right fix for the bug
+that prompted it — reading the register texture nine times per call, a thousand
+fetches to draw one dot — but the wrong rule, and it would have forbidden the
+change above. A lookup is not the problem; a lookup *per thing in the world*
+is. The check now says what it means: `scene()` and everything it calls may
+make at most one texture read, and it must be the terrain map rather than the
+registers.
+
+**Where the rover ended up**, on an Intel HD 6000 at 640×360, one context, one
+compile, the way the Playground runs: **367.6 ms → 13.5 ms**, 2.7 fps → 74 fps,
+at full resolution. The render scale from Phase 22b is now headroom rather than
+a requirement.
 
 ## 4. Decisions and risks
 
@@ -2002,6 +2062,7 @@ and hands back a texture, and every studio still draws through GL.
 | 22.1 | Snake, a tilemap platformer, a raymarched rover — **shipped** | M | 21.2 | a grid, a tilemap and a lit 3-D world |
 | 23.1 | The last of the catalogue — **nothing untranslated** | M | 21.1 | 48 of 53 identical; the 11 refusals are field ports |
 | 24.1 | The render graph on WebGPU — **shipped** | L | 23.1 | pool, fusion, feedback and 32-bit registers, identical |
+| 25.1 | Tiling on WebGPU; the rover's terrain as data | M | 24.1 | past the device's maximum, byte-identical; 74 fps |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

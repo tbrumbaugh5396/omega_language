@@ -111,9 +111,12 @@ export async function renderSketchGpu(sketch, width, height, opts = {}) {
   // somebody is listening, which is what the error scope below is for.
   const buf = new Float32Array(12 + 32 * 4);
   const iview = new Int32Array(buf.buffer);
-  buf[0] = width; buf[1] = height;
-  buf[2] = (opts.mouse || [width / 2, height / 2])[0];
-  buf[3] = (opts.mouse || [width / 2, height / 2])[1];
+  // A tile draws at its own size but must think in the whole picture's, or
+  // every scale in the sketch would change with the tiling.
+  const res = opts.resolution || [width, height];
+  buf[0] = res[0]; buf[1] = res[1];
+  buf[2] = (opts.mouse || [res[0] / 2, res[1] / 2])[0];
+  buf[3] = (opts.mouse || [res[0] / 2, res[1] / 2])[1];
   buf[4] = opts.time || 0;
   buf[5] = opts.seed || 0;
   buf[6] = opts.mouseDown ? 1 : 0;
@@ -207,6 +210,71 @@ export async function renderSketchGpu(sketch, width, height, opts = {}) {
   ubo.destroy();
   for (const t of owned) t.destroy();
   return { data, wgsl: emitted.wgsl, refused: emitted.refused };
+}
+
+/**
+ * The largest square this device will render in one go.
+ *
+ * WebGPU states it as a limit rather than as two queries whose smaller one you
+ * have to take — `MAX_TEXTURE_SIZE` and `MAX_VIEWPORT_DIMS` on the GL side,
+ * which are not always the same number.
+ */
+export async function maxRenderSizeGpu() {
+  const g = await gpu();
+  return g ? g.device.limits.maxTextureDimension2D : 0;
+}
+
+/**
+ * Render at any size, in tiles where the device will not do it in one go.
+ *
+ * The same rule as the GL path, for the same reason: each tile draws with the
+ * *whole* picture's resolution and its own corner in `origin`, so every pixel
+ * believes it is where it will end up. That is what makes a tiled render
+ * identical to an untiled one rather than merely similar — a sketch that
+ * divides by `u_resolution` or reaches for `p` would otherwise draw a
+ * different picture at every tile.
+ *
+ * The GL version has a branch for a sketch that keeps state — a simulation
+ * reads its neighbours and a tile's neighbours are in the next tile, so those
+ * come back untiled. There is no such branch here, because there is nothing
+ * for it to do: this translator refuses a `sim()` sketch outright, on the
+ * grounds that two passes and a ping-pong target are the runner's business.
+ * A stateful sketch belongs to `webgpu-graph.js`, which does tile-free
+ * feedback properly. Refusing here with that said is better than a branch
+ * that cannot be reached.
+ *
+ * Returns { canvas, width, height, tiles, clamped, why }.
+ */
+export async function renderTiledGpu(source, width, height, opts = {}) {
+  const max = await maxRenderSizeGpu();
+  if (!max) throw new Error("this machine has no WebGPU");
+  const emitted = toWgsl(source);
+  if (!emitted.ok) throw new Error(`not translated: ${emitted.refused[0]}`);
+  // `tile` forces a step, which is how the self-test exercises the tiled path
+  // at a size the device would happily do in one go.
+  const forced = opts.tile ? Math.max(8, opts.tile | 0) : 0;
+  if (!forced && width <= max && height <= max) {
+    return { canvas: await renderSketchGpuCanvas(source, width, height, opts),
+             width, height, tiles: 1, clamped: false, why: null };
+  }
+  const out = document.createElement("canvas");
+  out.width = width; out.height = height;
+  const g2 = out.getContext("2d");
+  const step = forced || Math.min(max, 2048);
+  let tiles = 0;
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const tw = Math.min(step, width - x), th = Math.min(step, height - y);
+      // The origin is in the fragment's own frame, which counts up from the
+      // bottom on both backends — the whole point of dropping the flip.
+      const originY = height - y - th;
+      const tile = await renderSketchGpuCanvas(source, tw, th, {
+        ...opts, tile: 0, resolution: [width, height], origin: [x, originY] });
+      g2.drawImage(tile, x, y);
+      tiles++;
+    }
+  }
+  return { canvas: out, width, height, tiles, clamped: false, why: null };
 }
 
 /** The same, as a canvas — for looking at rather than measuring. */

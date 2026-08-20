@@ -899,7 +899,11 @@ ${body}
   // picture. One convention throughout: row 0 of a target is the bottom of the
   // picture, exactly as in GL, and the readback turns it up the right way at
   // the end — which is what present() does over there.
-  let fc = FC.xy;
+  // Plus this tile's corner. A tiled render draws a piece at a time but every
+  // pixel has to believe it is where it will end up, or every scale in the
+  // sketch would change with the tiling: the resolution stays the whole
+  // picture's and the origin says which piece this is. Zero when there is one.
+  let fc = FC.xy + U.origin;
 ${reserved}
 ${fragCoord}
 ${reservedU}

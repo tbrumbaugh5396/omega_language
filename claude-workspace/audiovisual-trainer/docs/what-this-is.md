@@ -62,7 +62,7 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
 library, a WGSL emitter with a WebGPU runner for both a sketch and the whole
-graph, and a **234-check self-test across 34 groups that runs inside the app**.
+graph, and a **236-check self-test across 34 groups that runs inside the app**.
 
 ---
 
@@ -343,7 +343,9 @@ surprise:
   Two places the backends genuinely part remain, both named with numbers: a
   hash amplifying one ulp through multiply-add fusion, and `p.y` at a height
   that is not a power of two. What is still GL-only is tiling, which lives at
-  the sketch level, and the studios, which all still draw through GL.
+  the studios, which all still draw through GL. Tiling works on both: a
+  picture past what the device will render in one go comes back whole and
+  byte-identical to the same sketch drawn in one piece.
 
 The sketchpad-tier caveats in [`../README.md`](../README.md) still apply to the
 studios as tools. This document is about the machinery underneath them.

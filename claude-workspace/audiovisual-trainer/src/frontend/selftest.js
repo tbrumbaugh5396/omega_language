@@ -51,7 +51,8 @@ import { readGsubForTest } from "./font-file.js";
 import { renderTiled, maxRenderSize } from "./shader-run.js";
 import { auditNodes, portabilitySummary, auditSource } from "./wgsl-audit.js";
 import { toWgsl } from "./wgsl-emit.js";
-import { renderSketchGpu, gpuDescribe } from "./webgpu-run.js";
+import { renderSketchGpu, gpuDescribe, renderTiledGpu, renderSketchGpuCanvas,
+         maxRenderSizeGpu } from "./webgpu-run.js";
 import { renderGraphGpu, gpuGraphRunner, GpuGraphRunner } from "./webgpu-graph.js";
 import { zipStore, crc32 } from "./zip-store.js";
 import { graphStats } from "./graph-compile.js";
@@ -2582,6 +2583,66 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                  + split.map((r) => `${r.partial}/255 over ${r.nPartial} px`).join(", ")
                  + "), which is present() premultiplying into a canvas and getImageData un-premultiplying back out" }); }
 
+      // 3d. Tiling. The rule that makes a tiled render *identical* rather than
+      //     merely similar is that a tile draws at its own size while thinking
+      //     in the whole picture's: the resolution stays the whole picture's
+      //     and the origin says which piece this is. A sketch that divides by
+      //     u_resolution, or reaches for `p` or `st`, would otherwise draw a
+      //     different picture in every tile.
+      { const TW = 192, TH = 144;
+        const cases = [
+          ["a shape at p, whose scale must not change", "vec3(aa(sdCircle(p, 0.6)) * vec3(1.0, 0.6, 0.3) + 0.1)"],
+          ["uv straight through", "vec3(uv, 0.5)"],
+          ["st, which folds in the aspect", "vec3(fract(st * 4.0), 0.5)"],
+          ["gl_FragCoord, counted in pixels", "vec3(fract(gl_FragCoord.xy / 32.0), 0.0)"],
+          ["a hash of the pixel, which forgives nothing", "vec3(hash21(floor(gl_FragCoord.xy)))"],
+        ];
+        const bad = [], crossBad = [];
+        for (const [what, src2] of cases) {
+          const one = await renderSketchGpuCanvas(src2, TW, TH, {});
+          const many = await renderTiledGpu(src2, TW, TH, { tile: 64 });
+          const a = one.getContext("2d").getImageData(0, 0, TW, TH).data;
+          const b = many.canvas.getContext("2d").getImageData(0, 0, TW, TH).data;
+          let worst = 0;
+          for (let i = 0; i < TW * TH * 4; i++) worst = Math.max(worst, Math.abs(a[i] - b[i]));
+          if (worst !== 0 || many.tiles < 9) bad.push(`${what}: ${worst}/255 over ${many.tiles} tiles`);
+          // …and against the GL path's own tiled render, which is the same
+          // rule written twice and has to agree.
+          const glT = renderTiled(src2, TW, TH, { tile: 64 });
+          const c = glT.canvas.getContext("2d").getImageData(0, 0, TW, TH).data;
+          let cross = 0;
+          for (let i = 0; i < TW * TH; i++) {
+            for (let k = 0; k < 3; k++) cross = Math.max(cross, Math.abs(b[i * 4 + k] - c[i * 4 + k]));
+          }
+          if (cross !== 0) crossBad.push(`${what}: ${cross}/255`);
+        }
+        push({ group: "WebGPU", name: `${cases.length} sketches, nine tiles each, against the untiled render`,
+               ok: bad.length === 0,
+               detail: bad.length === 0
+                 ? "every one byte-identical to the same sketch drawn in one go — and identical to the GL path's "
+                   + `own tiled render except ${crossBad.length ? crossBad.join(", ") : "nothing"}`
+                   + (crossBad.length ? ", which is the hash the two backends already disagree about, tiled or not" : "")
+                 : bad.join(" · ") }); }
+
+      // 3e. And the case tiling exists for: a picture past what the device
+      //     will draw in one go.
+      { const max = await maxRenderSizeGpu();
+        const big = await renderTiledGpu("vec3(uv, 0.5)", max + 400, 64, {});
+        const row = big.canvas.getContext("2d").getImageData(0, 0, big.width, 1).data;
+        const sweep = [row[0], row[(big.width >> 1) * 4], row[(big.width - 1) * 4]];
+        // uv.x sweeps the whole picture rather than restarting at each tile.
+        const monotone = sweep[0] < 8 && Math.abs(sweep[1] - 128) <= 2 && sweep[2] > 247;
+        let refused = "";
+        try {
+          await renderTiledGpu("vec4 sim(vec2 q) { return vec4(q, 0.0, 1.0); }\nvec3(state(uv).rg, 0.5)", 256, 64, {});
+        } catch (e) { refused = String(e.message); }
+        push({ group: "WebGPU", name: "a picture wider than the device will draw comes back whole",
+               ok: big.width === max + 400 && big.tiles > 1 && !big.clamped && monotone && /sim\(\) state pass/.test(refused),
+               detail: `${max + 400}×64 asked for on a device whose limit is ${max}: ${big.tiles} tiles, `
+                 + `nothing clamped, and uv.x reads ${sweep.join(", ")} across it rather than restarting at each tile. `
+                 + "A sketch that keeps state is refused instead — two passes and a ping-pong target belong to the "
+                 + "graph runner, and a tile's neighbours are in the next tile anyway" }); }
+
       // 4. It refuses rather than guesses.
       { const cases = [
           [`float in0(vec2 p);\nin0(p)`, /field port/],
@@ -2655,17 +2716,35 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
            detail: bad.length ? bad.map((r) => `${r.id}: ${r.error || `moved ${r.moved}, lit ${r.lit}`}`).join(" · ")
              : rows.map((r) => `${r.id} changed on ${r.moved} frames, ${r.lit} lit pixels, ${r.effects} effects`).join(" · ") });
 
-    // The one that would have hung the GPU: a raymarched scene() must be
-    // arithmetic. Reading the state texture inside it costs a thousand
-    // fetches a pixel, and this is the check that it is not doing that.
+    // The one that would have hung the GPU — restated, because the first
+    // version of this check had the rule wrong.
+    //
+    // It asserted that scene() looks *nothing* up. That was the right fix for
+    // the bug that prompted it (reading the register texture nine times per
+    // call, which is a thousand fetches to draw one dot) but the wrong rule.
+    // Measured on an Intel HD 6000: the same scene with an analytic ground
+    // costs 28.7 ms a frame and with one filtered fetch 11.2 ms — which is
+    // what it costs with no terrain at all. A lookup is not the problem; a
+    // lookup *per thing in the world* is, and so is arithmetic nobody needs.
+    //
+    // So the rule is: scene() and everything it calls may make at most one
+    // texture read, and it must be the terrain map rather than the registers.
     { const g = GENERATE_PRESETS.find((x) => x.id === "rover");
       const parts = splitSketch(g.source);
-      const sceneFn = parts.declTexts.find((t) => /\bfloat\s+scene\s*\(\s*vec3/.test(stripComments(t))) || "";
-      const reads = (stripComments(sceneFn).match(/\bstate\s*\(|\btexture2D\s*\(/g) || []).length;
-      push({ group: "More games", name: "the raymarched scene() looks nothing up", ok: reads === 0,
-             detail: reads === 0
-               ? "scene() is arithmetic over globals the display body filled once — march calls it about 150 times a pixel, so a lookup in there is a thousand fetches to draw one dot"
-               : `${reads} texture reads inside scene()` }); }
+      const called = ["scene", "ground", "beacon"];
+      const bodies = parts.declTexts
+        .filter((t) => called.some((n) => new RegExp(`\\b(float|vec[234])\\s+${n}\\s*\\(`).test(stripComments(t))))
+        .map(stripComments).join("\n");
+      const registers = (bodies.match(/\bstate\s*\(/g) || []).length;
+      const maps = (bodies.match(/\bstate2\s*\(/g) || []).length;
+      const raw = (bodies.match(/\btexture2D\s*\(/g) || []).length;
+      push({ group: "More games", name: "the raymarched scene() reads the map, and nothing else",
+             ok: registers === 0 && raw === 0 && maps === 1,
+             detail: registers === 0 && raw === 0 && maps === 1
+               ? "one filtered fetch of the terrain map, and no read of the registers — the rover and the beacons "
+                 + "are hoisted into globals the display body fills once. march() calls scene() about a hundred "
+                 + "times a pixel, so anything in there is paid for a hundred times"
+               : `${registers} register reads, ${maps} map reads, ${raw} raw fetches` }); }
 
     // The same argument, one level down. ground() is two fbm, which is seven
     // noise, which is twenty-eight hashes — and scene() used to call it ten
