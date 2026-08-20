@@ -3540,6 +3540,86 @@ c`;
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 
+    // A can, and the two things a closed form gives you that a march does not.
+    try {
+      const g = GENERATE_PRESETS.find((x) => x.id === "can");
+      const CW = 240, CH = 170;
+      const us = parseUniforms(g.source);
+      const base = {};
+      for (const u of us) if (u.value) base[u.name] = u.value.slice();
+      const shot = (over) => renderSketch(g.source, CW, CH, { frame: 0, time: 0,
+                                                              values: { ...base, ...over } })
+        .getContext("2d").getImageData(0, 0, CW, CH).data;
+      // The can alone, as a mask: background and floor painted out, so what
+      // is left is the silhouette and nothing that shares a colour with it.
+      const maskSrc = g.source
+        .replace("vec3 col = mix(vec3(0.075, 0.082, 0.10), vec3(0.014, 0.016, 0.024), smoothstep(-0.9, 1.1, pp.y));",
+                 "vec3 col = vec3(0.0);")
+        .replace("col = base * (0.16 + 1.5 * lit) * srgbToLinear(lightC);", "col = vec3(0.0);")
+        .replace("  col = lin;", "  col = vec3(1.0);");
+      const mask = (over) => {
+        const d = renderSketch(maskSrc, CW, CH, { frame: 0, time: 0,
+                                                  values: { ...base, rays: [1], ...over } })
+          .getContext("2d").getImageData(0, 0, CW, CH).data;
+        const m = new Uint8Array(CW * CH);
+        let n = 0, sx = 0, sy = 0;
+        for (let i = 0; i < CW * CH; i++) if (d[i * 4] > 128) { m[i] = 1; n++; sx += i % CW; sy += (i / CW) | 0; }
+        return { m, n, cx: n ? sx / n : 0, cy: n ? sy / n : 0 };
+      };
+      const bits = (a2, b2) => { let n = 0; for (let i = 0; i < a2.length; i++) if (a2[i] !== b2[i]) n++; return n; };
+      const pixels = (a2, b2) => { let n = 0;
+        for (let i = 0; i < CW * CH; i++) if (Math.abs(a2[i * 4] - b2[i * 4]) + Math.abs(a2[i * 4 + 1] - b2[i * 4 + 1])
+          + Math.abs(a2[i * 4 + 2] - b2[i * 4 + 2]) > 8) n++;
+        return n; };
+
+      const m0 = mask({});
+      const byYaw = bits(m0.m, mask({ yaw: [1.2] }).m);
+      const byPitch = bits(m0.m, mask({ pitch: [0.9] }).m);
+      const byRoll = bits(m0.m, mask({ roll: [0.8] }).m);
+      const slid = mask({ slide: [0.72, 0.5] });
+      const away = mask({ depth: [-1.4] });
+      const paintByYaw = pixels(shot({}), shot({ yaw: [1.2] }));
+      const wrapped = pixels(shot({}), shot({ wraps: [2] }));
+      const shadow = pixels(shot({}), shot({ shadowOn: [0] }));
+      const edges = pixels(shot({ rays: [1] }), shot({ rays: [3] }));
+
+      // The exact claim, and it is exact: a can is a solid of revolution
+      // about its own axis, so turning it about that axis cannot move its
+      // outline by one pixel — while the picture on it must move.
+      const ok = m0.n > 500 && byYaw === 0 && paintByYaw > 100
+        && byPitch > 50 && byRoll > 50
+        && slid.cx - m0.cx > 15 && Math.abs(slid.cy - m0.cy) < 3
+        && away.n < m0.n * 0.75
+        && wrapped > 100 && shadow > 100 && edges > 100;
+      push({ group: "Generate presets", name: "a can: a picture wrapped round a cylinder, exactly", ok,
+             detail: `yaw moves ${byYaw} pixels of the silhouette and ${paintByYaw} of the picture on it — `
+               + `zero and not nearly zero, because a can is a solid of revolution about the very axis it `
+               + `is being turned about, and nothing but a closed form gets that exactly right. Pitch moves `
+               + `${byPitch} and roll ${byRoll}, which are not that axis. Sliding it moves the middle from `
+               + `x=${m0.cx.toFixed(1)} to ${slid.cx.toFixed(1)} and leaves the height alone; sending it `
+               + `away takes it from ${m0.n} pixels to ${away.n}. Two turns of the label differ by `
+               + `${wrapped} pixels, the shadow is ${shadow}, and one ray a pixel against nine differ by `
+               + `${edges} — all of them edges, which is what a hard silhouette costs and what a marched `
+               + `one would have hidden` });
+    } catch (e) {
+      push({ group: "Generate presets", name: "a can: a picture wrapped round a cylinder, exactly",
+             ok: false, detail: String(e.message).split("\n")[0] });
+    }
+
+    // An annotation that ate the ones after it.
+    { const one = parseUniforms("uniform float k; // @toggle @label the switch @default 1 @help why");
+      const two = parseUniforms("uniform float k; // @range 0 4 @label a name @step 2");
+      const u1 = one[0], u2 = two[0];
+      const ok = u1.label === "the switch" && u1.value[0] === 1 && u1.help === "why"
+        && u2.label === "a name" && u2.step === 2;
+      push({ group: "Generate presets", name: "@label stops where the next annotation starts", ok,
+             detail: ok
+               ? "free text runs to the next @, the rule @help already followed. It used to take the whole "
+                 + "rest of the line, so `@toggle @label shadow @default 1` made a control called "
+                 + '"shadow @default 1" that defaulted to off — and did it silently, because the label is '
+                 + "the one field where wrong text still looks like text. Two shipped sketches had it"
+               : `label "${u1.label}", default ${u1.value[0]}, help ${u1.help} · "${u2.label}", step ${u2.step}` }); }
+
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is
     // √(budget / measured) — snapped down to a step, and never above 1.

@@ -1152,6 +1152,274 @@ float marks = min(m.y, BEACONS);
 if (uv.y < 0.035 && uv.x * BEACONS < marks) col = mix(col, vec3(1.0, 0.62, 0.28), 0.85);
 finish(col)`
   },
+  { id: "can", label: "A can — a picture wrapped round a cylinder, exactly", preview: [720, 480], source:
+`// A can, and the arithmetic of putting a picture on a curved thing.
+//
+// Everything else in three dimensions here is *marched*: a distance field, a
+// hundred-odd steps a pixel, a normal found by asking the field four more
+// times. A cylinder does not need any of that. It is a quadratic, so a ray
+// meets it exactly, once, in closed form.
+//
+// And speed is the smaller half of what that buys. The real prize is the
+// *surface parameter*. A marcher hands you a point in space and leaves you to
+// work out where on the label it landed; the quadratic hands you the angle
+// and the height directly, because they are what you solved for. Wrapping a
+// picture round something is a question about parameters, and this is the
+// shape whose parameters you get for free.
+uniform sampler2D label;  // @image
+uniform vec2  label_size;
+uniform float yaw;        // @range -3.15 3.15 @default 0 @help turn, about the can's own axis
+uniform float pitch;      // @range -3.15 3.15 @default 0.22 @help tip it towards you
+uniform float roll;       // @range -3.15 3.15 @default -0.15 @help lean it over
+uniform float spin;       // @range -1 1 @default 0.12 @help and keep turning, radians a second
+uniform vec2  slide;      // @pad @default 0.5 0.5 @help where it stands, across and up
+uniform float depth;      // @range -2.5 2.5 @default 0 @help and how far away
+uniform float radius;     // @range 0.2 0.9 @default 0.42
+uniform float height;     // @range 0.4 2.4 @default 1.15
+uniform float wraps;      // @range 0.5 4 @default 1 @step 0.5 @help times the picture goes round
+uniform float bandLo;     // @range 0 0.5 @default 0.09 @help where the label starts up the can
+uniform float bandHi;     // @range 0.5 1 @default 0.9
+uniform float lightTurn;  // @range -3.15 3.15 @default -1.35 @help where the lamp is
+uniform float lightUp;    // @range -0.5 1.5 @default 0.65 @help and how high
+uniform float soft;       // @range 0 1 @default 0.18 @help how big the lamp is, which is what softens a shadow
+uniform vec3  lightC;     // @color @default #fff2e0
+uniform vec3  metalC;     // @color @default #cfd4d9
+uniform float polish;     // @range 0 1 @default 0.72 @help how sharp the highlight is
+uniform vec3  floorC;     // @color @default #3b4048
+uniform float shadowOn;   // @toggle @label shadow @default 1
+// How many rays a pixel. A marcher cannot afford this — four samples is four
+// hundred more scene() calls — and a closed form barely notices, because four
+// rays through a quadratic is four quadratics. It is the one place where
+// "exact" turns into something you can *see* rather than only measure: a
+// cylinder's silhouette is a hard edge, and a hard edge is where aliasing is
+// worst and where a distance field would have quietly given you a soft one.
+// (Named rays and not aa: aa is the prelude's own antialiasing helper. The
+// shorthand hands you a small standard library, and its names are taken.)
+uniform float rays;       // @range 1 3 @step 1 @int @default 2 @help rays a pixel, squared
+
+const float TAU = 6.2831853;
+
+// Where a ray meets a can, exactly.
+//
+// The wall is a quadratic in the two coordinates that are not the axis, and
+// each end is a plane, which is a division. Both roots of the quadratic are
+// tried rather than only the near one: the near root can be off the end of
+// the can while the far one is on the wall, which is what you are looking at
+// through the open end when the near cap is behind you.
+//
+// \`part\` comes back with it — 0 the wall, 1 the lid, 2 the base — because a
+// cylinder's normal and its surface parameters are different arithmetic on
+// each of the three, and the caller would otherwise have to work out which
+// surface it is on by comparing distances, which is exactly the guessing the
+// closed form was supposed to remove.
+float hitCan(vec3 ro, vec3 rd, float rad, float hh, out float part) {
+  part = 0.0;
+  float best = 1e9;
+  float a = dot(rd.xz, rd.xz);
+  if (a > 1e-7) {
+    float b = dot(ro.xz, rd.xz);
+    float c = dot(ro.xz, ro.xz) - rad * rad;
+    float disc = b * b - a * c;
+    if (disc > 0.0) {
+      float sq = sqrt(disc);
+      for (int i = 0; i < 2; i++) {
+        float tt = (-b + (i == 0 ? -sq : sq)) / a;
+        if (tt > 1e-4 && tt < best && abs(ro.y + tt * rd.y) <= hh) { best = tt; part = 0.0; }
+      }
+    }
+  }
+  if (abs(rd.y) > 1e-7) {
+    for (int i = 0; i < 2; i++) {
+      float yy = i == 0 ? hh : -hh;
+      float tt = (yy - ro.y) / rd.y;
+      if (tt > 1e-4 && tt < best) {
+        vec3 q = ro + rd * tt;
+        if (dot(q.xz, q.xz) <= rad * rad) { best = tt; part = i == 0 ? 1.0 : 2.0; }
+      }
+    }
+  }
+  return best < 1e8 ? best : -1.0;
+}
+
+// Yaw, then pitch, then roll — applied in that order, which is the order the
+// words mean when you say them about an object rather than about a camera.
+mat3 spinOf(float ya, float pi, float ro_) {
+  float cy = cos(ya), sy = sin(ya);
+  float cx = cos(pi), sx = sin(pi);
+  float cz = cos(ro_), sz = sin(ro_);
+  mat3 my = mat3(cy, 0.0, -sy,  0.0, 1.0, 0.0,  sy, 0.0, cy);
+  mat3 mx = mat3(1.0, 0.0, 0.0,  0.0, cx, sx,  0.0, -sx, cx);
+  mat3 mz = mat3(cz, sz, 0.0,  -sz, cz, 0.0,  0.0, 0.0, 1.0);
+  return mz * mx * my;
+}
+
+// A label when there is no picture to put on: bands, a disc and a stripe, in
+// the proportions a drinks can actually uses. A grey rectangle would tell you
+// nothing about whether the wrapping is right; this tells you at a glance,
+// because a circle that comes out an oval is a circle that came out wrong.
+vec3 standIn(vec2 q) {
+  vec3 c = mix(vec3(0.72, 0.10, 0.14), vec3(0.36, 0.05, 0.09), q.y);
+  c = mix(c, vec3(0.96, 0.93, 0.86), smoothstep(0.017, 0.0, abs(q.y - 0.72) - 0.035));
+  c = mix(c, vec3(0.96, 0.93, 0.86), smoothstep(0.017, 0.0, abs(q.y - 0.20) - 0.018));
+  vec2 d = (q - vec2(0.75, 0.46)) * vec2(1.0, 0.62);
+  c = mix(c, vec3(0.97, 0.87, 0.32), smoothstep(0.006, -0.006, length(d) - 0.115));
+  c = mix(c, vec3(0.20, 0.05, 0.07), smoothstep(0.006, -0.006, length(d) - 0.072));
+  c *= 0.94 + 0.12 * noise(q * 60.0);
+  return srgbToLinear(c);
+}
+
+// What the can is made of at this point on it, and how shiny that is.
+vec3 skinOf(float part, vec3 pl, float rad, float hh, out float gloss) {
+  gloss = 1.0;
+  vec3 metal = srgbToLinear(metalC);
+  if (part > 0.5) {
+    // A lid, drawn rather than modelled: a can's rim and its recess are half a
+    // millimetre of geometry that would double the intersection code and read,
+    // at this size, as two rings. So they are two rings.
+    float rr = length(pl.xz) / max(rad, 1e-4);
+    vec3 c = metal * (0.72 + 0.5 * smoothstep(0.86, 0.99, rr));
+    c *= 1.0 - 0.34 * smoothstep(0.80, 0.72, rr);
+    if (part > 1.5) return c * 0.8;
+    // …and the tab, which is the one thing that tells you which end is up.
+    vec2 q = pl.xz / max(rad, 1e-4);
+    float tab = max(abs(q.x) * 2.6 + abs(q.y - 0.12) - 0.42, -(length(q - vec2(0.0, 0.30)) - 0.14));
+    c = mix(c, metal * 1.25, smoothstep(0.03, -0.03, tab));
+    return c;
+  }
+  // The wall. Height first, because it decides whether there is a label here
+  // at all — the bare metal above and below it is most of what says "can".
+  float v = (pl.y + hh) / max(2.0 * hh, 1e-4);
+  float inBand = step(bandLo, v) * step(v, bandHi);
+  if (inBand < 0.5) { gloss = 1.0; return metal * (0.78 + 0.34 * smoothstep(0.0, 0.06, abs(v - 0.5))); }
+  // And the angle, which is the whole point: atan gives the way round, and
+  // the way round is the picture's x. One turn of the can is one width of the
+  // picture, unless you ask for more.
+  float u = fract((atan(pl.z, pl.x) / TAU + 0.5) * wraps);
+  float lv = (v - bandLo) / max(bandHi - bandLo, 1e-4);
+  gloss = 0.30;                                    // paper is not aluminium
+  return label_size.x > 0.5
+    ? srgbToLinear(texture2D(label, vec2(u, 1.0 - lv)).rgb)
+    : standIn(vec2(u, lv));
+}
+
+// ------------------------------------------------------------ the picture
+float gHH;
+vec3 gCentre;
+mat3 gRot;
+vec3 gLight;
+
+vec3 shadeAt(vec2 pp) {
+vec3 ro = vec3(0.0, 0.15, 3.7);
+vec3 rd = normalize(vec3(pp * 0.52, -1.0));
+float hh = gHH;
+vec3 centre = gCentre;
+mat3 rot = gRot;
+vec3 lightAt = gLight;
+
+// Into the can's own frame. Multiplying from the *other side* is the
+// transpose — v * M is M-transpose times v — and the transpose of a rotation
+// is its inverse, so there is no inverse here to compute and none to go
+// stale. It is the cheapest correct thing in the file.
+vec3 lo = (ro - centre) * rot;
+vec3 ld = rd * rot;
+
+float part;
+float tCan = hitCan(lo, ld, radius, hh, part);
+
+vec3 col = mix(vec3(0.075, 0.082, 0.10), vec3(0.014, 0.016, 0.024), smoothstep(-0.9, 1.1, pp.y));
+
+// The floor, and the can's shadow on it. The shadow is the same intersection
+// run backwards — from the floor towards the lamp — which is the other thing
+// a closed form gives you: one routine, and shadows are free of any of the
+// approximations a marched one has to make.
+float tFloor = rd.y < -1e-4 ? (-1.15 - ro.y) / rd.y : -1.0;
+if (tFloor > 0.0 && (tCan < 0.0 || tFloor < tCan)) {
+  vec3 fp = ro + rd * tFloor;
+  float fade = 1.0 - smoothstep(1.6, 7.5, length(fp.xz - centre.xz));
+  vec3 base = srgbToLinear(floorC) * (0.22 + 0.78 * fade);
+  float lit = 1.0;
+  if (shadowOn > 0.5) {
+    // The lamp is a disc rather than a point, sampled a few times across it.
+    // Five taps is not many and it does not need to be: a shadow's softness
+    // is a low-frequency thing, and the banding five would show is smaller
+    // than the noise already in the floor.
+    float open = 0.0;
+    for (int i = 0; i < 5; i++) {
+      float a = float(i) * 1.2566371;
+      vec3 lp = lightAt + vec3(cos(a), 0.35 * sin(a), sin(a)) * soft * 1.3;
+      vec3 sd = normalize(lp - fp);
+      float sp2;
+      float ts = hitCan((fp - centre) * rot, sd * rot, radius, hh, sp2);
+      open += (ts < 0.0 || ts > length(lp - fp)) ? 1.0 : 0.0;
+    }
+    lit = 0.06 + 0.94 * open / 5.0;
+  }
+  col = base * (0.16 + 1.5 * lit) * srgbToLinear(lightC);
+}
+
+if (tCan > 0.0) {
+  vec3 pl = lo + ld * tCan;                        // where it landed, in the can's frame
+  // The normal, in the can's frame, is the one place the three surfaces
+  // genuinely differ — and each is exact rather than a difference of four
+  // samples of a field. A cap is flat. A wall points straight out from the
+  // axis, and that is a normalise of two numbers.
+  vec3 nl = part > 0.5 ? vec3(0.0, part > 1.5 ? -1.0 : 1.0, 0.0)
+                       : normalize(vec3(pl.x, 0.0, pl.z));
+  vec3 n = rot * nl;                               // and back out into the world
+  vec3 hit = ro + rd * tCan;
+
+  float gloss;
+  vec3 albedo = skinOf(part, pl, radius, hh, gloss);
+
+  vec3 l = normalize(lightAt - hit);
+  float dist = length(lightAt - hit);
+  vec3 hv = normalize(l - rd);
+  float lambert = max(dot(n, l), 0.0);
+  float falloff = 26.0 / (dist * dist);
+
+  // Aluminium is not a mirror and not a diffuser; it is a narrow lobe. The
+  // exponent is where a can lives or dies — too broad and it is plastic, too
+  // narrow and it is chrome.
+  float shine = pow(max(dot(n, hv), 0.0), mix(18.0, 420.0, polish * gloss));
+  float rim = fresnel(max(dot(n, -rd), 0.0), 0.04);
+
+  vec3 lin = albedo * lambert * falloff * srgbToLinear(lightC);
+  // The ambient is the room: brighter above than below, which is the whole of
+  // why an object indoors reads as being in a place rather than in a void.
+  lin += albedo * mix(vec3(0.020, 0.023, 0.030), vec3(0.075, 0.080, 0.095), n.y * 0.5 + 0.5);
+  lin += shine * falloff * srgbToLinear(lightC) * mix(0.35, 2.6, gloss);
+  lin += rim * mix(0.06, 0.30, gloss) * vec3(0.6, 0.68, 0.85);
+  col = lin;
+}
+return col;
+}
+
+gHH = height * 0.5;
+gCentre = vec3((slide.x - 0.5) * 3.2, (slide.y - 0.5) * 2.2, depth);
+gRot = spinOf(yaw + t * spin, pitch, roll);
+gLight = vec3(sin(lightTurn) * 4.0, 1.2 + lightUp * 3.0, cos(lightTurn) * 4.0);
+
+// A rotated grid rather than a square one: an n-by-n grid of samples lines its
+// own rows up with the horizontal and vertical edges it is trying to soften,
+// which is the one arrangement that helps least. Turned, the samples land at
+// n-squared distinct heights instead of n.
+int n = int(rays);
+float inv = 1.0 / float(max(n, 1));
+vec3 col = vec3(0.0);
+float taken = 0.0;
+for (int j = 0; j < 3; j++) {
+  for (int i = 0; i < 3; i++) {
+    if (i >= n || j >= n) continue;
+    vec2 off = (vec2(float(i), float(j)) + 0.5) * inv - 0.5;
+    off = mat2(0.9612617, 0.2756374, -0.2756374, 0.9612617) * off;   // 16 degrees
+    col += shadeAt(p + off * 2.0 / u_resolution.y);
+    taken += 1.0;
+  }
+}
+col /= max(taken, 1.0);
+
+finish(col)` },
+
   { id: "world", label: "Open world — infinite terrain, biomes, a map that follows you",
     preview: [640, 360], steps: 1,
     // What the world sounds like. Six texels of its own state, read back each

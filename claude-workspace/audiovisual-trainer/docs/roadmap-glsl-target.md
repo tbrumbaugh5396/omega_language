@@ -2664,6 +2664,64 @@ dropping, no use; the tally caps at 99 because the font draws two digits; and
 picking up is automatic on walking near, which is friendlier than a key and
 means you cannot decline.
 
+### Phase 35 — A can: a picture wrapped round a cylinder, exactly *(M)* — **shipped**
+
+Every other three-dimensional sketch here is **marched**: a distance field, a
+hundred-odd steps a pixel, a normal found by asking the field four more times.
+A cylinder does not need any of it. It is a quadratic, so a ray meets it
+exactly, once, in closed form.
+
+**And speed is the smaller half of what that buys.** The prize is the
+*surface parameter*. A marcher hands you a point in space and leaves you to
+work out where on the label it landed; the quadratic hands you the angle and
+the height directly, because they are what you solved for. Wrapping a picture
+round something is a question about parameters, and this is the shape whose
+parameters come free.
+
+**The measurement that says so.** Turning the can about its own axis moves
+**zero** pixels of its silhouette and **~750** of the picture on it. Not
+nearly zero — zero. A can is a solid of revolution about the very axis it is
+being turned about, and only a closed form gets that exactly right; a marched
+version would wobble by a fraction of a step. Pitch moves 539 and roll 1,487,
+because those are not that axis.
+
+**No inverse to compute.** Rays go into the can's frame by multiplying from
+the *other side*: `v * M` is `Mᵀ · v`, and the transpose of a rotation is its
+inverse. The cheapest correct thing in the file, and nothing to go stale.
+
+**Shadows are the same routine run backwards** — from the floor towards the
+lamp — which is the second thing a closed form gives you. The lamp is a disc
+sampled five times; softness is low-frequency and five is enough.
+
+**Supersampling, which a marcher cannot afford.** Nine rays a pixel is nine
+quadratics; for a marcher it would be nine hundred more `scene()` calls. It is
+the one place where "exact" becomes something you can *see*: a cylinder's
+silhouette is a hard edge, which is where aliasing is worst and where a
+distance field would quietly have given you a soft one. One ray against nine
+differ by 588 pixels, all of them edges. Rotated grid, so n² samples land at
+n² distinct heights rather than n.
+
+**A stand-in label with a circle on it**, because a grey rectangle tells you
+nothing about whether the wrapping is right and a circle that comes out an
+oval tells you at a glance.
+
+**A parser bug this turned up, and it was mine from last week.** `@label` took
+the whole rest of the line, so `@toggle @label shadow @default 1` produced a
+control named "shadow @default 1" that defaulted to **off** — and did it
+silently, because the label is the one field where wrong text still looks like
+text. The world's two view buttons shipped in Phase 33 with their `@help` text
+glued into their names.
+
+`@label` now stops at the next `@`, the rule `@help` already followed. Fixed
+in the parser rather than at the call sites, so the two shipped sketches were
+repaired without being touched and the next one cannot reintroduce it.
+
+*Left:* no mipmapping across the label's seam, where `atan` wraps — harmless
+without mips and a visible seam column with them; the lid's rim and recess are
+two drawn rings rather than geometry; and the can floats, because rotating
+about its own centre and standing on a floor are different requirements and it
+was asked to do the first.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2739,6 +2797,7 @@ means you cannot decline.
 | 32.1 | Occlusion, and an FPS feel — **shipped** | M | 31.1 | exposure 0.69–1.00 over a walk; roll self-levels |
 | 33.1 | Footsteps, collision, a map, a body — **shipped** | L | 32.1 | blocked 16/2400 frames; body 2.5%; map 5.5× cheaper |
 | 34.1 | Things to pick up, and a bag — **shipped** | L | 33.1 | table in row 1, 421 slots; +0.29 ms; 1,989 px gone |
+| 35.1 | A can, solved rather than marched — **shipped** | M | — | yaw moves 0 silhouette pixels; @label parser fixed |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

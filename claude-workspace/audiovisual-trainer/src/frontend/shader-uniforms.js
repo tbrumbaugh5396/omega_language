@@ -77,8 +77,17 @@ function annotations(comment) {
         if (d.length) out.default = d;
       }
     } else if (key === "label") {
-      out.label = words.slice(i + 1).join(" ");
-      i = words.length;
+      // Free text up to the next annotation — the same rule @help follows.
+      //
+      // It used to take the whole rest of the line, which meant `@toggle
+      // @label shadow @default 1` produced a control labelled "shadow
+      // @default 1" that defaulted to off, and did it silently: the label is
+      // the one field where wrong text still looks like text. Two shipped
+      // sketches had it before anybody noticed.
+      let j = i + 1;
+      while (j < words.length && words[j][0] !== "@") j++;
+      out.label = words.slice(i + 1, j).join(" ");
+      i = j - 1;
     } else if (key === "options") {
       // An enumeration: `@options normal,multiply,screen` on an int makes a
       // select whose value is the index.
