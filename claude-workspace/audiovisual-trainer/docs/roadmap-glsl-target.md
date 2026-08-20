@@ -2106,7 +2106,7 @@ confirms the placeholder, confirms there is a way out from inside that does not
 depend on the button now underneath the picture, presses Escape, and holds
 every style to coming back byte for byte.
 
-### Phase 28 — An open world *(L)* — **shipped**
+### Phase 28 — An open world, and things to stand among *(L)* — **shipped**
 
 A first-person world with no edge: terrain, a sea, four biomes, and a map of
 the land that follows you. `world` in Generate.
@@ -2137,9 +2137,9 @@ fresnel.
 
 | held to | number |
 |---|---|
-| a frame at 640×360, Intel HD 6000 | **4.5 ms — 222 fps** |
-| the same at 800×450 | 7.4 ms — 136 fps |
-| `scene()` and `ground()` together | **one** texture read, and no noise |
+| a frame at 640×360, Intel HD 6000 | **9.1 ms — 109 fps**, with trees, boulders and grass |
+| the terrain alone, before any of that | 4.3 ms |
+| `scene()`, `ground()` and `thingAt()` together | **two** texture reads, and no noise |
 | four square kilometres at the origin | 42% sea, 18% sand, 22% grass, 18% rock, 1% snow |
 | the same twenty and two hundred kilometres out | three different places, no two the same picture |
 
@@ -2170,9 +2170,47 @@ at 2.35 is three stops over: the tone map hands back white with no shape at
 all. It is carried by the specular instead, with drifts for form and the sky's
 own colour in its shadows, which is what makes snow look like snow.
 
-*Left:* nothing on the land but the land — no trees, no rocks, no creatures.
-Scatter geometry is a per-march-step cost in a marcher that currently pays for
-one fetch, so it wants measuring before it is written, not after.
+**Then things to stand among.** Trees, boulders and grass — and, as promised,
+measured before they were written rather than after. Changing only `scene()`,
+at 640×360:
+
+| | frame |
+|---|---|
+| the terrain alone | 4.3 ms |
+| + one more map fetch a step | 6.3 ms |
+| + a whole tree: fetch, hash, three SDFs | **6.5 ms** |
+| the same tree, skipped beyond forty-five metres | **7.4 ms** |
+
+The last row is the one worth keeping. Guarding the scatter with a distance
+test made it *slower* than not guarding it: the rays in a warp disagree about
+which side of forty-five metres they are on, so the branch is paid for and both
+sides run anyway. The fetch is the cost, and it was already the cheapest way to
+know where the ground is.
+
+So: **one grid, and the cell decides what grows there.** A tree where the map
+says green, a boulder where it says stone, nothing in the sea — and both read
+the *same texel*. The height a thing stands on and the climate that put it
+there are one fetch, which is why two kinds of thing cost what one kind costs.
+The whole scatter comes to 4.3 → 9.1 ms, still 109 fps.
+
+Grass is not geometry and should not be: blades are a few centimetres across,
+so they exist only in the shading, under a second and much shorter distance
+fade than everything else. They are visible underfoot and gone by sixteen
+metres, which is where asking for them would bring back the fizz this phase
+already spent a round removing.
+
+**Two more things that had to be measured.** The bark was 0.30 in sRGB, which
+is 0.07 in linear, and a trunk lit from one side at 0.07 is a silhouette — the
+world opened on what looked like a black wall. And the fix for opening *inside*
+a tree overshot twice: checking the walker's own cell was not enough, because a
+tree in the next cell can be a metre away; rejecting any candidate with a tree
+in any of the nine cells around it walked out of the woods entirely and started
+in a desert. What was wanted was three metres of clearance, so the spawn now
+asks where the trunks actually are — the same jitter the scatter uses, so the
+two cannot disagree.
+
+*Left:* nothing that moves but the sea and the walker. No creatures, no
+weather, and nothing to do — this is a world to be in rather than a game.
 
 ## 4. Decisions and risks
 
@@ -2240,7 +2278,8 @@ one fetch, so it wants measuring before it is written, not after.
 | 25.1 | Tiling on WebGPU; the rover's terrain as data | M | 24.1 | past the device's maximum, byte-identical; 74 fps |
 | 26.1 | Fullscreen; the same care for the other 3D sketches | S | 25.1 | bounce 9.3 → 2.8 ms, and lit like the still life |
 | 27.1 | The picture filling the window, ten places | S | 26.1 | in-page, no permission to be refused; four fits |
-| 28.1 | An open world — infinite, four biomes — **shipped** | L | 25.1 | 4.5 ms; scene() is one fetch of a map that follows you |
+| 28.1 | An open world — infinite, four biomes — **shipped** | L | 25.1 | 4.3 ms; scene() is one fetch of a map that follows you |
+| 28.2 | Trees, boulders and grass — **shipped** | M | 28.1 | 9.1 ms; one grid, and the cell decides what grows |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

@@ -2903,21 +2903,32 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
       const parts = splitSketch(g.source);
       const bare = stripComments(g.source);
 
-      // 1. scene() is still one fetch. This is the whole reason an open world
-      //    is affordable here: march() calls it about a hundred times a pixel,
-      //    and everything it would otherwise have to work out — the height,
-      //    the climate, which biome — was baked into the map by one pass.
-      const sceneFn = parts.declTexts.find((t) => /\bfloat\s+scene\s*\(\s*vec3/.test(stripComments(t))) || "";
-      const groundFn = parts.declTexts.find((t) => /\bfloat\s+ground\s*\(\s*vec2/.test(stripComments(t))) || "";
-      const reads = ((stripComments(sceneFn) + stripComments(groundFn))
-        .match(/\bstate2?\s*\(|\btexture2D\s*\(/g) || []).length;
-      const fbmInScene = /\bfbmN?\s*\(|\bnoise\s*\(/.test(stripComments(sceneFn) + stripComments(groundFn));
-      push({ group: "More games", name: "an open world whose scene() is one fetch", ok: reads === 1 && !fbmInScene,
-             detail: reads === 1 && !fbmInScene
-               ? "the terrain, the climate and the biome weights are baked into the second state target once a "
-                 + "frame; scene() reads one texel of it. The alternative is a hundred fbm evaluations a pixel, "
-                 + "which is the mistake this codebase has now made once and measured twice"
-               : `${reads} reads in scene()/ground()${fbmInScene ? ", and noise in there too" : ""}` }); }
+      // 1. What scene() is allowed to cost. march() calls it about a hundred
+      //    times a pixel, so the budget is counted in fetches: one for the
+      //    ground, one for the cell that decides what grows there. No fbm at
+      //    all — everything the world knows about a place was baked into the
+      //    map by one pass, and the height a tree stands on and the climate
+      //    that put it there come back in the same texel.
+      //
+      //    Measured on an Intel HD 6000 at 640×360, changing only scene():
+      //    terrain alone 4.3 ms, one more fetch a step 6.3, a whole tree
+      //    (fetch, hash, three SDFs) 6.5 — and the same tree skipped beyond
+      //    forty-five metres 7.4, because the rays in a warp disagree about
+      //    which side of forty-five metres they are on and the branch is paid
+      //    for while both sides run anyway.
+      const bodies = ["scene", "ground", "thingAt"].map((n) => {
+        const re = new RegExp(`\\b(float|vec[234])\\s+${n}\\s*\\(`);
+        return stripComments(parts.declTexts.find((t) => re.test(stripComments(t))) || "");
+      }).join("\n");
+      const reads = (bodies.match(/\bstate2?\s*\(|\btexture2D\s*\(/g) || []).length;
+      const noisy = /\bfbmN?\s*\(|\bnoise\s*\(/.test(bodies);
+      push({ group: "More games", name: "an open world whose scene() is two fetches and no arithmetic",
+             ok: reads === 2 && !noisy,
+             detail: reads === 2 && !noisy
+               ? "one fetch for the ground and one for the cell that decides what grows on it — the height a "
+                 + "tree stands on and the climate that put it there are the same texel, which is why two kinds "
+                 + "of thing cost what one kind costs. No fbm anywhere a march step can reach it"
+               : `${reads} reads across scene(), ground() and thingAt()${noisy ? ", and noise in there too" : ""}` }); }
 
     // 2. It has no edge, and it is several places rather than one.
     //

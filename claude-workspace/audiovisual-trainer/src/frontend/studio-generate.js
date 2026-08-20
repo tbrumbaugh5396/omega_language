@@ -1162,6 +1162,7 @@ uniform vec3  grassC;    // @color @default #466b34
 uniform vec3  rockC;     // @color @default #6d655a
 uniform vec3  snowC;     // @color @default #eef3f8
 uniform vec3  waterC;    // @color @default #163c50
+uniform vec3  leafC;     // @color @default #3f6d2e
 
 // How much world the map holds. Larger than the far plane on purpose: the
 // edge of the map is then always further away than the fog, so nothing ever
@@ -1219,12 +1220,102 @@ float gWave;                // the sea's height this frame, once per pixel
 // How much of the fine detail survives at this distance — set once per pixel,
 // from how far the ray went. Declared here because the sea wants it too.
 float gNear;
+// …and a second, much shorter fade. Blades are a few centimetres across:
+// they are only ever visible underfoot, and asking for them at forty metres
+// is asking for the fizz that Phase 28 spent a round removing.
+float gClose;
 float ground(vec2 q) { return state2(mapUv(q)).r; }
+
+// ------------------------------------------------------------ what grows
+// One thing to a cell of an eight-metre grid, and the cell decides what it
+// is: a tree where the map says green, a boulder where it says stone. Both
+// read the *same texel* — the height a thing stands on and the climate that
+// put it there are one fetch — which is why two kinds of thing cost what one
+// kind costs.
+//
+// Measured on an Intel HD 6000, at 640×360, changing only scene():
+//
+//   terrain alone                                  4.3 ms
+//   + one more map fetch a step                    6.3 ms
+//   + a whole tree: fetch, hash, three SDFs        6.5 ms
+//   the same, skipped beyond forty-five metres     7.4 ms
+//
+// The last line is the one worth keeping. Guarding the scatter with a
+// distance test made it *slower* than not guarding it: the rays in a warp
+// disagree about which side of forty-five metres they are on, so the branch
+// is paid for and both sides run anyway. The fetch is the cost, and it is
+// already the cheapest way to know where the ground is.
+const float CELL = 8.0;
+
+// Whether a cell grows anything, given the land under it. Written once and
+// used twice — by the scatter, and by the spawn, so that the walker cannot
+// begin the world standing inside a trunk. It did, at first, and a tree from
+// the inside is a black screen.
+float treeChance(vec4 L)  { return smoothstep(0.28, 0.5, L.y) * (1.0 - smoothstep(14.0, 26.0, L.x)); }
+float stoneChance(vec4 L) { return smoothstep(12.0, 24.0, L.x); }
+bool growsTree(vec2 id) {
+  return hash21(id * 3.1 - 4.7) < treeChance(landform((id + 0.5) * CELL)) * 0.62;
+}
+/** Where the thing in this cell actually stands — the same jitter the scatter uses. */
+vec2 thingSpot(vec2 id) {
+  return (id + 0.5 + (vec2(hash21(id + 0.5), hash21(id * 1.7 + 9.13)) - 0.5) * 0.34) * CELL;
+}
+/** Room to stand: no trunk within a few metres of here. */
+bool roomToStand(vec2 q) {
+  vec2 id0 = floor(q / CELL);
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 id = id0 + vec2(float(dx), float(dy));
+      if (growsTree(id) && length(q - thingSpot(id)) < 3.4) return false;
+    }
+  }
+  return true;
+}
+
+vec3 gThing;                // where the thing in this cell stands
+float gThingKind;           // 0 a tree, 1 a boulder
+float gThingSize;
+
+float thingAt(vec3 p, out float kind) {
+  vec2 id = floor(p.xz / CELL);
+  float h1 = hash21(id + 0.5);
+  float h2 = hash21(id * 1.7 + 9.13);
+  float h3 = hash21(id * 3.1 - 4.7);
+  // Jittered, but not past the cell it belongs to: this asks the cell the ray
+  // is in and no others, so anything that leans over the edge is a thing the
+  // marcher can step through.
+  vec2 c = thingSpot(id);
+  vec4 L = state2(mapUv(c));
+  kind = 0.0;
+  if (L.x < 1.2) return 1e9;                       // nothing grows in the sea
+  float green = treeChance(L);
+  float stone = stoneChance(L);
+  vec3 rp = p - vec3(c.x, L.x, c.y);
+  if (h3 < green * 0.62) {                          // a tree
+    float sz = 0.75 + h2 * 0.7;
+    float trunk = sdCapsule3(rp, vec3(0.0), vec3(0.0, 3.1 * sz, 0.0), 0.17 * sz);
+    vec3 cp = rp - vec3(0.0, 3.5 * sz, 0.0);
+    cp.y *= 1.45;                                   // taller than it is wide
+    float crown = (length(cp) - 1.5 * sz) / 1.45;
+    gThingSize = sz;
+    return min(trunk, crown);
+  }
+  if (h3 > 1.0 - stone * 0.5) {                     // a boulder
+    kind = 1.0;
+    float sz = 0.5 + h1 * 0.9;
+    vec3 bp = rp - vec3(0.0, sz * 0.35, 0.0);
+    bp.y /= 0.72;
+    gThingSize = sz;
+    return (length(bp) - sz) * 0.72;
+  }
+  return 1e9;
+}
 
 float scene(vec3 p) {
   float land = p.y - ground(p.xz);
   float sea = p.y - gWave;
-  return min(land, sea);
+  float kind;
+  return min(min(land, sea), thingAt(p, kind));
 }
 
 // The sea is flat enough to march as a plane and detailed enough to look wet,
@@ -1288,6 +1379,13 @@ vec3 detailNormal(vec3 n, vec2 q, float h) {
   // centimetres is not grass at walking distance, it is noise on a hill —
   // what reads as a field is the patch, not the blade.
   vec3 grassN = n + (vec3(noise(q * 2.6), 0.0, noise(q * 2.6 + 5.1)) - 0.5) * 0.26;
+  // Blades, underfoot only: leaning noise, which is what a tuft of grass is
+  // when you are looking down at it from a person's height.
+  if (gClose > 0.01) {
+    float lean = noise(q * 1.4) * 5.0;
+    float blade = noise(q * vec2(34.0, 9.0) + vec2(lean, 0.0));
+    grassN += vec3(blade - 0.5, 0.0, (blade - 0.5) * 0.35) * 0.5 * gClose;
+  }
   float strata = fract(h * 0.55 + noise(q * 0.7) * 0.6);
   vec3 rockN = n + vec3(strata - 0.5, 0.0, noise(q * 2.2) - 0.5) * 0.55;
   // Snow drifts: long and shallow, and the only thing that gives a white
@@ -1312,6 +1410,13 @@ vec3 albedoOf(vec2 q, float h) {
   // a single green is a billiard table.
   vec3 grass = mix(srgbToLinear(grassC), srgbToLinear(sandC) * 0.5, 0.18 + 0.3 * n2)
              * (0.86 + 0.28 * n2) + vec3(0.02, 0.035, 0.0) * n3;
+  // Blade for blade the colour varies too, and the dark between them is what
+  // reads as depth rather than paint.
+  if (gClose > 0.01) {
+    float lean = noise(q * 1.4) * 5.0;
+    float blade = noise(q * vec2(34.0, 9.0) + vec2(lean, 0.0));
+    grass *= mix(1.0, 0.55 + 0.85 * blade, gClose);
+  }
   vec3 rock = srgbToLinear(rockC) * (0.74 + 0.42 * n4);
   // Bright, not white. Snow's albedo really is near 0.9, but a surface at 0.9
   // under a sun at 2.35 is three stops over and the tone map hands back paper.
@@ -1338,14 +1443,27 @@ vec3 albedoOf(vec2 q, float h) {
  * were two hundred across and found nothing at all once they were six
  * hundred: every view for the first four hundred metres of walking was open
  * sea. It now reaches two kilometres, which is past several coastlines.
+ *
+ * It also declines to begin inside a tree, which the first version did — the
+ * world opened on a black wall of bark. The same rule the scatter uses is
+ * asked here, against the land rather than the map, because on the frame the
+ * walker is placed the map has not been written yet.
  */
 vec2 spawnPoint() {
   for (int i = 1; i < 49; i++) {
     float a = float(i) * 2.399963;
     float r = 300.0 * sqrt(float(i));
     vec2 q = vec2(cos(a), sin(a)) * r;
-    float h = landform(q).x;
-    if (h > 4.0 && h < 22.0) return q;
+    vec4 L = landform(q);
+    if (L.x < 4.0 || L.x > 22.0) continue;
+    // Room to stand, rather than no trees at all. Rejecting every candidate
+    // with a tree in any of the nine cells around it does avoid opening on a
+    // wall of bark — by walking out of the woods entirely and starting in a
+    // desert, which is a worse answer to a better-posed question. What is
+    // wanted is three metres of clearance, so this asks where the trunks
+    // actually are.
+    if (!roomToStand(q)) continue;
+    return q;
   }
   return vec2(0.0);
 }
@@ -1404,6 +1522,15 @@ float tHit = march(ro, rd, fogFar);
 if (tHit > 0.0) {
   vec3 hit = ro + rd * tHit;
   gNear = 1.0 - smoothstep(9.0, 52.0, tHit);
+  gClose = 1.0 - smoothstep(3.0, 16.0, tHit);
+  // What was hit. The marcher does not hand back what it stopped on, so the
+  // three candidates are asked again — once, here, rather than a hundred
+  // times in scene().
+  float kind = 0.0;
+  float dThing = thingAt(hit, kind);
+  float dLand = hit.y - ground(hit.xz);
+  bool onThing = dThing < min(dLand, hit.y - gWave) + 0.02;
+
   vec4 land = state2(mapUv(hit.xz));
   // Wetness rather than wet. At a hundred metres one pixel covers several
   // metres of shoreline, and a hard test there makes the coast a dotted line
@@ -1416,10 +1543,31 @@ if (tHit > 0.0) {
 
   vec3 n = normalize(mix(detailNormal(nLand, hit.xz, land.x), seaNormal(hit.xz), gWet));
   vec3 albedo = mix(albedoOf(hit.xz, land.x), srgbToLinear(waterC), gWet);
+  if (onThing) {
+    // A thing has its own normal, because it is not the ground: normal3 walks
+    // the whole field, which is what makes a trunk round.
+    n = normal3(hit);
+    gWet = 0.0;
+    if (kind > 0.5) {
+      // Lighter than the ground it sits on, and mottled: a boulder the colour
+      // of its own shadow is a hole in the picture.
+      albedo = srgbToLinear(rockC) * (2.4 + 1.1 * noise(hit.xz * 2.6 + hit.y));
+    } else {
+      // Bark below, leaves above — the trunk is the part near the axis.
+      vec2 id = floor(hit.xz / CELL);
+      float lift = smoothstep(1.6, 2.6, hit.y - ground(hit.xz));
+      vec3 bark = srgbToLinear(vec3(0.52, 0.40, 0.30)) * (0.75 + 0.45 * noise(hit.xz * 9.0 + hit.y * 3.0));
+      // Every tree its own green, or a wood reads as one object repeated.
+      vec3 leaf = srgbToLinear(leafC) * (0.8 + 0.5 * noise(hit.xz * 3.2 + hit.y * 1.4))
+                * (0.8 + 0.55 * hash21(id + 0.5));
+      albedo = mix(bark, leaf, lift);
+    }
+  }
 
   float sh = softShadow(hit + n * 0.06, sun, 9.0);
   float lit = max(dot(n, sun), 0.0);
   float occ = mix(ao(hit, n), 1.0, gWet);
+  if (onThing) occ = mix(occ, 1.0, 0.45);          // leaves are not a cave
   vec3 lin = albedo * (lit * sh * vec3(1.0, 0.94, 0.84) * 2.35
                      // Snow's shadows are the sky's colour, which is why they
                      // are blue and why nothing else on the ground is.
@@ -1428,6 +1576,7 @@ if (tHit > 0.0) {
   // What the biome does with the light, rather than only with the pigment:
   // snow and water throw it back, sand and grass do not.
   float gloss = gW.w * 0.75 + gWet * 0.95 + gW.z * 0.12;
+  if (onThing) gloss = 0.05;                       // bark and stone are matt
   vec3 hv = normalize(sun - rd);
   lin += pow(max(dot(n, hv), 0.0), mix(30.0, 260.0, gloss)) * sh * gloss * 1.8;
   float fr = fresnel(max(dot(n, -rd), 0.0), 0.02);
