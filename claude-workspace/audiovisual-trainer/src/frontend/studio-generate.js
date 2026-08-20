@@ -1152,6 +1152,11 @@ finish(col)`
 // at a line. One program, several looks: a single view sees four biomes at
 // once, so they cannot be separate shaders, but they are separate functions
 // and they read like it.
+// The state is a height map of a fixed piece of ground and a handful of
+// registers. It has no business being the size of the window: at 1920x1080 a
+// float state pair with two targets is 132 MB, and at 448 square it is 13 MB
+// and holds the same world. It is also eight times less to bake.
+// @state 448 448
 uniform sampler2D u_keys;
 uniform float walk;      // @range 3 40 @default 13 @help metres a second
 uniform float turn;      // @range 0.5 3 @default 1.7 @help radians a second
@@ -1163,6 +1168,8 @@ uniform vec3  rockC;     // @color @default #6d655a
 uniform vec3  snowC;     // @color @default #eef3f8
 uniform vec3  waterC;    // @color @default #163c50
 uniform vec3  leafC;     // @color @default #3f6d2e
+uniform float weather;   // @range 0 1 @default 0.5 @help how much weather there is
+uniform float windAmt;   // @range 0 2 @default 1 @help how hard it blows
 
 // How much world the map holds. Larger than the far plane on purpose: the
 // edge of the map is then always further away than the fog, so nothing ever
@@ -1215,6 +1222,13 @@ vec4 landform(vec2 q) {
 // map moving through the world.
 vec2 gEye2;                 // where the map is centred, this frame
 vec2 mapUv(vec2 q) { return (q - gEye2) / WORLD + 0.5; }
+
+// The weather, read once per pixel and then used everywhere. Wind is a
+// direction and a strength, rain is an amount, and both drift with time in a
+// register — so the weather is something the world is doing rather than a
+// slider you are holding.
+vec2 gWind;
+float gRain;
 
 float gWave;                // the sea's height this frame, once per pixel
 // How much of the fine detail survives at this distance — set once per pixel,
@@ -1293,12 +1307,21 @@ float thingAt(vec3 p, out float kind) {
   vec3 rp = p - vec3(c.x, L.x, c.y);
   if (h3 < green * 0.62) {                          // a tree
     float sz = 0.75 + h2 * 0.7;
+    // The wind bends it, and bends the top more than the bottom, which is the
+    // whole of why a tree in wind reads as alive. Each has its own phase from
+    // the hash that placed it, so a wood does not sway as one object.
+    float lean = smoothstep(0.0, 3.4 * sz, rp.y);
+    float sway = sin(t * 1.7 + h1 * 6.28) * 0.16 + sin(t * 3.1 + h2 * 6.28) * 0.06;
+    rp.xz -= gWind * lean * (0.5 + sway) * sz;
     float trunk = sdCapsule3(rp, vec3(0.0), vec3(0.0, 3.1 * sz, 0.0), 0.17 * sz);
     vec3 cp = rp - vec3(0.0, 3.5 * sz, 0.0);
     cp.y *= 1.45;                                   // taller than it is wide
     float crown = (length(cp) - 1.5 * sz) / 1.45;
     gThingSize = sz;
-    return min(trunk, crown);
+    // Bending a field stretches it, so what it reports is no longer a bound on
+    // the truth. Scaled back, the marcher takes shorter steps near a leaning
+    // tree and does not walk through the bark.
+    return min(trunk, crown) * 0.85;
   }
   if (h3 > 1.0 - stone * 0.5) {                     // a boulder
     kind = 1.0;
@@ -1340,7 +1363,7 @@ vec3 seaNormal(vec2 q) {
 // hills. The fine detail arrives as a perturbation at shading time, which is
 // six samples a pixel rather than a hundred.
 vec3 landNormal(vec2 q) {
-  vec2 e = WORLD / u_resolution * 1.5;
+  vec2 e = WORLD / u_state_size * 1.5;
   float hx = ground(q + vec2(e.x, 0.0)) - ground(q - vec2(e.x, 0.0));
   float hy = ground(q + vec2(0.0, e.y)) - ground(q - vec2(0.0, e.y));
   return normalize(vec3(-hx, 2.0 * e.x, -hy));
@@ -1382,7 +1405,10 @@ vec3 detailNormal(vec3 n, vec2 q, float h) {
   // Blades, underfoot only: leaning noise, which is what a tuft of grass is
   // when you are looking down at it from a person's height.
   if (gClose > 0.01) {
-    float lean = noise(q * 1.4) * 5.0;
+    // The same wind runs through the blades, as a wave travelling across the
+    // field — which is what a gust looks like from above.
+    float gust = sin(dot(q, gWind) * 0.5 - t * 3.2) * 0.5 + 0.5;
+    float lean = noise(q * 1.4) * 5.0 + gust * length(gWind) * 2.4;
     float blade = noise(q * vec2(34.0, 9.0) + vec2(lean, 0.0));
     grassN += vec3(blade - 0.5, 0.0, (blade - 0.5) * 0.35) * 0.5 * gClose;
   }
@@ -1413,7 +1439,8 @@ vec3 albedoOf(vec2 q, float h) {
   // Blade for blade the colour varies too, and the dark between them is what
   // reads as depth rather than paint.
   if (gClose > 0.01) {
-    float lean = noise(q * 1.4) * 5.0;
+    float gust = sin(dot(q, gWind) * 0.5 - t * 3.2) * 0.5 + 0.5;
+    float lean = noise(q * 1.4) * 5.0 + gust * length(gWind) * 2.4;
     float blade = noise(q * vec2(34.0, 9.0) + vec2(lean, 0.0));
     grass *= mix(1.0, 0.55 + 0.85 * blade, gClose);
   }
@@ -1469,8 +1496,11 @@ vec2 spawnPoint() {
 }
 
 // ------------------------------------------------------------ the walker
-vec4 who()  { return state(vec2(0.5, 0.5) / u_resolution); }   // x, z, heading, speed
-vec4 meta() { return state(vec2(1.5, 0.5) / u_resolution); }   // metres walked, biome, -, -
+// By texel, not by uv: the state and the picture are different sizes now, so
+// dividing by u_resolution would be the wrong division in the display pass.
+vec4 who()  { return reg(vec2(0.0, 0.0)); }   // x, z, heading, speed
+vec4 meta() { return reg(vec2(1.0, 0.0)); }   // metres walked, -, -, -
+vec4 airOf() { return reg(vec2(2.0, 0.0)); }  // wind x, wind z, rain, gust
 
 vec4 sim(vec2 uvv) {
   vec2 texel = floor(gl_FragCoord.xy);
@@ -1493,6 +1523,16 @@ vec4 sim(vec2 uvv) {
 
   if (texel.x < 0.5) return vec4(pos, heading, sp);
   if (texel.x < 1.5) return vec4(m.x + abs(sp) * dt, 0.0, 0.0, 1.0);
+  if (texel.x < 2.5) {
+    // Weather, drifting. The direction turns slowly, the strength gusts, and
+    // the rain comes and goes over a couple of minutes — so standing still
+    // for a while is a thing worth doing.
+    float turnT = t * 0.037;
+    vec2 dirW = vec2(sin(turnT * 1.3 + 0.7), cos(turnT));
+    float gust = 0.55 + 0.45 * sin(t * 0.41) * sin(t * 0.17 + 1.1);
+    float front = smoothstep(0.35, 0.75, fbmN(vec2(t * 0.011, 4.3), 3) + weather - 0.5);
+    return vec4(dirW * gust * windAmt * (0.6 + front * 0.9), front, gust);
+  }
   return vec4(0.0);
 }
 
@@ -1507,6 +1547,9 @@ vec4 sim2(vec2 q) {
 
 // ------------------------------------------------------------ the picture
 vec4 w = who();
+vec4 air = airOf();
+gWind = air.xy;
+gRain = air.z;
 gEye2 = w.xy;
 gWave = 0.0;
 
@@ -1516,9 +1559,15 @@ vec3 ro = vec3(w.x, max(standing, gWave) + 1.75, w.y);
 mat3 cam = lookAt(ro, ro + fwd + vec3(0.0, -0.12, 0.0));
 vec3 rd = cam * normalize(vec3(p, 1.55));
 vec3 sun = normalize(vec3(0.42, 0.16 + hour * 0.8, 0.36));
+// Rain takes the sun away and brings the horizon in. Most of what makes a wet
+// day look like one follows from those two.
+float far = mix(fogFar, fogFar * 0.42, gRain);
+vec3 grey = vec3(0.52, 0.55, 0.60);
+vec3 skyCol = mix(sky(rd, sun), grey * (0.55 + 0.45 * smoothstep(-0.1, 0.5, rd.y)), gRain * 0.8);
+float sunDim = 1.0 - gRain * 0.72;
 
-vec3 col = sky(rd, sun);
-float tHit = march(ro, rd, fogFar);
+vec3 col = skyCol;
+float tHit = march(ro, rd, far);
 if (tHit > 0.0) {
   vec3 hit = ro + rd * tHit;
   gNear = 1.0 - smoothstep(9.0, 52.0, tHit);
@@ -1568,7 +1617,10 @@ if (tHit > 0.0) {
   float lit = max(dot(n, sun), 0.0);
   float occ = mix(ao(hit, n), 1.0, gWet);
   if (onThing) occ = mix(occ, 1.0, 0.45);          // leaves are not a cave
-  vec3 lin = albedo * (lit * sh * vec3(1.0, 0.94, 0.84) * 2.35
+  // Wet ground is darker and shinier: the water fills the pores, so less light
+  // comes back diffusely and more of it comes back in one direction.
+  albedo *= 1.0 - gRain * 0.35 * (1.0 - gWet);
+  vec3 lin = albedo * (lit * sh * vec3(1.0, 0.94, 0.84) * 2.35 * sunDim
                      // Snow's shadows are the sky's colour, which is why they
                      // are blue and why nothing else on the ground is.
                      + occ * mix(vec3(0.13, 0.19, 0.31), vec3(0.20, 0.30, 0.52), gW.w)
@@ -1577,13 +1629,44 @@ if (tHit > 0.0) {
   // snow and water throw it back, sand and grass do not.
   float gloss = gW.w * 0.75 + gWet * 0.95 + gW.z * 0.12;
   if (onThing) gloss = 0.05;                       // bark and stone are matt
+  gloss = max(gloss, gRain * 0.55 * (1.0 - gWet));
   vec3 hv = normalize(sun - rd);
-  lin += pow(max(dot(n, hv), 0.0), mix(30.0, 260.0, gloss)) * sh * gloss * 1.8;
+  lin += pow(max(dot(n, hv), 0.0), mix(30.0, 260.0, gloss)) * sh * gloss * 1.8 * sunDim;
   float fr = fresnel(max(dot(n, -rd), 0.0), 0.02);
-  lin = mix(lin, sky(reflect(rd, n), sun), fr * (gWet * 0.85 + gW.w * 0.25));
+  lin = mix(lin, skyCol, fr * (gWet * 0.85 + gW.w * 0.25 + gRain * 0.3));
   // Air, not milk: enough to say "far away" and not so much that the middle
   // distance loses its shape.
-  col = mix(sky(rd, sun), lin, exp(-pow(tHit / fogFar, 1.6) * 2.4));
+  col = mix(skyCol, lin, exp(-pow(tHit / far, 1.6) * 2.4));
+}
+
+// ------------------------------------------------------------ the rain
+//
+// Not particles and not geometry: four layers of streaks, each on a plane at
+// a fixed distance, sampled where the ray crosses it. A ray is a line, so the
+// crossing is one multiply — which makes a whole downpour a handful of hashes
+// a pixel rather than anything the marcher has to know about.
+//
+// Near layers are large and sparse, far ones small and dense. That is
+// parallax, and it is what stops rain reading as a texture stuck to the lens.
+if (gRain > 0.01) {
+  vec3 fall = normalize(vec3(gWind.x * 0.22, -1.0, gWind.y * 0.22));
+  // The frame belongs to the *rain*, not to the ray. The first version built
+  // it from cross(fall, rd), which is perpendicular to rd by construction — so
+  // projecting a point along the ray onto it gave zero everywhere and the
+  // downpour was invisible. Across the fall, and along it:
+  vec3 across = normalize(cross(fall, vec3(0.0, 0.0, 1.0)));
+  for (int i = 0; i < 4; i++) {
+    vec3 at = rd * (2.5 + float(i) * 5.5);
+    float k = 11.0 - float(i) * 1.6;
+    vec2 sq = vec2(dot(at, across), dot(at, fall)) * k;
+    sq.y += t * (34.0 + float(i) * 9.0);           // falling
+    float h = hash21(floor(sq) + float(i) * 17.3);
+    vec2 f = fract(sq) - 0.5;
+    // Narrow across and long along, so a drop is a streak rather than a dot.
+    float streak = step(1.0 - gRain * 0.45, h)
+                 * smoothstep(0.4, 0.0, abs(f.x) * 4.5 + abs(f.y) * 0.35);
+    col += vec3(0.58, 0.63, 0.72) * streak * 0.34 * (1.0 - float(i) * 0.16);
+  }
 }
 
 finish(col)` },
@@ -2555,7 +2638,7 @@ export async function generateEditor(host) {
     // The state is the size of the picture, so changing the size is the end of
     // this run of the simulation. Said plainly rather than left to look like a
     // glitch: the sketch restarts, once, at the start.
-    if (feedback) feedback.resize(w, h, feedback.channels || 1);
+    if (feedback) { const [sw, sh] = stateSize(w, h); feedback.resize(sw, sh, feedback.channels || 1); }
     restart();
     return true;
   };
@@ -2612,7 +2695,7 @@ export async function generateEditor(host) {
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     feedback = new Feedback(gl);
-    feedback.resize(canvas.width, canvas.height);
+    { const [sw, sh] = stateSize(); feedback.resize(sw, sh); }
     return true;
   }
 
@@ -2652,10 +2735,26 @@ export async function generateEditor(host) {
     // Two fields if the sketch defines sim2(); the buffers are rebuilt on the
     // next draw, and describe() then says whether the GPU actually gave two.
     wantChannels = s2 && dualTargets(src) ? 2 : 1;
-    if (feedback.channels !== wantChannels) feedback.resize(canvas.width, canvas.height, wantChannels);
+    const [sw, sh] = stateSize();
+    if (feedback.channels !== wantChannels) feedback.resize(sw, sh, wantChannels);
     stateLabel.textContent = sim ? `sim · ${feedback.describe()}` : (es3() ? "WebGL2 · ES 3.00" : "WebGL1 · ES 1.00");
     return true;
   }
+
+  /**
+   * How big the state is. A sketch may say with `@state W H`; otherwise it is
+   * the size of the picture, as it always was.
+   *
+   * This is the whole of the memory answer. A float state pair with two
+   * targets is w×h×16 bytes four times over: at 1920×1080 that is 132 MB for
+   * what is usually a dozen registers and a height map of a fixed piece of
+   * ground. Neither gets better by being the size of the window.
+   */
+  const stateSize = (w, h) => {
+    const said = doc.mode === "glsl" ? null : sketchMeta(doc.sketch || "").state;
+    return said ? [Math.max(1, said[0]), Math.max(1, said[1])]
+                : [w || canvas.width, h || canvas.height];
+  };
 
   let forcedTime = null;                  // set during an offline export
   let exporting = false;
@@ -2664,7 +2763,7 @@ export async function generateEditor(host) {
 
   /** Set everything both passes share, then bind the feedback textures on the
       last two units — user images take the first ones. */
-  function setCommon(prog, prevTex, stateTex, stateTex2) {
+  function setCommon(prog, prevTex, stateTex, stateTex2, asState = false) {
     gl.useProgram(prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     const loc = gl.getAttribLocation(prog, "a_pos");
@@ -2673,8 +2772,12 @@ export async function generateEditor(host) {
     const u = (n) => gl.getUniformLocation(prog, n);
     // A tile draws at its own size and thinks in the whole picture's, so a
     // render past the GPU's maximum comes out identical to one that fitted.
-    const res = tileRes || [canvas.width, canvas.height];
+    // In the state pass the resolution *is* the state's, so a sketch's
+    // `gl_FragCoord.xy / u_resolution` still sweeps 0..1 across it however big
+    // the picture happens to be.
+    const res = asState ? [feedback.w, feedback.h] : (tileRes || [canvas.width, canvas.height]);
     gl.uniform2f(u("u_resolution"), res[0], res[1]);
+    gl.uniform2f(u("u_state_size"), feedback.w, feedback.h);
     gl.uniform2f(u("u_origin"), tileOrigin[0], tileOrigin[1]);
     gl.uniform2f(u("u_mouse"), mouse[0], mouse[1]);
     gl.uniform1f(u("u_time"), timeNow());
@@ -2759,7 +2862,7 @@ export async function generateEditor(host) {
     const w = feedback.write, r = feedback.read;
     gl.bindFramebuffer(gl.FRAMEBUFFER, w.fbo);
     gl.viewport(0, 0, feedback.w, feedback.h);
-    setCommon(sim, r.tex, r.tex, r.tex2);
+    setCommon(sim, r.tex, r.tex, r.tex2, true);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     feedback.swap();
@@ -2772,8 +2875,9 @@ export async function generateEditor(host) {
     // The channel count matters as much as the size: a sketch that grew a
     // sim2() needs a second target, and a resize that only checks dimensions
     // would leave state2() reading the first field.
-    if (feedback.w !== canvas.width || feedback.h !== canvas.height || feedback.channels !== wantChannels) {
-      feedback.resize(canvas.width, canvas.height, wantChannels);
+    const [sw, sh] = stateSize();
+    if (feedback.w !== sw || feedback.h !== sh || feedback.channels !== wantChannels) {
+      feedback.resize(sw, sh, wantChannels);
     }
     gl.viewport(0, 0, canvas.width, canvas.height);
     if (sim) setCommon(display, feedback.write.tex, feedback.read.tex, feedback.read.tex2);

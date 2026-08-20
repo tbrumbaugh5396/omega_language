@@ -16,9 +16,11 @@ import { el, clear, api } from "./ui.js";
 import { GENERATE_PRESETS, newGenerateDoc, scaleForBudget, fitAspect } from "./studio-generate.js";
 import { expandButton } from "./expand.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
-import { parseUniforms, desugar, hasSimPass, withDefine, isEs3, splitSketch, stripComments } from "./shader-uniforms.js";
+import { parseUniforms, desugar, hasSimPass, withDefine, isEs3, splitSketch, stripComments,
+         sketchMeta } from "./shader-uniforms.js";
 import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
-import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets } from "./shader-run.js";
+import { getGL, isGL2, linkProgram, renderSketch, loadSketchImages, dualTargets,
+         sharedFeedbackBytes } from "./shader-run.js";
 import { compileDesignFrame } from "./design-to-sdf.js";
 import { compileSvg } from "./svg-to-sdf.js";
 import { Feedback } from "./feedback.js";
@@ -3013,6 +3015,97 @@ c`;
              detail: `the picture changed on ${changed} of 299 frames over about three hundred metres — further `
                + "than the map is wide, so nothing on screen at the end was on the map at the start. "
                + "One fbm per texel per frame, against a hundred per pixel if scene() did the arithmetic itself" }); }
+
+    // 4. What it costs to remember, which for this world is nothing.
+    //
+    //    The obvious worry about an endless world is that walking through it
+    //    fills memory with the places you have been. This one cannot: it
+    //    stores none of them. The world is a *function* of position, and the
+    //    map is one fixed texture that is rebuilt every frame around wherever
+    //    you are — so there are no regions to load and none to unload, and
+    //    four kilometres costs exactly what standing still costs. The price of
+    //    that choice is recomputing the map, which the numbers above say is
+    //    far cheaper than the alternative.
+    //
+    //    What *did* scale badly was the state's size. It was the size of the
+    //    picture, because every sim's state always had been — so a fullscreen
+    //    render meant a 1920×1080 float pair with two targets, which is 132 MB
+    //    to hold a dozen registers and a height map of a fixed piece of
+    //    ground. `@state W H` lets a sketch say otherwise.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const said = sketchMeta(g.source).state;
+      const kb = new Keyboard();
+      const values = {};
+      for (const u of parseUniforms(g.source)) if (u.value) values[u.name] = u.value;
+      values.walk = [40];
+      // Walked, at two very different picture sizes, watching the storage.
+      const sizes = [];
+      for (const [W2, H2] of [[96, 64], [480, 270]]) {
+        let bytes = null, stable = true;
+        for (let f = 0; f < 120; f++) {
+          kb.clear(); kb.press(KEY.up); kb.press(16);
+          renderSketch(g.source, W2, H2, { keys: kb, values, steps: 1, reset: f === 0, time: f / 60 });
+          kb.tick();
+          if (f % 30 === 29) {
+            const now = sharedFeedbackBytes();
+            if (bytes !== null && now !== bytes) stable = false;
+            bytes = now;
+          }
+        }
+        sizes.push({ at: `${W2}×${H2}`, bytes, stable });
+      }
+      const [small, large] = sizes;
+      const mb = (n) => (n / 1048576).toFixed(1);
+      // The same bytes at both sizes, and the same bytes after walking.
+      const ok = !!said && small.bytes === large.bytes && small.stable && large.stable;
+      push({ group: "More games", name: "an endless world that costs a fixed number of bytes",
+             ok,
+             detail: ok
+               ? `@state ${said[0]}×${said[1]}: ${mb(small.bytes)} MB of state, the same at ${small.at} and at `
+                 + `${large.at}, and the same after walking eighty metres at each. Without it the state is the `
+                 + "size of the picture — at 1920×1080 that is 132 MB to hold a height map of a fixed piece of "
+                 + "ground. Nothing accumulates with distance either: the world is a function, and the map is "
+                 + "rebuilt around wherever you are, so there is nothing to load and nothing to unload"
+               : !said ? "the world does not declare @state"
+               : `${mb(small.bytes)} MB at ${small.at} but ${mb(large.bytes)} MB at ${large.at}`
+                 + `${small.stable && large.stable ? "" : ", and it moved while walking"}` }); }
+
+    // 5. And the weather is weather: it changes the picture, and the wind
+    //    moves what is standing in it.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const kb = new Keyboard();
+      const base = {};
+      for (const u of parseUniforms(g.source)) if (u.value) base[u.name] = u.value;
+      const W2 = 128, H2 = 84;
+      const run = (over, frames) => {
+        const values = { ...base, ...over };
+        let out = null;
+        for (let f = 0; f < frames; f++) {
+          kb.clear();
+          out = renderSketch(g.source, W2, H2, { keys: kb, values, steps: 1, reset: f === 0, time: f / 60 });
+          kb.tick();
+        }
+        return out.getContext("2d").getImageData(0, 0, W2, H2).data;
+      };
+      const wet = run({ weather: [1], windAmt: [1.4] }, 90);
+      const dry = run({ weather: [0], windAmt: [0.15] }, 90);
+      let diff = 0;
+      for (let i = 0; i < W2 * H2; i++) diff += Math.abs(wet[i * 4] - dry[i * 4]);
+      diff /= W2 * H2;
+      // …and the wind moves things: two frames a moment apart, in a still
+      // world with nothing else changing, must not be the same picture.
+      const still1 = run({ weather: [0], windAmt: [0] }, 60);
+      const still2 = run({ weather: [0], windAmt: [0] }, 61);
+      const windy1 = run({ weather: [0], windAmt: [2] }, 60);
+      const windy2 = run({ weather: [0], windAmt: [2] }, 61);
+      const move = (a, b) => { let d = 0; for (let i = 0; i < W2 * H2; i++) d += Math.abs(a[i * 4] - b[i * 4]); return d / (W2 * H2); };
+      const stillMove = move(still1, still2), windyMove = move(windy1, windy2);
+      push({ group: "More games", name: "weather that changes the light, and wind that moves what stands in it",
+             ok: diff > 12 && windyMove > stillMove * 1.5,
+             detail: `rain against no rain is ${diff.toFixed(0)}/255 of a different picture — the sun goes, the `
+               + `horizon comes in, the ground darkens and the streaks fall across it. Between two consecutive `
+               + `frames the wind moves ${windyMove.toFixed(2)}/255 where still air moves ${stillMove.toFixed(2)}: `
+               + "each tree has its own phase from the hash that placed it, so a wood does not sway as one thing" }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is

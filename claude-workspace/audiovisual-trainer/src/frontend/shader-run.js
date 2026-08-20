@@ -9,7 +9,7 @@
 // One hidden WebGL canvas is shared, because a browser only grants a handful
 // of contexts and a filter dialog would otherwise burn one per preview.
 
-import { parseUniforms, desugar, hasSimPass, isEs3, withDefine } from "./shader-uniforms.js";
+import { parseUniforms, desugar, hasSimPass, isEs3, withDefine, sketchMeta } from "./shader-uniforms.js";
 import { applyUniforms } from "./shader-controls.js";
 import { Feedback } from "./feedback.js";
 
@@ -135,7 +135,12 @@ export function renderSketch(source, width, height, opts = {}) {
   }
   // Two targets when the sketch defines sim2(); the buffers decide whether
   // the GPU will actually give two, and say so in describe().
-  feedback.resize(width, height, dualTargets(source) ? 2 : 1);
+  // A sketch may say how big its state is. Without `@state` it is the size of
+  // the picture, as it always was.
+  const said = sketchMeta(source).state;
+  const stateW = said ? Math.max(1, said[0]) : width;
+  const stateH = said ? Math.max(1, said[1]) : height;
+  feedback.resize(stateW, stateH, dualTargets(source) ? 2 : 1);
   if (opts.reset !== false) feedback.reset();
 
   // The keyboard picture, uploaded once per render and kept between them.
@@ -158,7 +163,7 @@ export function renderSketch(source, width, height, opts = {}) {
   // Image uniforms from the caller's canvases.
   const texByName = new Map();
   let unit = 0;
-  const bindCommon = (prog, prevTex, stateTex, stateTex2) => {
+  const bindCommon = (prog, prevTex, stateTex, stateTex2, asState = false) => {
     gl.useProgram(prog);
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     const loc = gl.getAttribLocation(prog, "a_pos");
@@ -167,8 +172,11 @@ export function renderSketch(source, width, height, opts = {}) {
     const u = (n) => gl.getUniformLocation(prog, n);
     // A tile draws at its own size but must think in the whole picture's, or
     // every scale in the sketch would change with the tiling.
-    const res = opts.resolution || [width, height];
+    // In the state pass the resolution *is* the state's, so that a sketch's
+    // `gl_FragCoord.xy / u_resolution` still sweeps 0..1 across it.
+    const res = asState ? [stateW, stateH] : (opts.resolution || [width, height]);
     gl.uniform2f(u("u_resolution"), res[0], res[1]);
+    gl.uniform2f(u("u_state_size"), stateW, stateH);
     gl.uniform2f(u("u_origin"), (opts.origin || [0, 0])[0], (opts.origin || [0, 0])[1]);
     const m = opts.mouse || [res[0] / 2, res[1] / 2];
     gl.uniform2f(u("u_mouse"), m[0], m[1]);
@@ -229,8 +237,8 @@ export function renderSketch(source, width, height, opts = {}) {
     for (let i = 0; i < steps; i++) {
       const w = feedback.write, r = feedback.read;
       gl.bindFramebuffer(gl.FRAMEBUFFER, w.fbo);
-      gl.viewport(0, 0, width, height);
-      bindCommon(sim, r.tex, r.tex, r.tex2);
+      gl.viewport(0, 0, stateW, stateH);
+      bindCommon(sim, r.tex, r.tex, r.tex2, true);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       feedback.swap();
@@ -249,6 +257,15 @@ export function renderSketch(source, width, height, opts = {}) {
   out.getContext("2d").drawImage(canvas, 0, 0);
   return out;
 }
+
+/**
+ * How many bytes of state the shared renderer is holding.
+ *
+ * There to be *checked* rather than displayed. The claim an endless world
+ * makes is that walking through it costs nothing to remember, and a claim
+ * about memory is worth a number.
+ */
+export const sharedFeedbackBytes = () => (shared && shared.feedback ? shared.feedback.bytes() : 0);
 
 /** The largest square this GPU will render in one go. */
 export function maxRenderSize(gl = null) {

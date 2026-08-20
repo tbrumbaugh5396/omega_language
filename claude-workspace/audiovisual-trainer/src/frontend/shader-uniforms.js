@@ -14,7 +14,7 @@
 /** Supplied by the runtime, so they are driven rather than dialled. */
 export const RESERVED = new Set([
   "u_resolution", "u_mouse", "u_time", "u_seed",
-  "u_prev", "u_state", "u_state2", "u_frame", "u_mouseDown", "u_origin",
+  "u_prev", "u_state", "u_state2", "u_state_size", "u_frame", "u_mouseDown", "u_origin",
   // The keyboard, as a 256×3 picture: row 0 held, row 1 went down this
   // frame, row 2 toggled. Read it with keyDown(u_keys, code) and friends.
   "u_keys",
@@ -302,6 +302,12 @@ vec3 palette(float t){ return palette(t, vec3(0.5), vec3(0.5), vec3(1.0), vec3(0
   // say. Without a second target these read the first, so a sketch written
   // for two still runs (badly, and it will say so) where MRT is missing.
   ["state2", `vec4 state2(vec2 q){ return texture2D(u_state2, q); }`],
+  // A register by its texel, which is what a register *is*. state(uv) divides
+  // by u_resolution, and once a sketch declares `@state` its state and its
+  // picture are different sizes — so in the display pass that division is the
+  // wrong one. These are right in both passes.
+  ["reg", `vec4 reg(vec2 texel){ return texture2D(u_state, (texel + 0.5) / u_state_size); }`],
+  ["reg2", `vec4 reg2(vec2 texel){ return texture2D(u_state2, (texel + 0.5) / u_state_size); }`],
   ["stateAt2", `vec4 stateAt2(vec2 dpx){ return texture2D(u_state2, (gl_FragCoord.xy + dpx) / u_resolution); }`],
 ];
 
@@ -367,6 +373,7 @@ uniform float u_seed;
 uniform sampler2D u_prev;    // last frame — of the state if sim() exists, else of the picture
 uniform sampler2D u_state;   // this frame's state, once sim() has run
 uniform sampler2D u_state2;  // the second state, if the sketch defines sim2()
+uniform vec2  u_state_size;  // how big the state is, which @state may set apart from the picture
 uniform int   u_frame;       // frames since Restart; 0 on the first
 uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas
 uniform vec2  u_origin;      // this tile's corner, when a render is bigger than the GPU allows`;
@@ -391,6 +398,7 @@ uniform float u_seed;
 uniform sampler2D u_prev;    // last frame — of the state if sim() exists, else of the picture
 uniform sampler2D u_state;   // this frame's state, once sim() has run
 uniform sampler2D u_state2;  // the second state, if the sketch defines sim2()
+uniform vec2  u_state_size;  // how big the state is, which @state may set apart from the picture
 uniform int   u_frame;       // frames since Restart; 0 on the first
 uniform float u_mouseDown;   // 1.0 while the pointer is pressed on the canvas
 uniform vec2  u_origin;      // this tile's corner, when a render is bigger than the GPU allows`;
@@ -679,13 +687,21 @@ export function mapErrors(log, mapped, sketchText) {
  */
 export function sketchMeta(src) {
   const meta = { node: null, module: null, pass: false, alpha: false, field: false,
-                 precision: null, space: null, title: null };
+                 precision: null, space: null, title: null, state: null };
   for (const raw of String(src).split("\n")) {
     const line = raw.trim();
     if (!line) continue;
     if (!line.startsWith("//")) break;                 // the header ends at the first code
     const body = line.replace(/^\/\/\s?/, "");
     if (meta.title === null && !body.startsWith("@")) meta.title = body;
+    // `@state 448 448` — how big the state target is, when the sketch wants it
+    // to be something other than the size of the picture. A simulation's state
+    // is not a picture: a game keeps a dozen registers in it and a world keeps
+    // a height map of a fixed piece of ground, and neither gets better by
+    // being the size of the window. At 1920×1080 a float state pair costs
+    // 132 MB; the same state at 448×448 costs 13 MB and does the same job.
+    const st = /@state\b\s+(\d+)\s+(\d+)/.exec(body);
+    if (st) { meta.state = [+st[1], +st[2]]; continue; }
     const m = /@(node|module|pass|alpha|field|precision|space)\b\s*(\S*)/.exec(body);
     if (!m) continue;
     if (m[1] === "pass" || m[1] === "alpha" || m[1] === "field") meta[m[1]] = true;

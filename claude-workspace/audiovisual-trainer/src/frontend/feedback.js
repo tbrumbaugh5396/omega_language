@@ -181,6 +181,21 @@ export class Feedback {
   }
 
   /** A word for the panel. */
+  /**
+   * How many bytes of GPU storage this is holding.
+   *
+   * The ping-pong pair, each with as many targets as the sketch asked for,
+   * plus the byte copy of the last displayed frame. Worth being able to state
+   * rather than estimate: a float state pair with two targets at 1920×1080 is
+   * 132 MB, and the same state at 448 square is 13 MB and holds the same
+   * world — which is the whole argument for letting a sketch say `@state`.
+   */
+  bytes() {
+    const per = this.kind === "float" ? 16 : this.kind === "half" ? 8 : 4;
+    const state = 2 * this.channels * this.w * this.h * per;
+    return state + (this.prevTex ? this.w * this.h * 4 : 0);
+  }
+
   describe() {
     if (!this.kind) return "no feedback storage";
     const api = this.exts.gl2 ? "WebGL2" : "WebGL1";

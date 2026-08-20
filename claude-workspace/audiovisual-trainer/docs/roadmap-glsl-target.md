@@ -2212,6 +2212,74 @@ two cannot disagree.
 *Left:* nothing that moves but the sea and the walker. No creatures, no
 weather, and nothing to do — this is a world to be in rather than a game.
 
+### Phase 29 — Weather, and what an endless world costs to remember *(M)* — **shipped**
+
+**Weather.** Wind and rain, both living in a register and drifting with time,
+so the weather is something the world is *doing* rather than a slider you are
+holding. The direction turns over minutes, the strength gusts, and a front
+comes and goes — standing still for a while is a thing worth doing.
+
+Wind bends the trees, and bends the top more than the bottom, which is the
+whole of why a tree in wind reads as alive. Each has its own phase from the
+hash that placed it, so a wood does not sway as one object. The same wind runs
+through the grass as a wave travelling across the field, which is what a gust
+looks like from above.
+
+Rain is not particles and not geometry: four layers of streaks, each on a plane
+at a fixed distance, sampled where the ray crosses it. Near layers are large and
+sparse, far ones small and dense — that is parallax, and it is what stops rain
+reading as a texture stuck to the lens. A whole downpour is four hashes a pixel.
+It also takes the sun away, brings the horizon in, darkens the ground and makes
+it shine, and most of what makes a wet day look like one follows from those.
+
+*One bug worth keeping.* The first frame built the rain's coordinate frame from
+`cross(fall, rd)` — which is perpendicular to `rd` by construction, so
+projecting a point along the ray onto it gave **zero everywhere** and the
+downpour was invisible. Measured rather than eyeballed: the rain lifted 0 of
+275,800 pixels. The frame belongs to the rain, not to the ray. With that fixed
+it lifts 17% of them.
+
+**And what it costs to remember — which is nothing.** The worry about an
+endless world is that walking through it fills memory with the places you have
+been. This one cannot: it stores none of them. The world is a *function* of
+position and the map is one fixed texture rebuilt every frame around wherever
+you are, so there are no regions to load and none to unload. Four kilometres
+costs exactly what standing still costs. The price of that choice is
+recomputing the map, and Phase 28 measured that against the alternative.
+
+What *did* scale badly was the state's **size**. It was the size of the
+picture, because every sim's state always had been — so a fullscreen render
+meant a 1920×1080 float pair with two targets, which is **132 MB** to hold a
+dozen registers and a height map of a fixed piece of ground. Neither gets
+better by being the size of the window.
+
+So a sketch may now say `@state W H`:
+
+| | state |
+|---|---|
+| the world at 640×360, before | 14.7 MB |
+| the world at 1920×1080, before | **132 MB** |
+| the world at any size, with `@state 448 448` | **12.9 MB** |
+
+It is also eight times less to bake at fullscreen. The uniform `u_state_size`
+comes with it, and two helpers — `reg(texel)` and `reg2(texel)` — because once
+the state and the picture are different sizes, `state(uv)`'s division by
+`u_resolution` is the wrong division in the display pass. In the state pass
+`u_resolution` *is* the state's, so `gl_FragCoord.xy / u_resolution` still
+sweeps 0..1 across it and every existing sim sketch is untouched.
+
+| held to | number |
+|---|---|
+| a frame at 640×360, with weather | **11.9 ms — 84 fps** |
+| the same bytes of state at 96×64 and at 480×270 | yes, and unchanged after walking |
+| rain against no rain | 30/255 of a different picture |
+| the wind moving things between consecutive frames | several times what still air moves |
+
+*Left:* still nothing alive in it. And the map is rebuilt every frame even
+standing still — a toroidal clipmap would rebuild only the strip that moved,
+which is worth doing the day the bake shows up in a measurement rather than
+before.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2280,6 +2348,7 @@ weather, and nothing to do — this is a world to be in rather than a game.
 | 27.1 | The picture filling the window, ten places | S | 26.1 | in-page, no permission to be refused; four fits |
 | 28.1 | An open world — infinite, four biomes — **shipped** | L | 25.1 | 4.3 ms; scene() is one fetch of a map that follows you |
 | 28.2 | Trees, boulders and grass — **shipped** | M | 28.1 | 9.1 ms; one grid, and the cell decides what grows |
+| 29.1 | Weather, and `@state` — **shipped** | M | 28.2 | 11.9 ms; 132 MB of state becomes 12.9 |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
