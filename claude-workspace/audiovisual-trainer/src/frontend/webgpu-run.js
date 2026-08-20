@@ -70,8 +70,8 @@ async function pipelineFor(device, wgsl, bindCount) {
   return made;
 }
 
-/** A texture from a canvas or image, flipped the way the GL path uploads. */
-function uploadTexture(device, src) {
+/** A texture from a canvas or image, oriented the way the GL path uploads. */
+function uploadTexture(device, src, flipY = true) {
   const w = src.width || src.naturalWidth || 1, h = src.height || src.naturalHeight || 1;
   const tex = device.createTexture({
     size: [w, h], format: "rgba8unorm",
@@ -79,7 +79,7 @@ function uploadTexture(device, src) {
   });
   // flipY, because the GL path uploads with UNPACK_FLIP_Y_WEBGL — the two
   // backends have to agree about which way up a texture is.
-  device.queue.copyExternalImageToTexture({ source: src, flipY: true }, { texture: tex }, [w, h]);
+  device.queue.copyExternalImageToTexture({ source: src, flipY }, { texture: tex }, [w, h]);
   return tex;
 }
 
@@ -95,8 +95,12 @@ export async function renderSketchGpu(sketch, width, height, opts = {}) {
   const g = await gpu();
   if (!g) throw new Error("this machine has no WebGPU");
   const { device } = g;
-  const keys = !!opts.keys;
-  const emitted = toWgsl(sketch, { keys });
+  // The sketch says whether it reads the keyboard; the caller only says
+  // whether it has one to offer. Binding one that the module never reads is
+  // not harmless — `layout: "auto"` leaves a statically-unused binding out of
+  // the layout, and an entry for it makes the whole bind group invalid.
+  const emitted = toWgsl(sketch);
+  const keys = emitted.usesKeys;
   if (!emitted.ok) throw new Error(`not translated: ${emitted.refused[0]}`);
 
   const { pipeline } = await pipelineFor(device, emitted.wgsl);
@@ -146,8 +150,10 @@ export async function renderSketchGpu(sketch, width, height, opts = {}) {
     entries.push({ binding: binding++, resource: sampler });
   }
   if (keys) {
-    const src = opts.keys.texture ? opts.keys.texture() : opts.keys;
-    const tex = src && src.width ? uploadTexture(device, src) : blank();
+    const src = opts.keys && opts.keys.texture ? opts.keys.texture() : opts.keys;
+    // Not flipped: the GL path uploads its images with UNPACK_FLIP_Y_WEBGL
+    // and the keyboard without it, so row 0 is "held" at both ends.
+    const tex = src && src.width ? uploadTexture(device, src, false) : blank();
     owned.push(tex);
     entries.push({ binding: binding++, resource: tex.createView() });
     entries.push({ binding: binding++, resource: nearest });

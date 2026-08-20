@@ -61,7 +61,7 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
-library, a WGSL emitter with a WebGPU runner, and a **226-check self-test
+library, a WGSL emitter with a WebGPU runner, and a **228-check self-test
 across 33 groups that runs inside the app**.
 
 ---
@@ -326,12 +326,17 @@ surprise:
   needs a Brotli decoder and its static dictionary, which is out of proportion
   to what it buys.
 - **AI authoring of nodes** — the agents write briefs and critiques today.
-- **A second backend, mostly.** There is now a WGSL emitter and a WebGPU
-  runner: **40 node types translate and 36 render pixel-identically** to the
-  GL path on this machine. The rest are a named list — eight untranslated in
-  three classes, four that render without matching — not an unknown. Nothing about the render graph — pooling,
-  fusion, feedback, tiling — has a WebGPU path yet, and none of it should
-  until the pixels are known to match.
+- **A second backend, for one sketch at a time.** There is a WGSL emitter and
+  a WebGPU runner, and **every node type in the catalogue now translates**:
+  53 render, **48 of them pixel-identical** to the GL path on this machine.
+  The 11 that are refused are all field ports, which are compiled away into
+  their shade node before a plan exists, so they never run as nodes. The five
+  that render without matching are named with their numbers, and each is one
+  of three places the *backends* differ rather than the translator — a hash
+  through multiply-add fusion, `p.y` through reciprocal-versus-divide, and
+  `fwidth` through whichever 2×2 quad the driver chose. What is missing is the
+  render graph: pooling, fusion, feedback and tiling have no WebGPU path, and
+  none of them should until somebody needs one.
 
 The sketchpad-tier caveats in [`../README.md`](../README.md) still apply to the
 studios as tools. This document is about the machinery underneath them.

@@ -1818,6 +1818,57 @@ fall into but the void; and the rover's beacons respawn only on R.
 
 ---
 
+### Phase 23 — The last of the catalogue *(M)* — **shipped**
+
+The eight became **every node type there is**. Six were compile errors and
+five were refusals, and each named a rule:
+
+| what failed | the rule that was missing |
+|---|---|
+| `for (…) for (…) stmt;` | where a statement *ends*, braces and nesting included, so an outer loop can be braced round an inner one |
+| `step(vec3f(cut), lumaOf(c.rgb))` | an expression is as wide as its **widest operand**, and an operand that is a call of known return type says so — rather than being rummaged through for whatever vectors are inside it |
+| `clamp(sm * x, 0.0, 1.0)` | a matrix times a vector is the *vector*; the matrix is the operator, not the width |
+| `sdBox(…) - corner` given `_rgb3` | the same operand rule: a distance minus a distance is a distance |
+| `step(0.5, tex(…).r)` | a swizzle says its own width off **anything**, not only off a bare name |
+| a ternary split across lines | a statement ends at `;`, not at a newline — the else-branch was being cut at the line break |
+| a helper reading `uv`, a size or a uniform | promoted to a module-scope `var<private>`, assigned once at the top of the fragment |
+| `vec4 gState;` at file scope | module scope has no default address space, and *function* scope must not have one — the test is the brace depth, not the indentation, because a frozen node writes its function bodies against the left margin |
+| `if (texel == vec2(1.0, 0.0))` | `==` on two vectors is a bool in GLSL and a vector of bools in WGSL; GLSL has `equal()` for the second, so a bare `==` always meant `all()` |
+| `_rgb(vec4(c, 1.0))` in a frozen node | the GL prelude's own coercions, which are overloaded — one name per argument type, chosen after translation when the type is readable |
+| `keyDown(u_keys, 37.0)` | WGSL cannot pass a sampler; `u_keys` is one reserved binding, so the argument is dropped and every read goes through one helper |
+| `texture2D(in0, uv) * k` ending a sketch | a sketch may *compute* a vec4 as well as construct one — it keeps its colour and drops its alpha, as `_rgb(vec4)` does |
+
+**Where it stands:**
+
+| held against | number |
+|---|---|
+| the node catalogue, translated and rendered | **48 of 53 pixel-identical** to the GL path |
+| what is left untranslated | **none** |
+| what is refused | 11, every one a field port — which is compiled away into its shade node before a plan exists, so it never runs as a node |
+| twelve rules, one small sketch each | all twelve pixel-identical |
+
+**Two corrections worth keeping.** The comparison itself was wrong: it
+premultiplied the WebGPU side and not the GL side, which measures the
+difference between two storage conventions rather than the translation. Both
+composited over black — the picture either backend actually shows —
+`game.menu` went from 36.9/255 to **2.8/255** and `game.shipView` from
+1.1 to **0.2**. And the keyboard is the one texture the GL path uploads
+*without* `UNPACK_FLIP_Y_WEBGL`, so the WebGPU side must not flip it either;
+flipping it swapped "held" for "toggled" and read 255/255 apart.
+
+**A third place the backends genuinely differ, and it is not the translator.**
+Alongside multiply-add fusion in a hash and the reciprocal-versus-divide in
+`p.y`, there is `fwidth`: the same distance field is 0/255 apart and the same
+field through `aa()` is 6/255, on the edge pixels only. A derivative is a fact
+about whichever 2×2 quad the driver chose, and WGSL offers coarse and fine
+forms where GLSL ES offers a hint. It is why the five nodes that are not
+identical are the ones that draw an edge — and why `filter.grain`, at 8.8/255,
+is the hash rather than the edge.
+
+*Left:* still one sketch to one texture. Nothing about the render graph —
+pooling, fusion, feedback, tiling — has a WebGPU path, and none of it should
+until somebody needs it; the translation is now the part that is finished.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -1879,6 +1930,7 @@ fall into but the void; and the rover's beacons respawn only on R.
 | 21.1 | A WGSL emitter and a WebGPU runner — **40 translated** | L | 0.3 | 36 nodes identical on a second backend |
 | 21.2 | Three more games in Generate — **shipped** | S | 20.1 | breakout, a flyer, and pong |
 | 22.1 | Snake, a tilemap platformer, a raymarched rover — **shipped** | M | 21.2 | a grid, a tilemap and a lit 3-D world |
+| 23.1 | The last of the catalogue — **nothing untranslated** | M | 21.1 | 48 of 53 identical; the 11 refusals are field ports |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

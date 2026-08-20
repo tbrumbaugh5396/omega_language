@@ -118,7 +118,7 @@ function exprStart(src, at) {
     else if (c === "(" || c === "[") { if (depth === 0) return i + 1; depth--; }
     else if (depth === 0 && c === "=" && (src[i - 1] === "=" || src[i - 1] === "<"
              || src[i - 1] === ">" || src[i - 1] === "!" || src[i + 1] === "=")) continue;
-    else if (depth === 0 && (STOPS.has(c) || c === "\n")) return i + 1;
+    else if (depth === 0 && STOPS.has(c)) return i + 1;
     else if (depth === 0 && /\s/.test(c)) {
       const m = KEYWORD_END.exec(src.slice(0, i + 1));
       if (m) return i + 1;
@@ -133,7 +133,7 @@ function exprEnd(src, at, extra = "") {
     const c = src[i];
     if (c === "(" || c === "[") depth++;
     else if (c === ")" || c === "]") { if (depth === 0) return i; depth--; }
-    else if (depth === 0 && (c === ";" || c === "," || c === "\n" || extra.includes(c))) return i;
+    else if (depth === 0 && (c === ";" || c === "," || c === "{" || c === "}" || extra.includes(c))) return i;
   }
   return src.length;
 }
@@ -169,6 +169,38 @@ function ternaries(src) {
   return out;
 }
 
+/**
+ * Where the statement starting at `i` ends. A block ends at its matching
+ * brace; an `if` or a `for` ends where *its* body does, and an `if` carries
+ * any `else` with it. Without this an outer loop cannot be braced round an
+ * inner one, because it cannot tell where the inner one stops.
+ */
+function stmtEnd(src, i) {
+  while (i < src.length && /\s/.test(src[i])) i++;
+  if (src[i] === "{") {
+    let depth = 0;
+    for (let k = i; k < src.length; k++) {
+      if (src[k] === "{") depth++;
+      else if (src[k] === "}" && --depth === 0) return k + 1;
+    }
+    return src.length;
+  }
+  const kw = /^(if|for|while)\b/.exec(src.slice(i));
+  if (kw) {
+    let k = i + kw[0].length;
+    while (k < src.length && src[k] !== "(") k++;
+    const got = argsAt(src, k);
+    if (!got) return exprEnd(src, i, ";") + 1;
+    let end = stmtEnd(src, got.end + 1);
+    // `else` belongs to the `if` before it.
+    const after = src.slice(end).match(/^\s*else\b/);
+    if (kw[1] === "if" && after) end = stmtEnd(src, end + after[0].length);
+    return end;
+  }
+  const e = exprEnd(src, i, ";");
+  return src[e] === ";" ? e + 1 : e;
+}
+
 /** Braces round every branch: WGSL has no single-statement if. */
 function braces(src) {
   let out = src;
@@ -187,12 +219,9 @@ function braces(src) {
         i = got.end + 1;
       }
       while (i < out.length && /\s/.test(out[i])) i++;
-      // Already a block, or a construct of its own — an `else if`, or the
-      // inner `for` of a nested pair — which the pass for that keyword will
-      // brace itself.
-      if (out[i] === "{" || out.startsWith("if", i) || out.startsWith("for", i)) { from = i; continue; }
-      const end = exprEnd(out, i, ";");
-      const stop = out[end] === ";" ? end + 1 : end;
+      // Already a block, or an `else if`, which is one construct.
+      if (out[i] === "{" || (kw === "else" && out.startsWith("if", i))) { from = i; continue; }
+      const stop = stmtEnd(out, i);
       out = `${out.slice(0, i)}{ ${out.slice(i, stop)} }${out.slice(stop)}`;
       from = i + 1;
     }
@@ -262,10 +291,55 @@ function typeOf(expr, env) {
   if (m) return ["", "f32", "vec2f", "vec3f", "vec4f"][m[2].length] || null;
   m = /^([A-Za-z_]\w*)$/.exec(e);
   if (m) return env.get(m[1]) || null;
-  // An expression rather than a term: the widest vector anything in it is
-  // known to be. `o.rgb + amount * (o.rgb - b.rgb)` is a vec3f because `.rgb`
-  // is, and GLSL would not have let the rest be anything else.
   const RANK = { f32: 1, vec2f: 2, vec3f: 3, vec4f: 4 };
+  // Split on the top-level arithmetic and take the widest operand. This is
+  // the rule that stops `lumaOf(c.rgb) + 0.001` reading as a vec3f because
+  // there is a `.rgb` somewhere inside a call that answers with a float.
+  {
+    const ops = [];
+    let depth = 0;
+    for (let i = 0; i < e.length; i++) {
+      const c = e[i];
+      if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+      else if (depth === 0 && "+-*/".includes(c) && i > 0) {
+        // Not a sign, and not part of `->` or an exponent.
+        const before = e.slice(0, i).trimEnd();
+        if (before && !/[-+*/(,<>=!&|]$/.test(before)) ops.push(i);
+      }
+    }
+    if (ops.length) {
+      let w = null, at = 0;
+      for (const k of [...ops, e.length]) {
+        const part = e.slice(at, k).trim();
+        at = k + 1;
+        if (!part) continue;
+        const kt = typeOf(part, env);
+        // A matrix times a vector is the vector — the matrix is the operator
+        // here, not the width, so it does not get a vote.
+        if (!kt || kt.startsWith("mat")) continue;
+        if (!w || RANK[kt] > RANK[w]) w = kt;
+      }
+      return w;
+    }
+  }
+  // A swizzle says its own width whatever it hangs off — `tex(…).r` is a
+  // float, and reading it as a vec2f because there is an `in0_size` inside
+  // the call is how `step(vec2f(0.5), …)` got written.
+  {
+    const sw = /^(.+)\.([xyzwrgba]{1,4})$/.exec(e);
+    if (sw) {
+      let d = 0, ok = true;
+      for (const c of sw[1]) {
+        if (c === "(" || c === "[") d++;
+        else if (c === ")" || c === "]") { if (--d < 0) ok = false; }
+      }
+      if (ok && d === 0 && /[)\]\w]$/.test(sw[1])) {
+        return ["", "f32", "vec2f", "vec3f", "vec4f"][sw[2].length] || null;
+      }
+    }
+  }
+  // A term with no operators: the widest vector anything in it is known to be.
   let best = null;
   const note = (t) => { if (t && (!best || RANK[t] > RANK[best])) best = t; };
   for (const c of e.matchAll(/\b(vec[234]f)\s*\(/g)) note(c[1]);
@@ -497,9 +571,22 @@ fn vignette(uv: vec2f, k: f32) -> f32 { let q = uv * (1.0 - uv); return pow(clam
 
 // Only emitted when a keyboard is bound: WGSL has no preprocessor, so a
 // helper naming a binding that is not there is a shader that will not compile.
-const KEY_HELPERS = `fn keyDown(code: f32) -> f32 { return textureSample(KEYS_tex, KEYS_smp, vec2f((code + 0.5) / 256.0, 0.5 / 3.0)).r; }
-fn keyHit(code: f32) -> f32 { return textureSample(KEYS_tex, KEYS_smp, vec2f((code + 0.5) / 256.0, 1.5 / 3.0)).r; }
-fn keyToggle(code: f32) -> f32 { return textureSample(KEYS_tex, KEYS_smp, vec2f((code + 0.5) / 256.0, 2.5 / 3.0)).r; }`;
+const KEY_HELPERS = `fn _keys(q: vec2f) -> vec4f { return textureSampleLevel(KEYS_tex, KEYS_smp, q, 0.0); }
+fn keyDown(code: f32) -> f32 { return _keys(vec2f((code + 0.5) / 256.0, 0.5 / 3.0)).r; }
+fn keyHit(code: f32) -> f32 { return _keys(vec2f((code + 0.5) / 256.0, 1.5 / 3.0)).r; }
+fn keyToggle(code: f32) -> f32 { return _keys(vec2f((code + 0.5) / 256.0, 2.5 / 3.0)).r; }`;
+
+/**
+ * The keyboard, which GLSL passes about as a sampler and WGSL cannot: a
+ * texture and its sampler are two values there, so `keyDown(u_keys, 37.0)`
+ * has no shape to translate into. `u_keys` is a reserved name with exactly
+ * one binding behind it, so the argument is simply dropped and the reads go
+ * through one helper.
+ */
+const dropKeysArg = (src) => src
+  .replace(/^\s*uniform\s+sampler2D\s+u_keys\s*;.*$/gm, "")
+  .replace(/\b(keyDown|keyHit|keyToggle)\s*\(\s*u_keys\s*,/g, "$1(")
+  .replace(/\btexture(2D|Lod)?\s*\(\s*u_keys\s*,/g, "_keys(");
 
 // The coercions, which exist so a sketch may end in a float, a vec3 or a vec4.
 // WGSL has no overloading, so instead of one name three times the emitter
@@ -507,11 +594,92 @@ fn keyToggle(code: f32) -> f32 { return textureSample(KEYS_tex, KEYS_smp, vec2f(
 // it wraps by *arity of the constructor it can see*, and otherwise assumes a
 // vec3. That is the one place this translator guesses, and it is why the
 // self-test renders the whole catalogue rather than trusting it.
+const AS_COERCE = `fn _asRgb3(c: vec3f) -> vec3f { return c; }
+fn _asRgb4(c: vec4f) -> vec3f { return c.rgb; }
+fn _asRgb2(c: vec2f) -> vec3f { return vec3f(c, 0.0); }
+fn _asRgb1(g: f32) -> vec3f { return vec3f(g); }
+fn _asRgba4(c: vec4f) -> vec4f { return c; }
+fn _asRgba3(c: vec3f) -> vec4f { return vec4f(c, 1.0); }
+fn _asRgba2(c: vec2f) -> vec4f { return vec4f(c, 0.0, 1.0); }
+fn _asRgba1(g: f32) -> vec4f { return vec4f(vec3f(g), 1.0); }`;
+
+/**
+ * `_rgb(x)` and `_rgba(x)` are the GL prelude's coercions, and a frozen node
+ * carries calls to them in its source. GLSL resolves the overload by the
+ * argument's type and WGSL has no overloads at all, so the choice is made
+ * here — after translation, when the argument is WGSL and its type readable.
+ */
+function resolveCoercions(text, env) {
+  let out = text;
+  for (const name of ["_rgba", "_rgb"]) {          // longest first
+    let from = 0;
+    for (;;) {
+      const i = out.indexOf(`${name}(`, from);
+      if (i < 0) break;
+      if (i > 0 && /[\w_]/.test(out[i - 1])) { from = i + 1; continue; }
+      const got = argsAt(out, i + name.length);
+      if (!got) { from = i + 1; continue; }
+      const k = typeOf(got.args[0] || "", env);
+      const n = { f32: 1, vec2f: 2, vec3f: 3, vec4f: 4 }[k] || (name === "_rgba" ? 4 : 3);
+      out = `${out.slice(0, i)}${name === "_rgba" ? "_asRgba" : "_asRgb"}${n}(${got.args.join(", ")})${out.slice(got.end + 1)}`;
+      from = i + 1;
+    }
+  }
+  return out;
+}
+
 const COERCE = `fn _rgb3(c: vec3f) -> vec3f { return clamp(c, vec3f(0.0), vec3f(1.0)); }
 fn _rgb1(c: f32) -> vec3f { return clamp(vec3f(c), vec3f(0.0), vec3f(1.0)); }
 fn _rgba4(c: vec4f) -> vec4f { return vec4f(clamp(c.rgb, vec3f(0.0), vec3f(1.0)), clamp(c.a, 0.0, 1.0)); }`;
 
 // ------------------------------------------------------------------ emit
+
+/**
+ * `a == b` on two vectors is a bool in GLSL and a vector of bools in WGSL —
+ * the same spelling for "are these the same" and for "which components
+ * match". GLSL has `equal()` for the second, so a bare `==` between vectors
+ * always meant the first, and `all()` is what says that here.
+ */
+function vectorEquality(text, env) {
+  let out = text, from = 0;
+  for (;;) {
+    const i = out.indexOf("=", from) >= 0
+      ? Math.min(...["==", "!="].map((op) => { const k = out.indexOf(op, from); return k < 0 ? Infinity : k; }))
+      : Infinity;
+    if (!Number.isFinite(i)) break;
+    const op = out.slice(i, i + 2);
+    from = i + 2;
+    // `<=`, `>=` and `!==` are not this.
+    if ("<>=!".includes(out[i - 1]) && op === "==") continue;
+    const a = exprStart(out, i), b = exprEnd(out, i + 2);
+    const left = out.slice(a, i).trim(), right = out.slice(i + 2, b).trim();
+    if (!left || !right) continue;
+    const kl = typeOf(left, env), kr = typeOf(right, env);
+    const vec = (k) => k && /^vec[234](f|i|<bool>)?$/.test(k);
+    if (!vec(kl) && !vec(kr)) continue;
+    const wrapped = `${op === "==" ? "all" : "any"}(${left} ${op} ${right})`;
+    out = out.slice(0, a) + wrapped + out.slice(b);
+    from = a + wrapped.length;
+  }
+  return out;
+}
+
+/**
+ * Address spaces for the globals a sketch declares. A `vec4 gRover;` at file
+ * scope becomes a module-scope `var`, and module scope has no default address
+ * space — but the same line inside a function must *not* have one, and a
+ * frozen node writes its function bodies hard against the left margin, so the
+ * only honest test is the brace depth.
+ */
+function privatise(text) {
+  const out = [];
+  let depth = 0;
+  for (const line of text.split("\n")) {
+    out.push(depth === 0 ? line.replace(/^(\s*)var(\s+[A-Za-z_]\w*\s*:)/, "$1var<private>$2") : line);
+    for (const c of line) { if (c === "{") depth++; else if (c === "}") depth--; }
+  }
+  return out.join("\n");
+}
 
 /**
  * A sketch → a WGSL module, or a report of why not.
@@ -520,7 +688,9 @@ fn _rgba4(c: vec4f) -> vec4f { return vec4f(clamp(c.rgb, vec3f(0.0), vec3f(1.0))
  * the reasons this sketch was not translated; `ok` is that list being empty.
  */
 export function toWgsl(sketch, { keys = false } = {}) {
-  const src = String(sketch);
+  const raw = String(sketch);
+  const usesKeys = keys || /\bu_keys\b/.test(raw);
+  const src = usesKeys ? dropKeysArg(raw) : raw;
   const refused = [];
   const bare = stripComments(src);
   for (const [re, why] of REFUSED) if (re.test(bare)) refused.push(why);
@@ -559,6 +729,49 @@ export function toWgsl(sketch, { keys = false } = {}) {
     if (u.type === "vec3") return `U.vals[${i}].xyz`;
     return `U.vals[${i}]`;
   };
+  // What a helper reaches for that the entry point owns. GLSL puts the
+  // coordinates, the sampler sizes and the uniforms at file scope; WGSL will
+  // not let a `let` inside `fs` be seen from a function, so each name a helper
+  // actually reads is promoted to a module-scope `var<private>` and assigned
+  // once at the top of the fragment. The alternative — threading each one
+  // through every signature — would be a rewrite of the node rather than a
+  // translation of it, which is why this was a refusal before.
+  const ENTRY_ONLY = ["gl_FragCoord", "uv", "st", "p", "t", "m", "seed", "md", "frame",
+                      "u_resolution", "u_mouse", "u_time", "u_seed", "u_mouseDown", "u_frame",
+                      ...samplerNames.map((n) => `${n}_size`),
+                      ...scalars.map((u) => u.name)];
+  const wanted = new Set();
+  for (const d of parts.declTexts) {
+    const code = stripComments(d);
+    if (!/\)\s*\{/.test(code)) continue;                    // not a function
+    // …but a helper whose own parameter or local is called `m` is not reading
+    // the mouse. Only a name it never declares for itself counts.
+    const head = /\(([^)]*)\)\s*\{/.exec(code);
+    const declared = new Set();
+    for (const prm of (head ? head[1] : "").split(",")) {
+      const mm = /(\w+)\s+([A-Za-z_]\w*)\s*$/.exec(prm.trim());
+      if (mm) declared.add(mm[2]);
+    }
+    for (const mm of code.matchAll(new RegExp(`\\b(${TYPES.join("|")})\\s+([A-Za-z_]\\w*)`, "g"))) declared.add(mm[2]);
+    for (const n of ENTRY_ONLY) {
+      if (!declared.has(n) && new RegExp(`\\b${n}\\b`).test(code)) wanted.add(n);
+    }
+  }
+  const PRIV_TYPE = { uv: "vec2f", st: "vec2f", p: "vec2f", m: "vec2f",
+                      t: "f32", seed: "f32", md: "f32", frame: "f32",
+                      gl_FragCoord: "vec4f",
+                      u_resolution: "vec2f", u_mouse: "vec2f", u_time: "f32",
+                      u_seed: "f32", u_mouseDown: "f32", u_frame: "i32" };
+  for (const n of samplerNames) PRIV_TYPE[`${n}_size`] = "vec2f";
+  for (const u of scalars) PRIV_TYPE[u.name] = TYPE[u.type] || "f32";
+  const privates = [];
+  /** A binding at the top of `fs` — a `let`, unless a helper needs to see it. */
+  const bind = (name, value) => {
+    if (!wanted.has(name)) return `  let ${name} = ${value};`;
+    privates.push(`var<private> ${name}: ${PRIV_TYPE[name] || "f32"};`);
+    return `  ${name} = ${value};`;
+  };
+
   // A sketch may declare `float t = …` and mean its own; GLSL shadows the
   // global from that point and WGSL will not have two `t` in one scope. The
   // sketch clearly wants its own, so the reserved one is simply not offered.
@@ -576,7 +789,7 @@ export function toWgsl(sketch, { keys = false } = {}) {
   const RESERVED_LOCALS = ["uv", "st", "p", "t", "m", "seed", "md", "frame"];
   const shadowed = RESERVED_LOCALS.filter((n) => declares.has(n));
   const aliases = scalars.filter((u) => !declares.has(u.name))
-    .map((u) => `  let ${u.name} = ${access(u)};`).join("\n");
+    .map((u) => bind(u.name, access(u))).join("\n");
   // The reserved uniforms, where a sketch names one directly rather than
   // through its friendly alias — `u_resolution` and `u_seed` both appear in
   // the catalogue.
@@ -584,12 +797,12 @@ export function toWgsl(sketch, { keys = false } = {}) {
                       ["u_time", "U.time"], ["u_seed", "U.seed"],
                       ["u_mouseDown", "U.mouseDown"], ["u_frame", "U.frame"]];
   const reservedU = RESERVED_U.filter(([n]) => new RegExp(`\\b${n}\\b`).test(bare))
-    .map(([n, v]) => `  let ${n} = ${v};`).join("\n");
+    .map(([n, v]) => bind(n, v)).join("\n");
 
   // Each sampler's pixel size, which the GL path offers as `<name>_size`.
   const sizes = samplerNames
     .filter((n) => new RegExp(`\\b${n}_size\\b`).test(stripComments(src)))
-    .map((n) => `  let ${n}_size = vec2f(textureDimensions(${n}_tex));`).join("\n");
+    .map((n) => bind(`${n}_size`, `vec2f(textureDimensions(${n}_tex))`)).join("\n");
 
   // Bindings: a texture and a sampler each, plus the keyboard when asked for.
   let binding = 1;
@@ -598,7 +811,7 @@ export function toWgsl(sketch, { keys = false } = {}) {
     bindings.push(`@group(0) @binding(${binding++}) var ${name}_tex: texture_2d<f32>;`);
     bindings.push(`@group(0) @binding(${binding++}) var ${name}_smp: sampler;`);
   }
-  if (keys) {
+  if (usesKeys) {
     bindings.push(`@group(0) @binding(${binding++}) var KEYS_tex: texture_2d<f32>;`);
     bindings.push(`@group(0) @binding(${binding++}) var KEYS_smp: sampler;`);
   }
@@ -612,36 +825,19 @@ export function toWgsl(sketch, { keys = false } = {}) {
     ["p", "(fc * 2.0 - U.resolution) / U.resolution.y"],
     ["t", "U.time"], ["m", "U.mouse / U.resolution"], ["seed", "U.seed"],
     ["md", "U.mouseDown"], ["frame", "f32(U.frame)"],
-  ].filter(([n]) => !shadowed.includes(n)).map(([n, v]) => `  let ${n} = ${v};`).join("\n");
+  ].filter(([n]) => !shadowed.includes(n)).map(([n, v]) => bind(n, v)).join("\n");
 
-  // gl_FragCoord, where the body asks for it. Only inside the fragment: a
-  // helper that wants it would have to be handed it, and is refused instead.
-  // A helper that reaches for something the entry point owns. GLSL puts the
-  // coordinates and the sampler sizes at file scope; WGSL cannot, so a helper
-  // would have to be handed them — a signature change, which is a rewrite of
-  // the node rather than a translation of it.
-  const ENTRY_ONLY = ["gl_FragCoord", "uv", "st", "p", "t", "m", "seed", "md", "frame",
-                      ...samplerNames.map((n) => `${n}_size`)];
-  for (const d of parts.declTexts) {
-    const code = stripComments(d);
-    if (!/\)\s*\{/.test(code)) continue;                    // not a function
-    // …but a helper whose own parameter or local is called `m` is not
-    // reading the mouse. Only a name it never declares counts.
-    let own = code;
-    const head = /\(([^)]*)\)\s*\{/.exec(code);
-    const declared = new Set();
-    for (const prm of (head ? head[1] : "").split(",")) {
-      const mm = /(\w+)\s+([A-Za-z_]\w*)\s*$/.exec(prm.trim());
-      if (mm) declared.add(mm[2]);
-    }
-    for (const mm of own.matchAll(new RegExp(`\\b(${TYPES.join("|")})\\s+([A-Za-z_]\\w*)`, "g"))) declared.add(mm[2]);
-    const wants = ENTRY_ONLY.find((n) => !declared.has(n) && new RegExp(`\\b${n}\\b`).test(code));
-    if (wants) {
-      refused.push(`a helper function reads \`${wants}\`, which WGSL can only have at the entry point — `
-        + "the node would need it as a parameter, which is a rewrite rather than a translation");
+  // The one case promotion cannot reach: the main body declares its own `t`,
+  // so there is nothing to assign the module-scope one from, and a helper is
+  // reading a value that no longer exists at the entry point.
+  for (const n of shadowed) {
+    if (wanted.has(n)) {
+      refused.push(`a helper reads \`${n}\` while the body declares its own — `
+        + "the two are different values in GLSL and the helper's one has no source here");
       break;
     }
   }
+
   // What the sketch's own helpers answer with, so a widening inside a call
   // to one knows whether it is looking at a vector.
   for (const d of parts.declTexts) {
@@ -649,9 +845,19 @@ export function toWgsl(sketch, { keys = false } = {}) {
     if (mm) ctx.returns[mm[2]] = TYPE[mm[1]];
   }
   ctx.env.returns = ctx.returns;
-  const body = decls.map((t) => translateChunk(t, ctx)).join("\n");
-  const stmts = parts.stmtTexts.map((t) => translateChunk(t, ctx)).join("\n");
-  const expr = translateChunk(parts.expr || "vec3(0.0)", ctx).trim();
+  let body = decls.map((t) => translateChunk(t, ctx)).join("\n");
+  // A `vec4 gRover;` at file scope is a module-scope var in WGSL, and module
+  // scope has no default address space — a bare `var` there is an error
+  // rather than the private it plainly means.
+  body = privatise(body);
+  body = vectorEquality(body, ctx.env);
+  let stmts = vectorEquality(parts.stmtTexts.map((t) => translateChunk(t, ctx)).join("\n"), ctx.env);
+  let expr = vectorEquality(translateChunk(parts.expr || "vec3(0.0)", ctx).trim(), ctx.env);
+  if (/\b_rgba?\s*\(/.test(bare)) {
+    body = resolveCoercions(body, ctx.env);
+    stmts = resolveCoercions(stmts, ctx.env);
+    expr = resolveCoercions(expr, ctx.env);
+  }
 
   // Which coercion. A sketch may end in a float — a field node ends in a
   // distance — and GLSL picks the overload by type where WGSL has none, so
@@ -664,14 +870,21 @@ export function toWgsl(sketch, { keys = false } = {}) {
   const shape = typeOf(stripComments(expr).trim(), ctx.env);
   const wrap = alpha ? `_rgba4(${expr})`
     : /^vec4f\s*\(/.test(expr) ? `vec4f(_rgb3((${expr}).rgb), 1.0)`
+    : shape === "vec4f" ? `vec4f(_rgb3((${expr}).rgb), 1.0)`
     : shape === "vec3f" || /^vec3f\s*\(/.test(expr) ? `vec4f(_rgb3(${expr}), 1.0)`
     : shape === "f32" || shape === null ? `vec4f(_rgb1(${expr}), 1.0)`
     : `vec4f(_rgb3(${expr}), 1.0)`;
 
+  // Before the template: a `${…}` inside it runs in source order, and the
+  // private block is written out above the point this would have added to it.
+  const fragCoord = bind("gl_FragCoord", "vec4f(fc, 0.0, 1.0)");
+
   const wgsl = `${PRELUDE}
 ${COERCE}
+${/\b_rgba?\s*\(/.test(bare) ? AS_COERCE : ""}
 ${bindings.join("\n")}
-${keys ? KEY_HELPERS : ""}
+${privates.join("\n")}
+${usesKeys ? KEY_HELPERS : ""}
 
 ${body}
 
@@ -680,7 +893,7 @@ ${body}
   // one place the two conventions meet, exactly as present() is in the GL path.
   let fc = vec2f(FC.x, U.resolution.y - FC.y);
 ${reserved}
-  let gl_FragCoord = vec4f(fc, 0.0, 1.0);
+${fragCoord}
 ${reservedU}
 ${sizes}
 ${aliases}
@@ -688,5 +901,5 @@ ${stmts}
   return ${wrap};
 }`;
 
-  return { wgsl, uniforms: scalars, samplers: samplerNames, refused, ok: refused.length === 0, slot };
+  return { wgsl, uniforms: scalars, samplers: samplerNames, usesKeys, refused, ok: refused.length === 0, slot };
 }

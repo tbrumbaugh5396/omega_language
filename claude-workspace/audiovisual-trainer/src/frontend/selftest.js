@@ -2225,19 +2225,29 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
 
       // Size matters to this comparison — a power-of-two height divides
       // exactly and a 28 does not — so it is a parameter, not a constant.
+      // A keyboard, so the nodes that read one are measured rather than
+      // skipped: 256 columns of key code, three rows — held, hit, toggled.
+      const kb = document.createElement("canvas"); kb.width = 256; kb.height = 3;
+      { const k2 = kb.getContext("2d");
+        k2.fillStyle = "#000"; k2.fillRect(0, 0, 256, 3);
+        k2.fillStyle = "#fff"; k2.fillRect(37, 0, 1, 1); k2.fillRect(38, 1, 1, 1); }
+
       const compare = async (source, images, w = W, h = H) => {
-        const a = await renderSketchGpu(source, w, h, { images });
-        const b = renderSketch(source, w, h, { time: 0, images });
+        const a = await renderSketchGpu(source, w, h, { images, keys: kb });
+        const b = renderSketch(source, w, h, { time: 0, images, keys: { texture: () => kb } });
         const g2 = b.getContext("2d").getImageData(0, 0, w, h).data;
-        // The GL side has been through present(), which premultiplies —
-        // that is the host's convention where the two meet, and the WebGPU
-        // readback is the raw straight-alpha the shader wrote. Comparing
-        // them without this measures the convention, not the translation.
+        // Both composited over black, which is the picture either backend
+        // actually shows. Neither side's straight-alpha RGB is comparable on
+        // its own: where alpha is small the colour underneath it is whatever
+        // survived the round trip, and comparing *that* measures the storage
+        // convention rather than the translation. Premultiplying one side
+        // only — which this did — measures the difference between the two
+        // conventions, which is not a fact about anything.
         let sum = 0, worst = 0;
         for (let i = 0; i < w * h; i++) {
-          const al = a.data[i * 4 + 3] / 255;
+          const al = a.data[i * 4 + 3] / 255, bl = g2[i * 4 + 3] / 255;
           for (let k = 0; k < 3; k++) {
-            const d = Math.abs(Math.round(a.data[i * 4 + k] * al) - g2[i * 4 + k]);
+            const d = Math.abs(Math.round(a.data[i * 4 + k] * al) - Math.round(g2[i * 4 + k] * bl));
             sum += d; if (d > worst) worst = d;
           }
         }
@@ -2261,9 +2271,10 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
         const refused = rows.filter((r) => r.refused).length;
         const failed = rows.filter((r) => r.error);
         push({ group: "WebGPU", name: `${drew.length} of ${rows.length} node types render on WebGPU`,
-               ok: exact.length >= 36,
+               ok: exact.length >= 46 && failed.length === 0,
                detail: `${exact.length} pixel-identical to the GL path · `
                  + `${refused} refused with a reason, ${failed.length} not translated yet · `
+                 + `every refusal is a field port, which is compiled away before a plan exists · `
                  + `${desc.vendor} ${desc.architecture}` });
         // The ones that render and are not identical, named with their number
         // rather than folded into the count above.
@@ -2320,6 +2331,65 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                detail: `hash21 of a constant: ${constant.worst}/255 apart — both compilers fold it. `
                  + `hash21 of a computed coordinate: ${computed.worst}/255 — the inputs are bit-identical, so this is `
                  + "multiply-add fusion, which each driver is free to do or not" }); }
+
+      // 3b. The rules that closed the last of the catalogue, each on a sketch
+      //     small enough that the rule is the only thing it exercises. Each
+      //     one used to be a refusal or a compile error, and each is exact.
+      { const cases = [
+          ["a helper reads what the entry point owns",
+           `float ring(float r) { return smoothstep(r + 0.02, r, length(uv - 0.5)); }\nvec3(ring(0.3))`],
+          ["a helper reads a uniform",
+           `uniform float k;   // @range 0 2 @default 1.5\nfloat f() { return k * 0.25; }\nvec3(f())`],
+          ["a nested for with no braces of its own",
+           `float a = 0.0;\nfor (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) a += float(i * j) * 0.02;\nvec3(a)`],
+          ["a matrix times a vector is the vector",
+           `mat3 sm = mat3(0.8, 0.1, 0.1, 0.1, 0.8, 0.1, 0.1, 0.1, 0.8);\nvec3 x = vec3(uv, 0.5);\nclamp(sm * x, 0.0, 1.0)`],
+          ["a call's answer, not the vectors inside it",
+           `float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }\nvec3(step(0.4, luma(vec3(uv, 0.5)) + 0.001))`],
+          ["a swizzle off a call",
+           `vec3(step(0.5, vec4(uv, 0.25, 1.0).z))`],
+          ["a distance is a distance, not a colour",
+           `sdCircle(p, 0.4) * 0.5 + 0.5`],
+          ["a ternary whose branches are on their own lines",
+           `float k = p.x < 0.0\n  ? sdCircle(p, 0.3)\n  : 0.25;\nvec3(k * 0.5 + 0.5)`],
+          ["a global the sketch declares for itself",
+           `vec4 gState;\ngState = vec4(uv, 0.25, 1.0);\nvec3(gState.xyz)`],
+          ["two vectors compared for equality",
+           `vec2 texel = floor(uv * 2.0);\nfloat k = 0.0;\nif (texel == vec2(1.0, 0.0)) k = 1.0;\nvec3(k)`],
+          ["the prelude's own coercion, called by name",
+           `vec3 c = vec3(uv, 0.5);\nvec4(_rgb(vec4(c, 1.0)), 1.0)`],
+          ["the keyboard, which GLSL passes as a sampler",
+           `uniform sampler2D u_keys;\nvec3(keyDown(u_keys, 37.0), keyHit(u_keys, 38.0), 0.0)`],
+        ];
+        const bad = [];
+        for (const [what, src2] of cases) {
+          const em = toWgsl(src2);
+          if (!em.ok) { bad.push(`${what}: refused — ${em.refused[0].slice(0, 40)}`); continue; }
+          try {
+            const r = await compare(src2, {});
+            if (r.worst > 0) bad.push(`${what}: ${r.worst}/255 apart`);
+          } catch (e) { bad.push(`${what}: ${String(e.message).split("\n")[0].slice(0, 60)}`); }
+        }
+        push({ group: "WebGPU", name: `${cases.length} translation rules, one sketch each`, ok: bad.length === 0,
+               detail: bad.length === 0
+                 ? `each renders pixel-identically to the GL path: ${cases.map(([w]) => w).join(" · ")}`
+                 : bad.join(" · ") }); }
+
+      // 3c. And the third place they differ, which is neither the translator
+      //     nor arithmetic: a screen-space derivative. `fwidth` is a fact
+      //     about the 2×2 quad the driver chose, and WGSL offers coarse and
+      //     fine forms where GLSL ES offers a hint — so `aa()`, which every
+      //     antialiased edge in the catalogue goes through, is where the
+      //     remaining differences live.
+      { const flat = await compare(`float d = sdCircle(p, 0.3);\nvec3(d * 0.5 + 0.5)`, {}, 40, 32);
+        const edged = await compare(`vec3(aa(sdCircle(p, 0.3)))`, {}, 40, 32);
+        push({ group: "WebGPU", name: "an antialiased edge is the third place the two backends part",
+               ok: flat.worst === 0 && edged.worst > 0,
+               detail: `the same distance field: ${flat.worst}/255 apart. The same field through aa(): `
+                 + `${edged.worst}/255, on the edge pixels only (mean ${edged.mean.toFixed(2)}/255) — `
+                 + "aa() takes fwidth(), which is a derivative across whichever 2×2 quad the driver chose, "
+                 + "and WGSL has coarse and fine forms where GLSL ES has a hint. It is why the nodes that "
+                 + "are not identical are the ones that draw an edge." }); }
 
       // 4. It refuses rather than guesses.
       { const cases = [
