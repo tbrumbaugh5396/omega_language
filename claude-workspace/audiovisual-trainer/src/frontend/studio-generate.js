@@ -1177,21 +1177,30 @@ uniform float depth;      // @range -2.5 2.5 @default 0 @help and how far away
 uniform float radius;     // @range 0.15 1.4 @default 0.42
 uniform float height;     // @range 0.3 3.2 @default 1.15
 uniform float wraps;      // @range 1 4 @default 1 @step 1 @int @help times the picture goes round
-// How the picture meets a can whose size you are allowed to change.
+// How much the picture is allowed to be pulled about.
 //
-//   stretch    the label fills the band between the two sliders, whatever
-//              that does to the picture's proportions.
-//   undistorted  it goes round exactly, once per turn, and keeps its own
-//                shape: its height on the can follows from the can's
-//                circumference. Too tall for the can and the top and bottom
-//                are cropped; too short and there is metal above and below
-//                it, which is what a real label does.
+// 0 keeps its proportions: the label goes round once and its height on the
+// can follows from the can's circumference. 1 fills the band between the two
+// sliders, whatever that does to the picture. Everything between is between —
+// which is what this wants to be, because "a bit taller than it really is"
+// is a normal thing to want and a switch cannot say it.
+uniform float stretch;    // @range 0 1 @default 0 @label stretch
+// …and which part of the picture takes it.
 //
-// The second is the default because the first mode's failure is silent — you
-// widen the can, the picture stretches with it, and nothing tells you.
-// (One word an option: @options splits on commas and takes a single token,
-// so "wrap true" arrived as "wrap" and the rest went on the floor.)
-uniform float fit;        // @options stretch,undistorted @default 1 @label the picture
+// The way round is not negotiable — the label has to meet itself — so all the
+// give is vertical. These two mark the part that keeps its scale, measured
+// down from the top of the picture; everything outside them absorbs the
+// difference. A label with a black bar at each end can then be pulled to any
+// height on any can and the artwork in the middle never moves.
+//
+// Left at 0 and 1 there is nothing outside to absorb anything, so the whole
+// picture stretches evenly, which is the old behaviour and the right default.
+uniform float keepLo;     // @range 0 1 @default 0 @label keep from
+uniform float keepHi;     // @range 0 1 @default 1 @label keep to
+// A picture's own transparency shows the metal through it — and since a great
+// many labels arrive as artwork on black rather than as artwork on nothing,
+// black can be made to count as transparent too.
+uniform float keyBlack;   // @range 0 0.6 @default 0 @label black is see-through
 uniform float bandLo;     // @range 0 0.5 @default 0.09 @help where the label starts up the can
 uniform float bandHi;     // @range 0.5 1 @default 0.9
 uniform float lightTurn;  // @range -3.15 3.15 @default -1.35 @help where the lamp is
@@ -1249,15 +1258,45 @@ vec4 wrapSample(vec2 st) {
  * a picture that keeps its proportions must then get taller, and if it runs
  * off the ends of the can it must be cropped rather than squashed.
  */
-vec3 labelBand(float rad, float hgt) {
+vec4 labelBand(float rad, float hgt) {
   float lo = min(bandLo, bandHi), hi = max(bandLo, bandHi);
-  if (fit < 0.5) return vec3(lo, hi, 1.0);          // stretch: exactly as told
   float arc = TAU * rad / max(wraps, 1.0);          // what one copy has to cover
-  float tall = arc / max(imgAspect(), 0.01) / max(hgt, 1e-4);
-  float crop = 1.0;
-  if (tall > 1.0) { crop = 1.0 / tall; tall = 1.0; }   // taller than the can: crop it
+  // What the picture would take if nothing pulled it about, and what the
+  // sliders ask for. The knob is simply the distance between them.
+  float natural = arc / max(imgAspect(), 0.01) / max(hgt, 1e-4);
+  float wanted = mix(natural, hi - lo, clamp(stretch, 0.0, 1.0));
+  wanted = max(wanted, 1e-4);
+  float tall = min(wanted, 1.0);                    // the can is the limit
   float mid = clamp((lo + hi) * 0.5, tall * 0.5, 1.0 - tall * 0.5);
-  return vec3(mid - tall * 0.5, mid + tall * 0.5, crop);
+  // w: how much of the wanted band actually fits. z: the picture's own height
+  // as a fraction of that band, which is 1 when nothing is stretching it.
+  return vec4(mid - tall * 0.5, mid + tall * 0.5, natural / wanted, tall / wanted);
+}
+
+/**
+ * Where a point up the band lands in the picture.
+ *
+ * s runs 0 at the top of the band to 1 at the bottom, and the answer is in
+ * the same direction down the picture. k is what the whole picture would
+ * occupy of the band at its own scale: 1 means nothing is being pulled.
+ *
+ * Three pieces, and only the middle one is drawn at its own scale. That is
+ * the whole idea: a picture does not stretch evenly in the places you care
+ * about, it stretches in the places you do not.
+ */
+float labelV(float s, float k) {
+  float gLo = min(keepLo, keepHi), gHi = max(keepLo, keepHi);
+  float cf = gHi - gLo;                             // the part that keeps its scale
+  float m0 = gLo, m1 = 1.0 - gHi;                   // the parts that give
+  // Nothing marked to keep, or nothing left over to give: stretch it evenly,
+  // which is what a picture with no guides has always done.
+  if (m0 + m1 < 1e-4 || cf < 1e-4) return s;
+  float body = clamp(cf * k, 0.0, 1.0);             // what the kept part takes
+  float slack = 1.0 - body;
+  float t0 = slack * m0 / (m0 + m1);                // the top margin's share
+  if (s < t0) return s / max(t0, 1e-5) * gLo;
+  if (s < t0 + body) return gLo + (s - t0) / max(body, 1e-5) * cf;
+  return gHi + (s - t0 - body) / max(1.0 - t0 - body, 1e-5) * m1;
 }
 
 // Where a ray meets a can, exactly.
@@ -1334,7 +1373,7 @@ vec3 standIn(vec2 q, float asp) {
 }
 
 // What the can is made of at this point on it, and how shiny that is.
-vec3 skinOf(float part, vec3 pl, float rad, float hh, vec3 band, out float gloss) {
+vec3 skinOf(float part, vec3 pl, float rad, float hh, vec4 band, out float gloss) {
   gloss = 1.0;
   vec3 metal = srgbToLinear(metalC);
   if (part > 0.5) {
@@ -1354,22 +1393,32 @@ vec3 skinOf(float part, vec3 pl, float rad, float hh, vec3 band, out float gloss
   // The wall. Height first, because it decides whether there is a label here
   // at all — the bare metal above and below it is most of what says "can".
   float v = (pl.y + hh) / max(2.0 * hh, 1e-4);
-  if (v < band.x || v > band.y) {
-    gloss = 1.0;
-    return metal * (0.78 + 0.34 * smoothstep(0.0, 0.06, abs(v - 0.5)));
-  }
+  vec3 wall = metal * (0.78 + 0.34 * smoothstep(0.0, 0.06, abs(v - 0.5)));
+  if (v < band.x || v > band.y) { gloss = 1.0; return wall; }
   // And the angle, which is the whole point: atan gives the way round, and
   // the way round is the picture's x. It goes round exactly — u runs 0 to 1
   // over a full turn — so the picture meets itself, and wrapSample makes the
   // meeting invisible.
   float u = fract((atan(pl.z, pl.x) / TAU + 0.5) * wraps);
   float lv = (v - band.x) / max(band.y - band.x, 1e-4);
-  lv = (lv - 0.5) * band.z + 0.5;                  // cropped, if it was too tall
-  gloss = 0.30;                                    // paper is not aluminium
+  // Down from the top of the band, and then down from the top of the band it
+  // *wanted* — band.w is how much of that the can had room for, so a label
+  // too tall to fit shows its middle rather than its start.
+  float sDown = 0.5 + (1.0 - lv - 0.5) * band.w;
+  float iv = labelV(sDown, band.z);
   float asp = TAU * rad / max(wraps, 1.0) / max((band.y - band.x) * 2.0 * hh, 1e-4);
-  return label_size.x > 0.5
-    ? srgbToLinear(wrapSample(vec2(u, 1.0 - lv)).rgb)
-    : standIn(vec2(u, lv), asp);
+  if (label_size.x < 0.5) { gloss = 0.30; return standIn(vec2(u, 1.0 - iv), asp); }
+  // The host uploads a picture flipped, so the texture's v = 1 is the
+  // picture's top row. Sampling 1 − iv is therefore the right way up, and
+  // sampling iv was upside down — which the stand-in could never have shown,
+  // because it is generated in the same space it is read in.
+  vec4 lab = wrapSample(vec2(u, 1.0 - iv));
+  float a = lab.a;
+  // Artwork on black is the commonest way a label arrives, and black is not a
+  // colour a can is often painted. Below the threshold it gives way to metal.
+  if (keyBlack > 0.001) a *= smoothstep(keyBlack * 0.4, keyBlack, max(max(lab.r, lab.g), lab.b));
+  gloss = mix(1.0, 0.30, a);                       // bare metal where the label is not
+  return mix(wall, srgbToLinear(lab.rgb), a);
 }
 
 // ------------------------------------------------------------ the picture

@@ -3540,6 +3540,18 @@ c`;
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 
+    // A source edit that cannot silently do nothing.
+    //
+    // Several checks below work by deleting one thing from a sketch and
+    // measuring what changed. String.replace returns the original when it
+    // finds no match, so a needle that goes stale turns the check into a
+    // comparison of a picture with itself — which passes some tests and
+    // quietly stops testing anything. One of these was already dead.
+    const cut = (src, from, to) => {
+      if (!src.includes(from)) throw new Error(`the sketch no longer contains: ${from.trim().slice(0, 48)}…`);
+      return src.replace(from, to);
+    };
+
     // A can, and the two things a closed form gives you that a march does not.
     try {
       const g = GENERATE_PRESETS.find((x) => x.id === "can");
@@ -3552,11 +3564,10 @@ c`;
         .getContext("2d").getImageData(0, 0, CW, CH).data;
       // The can alone, as a mask: background and floor painted out, so what
       // is left is the silhouette and nothing that shares a colour with it.
-      const maskSrc = g.source
-        .replace("vec3 col = mix(vec3(0.075, 0.082, 0.10), vec3(0.014, 0.016, 0.024), smoothstep(-0.9, 1.1, pp.y));",
-                 "vec3 col = vec3(0.0);")
-        .replace("col = base * (0.16 + 1.5 * lit) * srgbToLinear(lightC);", "col = vec3(0.0);")
-        .replace("  col = lin;", "  col = vec3(1.0);");
+      let maskSrc = cut(g.source, "vec3 col = mix(vec3(0.075, 0.082, 0.10), vec3(0.014, 0.016, 0.024), smoothstep(-0.9, 1.1, pp.y));",
+                        "vec3 col = vec3(0.0);");
+      maskSrc = cut(maskSrc, "col = base * (0.16 + 1.5 * lit) * srgbToLinear(lightC);", "col = vec3(0.0);");
+      maskSrc = cut(maskSrc, "  col = lin;", "  col = vec3(1.0);");
       const mask = (over) => {
         const d = renderSketch(maskSrc, CW, CH, { frame: 0, time: 0,
                                                   values: { ...base, rays: [1], ...over } })
@@ -3606,77 +3617,114 @@ c`;
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 
-    // …and the same can, resized.
+    // …and the same can, resized, with the picture told how far it may give
+    // and which part of itself may do the giving.
     try {
       const g = GENERATE_PRESETS.find((x) => x.id === "can");
       const CW = 300, CH = 220;
       const us = parseUniforms(g.source);
       const base = {};
       for (const u of us) if (u.value) base[u.name] = u.value.slice();
-      // Straight on and still, so nothing here is measuring the animation.
+      // Straight on and still, so nothing here measures the animation.
       const flat = { yaw: [0], pitch: [0], roll: [0], spin: [0], rays: [1] };
 
-      // The label band on its own — white where the picture is, black
-      // everywhere else. Counting saturated pixels instead was a measurement
-      // of the stand-in's cream stripes, which are very nearly grey.
-      const bandSrc = g.source
-        .replace("vec3 col = mix(vec3(0.075, 0.082, 0.10), vec3(0.014, 0.016, 0.024), smoothstep(-0.9, 1.1, pp.y));",
-                 "vec3 col = vec3(0.0);")
-        .replace("col = base * (0.16 + 1.5 * lit) * srgbToLinear(lightC);", "col = vec3(0.0);")
-        .replace("  col = lin;", "  col = albedo;")
-        .replace("    return metal * (0.72 + 0.5 * smoothstep(0.86, 0.99, rr));", "    return vec3(0.0);")
-        .replace("    return metal * (0.78 + 0.34 * smoothstep(0.0, 0.06, abs(v - 0.5)));", "    return vec3(0.0);")
-        .replace("  return label_size.x > 0.5\n    ? srgbToLinear(wrapSample(vec2(u, 1.0 - lv)).rgb)\n    : standIn(vec2(u, lv), asp);",
-                 "  return vec3(1.0);");
-      const bandH = (over) => {
-        const d = renderSketch(bandSrc, CW, CH, { frame: 0, time: 0, values: { ...base, ...flat, ...over } })
-          .getContext("2d").getImageData(0, 0, CW, CH).data;
-        let n = 0;
-        for (let y = 0; y < CH; y++) if (d[(y * CW + (CW >> 1)) * 4] > 150) n++;
-        return n;
-      };
-      const uSmall = bandH({ radius: [0.21] }), uBig = bandH({ radius: [0.42] });
-      const sSmall = bandH({ radius: [0.21], fit: [0] }), sBig = bandH({ radius: [0.42], fit: [0] });
-      const clamped = bandH({ radius: [0.84] });
-
-      // The join. A test picture whose first and last columns are opposite
-      // colours, and the same sketch sampling it the host's way instead.
+      // A test label with a red row at the very top, a blue one at the very
+      // bottom, a green block in the middle, and black either side of it.
+      // Every question below is a question about where those end up.
       const im = document.createElement("canvas");
-      im.width = 16; im.height = 8;
+      im.width = 64; im.height = 64;
       const icx = im.getContext("2d");
-      for (let x = 0; x < 16; x++) {
-        icx.fillStyle = x === 0 ? "#ff2020" : (x === 15 ? "#2040ff" : "#909090");
-        icx.fillRect(x, 0, 1, 8);
-      }
-      const plainSrc = g.source.replace("srgbToLinear(wrapSample(vec2(u, 1.0 - lv)).rgb)",
-                                        "srgbToLinear(texture2D(label, vec2(u, 1.0 - lv)).rgb)");
-      // A quarter turn brings the join round to the front, where it can be seen.
-      const seamAt = { ...flat, yaw: [1.5707963], fit: [0] };
-      const shotI = (src) => renderSketch(src, CW, CH,
-        { frame: 0, time: 0, values: { ...base, ...seamAt }, images: { label: im } })
+      icx.fillStyle = "#101010"; icx.fillRect(0, 0, 64, 64);
+      icx.fillStyle = "#ff2020"; icx.fillRect(0, 0, 64, 4);
+      icx.fillStyle = "#2040ff"; icx.fillRect(0, 60, 64, 4);
+      icx.fillStyle = "#20c040"; icx.fillRect(0, 24, 64, 16);
+      const shot = (over, pic) => renderSketch(g.source, CW, CH,
+        { frame: 0, time: 0, values: { ...base, ...flat, ...over }, images: { label: pic || im } })
         .getContext("2d").getImageData(0, 0, CW, CH).data;
-      const a2 = shotI(g.source), b2 = shotI(plainSrc);
+      // Down the middle of the can, in order, top to bottom.
+      const scan = (d) => { const x = CW >> 1; const runs = [];
+        for (let y = 0; y < CH; y++) {
+          const i2 = (y * CW + x) * 4, r = d[i2], gg = d[i2 + 1], b = d[i2 + 2];
+          let k = null;
+          if (r > 90 && gg < 70 && b < 70) k = "red";
+          else if (b > 90 && r < 70 && gg < 90) k = "blue";
+          else if (gg > 70 && r < 80 && b < 80) k = "green";
+          if (k) { if (runs.length && runs[runs.length - 1][0] === k) runs[runs.length - 1][1]++;
+                   else runs.push([k, 1]); }
+        }
+        return runs; };
+      const green = (over) => { const r = scan(shot(over)).find((x) => x[0] === "green"); return r ? r[1] : 0; };
+      const order = scan(shot({ stretch: [1] })).map((r) => r[0]);
+
+      const keep = { keepLo: [0.375], keepHi: [0.625] };
+      const evenShort = green({ stretch: [1] }), evenTall = green({ stretch: [1], height: [2.6] });
+      const keptShort = green({ stretch: [1], ...keep });
+      const keptTall = green({ stretch: [1], height: [2.6], ...keep });
+      // …and the knob in between, which is the point of it being a knob.
+      const k0 = green({ stretch: [0], height: [2.6] });
+      const kHalf = green({ stretch: [0.5], height: [2.6] });
+      const k1 = green({ stretch: [1], height: [2.6] });
+
+      // Black artwork keyed out, against artwork that is genuinely absent.
+      const mkPic = (transparent) => { const c2 = document.createElement("canvas");
+        c2.width = 64; c2.height = 64;
+        const x2 = c2.getContext("2d");
+        if (transparent) c2.getContext("2d").clearRect(0, 0, 64, 64);
+        else { x2.fillStyle = "#000000"; x2.fillRect(0, 0, 64, 64); }
+        x2.fillStyle = "#e03018"; x2.fillRect(0, 20, 64, 24); return c2; };
+      const darkAt = (over, pic) => { const d = shot(over, pic); const x = CW >> 1; let n = 0;
+        for (let y = 0; y < CH; y++) { const i2 = (y * CW + x) * 4;
+          if (d[i2] + d[i2 + 1] + d[i2 + 2] < 80) n++; }
+        return n; };
+      const onBlack = mkPic(false), onNothing = mkPic(true);
+      const keyOff = darkAt({ stretch: [1] }, onBlack);
+      const keyOn = darkAt({ stretch: [1], keyBlack: [0.3] }, onBlack);
+      const reallyClear = darkAt({ stretch: [1] }, onNothing);
+
+      // The join, which the last phase fixed and which nothing was checking
+      // once this block was rewritten. A picture whose first and last columns
+      // are opposite colours, sampled the hand-wrapped way and the host's.
+      const seamIm = document.createElement("canvas");
+      seamIm.width = 16; seamIm.height = 8;
+      const scx = seamIm.getContext("2d");
+      for (let x = 0; x < 16; x++) {
+        scx.fillStyle = x === 0 ? "#ff2020" : (x === 15 ? "#2040ff" : "#909090");
+        scx.fillRect(x, 0, 1, 8);
+      }
+      const plainSrc = cut(g.source, "wrapSample(vec2(u, 1.0 - iv))", "texture2D(label, vec2(u, 1.0 - iv))");
+      const seamAt = { ...flat, yaw: [1.5707963], stretch: [1] };   // a quarter turn brings it to the front
+      const shotSeam = (src) => renderSketch(src, CW, CH,
+        { frame: 0, time: 0, values: { ...base, ...seamAt }, images: { label: seamIm } })
+        .getContext("2d").getImageData(0, 0, CW, CH).data;
+      const sa = shotSeam(g.source), sb = shotSeam(plainSrc);
       let seam = 0;
-      for (let i = 0; i < CW * CH; i++) {
-        if (Math.abs(a2[i * 4] - b2[i * 4]) + Math.abs(a2[i * 4 + 1] - b2[i * 4 + 1])
-          + Math.abs(a2[i * 4 + 2] - b2[i * 4 + 2]) > 10) seam++;
+      for (let i2 = 0; i2 < CW * CH; i2++) {
+        if (Math.abs(sa[i2 * 4] - sb[i2 * 4]) + Math.abs(sa[i2 * 4 + 1] - sb[i2 * 4 + 1])
+          + Math.abs(sa[i2 * 4 + 2] - sb[i2 * 4 + 2]) > 10) seam++;
       }
 
-      const grew = uBig / Math.max(uSmall, 1), stayed = sBig / Math.max(sSmall, 1);
-      const ok = grew > 1.7 && grew < 2.4 && stayed > 0.8 && stayed < 1.25
-        && clamped > uBig && clamped < uBig * 1.5 && seam > 40;
-      push({ group: "Generate presets", name: "a picture that stays a picture when the can changes size", ok,
-             detail: `doubling the radius doubles the circumference, so an undistorted label has to get `
-               + `twice as tall: ${uSmall} pixels to ${uBig}, a factor of ${grew.toFixed(2)}. Stretched to `
-               + `the sliders' band instead it goes ${sSmall} to ${sBig} — ${stayed.toFixed(2)}, which is `
-               + `the perspective and nothing else, and which is the mode's silent failure: the picture `
-               + `distorts and nothing says so. Double it again and the label runs off the ends of the can, `
-               + `so it is cropped rather than squashed and stops at ${clamped}. And the join: ${seam} `
-               + `pixels differ from letting the host sample it, because the host clamps an image at its `
-               + `edges — right for a picture pasted flat, wrong for one wrapped round something, and the `
-               + `join is exactly where a wrap has to be invisible` });
+      const grew = evenTall / Math.max(evenShort, 1), held = keptTall / Math.max(keptShort, 1);
+      const monotone = k0 >= kHalf - 1 && kHalf >= k1 - 1 && k0 - k1 > 4;
+      const ok = order.join(",") === "red,green,blue"
+        && grew > 1.8 && held > 0.9 && held < 1.15 && monotone
+        && keyOn < keyOff * 0.5 && Math.abs(keyOn - reallyClear) < 6 && seam > 40;
+      push({ group: "Generate presets", name: "how far the picture gives, and which part of it does the giving", ok,
+             detail: `red at the top, green in the middle, blue at the bottom — the picture is the right way `
+               + `up, which it was not: the host uploads an image flipped, so the texture's v=1 is the `
+               + `picture's first row, and the stand-in could never have caught it because it is generated `
+               + `in the same space it is read in. Made the can taller and stretched everything evenly, the `
+               + `artwork goes ${evenShort} pixels to ${evenTall} — ${grew.toFixed(2)}×, it grew with the `
+               + `can. Marked as the part to keep, it goes ${keptShort} to ${keptTall}, `
+               + `${held.toFixed(2)}× — the black either side of it took the whole difference. The knob in `
+               + `between reads ${k0}, ${kHalf}, ${k1} across 0, ½ and 1, because "a bit taller than it `
+               + `really is" is a normal thing to want and a switch cannot say it. And black keyed out `
+               + `leaves ${keyOn} dark pixels against ${keyOff} with it left in, which is within `
+               + `${Math.abs(keyOn - reallyClear)} of the ${reallyClear} that artwork with real `
+               + `transparency gives. And the join is still stitched: ${seam} pixels differ from letting `
+               + `the host sample it, which clamps an image at its edges — right for a picture pasted flat `
+               + `and wrong for one wrapped round something` });
     } catch (e) {
-      push({ group: "Generate presets", name: "a picture that stays a picture when the can changes size",
+      push({ group: "Generate presets", name: "how far the picture gives, and which part of it does the giving",
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 

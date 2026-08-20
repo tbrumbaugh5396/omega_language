@@ -2774,6 +2774,58 @@ same class of bug as the `@label` one fixed last phase and deserves the same
 treatment; and the crop is centred, with no way to say which part of a tall
 picture to keep.
 
+### Phase 37 — How far the picture gives, and which part of it does the giving *(M)* — **shipped**
+
+Phase 36 gave two ways to fit a label and made you pick one. Both were wrong
+for the ordinary case, which is a piece of artwork with a margin round it:
+stretch it evenly and the artwork distorts, keep it undistorted and it will
+not reach the ends of the can.
+
+**A knob, not a switch.** `stretch` runs 0 to 1 — 0 keeps the picture's
+proportions, 1 fills the band the sliders ask for, and everything between is
+between. "A bit taller than it really is" is a normal thing to want and a
+switch cannot say it. Measured on a 2.6-tall can, the artwork reads **40, 36,
+32** pixels across stretch 0, ½ and 1.
+
+**Two guides, and the give goes outside them.** `keepLo` and `keepHi` mark the
+part of the picture that keeps its scale, measured down from the top;
+everything outside absorbs the difference. Three-slice, and only vertical —
+the way round is not negotiable, because the label has to meet itself, so all
+the give there is.
+
+Measured: make the can more than twice as tall, stretching evenly, and the
+artwork goes **14 pixels to 32 — 2.3×**, growing with the can. Mark it as the
+part to keep and the same change gives **40 to 41, 1.03×**: the black either
+side of it took the whole difference. Left at 0 and 1 there is nothing outside
+to absorb anything, so the picture stretches evenly, which is the old
+behaviour and the right default.
+
+**Transparency, and black standing in for it.** A picture's own alpha now
+shows the metal through it, and the gloss follows — bare aluminium where the
+label is not. A great many labels arrive as artwork on *black* rather than on
+nothing, so `keyBlack` lets black give way too. Measured: keying it leaves
+**15** dark pixels against **52** with it left in, which is within **one
+pixel** of the **14** that artwork with real transparency gives.
+
+**The label was upside down.** The host uploads an image with
+`UNPACK_FLIP_Y_WEBGL`, so the texture's v = 1 is the picture's *first* row.
+Sampling `1 − lv` therefore put the top of the picture at the bottom of the
+can. The stand-in could never have caught it — it is generated in the same
+space it is read in, so it is upside down in both and looks right. It took a
+test picture with a red row at the top and a blue one at the bottom, which now
+reads **red, green, blue** down the can.
+
+**A check that had quietly stopped checking.** One of Phase 35's measurements
+patched the sketch by `String.replace` on a line that no longer existed;
+`replace` returns the original when it finds no match, so the check was
+comparing a picture with itself. There is now a `cut()` that throws when its
+needle is missing, and every source-surgery check goes through it. The seam
+check, which the rewrite had dropped entirely, is back with it.
+
+*Left:* the guides are vertical only, and horizontal ones would need the wrap
+to give somewhere, which it cannot; the crop when a label is too tall is still
+centred; and `@options` still swallows a multi-word option silently.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2851,6 +2903,7 @@ picture to keep.
 | 34.1 | Things to pick up, and a bag — **shipped** | L | 33.1 | table in row 1, 421 slots; +0.29 ms; 1,989 px gone |
 | 35.1 | A can, solved rather than marched — **shipped** | M | — | yaw moves 0 silhouette pixels; @label parser fixed |
 | 36.1 | A can you can resize — **shipped** | S | 35.1 | band 31→66 px with radius (×2.13); seam 540 px |
+| 37.1 | Stretch by amount, and by region — **shipped** | M | 36.1 | artwork 2.3× even vs 1.03× kept; black keys to within 1 px |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
