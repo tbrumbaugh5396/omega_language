@@ -14,6 +14,7 @@
 
 import { el, clear, api } from "./ui.js";
 import { GENERATE_PRESETS, newGenerateDoc, scaleForBudget, fitAspect } from "./studio-generate.js";
+import { fullscreenButton } from "./fullscreen.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3, splitSketch, stripComments } from "./shader-uniforms.js";
 import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
@@ -2787,6 +2788,75 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                ? "a 16:9 sketch fills a 16:9 screen and letterboxes a taller one; a square sketch on a 1920×1080 "
                  + "screen renders 1080×1080 rather than being stretched to fit"
                : wrong.map(([a, w, h, want]) => `${a.toFixed(2)} into ${w}×${h} → ${fitAspect(a, w, h)}, wanted ${want}`).join(" · ") }); }
+
+    // The fullscreen button, six studios over, written once.
+    //
+    // The platform's half — whether a request is granted — cannot be exercised
+    // from a test, and an embedded frame refuses it anyway. What *can* break is
+    // this file's half: the styles it puts on a stage while it is up, and
+    // whether it takes them off again. A stage left with `width: 100%` and a
+    // black background after exiting is a studio with a broken layout, which is
+    // exactly the kind of thing nobody notices until they have exited twice.
+    //
+    // So `document.fullscreenElement` is stubbed and the event dispatched: the
+    // platform is faked, the logic is real.
+    { const original = Object.getOwnPropertyDescriptor(Document.prototype, "fullscreenElement")
+                    || Object.getOwnPropertyDescriptor(document, "fullscreenElement");
+      let pretend = null;
+      Object.defineProperty(document, "fullscreenElement",
+                            { configurable: true, get: () => pretend });
+      const problems = [];
+      try {
+        for (const fit of ["contain", "fill", "none"]) {
+          const kid = document.createElement("canvas");
+          kid.style.width = "100%";
+          kid.style.height = "auto";
+          const stage = document.createElement("div");
+          stage.style.position = "relative";
+          stage.append(kid);
+          document.body.append(stage);
+          const before = { stage: stage.getAttribute("style"), kid: kid.getAttribute("style") };
+          let told = null;
+          const fs = fullscreenButton(stage, { fit, onChange: (f) => { told = f; } });
+
+          pretend = stage;
+          document.dispatchEvent(new Event("fullscreenchange"));
+          if (told !== true) problems.push(`${fit}: entering did not report`);
+          if (fs.button.textContent !== "Exit fullscreen") problems.push(`${fit}: the button did not relabel`);
+          if (stage.style.background !== "rgb(0, 0, 0)" && stage.style.background !== "#000") {
+            problems.push(`${fit}: no backdrop`);
+          }
+          const centred = stage.style.display === "flex";
+          if (fit === "none" && centred) problems.push("none: a scrolling editor was centred");
+          if (fit !== "none" && !centred) problems.push(`${fit}: the picture was not centred`);
+          if (fit === "fill" && kid.style.width !== "100%") problems.push("fill: the viewport did not fill");
+          if (fit === "contain" && kid.style.maxHeight !== "100%") problems.push("contain: not bounded by height");
+
+          pretend = null;
+          document.dispatchEvent(new Event("fullscreenchange"));
+          if (told !== false) problems.push(`${fit}: leaving did not report`);
+          if (fs.button.textContent !== "Fullscreen") problems.push(`${fit}: the button stayed relabelled`);
+          if (stage.getAttribute("style") !== before.stage) {
+            problems.push(`${fit}: the stage kept ${stage.getAttribute("style")}`);
+          }
+          if (kid.getAttribute("style") !== before.kid) {
+            problems.push(`${fit}: the picture kept ${kid.getAttribute("style")}`);
+          }
+          // …and a studio that has been navigated away from stops listening.
+          stage.remove();
+          document.dispatchEvent(new Event("fullscreenchange"));
+        }
+      } finally {
+        delete document.fullscreenElement;
+        if (original && original.get) Object.defineProperty(document, "fullscreenElement", original);
+      }
+      push({ group: "More games", name: "the fullscreen button dresses a stage and undresses it again",
+             ok: problems.length === 0,
+             detail: problems.length === 0
+               ? "three fits — a picture with a size of its own is centred and bounded by both dimensions, a "
+                 + "viewport fills, a scrolling editor is left alone — and all three put every style back on the "
+                 + "way out, byte for byte, so exiting cannot leave a studio with a broken layout"
+               : problems.join(" · ") }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is

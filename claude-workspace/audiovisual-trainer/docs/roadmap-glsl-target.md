@@ -2035,6 +2035,42 @@ arguments never mention the point found one more thing worth taking, in the
 rover: `rot(-gRover.z)`, two sines and two cosines, rebuilt at every march step
 for a heading that cannot change during a pixel.
 
+### Phase 27 — The same button in every studio *(S)* — **shipped**
+
+`fullscreen.js`. Six studios wanted it, so it is written once, and what varies
+is only *what* goes fullscreen — which a studio knows better than a shared file
+does, so it hands over the element.
+
+| studio | the stage | fit |
+|---|---|---|
+| Generate | the render and its grid overlay | contain, and the render *grows*: it aims at the screen, and the scale is re-measured |
+| Shader | the same | contain |
+| Canvas | the layers composited, with the selection marquee | contain |
+| Video | the frame at the playhead | contain |
+| Design | the SVG surface | **fill** — a viewport with its own pan and zoom wants more room, not a bigger copy |
+| Music | whichever view is up | **none** — a scrolling editor gets a bigger window onto the same thing: more bars across, more octaves down |
+
+Instrument has no button. Its surface is a patch and a list of problems, and
+there is no picture to put on its own — a button that made the form larger
+would be a button for its own sake.
+
+**Three things the platform makes awkward, handled once.**
+`fullscreenchange` fires on the *document*, so every studio ever opened would
+leave a listener behind; the handler removes itself once its stage is no longer
+in the page. A request can simply be refused — an embedded frame usually does —
+and the studio is told so it can say so, because a button that does nothing and
+says nothing is worse than one that says it was refused. And the screen's shape
+is not the picture's, which is what `fit` is for.
+
+**What is actually checked.** Whether the browser *grants* the request cannot
+be exercised from a test, and the pane this was built in refuses it. What can
+break is this file's half — the styles it puts on a stage and whether it takes
+them off again, because a stage left at `width: 100%` on a black background
+after exiting is a studio with a broken layout that nobody notices until the
+second time. So `document.fullscreenElement` is stubbed and the event
+dispatched: the platform is faked, the logic is real, and all three fits are
+held to putting every style back byte for byte on the way out.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2100,6 +2136,7 @@ for a heading that cannot change during a pixel.
 | 24.1 | The render graph on WebGPU — **shipped** | L | 23.1 | pool, fusion, feedback and 32-bit registers, identical |
 | 25.1 | Tiling on WebGPU; the rover's terrain as data | M | 24.1 | past the device's maximum, byte-identical; 74 fps |
 | 26.1 | Fullscreen; the same care for the other 3D sketches | S | 25.1 | bounce 9.3 → 2.8 ms, and lit like the still life |
+| 27.1 | One fullscreen button, six studios — **shipped** | S | 26.1 | written once, three fits, styles restored exactly |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

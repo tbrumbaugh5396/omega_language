@@ -10,6 +10,7 @@
 // clever with the names would break the one thing this is for.
 
 import { el, clear, toast, modal, closeModal } from "./ui.js";
+import { fullscreenButton } from "./fullscreen.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms } from "./shader-uniforms.js";
 import { getGL, linkProgram } from "./shader-run.js";
@@ -504,6 +505,12 @@ export async function shaderEditor(host) {
     },
   }, "Pause");
 
+  // The picture and its overlay together: the thing that goes fullscreen.
+  const stage = el("div", { style: { position: "relative", display: "flex",
+                                     alignItems: "center", justifyContent: "center" } },
+                   canvas, grid.overlay);
+  const fs = fullscreenButton(stage, { className: "", onRefused: (why) => { log.textContent = why; } });
+
   const root = el("div.stack", {},
     el("div.card.tight", {},
       el("div.row.tight", {},
@@ -534,11 +541,11 @@ export async function shaderEditor(host) {
             "'#ifdef GL_ES precision mediump float; #endif' guard.",
           onResult: (res) => { editor.value = res.text; run(); },
         }),
-        fpsLabel)),
+        fs.button, fpsLabel)),
 
     el("div.lab-split", {},
       el("div.stack", {},
-        el("div.lab-out", {}, el("div", { style: { position: "relative" } }, canvas, grid.overlay), log),
+        el("div.lab-out", {}, stage, log),
         knobHost,
         el("p.fine", {}, "Ctrl/Cmd+Enter runs. Editing re-runs after a pause. " +
           "A shader that fails to compile leaves the last working one on " +

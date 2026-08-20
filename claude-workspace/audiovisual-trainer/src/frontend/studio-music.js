@@ -14,6 +14,7 @@
 // you hear is exactly what lands in the file.
 
 import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, clamp } from "./ui.js";
+import { fullscreenButton } from "./fullscreen.js";
 import * as A from "./engine-audio.js";
 import { aiButton } from "./ai.js";
 
@@ -1087,6 +1088,12 @@ export async function musicEditor(host) {
   }
 
   const stageWrap = el("div.card.tight", { style: { overflow: "auto" } });
+  // Whichever view is up — the arrangement, the piano roll, the mixer — with
+  // more of it on screen. Its contents are the size the document makes them,
+  // so this is a bigger window onto the same thing rather than a bigger copy:
+  // more bars across, more octaves down.
+  const fs = fullscreenButton(stageWrap, { fit: "none", title: "more of this view at once",
+                                           onRefused: (why) => toast(why) });
   const sidePanel = el("div.stack");
 
   function renderViews() {
@@ -1169,7 +1176,7 @@ export async function musicEditor(host) {
       el("div.row.tight", {},
         playBtn,
         el("button", { onclick: () => { playFromSec = 0; if (playing) startPlayback(0); else drawArrange(); } }, "⏮"),
-        viewTabs,
+        viewTabs, fs.button,
         el("label.row.tight", { style: { marginBottom: 0, fontSize: ".78rem" } }, "bpm",
           el("input", { type: "number", value: doc.bpm, min: 40, max: 220, style: { width: "5rem" },
             onchange: (e) => { doc.bpm = +e.target.value || 120; host.save(); renderViews(); scheduleRender({ restart: true }); } })),

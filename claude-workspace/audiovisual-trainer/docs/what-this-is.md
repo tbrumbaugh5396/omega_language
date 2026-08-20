@@ -62,7 +62,7 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
 library, a WGSL emitter with a WebGPU runner for both a sketch and the whole
-graph, and a **237-check self-test across 34 groups that runs inside the app**.
+graph, and a **238-check self-test across 34 groups that runs inside the app**.
 
 ---
 

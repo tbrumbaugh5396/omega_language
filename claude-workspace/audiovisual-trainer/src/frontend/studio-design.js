@@ -10,6 +10,7 @@
 // you the grid cannot teach you to see it.
 
 import { el, clear, append, toast, modal, closeModal, confirmDialog, api } from "./ui.js";
+import { fullscreenButton } from "./fullscreen.js";
 import { aiButton } from "./ai.js";
 import { compileDesignFrame, fitPreview } from "./design-to-sdf.js";
 import { applyEffects, effectCost, effectLabel, makeEffect, prepareEffects } from "./canvas-graph.js";
@@ -122,6 +123,9 @@ export async function designEditor(host) {
   surface.append(worldG, overlay);
 
   const wrap = el("div.design-canvas", {}, surface);
+  // The surface is a viewport with its own pan and zoom, so fullscreen fills
+  // rather than letterboxes: what it wants is more room, not a bigger copy.
+  const fs = fullscreenButton(wrap, { fit: "fill", onRefused: (why) => toast(why) });
 
   const toWorld = (clientX, clientY) => {
     const r = surface.getBoundingClientRect();
@@ -1086,6 +1090,7 @@ export async function designEditor(host) {
         el("button.ghost", { onclick: () => restore(undo, redo) }, "Undo"),
         el("button.ghost", { onclick: () => restore(redo, undo) }, "Redo"),
         el("button.ghost", { onclick: fitAll }, "Fit"),
+        fs.button,
         zoomLabel,
         el("button.ghost", { onclick: exportSvg }, "SVG"),
         el("button.ghost", { onclick: () => exportPng(2) }, "PNG @2x"),

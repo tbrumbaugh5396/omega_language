@@ -21,6 +21,7 @@ import { fitPreview } from "./sdf-core.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
 import { Keyboard } from "./keyboard.js";
 import { hasSketchEffects, sketchFrame } from "./sketch-effects.js";
+import { fullscreenButton } from "./fullscreen.js";
 import { LiveRig } from "./live-audio.js";
 import { registerNode, withNodeHeader, nodeShape, declaresNode, keepVersion,
          versionSummary, usersOfNode, nodeIdFor } from "./node-library.js";
@@ -2058,7 +2059,7 @@ export async function generateEditor(host) {
   let deltas = [];              // recent frame-to-frame times, for the auto scale
   let settled = false;          // auto has chosen, and stops choosing
   const wantScale = () => (doc.renderScale === undefined ? "auto" : doc.renderScale);
-  const isFull = () => document.fullscreenElement === stage;
+  const isFull = () => fs.isFull();
   /**
    * The size a render aims at before the scale is applied: the authored
    * preview normally, and the screen with the sketch's own aspect fitted into
@@ -2072,33 +2073,16 @@ export async function generateEditor(host) {
                      Math.min(stage.clientWidth || screen.width, 1920),
                      Math.min(stage.clientHeight || screen.height, 1080));
   };
-  const fsBtn = el("button", {
+  // Entering or leaving changes what a full-size render *is* — the render aims
+  // at the screen rather than the authored preview — so the scale is asked
+  // again from scratch rather than carried across.
+  const fs = fullscreenButton(stage, {
+    className: "",
     title: "show the render on its own. The state is the size of the picture, so this restarts a simulation",
-    onclick: () => {
-      if (isFull()) document.exitFullscreen();
-      // A browser may simply refuse — an embedded frame without the permission
-      // is the common one — and a button that does nothing and says nothing is
-      // worse than one that says it was refused.
-      else if (stage.requestFullscreen) {
-        stage.requestFullscreen().catch((e) => {
-          log.textContent = `fullscreen was refused: ${String(e.message || e)}`;
-        });
-      } else log.textContent = "this browser has no fullscreen for an element";
-    } }, "Fullscreen");
-  // Entering or leaving changes what a full-size render *is*, so the scale is
-  // asked again from scratch rather than carried across.
-  const onFullscreen = () => {
-    fsBtn.textContent = isFull() ? "Exit fullscreen" : "Fullscreen";
-    stage.style.background = isFull() ? "#000" : "";
-    stage.style.width = isFull() ? "100%" : "";
-    stage.style.height = isFull() ? "100%" : "";
-    canvas.style.width = isFull() ? "auto" : "100%";
-    canvas.style.height = isFull() ? "auto" : "";
-    canvas.style.maxWidth = "100%";
-    canvas.style.maxHeight = isFull() ? "100%" : "";
-    rescale();
-  };
-  document.addEventListener("fullscreenchange", onFullscreen);
+    onRefused: (why) => { log.textContent = why; },
+    onChange: () => rescale(),
+  });
+  const fsBtn = fs.button;
   const applyScale = (scale) => {
     const base = baseSize();
     const w = Math.max(16, Math.round(base[0] * scale));
