@@ -2817,18 +2817,26 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
           document.body.append(stage);
           const before = { stage: stage.getAttribute("style"), kid: kid.getAttribute("style") };
           let told = null;
-          const fs = fullscreenButton(stage, { fit, onChange: (f) => { told = f; } });
+          // Black behind a picture, the app's own surface behind text: an
+          // editor on a black field is a different, worse editor.
+          const bg = fit === "none" ? "rgb(13, 15, 24)" : undefined;
+          const fs = fullscreenButton(stage, { fit, background: bg, onChange: (f) => { told = f; } });
 
           pretend = stage;
           document.dispatchEvent(new Event("fullscreenchange"));
           if (told !== true) problems.push(`${fit}: entering did not report`);
           if (fs.button.textContent !== "Exit fullscreen") problems.push(`${fit}: the button did not relabel`);
-          if (stage.style.background !== "rgb(0, 0, 0)" && stage.style.background !== "#000") {
-            problems.push(`${fit}: no backdrop`);
+          const want = bg || "rgb(0, 0, 0)";
+          if (stage.style.background !== want && stage.style.background !== "#000") {
+            problems.push(`${fit}: backdrop is ${stage.style.background || "nothing"}, wanted ${want}`);
           }
           const centred = stage.style.display === "flex";
           if (fit === "none" && centred) problems.push("none: a scrolling editor was centred");
           if (fit !== "none" && !centred) problems.push(`${fit}: the picture was not centred`);
+          // A scrolling stage gets room to breathe and somewhere to scroll.
+          if (fit === "none" && (!stage.style.padding || stage.style.overflow !== "auto")) {
+            problems.push("none: an editor got no padding or nowhere to scroll");
+          }
           if (fit === "fill" && kid.style.width !== "100%") problems.push("fill: the viewport did not fill");
           if (fit === "contain" && kid.style.maxHeight !== "100%") problems.push("contain: not bounded by height");
 
@@ -2854,8 +2862,9 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
              ok: problems.length === 0,
              detail: problems.length === 0
                ? "three fits — a picture with a size of its own is centred and bounded by both dimensions, a "
-                 + "viewport fills, a scrolling editor is left alone — and all three put every style back on the "
-                 + "way out, byte for byte, so exiting cannot leave a studio with a broken layout"
+                 + "viewport fills, a scrolling editor is left alone with padding and somewhere to scroll — each "
+                 + "on the backdrop it asked for, and all three put every style back on the way out, byte for "
+                 + "byte, so exiting cannot leave a studio with a broken layout"
                : problems.join(" · ") }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly

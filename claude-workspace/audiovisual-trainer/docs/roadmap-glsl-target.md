@@ -2049,10 +2049,20 @@ does, so it hands over the element.
 | Video | the frame at the playhead | contain |
 | Design | the SVG surface | **fill** — a viewport with its own pan and zoom wants more room, not a bigger copy |
 | Music | whichever view is up | **none** — a scrolling editor gets a bigger window onto the same thing: more bars across, more octaves down |
+| Instrument | the whole editor — patch, problems, keyboard | **none**, on the app's own surface rather than black, with the patch area grown to fill the height |
 
-Instrument has no button. Its surface is a patch and a list of problems, and
-there is no picture to put on its own — a button that made the form larger
-would be a button for its own sake.
+Instrument was the one I argued out of, and was wrong about. The reasoning was
+"there is no picture to put on its own" — true, and beside the point. A patch
+is *text*, and what fullscreen buys text is **lines**: a voice with a filter
+and two envelopes runs past seventeen rems, and reading it a third at a time is
+the thing that makes an editor tiring. The stage is the whole editor rather
+than the text alone, because fullscreening the patch would take away the
+problems list and the keyboard you check it against.
+
+Two options came out of it that the others now share: `background`, because
+black behind a picture is right and black behind text is a different, worse
+editor; and padding and `overflow: auto` for a `none` stage, so a long patch
+has somewhere to scroll and room to breathe.
 
 **Three things the platform makes awkward, handled once.**
 `fullscreenchange` fires on the *document*, so every studio ever opened would

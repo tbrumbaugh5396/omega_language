@@ -11,7 +11,8 @@
 // back on the next reload. That is the whole point of the document type: an
 // instrument that outlives the session it was made in.
 
-import { el, clear, toast } from "./ui.js";
+import { el, clear, append, toast } from "./ui.js";
+import { fullscreenButton } from "./fullscreen.js";
 import { parsePatch, toPatch, STARTER_PATCH } from "./instrument-doc.js";
 import { defineInstrument, instrumentId } from "./instrument-library.js";
 import { LiveInstrument } from "./live-audio.js";
@@ -66,6 +67,13 @@ export function instrumentNameFor(doc, projectName = "") {
   return raw.includes(".") ? raw : `you.${slug}`;
 }
 
+// How tall the patch area is, ordinarily and with the screen to itself. A
+// patch is text, so what fullscreen buys here is *lines* — a voice with a
+// filter and two envelopes runs past seventeen rems and reading it a third at
+// a time is the thing that makes an editor tiring.
+const AREA_HEIGHT = "17rem";
+const AREA_HEIGHT_FULL = "calc(100vh - 20rem)";
+
 // The two octaves the keyboard offers, as MIDI numbers with their labels.
 const KEYS = [
   [60, "C"], [62, "D"], [64, "E"], [65, "F"], [67, "G"], [69, "A"], [71, "B"], [72, "C"],
@@ -77,10 +85,21 @@ export function instrumentEditor(host) {
 
   const area = el("textarea", {
     spellcheck: "false",
-    style: { width: "100%", minHeight: "17rem", fontFamily: "ui-monospace, monospace",
+    style: { width: "100%", minHeight: AREA_HEIGHT, fontFamily: "ui-monospace, monospace",
              fontSize: ".82rem", lineHeight: "1.5", tabSize: "2" },
   });
   area.value = doc.patch;
+  // The stage is the whole editor — the patch, what did not parse, the
+  // keyboard to hear it on. Fullscreening the text alone would take away the
+  // thing you check the text against.
+  const stage = el("div.stack", { style: { gap: ".6rem" } });
+  const fs = fullscreenButton(stage, {
+    fit: "none",
+    background: "var(--bg, #0d0f18)",
+    title: "the patch with the screen to itself — the same editor, more lines of it",
+    onRefused: (why) => toast(why),
+    onChange: (full) => { area.style.minHeight = full ? AREA_HEIGHT_FULL : AREA_HEIGHT; },
+  });
 
   const problems = el("div.stack", { style: { gap: ".1rem" } });
   const idLine = el("p.fine", {});
@@ -138,7 +157,7 @@ export function instrumentEditor(host) {
 
   reparse();
 
-  return el("div.stack", { style: { gap: ".6rem" } },
+  append(stage,
     el("p.fine", {}, "One line per node: ",
       el("code", {}, "name = type key=value …"),
       ". A value is a number, or ", el("code", {}, "other.port"), " to wire it. ",
@@ -159,5 +178,7 @@ export function instrumentEditor(host) {
       } }, "Tidy"),
       el("button", { onclick: () => {
         area.value = STARTER_PATCH; doc.patch = area.value; reparse(); host.save();
-      } }, "Start over")));
+      } }, "Start over"),
+      fs.button));
+  return stage;
 }

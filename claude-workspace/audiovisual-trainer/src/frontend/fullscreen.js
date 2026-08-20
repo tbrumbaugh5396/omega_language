@@ -51,7 +51,11 @@ export function fullscreenButton(stage, opts = {}) {
           //               contents are already the size the document makes
           //               them. It gets a bigger window onto the same thing,
           //               and nothing is centred or resized.
-          fit = "contain" } = opts;
+          fit = "contain",
+          // Black is right behind a picture and wrong behind text: a patch on
+          // a black field is a different, worse editor. A studio whose stage
+          // is an editor asks for the surface it already sits on.
+          background = "#000" } = opts;
 
   const button = document.createElement("button");
   if (className) button.className = className;
@@ -68,7 +72,10 @@ export function fullscreenButton(stage, opts = {}) {
   const dress = (full) => {
     if (full) {
       for (const k of KEYS) saved[k] = stage.style[k];
-      stage.style.background = "#000";
+      saved.padding = stage.style.padding;
+      saved.overflow = stage.style.overflow;
+      if (fit === "none") { stage.style.padding = "1rem"; stage.style.overflow = "auto"; }
+      stage.style.background = background;
       stage.style.width = "100%";
       stage.style.height = "100%";
       if (fit === "none") return;                     // a scrolling editor: leave it be
@@ -94,6 +101,8 @@ export function fullscreenButton(stage, opts = {}) {
       }
     } else {
       for (const k of KEYS) stage.style[k] = saved[k] || "";
+      stage.style.padding = saved.padding || "";
+      stage.style.overflow = saved.overflow || "";
       for (const kid of stage.children) {
         if (!kid.style || kid.dataset.fsW === undefined) continue;
         kid.style.width = kid.dataset.fsW;
