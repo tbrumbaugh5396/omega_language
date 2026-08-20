@@ -2370,6 +2370,57 @@ recovered from the browser's own memory, where it was still loaded.
 *Left:* the moon keeps one face and one phase all night, the sun's circle is
 tilted by a constant rather than a latitude, and there is still no dawn chorus.
 
+### Phase 31 — A world you can hear *(M)* — **shipped**
+
+Dawn sounds and ambient noise, through the path that was already there: the
+world writes texels, the host reads them back as probes, and the ordinary
+effect evaluator turns them into notes and parameter moves. The same route a
+game's bounce takes. **The world says *that* a bird sang and how high; whether
+anything is listening is not its business.**
+
+**Two kinds of sound, and the difference matters.**
+
+*Beds* — wind, rain and surf — are always sounding, and what changes is how
+much. They are **one instrument three times**: filtered noise with a different
+corner and a different tap of the same state-variable filter, which is what
+those three sounds are. Their level is a `param` effect on a named part, not a
+note, because a note has a beginning.
+
+*Pulses* — the dawn chorus and a footfall a stride — last exactly one frame,
+and that is a thing a **shader** can say and an expression cannot. So the world
+emits them: a hash per eleventh of a second, gated by how much dawn it is, and
+the slot index kept in the register beside it so the pulse lasts the one frame
+the slot turns over on rather than the five a slot spans. The footfall watches
+the walked distance wrap.
+
+Dawn itself is one bump a day, not "the sun is low" — the sun crosses that
+height twice, and dusk is the other crossing.
+
+| held to | number |
+|---|---|
+| two sets of probe readings through the evaluator | 6 continuous levels and 2 notes |
+| a bird at dawn, a step in the rain | each fires once, and only its own |
+| every probe | names a texel the sketch actually writes |
+| every `param` effect | names a part its instrument actually has |
+
+**Four numbers tuned by measuring rather than taste.** The wind level was
+scaled at 0.55 and sat clipped at 1 — a level that tells you nothing. The rain
+front was a `smoothstep` narrow enough to be a switch, and rain does not arrive
+like that. The chorus was 2 chirps in 400 frames. And the stride was 1.75 m,
+which at thirteen metres a second is seven footfalls a second — a sewing
+machine rather than a walk.
+
+**And two things the system was right to refuse.** The patch parser rejects an
+instrument with no `voice.note`: "an instrument with nowhere to write a note
+plays nothing". A bed is sent no notes, so it has one and mixes it in at
+nothing — which keeps the patch honest rather than special-cased. And the
+weather was computed inside the branch that stores it, so the texel that says
+how loud it is could not see it; it is worked out before the branches now,
+because two texels want it.
+
+*Left:* the beds are mono and the same everywhere; nothing is quieter behind a
+hill or louder near the shore you can see.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2441,6 +2492,7 @@ tilted by a constant rather than a latitude, and there is still no dawn chorus.
 | 29.1 | Weather, and `@state` — **shipped** | M | 28.2 | 11.9 ms; 132 MB of state becomes 12.9 |
 | 29.2 | A herd and a flock — **shipped** | S | 29.1 | 12.8 ms; the herd 0.4, the birds 1.4 and no fetch |
 | 30.1 | Day and night, a moon and stars, roll/pitch/yaw | M | 29.2 | 12.2 ms; stars on the direction, not the screen |
+| 31.1 | Dawn sounds and ambient noise — **shipped** | M | 30.1 | beds by param, pulses by shader; 6 levels, 2 notes |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

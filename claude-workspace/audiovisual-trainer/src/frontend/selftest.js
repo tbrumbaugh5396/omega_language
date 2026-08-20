@@ -29,7 +29,7 @@ import { lifeStep, grayScottStep } from "./sim-nodes.js";
 import { shipStep, shipAsData, menuAsData, pongAsData, pongEffects, PONG_INSTRUMENTS } from "./game-nodes.js";
 import { EventQueue, pointerEvents } from "./events.js";
 import { LiveRig, renderFired } from "./live-audio.js";
-import { readProbes, sketchFrame, hasSketchEffects } from "./sketch-effects.js";
+import { readProbes, sketchFrame, hasSketchEffects, sketchGraph } from "./sketch-effects.js";
 import { shipInstrument, toneInstrument, instrumentId, normalise, internInstruments,
          inlineInstruments, resolveInstruments, instrumentFor, forgetInstrument,
          instrumentNames, instrumentCount, instrumentBytes, defineInstrument,
@@ -3210,6 +3210,65 @@ c`;
                + `screen, so they stay where they are when the head turns. And rolling moves ${moved.toFixed(0)}`
                + "/255 of the picture — the camera is a basis built from yaw, pitch and roll rather than a "
                + "lookAt, which can say where to point but has no way to say which way up" }); }
+
+    // 8. And what it sounds like. The world writes three texels the host reads
+    //    back — levels for the things heard continuously, and one-frame pulses
+    //    for the things heard once — and they go through the same effect
+    //    evaluator a game's bounce goes through. The world says *that* a bird
+    //    sang and how high; whether anything is listening is not its business.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const bad = [];
+      // The instruments have to be real instruments, and the effects have to
+      // name parts those instruments actually have.
+      for (const [name, inst] of Object.entries(g.instruments || {})) {
+        if (inst.ref) continue;
+        if (!inst.graph || !inst.parts) { bad.push(`${name} is not an instrument`); continue; }
+        if (!inst.parts.bed) bad.push(`${name} has no part called bed for an effect to move`);
+      }
+      for (const fx of g.effects || []) {
+        const inst = (g.instruments || {})[fx.instrument];
+        if (!inst) { bad.push(`effect names ${fx.instrument}, which the document does not carry`); continue; }
+        if (fx.kind === "param" && inst.parts && !inst.parts[fx.node]) {
+          bad.push(`a param effect moves "${fx.node}", which ${fx.instrument} does not have`);
+        }
+      }
+      // Every probe has to name a texel the sketch actually writes.
+      const wrote = new Set([0, 1, 2, 3, 4, 5, 6]);
+      for (const [name, pr] of Object.entries(g.probes || {})) {
+        if (!wrote.has(pr.texel[0]) || pr.texel[1] !== 0) bad.push(`probe ${name} reads a texel nothing writes`);
+      }
+      // …and the whole path, offline: probe values in, fired effects out.
+      const fired = [];
+      const seen = { dawn: 0, wind: 0, chirp: 0, foot: 0 };
+      for (const [probes, note] of [
+        [{ wind: 0.8, rain: 0.1, sea: 0.0, dawn: 0.9, chirp: 1, pitch: 0.4, foot: 0, wet: 0 }, "a bird at dawn"],
+        [{ wind: 0.2, rain: 0.9, sea: 0.6, dawn: 0.0, chirp: 0, pitch: 0, foot: 1, wet: 1 }, "a step in the rain"],
+      ]) {
+        const graph = sketchGraph({ params: {}, effects: g.effects, instruments: g.instruments },
+                                  probes, { stateKey: `world-sound-${note}`, width: 8, height: 8 });
+        const r = resolveParams(graph, { t: 0, frame: 1, commit: true });
+        if (r.paramErrors && r.paramErrors.length) bad.push(`${note}: ${r.paramErrors[0]}`);
+        fired.push(...(r.fired || []));
+        for (const f of r.fired || []) {
+          if (f.kind === "note" && f.instrument === "bird") seen.chirp++;
+          if (f.kind === "note" && f.instrument === "step") seen.foot++;
+          if (f.kind === "param" && f.instrument === "air") seen.wind++;
+        }
+      }
+      const beds = fired.filter((f) => f.kind === "param");
+      const notes = fired.filter((f) => f.kind === "note");
+      if (seen.chirp !== 1) bad.push(`the dawn chirp fired ${seen.chirp} times, wanted 1`);
+      if (seen.foot !== 1) bad.push(`the footfall fired ${seen.foot} times, wanted 1`);
+      if (beds.length !== 6) bad.push(`${beds.length} bed levels, wanted 6 — three beds, twice`);
+      push({ group: "More games", name: "a world you can hear: beds that follow the weather, a chorus at dawn",
+             ok: bad.length === 0,
+             detail: bad.length === 0
+               ? `${beds.length} continuous levels and ${notes.length} notes came back from two sets of probe `
+                 + "readings — wind, rain and surf are one instrument three times with a different corner and a "
+                 + "different tap of the same filter, and their level is a param effect rather than a note, "
+                 + "because a bed is always sounding and what changes is how much. The chorus is a one-frame "
+                 + "pulse the shader emits, since an expression cannot say 'exactly one frame' and a shader can"
+               : bad.join(" · ") }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is

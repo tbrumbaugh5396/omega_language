@@ -23,6 +23,7 @@ import { Keyboard } from "./keyboard.js";
 import { hasSketchEffects, sketchFrame } from "./sketch-effects.js";
 import { expandButton } from "./expand.js";
 import { LiveRig } from "./live-audio.js";
+import { parsePatch } from "./instrument-doc.js";
 import { registerNode, withNodeHeader, nodeShape, declaresNode, keepVersion,
          versionSummary, usersOfNode, nodeIdFor } from "./node-library.js";
 import { gridOverlay } from "./grid-overlay.js";
@@ -65,6 +66,32 @@ export function scaleForBudget(ms, atScale = 1, budgetMs = 16.7) {
   const want = Math.min(1, atScale * Math.sqrt(budgetMs / ms));
   for (const s of SCALE_STEPS) if (s <= want + 1e-9) return s;
   return SCALE_STEPS[SCALE_STEPS.length - 1];
+}
+
+/**
+ * A bed: filtered noise whose level something else moves.
+ *
+ * Wind, rain and surf are the same instrument three times with a different
+ * corner and a different tap of the same filter — which is what those three
+ * sounds are, and writing it once says so. `level` is the part an effect
+ * addresses; a `param` effect on it is how a document says "louder now".
+ */
+function airInstrument(freq, q, tap) {
+  // The voice.note is here because an instrument must have somewhere to write
+  // a note, and the parser is right to insist: an instrument without one plays
+  // nothing when a document sends it a note. This one is never sent any — a
+  // bed is always sounding and what changes is how much — so it is mixed in at
+  // nothing, which keeps the patch honest rather than special.
+  const { decl, errors } = parsePatch(`// @instrument world.air
+// @voices 1
+note  = voice.note
+n     = noise.white amp=1
+tone  = filter.svf  x=n.y  freq=${freq}  q=${q}
+bed   = gain.smooth x=tone.${tap}  level=0  ms=220
+level = mix.add     a=bed.y  b=note.gate  gainA=1  gainB=0
+`);
+  if (errors.length) throw new Error(`the air instrument does not parse: ${errors[0]}`);
+  return decl;
 }
 
 export const GENERATE_PRESETS = [
@@ -1127,6 +1154,45 @@ finish(col)`
   },
   { id: "world", label: "Open world — infinite terrain, biomes, a map that follows you",
     preview: [640, 360], steps: 1,
+    // What the world sounds like. Six texels of its own state, read back each
+    // frame and handed to the ordinary effect evaluator — the same path a game
+    // uses for a bounce. The world says *that* a bird sang and how high; it
+    // does not know whether anything is listening.
+    probes: {
+      wind: { texel: [4, 0], channel: "r" },
+      rain: { texel: [4, 0], channel: "g" },
+      sea:  { texel: [4, 0], channel: "b" },
+      dawn: { texel: [4, 0], channel: "a" },
+      chirp: { texel: [5, 0], channel: "r" },
+      pitch: { texel: [5, 0], channel: "g" },
+      foot: { texel: [6, 0], channel: "r" },
+      wet:  { texel: [6, 0], channel: "b" },
+    },
+    instruments: {
+      // Two beds, each a filtered noise whose level an effect moves. A bed is
+      // not a note: it is always sounding, and what changes is how much.
+      air: airInstrument(420, 0.6, "lp"),
+      hiss: airInstrument(3400, 0.5, "hp"),
+      surf: airInstrument(240, 1.4, "bp"),
+      bird: { ref: "tone.bell" },
+      step: { ref: "tone.pluck" },
+    },
+    effects: [
+      // The beds follow the weather continuously — no `when`, so every frame.
+      { kind: "param", node: "bed", param: "level", instrument: "air",
+        value: 'ch("wind") * 0.30 + 0.02' },
+      { kind: "param", node: "bed", param: "level", instrument: "hiss",
+        value: 'ch("rain") * 0.22' },
+      { kind: "param", node: "bed", param: "level", instrument: "surf",
+        value: 'ch("sea") * 0.16' },
+      // The dawn chorus. The shader decides when a bird sings, because a pulse
+      // that lasts exactly one frame is a thing a shader can say.
+      { kind: "note", instrument: "bird", when: 'ch("chirp") > 0.5',
+        hz: '900 + ch("pitch") * 1500', dur: '0.10 + ch("pitch") * 0.13' },
+      // And a footfall a stride, lower and softer on wet ground.
+      { kind: "note", instrument: "step", when: 'ch("foot") > 0.5',
+        hz: '64 + ch("wet") * 30', dur: "0.07" },
+    ],
     source:
 `// An open world: terrain with no edge, biomes that decide what a place is
 // made of, and a map of the land that follows you.
@@ -1650,7 +1716,7 @@ vec4 view()  { return reg(vec2(3.0, 0.0)); }  // pitch, roll, time of day, -
 
 vec4 sim(vec2 uvv) {
   vec2 texel = floor(gl_FragCoord.xy);
-  if (texel.y > 0.5 || texel.x > 4.5) return vec4(0.0);
+  if (texel.y > 0.5 || texel.x > 6.5) return vec4(0.0);
   bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
   float dt = 1.0 / 60.0;
   vec4 w = first ? vec4(spawnPoint(), 0.6, 0.0) : who();
@@ -1684,16 +1750,71 @@ vec4 sim(vec2 uvv) {
 
   if (texel.x < 0.5) return vec4(pos, heading, sp);
   if (texel.x < 1.5) return vec4(m.x + abs(sp) * dt, 0.0, 0.0, 1.0);
+  // The weather, worked out before the branches rather than inside one of
+  // them: two texels want it now — the one that stores it and the one that
+  // says how loud it is — and a value computed in a branch belongs to that
+  // branch alone.
+  float turnT = t * 0.037;
+  vec2 dirW = vec2(sin(turnT * 1.3 + 0.7), cos(turnT));
+  float gust = 0.55 + 0.45 * sin(t * 0.41) * sin(t * 0.17 + 1.1);
+  // A wide ramp rather than a narrow one: a front that is 0 or 1 and
+  // nothing between is a switch, and rain does not arrive like that.
+  float front = smoothstep(0.24, 0.86, fbmN(vec2(t * 0.011, 4.3), 3) + weather - 0.5);
+  vec2 windV = dirW * gust * windAmt * (0.6 + front * 0.9);
+
   if (texel.x > 2.5 && texel.x < 3.5) return vec4(pitch, roll, clock, 1.0);
+
+  // ---- what the world sounds like ------------------------------------
+  //
+  // Three texels the host reads back and turns into sound. The world decides
+  // *that* there is a chirp and how high it is; whether anything is heard is
+  // the host's business, which is the same division the effects have always
+  // had. It is also why the pulses are made here: a chirp that lasts exactly
+  // one frame is something a shader can say and an expression cannot.
+  float dayA = clock * 6.28318;
+  float sunY = sin(dayA);
+  vec4 land = landform(pos);
+  if (texel.x > 3.5 && texel.x < 4.5) {
+    // Levels, for the things that are heard continuously.
+    // Scaled so a strong wind is loud and not merely clipped: at 0.55 it
+    // reached 1 and stayed there, which is a level that tells you nothing.
+    float windL = clamp(length(windV) * 0.30, 0.0, 1.0);
+    float sea = 1.0 - smoothstep(0.0, 9.0, land.x);      // near or in the water
+    // Dawn is the sun coming up, not the sun being low — it has to be one
+    // bump a day, and dusk is the other crossing of the same height.
+    float dawn = smoothstep(-0.09, 0.14, sunY) * (1.0 - smoothstep(0.16, 0.46, sunY))
+               * step(0.0, cos(dayA));
+    return vec4(windL, front, sea, dawn);
+  }
+  if (texel.x > 4.5 && texel.x < 5.5) {
+    vec4 mem = reg(vec2(5.0, 0.0));
+    // A chirp, at most one a slot, and only in the dawn. The slot index is
+    // kept so the pulse lasts the one frame the slot turns over on, rather
+    // than the five frames a twelfth of a second spans.
+    float dawn = smoothstep(-0.09, 0.14, sunY) * (1.0 - smoothstep(0.16, 0.46, sunY))
+               * step(0.0, cos(dayA));
+    float slot = floor(t * 11.0);
+    float h = hash21(vec2(slot, 3.7));
+    float sings = step(1.0 - 0.34 * dawn * wildlife, h);
+    float fresh = abs(slot - mem.z) > 0.5 ? 1.0 : 0.0;
+    return vec4(sings * fresh, hash21(vec2(slot, 8.1)), slot, dawn);
+  }
+  if (texel.x > 5.5) {
+    // A footfall each stride, found by watching the walked distance wrap.
+    // Its own texel keeps its own memory: reading the chirp's would be a
+    // different number that happens to be nearby.
+    vec4 mem = reg(vec2(6.0, 0.0));
+    // A long stride: at 1.75 m and thirteen metres a second it was seven
+    // footfalls a second, which is a sewing machine rather than a walk.
+    float phase = fract(meta().x / 2.6);
+    float wrapped = (phase < mem.y && abs(sp) > 0.4) ? 1.0 : 0.0;
+    return vec4(wrapped, phase, land.x < 0.4 ? 1.0 : 0.0, 0.0);
+  }
   if (texel.x < 2.5) {
     // Weather, drifting. The direction turns slowly, the strength gusts, and
     // the rain comes and goes over a couple of minutes — so standing still
     // for a while is a thing worth doing.
-    float turnT = t * 0.037;
-    vec2 dirW = vec2(sin(turnT * 1.3 + 0.7), cos(turnT));
-    float gust = 0.55 + 0.45 * sin(t * 0.41) * sin(t * 0.17 + 1.1);
-    float front = smoothstep(0.35, 0.75, fbmN(vec2(t * 0.011, 4.3), 3) + weather - 0.5);
-    return vec4(dirW * gust * windAmt * (0.6 + front * 0.9), front, gust);
+    return vec4(windV, front, gust);
   }
   return vec4(0.0);
 }
