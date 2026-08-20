@@ -13,7 +13,7 @@
 // at, not a reason to block a save.
 
 import { el, clear, api } from "./ui.js";
-import { GENERATE_PRESETS, newGenerateDoc, scaleForBudget } from "./studio-generate.js";
+import { GENERATE_PRESETS, newGenerateDoc, scaleForBudget, fitAspect } from "./studio-generate.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3, splitSketch, stripComments } from "./shader-uniforms.js";
 import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
@@ -2766,6 +2766,27 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                ? "one ground() for the point it was asked about; the rover's and the beacons' heights are constants for the pixel, so they are hoisted, "
                  + "and the eight beacons are eight names rather than an array"
                : `${grounds} ground() calls in scene()${indexed ? ", and an array indexed by a variable" : ""}` }); }
+
+    // Fullscreen: the screen's shape is not the sketch's, so the render is the
+    // largest box of the sketch's aspect that fits inside it — letterboxed,
+    // never stretched, and never past 1920×1080, where the scale would only
+    // take it back down again.
+    { const cases = [
+        [16 / 9, 1920, 1080, [1920, 1080]],       // the same shape: fills it
+        [16 / 9, 1920, 1200, [1920, 1080]],       // taller screen: bars above and below
+        [1, 1920, 1080, [1080, 1080]],            // a square sketch on a wide screen
+        [640 / 400, 1920, 1080, [1728, 1080]],    // the games' shape
+      ];
+      const wrong = cases.filter(([a, w, h, want]) => {
+        const got = fitAspect(a, w, h);
+        return got[0] !== want[0] || got[1] !== want[1];
+      });
+      push({ group: "More games", name: "fullscreen fits the sketch's shape into the screen's",
+             ok: wrong.length === 0,
+             detail: wrong.length === 0
+               ? "a 16:9 sketch fills a 16:9 screen and letterboxes a taller one; a square sketch on a 1920×1080 "
+                 + "screen renders 1080×1080 rather than being stretched to fit"
+               : wrong.map(([a, w, h, want]) => `${a.toFixed(2)} into ${w}×${h} → ${fitAspect(a, w, h)}, wanted ${want}`).join(" · ") }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is

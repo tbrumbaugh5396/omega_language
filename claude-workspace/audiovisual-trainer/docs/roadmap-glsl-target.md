@@ -1999,6 +1999,42 @@ compile, the way the Playground runs: **367.6 ms → 13.5 ms**, 2.7 fps → 74 f
 at full resolution. The render scale from Phase 22b is now headroom rather than
 a requirement.
 
+### Phase 26 — Fullscreen, and the same care for the other 3D sketches *(S)* — **shipped**
+
+**Fullscreen.** A button that puts the canvas and its overlay — the *stage* —
+on their own. Entering changes what a full-size render is, so the scale is
+asked again from scratch rather than carried across: the render aims at the
+screen with the sketch's own aspect fitted into it, capped at 1920×1080, and
+the auto scale then takes it to the budget. `fitAspect` is a pure function and
+is checked against four cases, because "letterbox rather than stretch" is
+arithmetic and arithmetic can be held to a number. A browser that refuses the
+request — an embedded frame usually does — now says so in the log rather than
+leaving a button that does nothing.
+
+**And the other 3D sketches, measured before touching.** At 640×360: `still`
+4.9 ms, `bounce` 9.3 ms, `ocean` 8.0 ms, `cloudscape` 14.3 ms, `beach` 6.8 ms.
+None of them was the rover's kind of slow, so this was not another rescue —
+but `bounce` had the rover's exact bug:
+
+> `bounceY()` is a `mod`, a `sqrt`, a `log` and two `pow`s, and it depends on
+> the time and nothing else. `scene()` called it three times, and `march()`
+> calls `scene()` about a hundred and ten times a pixel. Three hundred and
+> thirty evaluations a pixel became three.
+
+**9.3 ms → 2.8 ms**, and while it was open the lighting was brought up to what
+`still` already had — the sun, sky fill and a warm bounce off the floor,
+fresnel with the sky in the surface, and a gloss that falls off at grazing
+angles. The framing changed too: the old camera stood five metres back with a
+wide lens, which put three small dots on a large floor. Technically the same
+scene, and a worse picture.
+
+`still` needed nothing — it was already the richest of them, and is where
+`bounce`'s new lighting came from. `ocean`, `cloudscape` and `beach` have no
+loop-invariant work in their marchers; a scan for calls inside `scene()` whose
+arguments never mention the point found one more thing worth taking, in the
+rover: `rot(-gRover.z)`, two sines and two cosines, rebuilt at every march step
+for a heading that cannot change during a pixel.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2063,6 +2099,7 @@ a requirement.
 | 23.1 | The last of the catalogue — **nothing untranslated** | M | 21.1 | 48 of 53 identical; the 11 refusals are field ports |
 | 24.1 | The render graph on WebGPU — **shipped** | L | 23.1 | pool, fusion, feedback and 32-bit registers, identical |
 | 25.1 | Tiling on WebGPU; the rover's terrain as data | M | 24.1 | past the device's maximum, byte-identical; 74 fps |
+| 26.1 | Fullscreen; the same care for the other 3D sketches | S | 25.1 | bounce 9.3 → 2.8 ms, and lit like the still life |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

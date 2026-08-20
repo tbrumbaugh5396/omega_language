@@ -47,6 +47,18 @@ export const SCALE_STEPS = [1, 0.85, 0.75, 0.6, 0.5];
  * above 1: a sketch is authored at its preview size, and a scale that
  * invented pixels would be inventing detail.
  */
+/**
+ * The largest w×h with this aspect that fits inside a box — which is what
+ * fullscreen needs, because a sketch has an aspect and a screen has a
+ * different one, and stretching it would be a different picture.
+ */
+export function fitAspect(aspect, maxW, maxH) {
+  if (!(aspect > 0)) return [Math.round(maxW), Math.round(maxH)];
+  const byWidth = [maxW, maxW / aspect];
+  return byWidth[1] <= maxH ? [Math.round(byWidth[0]), Math.round(byWidth[1])]
+                            : [Math.round(maxH * aspect), Math.round(maxH)];
+}
+
 export function scaleForBudget(ms, atScale = 1, budgetMs = 16.7) {
   if (!(ms > 0) || !(atScale > 0)) return 1;
   const want = Math.min(1, atScale * Math.sqrt(budgetMs / ms));
@@ -685,18 +697,31 @@ float bounceY(float tt, float h0, float e) {
   float v0 = 0.5 * g * Tn;
   return max(v0 * tau - 0.5 * g * tau * tau, 0.0);
 }
+// Where the three balls are *this frame*. bounceY is a mod, a sqrt, a log and
+// two pows, and it depends on the time and nothing else — so it is a constant
+// for the whole pixel, and computing it inside scene() means paying for it
+// once per march step instead of once per frame. Three hundred and thirty
+// evaluations a pixel became three.
+vec3 gY;
 float scene(vec3 q) {
   float d = sdPlane(q, 0.0);
-  float tt = t * speed;
-  d = min(d, sdSphere(q - vec3(-1.2, 0.3 + bounceY(tt, drop, bouncy), 0.0), 0.3));
-  d = min(d, sdSphere(q - vec3(0.0, 0.3 + bounceY(tt + 0.7, drop * 0.8, bouncy * 0.9), 0.0), 0.3));
-  d = min(d, sdSphere(q - vec3(1.2, 0.3 + bounceY(tt + 1.4, drop * 0.6, min(bouncy * 1.15, 0.95)), 0.0), 0.3));
+  d = min(d, sdSphere(q - vec3(-0.95, 0.36 + gY.x, 0.0), 0.36));
+  d = min(d, sdSphere(q - vec3( 0.00, 0.36 + gY.y, 0.0), 0.36));
+  d = min(d, sdSphere(q - vec3( 0.95, 0.36 + gY.z, 0.0), 0.36));
   return d;
 }
 
+float tt = t * speed;
+gY = vec3(bounceY(tt, drop, bouncy),
+          bounceY(tt + 0.7, drop * 0.8, bouncy * 0.9),
+          bounceY(tt + 1.4, drop * 0.6, min(bouncy * 1.15, 0.95)));
+
+// Close enough that the balls are the subject. The old camera stood five
+// metres back with a wide lens, which put three small dots on a large floor —
+// technically the same scene and a worse picture.
 vec3 sd = normalize(vec3(-0.5, sunHeight, 0.6));
-vec3 ro = vec3(0.4, 1.6, 5.2);
-vec3 rd = lookAt(ro, vec3(0.0, 0.8, 0.0)) * normalize(vec3(p, 1.8));
+vec3 ro = vec3(0.35, 1.15, 3.4);
+vec3 rd = lookAt(ro, vec3(0.0, 0.62, 0.0)) * normalize(vec3(p, 2.0));
 vec3 col = sky(rd, sd);
 float tHit = march(ro, rd, 40.0);
 if (tHit > 0.0) {
@@ -704,13 +729,25 @@ if (tHit > 0.0) {
   vec3 n = normal3(pos);
   bool isFloor = pos.y < 0.02 && abs(n.y) > 0.99;
   vec3 albedo = isFloor
-    ? mix(vec3(0.62), vec3(0.78), mod(floor(pos.x) + floor(pos.z), 2.0)) * 0.55
-    : (pos.x < -0.6 ? vec3(0.8, 0.2, 0.15) : (pos.x < 0.6 ? vec3(0.15, 0.5, 0.8) : vec3(0.9, 0.7, 0.2)));
-  float dif = max(dot(n, sd), 0.0) * softShadow(pos + n * 0.01, sd, 16.0);
-  vec3 lig = vec3(1.0, 0.92, 0.80) * 2.6 * dif + vec3(0.35, 0.45, 0.65) * (0.5 + 0.5 * n.y) * ao(pos, n);
+    ? mix(vec3(0.30), vec3(0.42), mod(floor(pos.x) + floor(pos.z), 2.0))
+    : (pos.x < -0.6 ? srgbToLinear(vec3(0.85, 0.22, 0.16))
+                    : (pos.x < 0.6 ? srgbToLinear(vec3(0.15, 0.52, 0.85))
+                                   : srgbToLinear(vec3(0.95, 0.72, 0.20))));
+  float sh = softShadow(pos + n * 0.01, sd, 16.0);
+  float dif = max(dot(n, sd), 0.0) * sh;
+  float occ = ao(pos, n);
+  // The same three lights the still life is lit by: sun, sky from above, and
+  // a warm bounce off the floor. A ball lit only from the sun is a sticker.
+  vec3 lig = vec3(1.0, 0.92, 0.80) * 2.6 * dif;
+  lig += vec3(0.35, 0.45, 0.65) * (0.5 + 0.5 * n.y) * occ;
+  lig += vec3(0.30, 0.24, 0.18) * max(-n.y, 0.0) * occ * 0.5;
   col = albedo * lig;
+  // A gloss, and the sky in the surface — the floor takes a little, the balls
+  // take a lot, and both fall off at grazing angles the way a real one does.
   vec3 hv = normalize(sd - rd);
-  col += pow(max(dot(n, hv), 0.0), 120.0) * dif * (isFloor ? 0.2 : 1.2);
+  float fr = fresnel(max(dot(n, -rd), 0.0), 0.04);
+  col += pow(max(dot(n, hv), 0.0), isFloor ? 60.0 : 180.0) * dif * (isFloor ? 0.25 : 1.4);
+  col = mix(col, sky(reflect(rd, n), sd), fr * (isFloor ? 0.35 : 0.75));
   col = mix(col, sky(rd, sd), 1.0 - exp(-tHit * 0.015));
 }
 
@@ -925,6 +962,8 @@ vec4 sim2(vec2 q) {
 // under the point it was actually asked about.
 vec4 gRover;
 float gRoverY;            // the ground under the rover, once per pixel
+mat2 gTurn;               // and the heading as a matrix: two sin and two cos,
+                          // which scene() was building at every march step
 // Eight beacons, and eight *names* rather than an array. An array indexed by
 // a running variable is not a register file on most drivers — it is memory,
 // and scene() reads it about a hundred times a pixel. Written out it costs
@@ -948,7 +987,7 @@ float beacon(vec3 p, vec4 b) {
 float scene(vec3 p) {
   float d = p.y - ground(p.xz);
   vec3 rp = p - vec3(gRover.x, gRoverY + 0.42, gRover.y);
-  rp.xz = rot(-gRover.z) * rp.xz;
+  rp.xz = gTurn * rp.xz;
   float car = sdBox3(rp, vec3(0.62, 0.20, 0.95)) - 0.10;
   car = min(car, sdSphere(rp - vec3(0.0, 0.26, -0.10), 0.42));
   d = min(d, car);
@@ -1023,6 +1062,7 @@ vec4 m = meta();
 gSmooth = 1.0;
 gRover = r;
 gRoverY = ground(r.xy);
+gTurn = rot(-r.z);
 { vec2 b = beaconAt(0.0); gB0 = vec4(b, standing(0.0), ground(b)); }
 { vec2 b = beaconAt(1.0); gB1 = vec4(b, standing(1.0), ground(b)); }
 { vec2 b = beaconAt(2.0); gB2 = vec4(b, standing(2.0), ground(b)); }
@@ -2000,6 +2040,12 @@ export async function generateEditor(host) {
   const mouse = [0.5, 0.5];
   let mouseDown = 0;
   let paused = false, pausedAt = 0;
+  // The stage: the canvas and its overlay together, and the element that goes
+  // fullscreen. Centred and letterboxed there, because a sketch has an aspect
+  // and a screen has a different one.
+  const stage = el("div", { style: { position: "relative", display: "flex",
+                                     alignItems: "center", justifyContent: "center" } },
+                   canvas, grid.overlay);
   const fpsLabel = el("span.fine");
   const stateLabel = el("span.fine");
   let frames = 0, lastFpsAt = performance.now();
@@ -2012,9 +2058,51 @@ export async function generateEditor(host) {
   let deltas = [];              // recent frame-to-frame times, for the auto scale
   let settled = false;          // auto has chosen, and stops choosing
   const wantScale = () => (doc.renderScale === undefined ? "auto" : doc.renderScale);
+  const isFull = () => document.fullscreenElement === stage;
+  /**
+   * The size a render aims at before the scale is applied: the authored
+   * preview normally, and the screen with the sketch's own aspect fitted into
+   * it when fullscreen. Capped at 1920×1080 — past that the scale would just
+   * take it back down again, and a 4K backing store for a raymarcher is
+   * several seconds a frame rather than a nicer picture.
+   */
+  const baseSize = () => {
+    if (!isFull()) return doc.preview;
+    return fitAspect(doc.preview[0] / doc.preview[1],
+                     Math.min(stage.clientWidth || screen.width, 1920),
+                     Math.min(stage.clientHeight || screen.height, 1080));
+  };
+  const fsBtn = el("button", {
+    title: "show the render on its own. The state is the size of the picture, so this restarts a simulation",
+    onclick: () => {
+      if (isFull()) document.exitFullscreen();
+      // A browser may simply refuse — an embedded frame without the permission
+      // is the common one — and a button that does nothing and says nothing is
+      // worse than one that says it was refused.
+      else if (stage.requestFullscreen) {
+        stage.requestFullscreen().catch((e) => {
+          log.textContent = `fullscreen was refused: ${String(e.message || e)}`;
+        });
+      } else log.textContent = "this browser has no fullscreen for an element";
+    } }, "Fullscreen");
+  // Entering or leaving changes what a full-size render *is*, so the scale is
+  // asked again from scratch rather than carried across.
+  const onFullscreen = () => {
+    fsBtn.textContent = isFull() ? "Exit fullscreen" : "Fullscreen";
+    stage.style.background = isFull() ? "#000" : "";
+    stage.style.width = isFull() ? "100%" : "";
+    stage.style.height = isFull() ? "100%" : "";
+    canvas.style.width = isFull() ? "auto" : "100%";
+    canvas.style.height = isFull() ? "auto" : "";
+    canvas.style.maxWidth = "100%";
+    canvas.style.maxHeight = isFull() ? "100%" : "";
+    rescale();
+  };
+  document.addEventListener("fullscreenchange", onFullscreen);
   const applyScale = (scale) => {
-    const w = Math.max(16, Math.round(doc.preview[0] * scale));
-    const h = Math.max(16, Math.round(doc.preview[1] * scale));
+    const base = baseSize();
+    const w = Math.max(16, Math.round(base[0] * scale));
+    const h = Math.max(16, Math.round(base[1] * scale));
     if (canvas.width === w && canvas.height === h) return false;
     canvas.width = w; canvas.height = h;
     // The state is the size of the picture, so changing the size is the end of
@@ -2272,7 +2360,7 @@ export async function generateEditor(host) {
       if (deltas.length >= 24) {
         const sorted = deltas.slice(4).sort((a, b) => a - b);
         const median = sorted[sorted.length >> 1];
-        const scale = scaleForBudget(median, canvas.width / doc.preview[0]);
+        const scale = scaleForBudget(median, canvas.width / baseSize()[0]);
         settled = true;
         applyScale(scale);
       }
@@ -2283,10 +2371,11 @@ export async function generateEditor(host) {
         soundBtn.hidden = false;
         soundBtn.title = soundSaid || (wantSound ? `${soundNotes} notes so far` : "");
       }
-      const scale = canvas.width / doc.preview[0];
+      const base = baseSize();
+      const scale = canvas.width / base[0];
       fpsLabel.textContent =
         `${Math.round((frames * 1000) / (now - lastFpsAt))} fps · ${canvas.width}×${canvas.height}`
-        + (scale < 0.999 ? ` · ${Math.round(scale * 100)}% of ${doc.preview[0]}×${doc.preview[1]}` : "");
+        + (scale < 0.999 ? ` · ${Math.round(scale * 100)}% of ${base[0]}×${base[1]}` : "");
       frames = 0; lastFpsAt = now;
     }
     raf = requestAnimationFrame(frame);
@@ -3110,11 +3199,11 @@ uniform bool  mirror;  // @toggle`),
               "statements before the final expression are allowed.",
           onResult: (res) => { editor.value = res.text; doc.uniforms = {}; run(); restart(); },
         }),
-        scaleSel, seedLabel, fpsLabel, stateLabel, soundBtn)),
+        fsBtn, scaleSel, seedLabel, fpsLabel, stateLabel, soundBtn)),
 
     el("div.lab-split", {},
       el("div.stack", {},
-        el("div.lab-out", {}, el("div", { style: { position: "relative" } }, canvas, grid.overlay), log),
+        el("div.lab-out", {}, stage, log),
         knobHost,
         el("p.fine", {}, "Ctrl/Cmd+Enter runs. Editing re-runs after a pause. " +
           "A sketch that fails to compile leaves the last working image on " +
