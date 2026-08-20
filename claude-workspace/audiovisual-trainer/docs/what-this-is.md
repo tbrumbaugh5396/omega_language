@@ -61,8 +61,8 @@ glyph atlas (exact Euclidean distance transform, MSDF), a font-file parser
 (`glyf`, CFF Type 2, `cmap`, GPOS kerning, GSUB ligatures), a `.cube` LUT
 reader, a store-only ZIP writer, a WGSL portability auditor, a small expression language for parameters, the
 keyboard as a texture, an event queue, a content-addressed instrument
-library, a WGSL emitter with a WebGPU runner, and a **228-check self-test
-across 33 groups that runs inside the app**.
+library, a WGSL emitter with a WebGPU runner for both a sketch and the whole
+graph, and a **234-check self-test across 34 groups that runs inside the app**.
 
 ---
 
@@ -326,17 +326,24 @@ surprise:
   needs a Brotli decoder and its static dictionary, which is out of proportion
   to what it buys.
 - **AI authoring of nodes** — the agents write briefs and critiques today.
-- **A second backend, for one sketch at a time.** There is a WGSL emitter and
-  a WebGPU runner, and **every node type in the catalogue now translates**:
-  53 render, **48 of them pixel-identical** to the GL path on this machine.
-  The 11 that are refused are all field ports, which are compiled away into
-  their shade node before a plan exists, so they never run as nodes. The five
-  that render without matching are named with their numbers, and each is one
-  of three places the *backends* differ rather than the translator — a hash
-  through multiply-add fusion, `p.y` through reciprocal-versus-divide, and
-  `fwidth` through whichever 2×2 quad the driver chose. What is missing is the
-  render graph: pooling, fusion, feedback and tiling have no WebGPU path, and
-  none of them should until somebody needs one.
+- **A second backend, complete for the graph.** There is a WGSL emitter, a
+  WebGPU runner and a WebGPU *graph* runner. Every node type in the catalogue
+  translates: 53 render, **48 of them pixel-identical** to the GL path on this
+  machine. The 11 refused are all field ports, which are compiled away into
+  their shade node before a plan exists, so they never run as nodes. The
+  render graph itself — a pool, fused runs, feedback kept between frames,
+  several steps in a row, registers in 32 bits — is **identical on both
+  backends** across seven shapes, including twelve generations of Life cell
+  for cell and a ship flown forty frames. It shares the planner rather than
+  reimplementing it, so a difference between the two can only ever be a
+  difference in how a pass runs, not in which passes there are. The five nodes
+  that render without matching agree exactly on every *opaque* pixel; what is
+  left differs only where alpha is partial, which is the GL side being read
+  back through a premultiplied canvas rather than a difference in the picture.
+  Two places the backends genuinely part remain, both named with numbers: a
+  hash amplifying one ulp through multiply-add fusion, and `p.y` at a height
+  that is not a power of two. What is still GL-only is tiling, which lives at
+  the sketch level, and the studios, which all still draw through GL.
 
 The sketchpad-tier caveats in [`../README.md`](../README.md) still apply to the
 studios as tools. This document is about the machinery underneath them.

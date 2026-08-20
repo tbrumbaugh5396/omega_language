@@ -889,9 +889,17 @@ ${usesKeys ? KEY_HELPERS : ""}
 ${body}
 
 @fragment fn fs(@builtin(position) FC: vec4f) -> @location(0) vec4f {
-  // WebGPU's position is top-down and GL's is bottom-up; flipping here is the
-  // one place the two conventions meet, exactly as present() is in the GL path.
-  let fc = vec2f(FC.x, U.resolution.y - FC.y);
+  // Not flipped, and that is deliberate. WebGPU's builtin position counts down
+  // from the top and GL's gl_FragCoord counts up from the bottom, so flipping
+  // here makes a single picture come out the right way up — and makes every
+  // *render target* the other way up from a GL framebuffer. Nothing noticed
+  // while the only textures a sketch sampled were ones the host uploaded; a
+  // render graph samples what the pass before it drew, and then a chain of
+  // passes flips once per pass and a directional filter runs on an upside-down
+  // picture. One convention throughout: row 0 of a target is the bottom of the
+  // picture, exactly as in GL, and the readback turns it up the right way at
+  // the end — which is what present() does over there.
+  let fc = FC.xy;
 ${reserved}
 ${fragCoord}
 ${reservedU}

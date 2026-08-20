@@ -1856,18 +1856,88 @@ composited over black — the picture either backend actually shows —
 *without* `UNPACK_FLIP_Y_WEBGL`, so the WebGPU side must not flip it either;
 flipping it swapped "held" for "toggled" and read 255/255 apart.
 
-**A third place the backends genuinely differ, and it is not the translator.**
-Alongside multiply-add fusion in a hash and the reciprocal-versus-divide in
-`p.y`, there is `fwidth`: the same distance field is 0/255 apart and the same
-field through `aa()` is 6/255, on the edge pixels only. A derivative is a fact
-about whichever 2×2 quad the driver chose, and WGSL offers coarse and fine
-forms where GLSL ES offers a hint. It is why the five nodes that are not
-identical are the ones that draw an edge — and why `filter.grain`, at 8.8/255,
-is the hash rather than the edge.
+**A third place the backends appeared to differ — and did not.** This phase
+reported `fwidth` as a third cause, alongside multiply-add fusion in a hash and
+reciprocal-versus-divide in `p.y`: the same distance field 0/255 apart and the
+same field through `aa()` 6/255, on edge pixels only. That was wrong, and
+Phase 24 found out why — it was the emitter flipping `@builtin(position)`,
+which gave the two sides opposite derivative signs. With the flip gone, `aa()`
+and `fwidth` are both **0/255**. The reading was real; the explanation was a
+guess that fitted it, and the fix for something else disproved it.
 
 *Left:* still one sketch to one texture. Nothing about the render graph —
 pooling, fusion, feedback, tiling — has a WebGPU path, and none of it should
 until somebody needs it; the translation is now the part that is finished.
+
+### Phase 24 — The render graph on WebGPU *(L)* — **shipped**
+
+`webgpu-graph.js`: a pool of textures, a pipeline per node type, fused runs,
+feedback kept between frames, several steps in a row — the same list as the GL
+runner, on the second backend.
+
+**The design decision that matters is what is *not* in the file.**
+`resolveParams`, `compileFields` and `planPasses` are imported, not written
+again. Nothing in the WebGPU runner decides what to draw. That is why the
+self-test can assert that both backends produce *the same plan*, and why a
+difference between them can only ever be a difference in how a pass is
+executed — never a disagreement about which passes there are.
+
+| held against the GL runner | number |
+|---|---|
+| one node, one draw | **identical** |
+| three nodes fused into one draw | **identical** |
+| two spatial passes with a buffer between them | **identical** |
+| a two-input composite | **identical** |
+| a node carrying a lookup table | **identical** |
+| Life, twelve generations of ping-pong | **0 cells differ**, and the glider is still a glider |
+| a ship flown forty frames, state in `rgba32float` | **identical** |
+
+**Three things the second backend does differently, and why.**
+
+*One submission.* GL issues each draw as it is encoded; here every pass in a
+frame goes into one command encoder and is submitted once.
+
+*Bind group layouts written out rather than derived.* `layout: "auto"` builds
+the layout from what the shader statically reads, so a binding the module
+never touches is absent and a graph that binds it is invalid — the failure that
+made forty-eight node types "refuse the draw" at once earlier in this work.
+It also cannot express `rgba32float`, which is `unfilterable-float` and is
+exactly what a simulation's register needs. Writing the layouts out fixes both,
+and the target's format joins the pipeline key, because a module whose fragment
+target says `rgba16float` cannot draw into a 32-bit texture.
+
+*Formats instead of extensions.* `rgba16float` is renderable and filterable in
+core WebGPU. The GL path negotiates for the same thing through
+`EXT_color_buffer_float`, `OES_texture_half_float` and a byte fallback.
+
+**One convention, found the hard way.** The emitter used to flip
+`@builtin(position)`, so that a single picture came out the right way up. That
+also made every *render target* the opposite way up from a GL framebuffer —
+which nothing noticed while the only textures a sketch sampled were ones the
+host had uploaded. A render graph samples what the pass before it drew, and the
+first two-pass comparison came back 41.3/255 apart and **exactly 0 when
+compared upside down**. The flip is gone: a target holds the picture the way a
+GL framebuffer does, bottom row first, and the readback turns it up the right
+way at the end — which is what `present()` does on the other side. The forty-
+eight identical node types stayed identical through the change, and the five
+that were not identical each got slightly closer.
+
+**And what the flip was hiding.** With one convention throughout, the five
+nodes that "render without matching" mostly stop: on every **opaque** pixel of
+`game.menu`, `game.pongView` and `game.shipView` the two backends are exactly
+equal. What is left differs only where alpha is partial — and that is the GL
+side's round trip, not the picture: `present()` premultiplies into a canvas and
+`getImageData` un-premultiplies on the way out, which at low alpha cannot
+return the number it started from. The WebGPU readback never takes that trip.
+
+So the honest list of places the two backends actually part is **two**, not
+five: a hash amplifying one ulp through multiply-add fusion (`filter.grain`,
+8.8/255), and `p.y` at a height that is not a power of two, where one driver
+multiplies by the reciprocal and the other divides.
+
+*Left:* tiling, which lives in `renderTiled` at the sketch level rather than in
+the graph, and a WebGPU path for the studios themselves — this runs the graph
+and hands back a texture, and every studio still draws through GL.
 
 ## 4. Decisions and risks
 
@@ -1931,6 +2001,7 @@ until somebody needs it; the translation is now the part that is finished.
 | 21.2 | Three more games in Generate — **shipped** | S | 20.1 | breakout, a flyer, and pong |
 | 22.1 | Snake, a tilemap platformer, a raymarched rover — **shipped** | M | 21.2 | a grid, a tilemap and a lit 3-D world |
 | 23.1 | The last of the catalogue — **nothing untranslated** | M | 21.1 | 48 of 53 identical; the 11 refusals are field ports |
+| 24.1 | The render graph on WebGPU — **shipped** | L | 23.1 | pool, fusion, feedback and 32-bit registers, identical |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

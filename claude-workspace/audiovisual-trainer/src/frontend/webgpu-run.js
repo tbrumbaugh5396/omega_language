@@ -196,7 +196,11 @@ export async function renderSketchGpu(sketch, width, height, opts = {}) {
   await read.mapAsync(GPUMapMode.READ);
   const padded = new Uint8Array(read.getMappedRange());
   const data = new Uint8ClampedArray(width * height * 4);
-  for (let y = 0; y < height; y++) data.set(padded.subarray(y * bpr, y * bpr + width * 4), y * width * 4);
+  // Rows reversed: the target holds the picture the way a GL framebuffer does,
+  // bottom row first, and a caller wants what getImageData gives — top first.
+  for (let y = 0; y < height; y++) {
+    data.set(padded.subarray(y * bpr, y * bpr + width * 4), (height - 1 - y) * width * 4);
+  }
   read.unmap();
   read.destroy();
   target.destroy();

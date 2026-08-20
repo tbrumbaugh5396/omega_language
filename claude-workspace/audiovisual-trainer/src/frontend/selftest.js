@@ -52,6 +52,7 @@ import { renderTiled, maxRenderSize } from "./shader-run.js";
 import { auditNodes, portabilitySummary, auditSource } from "./wgsl-audit.js";
 import { toWgsl } from "./wgsl-emit.js";
 import { renderSketchGpu, gpuDescribe } from "./webgpu-run.js";
+import { renderGraphGpu, gpuGraphRunner, GpuGraphRunner } from "./webgpu-graph.js";
 import { zipStore, crc32 } from "./zip-store.js";
 import { graphStats } from "./graph-compile.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
@@ -2203,6 +2204,159 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
     push({ group: "Sketch effects", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
   }
 
+  // The render graph on the second backend. The sketch translator was held to
+  // one picture at a time; this is the machinery around it — a pool, fused
+  // runs, feedback kept between frames, several steps in a row — and the bar
+  // is the same one: not "close", but the same bytes.
+  //
+  // The strongest evidence here is not a number, it is that the plans match.
+  // `resolveParams`, `compileFields` and `planPasses` are imported by the
+  // WebGPU runner rather than written again, so a difference between the two
+  // backends cannot be a difference about *which* passes there are.
+  try {
+    const runner = await gpuGraphRunner();
+    if (!runner) {
+      push({ group: "Graph on WebGPU", name: "a second backend for the graph", ok: true,
+             detail: "this machine has no WebGPU, so nothing was measured — the GL path is unaffected" });
+    } else {
+      const W = 64, H = 48;
+      // The block's own helpers: the ones above are local to their own try.
+      const px = (c, w, h) => c.getContext("2d").getImageData(0, 0, w, h).data;
+      const seedCanvas = (w, h, draw) => {
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
+        const g2 = c.getContext("2d");
+        g2.fillStyle = "#000"; g2.fillRect(0, 0, w, h);
+        g2.fillStyle = "#fff"; draw(g2);
+        return c;
+      };
+      let stateN = 0;
+      const fresh = (g) => { g.stateKey = `selftest-gpu-graph-${stateN++}`; return g; };
+      const pic = document.createElement("canvas"); pic.width = W; pic.height = H;
+      { const g2 = pic.getContext("2d");
+        const gr = g2.createLinearGradient(0, 0, W, H);
+        gr.addColorStop(0, "#f4efe6"); gr.addColorStop(1, "#1b2b4b");
+        g2.fillStyle = gr; g2.fillRect(0, 0, W, H);
+        g2.fillStyle = "#e04020"; g2.beginPath(); g2.arc(22, 20, 11, 0, Math.PI * 2); g2.fill();
+        g2.fillStyle = "#1fa36c"; g2.fillRect(44, 8, 14, 22); }
+
+      // Both composited over black, which is the picture either backend shows.
+      const agree = (gpu, gl, w, h) => {
+        let sum = 0, worst = 0;
+        for (let i = 0; i < w * h; i++) {
+          const ga = gpu[i * 4 + 3] / 255, la = gl[i * 4 + 3] / 255;
+          for (let k = 0; k < 3; k++) {
+            const d = Math.abs(Math.round(gpu[i * 4 + k] * ga) - Math.round(gl[i * 4 + k] * la));
+            sum += d; if (d > worst) worst = d;
+          }
+        }
+        return { mean: sum / (w * h * 3), worst };
+      };
+
+      // 1. Five shapes, each exercising a different part of the runner.
+      { const shapes = [];
+        const mk = (name, build) => {
+          const g = fresh(createGraph(W, H));
+          const s0 = addNode(g, "source");
+          build(g, s0);
+          shapes.push({ name, g, s0 });
+        };
+        mk("one node, one draw", (g, s0) => { g.output = addNode(g, "adjust.invert", {}, [s0]); });
+        mk("three nodes fused into one draw", (g, s0) => {
+          const a = addNode(g, "adjust.exposure", { stops: [0.6] }, [s0]);
+          const b = addNode(g, "adjust.grade", { saturation: [1.4] }, [a]);
+          g.output = addNode(g, "filter.vignette", {}, [b]);
+        });
+        mk("two spatial passes, a buffer between them", (g, s0) => {
+          const b1 = addNode(g, "filter.blur1d", { radius: [3], dir: [1, 0] }, [s0]);
+          g.output = addNode(g, "filter.blur1d", { radius: [3], dir: [0, 1] }, [b1]);
+        });
+        mk("a two-input composite", (g, s0) => {
+          const e = addNode(g, "adjust.exposure", { stops: [1.2] }, [s0]);
+          g.output = addNode(g, "composite.blend", { mode: [2], opacity: [0.6] }, [s0, e]);
+        });
+        mk("a node carrying a lookup table", (g, s0) => { g.output = addNode(g, "adjust.curves", {}, [s0]); });
+        const bad = [], plans = [];
+        for (const { name, g, s0 } of shapes) {
+          let glPasses = null;
+          const gl = px(renderGraph(g, { [s0]: pic }, { onPasses: (ps) => { glPasses = ps; } }), W, H);
+          const r = await renderGraphGpu(g, { [s0]: pic }, {});
+          const same = JSON.stringify(glPasses.map((q) => q.type)) === JSON.stringify(r.passes.map((q) => q.type));
+          const { mean, worst } = agree(r.data, gl, W, H);
+          plans.push(`${name}: ${glPasses.length} pass${glPasses.length === 1 ? "" : "es"}`);
+          if (!same || worst !== 0) bad.push(`${name}: ${same ? "" : "different plan, "}${worst}/255 apart`);
+        }
+        push({ group: "Graph on WebGPU", name: `${shapes.length} graph shapes, both backends, the same bytes`,
+               ok: bad.length === 0,
+               detail: bad.length === 0
+                 ? `${plans.join(" · ")} — the same plan from the same planner, and every pixel identical`
+                 : bad.join(" · ") }); }
+
+      // 2. Feedback: the memory is the picture before, and it survives.
+      { const S = 32;
+        const cells = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
+        const seed = seedCanvas(S, S, (g) => { for (const [x, y] of cells) g.fillRect(x + 4, y + 4, 1, 1); });
+        const build = (key) => {
+          const g = fresh(createGraph(S, S));
+          g.stateKey = key;
+          const s0 = addNode(g, "source");
+          const life = addNode(g, "sim.life", {}, [null, s0], { name: "life" });
+          feedback(g, life, 0, life);
+          g.output = life;
+          return { g, s0 };
+        };
+        const a = build(`life-gl-${Math.random()}`), b = build(`life-gpu-${Math.random()}`);
+        const gl = px(renderGraph(a.g, { [a.s0]: seed }, { steps: 13, reset: true }), S, S);
+        const r = await renderGraphGpu(b.g, { [b.s0]: seed }, { steps: 13, reset: true });
+        let wrong = 0, alive = 0;
+        for (let i = 0; i < S * S; i++) {
+          const got = r.data[i * 4] > 127 ? 1 : 0;
+          if (got !== (gl[i * 4] > 127 ? 1 : 0)) wrong++;
+          alive += got;
+        }
+        push({ group: "Graph on WebGPU", name: "Life: twelve generations of ping-pong, cell for cell",
+               ok: wrong === 0 && alive === 5,
+               detail: `${wrong} cells differ from the GL run · ${alive} alive, so the glider is still a glider · `
+                 + "thirteen draws, each reading what the one before wrote, in one submission" }); }
+
+      // 3. A register in 32 bits — which is the reason the bind group layouts
+      //    here are written out rather than derived. `layout: "auto"` calls
+      //    every sampled texture filterable, and rgba32float is not one.
+      { const kb = document.createElement("canvas"); kb.width = 256; kb.height = 3;
+        { const k = kb.getContext("2d"); k.fillStyle = "#000"; k.fillRect(0, 0, 256, 3);
+          k.fillStyle = "#fff"; k.fillRect(38, 0, 1, 1); }          // right arrow, held
+        const build = (key) => {
+          const g = fresh(createGraph(W, H));
+          g.stateKey = key;
+          const ship = addNode(g, "game.ship", {}, [null], { name: "ship" });
+          feedback(g, ship, 0, ship);
+          g.output = addNode(g, "game.shipView", {}, [ship]);
+          return g;
+        };
+        const gl = px(renderGraph(build(`ship-gl-${Math.random()}`), {},
+                                  { steps: 40, reset: true, keys: kb }), W, H);
+        const r = await renderGraphGpu(build(`ship-gpu-${Math.random()}`), {},
+                                       { steps: 40, reset: true, keys: kb });
+        const { mean, worst } = agree(r.data, gl, W, H);
+        const stats = runner.stats();
+        push({ group: "Graph on WebGPU", name: "a ship flown forty frames, its state in 32 bits",
+               ok: worst === 0 && stats.floatMemories >= 1,
+               detail: worst === 0
+                 ? `identical after forty frames of the same held key · ${stats.floatMemories} memory in rgba32float, `
+                   + "which is unfilterable and needs a layout written out rather than derived from the shader"
+                 : `${worst}/255 apart, mean ${mean.toFixed(2)}` }); }
+
+      // 4. What has no pass here, said rather than counted.
+      { const refused = GpuGraphRunner.refusals();
+        const kinds = new Set(refused.map((r) => r.why.slice(0, 28)));
+        push({ group: "Graph on WebGPU", name: "the node types this backend has no pass for", ok: kinds.size <= 1,
+               detail: refused.length === 0 ? "none — every node type has a WebGPU pass"
+                 : `${refused.length}: ${[...kinds].join(" · ")} — a field port is compiled into its shade node `
+                   + "before a plan exists, so it never reaches a runner of either kind" }); }
+    }
+  } catch (e) {
+    push({ group: "Graph on WebGPU", name: "run", ok: false, detail: String(e.message).split("\n")[0] });
+  }
+
   // WebGPU: the second backend, as a number rather than an argument.
   //
   // `wgsl-audit.js` has said for several phases that nothing in the node
@@ -2375,21 +2529,58 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                  ? `each renders pixel-identically to the GL path: ${cases.map(([w]) => w).join(" · ")}`
                  : bad.join(" · ") }); }
 
-      // 3c. And the third place they differ, which is neither the translator
-      //     nor arithmetic: a screen-space derivative. `fwidth` is a fact
-      //     about the 2×2 quad the driver chose, and WGSL offers coarse and
-      //     fine forms where GLSL ES offers a hint — so `aa()`, which every
-      //     antialiased edge in the catalogue goes through, is where the
-      //     remaining differences live.
+      // 3c. What is left, and what turned out not to be a difference at all.
+      //
+      //     This check used to assert that `fwidth` was a third place the
+      //     backends part, at 6/255 on edge pixels. It was not: it was the
+      //     emitter flipping @builtin(position), which gave the two sides
+      //     opposite derivative signs. With the flip gone, an antialiased
+      //     edge is identical — and so is fwidth on its own.
+      //
+      //     What remains, measured rather than assumed: on every *opaque*
+      //     pixel the two backends agree exactly. Where a node still differs,
+      //     it differs only where alpha is partial, and that is the GL side's
+      //     round trip — present() premultiplies into a canvas and
+      //     getImageData un-premultiplies on the way out, which at low alpha
+      //     cannot come back to the number it started from. The WebGPU side
+      //     never takes that trip. It is a fact about reading GL back through
+      //     a canvas, not about either picture.
       { const flat = await compare(`float d = sdCircle(p, 0.3);\nvec3(d * 0.5 + 0.5)`, {}, 40, 32);
         const edged = await compare(`vec3(aa(sdCircle(p, 0.3)))`, {}, 40, 32);
-        push({ group: "WebGPU", name: "an antialiased edge is the third place the two backends part",
-               ok: flat.worst === 0 && edged.worst > 0,
-               detail: `the same distance field: ${flat.worst}/255 apart. The same field through aa(): `
-                 + `${edged.worst}/255, on the edge pixels only (mean ${edged.mean.toFixed(2)}/255) — `
-                 + "aa() takes fwidth(), which is a derivative across whichever 2×2 quad the driver chose, "
-                 + "and WGSL has coarse and fine forms where GLSL ES has a hint. It is why the nodes that "
-                 + "are not identical are the ones that draw an edge." }); }
+        const width = await compare(`vec3(fwidth(p.x) * 40.0, fwidth(p.y) * 40.0, 0.0)`, {}, 40, 32);
+
+        // And the same claim about the catalogue: split by alpha rather than
+        // averaged over it.
+        const split = [];
+        for (const id of ["game.menu", "game.pongView", "game.shipView"]) {
+          const t = NODE_TYPES.get(id);
+          if (!t) continue;
+          const g4 = await renderSketchGpu(t.source, 40, 32, {});
+          const b4 = renderSketch(t.source, 40, 32, { time: 0 }).getContext("2d").getImageData(0, 0, 40, 32).data;
+          let opaque = 0, partial = 0, nPartial = 0;
+          for (let i = 0; i < 40 * 32; i++) {
+            const al = b4[i * 4 + 3];
+            if (al === 0) continue;
+            const ga = g4.data[i * 4 + 3] / 255, la = al / 255;
+            let d = 0;
+            for (let k = 0; k < 3; k++) {
+              d = Math.max(d, Math.abs(Math.round(g4.data[i * 4 + k] * ga) - Math.round(b4[i * 4 + k] * la)));
+            }
+            if (al === 255) opaque = Math.max(opaque, d);
+            else { partial = Math.max(partial, d); nPartial++; }
+          }
+          split.push({ id, opaque, partial, nPartial });
+        }
+        const cleanOpaque = split.every((r) => r.opaque === 0);
+        push({ group: "WebGPU", name: "an antialiased edge is not a difference, and neither is anything opaque",
+               ok: flat.worst === 0 && edged.worst === 0 && width.worst === 0 && cleanOpaque,
+               detail: `a distance field ${flat.worst}/255, the same field through aa() ${edged.worst}/255, `
+                 + `fwidth on its own ${width.worst}/255 — the 6/255 this check used to report was the emitter `
+                 + "flipping the fragment position, not the driver's choice of quad. And on every opaque pixel of "
+                 + split.map((r) => `${r.id} ${r.opaque}/255`).join(", ")
+                 + " — what is left differs only where alpha is partial ("
+                 + split.map((r) => `${r.partial}/255 over ${r.nPartial} px`).join(", ")
+                 + "), which is present() premultiplying into a canvas and getImageData un-premultiplying back out" }); }
 
       // 4. It refuses rather than guesses.
       { const cases = [
