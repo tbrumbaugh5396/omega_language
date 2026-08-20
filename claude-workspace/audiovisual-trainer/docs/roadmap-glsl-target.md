@@ -2421,6 +2421,61 @@ because two texels want it.
 *Left:* the beds are mono and the same everywhere; nothing is quieter behind a
 hill or louder near the shore you can see.
 
+### Phase 32 — Sound a hill gets in the way of, and a view that stays upright *(M)* — **shipped**
+
+**Positional sound.** `exposure()` — eight fetches of the same baked map the
+marcher reads, on the compass at twenty-five metres, asking how much of the
+surrounding ground stands above your ear. It runs in *one texel of the state
+pass, once a frame*, which is precisely why it can afford eight fetches where
+`scene()` could not afford two. That asymmetry is the whole reason this is
+cheap.
+
+Wind and surf are scaled by it — in a hollow the wind is not gone, it is
+distant, which is the difference between an occluder and a mute — and the dawn
+chorus is gated by it, so a bird behind a ridge is not heard.
+
+Measured over a walk it spans **0.69 to 1.00**: a measure of where you are
+standing rather than a constant. The first threshold asked for a ridge nine
+metres above the ear and sat between 0.96 and 0.99 everywhere, telling you
+nothing.
+
+**The chorus is gated rather than faded, and that is a limit worth naming.**
+Fading it wants a per-note velocity; `env.ad` triggers on `gate > 0.5`, so a
+fractional gate never fires, and `osc.sineHz` takes the envelope as its gate
+with no signal-by-signal multiply in the catalogue to put a velocity in
+between. That is a new DSP node and a change to every tone instrument — worth
+doing, not worth pretending is done.
+
+**A view you can keep your bearings in.** Three things, and the first is the
+one that mattered:
+
+*Roll comes back to level on its own.* Free roll is what makes a first-person
+view lose its grounding — the horizon stops telling you which way up you are
+and nothing puts it back. Roll is now something you *hold*: let go and it
+returns over about a third of a second. Measured: 1.65 rad held, 0.014 a second
+and a half after letting go.
+
+*The mouse turns by how far it moved*, not by where it is. The first version
+steered by the pointer's position — hold it left of centre and the world spins,
+which is a joystick. The pointer's previous position now lives in a register
+beside everything else the world remembers, and the turn is the delta. It is
+also in *picture pixels* rather than a fraction of the window, which is why the
+same mouse feels the same in a small window and a large one.
+
+*And a reticle.* Four ticks and a gap, in the picture's own pixels. It is the
+cheapest thing in the file and it does more for the feeling of standing
+somewhere than anything else in it: without a fixed mark to look through, a
+first-person view is a camera being flown rather than a head being turned.
+
+**One more shadowed name**, the third this month: the meta register was called
+`m`, which is the reserved mouse, so `m` inside the state pass was a `vec4` and
+the mouse was not there at all. The rule — a sketch that declares a name gets
+its own — is right, and it is a sharp edge every time.
+
+*Left:* no panning, because a note carries no position and the instrument path
+is mono; and the beds are still one sound each rather than a near one and a far
+one.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2493,6 +2548,7 @@ hill or louder near the shore you can see.
 | 29.2 | A herd and a flock — **shipped** | S | 29.1 | 12.8 ms; the herd 0.4, the birds 1.4 and no fetch |
 | 30.1 | Day and night, a moon and stars, roll/pitch/yaw | M | 29.2 | 12.2 ms; stars on the direction, not the screen |
 | 31.1 | Dawn sounds and ambient noise — **shipped** | M | 30.1 | beds by param, pulses by shader; 6 levels, 2 notes |
+| 32.1 | Occlusion, and an FPS feel — **shipped** | M | 31.1 | exposure 0.69–1.00 over a walk; roll self-levels |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

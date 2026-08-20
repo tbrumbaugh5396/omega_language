@@ -1706,6 +1706,31 @@ vec2 spawnPoint() {
   return vec2(0.0);
 }
 
+/**
+ * How exposed a spot is: 1 on a ridge with nothing around it, 0 in a hollow.
+ *
+ * Eight fetches of the same baked map the marcher uses, at twenty-five metres
+ * on the compass. This is the whole of "quieter behind a hill" for the things
+ * that are heard continuously — wind is loud where there is nothing to stop
+ * it, and the sea is not heard from behind a ridge.
+ *
+ * It runs in one texel of the state pass, once a frame, which is why it can
+ * afford eight fetches while scene() cannot afford two.
+ */
+float exposure(vec2 at, float earY) {
+  float open = 0.0;
+  for (int i = 0; i < 8; i++) {
+    float a = float(i) * 0.7853982;
+    vec2 q = at + vec2(cos(a), sin(a)) * 25.0;
+    // Above the ear is in the way; below it is not.
+    // A ridge four metres above the ear at twenty-five paces already hides
+    // what is behind it. At nine the measure sat between 0.96 and 0.99
+    // everywhere and told you nothing about where you were standing.
+    open += 1.0 - smoothstep(-2.5, 4.0, ground(q) - earY);
+  }
+  return open / 8.0;
+}
+
 // ------------------------------------------------------------ the walker
 // By texel, not by uv: the state and the picture are different sizes now, so
 // dividing by u_resolution would be the wrong division in the display pass.
@@ -1716,11 +1741,11 @@ vec4 view()  { return reg(vec2(3.0, 0.0)); }  // pitch, roll, time of day, -
 
 vec4 sim(vec2 uvv) {
   vec2 texel = floor(gl_FragCoord.xy);
-  if (texel.y > 0.5 || texel.x > 6.5) return vec4(0.0);
+  if (texel.y > 0.5 || texel.x > 7.5) return vec4(0.0);
   bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
   float dt = 1.0 / 60.0;
   vec4 w = first ? vec4(spawnPoint(), 0.6, 0.0) : who();
-  vec4 m = first ? vec4(0.0) : meta();
+  vec4 mt = first ? vec4(0.0) : meta();
 
   float lf = max(keyDown(u_keys, 37.0), keyDown(u_keys, 65.0));
   float rt = max(keyDown(u_keys, 39.0), keyDown(u_keys, 68.0));
@@ -1737,11 +1762,36 @@ vec4 sim(vec2 uvv) {
   float dnK = max(keyDown(u_keys, 75.0), keyDown(u_keys, 34.0));    // K / PageDown
   float rlK = keyDown(u_keys, 81.0), rrK = keyDown(u_keys, 69.0);   // Q / E
   float pitch = clamp(v.x + (upK - dnK) * look * dt, -1.45, 1.45);
+
+  // Roll comes back to level on its own.
+  //
+  // Free roll is what makes a first-person view lose its grounding: the
+  // horizon stops telling you which way up you are, and nothing puts it back.
+  // A shooter keeps up pointing up, so roll here is something you *hold* — let
+  // go and it returns over about a third of a second. It is still there when
+  // you want to lean into a turn; it is simply not somewhere you can end up by
+  // accident.
   float roll = v.y + (rlK - rrK) * look * dt;
-  // …and dragging the mouse looks around, which is what a mouse is for.
-  if (md > 0.5) {
-    heading += (m.x - 0.5) * look * dt * 3.4;
-    pitch = clamp(pitch + (m.y - 0.5) * look * dt * 2.6, -1.45, 1.45);
+  if (rlK + rrK < 0.5) roll *= exp(-dt * 3.2);
+
+  // Mouse look, by the *delta* rather than the position.
+  //
+  // The first version steered by where the pointer was — hold it left of
+  // centre and the world spins, which is a joystick, not a mouse. A shooter
+  // turns by how far the mouse moved since the last frame, so the pointer's
+  // previous position is kept in a register beside everything else the world
+  // remembers.
+  // u_mouse is in the picture's pixels, and in the state pass u_resolution is
+  // the *state's* — so there is nothing here to normalise by, and nothing that
+  // should be: a shooter turns by an angle per pixel the mouse moved, not per
+  // fraction of a window, which is why the same mouse feels the same in a
+  // small window and a large one.
+  vec2 mouseNow = u_mouse / 600.0;
+  vec4 mouseMem = first ? vec4(mouseNow, 0.0, 0.0) : reg(vec2(7.0, 0.0));
+  if (md > 0.5 && mouseMem.z > 0.5) {
+    vec2 dm = mouseNow - mouseMem.xy;
+    heading += dm.x * look * 5.2;
+    pitch = clamp(pitch - dm.y * look * 4.0, -1.45, 1.45);
   }
   float clock = fract(v.z + dt / max(dayLen, 1.0));
   float sp = (fw - bk) * walk * run;
@@ -1749,7 +1799,7 @@ vec4 sim(vec2 uvv) {
   vec2 pos = w.xy + dir * sp * dt;
 
   if (texel.x < 0.5) return vec4(pos, heading, sp);
-  if (texel.x < 1.5) return vec4(m.x + abs(sp) * dt, 0.0, 0.0, 1.0);
+  if (texel.x < 1.5) return vec4(mt.x + abs(sp) * dt, 0.0, 0.0, 1.0);
   // The weather, worked out before the branches rather than inside one of
   // them: two texels want it now — the one that stores it and the one that
   // says how loud it is — and a value computed in a branch belongs to that
@@ -1774,12 +1824,23 @@ vec4 sim(vec2 uvv) {
   float dayA = clock * 6.28318;
   float sunY = sin(dayA);
   vec4 land = landform(pos);
+  // The map is centred on where the walker was, so that is where to listen
+  // from — and it has to be said before anything reads the map, because
+  // ground() has no other way to know.
+  gEye2 = w.xy;
+  float earY = max(land.x, 0.0) + 1.75;
+  float open = exposure(pos, earY);
   if (texel.x > 3.5 && texel.x < 4.5) {
     // Levels, for the things that are heard continuously.
     // Scaled so a strong wind is loud and not merely clipped: at 0.55 it
     // reached 1 and stayed there, which is a level that tells you nothing.
-    float windL = clamp(length(windV) * 0.30, 0.0, 1.0);
-    float sea = 1.0 - smoothstep(0.0, 9.0, land.x);      // near or in the water
+    // Wind is loud where there is nothing to stop it. In a hollow it is not
+    // gone, it is distant — which is the difference between an occluder and
+    // a mute.
+    float windL = clamp(length(windV) * 0.30, 0.0, 1.0) * (0.30 + 0.70 * open);
+    // Near the water, and with something between you and it: a shore you
+    // cannot see is a shore you cannot hear.
+    float sea = (1.0 - smoothstep(0.0, 9.0, land.x)) * (0.25 + 0.75 * open);
     // Dawn is the sun coming up, not the sun being low — it has to be one
     // bump a day, and dusk is the other crossing of the same height.
     float dawn = smoothstep(-0.09, 0.14, sunY) * (1.0 - smoothstep(0.16, 0.46, sunY))
@@ -1795,9 +1856,20 @@ vec4 sim(vec2 uvv) {
                * step(0.0, cos(dayA));
     float slot = floor(t * 11.0);
     float h = hash21(vec2(slot, 3.7));
-    float sings = step(1.0 - 0.34 * dawn * wildlife, h);
+    // A bird behind a hill is not heard at all. Fading it would be better and
+    // needs a per-note velocity, which would mean a signal multiply this DSP
+    // catalogue does not have and a change to every tone instrument — so for
+    // now the occlusion is a gate rather than a level, and this comment is the
+    // honest version of that.
+    float sings = step(1.0 - 0.34 * dawn * wildlife, h) * step(0.45, open);
     float fresh = abs(slot - mem.z) > 0.5 ? 1.0 : 0.0;
     return vec4(sings * fresh, hash21(vec2(slot, 8.1)), slot, dawn);
+  }
+  if (texel.x > 6.5) {
+    // Where the pointer was, and whether it was down — a delta needs a
+    // previous, and the frame a drag starts on has none, which is the frame
+    // the view would otherwise jump on.
+    return vec4(mouseNow, md, 0.0);
   }
   if (texel.x > 5.5) {
     // A footfall each stride, found by watching the walked distance wrap.
@@ -1808,7 +1880,7 @@ vec4 sim(vec2 uvv) {
     // footfalls a second, which is a sewing machine rather than a walk.
     float phase = fract(meta().x / 2.6);
     float wrapped = (phase < mem.y && abs(sp) > 0.4) ? 1.0 : 0.0;
-    return vec4(wrapped, phase, land.x < 0.4 ? 1.0 : 0.0, 0.0);
+    return vec4(wrapped, phase, land.x < 0.4 ? 1.0 : 0.0, open);
   }
   if (texel.x < 2.5) {
     // Weather, drifting. The direction turns slowly, the strength gusts, and
@@ -1998,6 +2070,22 @@ if (gRain > 0.01) {
                  * smoothstep(0.4, 0.0, abs(f.x) * 4.5 + abs(f.y) * 0.35);
     col += vec3(0.58, 0.63, 0.72) * streak * 0.34 * (1.0 - float(i) * 0.16);
   }
+}
+
+// A crosshair. Four ticks and a gap, drawn in the picture's own pixels rather
+// than in p — a reticle that changes size with the aspect is not a reticle.
+// It is the cheapest thing here and it does more for the feel of standing
+// somewhere than anything else in this file: without a fixed mark to look
+// through, a first-person view is a camera being flown rather than a head
+// being turned.
+{
+  vec2 pix = (gl_FragCoord.xy - u_resolution * 0.5);
+  vec2 ap = abs(pix);
+  float arm = min(max(ap.x, ap.y), 9.0) - 3.0;          // a gap in the middle
+  float tick = step(min(ap.x, ap.y), 0.75) * step(3.0, max(ap.x, ap.y)) * step(max(ap.x, ap.y), 9.0);
+  float dot_ = step(length(pix), 1.0);
+  float mark = clamp(tick + dot_, 0.0, 1.0);
+  col = mix(col, vec3(0.95), mark * 0.55);
 }
 
 finish(col)` },

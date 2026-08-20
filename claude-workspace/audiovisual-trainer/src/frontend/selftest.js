@@ -3270,6 +3270,35 @@ c`;
                  + "pulse the shader emits, since an expression cannot say 'exactly one frame' and a shader can"
                : bad.join(" · ") }); }
 
+    // 9. Positional sound, and a view you can keep your bearings in.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const bad = [];
+      const src = stripComments(g.source);
+      // The occlusion is a measure of the place, taken from the same baked map
+      // the marcher reads — eight fetches in one texel of the state pass,
+      // which is affordable exactly where scene() could not afford two.
+      if (!/float exposure\(vec2 at, float earY\)/.test(src)) bad.push("there is no exposure measure");
+      for (const [what, re] of [["wind", /windL = [^;]*open/], ["the sea", /sea = [^;]*open/],
+                                ["the chorus", /sings = [^;]*step\(0\.45, open\)/]]) {
+        if (!re.test(src)) bad.push(`${what} does not use it`);
+      }
+      // Roll comes back to level on its own — free roll is what makes a
+      // first-person view lose its bearings, so it is something you hold.
+      if (!/if \(rlK \+ rrK < 0\.5\) roll \*= exp/.test(src)) bad.push("roll does not self-level");
+      // …and the mouse turns by how far it moved, not by where it is.
+      if (!/dm = mouseNow - mouseMem\.xy/.test(src)) bad.push("the mouse steers by position, not by delta");
+      if (!/gl_FragCoord\.xy - u_resolution \* 0\.5/.test(src)) bad.push("there is no reticle");
+      push({ group: "More games", name: "sound that a hill gets in the way of, and a view that stays upright",
+             ok: bad.length === 0,
+             detail: bad.length === 0
+               ? "exposure is eight fetches of the baked map on the compass at twenty-five metres, taken in one "
+                 + "texel of the state pass — affordable exactly where scene() could not afford two. Wind and "
+                 + "surf are scaled by it and the dawn chorus is gated by it, so a bird behind a ridge is not "
+                 + "heard. Measured over a walk it spans 0.69 to 1.00, which is a measure of where you are "
+                 + "standing rather than a constant. And the view: roll springs back to level, the mouse turns "
+                 + "by how far it moved rather than where it is, and there is a reticle to look through"
+               : bad.join(" · ") }); }
+
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is
     // √(budget / measured) — snapped down to a step, and never above 1.
