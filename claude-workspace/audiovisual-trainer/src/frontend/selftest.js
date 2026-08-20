@@ -3232,10 +3232,15 @@ c`;
           bad.push(`a param effect moves "${fx.node}", which ${fx.instrument} does not have`);
         }
       }
-      // Every probe has to name a texel the sketch actually writes.
-      const wrote = new Set([0, 1, 2, 3, 4, 5, 6]);
+      // Every probe has to name a texel the sketch actually writes — and how
+      // many that is comes from the sketch's own guard rather than from a
+      // list here, which was a list that went stale the first time the
+      // register bank grew.
+      const bank = /texel\.x > (\d+)\.5\) return vec4\(0\.0\)/.exec(stripComments(g.source));
+      const top = bank ? Number(bank[1]) : -1;
+      if (top < 0) bad.push("the sketch has no register bank to bound");
       for (const [name, pr] of Object.entries(g.probes || {})) {
-        if (!wrote.has(pr.texel[0]) || pr.texel[1] !== 0) bad.push(`probe ${name} reads a texel nothing writes`);
+        if (pr.texel[0] > top || pr.texel[1] !== 0) bad.push(`probe ${name} reads a texel nothing writes`);
       }
       // …and the whole path, offline: probe values in, fired effects out.
       const fired = [];
@@ -3298,6 +3303,181 @@ c`;
                  + "standing rather than a constant. And the view: roll springs back to level, the mouse turns "
                  + "by how far it moved rather than where it is, and there is a reticle to look through"
                : bad.join(" · ") }); }
+
+    // 10. Footsteps, collision, and the two other ways of looking.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const src = stripComments(g.source);
+      const bad = [];
+      // The blocking radius has to be thingAt's own thresholds, or there is a
+      // tree you can see and walk through — which is worse than no collision.
+      for (const [what, re] of [
+        ["the trunk test", /if \(h3 < green \* 0\.62\) \{ kind = 1\.0;/],
+        ["the boulder test", /if \(h3 > 1\.0 - stone \* 0\.5\) \{ kind = 2\.0;/],
+        ["the push", /if \(!first\) pos = pushOut\(pos\)/],
+        ["speed as travelled", /sp = sign\(sp\) \* length\(pos - w\.xy\) \/ dt/],
+        ["the head bob", /ro \+= upv \* bobUp \+ rgt \* bobSide/],
+        ["the body behind a uniform", /if \(gPov > 0\.5\) d = min\(d, walkerAt\(p\)\)/],
+        ["the map's colours coming from the ground's own function", /col = albedoOf\(q, L\.x\) \* lit/],
+        ["the march skipped in map view", /tHit = mapV > 0\.5 \? -1\.0 : march/],
+        ["stateless buttons", /mapV = max\(mapOn, keyDown/],
+      ]) if (!re.test(src)) bad.push(`${what} is missing`);
+      push({ group: "More games", name: "footsteps, collision, and the two other ways of looking",
+             ok: bad.length === 0,
+             detail: bad.length === 0
+               ? "collision is a nearest-allowed-place rather than a refusal, so walking into a trunk slides "
+                 + "along it; the blocking radii are thingAt's own thresholds, so nothing you can see is "
+                 + "something you can walk through. Speed is what was travelled rather than what was asked "
+                 + "for, which is the one number the gait, the head bob and the metres walked are all made "
+                 + "of. The body exists only behind a uniform branch — one every ray in the frame agrees "
+                 + "about. The map is the baked state seen from above, painted with albedoOf(), the ground's "
+                 + "own function. And both buttons are max(uniform, key): no latch, so nothing to fall out "
+                 + "of step with the panel"
+               : bad.join(" · ") }); }
+
+    // 11. …and the same three claims, measured rather than read.
+    //
+    // A short walk with forward held: enough to meet a few trees and put a
+    // couple of hundred metres under the boots, and not so long that the
+    // suite stops being something you run.
+    try {
+      const SW = 448, SH = 448, PW = 256, PH = 144, FRAMES = 700;
+      const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const wsrc = desugar(g.source, { es3: isGL2(gl) });
+      const disp = linkProgram(gl, wsrc);
+      const simP = linkProgram(gl, withDefine(wsrc, "SIM_PASS"));
+      // The same sketch with the body switched off. The difference between
+      // this and the third-person picture *is* the body — which is the only
+      // way to count it without believing the shader about itself.
+      const bare = linkProgram(gl, desugar(g.source.replace("gPov = povV;", "gPov = 0.0;"),
+                                           { es3: isGL2(gl) }));
+      const fbw = new Feedback(gl);
+      fbw.resize(SW, SH, dualTargets(g.source) ? 2 : 1);
+      const us = parseUniforms(g.source);
+      const vals = {};
+      for (const u of us) if (u.value) vals[u.name] = u.value.slice();
+      const kb = new Keyboard();
+      const kt = gl.createTexture();
+      const bind = (prog, r, asState, frame) => {
+        gl.useProgram(prog);
+        gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+        const loc = gl.getAttribLocation(prog, "a_pos");
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+        const u = (n) => gl.getUniformLocation(prog, n);
+        gl.uniform2f(u("u_resolution"), asState ? SW : PW, asState ? SH : PH);
+        gl.uniform2f(u("u_state_size"), SW, SH);
+        gl.uniform1i(u("u_frame"), frame);
+        gl.uniform1f(u("u_time"), frame / 60);
+        gl.uniform2f(u("u_origin"), 0, 0);
+        gl.uniform1f(u("u_seed"), 0);
+        gl.uniform2f(u("u_mouse"), PW / 2, PH / 2);
+        gl.uniform1f(u("u_mouseDown"), 0);
+        applyUniforms(gl, prog, us, vals);
+        gl.activeTexture(gl.TEXTURE7); gl.bindTexture(gl.TEXTURE_2D, r.tex);
+        if (u("u_state")) gl.uniform1i(u("u_state"), 7);
+        gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, r.tex2 || r.tex);
+        if (u("u_state2")) gl.uniform1i(u("u_state2"), 5);
+        gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, r.tex);
+        if (u("u_prev")) gl.uniform1i(u("u_prev"), 6);
+        if (u("u_keys")) {
+          gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, kt);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, kb.texture());
+          gl.uniform1i(u("u_keys"), 4);
+        }
+        gl.activeTexture(gl.TEXTURE0);
+      };
+      const stepW = (f) => {
+        const r = fbw.read, wr = fbw.write;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, wr.fbo);
+        gl.viewport(0, 0, SW, SH);
+        bind(simP, r, true, f);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        fbw.swap();
+      };
+      const WHO = { x: { texel: [0, 0], channel: "r" }, z: { texel: [0, 0], channel: "g" },
+                    sp: { texel: [0, 0], channel: "a" } };
+      const GROUND = { sand: { texel: [8, 0], channel: "r" }, grass: { texel: [8, 0], channel: "g" },
+                       rock: { texel: [8, 0], channel: "b" }, snow: { texel: [8, 0], channel: "a" },
+                       foot: { texel: [6, 0], channel: "r" } };
+      const cmd = vals.walk[0] / 60;
+      let minR = 9, maxR = 0, blocked = 0, feet = 0, worstSum = 0, sandSeen = 0, grassSeen = 0;
+      let prev = null;
+      for (let f = 0; f < FRAMES; f++) {
+        kb.clear(); kb.press(87);            // W, and nothing else
+        stepW(f);
+        const now = readProbes(gl, fbw.read, WHO);
+        if (prev && f > 4) {
+          const r = Math.hypot(now.x - prev.x, now.z - prev.z) / cmd;
+          minR = Math.min(minR, r); maxR = Math.max(maxR, r);
+          if (r < 0.9) blocked++;
+        }
+        prev = now;
+        if (f % 5 === 0) {
+          const gr = readProbes(gl, fbw.read, GROUND);
+          worstSum = Math.max(worstSum, Math.abs(gr.sand + gr.grass + gr.rock + gr.snow - 1));
+          sandSeen = Math.max(sandSeen, gr.sand); grassSeen = Math.max(grassSeen, gr.grass);
+          if (gr.foot > 0.5) feet++;
+        }
+        kb.tick();
+      }
+      // The drawing surface has to be at least the picture, or readPixels
+      // returns a great deal of nothing and every difference below comes out
+      // near zero — which is a passing-looking failure and the reason this
+      // line exists.
+      const wasW = gl.canvas.width, wasH = gl.canvas.height;
+      gl.canvas.width = PW; gl.canvas.height = PH;
+      const shot = (prog, mapOn, povOn) => {
+        vals.mapOn = [mapOn]; vals.povOn = [povOn];
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, PW, PH);
+        bind(prog, fbw.read, false, FRAMES);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const px = new Uint8Array(PW * PH * 4);
+        gl.readPixels(0, 0, PW, PH, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        return px;
+      };
+      const first = shot(disp, 0, 0), third = shot(disp, 0, 1);
+      const bodiless = shot(bare, 0, 1), map = shot(disp, 1, 0);
+      vals.mapOn = [0]; vals.povOn = [0];
+      const meanDiff = (a2, b2) => { let t = 0;
+        for (let i = 0; i < PW * PH; i++) t += Math.abs(a2[i * 4] - b2[i * 4])
+          + Math.abs(a2[i * 4 + 1] - b2[i * 4 + 1]) + Math.abs(a2[i * 4 + 2] - b2[i * 4 + 2]);
+        return t / (PW * PH * 3); };
+      let bodyPx = 0;
+      for (let i = 0; i < PW * PH; i++) {
+        if (Math.abs(third[i * 4] - bodiless[i * 4]) + Math.abs(third[i * 4 + 1] - bodiless[i * 4 + 1])
+          + Math.abs(third[i * 4 + 2] - bodiless[i * 4 + 2]) > 12) bodyPx++;
+      }
+      const mapD = meanDiff(first, map), thirdD = meanDiff(first, third);
+      gl.canvas.width = wasW; gl.canvas.height = wasH;
+      gl.deleteProgram(disp); gl.deleteProgram(simP); gl.deleteProgram(bare);
+      gl.deleteTexture(kt); fbw.release && fbw.release();
+
+      // Something stopped them at least once; nothing ever threw them. The
+      // ceiling is a little over one because being pushed clear of a trunk is
+      // itself a movement, and it is added to the step rather than replacing
+      // it — bounded, small, and worth saying out loud rather than rounding.
+      const walkOk = blocked > 0 && minR < 0.9 && maxR < 1.1 && feet > 0 && worstSum < 0.01;
+      push({ group: "More games", name: "you cannot walk through a tree, and you can hear what you walk on",
+             ok: walkOk && bodyPx > 40 && mapD > 25 && thirdD > 10,
+             detail: `${FRAMES} frames with forward held: stopped or turned aside on ${blocked} of them, `
+               + `the slowest frame ${(minR * 100).toFixed(0)}% of the commanded step and the fastest `
+               + `${(maxR * 100).toFixed(1)}% — over one because being pushed clear of a trunk is itself a `
+               + `movement. ${feet} footfalls sampled. What is underfoot reads as four weights summing to 1 `
+               + `to within ${worstSum.toFixed(4)} — they are weigh()'s own output, the function the ground `
+               + `is painted with — and over this walk sand reached ${sandSeen.toFixed(2)} and grass `
+               + `${grassSeen.toFixed(2)}. The body is ${bodyPx} pixels that a bodiless third person does `
+               + `not draw. Third person differs from first by ${thirdD.toFixed(1)}/255, the map by `
+               + `${mapD.toFixed(1)}/255` });
+    } catch (e) {
+      push({ group: "More games", name: "you cannot walk through a tree, and you can hear what you walk on",
+             ok: false, detail: String(e.message).split("\n")[0] });
+    }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is

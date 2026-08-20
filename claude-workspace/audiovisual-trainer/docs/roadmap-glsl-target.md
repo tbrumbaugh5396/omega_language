@@ -2476,6 +2476,104 @@ its own — is right, and it is a sharp edge every time.
 is mono; and the beds are still one sound each rather than a near one and a far
 one.
 
+### Phase 33 — Footsteps, collision, a map and a body *(L)* — **shipped**
+
+**Collision is a nearest allowed place, not a refusal.** The walker is a
+circle and a trunk is a circle, so "not inside it" is one subtraction, and
+moving to the nearest point outside is *exactly* sliding along the bark.
+Refusing the step instead would glue you to the tree — press forward at any
+angle and you stop dead — which is what walking into something in a bad game
+feels like and not what walking into a tree feels like.
+
+Nine cells, once, in the state pass, never in `scene()`. Same asymmetry the
+sound occlusion is built on.
+
+The blocking radii are `thingAt`'s own thresholds, character for character.
+A tree you can see and walk through is worse than no collision at all. It is
+the *trunk* and not the crown: the crown is three metres up and you are meant
+to walk under it.
+
+Measured over 2,400 frames with forward held — 517 metres in a straight line —
+the walker was stopped or turned aside on **16** of them, the slowest frame
+**16%** of the commanded step. The fastest was **101.4%**: being pushed clear
+of a trunk is itself a movement and it adds to the step rather than replacing
+it. Bounded, small, and better said than rounded away.
+
+**Footsteps.** Speed became what was *travelled* rather than what was asked
+for — one line, and it is the number the gait, the head bob, the metres walked
+and the footfall rate are now all made of. Lean on a boulder with forward held
+and the footsteps stop, which they did not before.
+
+What is underfoot is `weigh()`'s own four weights — the function the ground is
+*painted* with — so a step on rock is the picture's judgement about that texel
+and not a second opinion free to drift from it. Measured: they sum to 1.000.
+`tone.pluck` is noise into a comb, so its pitch is the comb's length: a short
+comb is a click and a long one is a thud, which maps onto ground almost
+suspiciously well. Rock clicks, snow squeaks, sand and grass thud, water is
+lower still because a splash is mostly body. A second note carries the hiss of
+ground that *gives*, on loose or wet only — a second note rather than a louder
+first one, because a note carries no velocity. The same limit the dawn chorus
+ran into, met from the other side.
+
+*Measured honestly:* over about two kilometres of walking, sand and grass each
+spanned their full range, 0 to 1.00. Rock reached 0.03 and snow 0 — this
+spawn's country is low. Those two sounds are on the same code path and were
+not exercised by the sample, and saying so is cheaper than implying otherwise.
+
+**A head that goes up and down**, because a walk is not a dolly move. Twice a
+stride vertically (two feet), once laterally (opposite sides), scaled by the
+travelled speed. Three centimetres — deliberately less than it wants to be;
+head bob is the effect most often turned up until it makes people ill. It is
+applied in the *camera's* frame rather than the world's, so it survives being
+upside down.
+
+**A map you can only have because the world already keeps one.** The state
+pass bakes 190 m of landform around the walker every frame — it must, the
+marcher reads it — so the map is that same texture from above: one fetch a
+pixel, nothing drawn that was not already there. The colours come from
+`albedoOf()`, so the map cannot quietly drift out of agreement with the world
+it is a map of.
+
+It is a **local** map, and that is not a corner cut. There is no world map to
+have: the world is a function of position, unbounded, and no part of it exists
+until something asks. What a map can honestly show is what has been baked —
+about as far as you can see on a clear day, and the same reason the fog never
+reaches the edge.
+
+The arrow and the dots are sized in **pixels**, not metres. Drawn in metres
+the arrow came out three pixels tall, because a symbol that shrinks as the map
+covers more ground is a symbol nobody can see — which is what every map has
+always done to a road.
+
+**A body, behind a uniform branch.** The walker only exists as a shape while
+somebody can see them. The guard is a *uniform*, so every ray in the frame
+agrees about it — which is exactly what made this branch worth having and made
+the distance guard on the scatter (Phase 28) worth deleting. A branch a warp
+agrees about is free; one it argues about costs both sides and the test.
+
+Counted by rendering the same frame with the body switched off: **1,065 pixels
+of 57,600**, centred below the reticle where an over-the-shoulder camera puts
+them. At 320×180: first person **3.57 ms**, third person **3.66 ms** — the
+body is 2.5%. The map is **0.64 ms**, five and a half times cheaper, because
+the march is skipped by a ternary rather than marched and thrown away.
+
+**Two buttons with no state.** Hold M or V for a moment; tick the box to stay.
+A key that *toggled* would need a latch, and then the box and the latch would
+be two truths about one thing, free to disagree the moment somebody used both.
+`max(uniform, key)` cannot get out of step because there is nothing to get out
+of step with.
+
+**A `fwidth` that was not there.** The grid started as a screen-space
+derivative, which is an extension in GLSL ES 1.00 and refused to compile. It
+is now computed from the mapping — `p` is `(2·frag − res)/res.y` by
+construction — which is *exact* where the derivative would have been an
+estimate. Better than what it replaced, and only because it had to be.
+
+*Left:* animals do not block you (they move, and a moving obstacle wants a
+sweep test rather than a push); the third-person camera pulls in on terrain
+but not on trunks; and there is no fog of war, because a local map has nothing
+to hide.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2549,6 +2647,7 @@ one.
 | 30.1 | Day and night, a moon and stars, roll/pitch/yaw | M | 29.2 | 12.2 ms; stars on the direction, not the screen |
 | 31.1 | Dawn sounds and ambient noise — **shipped** | M | 30.1 | beds by param, pulses by shader; 6 levels, 2 notes |
 | 32.1 | Occlusion, and an FPS feel — **shipped** | M | 31.1 | exposure 0.69–1.00 over a walk; roll self-levels |
+| 33.1 | Footsteps, collision, a map, a body — **shipped** | L | 32.1 | blocked 16/2400 frames; body 2.5%; map 5.5× cheaper |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

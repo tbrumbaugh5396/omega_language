@@ -1167,6 +1167,11 @@ finish(col)`
       pitch: { texel: [5, 0], channel: "g" },
       foot: { texel: [6, 0], channel: "r" },
       wet:  { texel: [6, 0], channel: "b" },
+      // What is underfoot: the same four weights the ground is painted with.
+      sand:  { texel: [8, 0], channel: "r" },
+      grass: { texel: [8, 0], channel: "g" },
+      rock:  { texel: [8, 0], channel: "b" },
+      snow:  { texel: [8, 0], channel: "a" },
     },
     instruments: {
       // Two beds, each a filtered noise whose level an effect moves. A bed is
@@ -1176,6 +1181,9 @@ finish(col)`
       surf: airInstrument(240, 1.4, "bp"),
       bird: { ref: "tone.bell" },
       step: { ref: "tone.pluck" },
+      // The second half of a footstep: what the ground does *after* the weight
+      // lands. Sand and snow give, so they hiss; rock does not, so it does not.
+      scuff: { ref: "tone.pluck" },
     },
     effects: [
       // The beds follow the weather continuously — no `when`, so every frame.
@@ -1189,9 +1197,23 @@ finish(col)`
       // that lasts exactly one frame is a thing a shader can say.
       { kind: "note", instrument: "bird", when: 'ch("chirp") > 0.5',
         hz: '900 + ch("pitch") * 1500', dur: '0.10 + ch("pitch") * 0.13' },
-      // And a footfall a stride, lower and softer on wet ground.
+      // A footfall a stride, and the ground decides what it sounds like.
+      //
+      // tone.pluck is noise into a comb, so its pitch is the comb's length —
+      // a short comb is a click and a long one is a thud. That maps onto
+      // ground rather neatly: rock clicks, snow squeaks, sand and grass
+      // thud, and water is lower still because a splash is mostly body.
       { kind: "note", instrument: "step", when: 'ch("foot") > 0.5',
-        hz: '64 + ch("wet") * 30', dur: "0.07" },
+        hz: '62 + ch("rock") * 165 + ch("snow") * 78 + ch("grass") * 26 - ch("wet") * 18',
+        dur: '0.055 + ch("sand") * 0.045 + ch("wet") * 0.05' },
+      // …and the hiss of ground that gives under you. Loose or wet only: a
+      // scuff on bare rock is a sound that is not there. It is a second note
+      // rather than a louder first one because a note carries no velocity —
+      // the same limit the dawn chorus runs into, met from the other side.
+      { kind: "note", instrument: "scuff",
+        when: 'ch("foot") > 0.5 && ch("sand") + ch("snow") + ch("wet") > 0.38',
+        hz: '760 + ch("snow") * 520 + ch("wet") * 380',
+        dur: '0.05 + ch("sand") * 0.05' },
     ],
     source:
 `// An open world: terrain with no edge, biomes that decide what a place is
@@ -1240,6 +1262,15 @@ uniform float weather;   // @range 0 1 @default 0.5 @help how much weather there
 uniform float windAmt;   // @range 0 2 @default 1 @help how hard it blows
 uniform float wildlife;  // @range 0 1 @default 0.6 @help how much of it is alive
 uniform vec3  hideC;     // @color @default #6b4f31
+// The two other ways of looking, as buttons. Hold M or V for a moment; tick
+// the box to stay there.
+//
+// A key that *toggled* would be nicer and would need a latch, and then the
+// box and the latch would be two truths about one thing, free to disagree the
+// moment somebody used both. The greater of a held key and a ticked box has
+// no state at all, so there is nothing to get out of step.
+uniform float mapOn;     // @toggle @label map @help what the world has baked — or hold M
+uniform float povOn;     // @toggle @label third person @help stand behind yourself — or hold V
 
 // How much world the map holds. Larger than the far plane on purpose: the
 // edge of the map is then always further away than the fog, so nothing ever
@@ -1422,6 +1453,89 @@ bool roomToStand(vec2 q) {
   return true;
 }
 
+// -------------------------------------------------- walking into things
+// Collision as a *nearest allowed place*, not as a refusal.
+//
+// The walker is a circle and a trunk is a circle, so "not inside it" is one
+// subtraction, and moving to the nearest point outside is exactly sliding
+// along the bark. Refusing the step instead would glue you to the tree: press
+// forward and you stop dead, at any angle, which is what walking into
+// something in a bad game feels like and not what walking into a tree feels
+// like.
+//
+// Nine cells, once, in the state pass — never in scene(). The same asymmetry
+// the sound occlusion is built on: the walker is one texel a frame and can
+// afford what a hundred and ten march steps a pixel cannot.
+const float BODY = 0.40;
+
+/** What stands in this cell, as the radius it keeps you out by. 0 for nothing.
+    The thresholds are thingAt's, character for character, because a tree you
+    can see and walk through is worse than no collision at all. */
+float blockAt(vec2 id, out float kind) {
+  kind = 0.0;
+  vec4 L = state2(mapUv(thingSpot(id)));
+  if (L.x < 1.2) return 0.0;
+  float h1 = hash21(id + 0.5), h2 = hash21(id * 1.7 + 9.13), h3 = hash21(id * 3.1 - 4.7);
+  float green = treeChance(L), stone = stoneChance(L);
+  // A trunk, not a crown. The crown is three metres up and you are meant to
+  // walk under it; blocking the whole silhouette would turn a wood into a
+  // maze of invisible walls.
+  if (h3 < green * 0.62) { kind = 1.0; return 0.17 * (0.75 + h2 * 0.7) + 0.06; }
+  if (h3 > 1.0 - stone * 0.5) { kind = 2.0; return (0.5 + h1 * 0.9) * 0.82; }
+  return 0.0;    // grass grows there, or an animal does, and an animal moves
+}
+
+/** The nearest place a given position is allowed to be. */
+vec2 pushOut(vec2 q) {
+  vec2 id0 = floor(q / CELL);
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 id = id0 + vec2(float(dx), float(dy));
+      float kind;
+      float r = blockAt(id, kind) + BODY;
+      if (kind < 0.5) continue;
+      vec2 d = q - thingSpot(id);
+      float len = length(d);
+      // A dead-centre hit has no direction to leave by; any one will do, and
+      // it is the one case where standing still would be the wrong answer.
+      if (len < r) q += (r - len) * (len > 1e-4 ? d / len : vec2(1.0, 0.0));
+    }
+  }
+  return q;
+}
+
+// -------------------------------------------------- the one you are playing
+// Only ever asked for when the camera is behind them. The guard is a uniform,
+// so every ray in the frame agrees about it — which is what makes this branch
+// worth having and made the distance guard on the scatter (Phase 28) worth
+// removing. A branch a warp agrees about is free; one it argues about costs
+// both sides and the test as well.
+float gPov;                 // 1 while you can see yourself
+vec3 gWalkAt;               // where they stand
+float gWalkFace;
+float gWalkStride;
+float gWalkSpeed;
+
+float walkerAt(vec3 p) {
+  vec3 q = p - gWalkAt;
+  float c = cos(-gWalkFace), s = sin(-gWalkFace);
+  // Into their frame, so +z is the way they face and the legs swing in z.
+  q.xz = mat2(c, -s, s, c) * q.xz;
+  float sw = sin(gWalkStride * 6.28318) * gWalkSpeed;
+  vec3 hip = vec3(0.0, 0.86, 0.0);
+  float body = sdCapsule3(q - hip, vec3(0.0), vec3(0.0, 0.62, 0.0), 0.20);
+  float head = sdSphere(q - vec3(0.0, 1.76, 0.0), 0.145);
+  // Two legs and two arms from one capsule each, by folding the space they
+  // stand in — and the near side swings opposite the far one, which is the
+  // whole of why a walk reads as a walk rather than as a hop.
+  vec3 lp = q; lp.x = abs(lp.x) - 0.13;
+  float side = q.x < 0.0 ? -1.0 : 1.0;
+  float leg = sdCapsule3(lp - hip, vec3(0.0), vec3(0.0, -0.86, sw * 0.34 * side), 0.085);
+  float arm = sdCapsule3(lp - vec3(0.0, 1.44, 0.0), vec3(0.0),
+                         vec3(0.0, -0.60, -sw * 0.30 * side), 0.062);
+  return min(min(body, head), min(leg, arm));
+}
+
 vec3 gThing;                // where the thing in this cell stands
 float gThingKind;           // 0 a tree, 1 a boulder
 float gThingSize;
@@ -1549,7 +1663,9 @@ float scene(vec3 p) {
   float land = p.y - ground(p.xz);
   float sea = p.y - gWave;
   float kind;
-  return min(min(land, sea), min(thingAt(p, kind), birdsAt(p)));
+  float d = min(min(land, sea), min(thingAt(p, kind), birdsAt(p)));
+  if (gPov > 0.5) d = min(d, walkerAt(p));
+  return d;
 }
 
 // The sea is flat enough to march as a plane and detailed enough to look wet,
@@ -1739,13 +1855,102 @@ vec4 meta() { return reg(vec2(1.0, 0.0)); }   // metres walked, -, -, -
 vec4 airOf() { return reg(vec2(2.0, 0.0)); }  // wind x, wind z, rain, gust
 vec4 view()  { return reg(vec2(3.0, 0.0)); }  // pitch, roll, time of day, -
 
+// ------------------------------------------------------------ the map
+// A map you can only have because the world already keeps one.
+//
+// The state pass bakes a hundred and ninety metres of landform around the
+// walker every frame — it must, because the marcher reads it — so the map is
+// that same texture seen from above: one fetch a pixel, and nothing drawn
+// that was not already there. The colours come from albedoOf(), the very
+// function the ground is painted with, so the map cannot quietly drift out
+// of agreement with the world it is a map of.
+//
+// It is a *local* map, and that is not a corner cut. There is no world map to
+// have: the world is a function of position, unbounded, and no part of it
+// exists until something asks. What a map can honestly show is what has been
+// baked — about as far as you can see on a clear day, and the same reason the
+// fog never reaches the edge.
+vec3 mapPicture(vec2 pp, vec4 wk) {
+  vec3 paper = vec3(0.020, 0.024, 0.032);
+  // pp is aspect-corrected, so a square map stays square in a wide window.
+  vec2 m = pp * 1.02;
+  float edge = max(abs(m.x), abs(m.y));
+  if (edge > 1.0) return paper + vec3(0.05, 0.055, 0.07) * smoothstep(1.05, 1.0, edge);
+  // North is up. Heading is measured from +z, so this is the compass rather
+  // than a second convention to hold in your head.
+  vec2 q = wk.xy + m * WORLD * 0.5;
+  vec4 L = state2(mapUv(q));
+  // Metres a pixel, from the mapping rather than from a derivative: fwidth is
+  // an extension in GLSL ES 1.00 and this sketch is meant to run there too.
+  // p is (2·frag − res)/res.y by construction, so this is exact where a
+  // derivative would have been an estimate.
+  float mpp = WORLD.x * 1.02 / max(u_resolution.y, 1.0);
+
+  // Relief, from the baked map's own neighbours — the ground normal's trick
+  // at the map's resolution rather than at the metre.
+  float e = WORLD.x / max(u_state_size.x, 1.0) * 2.0;
+  float hx = ground(q + vec2(e, 0.0)) - ground(q - vec2(e, 0.0));
+  float hz = ground(q + vec2(0.0, e)) - ground(q - vec2(0.0, e));
+  vec3 n = normalize(vec3(-hx, 2.0 * e, -hz));
+  float lit = 0.40 + 0.85 * max(dot(n, normalize(vec3(-0.45, 0.72, 0.53))), 0.0);
+
+  gNear = 0.0;              // no detail up here: a ripple half a pixel wide is static
+  gW = vec4(0.0);
+  weigh(L.x, L.y, L.z, 1.0 - n.y);
+  vec3 col = albedoOf(q, L.x) * lit;
+  if (L.x < 0.0) col = srgbToLinear(waterC) * (0.55 + 0.75 * smoothstep(-11.0, 0.0, L.x));
+
+  // What stands there. At a hundred and ninety metres across a few hundred
+  // pixels a trunk is a fifth of a pixel wide, so the dot has a floor measured
+  // in *pixels* — it is the size it must be to exist rather than the size the
+  // tree is, which is what every map has always done to a road.
+  vec2 id = floor(q / CELL);
+  float kind;
+  float r = blockAt(id, kind);
+  if (kind > 0.5) {
+    float d = length(q - thingSpot(id)) - max(r, mpp * 1.7);
+    vec3 ink = kind > 1.5 ? srgbToLinear(rockC) * 2.1 : srgbToLinear(leafC) * 1.7;
+    col = mix(col, ink, smoothstep(0.4, -0.4, d));
+  }
+
+  // Twenty metres a square: the ruler and the scale bar in one, at a width
+  // measured in pixels so it stays a hairline whatever the window does.
+  //
+  // The metres-a-pixel comes from the mapping rather than from a derivative:
+  // fwidth is an extension in GLSL ES 1.00 and this sketch is meant to run
+  // there too. Since p is (2·frag − res)/res.y by construction, the scale is
+  // exact rather than approximate, which a derivative would not have been.
+  vec2 g = abs(fract(q / 20.0 + 0.5) - 0.5) * 20.0 / max(mpp, 1e-4);
+  col = mix(col, vec3(0.62, 0.66, 0.74), 0.18 * (1.0 - smoothstep(0.0, 1.0, min(g.x, g.y))));
+
+  // Where you are and which way you point. In *pixels*, not in metres: the
+  // arrow is a symbol rather than a thing standing on the ground, and a
+  // symbol that shrinks as the map covers more is a symbol nobody can see.
+  // Drawn in metres it came out three pixels tall.
+  vec2 rel = q - wk.xy;
+  float ch = cos(-wk.z), sh = sin(-wk.z);
+  vec2 lr = (mat2(ch, -sh, sh, ch) * rel) / max(mpp, 1e-4);   // +y is the way they face
+  float arrow = max(-lr.y - 4.0, abs(lr.x) * 2.2 + lr.y - 8.0);
+  col = mix(col, vec3(0.02, 0.02, 0.03), smoothstep(2.2, 0.7, arrow));
+  col = mix(col, vec3(0.99, 0.93, 0.42), smoothstep(0.8, -0.3, arrow));
+
+  // And a tick at the top, so north is stated rather than assumed.
+  vec2 nm = m - vec2(0.0, 0.94);
+  col = mix(col, vec3(0.85), step(abs(nm.x), 0.004) * step(abs(nm.y), 0.045));
+  return col;
+}
+
 vec4 sim(vec2 uvv) {
   vec2 texel = floor(gl_FragCoord.xy);
-  if (texel.y > 0.5 || texel.x > 7.5) return vec4(0.0);
+  if (texel.y > 0.5 || texel.x > 8.5) return vec4(0.0);
   bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
   float dt = 1.0 / 60.0;
   vec4 w = first ? vec4(spawnPoint(), 0.6, 0.0) : who();
   vec4 mt = first ? vec4(0.0) : meta();
+  // The map is baked around where the walker was, so that is what "here"
+  // means to every fetch below — and it has to be said before the first of
+  // them, because ground() has no other way to know.
+  gEye2 = w.xy;
 
   float lf = max(keyDown(u_keys, 37.0), keyDown(u_keys, 65.0));
   float rt = max(keyDown(u_keys, 39.0), keyDown(u_keys, 68.0));
@@ -1797,6 +2002,14 @@ vec4 sim(vec2 uvv) {
   float sp = (fw - bk) * walk * run;
   vec2 dir = vec2(sin(heading), cos(heading));
   vec2 pos = w.xy + dir * sp * dt;
+  // Where they meant to go, and then the nearest place they are allowed to
+  // be. Not on the first frame: the map is baked around the spawn and does
+  // not exist yet, so there is nothing there yet to be inside of.
+  if (!first) pos = pushOut(pos);
+  // Speed as *travelled*, not as asked for. Leaning on a boulder with forward
+  // held should stop the footsteps, and this is the one number the gait, the
+  // head bob and the metres walked are all made of.
+  sp = sign(sp) * length(pos - w.xy) / dt;
 
   if (texel.x < 0.5) return vec4(pos, heading, sp);
   if (texel.x < 1.5) return vec4(mt.x + abs(sp) * dt, 0.0, 0.0, 1.0);
@@ -1824,10 +2037,6 @@ vec4 sim(vec2 uvv) {
   float dayA = clock * 6.28318;
   float sunY = sin(dayA);
   vec4 land = landform(pos);
-  // The map is centred on where the walker was, so that is where to listen
-  // from — and it has to be said before anything reads the map, because
-  // ground() has no other way to know.
-  gEye2 = w.xy;
   float earY = max(land.x, 0.0) + 1.75;
   float open = exposure(pos, earY);
   if (texel.x > 3.5 && texel.x < 4.5) {
@@ -1864,6 +2073,14 @@ vec4 sim(vec2 uvv) {
     float sings = step(1.0 - 0.34 * dawn * wildlife, h) * step(0.45, open);
     float fresh = abs(slot - mem.z) > 0.5 ? 1.0 : 0.0;
     return vec4(sings * fresh, hash21(vec2(slot, 8.1)), slot, dawn);
+  }
+  if (texel.x > 7.5) {
+    // What is underfoot, as the four weights the ground itself is painted
+    // with — so a step on rock is the picture's own judgement about that
+    // texel rather than a second opinion free to disagree with it.
+    vec3 nrm = landNormal(pos);
+    weigh(land.x, land.y, land.z, 1.0 - nrm.y);
+    return gW;
   }
   if (texel.x > 6.5) {
     // Where the pointer was, and whether it was down — a delta needs a
@@ -1908,8 +2125,29 @@ gRain = air.z;
 gEye2 = w.xy;
 gWave = 0.0;
 
+
+// Which way of looking. The greater of a held key and a ticked box — no
+// latch, so nothing to fall out of step with the panel.
+float mapV = max(mapOn, keyDown(u_keys, 77.0));
+float povV = max(povOn, keyDown(u_keys, 86.0));
+
+vec4 ft = reg(vec2(6.0, 0.0));
 float standing = ground(w.xy);
 vec3 ro = vec3(w.x, max(standing, gWave) + 1.75, w.y);
+
+// A head that goes up and down, because a walk is not a dolly move.
+//
+// Twice a stride vertically — there are two feet — and once laterally, since
+// they are on opposite sides of you. Scaled by how fast you are *actually*
+// travelling, so leaning on a boulder is as still as standing still.
+//
+// Three centimetres, which is smaller than it wants to be. Head bob is the
+// effect most often turned up until it makes people ill, and the amount that
+// reads as walking is a good deal less than the amount that reads as effort.
+float gait = clamp(abs(w.w) / max(walk, 1.0), 0.0, 1.0);
+float stridePh = ft.y * 6.28318;
+float bobUp = -cos(stridePh * 2.0) * 0.030 * gait;
+float bobSide = sin(stridePh) * 0.042 * gait;
 
 // Yaw, pitch and roll, built by hand rather than through lookAt — which can
 // say where to point but has no way to say which way up.
@@ -1921,6 +2159,40 @@ vec3 upv = cross(rgt, fwd);
 float cr = cos(vw.y), sr = sin(vw.y);
 mat3 cam = mat3(rgt * cr + upv * sr, upv * cr - rgt * sr, fwd);
 vec3 rd = cam * normalize(vec3(p, 1.55));
+
+// Standing behind yourself.
+//
+// The walker only exists as a shape while somebody can see them — and the
+// guard is a *uniform*, so every ray in the frame agrees about it. That is
+// what makes this branch worth having, and it is the same fact that made the
+// distance guard on the scatter worth deleting in Phase 28: a branch a warp
+// agrees about is free, one it argues about costs both sides and the test.
+gPov = povV;
+gWalkAt = vec3(w.x, max(standing, gWave), w.y);
+gWalkFace = w.z;
+gWalkStride = ft.y;
+gWalkSpeed = gait;
+if (povV > 0.5) {
+  // Behind and a little above, and pulled in when the ground gets between:
+  // a camera on a rigid boom spends half of every hillside inside the hill.
+  // Six tries at sixty centimetres is a coarse search and the right one —
+  // it is a camera, not a collision solver, and the failure it has to avoid
+  // is being underground rather than being an inch too far out.
+  float boom = 4.4;
+  for (int i = 0; i < 6; i++) {
+    vec3 at = ro - fwd * boom + vec3(0.0, 0.85, 0.0);
+    if (at.y > ground(at.xz) + 0.55) break;
+    boom -= 0.6;
+  }
+  ro = ro - fwd * max(boom, 1.3) + vec3(0.0, 0.85, 0.0);
+  ro.y = max(ro.y, ground(ro.xz) + 0.55);
+} else {
+  // The bob belongs to the head, so it is applied in the head's frame: up is
+  // the camera's up, not the world's, and it therefore survives being upside
+  // down. Adding it to ro.y would make a bob that grows and shrinks with how
+  // far you are leaning.
+  ro += upv * bobUp + rgt * bobSide;
+}
 // A day. The sun goes round a tilted circle and the moon goes round the other
 // side of it, so when one is up the other is mostly not — which is wrong about
 // the actual moon and right about what a sky looks like.
@@ -1944,12 +2216,15 @@ vec3 grey = vec3(0.52, 0.55, 0.60);
 // Overcast is grey by day and nearly black by night — a rainy night is not a
 // grey one, and mixing toward the same grey either way is what makes a cheap
 // night look like a photograph of a day.
-vec3 skyCol = mix(skyAt(rd), grey * (0.55 + 0.45 * smoothstep(-0.1, 0.5, rd.y)) * (1.0 - gNight * 0.88),
+vec3 skyCol = mapV > 0.5 ? vec3(0.0) : mix(skyAt(rd), grey * (0.55 + 0.45 * smoothstep(-0.1, 0.5, rd.y)) * (1.0 - gNight * 0.88),
                   gRain * 0.8);
 float sunDim = 1.0 - gRain * 0.72;
 
 vec3 col = skyCol;
-float tHit = march(ro, rd, far);
+// Nothing to march when you are looking at the map, and nothing to pay for
+// it either — the ternary is the whole saving, because a frame that marches
+// and then throws the result away costs exactly as much as one that keeps it.
+float tHit = mapV > 0.5 ? -1.0 : march(ro, rd, far);
 if (tHit > 0.0) {
   vec3 hit = ro + rd * tHit;
   gNear = 1.0 - smoothstep(9.0, 52.0, tHit);
@@ -2051,7 +2326,7 @@ if (tHit > 0.0) {
 //
 // Near layers are large and sparse, far ones small and dense. That is
 // parallax, and it is what stops rain reading as a texture stuck to the lens.
-if (gRain > 0.01) {
+if (gRain > 0.01 && mapV < 0.5) {
   vec3 fall = normalize(vec3(gWind.x * 0.22, -1.0, gWind.y * 0.22));
   // The frame belongs to the *rain*, not to the ray. The first version built
   // it from cross(fall, rd), which is perpendicular to rd by construction — so
@@ -2078,7 +2353,7 @@ if (gRain > 0.01) {
 // somewhere than anything else in this file: without a fixed mark to look
 // through, a first-person view is a camera being flown rather than a head
 // being turned.
-{
+if (mapV < 0.5) {
   vec2 pix = (gl_FragCoord.xy - u_resolution * 0.5);
   vec2 ap = abs(pix);
   float arm = min(max(ap.x, ap.y), 9.0) - 3.0;          // a gap in the middle
@@ -2087,6 +2362,8 @@ if (gRain > 0.01) {
   float mark = clamp(tick + dot_, 0.0, 1.0);
   col = mix(col, vec3(0.95), mark * 0.55);
 }
+
+if (mapV > 0.5) col = mapPicture(p, w);
 
 finish(col)` },
 
