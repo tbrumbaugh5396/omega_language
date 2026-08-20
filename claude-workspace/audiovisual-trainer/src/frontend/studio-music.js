@@ -14,7 +14,7 @@
 // you hear is exactly what lands in the file.
 
 import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, clamp } from "./ui.js";
-import { fullscreenButton } from "./fullscreen.js";
+import { expandButton } from "./expand.js";
 import * as A from "./engine-audio.js";
 import { aiButton } from "./ai.js";
 
@@ -1092,8 +1092,7 @@ export async function musicEditor(host) {
   // more of it on screen. Its contents are the size the document makes them,
   // so this is a bigger window onto the same thing rather than a bigger copy:
   // more bars across, more octaves down.
-  const fs = fullscreenButton(stageWrap, { fit: "none", title: "more of this view at once",
-                                           onRefused: (why) => toast(why) });
+  const fs = expandButton(stageWrap, { fit: "none", title: "more of this view at once — Esc to come back" });
   const sidePanel = el("div.stack");
 
   function renderViews() {

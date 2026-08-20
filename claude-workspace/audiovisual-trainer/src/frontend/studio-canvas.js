@@ -19,7 +19,7 @@
 //     edit and only become pixels when you ask them to.
 
 import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, api } from "./ui.js";
-import { fullscreenButton } from "./fullscreen.js";
+import { expandButton } from "./expand.js";
 import * as I from "./engine-image.js";
 import { Selection, wandMask } from "./canvas-selection.js";
 import { aiButton } from "./ai.js";
@@ -322,7 +322,7 @@ export async function canvasEditor(host) {
   // The picture on its own — the layers composited, without the tool bar and
   // the panels. Zoom is a document setting and stays where it is; fullscreen
   // is a way of *looking*, not a way of editing.
-  const fs = fullscreenButton(stage, { onRefused: (why) => toast(why) });
+  const fs = expandButton(stage);
 
   let strokeCanvas = null, strokeCtx = null;
 

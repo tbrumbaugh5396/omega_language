@@ -12,7 +12,7 @@
 // instrument that outlives the session it was made in.
 
 import { el, clear, append, toast } from "./ui.js";
-import { fullscreenButton } from "./fullscreen.js";
+import { expandButton } from "./expand.js";
 import { parsePatch, toPatch, STARTER_PATCH } from "./instrument-doc.js";
 import { defineInstrument, instrumentId } from "./instrument-library.js";
 import { LiveInstrument } from "./live-audio.js";
@@ -93,11 +93,10 @@ export function instrumentEditor(host) {
   // keyboard to hear it on. Fullscreening the text alone would take away the
   // thing you check the text against.
   const stage = el("div.stack", { style: { gap: ".6rem" } });
-  const fs = fullscreenButton(stage, {
+  const fs = expandButton(stage, {
     fit: "none",
     background: "var(--bg, #0d0f18)",
-    title: "the patch with the screen to itself — the same editor, more lines of it",
-    onRefused: (why) => toast(why),
+    title: "the patch with the window to itself — the same editor, more lines of it",
     onChange: (full) => { area.style.minHeight = full ? AREA_HEIGHT_FULL : AREA_HEIGHT; },
   });
 

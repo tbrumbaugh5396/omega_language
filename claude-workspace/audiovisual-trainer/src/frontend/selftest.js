@@ -14,7 +14,7 @@
 
 import { el, clear, api } from "./ui.js";
 import { GENERATE_PRESETS, newGenerateDoc, scaleForBudget, fitAspect } from "./studio-generate.js";
-import { fullscreenButton } from "./fullscreen.js";
+import { expandButton } from "./expand.js";
 import { SHADER_PRESETS } from "./studio-shader.js";
 import { parseUniforms, desugar, hasSimPass, withDefine, isEs3, splitSketch, stripComments } from "./shader-uniforms.js";
 import { applyUniforms, randomise, seededRandom } from "./shader-controls.js";
@@ -2789,82 +2789,95 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
                  + "screen renders 1080×1080 rather than being stretched to fit"
                : wrong.map(([a, w, h, want]) => `${a.toFixed(2)} into ${w}×${h} → ${fitAspect(a, w, h)}, wanted ${want}`).join(" · ") }); }
 
-    // The fullscreen button, six studios over, written once.
+    // Filling the window, seven studios over, written once.
     //
-    // The platform's half — whether a request is granted — cannot be exercised
-    // from a test, and an embedded frame refuses it anyway. What *can* break is
-    // this file's half: the styles it puts on a stage while it is up, and
-    // whether it takes them off again. A stage left with `width: 100%` and a
-    // black background after exiting is a studio with a broken layout, which is
-    // exactly the kind of thing nobody notices until they have exited twice.
-    //
-    // So `document.fullscreenElement` is stubbed and the event dispatched: the
-    // platform is faked, the logic is real.
-    { const original = Object.getOwnPropertyDescriptor(Document.prototype, "fullscreenElement")
-                    || Object.getOwnPropertyDescriptor(document, "fullscreenElement");
-      let pretend = null;
-      Object.defineProperty(document, "fullscreenElement",
-                            { configurable: true, get: () => pretend });
-      const problems = [];
-      try {
-        for (const fit of ["contain", "fill", "none"]) {
-          const kid = document.createElement("canvas");
-          kid.style.width = "100%";
-          kid.style.height = "auto";
-          const stage = document.createElement("div");
-          stage.style.position = "relative";
-          stage.append(kid);
-          document.body.append(stage);
-          const before = { stage: stage.getAttribute("style"), kid: kid.getAttribute("style") };
-          let told = null;
-          // Black behind a picture, the app's own surface behind text: an
-          // editor on a black field is a different, worse editor.
-          const bg = fit === "none" ? "rgb(13, 15, 24)" : undefined;
-          const fs = fullscreenButton(stage, { fit, background: bg, onChange: (f) => { told = f; } });
+    // This began as the browser's Fullscreen API and the check had to stub
+    // `document.fullscreenElement`, because whether a request is *granted* is
+    // not something a test can decide. Filling the window is ordinary CSS, so
+    // there is nothing left to fake: this expands a real stage and collapses
+    // it again, and every assertion is about what actually happened.
+    { const problems = [];
+      for (const fit of ["contain", "fill", "none"]) {
+        const kid = document.createElement("canvas");
+        kid.width = 320; kid.height = 180;
+        kid.style.width = "100%";
+        kid.style.height = "auto";
+        const stage = document.createElement("div");
+        stage.style.position = "relative";
+        stage.append(kid);
+        // A margin, because a fixed box keeps one and it comes off the size
+        // `inset` gave it — Music's stage is a card with a rem underneath and
+        // filled the window fifteen pixels short until that was noticed.
+        stage.style.margin = "0 0 1rem";
+        const holder = document.createElement("div");
+        holder.style.height = "140px";
+        holder.append(stage);
+        document.body.append(holder);
+        const before = { stage: stage.getAttribute("style"), kid: kid.getAttribute("style"),
+                         siblings: holder.children.length };
+        let told = null;
+        const bg = fit === "none" ? "rgb(13, 15, 24)" : undefined;
+        const ex = expandButton(stage, { fit, background: bg, onChange: (b) => { told = b; } });
 
-          pretend = stage;
-          document.dispatchEvent(new Event("fullscreenchange"));
-          if (told !== true) problems.push(`${fit}: entering did not report`);
-          if (fs.button.textContent !== "Exit fullscreen") problems.push(`${fit}: the button did not relabel`);
-          const want = bg || "rgb(0, 0, 0)";
-          if (stage.style.background !== want && stage.style.background !== "#000") {
-            problems.push(`${fit}: backdrop is ${stage.style.background || "nothing"}, wanted ${want}`);
-          }
-          const centred = stage.style.display === "flex";
-          if (fit === "none" && centred) problems.push("none: a scrolling editor was centred");
-          if (fit !== "none" && !centred) problems.push(`${fit}: the picture was not centred`);
-          // A scrolling stage gets room to breathe and somewhere to scroll.
-          if (fit === "none" && (!stage.style.padding || stage.style.overflow !== "auto")) {
-            problems.push("none: an editor got no padding or nowhere to scroll");
-          }
-          if (fit === "fill" && kid.style.width !== "100%") problems.push("fill: the viewport did not fill");
-          if (fit === "contain" && kid.style.maxHeight !== "100%") problems.push("contain: not bounded by height");
-
-          pretend = null;
-          document.dispatchEvent(new Event("fullscreenchange"));
-          if (told !== false) problems.push(`${fit}: leaving did not report`);
-          if (fs.button.textContent !== "Fullscreen") problems.push(`${fit}: the button stayed relabelled`);
-          if (stage.getAttribute("style") !== before.stage) {
-            problems.push(`${fit}: the stage kept ${stage.getAttribute("style")}`);
-          }
-          if (kid.getAttribute("style") !== before.kid) {
-            problems.push(`${fit}: the picture kept ${kid.getAttribute("style")}`);
-          }
-          // …and a studio that has been navigated away from stops listening.
-          stage.remove();
-          document.dispatchEvent(new Event("fullscreenchange"));
+        ex.button.click();
+        if (told !== true) problems.push(`${fit}: expanding did not report`);
+        if (!ex.isExpanded()) problems.push(`${fit}: did not think it had expanded`);
+        if (ex.button.textContent !== "Exit fullscreen") problems.push(`${fit}: the button did not relabel`);
+        // The window, not the screen: fixed to every edge, and layered above
+        // the header and below the modals.
+        if (stage.style.position !== "fixed" || stage.style.inset !== "0px") {
+          problems.push(`${fit}: not pinned to the window (${stage.style.position} ${stage.style.inset})`);
         }
-      } finally {
-        delete document.fullscreenElement;
-        if (original && original.get) Object.defineProperty(document, "fullscreenElement", original);
+        const box = stage.getBoundingClientRect();
+        if (Math.round(box.width) !== window.innerWidth || Math.round(box.height) !== window.innerHeight) {
+          problems.push(`${fit}: ${Math.round(box.width)}×${Math.round(box.height)} of `
+            + `${window.innerWidth}×${window.innerHeight} — it did not fill the window`);
+        }
+        if (+stage.style.zIndex <= 50 || +stage.style.zIndex >= 80) {
+          problems.push(`${fit}: layered at ${stage.style.zIndex}, which is not between the menus and the modals`);
+        }
+        if (stage.style.background !== (bg || "rgb(0, 0, 0)")) {
+          problems.push(`${fit}: backdrop is ${stage.style.background || "nothing"}`);
+        }
+        const centred = stage.style.display === "flex";
+        if (fit === "none" && centred) problems.push("none: a scrolling editor was centred");
+        if (fit !== "none" && !centred) problems.push(`${fit}: the picture was not centred`);
+        if (fit === "none" && (!stage.style.padding || stage.style.overflow !== "auto")) {
+          problems.push("none: an editor got no padding or nowhere to scroll");
+        }
+        if (fit === "fill" && kid.style.width !== "100%") problems.push("fill: the viewport did not fill");
+        if (fit === "contain" && kid.style.maxHeight !== "100%") problems.push("contain: not bounded by height");
+        // A placeholder holds the slot open, so the page behind does not
+        // reflow and lose where you were.
+        if (holder.children.length !== before.siblings + 1) problems.push(`${fit}: no placeholder for the slot`);
+        // A way out that does not need the button, which is under the picture.
+        const exitBtn = [...stage.children].find((c) => c.dataset && c.dataset.expandChrome !== undefined);
+        if (!exitBtn) problems.push(`${fit}: no way out from inside`);
+
+        // Escape comes back.
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        if (told !== false) problems.push(`${fit}: Escape did not collapse it`);
+        if (ex.button.textContent !== "Fullscreen") problems.push(`${fit}: the button stayed relabelled`);
+        if (stage.getAttribute("style") !== before.stage) {
+          problems.push(`${fit}: the stage kept ${stage.getAttribute("style")}`);
+        }
+        if (kid.getAttribute("style") !== before.kid) {
+          problems.push(`${fit}: the picture kept ${kid.getAttribute("style")}`);
+        }
+        if (holder.children.length !== before.siblings) problems.push(`${fit}: the placeholder outlived it`);
+        // …and Escape after that does nothing, rather than throwing.
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+        holder.remove();
       }
-      push({ group: "More games", name: "the fullscreen button dresses a stage and undresses it again",
+      push({ group: "More games", name: "expanding a stage fills the window, and collapsing puts it all back",
              ok: problems.length === 0,
              detail: problems.length === 0
                ? "three fits — a picture with a size of its own is centred and bounded by both dimensions, a "
                  + "viewport fills, a scrolling editor is left alone with padding and somewhere to scroll — each "
-                 + "on the backdrop it asked for, and all three put every style back on the way out, byte for "
-                 + "byte, so exiting cannot leave a studio with a broken layout"
+                 + "pinned to every edge of the window at a layer above the menus and below the modals, each with "
+                 + "a placeholder holding its slot so the page does not lose where you were, each measured as "
+                 + "filling the window exactly even with a margin of its own, and each putting "
+                 + "every style back byte for byte when Escape collapses it"
                : problems.join(" · ") }); }
 
     // The render scale, as a rule rather than a feeling. Cost is very nearly

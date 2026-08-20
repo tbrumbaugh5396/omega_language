@@ -10,7 +10,7 @@
 // clever with the names would break the one thing this is for.
 
 import { el, clear, toast, modal, closeModal } from "./ui.js";
-import { fullscreenButton } from "./fullscreen.js";
+import { expandButton } from "./expand.js";
 import { aiButton } from "./ai.js";
 import { parseUniforms } from "./shader-uniforms.js";
 import { getGL, linkProgram } from "./shader-run.js";
@@ -509,7 +509,7 @@ export async function shaderEditor(host) {
   const stage = el("div", { style: { position: "relative", display: "flex",
                                      alignItems: "center", justifyContent: "center" } },
                    canvas, grid.overlay);
-  const fs = fullscreenButton(stage, { className: "", onRefused: (why) => { log.textContent = why; } });
+  const fs = expandButton(stage, { className: "" });
 
   const root = el("div.stack", {},
     el("div.card.tight", {},

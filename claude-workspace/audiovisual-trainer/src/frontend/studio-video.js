@@ -18,7 +18,7 @@
 // grade you cannot scrub against is not a grade you can judge.
 
 import { el, clear, append, toast, modal, closeModal, knob, confirmDialog, clamp, api } from "./ui.js";
-import { fullscreenButton } from "./fullscreen.js";
+import { expandButton } from "./expand.js";
 import { muxMp4 } from "./video-mux.js";
 import { aiButton } from "./ai.js";
 import { renderGraph, ejectGraph } from "./graph-compile.js";
@@ -1232,7 +1232,7 @@ export async function videoEditor(host) {
   // than a mode of its own.
   const stage = el("div", { style: { position: "relative", display: "flex",
                                      alignItems: "center", justifyContent: "center" } }, canvas);
-  const fs = fullscreenButton(stage, { onRefused: (why) => toast(why) });
+  const fs = expandButton(stage);
 
   const root = el("div.stack", {},
     el("div.card.tight", {},
@@ -1273,7 +1273,7 @@ export async function videoEditor(host) {
       el("div.stack", {}, stage, el("div.card.tight", { style: { overflow: "auto" } }, timeline)),
       el("div.stack", {}, el("div.card.tight", {}, el("h4", {}, "Clip"), inspector), scopePanel)));
 
-  root._cleanup = () => { stop(); fs.exit(); document.removeEventListener("keydown", onKey); };
+  root._cleanup = () => { stop(); fs.collapse(); document.removeEventListener("keydown", onKey); };
 
   for (const { clip } of allClips()) await ensureMedia(clip);
   renderInspector();

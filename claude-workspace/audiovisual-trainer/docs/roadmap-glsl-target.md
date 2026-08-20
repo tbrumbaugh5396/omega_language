@@ -1999,17 +1999,17 @@ compile, the way the Playground runs: **367.6 ms → 13.5 ms**, 2.7 fps → 74 f
 at full resolution. The render scale from Phase 22b is now headroom rather than
 a requirement.
 
-### Phase 26 — Fullscreen, and the same care for the other 3D sketches *(S)* — **shipped**
+### Phase 26 — Filling the window, and the same care for the other 3D sketches *(S)* — **shipped**
 
-**Fullscreen.** A button that puts the canvas and its overlay — the *stage* —
-on their own. Entering changes what a full-size render is, so the scale is
-asked again from scratch rather than carried across: the render aims at the
-screen with the sketch's own aspect fitted into it, capped at 1920×1080, and
-the auto scale then takes it to the budget. `fitAspect` is a pure function and
-is checked against four cases, because "letterbox rather than stretch" is
-arithmetic and arithmetic can be held to a number. A browser that refuses the
-request — an embedded frame usually does — now says so in the log rather than
-leaving a button that does nothing.
+**The button.** It puts the canvas and its overlay — the *stage* — on their
+own. Doing so changes what a full-size render is, so the scale is asked again
+from scratch rather than carried across: the render aims at the window with the
+sketch's own aspect fitted into it, capped at 1920×1080, and the auto scale
+then takes it to the budget. `fitAspect` is a pure function checked against
+four cases, because "letterbox rather than stretch" is arithmetic and
+arithmetic can be held to a number. (This shipped against the browser's
+Fullscreen API; Phase 27 replaced that with filling the window, for reasons
+recorded there.)
 
 **And the other 3D sketches, measured before touching.** At 640×360: `still`
 4.9 ms, `bounce` 9.3 ms, `ocean` 8.0 ms, `cloudscape` 14.3 ms, `beach` 6.8 ms.
@@ -2035,51 +2035,53 @@ arguments never mention the point found one more thing worth taking, in the
 rover: `rot(-gRover.z)`, two sines and two cosines, rebuilt at every march step
 for a heading that cannot change during a pixel.
 
-### Phase 27 — The same button in every studio *(S)* — **shipped**
+### Phase 27 — The picture, filling the window *(S)* — **shipped**
 
-`fullscreen.js`. Six studios wanted it, so it is written once, and what varies
-is only *what* goes fullscreen — which a studio knows better than a shared file
-does, so it hands over the element.
+`expand.js`. One button, seven studios, and what varies is only *what* expands
+and how it wants the room — which a studio knows better than a shared file
+does, so it hands over the element and says which.
 
 | studio | the stage | fit |
 |---|---|---|
-| Generate | the render and its grid overlay | contain, and the render *grows*: it aims at the screen, and the scale is re-measured |
+| Generate | the render and its grid overlay | contain, and the render *grows*: it aims at the window and the scale is re-measured |
 | Shader | the same | contain |
 | Canvas | the layers composited, with the selection marquee | contain |
 | Video | the frame at the playhead | contain |
 | Design | the SVG surface | **fill** — a viewport with its own pan and zoom wants more room, not a bigger copy |
-| Music | whichever view is up | **none** — a scrolling editor gets a bigger window onto the same thing: more bars across, more octaves down |
-| Instrument | the whole editor — patch, problems, keyboard | **none**, on the app's own surface rather than black, with the patch area grown to fill the height |
+| Music | whichever view is up | **none** — a scrolling editor gets a bigger window onto the same thing |
+| Instrument | the whole editor — patch, problems, keyboard | **none**, on the app's own surface rather than black, the patch area grown to fill the height |
 
-Instrument was the one I argued out of, and was wrong about. The reasoning was
-"there is no picture to put on its own" — true, and beside the point. A patch
-is *text*, and what fullscreen buys text is **lines**: a voice with a filter
-and two envelopes runs past seventeen rems, and reading it a third at a time is
-the thing that makes an editor tiring. The stage is the whole editor rather
-than the text alone, because fullscreening the patch would take away the
-problems list and the keyboard you check it against.
+**This was the browser's Fullscreen API for about an hour, and that was the
+wrong tool.** What a studio wants is the *canvas* at the size of the window —
+the tool bars and the panels out of the way. Taking over the whole screen is a
+different thing, and one the browser already offers on a key of its own.
 
-Two options came out of it that the others now share: `background`, because
-black behind a picture is right and black behind text is a different, worse
-editor; and padding and `overflow: auto` for a `none` stage, so a long patch
-has somewhere to scroll and room to breathe.
+Asking for it the other way cost more than it bought. `requestFullscreen` can
+be refused, and is, whenever the page sits in a frame that was not granted the
+permission — measured: all seven buttons reported *"Permissions check failed"*
+rather than working. It also fires its change event on the **document** rather
+than the element, so every studio ever opened leaves a listener behind unless
+somebody remembers to take it off.
 
-**Three things the platform makes awkward, handled once.**
-`fullscreenchange` fires on the *document*, so every studio ever opened would
-leave a listener behind; the handler removes itself once its stage is no longer
-in the page. A request can simply be refused — an embedded frame usually does —
-and the studio is told so it can say so, because a button that does nothing and
-says nothing is worse than one that says it was refused. And the screen's shape
-is not the picture's, which is what `fit` is for.
+Filling the window is `position: fixed; inset: 0` and a z-index, which no
+permission gates and no listener outlives. It sits at **70** — above the sticky
+header at 40 and the menus at 50, below the modals at 80 and the toasts at 90,
+so a dialog still opens over the top of it.
 
-**What is actually checked.** Whether the browser *grants* the request cannot
-be exercised from a test, and the pane this was built in refuses it. What can
-break is this file's half — the styles it puts on a stage and whether it takes
-them off again, because a stage left at `width: 100%` on a black background
-after exiting is a studio with a broken layout that nobody notices until the
-second time. So `document.fullscreenElement` is stubbed and the event
-dispatched: the platform is faked, the logic is real, and all three fits are
-held to putting every style back byte for byte on the way out.
+**Two things that only showed up once it could be watched.** A fixed box keeps
+its margin, and the margin comes off the size `inset` gave it: Music's stage is
+a card with a rem underneath, and it filled the window fifteen pixels short
+until that was measured. And `position: fixed` takes the stage out of the flow,
+so the page behind would reflow and put you somewhere else on the way back — a
+placeholder of the same height holds the slot open.
+
+**What the check is now.** It used to stub `document.fullscreenElement`,
+because whether a request is *granted* is not something a test can decide.
+There is nothing left to fake: the check expands a real stage, measures that it
+fills the window exactly — with a margin of its own, which is the bug above —
+confirms the placeholder, confirms there is a way out from inside that does not
+depend on the button now underneath the picture, presses Escape, and holds
+every style to coming back byte for byte.
 
 ## 4. Decisions and risks
 
@@ -2146,7 +2148,7 @@ held to putting every style back byte for byte on the way out.
 | 24.1 | The render graph on WebGPU — **shipped** | L | 23.1 | pool, fusion, feedback and 32-bit registers, identical |
 | 25.1 | Tiling on WebGPU; the rover's terrain as data | M | 24.1 | past the device's maximum, byte-identical; 74 fps |
 | 26.1 | Fullscreen; the same care for the other 3D sketches | S | 25.1 | bounce 9.3 → 2.8 ms, and lit like the still life |
-| 27.1 | One fullscreen button, six studios — **shipped** | S | 26.1 | written once, three fits, styles restored exactly |
+| 27.1 | The picture filling the window, seven studios | S | 26.1 | in-page, no permission to be refused; three fits |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

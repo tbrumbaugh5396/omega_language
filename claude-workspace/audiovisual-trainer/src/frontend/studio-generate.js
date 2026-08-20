@@ -21,7 +21,7 @@ import { fitPreview } from "./sdf-core.js";
 import { nodeReference, referenceGaps } from "./node-docs.js";
 import { Keyboard } from "./keyboard.js";
 import { hasSketchEffects, sketchFrame } from "./sketch-effects.js";
-import { fullscreenButton } from "./fullscreen.js";
+import { expandButton } from "./expand.js";
 import { LiveRig } from "./live-audio.js";
 import { registerNode, withNodeHeader, nodeShape, declaresNode, keepVersion,
          versionSummary, usersOfNode, nodeIdFor } from "./node-library.js";
@@ -2059,7 +2059,7 @@ export async function generateEditor(host) {
   let deltas = [];              // recent frame-to-frame times, for the auto scale
   let settled = false;          // auto has chosen, and stops choosing
   const wantScale = () => (doc.renderScale === undefined ? "auto" : doc.renderScale);
-  const isFull = () => fs.isFull();
+  const isFull = () => fs.isExpanded();
   /**
    * The size a render aims at before the scale is applied: the authored
    * preview normally, and the screen with the sketch's own aspect fitted into
@@ -2076,7 +2076,7 @@ export async function generateEditor(host) {
   // Entering or leaving changes what a full-size render *is* — the render aims
   // at the screen rather than the authored preview — so the scale is asked
   // again from scratch rather than carried across.
-  const fs = fullscreenButton(stage, {
+  const fs = expandButton(stage, {
     className: "",
     title: "show the render on its own. The state is the size of the picture, so this restarts a simulation",
     onRefused: (why) => { log.textContent = why; },
