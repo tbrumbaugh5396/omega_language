@@ -1160,7 +1160,9 @@ finish(col)`
 uniform sampler2D u_keys;
 uniform float walk;      // @range 3 40 @default 13 @help metres a second
 uniform float turn;      // @range 0.5 3 @default 1.7 @help radians a second
-uniform float hour;      // @range 0 1 @default 0.32 @help sun height
+uniform float hour;      // @range 0 1 @default 0.28 @help the time of day it starts at
+uniform float dayLen;    // @range 20 900 @default 180 @help seconds in a whole day
+uniform float look;      // @range 0.4 3 @default 1.4 @help how fast the view turns
 uniform float fogFar;    // @range 30 160 @default 86 @help where the air closes in
 uniform vec3  sandC;     // @color @default #cbab72
 uniform vec3  grassC;    // @color @default #466b34
@@ -1224,6 +1226,72 @@ vec4 landform(vec2 q) {
 // map moving through the world.
 vec2 gEye2;                 // where the map is centred, this frame
 vec2 mapUv(vec2 q) { return (q - gEye2) / WORLD + 0.5; }
+
+// The sun, the moon, and how much of the night it is. Set once per pixel.
+// One name to a declaration: the shorthand's global handling reads a type
+// and a name, and a comma-separated pair is a second name it never sees.
+vec3 gSun;
+vec3 gMoon;
+vec3 gKey;
+vec3 gKeyCol;
+float gNight;
+
+/**
+ * The sky, which is two skies with a dusk between them.
+ *
+ * The prelude's sky() is a daytime sky and knows nothing about night, so the
+ * night is written here and crossfaded in: a deep blue that darkens overhead,
+ * stars in it, and the moon as a lit disc with a phase.
+ *
+ * The stars are cells on the *direction* rather than on the screen — the same
+ * star has to stay where it is when the head turns, which a screen-space hash
+ * cannot do. Two angles, quantised: that is what a constellation is.
+ */
+vec3 nightSky(vec3 rd) {
+  float up = max(rd.y, 0.0);
+  vec3 base = mix(vec3(0.035, 0.045, 0.085), vec3(0.006, 0.010, 0.026), up);
+  if (rd.y > -0.02) {
+    vec2 sp = vec2(atan(rd.z, rd.x) * 3.1, asin(clamp(rd.y, -1.0, 1.0)) * 6.2) * 9.5;
+    vec2 sc = floor(sp);
+    float h = hash21(sc);
+    if (h > 0.975) {
+      vec2 j = vec2(hash21(sc + 3.1), hash21(sc + 7.7)) * 0.6 + 0.2;
+      float d = length(fract(sp) - j);
+      // A little twinkle, but not so much that the sky boils.
+      float tw = 0.75 + 0.25 * sin(t * 2.3 + h * 90.0);
+      float mag = 0.35 + 0.65 * hash21(sc + 11.3);
+      base += vec3(0.9, 0.93, 1.0) * smoothstep(0.09, 0.0, d) * mag * tw
+            * smoothstep(-0.02, 0.25, rd.y);
+    }
+  }
+  // The moon: a disc, and a phase, which is the sun's direction seen from it.
+  float mdot = dot(rd, gMoon);
+  if (mdot > 0.9985) {
+    // Where on the little disc this ray lands, in the moon's own frame.
+    vec3 mr = normalize(cross(gMoon, vec3(0.0, 1.0, 0.0)));
+    vec3 mu = cross(mr, gMoon);
+    vec2 q = vec2(dot(rd, mr), dot(rd, mu)) / 0.055;
+    float r2 = dot(q, q);
+    if (r2 < 1.0) {
+      // A sphere's normal, from where the ray lands on the disc — which is
+      // all a phase is: the lit half of a ball, seen edge on.
+      vec3 nrm = gMoon * sqrt(max(1.0 - r2, 0.0)) + mr * q.x + mu * q.y;
+      float lit = smoothstep(-0.12, 0.12, dot(nrm, gSun));
+      vec3 face = mix(vec3(0.72, 0.74, 0.78), vec3(0.96, 0.95, 0.90),
+                      0.5 + 0.5 * noise(q * 3.0));
+      base = mix(base, face * (0.12 + 0.88 * lit), smoothstep(1.0, 0.86, r2));
+    }
+  }
+  // …and a halo, so it is a light in the sky rather than a sticker on it.
+  // Tight, or the halo swallows the disc it is meant to surround: at an
+  // exponent of 260 the glow was four degrees wide and the moon is three.
+  base += vec3(0.5, 0.53, 0.62) * pow(max(mdot, 0.0), 900.0) * 0.22;
+  return base;
+}
+
+vec3 skyAt(vec3 rd) {
+  return mix(sky(rd, gSun), nightSky(rd), gNight);
+}
 
 // The weather, read once per pixel and then used everywhere. Wind is a
 // direction and a strength, rain is an amount, and both drift with time in a
@@ -1578,10 +1646,11 @@ vec2 spawnPoint() {
 vec4 who()  { return reg(vec2(0.0, 0.0)); }   // x, z, heading, speed
 vec4 meta() { return reg(vec2(1.0, 0.0)); }   // metres walked, -, -, -
 vec4 airOf() { return reg(vec2(2.0, 0.0)); }  // wind x, wind z, rain, gust
+vec4 view()  { return reg(vec2(3.0, 0.0)); }  // pitch, roll, time of day, -
 
 vec4 sim(vec2 uvv) {
   vec2 texel = floor(gl_FragCoord.xy);
-  if (texel.y > 0.5 || texel.x > 3.5) return vec4(0.0);
+  if (texel.y > 0.5 || texel.x > 4.5) return vec4(0.0);
   bool first = frame == 0 || keyHit(u_keys, 82.0) > 0.5;
   float dt = 1.0 / 60.0;
   vec4 w = first ? vec4(spawnPoint(), 0.6, 0.0) : who();
@@ -1594,12 +1663,28 @@ vec4 sim(vec2 uvv) {
   float run = 1.0 + keyDown(u_keys, 16.0) * 1.6;
 
   float heading = w.z + (lf - rt) * turn * dt;
+  // Pitch, roll and the clock. Pitch stops just short of straight up: at
+  // exactly vertical the forward vector is parallel to world-up and the frame
+  // it is built from has no right-hand side.
+  vec4 v = first ? vec4(-0.07, 0.0, hour, 0.0) : view();
+  float upK = max(keyDown(u_keys, 73.0), keyDown(u_keys, 33.0));    // I / PageUp
+  float dnK = max(keyDown(u_keys, 75.0), keyDown(u_keys, 34.0));    // K / PageDown
+  float rlK = keyDown(u_keys, 81.0), rrK = keyDown(u_keys, 69.0);   // Q / E
+  float pitch = clamp(v.x + (upK - dnK) * look * dt, -1.45, 1.45);
+  float roll = v.y + (rlK - rrK) * look * dt;
+  // …and dragging the mouse looks around, which is what a mouse is for.
+  if (md > 0.5) {
+    heading += (m.x - 0.5) * look * dt * 3.4;
+    pitch = clamp(pitch + (m.y - 0.5) * look * dt * 2.6, -1.45, 1.45);
+  }
+  float clock = fract(v.z + dt / max(dayLen, 1.0));
   float sp = (fw - bk) * walk * run;
   vec2 dir = vec2(sin(heading), cos(heading));
   vec2 pos = w.xy + dir * sp * dt;
 
   if (texel.x < 0.5) return vec4(pos, heading, sp);
   if (texel.x < 1.5) return vec4(m.x + abs(sp) * dt, 0.0, 0.0, 1.0);
+  if (texel.x > 2.5 && texel.x < 3.5) return vec4(pitch, roll, clock, 1.0);
   if (texel.x < 2.5) {
     // Weather, drifting. The direction turns slowly, the strength gusts, and
     // the rain comes and goes over a couple of minutes — so standing still
@@ -1630,17 +1715,44 @@ gRain = air.z;
 gEye2 = w.xy;
 gWave = 0.0;
 
-vec3 fwd = vec3(sin(w.z), 0.0, cos(w.z));
 float standing = ground(w.xy);
 vec3 ro = vec3(w.x, max(standing, gWave) + 1.75, w.y);
-mat3 cam = lookAt(ro, ro + fwd + vec3(0.0, -0.07, 0.0));
+
+// Yaw, pitch and roll, built by hand rather than through lookAt — which can
+// say where to point but has no way to say which way up.
+vec4 vw = view();
+float cp = cos(vw.x), sp2 = sin(vw.x);
+vec3 fwd = vec3(sin(w.z) * cp, sp2, cos(w.z) * cp);
+vec3 rgt = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+vec3 upv = cross(rgt, fwd);
+float cr = cos(vw.y), sr = sin(vw.y);
+mat3 cam = mat3(rgt * cr + upv * sr, upv * cr - rgt * sr, fwd);
 vec3 rd = cam * normalize(vec3(p, 1.55));
-vec3 sun = normalize(vec3(0.42, 0.16 + hour * 0.8, 0.36));
+// A day. The sun goes round a tilted circle and the moon goes round the other
+// side of it, so when one is up the other is mostly not — which is wrong about
+// the actual moon and right about what a sky looks like.
+float dayAng = view().z * 6.28318;
+gSun = normalize(vec3(cos(dayAng) * 0.85, sin(dayAng), 0.38));
+gMoon = normalize(vec3(cos(dayAng + 3.14159) * 0.85, sin(dayAng + 3.14159), -0.42));
+// Night is not a switch. It comes on as the sun goes under, and the dusk in
+// between is where the light is worth looking at.
+gNight = smoothstep(0.10, -0.14, gSun.y);
+// Whichever is up is the light. The moon is a hundred thousand times dimmer
+// than the sun in life; here it is twenty times, because a scene lit by the
+// real ratio is a black rectangle.
+gKey = mix(gSun, gMoon, gNight);
+gKeyCol = mix(vec3(1.0, 0.94, 0.84) * (0.35 + 0.65 * smoothstep(-0.05, 0.35, gSun.y)),
+              vec3(0.42, 0.52, 0.78), gNight);
+vec3 sun = gKey;
 // Rain takes the sun away and brings the horizon in. Most of what makes a wet
 // day look like one follows from those two.
 float far = mix(fogFar, fogFar * 0.42, gRain);
 vec3 grey = vec3(0.52, 0.55, 0.60);
-vec3 skyCol = mix(sky(rd, sun), grey * (0.55 + 0.45 * smoothstep(-0.1, 0.5, rd.y)), gRain * 0.8);
+// Overcast is grey by day and nearly black by night — a rainy night is not a
+// grey one, and mixing toward the same grey either way is what makes a cheap
+// night look like a photograph of a day.
+vec3 skyCol = mix(skyAt(rd), grey * (0.55 + 0.45 * smoothstep(-0.1, 0.5, rd.y)) * (1.0 - gNight * 0.88),
+                  gRain * 0.8);
 float sunDim = 1.0 - gRain * 0.72;
 
 vec3 col = skyCol;
@@ -1705,6 +1817,7 @@ if (tHit > 0.0) {
     gWet = 0.0;
     gW = vec4(0.0);
     albedo = vec3(0.035, 0.033, 0.030);
+    if (gNight > 0.5) albedo = vec3(0.02, 0.022, 0.03);
   }
   float sh = softShadow(hit + n * 0.06, sun, 9.0);
   float lit = max(dot(n, sun), 0.0);
@@ -1714,10 +1827,12 @@ if (tHit > 0.0) {
   // Wet ground is darker and shinier: the water fills the pores, so less light
   // comes back diffusely and more of it comes back in one direction.
   albedo *= 1.0 - gRain * 0.35 * (1.0 - gWet);
-  vec3 lin = albedo * (lit * sh * vec3(1.0, 0.94, 0.84) * 2.35 * sunDim
+  vec3 lin = albedo * (lit * sh * gKeyCol * mix(2.35, 0.42, gNight) * sunDim
                      // Snow's shadows are the sky's colour, which is why they
                      // are blue and why nothing else on the ground is.
-                     + occ * mix(vec3(0.13, 0.19, 0.31), vec3(0.20, 0.30, 0.52), gW.w)
+                     // The ambient is the sky, so it goes out with the sky.
+                     + occ * mix(mix(vec3(0.13, 0.19, 0.31), vec3(0.20, 0.30, 0.52), gW.w),
+                                 vec3(0.030, 0.042, 0.085), gNight)
                        * (0.5 + 0.5 * n.y));
   // What the biome does with the light, rather than only with the pigment:
   // snow and water throw it back, sand and grass do not.

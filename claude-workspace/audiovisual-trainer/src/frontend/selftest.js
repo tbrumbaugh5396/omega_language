@@ -3156,6 +3156,61 @@ c`;
                + "the birds are 1.4 ms and simpler, because a bird is at a height it chose and needs no fetch "
                + "at all, which is the same fact from the other side" }); }
 
+    // 7. A day, and a head that turns in three axes.
+    { const g = GENERATE_PRESETS.find((x) => x.id === "world");
+      const W2 = 96, H2 = 64;
+      const base = {};
+      for (const u of parseUniforms(g.source)) if (u.value) base[u.name] = u.value;
+      const kb = new Keyboard();
+      const px = (c) => c.getContext("2d").getImageData(0, 0, W2, H2).data;
+      // A whole day in 180 frames, sampled six times.
+      const values = { ...base, dayLen: [3], weather: [0], wildlife: [0] };
+      const bright = [];
+      for (let f = 0; f <= 180; f++) {
+        kb.clear();
+        const out = renderSketch(g.source, W2, H2, { keys: kb, values, steps: 1, reset: f === 0, time: f / 60 });
+        kb.tick();
+        if (f % 30 !== 0 || f === 0) continue;
+        const d = px(out);
+        let sum = 0;
+        for (let i = 0; i < W2 * H2; i++) sum += d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
+        bright.push(Math.round(sum / (W2 * H2 * 3)));
+      }
+      const day = Math.max(...bright), night = Math.min(...bright);
+
+      // Stars: only at night, and in the same place when the head turns —
+      // a star fixed to the screen is a speck on the lens.
+      const lookUp = (keys, frames, over) => {
+        for (let f = 0; f <= frames; f++) {
+          kb.clear(); for (const k of keys) kb.press(k);
+          var out = renderSketch(g.source, W2, H2,
+            { keys: kb, values: { ...base, ...over }, steps: 1, reset: f === 0, time: f / 60 });
+          kb.tick();
+        }
+        return px(out);
+      };
+      const nightUp = lookUp([73], 90, { dayLen: [900], hour: [0.72], weather: [0], wildlife: [0], look: [2.2] });
+      const dayUp = lookUp([73], 90, { dayLen: [900], hour: [0.25], weather: [0], wildlife: [0], look: [2.2] });
+      const speckle = (d) => { let n = 0;
+        for (let i = 0; i < W2 * H2; i++) if (d[i * 4] > 90 && d[i * 4 + 2] > 90) n++;
+        return n; };
+      // Rolled: the horizon has to move, which a yaw alone cannot do.
+      const level = lookUp([], 60, { dayLen: [900], hour: [0.25], weather: [0], wildlife: [0] });
+      const rolled = lookUp([81], 60, { dayLen: [900], hour: [0.25], weather: [0], wildlife: [0], look: [2.2] });
+      let moved = 0;
+      for (let i = 0; i < W2 * H2; i++) moved += Math.abs(level[i * 4] - rolled[i * 4]);
+      moved /= W2 * H2;
+
+      const nightSpecks = speckle(nightUp);
+      push({ group: "More games", name: "a day that turns, a moon and stars in the night, and a head with three axes",
+             ok: day - night > 45 && nightSpecks > 4 && moved > 25,
+             detail: `a whole day sampled six times: ${bright.join(", ")}/255 mean — ${day} at noon and ${night} `
+               + `at midnight. Looking up at night finds ${nightSpecks} bright specks against the dark where the `
+               + "same view by day finds sky; the stars are cells on the ray's *direction* rather than the "
+               + `screen, so they stay where they are when the head turns. And rolling moves ${moved.toFixed(0)}`
+               + "/255 of the picture — the camera is a basis built from yaw, pitch and roll rather than a "
+               + "lookAt, which can say where to point but has no way to say which way up" }); }
+
     // The render scale, as a rule rather than a feeling. Cost is very nearly
     // proportional to pixel count, so the scale that fits a budget is
     // √(budget / measured) — snapped down to a step, and never above 1.

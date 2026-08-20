@@ -2322,6 +2322,54 @@ came up a little to meet them.
 would rebuild only the strip that moved, which is worth doing the day the bake
 shows up in a measurement rather than before.
 
+### Phase 30 — A day, and a head that turns *(M)* — **shipped**
+
+**A day.** The time of day lives in a register and advances, so the sun goes
+round a tilted circle and the moon goes round the other side of it. Night is
+not a switch: it comes on as the sun goes under, and the dusk in between is
+where the light is worth looking at.
+
+The prelude's `sky()` is a daytime sky and knows nothing about night, so the
+night is written beside it and crossfaded in — a deep blue darkening overhead,
+stars, and the moon as a lit disc with a phase, which is the sun's direction
+seen from a sphere.
+
+The stars are cells on the *ray's direction* rather than on the screen. That is
+the whole of it: a star fixed to the screen is a speck on the lens, and the
+same star has to stay where it is when the head turns. Two angles, quantised —
+which is what a constellation is.
+
+**A head that turns in three axes.** `lookAt` can say where to point but has no
+way to say which way up, so the camera is now a basis built by hand from yaw,
+pitch and roll. Pitch stops just short of vertical, because at exactly vertical
+the forward vector is parallel to world-up and the frame built from it has no
+right-hand side. I/K or PageUp/PageDown pitch, Q/E roll, A/D still yaw, and
+dragging the mouse looks around.
+
+| held to | number |
+|---|---|
+| a frame at 640×360, with everything | **12.2 ms — 82 fps** |
+| a whole day, six samples | noon to midnight, a swing of more than 45/255 |
+| looking up at night | bright specks where the same view by day finds sky |
+| rolling | more than 25/255 of the picture moves |
+
+**Two mistakes, both about names.** `vec3 gSun, gMoon;` declares two globals
+and the shorthand's global handling reads a type and *a* name, so the second
+was never emitted. And a local called `md` inside the night sky silently
+deleted the reserved `md` — the shorthand drops a built-in the moment a sketch
+defines that name itself, which is the right rule and a sharp edge: the mouse
+look stopped compiling in a function that never mentions the mouse.
+
+**And one of mine, worth recording because it nearly cost the work.** The
+scratch file holding this phase was deleted by a `rm` that ran after the script
+which should have consumed it had already failed — its guard rejected the file
+for containing a backtick, which would have broken the template literal it was
+being pasted into. The guard was right; the ordering was mine. It was
+recovered from the browser's own memory, where it was still loaded.
+
+*Left:* the moon keeps one face and one phase all night, the sun's circle is
+tilted by a constant rather than a latitude, and there is still no dawn chorus.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2392,6 +2440,7 @@ shows up in a measurement rather than before.
 | 28.2 | Trees, boulders and grass — **shipped** | M | 28.1 | 9.1 ms; one grid, and the cell decides what grows |
 | 29.1 | Weather, and `@state` — **shipped** | M | 28.2 | 11.9 ms; 132 MB of state becomes 12.9 |
 | 29.2 | A herd and a flock — **shipped** | S | 29.1 | 12.8 ms; the herd 0.4, the birds 1.4 and no fetch |
+| 30.1 | Day and night, a moon and stars, roll/pitch/yaw | M | 29.2 | 12.2 ms; stars on the direction, not the screen |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
