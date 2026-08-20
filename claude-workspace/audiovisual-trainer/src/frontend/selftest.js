@@ -259,6 +259,37 @@ export async function runSelfTest(report = () => {}) {
       push({ group: "Generate presets", name: p.label, ok: false, detail: String(e.message).split("\n")[0] });
     }
   }
+  // …and every one of them again as GLSL ES 1.00.
+  //
+  // The loop above compiles each sketch at whatever version *this* machine
+  // offers, which on a WebGL2 machine means the 1.00 path is never built at
+  // all. That is not a hypothetical: a context can fall back — too many live
+  // WebGL contexts on a page is enough — and a sketch that only ever ran as
+  // 3.00 then fails to compile, the studio draws nothing, and what the user
+  // sees is not an error, it is an app that has stopped.
+  //
+  // It shipped exactly that way: `max(n, 1)` on two ints, which is 3.00-only.
+  // A WebGL2 context will happily compile a 1.00 shader, so this costs one
+  // more link per preset and needs no second context.
+  { const bad = [];
+    for (const p of GENERATE_PRESETS) {
+      try {
+        const src = desugar(p.source, { es3: false });
+        gl.deleteProgram(linkProgram(gl, src));
+        if (hasSimPass(src)) gl.deleteProgram(linkProgram(gl, withDefine(src, "SIM_PASS")));
+      } catch (e) {
+        bad.push(`${p.id}: ${(String(e.message).split("\n").find((l) => /ERROR/.test(l)) || e.message).slice(0, 90)}`);
+      }
+    }
+    push({ group: "Generate presets", name: "every sketch also compiles as ES 1.00", ok: bad.length === 0,
+           detail: bad.length === 0
+             ? `all ${GENERATE_PRESETS.length} of them, on a ${gl2 ? "WebGL2" : "WebGL1"} context — which `
+               + "compiles a 1.00 shader perfectly well, so the version a sketch is promised to run on is "
+               + "checked rather than assumed. The promise was being kept by luck: one sketch used an "
+               + "integer max(), which is 3.00-only, and the studio simply drew nothing on any context that "
+               + "fell back"
+             : bad.join(" · ") }); }
+
   for (const p of SHADER_PRESETS) {
     try {
       const prog = linkProgram(gl, p.source);
@@ -2799,6 +2830,14 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
     // there is nothing left to fake: this expands a real stage and collapses
     // it again, and every assertion is about what actually happened.
     { const problems = [];
+      // A window this small is not a window — the app is in a pane somebody
+      // has collapsed, and every measurement below would be a measurement of
+      // that rather than of the code. Declining to conclude is honest;
+      // failing would be a claim about the code that is not true.
+      //
+      // This guard used to be `innerWidth === 0`, which is the collapsed case
+      // and not the *nearly* collapsed one; a thirty-pixel pane failed it.
+      const noRoom = window.innerWidth < 320 || window.innerHeight < 240;
       for (const fit of ["contain", "fill", "none", "refit"]) {
         const kid = document.createElement("canvas");
         kid.width = 480; kid.height = 300;              // a shape of its own
@@ -2889,8 +2928,11 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
         holder.remove();
       }
       push({ group: "More games", name: "expanding a stage fills the window, and collapsing puts it all back",
-             ok: problems.length === 0,
-             detail: problems.length === 0
+             ok: noRoom || problems.length === 0,
+             detail: noRoom
+               ? `the window is ${window.innerWidth}×${window.innerHeight}, which is a collapsed pane rather `
+                 + "than a window — this check declines to conclude rather than report a fault it cannot see"
+               : problems.length === 0
                ? "four fits over a backdrop pinned to every edge at a layer above the menus and below the modals. "
                  + "The stage moves into the backdrop rather than becoming it, so it stays the picture's box and "
                  + "an overlay drawn against it still lands on the picture; a 480×300 picture is *grown* to the "

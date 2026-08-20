@@ -1526,8 +1526,13 @@ gLight = vec3(sin(lightTurn) * 4.0, 1.2 + lightUp * 3.0, cos(lightTurn) * 4.0);
 // own rows up with the horizontal and vertical edges it is trying to soften,
 // which is the one arrangement that helps least. Turned, the samples land at
 // n-squared distinct heights instead of n.
+// float(max(n, 1)) would read better and does not exist: GLSL ES 1.00 has no
+// integer max — that overload arrived with 3.00. A sketch here is meant to run
+// on either, so the arithmetic stays in floats and only the loop counter is an
+// int. This shipped, and nothing caught it, because the self-test compiled
+// every sketch at whatever version *this* machine offers and never the other.
 int n = int(rays);
-float inv = 1.0 / float(max(n, 1));
+float inv = 1.0 / max(float(n), 1.0);
 vec3 col = vec3(0.0);
 float taken = 0.0;
 for (int j = 0; j < 3; j++) {

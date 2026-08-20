@@ -2826,6 +2826,55 @@ check, which the rewrite had dropped entirely, is back with it.
 to give somewhere, which it cannot; the crop when a label is too tall is still
 centred; and `@options` still swallows a multi-word option silently.
 
+### Phase 38 — The sketch that would not compile, and the check that never looked *(S)* — **shipped**
+
+Reported as "the UI seems to lag". It was not lag. The can sketch **failed to
+compile**, so the studio drew nothing and the loop had nothing to do — and a
+studio with a black canvas and a stopped clock is indistinguishable from a
+slow one until you read the error underneath it.
+
+`float inv = 1.0 / float(max(n, 1));` — `max` on two ints, which arrived with
+GLSL ES 3.00 and does not exist in 1.00. The arithmetic now stays in floats
+and only the loop counter is an int.
+
+**Why nothing caught it.** The preset check compiles each sketch with
+`desugar(src, { es3: gl2 })` — at whatever version *this* machine offers. On a
+WebGL2 machine the 1.00 path is never built at all, for any sketch. The
+sketches are advertised as running on either; that promise was being kept by
+luck.
+
+Every Generate preset is now linked **both ways**, which a WebGL2 context does
+perfectly well, so it costs one more link per preset and needs no second
+context. All 34 pass; before the fix, exactly one did not, and it was the one
+on screen.
+
+**And the fallback was probably mine.** WebGL contexts are a limited
+per-process resource, and the measurements in this session created a handful
+of throwaway ones in another tab. The studio came up on a 1.00 context, which
+is exactly the condition the bug needed. That is not an excuse — a real
+machine can fall back for its own reasons, and this would have been waiting
+for it.
+
+**What the performance actually is**, measured while looking for a slowdown
+that turned out not to exist:
+
+| | |
+|---|---|
+| the can, 720×480, 4 rays a pixel | **5.58 ms** |
+| the same with a 285 MB label bound | **5.11 ms** — flat |
+| one `readPixels` on this GPU | **2.675 ms** |
+
+The 11520×6480 image the document had loaded costs nothing to sample: eight
+fetches a pixel is eight fetches whatever the texture weighs. The number worth
+keeping is the last one — the sound path reads one texel per *distinct* probe
+texel per frame, and the world has five of them, so about **13 ms a frame of
+synchronous main-thread stall** whenever sound is on. That is a real cause of
+the symptom that was reported, in a different sketch, and it is unfixed.
+
+*Left:* the probe readback is still synchronous, where a WebGL2 pixel buffer
+object read one frame late would cost nothing and be indistinguishable; and
+nothing bounds how many GL contexts the app and its tests may hold at once.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2904,6 +2953,7 @@ centred; and `@options` still swallows a multi-word option silently.
 | 35.1 | A can, solved rather than marched — **shipped** | M | — | yaw moves 0 silhouette pixels; @label parser fixed |
 | 36.1 | A can you can resize — **shipped** | S | 35.1 | band 31→66 px with radius (×2.13); seam 540 px |
 | 37.1 | Stretch by amount, and by region — **shipped** | M | 36.1 | artwork 2.3× even vs 1.03× kept; black keys to within 1 px |
+| 38.1 | ES 1.00 checked, not assumed — **shipped** | S | 37.1 | 34/34 link both ways; integer max() was 3.00-only |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
