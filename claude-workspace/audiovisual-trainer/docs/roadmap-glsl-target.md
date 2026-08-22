@@ -2875,6 +2875,75 @@ the symptom that was reported, in a different sketch, and it is unfixed.
 object read one frame late would cost nothing and be indistinguishable; and
 nothing bounds how many GL contexts the app and its tests may hold at once.
 
+### Phase 39 — Probes read without stalling on them *(M)* — **shipped**
+
+The number from Phase 38: **2.675 ms per `readPixels`** on an Intel HD 6000,
+once per *distinct probe texel*, five of them in the open world. About eleven
+milliseconds a frame of the main thread doing nothing, whenever sound was on.
+
+Two changes, and the dull one does much of the work.
+
+**One rectangle, not one call a texel.** A sketch's probes live in a handful
+of texels of one row, so their bounding box is tiny — eleven texels for the
+world. One read of the box replaces five reads of one pixel. Probes in
+opposite corners would make "the box" the whole picture, so above 4,096 texels
+the old way is still there.
+
+**The pixels go into a buffer, and a fence says when they arrived.** With a
+buffer bound to `PIXEL_PACK_BUFFER`, `readPixels` stops being a question and
+becomes a command: it returns at once and the GPU fills the buffer when it
+gets there. A three-slot ring, collected strictly in order, one a frame.
+
+Measured against a synchronous read of the same texels: **6 issued, 3
+collected, 0 skipped**, every value identical, and a collection trace of
+`0,0,1,2,2,3` — the pipeline filling and then draining one a frame, which is
+the frame or two of lag this buys the stall with. Thirty milliseconds on a
+footstep is inaudible; *missing* a pulse would not be, and none are missed
+while a slot is free, because every frame's read is issued and they are
+collected in order.
+
+**Three things that will bite the next person, all of which bit this one.**
+
+*A fence needs `SYNC_FLUSH_COMMANDS_BIT`.* It only advances once the commands
+behind it have been sent, and nothing in a poll loop sends them. Without it
+the queue never drains and the reader returns the same empty object for ever
+while looking exactly like it works — and reports a saving that is entirely
+the saving of not doing the work.
+
+*The pack buffer must be unbound immediately.* Left bound it silently
+redirects every other `readPixels` in the app into itself, and those callers
+get whatever was already in their array — a frozen picture rather than an
+error. The check reads ordinarily straight afterwards for exactly this.
+
+*The fence needs a yield **and** elapsed time.* Fifty message-channel ticks in
+a quarter of a millisecond do not move it. Neither does busy-waiting twenty
+milliseconds without yielding. Nor does `gl.finish()`, which advances the GPU
+but not the JS-visible sync status. A real frame loop supplies both without
+trying — but a *test* must be written to, and three separate measurements read
+"broken" before the instrument was the thing at fault.
+
+That last one cost a working implementation: it was reverted as unverified on
+the strength of a measurement that was itself the bug. `gl.getError()` after
+the buffered read — one line — said `NO_ERROR` and would have cleared the code
+immediately.
+
+**And it is opt-in, which is the part that nearly shipped wrong.** Turning it
+on unconditionally broke three existing checks at once — the ones that drive
+`sketchFrame` seven hundred frames back to back to prove a sketch sounds the
+same played as bounced. A batch loop never yields, so it collects nothing and
+hears silence. That was not a test artefact; a real offline bounce would have
+gone quiet the same way.
+
+So `live` is a statement about the caller's loop rather than a performance
+knob, and it is **off by default**: a caller who gets it wrong should get the
+slow answer, not no answer. The studio's frame loop asks for it; everything
+batch keeps the synchronous read.
+
+*Left:* the reader is per-`stateKey` in a module map and only released on
+request, so a long session with many sketch documents keeps a few buffers it
+no longer needs; and the WebGL1 path is unchanged, which is correct and means
+those contexts still stall.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -2954,6 +3023,7 @@ nothing bounds how many GL contexts the app and its tests may hold at once.
 | 36.1 | A can you can resize — **shipped** | S | 35.1 | band 31→66 px with radius (×2.13); seam 540 px |
 | 37.1 | Stretch by amount, and by region — **shipped** | M | 36.1 | artwork 2.3× even vs 1.03× kept; black keys to within 1 px |
 | 38.1 | ES 1.00 checked, not assumed — **shipped** | S | 37.1 | 34/34 link both ways; integer max() was 3.00-only |
+| 39.1 | Async probe readback — **shipped** | M | 38.1 | 5 reads → 1 buffered read; 6 issued / 3 collected / 0 skipped, values identical |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

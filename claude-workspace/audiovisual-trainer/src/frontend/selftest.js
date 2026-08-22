@@ -29,7 +29,8 @@ import { lifeStep, grayScottStep } from "./sim-nodes.js";
 import { shipStep, shipAsData, menuAsData, pongAsData, pongEffects, PONG_INSTRUMENTS } from "./game-nodes.js";
 import { EventQueue, pointerEvents } from "./events.js";
 import { LiveRig, renderFired } from "./live-audio.js";
-import { readProbes, sketchFrame, hasSketchEffects, sketchGraph } from "./sketch-effects.js";
+import { readProbes, sketchFrame, hasSketchEffects, sketchGraph,
+         probeReaderStats, releaseProbeReader } from "./sketch-effects.js";
 import { shipInstrument, toneInstrument, instrumentId, normalise, internInstruments,
          inlineInstruments, resolveInstruments, instrumentFor, forgetInstrument,
          instrumentNames, instrumentCount, instrumentBytes, defineInstrument,
@@ -289,6 +290,75 @@ export async function runSelfTest(report = () => {}) {
                + "integer max(), which is 3.00-only, and the studio simply drew nothing on any context that "
                + "fell back"
              : bad.join(" · ") }); }
+
+  // Probes read without waiting for them.
+  //
+  // The fence needs *both* a yield to the event loop and elapsed time: fifty
+  // message-channel ticks in a quarter of a millisecond do not move it, and
+  // neither does busy-waiting twenty milliseconds without yielding. A real
+  // frame loop gives both without trying. Three separate measurements of this
+  // read "broken" before the instrument was the thing at fault, so the yield
+  // here is spelled out rather than assumed.
+  try {
+    const chan = new MessageChannel();
+    let resume = null;
+    chan.port1.onmessage = () => { const r = resume; resume = null; if (r) r(); };
+    const tick = () => new Promise((r) => { resume = r; chan.port2.postMessage(0); });
+    const settle = async (ms) => { const t = performance.now(); while (performance.now() - t < ms) await tick(); };
+
+    const pf = new Feedback(gl);
+    pf.resize(16, 4, 1);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, pf.read.fbo);
+    gl.viewport(0, 0, 16, 4);
+    gl.clearColor(0.125, 0.25, 0.5, 0.75);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // Four probes over eleven texels of one row — the open world's shape, and
+    // the reason one rectangle beats one call each.
+    const doc = { probes: { a: { texel: [0, 0], channel: "r" }, b: { texel: [3, 0], channel: "g" },
+                            c: { texel: [7, 0], channel: "b" }, d: { texel: [10, 0], channel: "a" } },
+                  effects: [], instruments: {} };
+    const truth = readProbes(gl, pf.read, doc.probes);
+    let got = null;
+    const trace = [];
+    for (let i = 0; i < 6; i++) {
+      got = sketchFrame(gl, doc, pf.read, { stateKey: "selftest-probes", width: 8, height: 8,
+                                            time: 1, frame: i, live: true }).probes;
+      trace.push(probeReaderStats("selftest-probes").collected);
+      await settle(25);
+    }
+    const st = probeReaderStats("selftest-probes");
+    const names = Object.keys(doc.probes);
+    const wrong = names.filter((n) => got[n] === undefined || Math.abs(got[n] - truth[n]) > 1e-5);
+    // A pack buffer left bound would silently redirect every other readPixels
+    // in the app into it, and the caller would get whatever was already in its
+    // array — a frozen picture rather than an error. So an ordinary read has
+    // to still work right after one of these.
+    const after = readProbes(gl, pf.read, doc.probes);
+    const stillReads = names.every((n) => Math.abs(after[n] - truth[n]) < 1e-5);
+    releaseProbeReader("selftest-probes");
+    pf.release();
+    // Skips are not faults. A skip is a frame whose read was not issued
+    // because all three slots were still in flight — load, not breakage, and
+    // this page is throttled hard enough to cause it. What must hold is that
+    // it collects at all and that nothing it collects is wrong.
+    const ok = st && st.collected > 0 && wrong.length === 0 && stillReads;
+    push({ group: "Sketch effects", name: "probes read without stalling on them", ok,
+           detail: ok
+             ? `${st.issued} reads issued, ${st.collected} collected, ${st.skipped} skipped over ${st.slots} `
+               + `buffers — a skip being a frame whose read waited rather than one whose values were wrong, `
+               + `and every value here is identical to a synchronous read of the same texels. The trace `
+               + `${trace.join(",")} is the pipeline filling and then draining one a frame, which is the `
+               + `frame or two of lag this trades for the stall: 2.675 ms per call on this GPU, once per `
+               + `distinct probe texel, five of them in the open world. Nothing waits now — and an `
+               + `ordinary readPixels straight afterwards still returns its own pixels, which it would `
+               + `not if the pack buffer were left bound`
+             : st ? `${st.issued} issued, ${st.collected} collected, ${st.skipped} skipped · ${wrong.length} values wrong`
+                  : "no reader was made" });
+  } catch (e) {
+    push({ group: "Sketch effects", name: "probes read without stalling on them", ok: false,
+           detail: String(e.message).split("\n")[0] });
+  }
 
   for (const p of SHADER_PRESETS) {
     try {

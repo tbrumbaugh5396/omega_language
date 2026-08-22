@@ -4219,6 +4219,8 @@ export async function generateEditor(host) {
         stateKey: `generate-${host.doc.id || "doc"}`,
         width: canvas.width, height: canvas.height,
         time: timeNow(), frame: feedback.frame, keys: keyboard,
+        // A frame loop, so the probes can be read without waiting for them.
+        live: true,
       });
       soundSaid = errors[0] || "";
       if (fired.length) soundNotes += rig.perform(fired);
