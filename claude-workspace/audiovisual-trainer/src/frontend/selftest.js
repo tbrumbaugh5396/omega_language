@@ -3840,6 +3840,140 @@ c`;
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 
+    // A wing, and whether the colour on it is the colour the physics asks for.
+    try {
+      const g = GENERATE_PRESETS.find((x) => x.id === "wing");
+      const us = parseUniforms(g.source);
+      const base = {};
+      for (const u of us) if (u.value) base[u.name] = u.value.slice();
+
+      // An independent implementation of the same physics, in JavaScript,
+      // from the same textbook expressions rather than from the shader.
+      const lobe = (x, mu, s1, s2) => { const k = (x - mu) / (x < mu ? s1 : s2); return Math.exp(-0.5 * k * k); };
+      const cmfJs = (nm) => [
+        1.056 * lobe(nm, 599.8, 37.9, 31.0) + 0.362 * lobe(nm, 442.0, 16.0, 26.7)
+          - 0.065 * lobe(nm, 501.1, 20.4, 26.2),
+        0.821 * lobe(nm, 568.8, 46.9, 40.5) + 0.286 * lobe(nm, 530.9, 16.3, 31.1),
+        1.217 * lobe(nm, 437.0, 11.8, 36.0) + 0.681 * lobe(nm, 459.0, 26.0, 13.8)];
+      const nAt = (nm, nF) => nF + 0.0148 / ((nm * 0.001) * (nm * 0.001));
+      const filmR = (nm, cosI, d, nF) => {
+        const n2 = nAt(nm, nF);
+        const cosT = Math.sqrt(Math.max(1 - (1 - cosI * cosI) / (n2 * n2), 0));
+        const rs = (cosI - n2 * cosT) / (cosI + n2 * cosT);
+        const rp = (n2 * cosI - cosT) / (n2 * cosI + cosT);
+        const cd = Math.cos(4 * Math.PI * n2 * d * cosT / nm);
+        const one = (r2) => 2 * r2 * (1 - cd) / (1 + r2 * r2 - 2 * r2 * cd);
+        return 0.5 * (one(rs * rs) + one(rp * rp));
+      };
+      const rgbOf = (cosI, d, n, nF) => {
+        let X = 0, Y = 0, Z = 0, w = 0;
+        for (let i = 0; i < n; i++) {
+          const nm = 380 + (i + 0.5) / n * 350, b = cmfJs(nm), Rv = filmR(nm, cosI, d, nF);
+          X += b[0] * Rv; Y += b[1] * Rv; Z += b[2] * Rv; w += b[1];
+        }
+        X /= w; Y /= w; Z /= w;
+        return [Math.max(3.2406 * X - 1.5372 * Y - 0.4986 * Z, 0),
+                Math.max(-0.9689 * X + 1.8758 * Y + 0.0415 * Z, 0),
+                Math.max(0.0557 * X - 0.2040 * Y + 1.0570 * Z, 0)];
+      };
+      const enc = (u) => { const c = Math.min(Math.max(u, 0), 1);
+        return c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; };
+
+      // 1. How wrong a small number of samples is, against a converged one.
+      //    This is the whole point of the sketch, and it is a fact about the
+      //    integral rather than about any shader.
+      const conv = {};
+      for (const N of [3, 6, 12, 24, 48]) {
+        let worst = 0;
+        for (let a2 = 0; a2 < 9; a2++) for (let b2 = 0; b2 < 9; b2++) {
+          const cosI = 1 - a2 * 0.09, d = 180 + b2 * 100;
+          const r0 = rgbOf(cosI, d, 400, base.nFilm[0]), rN = rgbOf(cosI, d, N, base.nFilm[0]);
+          for (let c = 0; c < 3; c++) worst = Math.max(worst, Math.abs(enc(r0[c]) - enc(rN[c])) * 255);
+        }
+        conv[N] = +worst.toFixed(1);
+      }
+
+      // 2. The same convergence, measured in the shader, against the shader's
+      //    own N=48. Both sides go through the same tone mapping, so this is
+      //    a fair comparison where an absolute one would not be.
+      const CS = 160;
+      const chart = (N) => renderSketch(g.source, CS, CS, { frame: 0, time: 0,
+          values: { ...base, chart: [1], jitter: [0], samples: [N], expose: [0] } })
+        .getContext("2d").getImageData(0, 0, CS, CS).data;
+      const ref48 = chart(48);
+      const drift = (N) => { const a2 = chart(N); let sum = 0;
+        for (let i = 0; i < CS * CS; i++) sum += Math.abs(a2[i * 4] - ref48[i * 4])
+          + Math.abs(a2[i * 4 + 1] - ref48[i * 4 + 1]) + Math.abs(a2[i * 4 + 2] - ref48[i * 4 + 2]);
+        return +(sum / (CS * CS * 3)).toFixed(2); };
+      const shaderConv = { 3: drift(3), 6: drift(6), 12: drift(12), 24: drift(24) };
+
+      // 3. And the bands are where Maxwell says. The chart is always exactly
+      //    as wide as it is tall, so a square render is what gives the
+      //    thickness axis about a nanometre a pixel.
+      // Kept small on purpose. This shares one renderer with every check
+      // after it, and leaving that resized to 700 square is a cost they all
+      // inherit — on a GPU with a few hundred megabytes to its name, the
+      // suite stopped finishing. 420 gives the thickness axis 2.3 nm a pixel,
+      // which is ample against a threshold of thirty.
+      const S2 = 420;
+      const px = renderSketch(g.source, S2, S2, { frame: 0, time: 0,
+          values: { ...base, chart: [1], jitter: [0], samples: [48], expose: [0] } })
+        .getContext("2d").getImageData(0, 0, S2, S2).data;
+      const lums = [], ds = [];
+      for (let x = 0; x < S2; x++) {
+        const gx = (x + 0.5) / S2;
+        if (gx < 0.02 || gx > 0.98) continue;
+        const i = ((S2 - 1 - 3) * S2 + x) * 4;
+        lums.push(0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]);
+        ds.push(120 + gx * 980);
+      }
+      const smooth = (a2) => a2.map((_, i) => { let t = 0, n = 0;
+        for (let k = -2; k <= 2; k++) { const j = i + k; if (j >= 0 && j < a2.length) { t += a2[j]; n++; } }
+        return t / n; });
+      const dips = (arr, xs, hi) => { const o = [];
+        for (let i = 3; i < arr.length - 3; i++) { if (xs[i] > hi) break;
+          let lo = true;
+          for (let k = 1; k <= 3; k++) if (!(arr[i] < arr[i - k] && arr[i] < arr[i + k])) lo = false;
+          if (lo) o.push(xs[i]); }
+        return o; };
+      // Only below 860 nm. Above it the dips are shallower than one step of
+      // an eight-bit channel and a minimum-finder finds quantisation, not
+      // physics — which is a limit of reading the answer off a picture, and
+      // is said here rather than papered over with a looser threshold.
+      const seen = dips(smooth(lums), ds, 860);
+      const yb = (nm) => cmfJs(nm)[1];
+      const lumJs = (d) => { let Y = 0, w = 0;
+        for (let i = 0; i < 48; i++) { const nm = 380 + (i + 0.5) / 48 * 350;
+          Y += yb(nm) * filmR(nm, 1.0, d, base.nFilm[0]); w += yb(nm); }
+        return Y / w; };
+      const td = [], tl = [];
+      for (let k = 0; k < 1600; k++) { const d = 125 + k * 0.5; td.push(d); tl.push(lumJs(d)); }
+      const want = dips(tl, td, 900);
+      const offs = seen.map((sd) => Math.min(...want.map((t) => Math.abs(t - sd))));
+      const worstNm = offs.length ? Math.max(...offs) : 999;
+      const spacing = seen.length > 1 ? (seen[seen.length - 1] - seen[0]) / (seen.length - 1) : 0;
+      // …and put the shared renderer back to something small before leaving.
+      renderSketch(g.source, 32, 32, { frame: 0, time: 0, values: { ...base, chart: [1], samples: [3] } });
+
+      const ok = conv[3] > 60 && conv[24] < 4 && conv[48] < 1
+        && shaderConv[3] > 5 && shaderConv[24] < 0.5
+        && seen.length >= 4 && worstNm < 30;
+      push({ group: "Generate presets", name: "a wing: the spectrum integrated, not sampled at three points", ok,
+             detail: `three samples of an oscillating reflectance is not an approximation of anything: against `
+               + `a 400-sample reference it is wrong by ${conv[3]}/255 at worst, and 6 samples by ${conv[6]}. `
+               + `Twelve gets it to ${conv[12]}, twenty-four to ${conv[24]}, forty-eight to ${conv[48]} — which `
+               + `is why the default is 24 and not 3. The shader shows the same curve against its own N=48: `
+               + `${shaderConv[3]}, ${shaderConv[6]}, ${shaderConv[12]}, ${shaderConv[24]}/255 at 3, 6, 12 and `
+               + `24 samples, both sides through the same tone mapping so the comparison is a fair one. And `
+               + `the bands are where the physics puts them: ${seen.length} interference minima below 860 nm, `
+               + `each within ${worstNm.toFixed(1)} nm of a free-standing-film prediction computed `
+               + `independently in JavaScript, on a fringe spacing of ${spacing.toFixed(0)} nm. Above 860 the `
+               + `dips are shallower than one step of an 8-bit channel, so that is where the reading stops` });
+    } catch (e) {
+      push({ group: "Generate presets", name: "a wing: the spectrum integrated, not sampled at three points",
+             ok: false, detail: String(e.message).split("\n")[0] });
+    }
+
     // An annotation that ate the ones after it.
     { const one = parseUniforms("uniform float k; // @toggle @label the switch @default 1 @help why");
       const two = parseUniforms("uniform float k; // @range 0 4 @label a name @step 2");

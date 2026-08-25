@@ -1152,6 +1152,315 @@ float marks = min(m.y, BEACONS);
 if (uv.y < 0.035 && uv.x * BEACONS < marks) col = mix(col, vec3(1.0, 0.62, 0.28), 0.85);
 finish(col)`
   },
+  { id: "wing", label: "Insect wing — structural colour, integrated over the spectrum", preview: [800, 500], source:
+`// A wing, and a colour that is not a pigment.
+//
+// Nothing on a hoverfly's wing is coloured. The membrane is clear chitin a few
+// hundred nanometres thick, and what you see is *interference*: light reflects
+// off the front face and off the back face, the two waves arrive out of step
+// by however far the round trip through the film was, and at each wavelength
+// they add or cancel. That is Maxwell's boundary conditions and nothing else,
+// which is why the colour swings as the wing turns — tilt it and the round
+// trip lengthens and every cancellation moves.
+//
+// The interesting part for a shader is not the physics but the *sampling*.
+// A film of half a micron cancels and reinforces a dozen times across the
+// visible range, so the reflectance is a comb, not a curve. Ask it for red,
+// green and blue and you get three arbitrary points off a comb — a colour with
+// no relation to the one an eye would see, and it will not converge, because
+// three samples of an oscillation is not an approximation of anything.
+//
+// So this integrates properly: N wavelengths, each weighted by the colour
+// matching functions — the curves measured on human beings in 1931 — and the
+// result converted from XYZ. Turn the sample count down and watch it come apart.
+// That is the demonstration, and the chart shows it without the wing in the way.
+
+uniform float thickness;  // @range 150 900 @default 430 @help the membrane, in nanometres
+uniform float thickVary;  // @range 0 1 @default 0.55 @help how much it wanders across the wing
+uniform float nFilm;      // @range 1.2 2.2 @default 1.56 @help chitin's refractive index
+uniform float samples;    // @range 3 48 @step 1 @int @default 24 @help wavelengths in the integral
+uniform float jitter;     // @toggle @default 1 @label stratify @help offset the samples per pixel
+uniform float tilt;       // @range -1.2 1.2 @default 0.35 @help how the wing is held to the light
+uniform float lightTurn;  // @range -3.15 3.15 @default -0.7
+uniform float veinDark;   // @range 0 1 @default 0.72 @help how solid the veins are
+uniform float hairs;      // @range 0 1 @default 0.6 @help the fringe along the margin
+uniform float grime;      // @range 0 1 @default 0.35 @help a wing that has been used
+uniform vec3  backC;      // @color @default #0b0d12
+uniform float expose;     // @range -2 2 @default 0.15
+uniform float chart;      // @toggle @default 0 @label the physics @help thickness across, angle up
+
+const float PI = 3.14159265;
+
+// ---------------------------------------------------------------- the film
+// Chitin, with dispersion. Cauchy's relation: the index falls as the
+// wavelength grows, which is why the blue fringes are closer together than
+// the red ones and why a real wing's bands are not evenly spaced.
+float indexAt(float nm) {
+  float um2 = (nm * 0.001) * (nm * 0.001);
+  return nFilm + 0.0148 / um2;
+}
+
+/**
+ * The reflectance of a free-standing film, at one wavelength and one angle.
+ *
+ * Two interfaces — air to chitin to air — so the second amplitude is exactly
+ * the negative of the first, and the infinite sum of internal bounces closes
+ * into one expression. r is Fresnel's, which is Maxwell's boundary conditions
+ * solved for a plane wave, and it is worked out for both polarisations
+ * because daylight has no preference between them.
+ */
+float filmR(float nm, float cosI, float d) {
+  float n2 = indexAt(nm);
+  float sin2t = (1.0 - cosI * cosI) / (n2 * n2);     // Snell, squared
+  float cosT = sqrt(max(1.0 - sin2t, 0.0));
+  float rs = (cosI - n2 * cosT) / (cosI + n2 * cosT);
+  float rp = (n2 * cosI - cosT) / (n2 * cosI + cosT);
+  // The phase the round trip costs. Everything this sketch is about is here.
+  float cd = cos(4.0 * PI * n2 * d * cosT / nm);
+  float a = rs * rs, b = rp * rp;
+  return 0.5 * (2.0 * a * (1.0 - cd) / (1.0 + a * a - 2.0 * a * cd)
+              + 2.0 * b * (1.0 - cd) / (1.0 + b * b - 2.0 * b * cd));
+}
+
+// ------------------------------------------------------------- the observer
+// A piecewise Gaussian — one width below the peak and another above — which
+// is what lets three of them fit a curve that was measured on people rather
+// than derived from anything.
+float lobe(float x, float mu, float s1, float s2) {
+  float k = (x - mu) * (x < mu ? 1.0 / s1 : 1.0 / s2);
+  return exp(-0.5 * k * k);
+}
+vec3 cmf(float nm) {
+  return vec3(
+    1.056 * lobe(nm, 599.8, 37.9, 31.0) + 0.362 * lobe(nm, 442.0, 16.0, 26.7)
+      - 0.065 * lobe(nm, 501.1, 20.4, 26.2),
+    0.821 * lobe(nm, 568.8, 46.9, 40.5) + 0.286 * lobe(nm, 530.9, 16.3, 31.1),
+    1.217 * lobe(nm, 437.0, 11.8, 36.0) + 0.681 * lobe(nm, 459.0, 26.0, 13.8));
+}
+
+/**
+ * The colour of the film, integrated rather than sampled at three points.
+ *
+ * Normalised by the sum of the y-bar weights, so a perfect mirror comes out
+ * white at unit luminance whatever N is — which is what makes the sample
+ * count a question about *colour* rather than about brightness. The
+ * illuminant is equal-energy, which is a choice and worth saying: under D65
+ * the whites would shift, and nothing else here would change.
+ */
+vec3 filmColour(float cosI, float d, float jit) {
+  int n = int(samples);
+  vec3 xyz = vec3(0.0);
+  float wsum = 0.0;
+  for (int i = 0; i < 48; i++) {
+    if (i >= n) break;
+    float nm = 380.0 + (float(i) + jit) / float(n) * 350.0;
+    vec3 bar = cmf(nm);
+    xyz += bar * filmR(nm, cosI, d);
+    wsum += bar.y;
+  }
+  xyz /= max(wsum, 1e-5);
+  // XYZ to linear sRGB. Negative components are colours the display cannot
+  // make; clamping is the honest thing to do to them and the reason a very
+  // saturated fringe flattens rather than glowing.
+  return max(vec3(
+     3.2406 * xyz.x - 1.5372 * xyz.y - 0.4986 * xyz.z,
+    -0.9689 * xyz.x + 1.8758 * xyz.y + 0.0415 * xyz.z,
+     0.0557 * xyz.x - 0.2040 * xyz.y + 1.0570 * xyz.z), 0.0);
+}
+
+// ---------------------------------------------------------------- the wing
+// Wing space: x from base to tip, y across. One width profile does the whole
+// outline — nought at the base, nought at the tip, fullest a little past the
+// middle — and every vein is placed as a *fraction* of it, so the veins fan
+// and converge because the wing does, rather than because they were told to.
+float wid(float x) {
+  float xx = clamp(x, 0.0, 1.0);
+  return pow(xx, 0.55) * pow(1.0 - xx, 0.5) * 2.05;
+}
+/** Where the two margins are: a wing is not symmetric about its own axis. */
+vec2 margins(float x) { float k = wid(x); return vec2(0.40 * k, -0.60 * k); }
+
+/** How far across the membrane, 0 on the axis and 1 at the margin. */
+float across(vec2 q) {
+  vec2 mg = margins(q.x);
+  return q.y > 0.0 ? q.y / max(mg.x, 1e-4) : q.y / min(mg.y, -1e-4);
+}
+
+// The vein network. Six longitudinal veins as fractions of the local width,
+// each with its own slight curve, and cross-veins staggered per band — which
+// is what makes real venation look organised rather than ruled. A grid of
+// straight lines is the one thing it never looks like.
+vec3 venation(vec2 q) {
+  float k = wid(q.x);
+  float best = 1e9, bestBand = 0.0, prev = -1.0;
+  for (int i = 0; i < 6; i++) {
+    float f = -0.82 + float(i) * 0.30;               // where it sits across the wing
+    float yv = f * k * 0.72 + 0.035 * k * sin(q.x * 3.1 + float(i) * 2.2);
+    // Veins taper towards the tip, and the ones nearer the leading edge are
+    // heavier — the wing is stiffened where it meets the air.
+    float wgt = (1.0 - 0.45 * clamp(q.x, 0.0, 1.0)) * (1.15 - 0.35 * float(i) / 5.0);
+    float d = abs(q.y - yv) / max(wgt, 0.2);
+    if (d < best) { best = d; bestBand = float(i) + (q.y > yv ? 0.5 : -0.5); }
+    prev = yv;
+  }
+  // The costa: the spar along the leading edge, thicker than anything else.
+  best = min(best, abs(q.y - margins(q.x).x * 0.94) * 0.55);
+
+  // Cross-veins, staggered band by band and only past the basal third.
+  float band = floor(bestBand + 0.5);
+  float off = hash21(vec2(band, 3.0)) * 0.7;
+  float pitch = 0.115 + 0.05 * hash21(vec2(band, 9.0));
+  float cx = abs(fract((q.x - off) / pitch) - 0.5) * pitch;
+  float gate = smoothstep(0.26, 0.36, q.x) * smoothstep(1.0, 0.92, q.x);
+  float cross = cx / max(gate, 1e-3) * 2.4;
+  return vec3(min(best, cross), band, best);
+}
+
+// Something for the light to come through, so a transparent thing reads as
+// transparent. A wing photographed against nothing looks like a decal.
+vec3 behind(vec2 pp) {
+  vec3 c = mix(srgbToLinear(backC) * 2.4, srgbToLinear(backC) * 0.7,
+               smoothstep(-1.1, 1.0, pp.y - pp.x * 0.3));
+  for (int i = 0; i < 3; i++) {
+    float f = float(i);
+    vec2 at = vec2(-0.9 + f * 0.95, 0.55 - f * 0.5);
+    float d = length((pp - at) * vec2(1.0, 1.25));
+    c += srgbToLinear(vec3(0.30, 0.34, 0.42)) * smoothstep(0.62, 0.0, d) * (0.5 - f * 0.12);
+  }
+  return c;
+}
+
+// -------------------------------------------------------------- the picture
+vec3 shadeWing(vec2 pp) {
+  vec3 bg = behind(pp);
+  // Laid across the frame, tip to the right, and tilted a little so it is a
+  // wing lying in space rather than a diagram of one.
+  vec2 r = vec2(pp.x, pp.y - pp.x * 0.10 * tilt);
+  vec2 q = vec2((r.x + 1.48) / 2.90, r.y / 0.74);
+  if (q.x < -0.03 || q.x > 1.04) return bg;
+  float edge = across(q);
+  if (abs(edge) > 1.6) return bg;
+
+  vec3 vn = venation(q);
+  float vein = smoothstep(0.062, 0.020, vn.x);
+
+  // Membrane thickness. Broad sweeps rather than confetti: the low frequency
+  // is what a wing actually has, and it is what makes the bands read as one
+  // surface catching the light in different places rather than as noise.
+  // Two scales and a gradient. The long one runs down the wing, which is
+  // what gives a real one its sweeping bands from base to tip; the shorter
+  // one breaks them up. The membrane also thins towards the margin, so the
+  // fringe of colour at the edge is the film running out rather than a
+  // separate effect.
+  float d = thickness
+    * (0.74 + 0.30 * (1.0 - abs(edge)) - 0.16 * clamp(q.x, 0.0, 1.0))
+    * (1.0 + thickVary * (fbm(q * vec2(2.4, 1.1) + 4.0) - 0.5) * 1.05)
+    * (1.0 + thickVary * (fbm(q * vec2(6.5, 3.0) + 19.0) - 0.5) * 0.35)
+    // …and *not* coupled to the veins. A real membrane does thicken where it
+    // meets one, but an eight-per-cent step in thickness is a visible jump in
+    // hue, so every cell came out bounded by a colour change and the wing
+    // read as stained glass. The physics was right and the picture was wrong;
+    // the picture wins, and this line says why.
+    ;
+
+  // The wing is corrugated: pleated between the veins, which is how something
+  // one cell thick carries a load. The pleats are why it flashes in bands.
+  //
+  // Continuous across the wing, and that is the fix rather than the detail.
+  // Keyed to the band *index* — a number that steps — every cell got one
+  // constant angle, so every cell came out one flat colour and the wing read
+  // as tiling rather than as a surface. A pleat is a shape, not a label.
+  // Gentle: a corrugation you could run a finger over, not a washboard. At
+  // eight cycles across the wing this drew five hard stripes of colour and
+  // buried everything else, which is a pleat doing the job of a pattern.
+  float pleat = sin(edge * 3.0 + q.x * 1.7) * 0.020 + (fbm(q * 4.0) - 0.5) * 0.035;
+  vec3 nrm = normalize(vec3(pleat * 0.9, edge * 0.16 + pleat, 1.0));
+  vec3 view = normalize(vec3(pp * 0.30, -1.0));
+  vec3 lightDir = normalize(vec3(sin(lightTurn), 0.45 + 0.7 * tilt, -0.8));
+  // The reflection is what interferes, so the half vector is the angle that
+  // matters — not the surface normal, and not the view.
+  vec3 halfv = normalize(lightDir - view);
+  float cosI = clamp(abs(dot(halfv, nrm)), 0.05, 1.0);
+
+  float jit = jitter > 0.5 ? hash21(gl_FragCoord.xy + float(frame) * 0.017) : 0.5;
+  vec3 film = filmColour(cosI, d, jit);
+
+  // How much of it you catch, and this is the restraint the first version
+  // wanted: a wing is *mostly clear*. The interference is a specular term —
+  // it lives in the highlight — with only a trace of it away from one. Full
+  // strength everywhere is an oil slick, which is a different phenomenon
+  // with the same arithmetic behind it.
+  float lobe1 = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 5.0);
+  float fres = 0.06 + 0.94 * pow(1.0 - clamp(dot(nrm, -view), 0.0, 1.0), 4.0);
+  // Restraint, measured by eye against the animal: at full strength this is
+  // an oil slick, which is the same arithmetic and a different object. Most
+  // of a wing is clear most of the time, and the colour is something that
+  // happens in the highlight and at the grazing edges.
+  float catch1 = 0.038 + 1.25 * lobe1 * (0.30 + 0.70 * fres);
+
+  // What the membrane does to the light behind it: takes a little, and takes
+  // slightly more of the blue, which is why a clear wing looks faintly warm.
+  // Most of what you see through a wing is what is behind it. The membrane
+  // takes a little, and a little more of the blue, which is why clear chitin
+  // looks faintly warm held up to a window.
+  vec3 col = bg * mix(vec3(0.94, 0.91, 0.86), vec3(0.74), 0.30);
+  col += film * catch1;
+
+  // The veins: solid chitin. No film, so no colour — which is the tell that
+  // this is interference and not a dye. They are the same brown at every
+  // angle while the membrane between them changes completely.
+  vec3 veinC = srgbToLinear(vec3(0.26, 0.18, 0.11));
+  col = mix(col, veinC * (0.55 + 1.1 * lobe1) + bg * 0.10, vein * veinDark);
+
+  // A wing that has flown: dust, and the odd scratch along the grain.
+  float wear = fbm(q * vec2(9.0, 20.0) + 11.0);
+  col *= 1.0 - grime * 0.30 * smoothstep(0.5, 0.95, wear);
+  col += vec3(0.5, 0.48, 0.45) * grime * 0.10
+       * smoothstep(0.86, 0.995, fbm(q * vec2(60.0, 4.0)));
+
+  // The silhouette darkens: at the margin you are looking along the membrane
+  // rather than through it, and a long path through anything takes more out.
+  // Before the blend back to the background, not after — after, it darkened
+  // the background too and drew a shadow round the wing that nothing casts.
+  col *= 1.0 - 0.35 * smoothstep(0.82, 1.0, abs(edge));
+
+  // The margin, and the fringe of hairs on it. Hairs are on the trailing and
+  // outer edges only, because that is where they are on the animal.
+  float rim = 1.0 - smoothstep(0.94, 1.02, abs(edge));
+  col = mix(bg, col, rim);
+  // Hairs, hugging the margin. Set wide of it they read as a halo round the
+  // wing rather than as a fringe on it, which is what the first attempt drew:
+  // the band has to start where the membrane stops and be shorter than it is
+  // long. Trailing edge, and the outer part of the leading one.
+  float outward = smoothstep(0.985, 1.010, abs(edge)) * smoothstep(1.075, 1.020, abs(edge));
+  float comb = smoothstep(0.30, 0.92, sin(q.x * 1850.0) * 0.5 + 0.5);
+  float side = edge < 0.0 ? 1.0 : smoothstep(0.62, 0.92, q.x);
+  col += vec3(0.34, 0.32, 0.29) * outward * comb * side * hairs * (0.40 + 0.8 * lobe1);
+  return col;
+}
+
+/**
+ * The physics, without the wing in front of it: thickness across, angle up.
+ *
+ * Not a debug view — it is the thing the wing is made of, and it is the only
+ * place you can see what the sample count is doing without the venation and
+ * the pleats arguing with it. Reading it left to right is reading Newton's
+ * series of colours; reading it bottom to top is tilting the wing.
+ */
+vec3 shadeChart(vec2 pp) {
+  vec2 g = pp * vec2(0.5, 0.5) + 0.5;
+  if (g.x < 0.0 || g.x > 1.0 || g.y < 0.0 || g.y > 1.0) return srgbToLinear(backC);
+  float d = mix(120.0, 1100.0, g.x);
+  float cosI = mix(1.0, 0.20, g.y);
+  float jit = jitter > 0.5 ? hash21(gl_FragCoord.xy + float(frame) * 0.017) : 0.5;
+  return filmColour(cosI, d, jit);
+}
+
+vec3 col = chart > 0.5 ? shadeChart(p) : shadeWing(p);
+col *= exp2(expose);
+
+finish(col)` },
+
   { id: "can", label: "A can — a picture wrapped round a cylinder, exactly", preview: [720, 480], source:
 `// A can, and the arithmetic of putting a picture on a curved thing.
 //

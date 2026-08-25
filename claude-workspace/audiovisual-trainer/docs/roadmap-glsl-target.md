@@ -2944,6 +2944,82 @@ request, so a long session with many sketch documents keeps a few buffers it
 no longer needs; and the WebGL1 path is unchanged, which is correct and means
 those contexts still stall.
 
+### Phase 40 — An insect wing, and a spectrum you integrate *(M)* — **shipped**
+
+Nothing on a hoverfly's wing is coloured. The membrane is clear chitin a few
+hundred nanometres thick, and what you see is **interference**: light reflects
+off the front face and off the back, the two waves arrive out of step by
+however far the round trip through the film was, and at each wavelength they
+add or cancel. Fresnel's coefficients are Maxwell's boundary conditions solved
+for a plane wave; the free-standing film closes the infinite sum of internal
+bounces into one expression; and chitin is given Cauchy dispersion, so the
+blue fringes crowd closer than the red ones the way they do in life.
+
+**But the point of the sketch is the sampling.** A film half a micron thick
+cancels and reinforces a dozen times across the visible range, so its
+reflectance is a comb, not a curve. Ask it for red, green and blue and you get
+three arbitrary points off a comb — a colour with no relation to the one an
+eye would see, and it does not get better with care, because three samples of
+an oscillation is not an approximation of anything.
+
+So it integrates: N wavelengths, each weighted by the 1931 colour matching
+functions, converted from XYZ. Turn the sample count down and watch it come
+apart.
+
+**Measured, against a 400-sample reference computed independently in
+JavaScript:**
+
+| samples | worst error |
+|---|---|
+| 3 | **130.7/255** |
+| 6 | 121.3 |
+| 12 | 11.2 |
+| 24 | **1.0** |
+| 48 | 0.1 |
+
+Half the range, at three samples. That table is the reason the default is 24.
+
+The shader shows the same curve against its own N=48 — **49.2, 20.7, 1.57,
+0.11** at 3, 6, 12, 24 — with both sides through the same tone mapping, which
+is what makes it a fair comparison where an absolute one is not. That last
+point cost a measurement: comparing shader pixels to CPU colours directly gave
+a flat ~17/255 disagreement at *every* sample count, which is the signature of
+a constant transform in the way rather than an error in either.
+
+**And the bands are where Maxwell says.** The interference minima below 860 nm
+of thickness land within **14.8 nm** of the free-standing-film prediction, on
+a fringe spacing of about 175 nm. Above 860 nm of thickness the
+dips are shallower than one step of an 8-bit channel and a minimum-finder
+finds quantisation rather than physics — so that is where the reading stops,
+said plainly rather than hidden behind a looser threshold.
+
+**The chart is not a debug view.** `chart` draws the film alone — thickness
+across, angle up — and reading it left to right is reading Newton's series of
+colours while reading it bottom to top is tilting the wing. It is also the
+only place the sample count can be seen doing its damage without the venation
+arguing with it, and it is what makes the claim checkable at all, because
+there the thickness and the angle at every pixel are known exactly.
+
+**The wing itself is plausible rather than photographic**, and worth saying so.
+One width profile drives the whole outline, and every vein is placed as a
+*fraction* of it, so the veins fan and converge because the wing does. Two
+things were got wrong and are worth keeping:
+
+*The pleats were keyed to the band index* — a number that steps — so every
+cell got one constant angle, came out one flat colour, and the wing read as
+tiling. A pleat is a shape, not a label.
+
+*The thickness was coupled to the veins.* A real membrane does thicken where
+it meets one, but an eight-per-cent step in thickness is a visible jump in
+hue, so every cell came out bounded by a colour change and the whole thing
+read as stained glass. The physics was right and the picture was wrong; the
+picture won.
+
+*Left:* one illuminant, equal-energy, where D65 would move the whites and
+nothing else; no transmission colour, so a wing held against a bright
+background does not tint what is behind it the way a real one does; and the
+hairs are a comb function rather than hairs.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -3024,6 +3100,7 @@ those contexts still stall.
 | 37.1 | Stretch by amount, and by region — **shipped** | M | 36.1 | artwork 2.3× even vs 1.03× kept; black keys to within 1 px |
 | 38.1 | ES 1.00 checked, not assumed — **shipped** | S | 37.1 | 34/34 link both ways; integer max() was 3.00-only |
 | 39.1 | Async probe readback — **shipped** | M | 38.1 | 5 reads → 1 buffered read; 6 issued / 3 collected / 0 skipped, values identical |
+| 40.1 | Insect wing, spectrally integrated — **shipped** | M | — | 3 samples wrong by 130.7/255; 24 by 1.0; fringes within 14.8 nm |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
