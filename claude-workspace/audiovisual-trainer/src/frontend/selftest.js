@@ -3955,11 +3955,53 @@ c`;
       // …and put the shared renderer back to something small before leaving.
       renderSketch(g.source, 32, 32, { frame: 0, time: 0, values: { ...base, chart: [1], samples: [3] } });
 
-      const ok = conv[3] > 60 && conv[24] < 4 && conv[48] < 1
+      // The net is cellular noise, and specifically the *border* metric —
+      // the distance to the wall between two cells rather than to a cell's
+      // centre. Distance to a centre gives blobs; a wing is a net.
+      const src = stripComments(g.source);
+      const structure = [];
+      if (!/dot\(0\.5 \* \(bestR \+ r\), diff \* inversesqrt\(dd\)\)/.test(src)) {
+        structure.push("the wall metric is not the perpendicular bisector");
+      }
+      if (!/float panel = hash21\(cell\.yz/.test(src)) structure.push("thickness does not come from the cell");
+      // …and a finer net has more cells in it — counted, not covered.
+      //
+      // Coverage was the first thing asserted and it does not move: 0.282 at
+      // seven cells and 0.278 at eighteen. That is not a fault, it is the
+      // design — a vein's width is a fraction of a *cell* rather than of the
+      // wing, so a finer net has proportionally finer veins and the ink on
+      // the page stays the same. What changes is how many walls a line across
+      // the wing crosses, which is what "finer" means and what is counted.
+      const wallsAt = (n) => { const MW = 420, MH = 264;
+        const d = renderSketch(cut(g.source, "  return col;\n}\n", "  return vec3(vein);\n}\n"),
+          MW, MH, { frame: 0, time: 0, values: { ...base, cells: [n] } })
+          .getContext("2d").getImageData(0, 0, MW, MH).data;
+        let crossings = 0, rows = 0;
+        for (let y = Math.round(MH * 0.44); y < MH * 0.56; y += 3) {
+          let was = false, run = 0;
+          for (let x = Math.round(MW * 0.25); x < MW * 0.75; x++) {
+            const on = d[(y * MW + x) * 4] > 128;
+            if (on && !was) run++;
+            was = on;
+          }
+          crossings += run; rows++;
+        }
+        return +(crossings / Math.max(rows, 1)).toFixed(2); };
+      const coarse = wallsAt(7), fine = wallsAt(18);
+
+      const ok = structure.length === 0 && fine > coarse * 1.5
+        && conv[3] > 60 && conv[24] < 4 && conv[48] < 1
         && shaderConv[3] > 5 && shaderConv[24] < 0.5
         && seen.length >= 4 && worstNm < 30;
       push({ group: "Generate presets", name: "a wing: the spectrum integrated, not sampled at three points", ok,
-             detail: `three samples of an oscillating reflectance is not an approximation of anything: against `
+             detail: (structure.length ? structure.join(" · ") + " · " : "")
+               + `the net is cellular noise read at its borders — the Book of Shaders' twelfth chapter, `
+               + `which opens on a dragonfly for the same reason. A finer lattice is more *cells*, not `
+               + `more ink: a line across the middle of the wing crosses ${coarse} walls at 7 cells and `
+               + `${fine} at 18, while the coverage barely moves — a vein's width is a fraction of a cell `
+               + `rather than of the wing, so a finer net has finer veins. Each cell carries its own `
+               + `membrane thickness, so the colour belongs to the cell and stops at its wall. `
+               + `three samples of an oscillating reflectance is not an approximation of anything: against `
                + `a 400-sample reference it is wrong by ${conv[3]}/255 at worst, and 6 samples by ${conv[6]}. `
                + `Twelve gets it to ${conv[12]}, twenty-four to ${conv[24]}, forty-eight to ${conv[48]} — which `
                + `is why the default is 24 and not 3. The shader shows the same curve against its own N=48: `

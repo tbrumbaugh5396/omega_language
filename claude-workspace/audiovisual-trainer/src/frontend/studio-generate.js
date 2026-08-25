@@ -1182,6 +1182,9 @@ uniform float samples;    // @range 3 48 @step 1 @int @default 24 @help waveleng
 uniform float jitter;     // @toggle @default 1 @label stratify @help offset the samples per pixel
 uniform float tilt;       // @range -1.2 1.2 @default 0.35 @help how the wing is held to the light
 uniform float lightTurn;  // @range -3.15 3.15 @default -0.7
+uniform float cells;      // @range 4 40 @step 1 @int @default 16 @help how fine the net is
+uniform float stretch;    // @range 1 6 @default 3.2 @help cells along the wing, against cells across it
+uniform float bend;       // @range 0 1 @default 0.45 @help how much the pleats bend what is behind
 uniform float veinDark;   // @range 0 1 @default 0.72 @help how solid the veins are
 uniform float hairs;      // @range 0 1 @default 0.6 @help the fringe along the margin
 uniform float grime;      // @range 0 1 @default 0.35 @help a wing that has been used
@@ -1268,52 +1271,84 @@ vec3 filmColour(float cosI, float d, float jit) {
      0.0557 * xyz.x - 0.2040 * xyz.y + 1.0570 * xyz.z), 0.0);
 }
 
+// ------------------------------------------------------- the cell structure
+// Worley noise, and the *borders* between cells rather than the distance to
+// their centres. This is the Book of Shaders' chapter twelve almost exactly,
+// and it is that chapter because a dragonfly's wing is the photograph at the
+// top of it. A wing is a net, and a net is what a Voronoi diagram draws;
+// veins placed by hand — which is what this sketch did first — are a drawing
+// of a net rather than one.
+//
+// Two passes over the neighbourhood. The first finds the nearest feature
+// point. The second measures the distance to the perpendicular bisector
+// between that point and each of the others, which is the wall between two
+// cells. Distance to a centre gives blobs; distance to a wall gives a net,
+// and the difference is the whole chapter.
+vec2 cellJitter(vec2 id) { return vec2(hash21(id), hash21(id + 17.3)); }
+
+/** x: distance to the nearest wall. yz: which cell you are in. */
+vec3 cellular(vec2 at) {
+  vec2 base = floor(at);
+  vec2 f = at - base;
+  vec2 bestR = vec2(0.0), bestId = base;
+  float bestD = 1e9;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 r = g + cellJitter(base + g) - f;
+      float d = dot(r, r);
+      if (d < bestD) { bestD = d; bestR = r; bestId = base + g; }
+    }
+  }
+  float wall = 1e9;
+  for (int j = -2; j <= 2; j++) {
+    for (int i = -2; i <= 2; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 r = g + cellJitter(base + g) - f;
+      vec2 diff = r - bestR;
+      float dd = dot(diff, diff);
+      if (dd < 1e-5) continue;                       // that one is the cell itself
+      wall = min(wall, dot(0.5 * (bestR + r), diff * inversesqrt(dd)));
+    }
+  }
+  return vec3(wall, bestId);
+}
+
 // ---------------------------------------------------------------- the wing
 // Wing space: x from base to tip, y across. One width profile does the whole
 // outline — nought at the base, nought at the tip, fullest a little past the
-// middle — and every vein is placed as a *fraction* of it, so the veins fan
-// and converge because the wing does, rather than because they were told to.
+// middle.
 float wid(float x) {
   float xx = clamp(x, 0.0, 1.0);
   return pow(xx, 0.55) * pow(1.0 - xx, 0.5) * 2.05;
 }
-/** Where the two margins are: a wing is not symmetric about its own axis. */
-vec2 margins(float x) { float k = wid(x); return vec2(0.40 * k, -0.60 * k); }
-
-/** How far across the membrane, 0 on the axis and 1 at the margin. */
+// Narrower than a leaf, which is what the first outline was. A dragonfly's
+// forewing is a blade: the leading edge nearly straight, the trailing one
+// bellied, and the whole thing about a fifth as deep as it is long.
+vec2 margins(float x) { float k = wid(x); return vec2(0.33 * k, -0.47 * k); }
 float across(vec2 q) {
   vec2 mg = margins(q.x);
   return q.y > 0.0 ? q.y / max(mg.x, 1e-4) : q.y / min(mg.y, -1e-4);
 }
 
-// The vein network. Six longitudinal veins as fractions of the local width,
-// each with its own slight curve, and cross-veins staggered per band — which
-// is what makes real venation look organised rather than ruled. A grid of
-// straight lines is the one thing it never looks like.
-vec3 venation(vec2 q) {
-  float k = wid(q.x);
-  float best = 1e9, bestBand = 0.0, prev = -1.0;
-  for (int i = 0; i < 6; i++) {
-    float f = -0.82 + float(i) * 0.30;               // where it sits across the wing
-    float yv = f * k * 0.72 + 0.035 * k * sin(q.x * 3.1 + float(i) * 2.2);
-    // Veins taper towards the tip, and the ones nearer the leading edge are
-    // heavier — the wing is stiffened where it meets the air.
-    float wgt = (1.0 - 0.45 * clamp(q.x, 0.0, 1.0)) * (1.15 - 0.35 * float(i) / 5.0);
-    float d = abs(q.y - yv) / max(wgt, 0.2);
-    if (d < best) { best = d; bestBand = float(i) + (q.y > yv ? 0.5 : -0.5); }
-    prev = yv;
-  }
-  // The costa: the spar along the leading edge, thicker than anything else.
-  best = min(best, abs(q.y - margins(q.x).x * 0.94) * 0.55);
-
-  // Cross-veins, staggered band by band and only past the basal third.
-  float band = floor(bestBand + 0.5);
-  float off = hash21(vec2(band, 3.0)) * 0.7;
-  float pitch = 0.115 + 0.05 * hash21(vec2(band, 9.0));
-  float cx = abs(fract((q.x - off) / pitch) - 0.5) * pitch;
-  float gate = smoothstep(0.26, 0.36, q.x) * smoothstep(1.0, 0.92, q.x);
-  float cross = cx / max(gate, 1e-3) * 2.4;
-  return vec3(min(best, cross), band, best);
+/**
+ * The lattice the cells are laid on, in wing coordinates.
+ *
+ * Not a square grid. A dragonfly's cells are drawn out along the wing and
+ * they get smaller towards the leading edge and the tip, so the lattice is
+ * stretched and its density is a function of where you are. Warping the
+ * *input* is what makes the net follow the wing; warping the output would
+ * only stretch the picture of it.
+ */
+vec2 latticeOf(vec2 q, float e) {
+  // Counted, not scaled. The wing is four times longer than it is wide, so
+  // saying "this many cells along and this many across" is the description
+  // that survives changing either; a single density divided by a stretch put
+  // more cells across the wing than along it, which is a wing nothing has.
+  float grow = 1.0 + 0.55 * clamp(q.x, 0.0, 1.0);    // finer towards the tip
+  float nAlong = cells * max(stretch, 0.1) * grow;
+  float nAcross = cells * 0.42 * grow;
+  return vec2(clamp(q.x, 0.0, 1.0) * nAlong, (e * 0.5 + 0.5) * nAcross);
 }
 
 // Something for the light to come through, so a transparent thing reads as
@@ -1322,10 +1357,10 @@ vec3 behind(vec2 pp) {
   vec3 c = mix(srgbToLinear(backC) * 2.4, srgbToLinear(backC) * 0.7,
                smoothstep(-1.1, 1.0, pp.y - pp.x * 0.3));
   for (int i = 0; i < 3; i++) {
-    float f = float(i);
-    vec2 at = vec2(-0.9 + f * 0.95, 0.55 - f * 0.5);
+    float fi = float(i);
+    vec2 at = vec2(-0.9 + fi * 0.95, 0.55 - fi * 0.5);
     float d = length((pp - at) * vec2(1.0, 1.25));
-    c += srgbToLinear(vec3(0.30, 0.34, 0.42)) * smoothstep(0.62, 0.0, d) * (0.5 - f * 0.12);
+    c += srgbToLinear(vec3(0.30, 0.34, 0.42)) * smoothstep(0.62, 0.0, d) * (0.5 - fi * 0.12);
   }
   return c;
 }
@@ -1333,105 +1368,105 @@ vec3 behind(vec2 pp) {
 // -------------------------------------------------------------- the picture
 vec3 shadeWing(vec2 pp) {
   vec3 bg = behind(pp);
-  // Laid across the frame, tip to the right, and tilted a little so it is a
-  // wing lying in space rather than a diagram of one.
   vec2 r = vec2(pp.x, pp.y - pp.x * 0.10 * tilt);
   vec2 q = vec2((r.x + 1.48) / 2.90, r.y / 0.74);
   if (q.x < -0.03 || q.x > 1.04) return bg;
   float edge = across(q);
   if (abs(edge) > 1.6) return bg;
 
-  vec3 vn = venation(q);
-  float vein = smoothstep(0.062, 0.020, vn.x);
+  vec3 cell = cellular(latticeOf(q, edge));
+  float wall = cell.x;
+  // The major veins: a handful of longitudinal spars the net is organised
+  // around. Real venation has both — a few strong ribs, and a mesh between
+  // them — and only the mesh is Voronoi.
+  float rib = 1e9;
+  for (int i = 0; i < 4; i++) {
+    float f = -0.62 + float(i) * 0.42;
+    // Scaled so a rib is a *line*. At 0.55 the four of them were never more
+    // than 0.115 apart in this metric, the threshold below caught most of the
+    // membrane, and the wing came out the colour of its own veins — which is
+    // what the orange wash turned out to be, measured at 0.72 of full vein
+    // across the middle of the wing where it should be nearer 0.1.
+    rib = min(rib, abs(edge - f - 0.05 * sin(q.x * 3.0 + float(i))) * 3.0);
+  }
+  rib = min(rib, abs(edge - 0.97) * 1.6);            // the costa, along the leading edge
+  // The wall distance comes back in *lattice* units — a cell is one unit
+  // across — so the vein's width is a fraction of a cell rather than of the
+  // wing, and it stays a vein when the net gets finer. At the wing's own
+  // scale this was 0.055 of a cell, which is a hairline nothing could see,
+  // and the net was invisible while the colours it organised were not.
+  float vein = clamp(smoothstep(0.085, 0.020, wall) * 0.80
+                   + smoothstep(0.06, 0.015, rib), 0.0, 1.0);
 
-  // Membrane thickness. Broad sweeps rather than confetti: the low frequency
-  // is what a wing actually has, and it is what makes the bands read as one
-  // surface catching the light in different places rather than as noise.
-  // Two scales and a gradient. The long one runs down the wing, which is
-  // what gives a real one its sweeping bands from base to tip; the shorter
-  // one breaks them up. The membrane also thins towards the margin, so the
-  // fringe of colour at the edge is the film running out rather than a
-  // separate effect.
+  // Each cell is a panel of membrane with its own thickness, which is what a
+  // real wing is and why it reads as a mosaic of colours rather than a
+  // wash. The thickness comes from the cell's own identity, so the colour
+  // belongs to the cell and stops at its wall — which is exactly what the
+  // photograph at the top of chapter twelve looks like.
+  float panel = hash21(cell.yz * 1.7 + 4.0);
   float d = thickness
-    * (0.74 + 0.30 * (1.0 - abs(edge)) - 0.16 * clamp(q.x, 0.0, 1.0))
-    * (1.0 + thickVary * (fbm(q * vec2(2.4, 1.1) + 4.0) - 0.5) * 1.05)
-    * (1.0 + thickVary * (fbm(q * vec2(6.5, 3.0) + 19.0) - 0.5) * 0.35)
-    // …and *not* coupled to the veins. A real membrane does thicken where it
-    // meets one, but an eight-per-cent step in thickness is a visible jump in
-    // hue, so every cell came out bounded by a colour change and the wing
-    // read as stained glass. The physics was right and the picture was wrong;
-    // the picture wins, and this line says why.
-    ;
+    * (0.80 + 0.26 * (1.0 - abs(edge)) - 0.14 * clamp(q.x, 0.0, 1.0))
+    * (1.0 + thickVary * (panel - 0.5) * 1.30)
+    * (1.0 + thickVary * (fbm(q * vec2(2.2, 1.2) + 4.0) - 0.5) * 0.45);
 
-  // The wing is corrugated: pleated between the veins, which is how something
-  // one cell thick carries a load. The pleats are why it flashes in bands.
-  //
-  // Continuous across the wing, and that is the fix rather than the detail.
-  // Keyed to the band *index* — a number that steps — every cell got one
-  // constant angle, so every cell came out one flat colour and the wing read
-  // as tiling rather than as a surface. A pleat is a shape, not a label.
-  // Gentle: a corrugation you could run a finger over, not a washboard. At
-  // eight cycles across the wing this drew five hard stripes of colour and
-  // buried everything else, which is a pleat doing the job of a pattern.
-  float pleat = sin(edge * 3.0 + q.x * 1.7) * 0.020 + (fbm(q * 4.0) - 0.5) * 0.035;
-  vec3 nrm = normalize(vec3(pleat * 0.9, edge * 0.16 + pleat, 1.0));
+  // …and each panel is taut between its walls, so it domes. That is why one
+  // cell shows a sweep of colour across it rather than one flat tint: the
+  // angle through the film changes as the surface curves away.
+  float dome = smoothstep(0.0, 0.30, wall);
+  // Each panel is taut between its walls, so it domes — and the dome is what
+  // gives one cell a sweep of colour across it instead of one flat tint,
+  // because the angle through the film changes as the surface curves away.
+  vec3 nrm = normalize(vec3((panel - 0.5) * 0.34 * dome + edge * 0.10,
+                            (hash21(cell.yz + 3.1) - 0.5) * 0.34 * dome + edge * 0.12, 1.0));
+
   vec3 view = normalize(vec3(pp * 0.30, -1.0));
   vec3 lightDir = normalize(vec3(sin(lightTurn), 0.45 + 0.7 * tilt, -0.8));
-  // The reflection is what interferes, so the half vector is the angle that
-  // matters — not the surface normal, and not the view.
   vec3 halfv = normalize(lightDir - view);
   float cosI = clamp(abs(dot(halfv, nrm)), 0.05, 1.0);
 
   float jit = jitter > 0.5 ? hash21(gl_FragCoord.xy + float(frame) * 0.017) : 0.5;
   vec3 film = filmColour(cosI, d, jit);
 
-  // How much of it you catch, and this is the restraint the first version
-  // wanted: a wing is *mostly clear*. The interference is a specular term —
-  // it lives in the highlight — with only a trace of it away from one. Full
-  // strength everywhere is an oil slick, which is a different phenomenon
-  // with the same arithmetic behind it.
-  float lobe1 = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 5.0);
-  float fres = 0.06 + 0.94 * pow(1.0 - clamp(dot(nrm, -view), 0.0, 1.0), 4.0);
-  // Restraint, measured by eye against the animal: at full strength this is
-  // an oil slick, which is the same arithmetic and a different object. Most
-  // of a wing is clear most of the time, and the colour is something that
-  // happens in the highlight and at the grazing edges.
-  float catch1 = 0.038 + 1.25 * lobe1 * (0.30 + 0.70 * fres);
+  // What comes through, and where from. Snell again, and this time for the
+  // light that is *transmitted* rather than the light that comes back: the
+  // corrugated sheet bends what is behind it. The film's own thickness could
+  // never do this — half a micron of anything displaces an image by half a
+  // micron — but the pleating between veins is a millimetre of curved
+  // dielectric, and that is enough to smear a bright edge seen through a
+  // wing, which is a thing you can watch happen.
+  vec3 bent = refract(view, nrm, 1.0 / max(nFilm, 1.05));
+  vec3 through = behind(pp + bent.xy * bend * 0.30);
+  // Energy has to go somewhere: what the film sends back it does not let
+  // through. The average of the reflectance over the visible range is the
+  // luminance of what came back, so one minus that is what is left.
+  float sent = clamp(dot(film, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+  vec3 col = through * (1.0 - 0.55 * sent) * mix(vec3(0.94, 0.91, 0.86), vec3(0.74), 0.30);
 
-  // What the membrane does to the light behind it: takes a little, and takes
-  // slightly more of the blue, which is why a clear wing looks faintly warm.
-  // Most of what you see through a wing is what is behind it. The membrane
-  // takes a little, and a little more of the blue, which is why clear chitin
-  // looks faintly warm held up to a window.
-  vec3 col = bg * mix(vec3(0.94, 0.91, 0.86), vec3(0.74), 0.30);
-  col += film * catch1;
+  // A narrow lobe, and that is the difference between a wing and a decal.
+  // At an exponent of five the whole wing sits inside the highlight and comes
+  // out one warm wash; the colour has to be somewhere rather than everywhere,
+  // because what you are looking at is a reflection and a reflection has a
+  // direction. The band sweeps across as the wing turns, which is the thing
+  // a real one does that a photograph of one cannot.
+  float lobe1 = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 16.0);
+  float fres = 0.06 + 0.94 * pow(1.0 - clamp(dot(nrm, -view), 0.0, 1.0), 4.0);
+  col += film * (0.022 + 2.6 * lobe1 * (0.25 + 0.75 * fres));
 
   // The veins: solid chitin. No film, so no colour — which is the tell that
-  // this is interference and not a dye. They are the same brown at every
+  // this is interference and not a dye. They stay the same brown at every
   // angle while the membrane between them changes completely.
   vec3 veinC = srgbToLinear(vec3(0.26, 0.18, 0.11));
   col = mix(col, veinC * (0.55 + 1.1 * lobe1) + bg * 0.10, vein * veinDark);
 
-  // A wing that has flown: dust, and the odd scratch along the grain.
   float wear = fbm(q * vec2(9.0, 20.0) + 11.0);
   col *= 1.0 - grime * 0.30 * smoothstep(0.5, 0.95, wear);
   col += vec3(0.5, 0.48, 0.45) * grime * 0.10
        * smoothstep(0.86, 0.995, fbm(q * vec2(60.0, 4.0)));
 
-  // The silhouette darkens: at the margin you are looking along the membrane
-  // rather than through it, and a long path through anything takes more out.
-  // Before the blend back to the background, not after — after, it darkened
-  // the background too and drew a shadow round the wing that nothing casts.
   col *= 1.0 - 0.35 * smoothstep(0.82, 1.0, abs(edge));
 
-  // The margin, and the fringe of hairs on it. Hairs are on the trailing and
-  // outer edges only, because that is where they are on the animal.
   float rim = 1.0 - smoothstep(0.94, 1.02, abs(edge));
   col = mix(bg, col, rim);
-  // Hairs, hugging the margin. Set wide of it they read as a halo round the
-  // wing rather than as a fringe on it, which is what the first attempt drew:
-  // the band has to start where the membrane stops and be shorter than it is
-  // long. Trailing edge, and the outer part of the leading one.
   float outward = smoothstep(0.985, 1.010, abs(edge)) * smoothstep(1.075, 1.020, abs(edge));
   float comb = smoothstep(0.30, 0.92, sin(q.x * 1850.0) * 0.5 + 0.5);
   float side = edge < 0.0 ? 1.0 : smoothstep(0.62, 0.92, q.x);

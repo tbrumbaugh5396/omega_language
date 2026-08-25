@@ -3000,10 +3000,36 @@ only place the sample count can be seen doing its damage without the venation
 arguing with it, and it is what makes the claim checkable at all, because
 there the thickness and the angle at every pixel are known exactly.
 
+**The net is cellular noise, read at its borders.** This is the Book of
+Shaders' chapter twelve, and it is that chapter because a dragonfly is the
+photograph at the top of it. A wing *is* a Voronoi diagram: the first version
+placed veins by hand, which is a drawing of a net rather than one.
+
+Two passes over the neighbourhood. The first finds the nearest feature point;
+the second measures the distance to the perpendicular bisector between that
+point and each of the others, which is the wall between two cells. Distance
+to a centre gives blobs; distance to a wall gives a net, and that difference
+is the whole chapter.
+
+**And the optics hang off the structure**, which is the part that makes it a
+wing rather than a texture. Each cell is a panel of membrane with its own
+thickness, drawn from the cell's own identity — so the colour belongs to the
+cell and stops at its wall, which is exactly what the photograph shows. Each
+panel is taut between its walls and domes, so one cell shows a *sweep* of
+colour across it rather than a flat tint: the angle through the film changes
+as the surface curves away, and the angle is what the interference is a
+function of.
+
+Refraction appears twice, and only one of them is visible. Snell's refracted
+angle sets the optical path `2·n(λ)·d·cosθt`, which is what the whole
+interference is built on. The *transmitted* ray bends too — but a film half a
+micron thick displaces an image by half a micron, so what actually smears a
+bright edge seen through a wing is the corrugation between veins, a
+millimetre of curved dielectric. That is the one that is drawn, and the note
+in the source says why the other is not.
+
 **The wing itself is plausible rather than photographic**, and worth saying so.
-One width profile drives the whole outline, and every vein is placed as a
-*fraction* of it, so the veins fan and converge because the wing does. Two
-things were got wrong and are worth keeping:
+Three things were got wrong and are worth keeping:
 
 *The pleats were keyed to the band index* — a number that steps — so every
 cell got one constant angle, came out one flat colour, and the wing read as
@@ -3014,6 +3040,22 @@ it meets one, but an eight-per-cent step in thickness is a visible jump in
 hue, so every cell came out bounded by a colour change and the whole thing
 read as stained glass. The physics was right and the picture was wrong; the
 picture won.
+
+*The whole wing came out one warm orange*, and three guesses at why were all
+wrong before it was measured. It was not the highlight and not the film: the
+four longitudinal ribs were scaled so tightly that in their own metric they
+were never more than 0.115 apart, the threshold caught most of the membrane,
+and **the wing was the colour of its own veins** — measured at 0.72 of full
+vein across the middle where it should be nearer 0.1. Rendering the vein term
+on its own as a mask found it in one reading; it is now 0.275.
+
+*And the first assertion written about the net was wrong in the same way.* It
+claimed a finer lattice puts more ink on the page — coverage 0.282 at seven
+cells, 0.278 at eighteen, so it failed. The code was right: a vein's width is
+a fraction of a **cell**, not of the wing, so a finer net has proportionally
+finer veins and the coverage is scale-invariant by design. What "finer"
+actually means is *more walls crossed*, and that is what the check counts:
+**20.1 at seven cells, 35.1 at eighteen**.
 
 *Left:* one illuminant, equal-energy, where D65 would move the whites and
 nothing else; no transmission colour, so a wing held against a bright
