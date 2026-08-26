@@ -3695,6 +3695,16 @@ _exp3 = c.post(f"/api/store/admin/engagements/{_eid}/export",
 ok(any(f.endswith(".pdf") for f in _exp3["files"]),
    "exports carry the PDF beside the markdown — the .md is for editing, "
    "the .pdf is for sending")
+
+# View opens an in-app viewer, never window.open after an await: the popup
+# blocker eats a window opened outside the user-gesture call stack, and the
+# button reads as broken to exactly the person clicking it.
+_viewer = _ops.split('[data-engview]')[1][:2600]
+ok('iframe class="doc-viewer"' in _viewer and "window.open" not in _viewer,
+   "the View button shows the document in an in-app frame — a popup opened "
+   "after an awaited fetch is one a blocker silently eats")
+ok("Open ${" in _viewer or "Open PDF" in _viewer,
+   "with the literal PDF one click away in the same modal")
 import shutil as _sh3
 _sh3.rmtree(_exp3["root"], ignore_errors=True)
 c.delete(f"/api/store/admin/documents/{_g2['doc_id']}", headers=A)

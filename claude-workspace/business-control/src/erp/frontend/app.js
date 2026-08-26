@@ -205,11 +205,11 @@ async function download(path) {
   } catch (e) { toast(e.message); }
 }
 
-function modal(html) {
+function modal(html, cls) {
   closeModal();
   const o = document.createElement("div");
   o.id = "ops-modal";
-  o.innerHTML = `<div class="ops-modal-card">${html}</div>`;
+  o.innerHTML = `<div class="ops-modal-card ${cls || ""}">${html}</div>`;
   o.onclick = (e) => { if (e.target === o) closeModal(); };
   document.body.appendChild(o);
   o.querySelectorAll("[data-close]").forEach((b) => b.onclick = closeModal);
@@ -5202,16 +5202,48 @@ async function renderEngagement(id) {
     return r.blob();
   };
   view().querySelectorAll("[data-engview]").forEach((b) => b.onclick = async () => {
-    // The PDF is the preview: authored docs render to one, uploaded PDFs
-    // are themselves, and the browser's viewer does the rest.
+    /* The PDF is the preview — shown in an in-app viewer, not a popup.
+       A window opened by script after an awaited fetch has left the
+       user-gesture call stack, so popup blockers eat it and the button
+       reads as broken; an iframe in our own modal needs nobody's
+       permission. */
     const did = b.dataset.engview;
     const isPdfable = b.dataset.kind === "body" || b.dataset.ext === "pdf";
     const path = isPdfable
       ? `/api/store/admin/documents/${did}/pdf`
       : `/api/store/admin/documents/${did}/file`;
     try {
-      const blob = await authBlob(path);
-      window.open(URL.createObjectURL(blob));
+      const name = (b.closest(".sig-row")?.querySelector("b")?.textContent
+        || "document").trim();
+      /* What fills the frame: for authored documents, the HTML preview —
+         the same parser as the PDF, but it renders in every browser and on
+         every phone, where iframe PDF viewers are a lottery. For uploaded
+         files, the file itself. The literal PDF stays one click away in
+         the footer, always. */
+      let frameUrl;
+      if (b.dataset.kind === "body") {
+        const html = await (await authBlob(
+          `/api/store/admin/documents/${did}/preview`)).text();
+        frameUrl = URL.createObjectURL(
+          new Blob([html], { type: "text/html" }));
+      } else {
+        frameUrl = URL.createObjectURL(await authBlob(
+          `/api/store/admin/documents/${did}/file`));
+      }
+      const pdfBlob = isPdfable ? await authBlob(path) : null;
+      const pdfUrl = pdfBlob ? URL.createObjectURL(
+        new Blob([pdfBlob], { type: "application/pdf" })) : frameUrl;
+      modal(`<h3>${esc(name)}</h3>
+        <iframe class="doc-viewer" src="${frameUrl}"
+          title="${esc(name)}"></iframe>
+        <div class="modal-foot" style="margin-top:10px">
+          <a class="btn alt" href="${pdfUrl}"
+             download="${esc(name)}${isPdfable ? ".pdf" : ""}">Download
+             ${isPdfable ? "PDF" : ""}</a>
+          <a class="btn alt" href="${pdfUrl}" target="_blank"
+             rel="noopener">Open ${isPdfable ? "PDF" : ""} in tab</a>
+          <button class="btn" data-close>Close</button>
+        </div>`, "wide");
     } catch (err) { toast(err.message); }
   });
   view().querySelectorAll("[data-engdl]").forEach((b) => b.onclick = async () => {
