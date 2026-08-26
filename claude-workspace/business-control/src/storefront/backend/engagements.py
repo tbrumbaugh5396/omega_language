@@ -928,6 +928,14 @@ def _export_entries(con, eid: int, side: str):
                 yield f"{folder}/{safe_name(r['filename'] or stem)}", p.read_bytes()
         if (r["body"] or "").strip():
             yield f"{folder}/{stem}.md", r["body"].encode()
+            # The PDF beside it: the .md is for editing, the .pdf is for
+            # sending — a bundle a client can open needs no explanation.
+            from . import pdfgen
+            try:
+                yield f"{folder}/{stem}.pdf", pdfgen.doc_pdf(r["title"],
+                                                             r["body"])
+            except Exception:
+                pass          # a render bug must not sink the whole export
         sigs = con.execute(
             "SELECT signer_name, signer_email, role, status, signed_at,"
             " ip, doc_sha256 FROM document_signatures WHERE document_id=?"
@@ -1316,11 +1324,27 @@ def portal_doc(token: str, did: int, con=Depends(get_con),
             raise HTTPException(404, "file missing from storage")
         return FileResponse(p, media_type=vault.ALLOWED_EXT.get(
             row["ext"], "application/octet-stream"))
-    inner = (f"<p><a href=\"/engage/{token}\">← back to the roadmap</a></p>"
+    inner = (f"<p><a href=\"/engage/{token}\">← back to the roadmap</a>"
+             f"<a class=\"btn\" style=\"float:right\""
+             f" href=\"/engage/{token}/pdf/{did}\">Download PDF</a></p>"
              f"<h1>{sect.esc(row['title'])}</h1>"
              f"<div class=\"card doc-body\">{vault.md_html(row['body'])}"
              f"</div>")
     return HTMLResponse(_portal_shell(row["title"], inner))
+
+
+@router.get("/engage/{token}/pdf/{did}")
+def portal_doc_pdf(token: str, did: int, con=Depends(get_con),
+                   _rl=Depends(rate_limit)):
+    e = _portal_or_404(con, token)
+    row = con.execute(
+        "SELECT d.* FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.doc_id=? AND ed.side='to_client'",
+        (e["id"], did)).fetchone()
+    if row is None:
+        raise HTTPException(404, "not found")
+    from . import documents as vault
+    return vault._pdf_response(row, inline=False)
 
 
 @router.post("/engage/{token}/direction")

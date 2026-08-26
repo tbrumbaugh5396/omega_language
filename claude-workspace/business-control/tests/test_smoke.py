@@ -3671,6 +3671,32 @@ _ff = c.post(f"/api/store/admin/engagements/{_eid}/docs/{_g2['doc_id']}"
 ok(_tok0 not in _ff["unfilled"]
    and len(_ff["unfilled"]) == len(_b2["placeholders"]) - 1,
    "filling from the UI populates the template in place, token by token")
+
+# --- PDFs everywhere a document appears ------------------------------------
+_pdf = c.get(f"/api/store/admin/documents/{_g2['doc_id']}/pdf", headers=A)
+ok(_pdf.status_code == 200 and _pdf.content[:5] == b"%PDF-"
+   and "inline" in _pdf.headers.get("content-disposition", ""),
+   "an authored document renders to a real PDF, served inline so the "
+   "browser's own viewer is the preview")
+_pdfd = c.get(f"/api/store/admin/documents/{_g2['doc_id']}/pdf?download=1",
+              headers=A)
+ok("attachment" in _pdfd.headers.get("content-disposition", ""),
+   "and downloads as one when asked")
+ok(c.get(f"/sign/{_tok}/pdf").content[:5] == b"%PDF-",
+   "the signer can take a PDF copy from the same parse they signed")
+_p3 = c.post(f"/api/store/admin/engagements/{_eid}/portal",
+             headers=A).json()["url"].split("/engage/")[1]
+ok(c.get(f"/engage/{_p3}/pdf/{_gen['doc_id']}").content[:5] == b"%PDF-",
+   "the client can take a PDF of anything on their side of the wall")
+ok(c.get(f"/engage/{_p3}/pdf/{_rate_id}").status_code == 404,
+   "and nothing on the other side — the .pdf route holds the same wall")
+_exp3 = c.post(f"/api/store/admin/engagements/{_eid}/export",
+               headers=A).json()
+ok(any(f.endswith(".pdf") for f in _exp3["files"]),
+   "exports carry the PDF beside the markdown — the .md is for editing, "
+   "the .pdf is for sending")
+import shutil as _sh3
+_sh3.rmtree(_exp3["root"], ignore_errors=True)
 c.delete(f"/api/store/admin/documents/{_g2['doc_id']}", headers=A)
 
 # leave the live db as we found it

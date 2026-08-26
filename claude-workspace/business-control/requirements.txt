@@ -7,3 +7,4 @@ websockets>=12
 python-liquid>=2.0
 Pillow>=10.0
 python-multipart>=0.0.9
+fpdf2>=2.8

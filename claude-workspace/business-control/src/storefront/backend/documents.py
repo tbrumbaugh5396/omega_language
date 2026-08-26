@@ -176,26 +176,33 @@ def _md_row(line: str) -> list:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
-def md_html(text: str) -> str:
+def md_blocks(text: str) -> list:
+    """Parse the subset into blocks — one parser feeding both renderers, so
+    the HTML a signer is shown and the PDF a client files can never carry
+    different readings of the same document.
+
+    Blocks: ("h", depth, text) · ("hr",) · ("table", head, rows) ·
+    ("list", ordered, items) · ("quote", text) · ("p", text)
+    """
     out, para, lines = [], [], text.splitlines()
-    flush = lambda: (out.append(f"<p>{_md_inline(' '.join(para))}</p>"),
-                     para.clear()) if para else None
+
+    def flush():
+        if para:
+            out.append(("p", " ".join(para)))
+            para.clear()
+
     i = 0
     while i < len(lines):
-        ln = lines[i]
-        stripped = ln.strip()
+        stripped = lines[i].strip()
         if not stripped:
             flush(); i += 1; continue
         if re.match(r"^#{1,4} ", stripped):
             flush()
             depth = len(stripped) - len(stripped.lstrip("#"))
-            # the page already has an h1 (the document title), so shift down
-            out.append(f"<h{min(depth + 1, 5)}>"
-                       f"{_md_inline(stripped.lstrip('#').strip())}"
-                       f"</h{min(depth + 1, 5)}>")
+            out.append(("h", depth, stripped.lstrip("#").strip()))
             i += 1; continue
         if re.fullmatch(r"[-*_]{3,}", stripped):
-            flush(); out.append("<hr>"); i += 1; continue
+            flush(); out.append(("hr",)); i += 1; continue
         if (stripped.startswith("|") and i + 1 < len(lines)
                 and re.fullmatch(r"\|[\s:|-]+\|?",
                                  lines[i + 1].strip())):
@@ -204,13 +211,7 @@ def md_html(text: str) -> str:
             rows, i = [], i + 2
             while i < len(lines) and lines[i].strip().startswith("|"):
                 rows.append(_md_row(lines[i])); i += 1
-            out.append("<table><thead><tr>"
-                       + "".join(f"<th>{_md_inline(h)}</th>" for h in head)
-                       + "</tr></thead><tbody>"
-                       + "".join("<tr>" + "".join(
-                           f"<td>{_md_inline(c)}</td>" for c in r) + "</tr>"
-                           for r in rows)
-                       + "</tbody></table>")
+            out.append(("table", head, rows))
             continue
         if stripped.startswith(("- ", "* ")) or re.match(r"^\d+\. ", stripped):
             flush()
@@ -228,20 +229,46 @@ def md_html(text: str) -> str:
                 else:
                     break
                 i += 1
-            tag = "ol" if ordered else "ul"
-            out.append(f"<{tag}>" + "".join(
-                f"<li>{_md_inline(x)}</li>" for x in items) + f"</{tag}>")
+            out.append(("list", ordered, items))
             continue
         if stripped.startswith(">"):
             flush()
             quote = []
             while i < len(lines) and lines[i].strip().startswith(">"):
                 quote.append(lines[i].strip().lstrip(">").strip()); i += 1
-            out.append(f"<blockquote>{_md_inline(' '.join(quote))}"
-                       f"</blockquote>")
+            out.append(("quote", " ".join(quote)))
             continue
         para.append(stripped); i += 1
     flush()
+    return out
+
+
+def md_html(text: str) -> str:
+    out = []
+    for b in md_blocks(text):
+        kind = b[0]
+        if kind == "h":
+            # the page already has an h1 (the document title), so shift down
+            lvl = min(b[1] + 1, 5)
+            out.append(f"<h{lvl}>{_md_inline(b[2])}</h{lvl}>")
+        elif kind == "hr":
+            out.append("<hr>")
+        elif kind == "table":
+            out.append("<table><thead><tr>"
+                       + "".join(f"<th>{_md_inline(h)}</th>" for h in b[1])
+                       + "</tr></thead><tbody>"
+                       + "".join("<tr>" + "".join(
+                           f"<td>{_md_inline(c)}</td>" for c in r) + "</tr>"
+                           for r in b[2])
+                       + "</tbody></table>")
+        elif kind == "list":
+            tag = "ol" if b[1] else "ul"
+            out.append(f"<{tag}>" + "".join(
+                f"<li>{_md_inline(x)}</li>" for x in b[2]) + f"</{tag}>")
+        elif kind == "quote":
+            out.append(f"<blockquote>{_md_inline(b[1])}</blockquote>")
+        else:
+            out.append(f"<p>{_md_inline(b[1])}</p>")
     return "".join(out)
 
 
@@ -436,6 +463,50 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"@media print{{body{{padding:0}}}}"
         f"</style></head><body><h1>{sect.esc(d['title'])}</h1>"
         f"{md_html(d['body'])}</body></html>")
+
+
+def _pdf_response(d, inline: bool = True):
+    """A PDF for any document that can produce one: authored bodies are
+    rendered; an uploaded PDF is itself. Inline by default so the browser's
+    own viewer is the preview."""
+    from . import pdfgen
+    stem = re.sub(r"[^\w.-]+", "-", d["title"]).strip("-")[:80] or "document"
+    if (d["body"] or "").strip():
+        blob = pdfgen.doc_pdf(d["title"], d["body"])
+    elif d["ext"] == "pdf":
+        p = doc_path(d)
+        if not p.exists():
+            raise HTTPException(404, "file missing from storage")
+        blob = p.read_bytes()
+    else:
+        raise HTTPException(400, f"this document is a .{d['ext'] or '?'} "
+                                 "file — download it as itself")
+    disp = "inline" if inline else "attachment"
+    return Response(blob, media_type="application/pdf", headers={
+        "Content-Disposition": f'{disp}; filename="{stem}.pdf"'})
+
+
+@router.get("/api/store/admin/documents/{did}/pdf")
+def document_pdf(did: int, download: int = 0, u=Depends(admin_user),
+                 con=Depends(get_con)):
+    d = con.execute("SELECT * FROM documents WHERE id=?", (did,)).fetchone()
+    if d is None:
+        raise HTTPException(404, "no such document")
+    if download:
+        log(con, did, u["name"], "downloaded")
+        con.commit()
+    return _pdf_response(d, inline=not download)
+
+
+@router.get("/sign/{token}/pdf")
+def signing_pdf(token: str, con=Depends(get_con), _rl=Depends(rate_limit)):
+    """The signer's own copy — the same parse as the page they signed."""
+    s2 = _sig_or_404(con, token)
+    d = con.execute("SELECT * FROM documents WHERE id=?",
+                    (s2["document_id"],)).fetchone()
+    if d is None:
+        raise HTTPException(404, "document not found")
+    return _pdf_response(d, inline=False)
 
 
 @router.get("/api/store/admin/documents/{did}/markdown")
@@ -663,7 +734,8 @@ def signing_page(token: str, request: Request, con=Depends(get_con),
           <p class="fine">A copy has been emailed to {sect.esc(s['signer_email'])}.
              Reference <code>{s['token'][:12]}</code>.</p>
           <p><a class="btn" href="/sign/{token}/certificate">View the
-             signing certificate</a></p>
+             signing certificate</a>
+             <a class="btn" href="/sign/{token}/pdf">Download the PDF</a></p>
         </div>"""
     elif declined:
         panel = """<div class="sign-done"><h2>Declined</h2>

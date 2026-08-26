@@ -5022,11 +5022,11 @@ async function renderEngagement(id) {
           title="the brackets still unfilled — same form as generation,
           shorter each time">Fill blanks (${x.blanks})</button>` : ""}
       <button class="btn alt sm" data-engview="${x.id}"
-        data-kind="${x.has_body ? "body" : "file"}"
-        title="exactly what a signer will be shown — print it for a PDF">View</button>
+        data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
+        title="opens the PDF — exactly what a signer will be shown">View</button>
       <button class="btn alt sm" data-engdl="${x.id}"
-        data-kind="${x.has_body ? "body" : "file"}"
-        data-name="${esc(x.filename || x.title)}">Download</button>
+        data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
+        data-name="${esc(x.filename || x.title)}">PDF</button>
       <button class="btn alt sm" data-engsign="${x.id}">${opsIcon("pen","btn-ic")} Sign</button>
       <button class="btn alt sm" data-engopen="${esc(x.title)}">Open</button>
     </div>`;
@@ -5202,27 +5202,30 @@ async function renderEngagement(id) {
     return r.blob();
   };
   view().querySelectorAll("[data-engview]").forEach((b) => b.onclick = async () => {
+    // The PDF is the preview: authored docs render to one, uploaded PDFs
+    // are themselves, and the browser's viewer does the rest.
     const did = b.dataset.engview;
-    const path = b.dataset.kind === "body"
-      ? `/api/store/admin/documents/${did}/preview`
+    const isPdfable = b.dataset.kind === "body" || b.dataset.ext === "pdf";
+    const path = isPdfable
+      ? `/api/store/admin/documents/${did}/pdf`
       : `/api/store/admin/documents/${did}/file`;
     try {
       const blob = await authBlob(path);
-      window.open(URL.createObjectURL(
-        b.dataset.kind === "body"
-          ? new Blob([await blob.text()], { type: "text/html" }) : blob));
+      window.open(URL.createObjectURL(blob));
     } catch (err) { toast(err.message); }
   });
   view().querySelectorAll("[data-engdl]").forEach((b) => b.onclick = async () => {
     const did = b.dataset.engdl;
-    const path = b.dataset.kind === "body"
-      ? `/api/store/admin/documents/${did}/markdown`
+    const isPdfable = b.dataset.kind === "body" || b.dataset.ext === "pdf";
+    const path = isPdfable
+      ? `/api/store/admin/documents/${did}/pdf?download=1`
       : `/api/store/admin/documents/${did}/file`;
     try {
       const blob = await authBlob(path);
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = b.dataset.name + (b.dataset.kind === "body" ? ".md" : "");
+      a.download = b.dataset.name
+        + (b.dataset.kind === "body" ? ".pdf" : "");
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (err) { toast(err.message); }
