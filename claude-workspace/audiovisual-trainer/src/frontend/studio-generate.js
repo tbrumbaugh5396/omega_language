@@ -1178,6 +1178,9 @@ finish(col)`
 uniform float thickness;  // @range 150 900 @default 430 @help the membrane, in nanometres
 uniform float thickVary;  // @range 0 1 @default 0.55 @help how much it wanders across the wing
 uniform float nFilm;      // @range 1.2 2.2 @default 1.56 @help chitin's refractive index
+uniform float kelvin;     // @range 1800 12000 @step 50 @default 6500 @help the light it is seen under
+uniform float tint;       // @range 0 1.5 @default 0.6 @help how much the chitin absorbs, blue end first
+uniform float ranks;      // @range 0 1 @default 0.75 @help how strictly the cells line up between ribs
 uniform float samples;    // @range 3 48 @step 1 @int @default 24 @help wavelengths in the integral
 uniform float jitter;     // @toggle @default 1 @label stratify @help offset the samples per pixel
 uniform float tilt;       // @range -1.2 1.2 @default 0.35 @help how the wing is held to the light
@@ -1225,6 +1228,43 @@ float filmR(float nm, float cosI, float d) {
               + 2.0 * b * (1.0 - cd) / (1.0 + b * b - 2.0 * b * cd));
 }
 
+/**
+ * The light it is seen under. Planck's law, which is the other half of the
+ * electromagnetism in this sketch: the film says what a surface does to a
+ * wavelength, and this says how much of that wavelength there was.
+ *
+ * A blackbody rather than a table of CIE daylight, and that is a choice worth
+ * naming. Illuminant A *is* a blackbody — 2856 K exactly — so tungsten here
+ * is the standard illuminant and not an approximation of it. D65 is not: it
+ * is a measured daylight spectrum with the mercury lines of a real sky in it,
+ * and 6500 K blackbody is a near neighbour rather than the thing itself. What
+ * is lost is a percent or so in the blue; what is gained is a continuous knob
+ * over every colour temperature instead of three tabulated ones.
+ *
+ * The leading constant divides out under the normalisation below, so it is
+ * not written. Micrometres, to keep the fifth power in a range float32 is
+ * comfortable in.
+ */
+float planck(float nm, float K) {
+  float um = nm * 0.001;
+  float u5 = um * um * um * um * um;
+  return 1.0 / (u5 * (exp(14388.0 / (um * max(K, 100.0))) - 1.0));
+}
+
+/**
+ * Beer-Lambert through the membrane. Chitin is not water-clear: it absorbs,
+ * and it absorbs more towards the blue, which is why a bare wing held to the
+ * light is faintly straw-coloured rather than colourless.
+ *
+ * The *shape* is right — an exponential rising into the blue and the
+ * ultraviolet, which is what an organic polymer does. The coefficient is
+ * fitted by eye and not measured, and saying so is cheaper than implying a
+ * spectrophotometer was involved.
+ */
+float absorb(float nm, float path) {
+  return exp(-tint * 3.0e-4 * exp(-(nm - 380.0) / 120.0) * path);
+}
+
 // ------------------------------------------------------------- the observer
 // A piecewise Gaussian — one width below the peak and another above — which
 // is what lets three of them fit a curve that was measured on people rather
@@ -1242,26 +1282,34 @@ vec3 cmf(float nm) {
 }
 
 /**
- * The colour of the film, integrated rather than sampled at three points.
+ * Adapt a colour seen under one white to how it would look under another.
  *
- * Normalised by the sum of the y-bar weights, so a perfect mirror comes out
- * white at unit luminance whatever N is — which is what makes the sample
- * count a question about *colour* rather than about brightness. The
- * illuminant is equal-energy, which is a choice and worth saying: under D65
- * the whites would shift, and nothing else here would change.
+ * Von Kries in Bradford's cone space, which is the textbook answer and only
+ * three matrices. Dividing XYZ by the illuminant's own XYZ — the obvious
+ * thing, and what this did first — is wrong twice over: it leaves a mirror at
+ * XYZ (1,1,1), which is *not* white on an sRGB display but a pink (1.20,
+ * 0.95, 0.91) because that matrix is built around D65; and it flattens the
+ * real colour shift almost to nothing, 0.23/255 between tungsten and
+ * daylight, because per-channel division in XYZ over-corrects everything and
+ * not only the white.
+ *
+ * Scaling in cone space instead preserves white exactly and leaves the
+ * saturated colours to move, which is what adaptation does in an eye.
  */
-vec3 filmColour(float cosI, float d, float jit) {
-  int n = int(samples);
-  vec3 xyz = vec3(0.0);
-  float wsum = 0.0;
-  for (int i = 0; i < 48; i++) {
-    if (i >= n) break;
-    float nm = 380.0 + (float(i) + jit) / float(n) * 350.0;
-    vec3 bar = cmf(nm);
-    xyz += bar * filmR(nm, cosI, d);
-    wsum += bar.y;
-  }
-  xyz /= max(wsum, 1e-5);
+vec3 adaptToD65(vec3 xyz, vec3 srcWhite) {
+  const mat3 toLms = mat3( 0.8951, -0.7502,  0.0389,
+                           0.2664,  1.7135, -0.0685,
+                          -0.1614,  0.0367,  1.0296);
+  const mat3 fromLms = mat3( 0.9869929, 0.4323053, -0.0085287,
+                            -0.1470543, 0.5183603,  0.0400428,
+                             0.1599627, 0.0492912,  0.9684867);
+  vec3 d65 = vec3(0.95047, 1.0, 1.08883);
+  vec3 srcC = toLms * srcWhite;
+  vec3 dstC = toLms * d65;
+  return fromLms * ((toLms * xyz) * (dstC / max(srcC, vec3(1e-6))));
+}
+
+vec3 xyzToRgb(vec3 xyz) {
   // XYZ to linear sRGB. Negative components are colours the display cannot
   // make; clamping is the honest thing to do to them and the reason a very
   // saturated fringe flattens rather than glowing.
@@ -1270,6 +1318,49 @@ vec3 filmColour(float cosI, float d, float jit) {
     -0.9689 * xyz.x + 1.8758 * xyz.y + 0.0415 * xyz.z,
      0.0557 * xyz.x - 0.2040 * xyz.y + 1.0570 * xyz.z), 0.0);
 }
+
+/**
+ * What the film sends back, and what it lets through, in one pass.
+ *
+ * Integrated rather than sampled at three points, and normalised so that the
+ * sample count is a question about *colour* rather than about brightness —
+ * which is what makes the convergence below a fair thing to measure.
+ */
+void filmBoth(float cosI, float d, float jit, out vec3 refl, out vec3 tran) {
+  int n = int(samples);
+  vec3 xyzR = vec3(0.0), xyzT = vec3(0.0), xyzW = vec3(0.0);
+  for (int i = 0; i < 48; i++) {
+    if (i >= n) break;
+    float nm = 380.0 + (float(i) + jit) / float(n) * 350.0;
+    vec3 bar = cmf(nm);
+    float e = planck(nm, kelvin);
+    float R = filmR(nm, cosI, d);
+    // What is not sent back goes through, and on the way it is absorbed. The
+    // two are one calculation: a wing that flashes green in reflection is
+    // magenta held up to the light, and that is not a stylistic choice, it is
+    // R and 1 − R sampled by the same eye.
+    float T = (1.0 - R) * absorb(nm, d / max(cosI, 0.1));
+    xyzR += bar * e * R;
+    xyzT += bar * e * T;
+    xyzW += bar * e;                                 // the illuminant's own white
+  }
+  // Scaled so a perfect mirror has the luminance of the illuminant, then
+  // adapted from that illuminant's white to D65 — which is the white the sRGB
+  // matrix below is built around. A mirror therefore comes out neutral at any
+  // colour temperature, and everything that is not a mirror is free to shift.
+  float wY = max(xyzW.y, 1e-5);
+  vec3 white = xyzW / wY;
+  refl = xyzToRgb(adaptToD65(xyzR / wY, white));
+  tran = xyzToRgb(adaptToD65(xyzT / wY, white));
+}
+
+/** Just the reflection, for the chart. */
+vec3 filmColour(float cosI, float d, float jit) {
+  vec3 refl, tran;
+  filmBoth(cosI, d, jit, refl, tran);
+  return refl;
+}
+
 
 // ------------------------------------------------------- the cell structure
 // Worley noise, and the *borders* between cells rather than the distance to
@@ -1284,7 +1375,14 @@ vec3 filmColour(float cosI, float d, float jit) {
 // between that point and each of the others, which is the wall between two
 // cells. Distance to a centre gives blobs; distance to a wall gives a net,
 // and the difference is the whole chapter.
-vec2 cellJitter(vec2 id) { return vec2(hash21(id), hash21(id + 17.3)); }
+// Jittered along freely, and across only as much as the ranks knob allows. At
+// 0 this is the plain Voronoi of the chapter; at 1 every feature point sits
+// exactly on its row and the cells come out in ranks. A real wing is near the
+// ordered end: its cells lie in files between the longitudinal veins, and a
+// uniform scatter is the one thing venation never looks like.
+vec2 cellJitter(vec2 id) {
+  return vec2(hash21(id), mix(hash21(id + 17.3), 0.5, clamp(ranks, 0.0, 1.0)));
+}
 
 /** x: distance to the nearest wall. yz: which cell you are in. */
 vec3 cellular(vec2 at) {
@@ -1331,6 +1429,30 @@ float across(vec2 q) {
   return q.y > 0.0 ? q.y / max(mg.x, 1e-4) : q.y / min(mg.y, -1e-4);
 }
 
+/** Where the i-th longitudinal rib sits, across the wing, at this station. */
+float ribAt(int i, float x) {
+  return -0.62 + float(i) * 0.42 + 0.05 * sin(x * 3.0 + float(i));
+}
+
+/**
+ * Across the wing, counted in *bands between ribs* rather than in wing widths.
+ *
+ * This is what puts the cells in ranks. A lattice laid on the raw width knows
+ * nothing about the ribs and drops cells across them; laid on this, one unit
+ * is one gap between two veins, so a row of cells fills a band and the veins
+ * are where the rows end. The map is piecewise linear and it moves with the
+ * ribs, so when they wobble the ranks wobble with them.
+ */
+float bandCoord(vec2 q, float e) {
+  float lo = -1.0;
+  for (int i = 0; i < 4; i++) {
+    float hi = ribAt(i, q.x);
+    if (e < hi) return float(i) + (e - lo) / max(hi - lo, 1e-3);
+    lo = hi;
+  }
+  return 4.0 + (e - lo) / max(1.0 - lo, 1e-3);
+}
+
 /**
  * The lattice the cells are laid on, in wing coordinates.
  *
@@ -1347,8 +1469,44 @@ vec2 latticeOf(vec2 q, float e) {
   // more cells across the wing than along it, which is a wing nothing has.
   float grow = 1.0 + 0.55 * clamp(q.x, 0.0, 1.0);    // finer towards the tip
   float nAlong = cells * max(stretch, 0.1) * grow;
-  float nAcross = cells * 0.42 * grow;
-  return vec2(clamp(q.x, 0.0, 1.0) * nAlong, (e * 0.5 + 0.5) * nAcross);
+  // …and across, in bands. Five bands, a little over one row of cells in
+  // each, so the ranks are the wing's own compartments rather than a grid
+  // that happens to lie near them.
+  return vec2(clamp(q.x, 0.0, 1.0) * nAlong, bandCoord(q, e) * 1.15 * grow);
+}
+
+/**
+ * The fringe, as actual setae.
+ *
+ * A comb function is a row of identical teeth at one pitch, which is what
+ * this was and what nothing on an animal looks like. These are segments: each
+ * with its own root along the margin, its own length, its own rake backwards,
+ * and a taper from base to tip. Three neighbours are enough — a hair is
+ * shorter than the spacing between roots, so a fourth could never reach.
+ *
+ * The outward distance is converted into the same units the length is in,
+ * because the wing's half-width changes along it and a hair does not.
+ */
+float setae(vec2 q, float edge) {
+  vec2 mg = margins(q.x);
+  float halfW = edge > 0.0 ? mg.x : -mg.y;
+  float wq = (abs(edge) - 1.0) * halfW * 0.74 / 2.90;   // outward, in q.x units
+  if (wq < -0.002) return 0.0;
+  float dens = 300.0;
+  float sIdx = q.x * dens;
+  float cover = 0.0;
+  for (int i = -1; i <= 1; i++) {
+    float id = floor(sIdx) + float(i);
+    float root = (id + 0.5 + (hash21(vec2(id, 7.0)) - 0.5) * 0.8) / dens;
+    float len = (1.4 + 1.8 * hash21(vec2(id, 3.0))) / dens;
+    vec2 dir = normalize(vec2((hash21(vec2(id, 11.0)) - 0.5) * 1.1 - 0.55, 1.0));
+    vec2 rel = vec2(q.x - root, wq);
+    float t2 = clamp(dot(rel, dir), 0.0, len);
+    float dist = length(rel - dir * t2);
+    float th = (0.30 / dens) * (1.0 - 0.75 * t2 / max(len, 1e-5));
+    cover = max(cover, smoothstep(th, th * 0.15, dist));
+  }
+  return cover;
 }
 
 // Something for the light to come through, so a transparent thing reads as
@@ -1381,13 +1539,12 @@ vec3 shadeWing(vec2 pp) {
   // them — and only the mesh is Voronoi.
   float rib = 1e9;
   for (int i = 0; i < 4; i++) {
-    float f = -0.62 + float(i) * 0.42;
     // Scaled so a rib is a *line*. At 0.55 the four of them were never more
     // than 0.115 apart in this metric, the threshold below caught most of the
     // membrane, and the wing came out the colour of its own veins — which is
     // what the orange wash turned out to be, measured at 0.72 of full vein
     // across the middle of the wing where it should be nearer 0.1.
-    rib = min(rib, abs(edge - f - 0.05 * sin(q.x * 3.0 + float(i))) * 3.0);
+    rib = min(rib, abs(edge - ribAt(i, q.x)) * 3.0);
   }
   rib = min(rib, abs(edge - 0.97) * 1.6);            // the costa, along the leading edge
   // The wall distance comes back in *lattice* units — a cell is one unit
@@ -1425,7 +1582,8 @@ vec3 shadeWing(vec2 pp) {
   float cosI = clamp(abs(dot(halfv, nrm)), 0.05, 1.0);
 
   float jit = jitter > 0.5 ? hash21(gl_FragCoord.xy + float(frame) * 0.017) : 0.5;
-  vec3 film = filmColour(cosI, d, jit);
+  vec3 film, tran;
+  filmBoth(cosI, d, jit, film, tran);
 
   // What comes through, and where from. Snell again, and this time for the
   // light that is *transmitted* rather than the light that comes back: the
@@ -1436,11 +1594,12 @@ vec3 shadeWing(vec2 pp) {
   // wing, which is a thing you can watch happen.
   vec3 bent = refract(view, nrm, 1.0 / max(nFilm, 1.05));
   vec3 through = behind(pp + bent.xy * bend * 0.30);
-  // Energy has to go somewhere: what the film sends back it does not let
-  // through. The average of the reflectance over the visible range is the
-  // luminance of what came back, so one minus that is what is left.
-  float sent = clamp(dot(film, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
-  vec3 col = through * (1.0 - 0.55 * sent) * mix(vec3(0.94, 0.91, 0.86), vec3(0.74), 0.30);
+  // …and it comes through *tinted*, which is the other half of the same
+  // integral. Energy taken out at one wavelength is energy missing at that
+  // wavelength, so the transmitted colour is the reflected one's complement:
+  // where the wing flashes green it passes magenta. Nothing here chooses that
+  // — it falls out of R and 1 − R being read by the same eye.
+  vec3 col = through * tran;
 
   // A narrow lobe, and that is the difference between a wing and a decal.
   // At an exponent of five the whole wing sits inside the highlight and comes
@@ -1467,10 +1626,8 @@ vec3 shadeWing(vec2 pp) {
 
   float rim = 1.0 - smoothstep(0.94, 1.02, abs(edge));
   col = mix(bg, col, rim);
-  float outward = smoothstep(0.985, 1.010, abs(edge)) * smoothstep(1.075, 1.020, abs(edge));
-  float comb = smoothstep(0.30, 0.92, sin(q.x * 1850.0) * 0.5 + 0.5);
   float side = edge < 0.0 ? 1.0 : smoothstep(0.62, 0.92, q.x);
-  col += vec3(0.34, 0.32, 0.29) * outward * comb * side * hairs * (0.40 + 0.8 * lobe1);
+  col += vec3(0.34, 0.32, 0.29) * setae(q, edge) * side * hairs * (0.40 + 0.8 * lobe1);
   return col;
 }
 

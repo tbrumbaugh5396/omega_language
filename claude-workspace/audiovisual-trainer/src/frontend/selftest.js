@@ -2900,14 +2900,24 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
     // there is nothing left to fake: this expands a real stage and collapses
     // it again, and every assertion is about what actually happened.
     { const problems = [];
-      // A window this small is not a window — the app is in a pane somebody
-      // has collapsed, and every measurement below would be a measurement of
-      // that rather than of the code. Declining to conclude is honest;
-      // failing would be a claim about the code that is not true.
+      // The window has to be bigger than the picture, and that is the guard
+      // rather than an arbitrary floor.
       //
-      // This guard used to be `innerWidth === 0`, which is the collapsed case
-      // and not the *nearly* collapsed one; a thirty-pixel pane failed it.
-      const noRoom = window.innerWidth < 320 || window.innerHeight < 240;
+      // One assertion below is that "contain" *grows* a 480x300 picture to
+      // fill the window. In a pane narrower than 480 the right answer is to
+      // shrink it, so the assertion is false and the code is correct — which
+      // is what a 403-pixel pane reported as a fault. The guard has been
+      // wrong twice in the other direction too: first `innerWidth === 0`,
+      // which is the collapsed case and not the nearly-collapsed one, then
+      // 320x240, which is neither. It now says what the check needs.
+      const noRoom = window.innerWidth < 620 || window.innerHeight < 420;
+      // …and the size it started at. Every assertion below compares something
+      // measured after expanding against the window it was expanded into, and
+      // those are two readings at two moments. If the window moves between
+      // them — a pane dragged, a preview shown or hidden — the check reports a
+      // fault that is really a resize. Caught it doing exactly that: 1222x814
+      // at one reading and 403x367 at the next.
+      const began = [window.innerWidth, window.innerHeight];
       for (const fit of ["contain", "fill", "none", "refit"]) {
         const kid = document.createElement("canvas");
         kid.width = 480; kid.height = 300;              // a shape of its own
@@ -2997,9 +3007,15 @@ out  = osc.sineHz  hz=note.hz  gate=env.y  amp=0.25
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         holder.remove();
       }
+      const moved = window.innerWidth !== began[0] || window.innerHeight !== began[1];
       push({ group: "More games", name: "expanding a stage fills the window, and collapsing puts it all back",
-             ok: noRoom || problems.length === 0,
-             detail: noRoom
+             ok: noRoom || moved || problems.length === 0,
+             detail: moved
+               ? `the window went from ${began[0]}x${began[1]} to ${window.innerWidth}x`
+                 + `${window.innerHeight} while this was measuring — every assertion here compares a box `
+                 + "against the window it was expanded into, so this declines rather than blame the code "
+                 + "for a resize"
+               : noRoom
                ? `the window is ${window.innerWidth}×${window.innerHeight}, which is a collapsed pane rather `
                  + "than a window — this check declines to conclude rather than report a fault it cannot see"
                : problems.length === 0
@@ -3855,6 +3871,12 @@ c`;
           - 0.065 * lobe(nm, 501.1, 20.4, 26.2),
         0.821 * lobe(nm, 568.8, 46.9, 40.5) + 0.286 * lobe(nm, 530.9, 16.3, 31.1),
         1.217 * lobe(nm, 437.0, 11.8, 36.0) + 0.681 * lobe(nm, 459.0, 26.0, 13.8)];
+      // Planck, because the shader is no longer under an equal-energy lamp.
+      // A reference that does not model the illuminant is a reference for a
+      // different sketch.
+      const planck = (nm, K) => { const um = nm * 0.001;
+        return 1 / (um ** 5 * (Math.exp(14388 / (um * K)) - 1)); };
+      const KELVIN = base.kelvin[0];
       const nAt = (nm, nF) => nF + 0.0148 / ((nm * 0.001) * (nm * 0.001));
       const filmR = (nm, cosI, d, nF) => {
         const n2 = nAt(nm, nF);
@@ -3869,7 +3891,8 @@ c`;
         let X = 0, Y = 0, Z = 0, w = 0;
         for (let i = 0; i < n; i++) {
           const nm = 380 + (i + 0.5) / n * 350, b = cmfJs(nm), Rv = filmR(nm, cosI, d, nF);
-          X += b[0] * Rv; Y += b[1] * Rv; Z += b[2] * Rv; w += b[1];
+          const e = planck(nm, KELVIN);
+          X += b[0] * e * Rv; Y += b[1] * e * Rv; Z += b[2] * e * Rv; w += b[1] * e;
         }
         X /= w; Y /= w; Z /= w;
         return [Math.max(3.2406 * X - 1.5372 * Y - 0.4986 * Z, 0),
@@ -3944,7 +3967,8 @@ c`;
       const yb = (nm) => cmfJs(nm)[1];
       const lumJs = (d) => { let Y = 0, w = 0;
         for (let i = 0; i < 48; i++) { const nm = 380 + (i + 0.5) / 48 * 350;
-          Y += yb(nm) * filmR(nm, 1.0, d, base.nFilm[0]); w += yb(nm); }
+          const e = planck(nm, KELVIN);
+          Y += yb(nm) * e * filmR(nm, 1.0, d, base.nFilm[0]); w += yb(nm) * e; }
         return Y / w; };
       const td = [], tl = [];
       for (let k = 0; k < 1600; k++) { const d = 125 + k * 0.5; td.push(d); tl.push(lumJs(d)); }
@@ -4013,6 +4037,116 @@ c`;
                + `dips are shallower than one step of an 8-bit channel, so that is where the reading stops` });
     } catch (e) {
       push({ group: "Generate presets", name: "a wing: the spectrum integrated, not sampled at three points",
+             ok: false, detail: String(e.message).split("\n")[0] });
+    }
+
+    // The lamp it is under, what it lets through, and the shape of the net.
+    try {
+      const g = GENERATE_PRESETS.find((x) => x.id === "wing");
+      const us = parseUniforms(g.source);
+      const base = {};
+      for (const u of us) if (u.value) base[u.name] = u.value.slice();
+      const W2 = 380, H2 = 238;
+      const bad = [];
+
+      // 1. A mirror is neutral at any colour temperature. Dividing XYZ by the
+      //    illuminant's own XYZ leaves it at (1,1,1), which is a *pink* on an
+      //    sRGB display because that matrix is built around D65; scaling in
+      //    Bradford cone space instead is what makes white come out white.
+      const mirrorSrc = cut(cut(g.source, "float R = filmR(nm, cosI, d);", "float R = 1.0;"),
+        "vec3 col = chart > 0.5 ? shadeChart(p) : shadeWing(p);",
+        "vec3 rr, tt; filmBoth(0.8, 400.0, 0.5, rr, tt); vec3 col = rr;");
+      const mirrorAt = (K) => { const d = renderSketch(mirrorSrc, 64, 40,
+          { frame: 0, time: 0, values: { ...base, expose: [0], kelvin: [K] } })
+          .getContext("2d").getImageData(30, 20, 1, 1).data;
+        return [d[0], d[1], d[2]]; };
+      const mirrors = [2856, 6500, 9000].map(mirrorAt);
+      const offNeutral = Math.max(...mirrors.map((m2) => Math.max(...m2) - Math.min(...m2)));
+      if (offNeutral > 3) bad.push(`a mirror is ${offNeutral}/255 off neutral`);
+
+      // 2. …and everything that is not a mirror is free to move with the lamp.
+      const chartAt = (K) => renderSketch(g.source, W2, H2, { frame: 0, time: 0,
+          values: { ...base, chart: [1], jitter: [0], expose: [2.2], kelvin: [K] } })
+        .getContext("2d").getImageData(0, 0, W2, H2).data;
+      const lit = (a2, b2) => { let t = 0, n = 0;
+        for (let i = 0; i < W2 * H2; i++) {
+          if (a2[i * 4] + a2[i * 4 + 1] + a2[i * 4 + 2] < 20) continue;
+          t += Math.abs(a2[i * 4] - b2[i * 4]) + Math.abs(a2[i * 4 + 1] - b2[i * 4 + 1])
+             + Math.abs(a2[i * 4 + 2] - b2[i * 4 + 2]); n += 3;
+        }
+        return +(t / Math.max(n, 1)).toFixed(2); };
+      const ref = chartAt(6500);
+      const tungsten = lit(ref, chartAt(2856)), cool = lit(ref, chartAt(9000));
+      if (tungsten < 2) bad.push(`the lamp barely moves the film (${tungsten}/255)`);
+
+      // 3. What it lets through is the complement of what it sends back —
+      //    not a choice, just R and 1 − R read by the same eye.
+      const pairSrc = cut(g.source, "vec3 col = chart > 0.5 ? shadeChart(p) : shadeWing(p);",
+        "vec3 rr, tt; filmBoth(0.85, 120.0 + (p.x * 0.5 + 0.5) * 980.0, 0.5, rr, tt);\n"
+        + "vec3 col = p.y > 0.0 ? rr * 5.0 : (vec3(1.0) - tt) * 5.0;");
+      const pd = renderSketch(pairSrc, W2, H2, { frame: 0, time: 0,
+        values: { ...base, expose: [0], tint: [0] } }).getContext("2d").getImageData(0, 0, W2, H2).data;
+      let same = 0, seen2 = 0;
+      for (let x = 40; x < W2 - 40; x += 2) {
+        const top = [0, 1, 2].map((c) => pd[((H2 - 1 - Math.round(H2 * 0.25)) * W2 + x) * 4 + c]);
+        const bot = [0, 1, 2].map((c) => pd[((H2 - 1 - Math.round(H2 * 0.75)) * W2 + x) * 4 + c]);
+        if (Math.max(...top) - Math.min(...top) < 10) continue;
+        if (top.indexOf(Math.max(...top)) === bot.indexOf(Math.max(...bot))) same++;
+        seen2++;
+      }
+      const pct = Math.round(100 * same / Math.max(seen2, 1));
+      if (pct < 90) bad.push(`transmission is the complement of reflection only ${pct}% of the time`);
+
+      // 4. Hairs with their own lengths, rather than a comb — which has one.
+      const HW = 1200, HH = 750;
+      const hd = renderSketch(cut(g.source, "  return col;\n}\n", "  return vec3(setae(q, edge));\n}\n"),
+        HW, HH, { frame: 0, time: 0, values: { ...base } }).getContext("2d").getImageData(0, 0, HW, HH).data;
+      const runs = [];
+      for (let x = Math.round(HW * 0.35); x < HW * 0.65; x++) {
+        let best = 0, cur = 0;
+        for (let y = Math.round(HH * 0.5); y < HH; y++) {
+          if (hd[(y * HW + x) * 4] > 100) { cur++; best = Math.max(best, cur); } else cur = 0;
+        }
+        if (best > 0) runs.push(best);
+      }
+      const mu = runs.reduce((t, x) => t + x, 0) / Math.max(runs.length, 1);
+      const spread = Math.sqrt(runs.reduce((t, x) => t + (x - mu) ** 2, 0) / Math.max(runs.length, 1)) / Math.max(mu, 1e-6);
+      if (!(spread > 0.3)) bad.push(`the fringe is regular (spread ${spread.toFixed(2)}) — that is a comb`);
+
+      // 5. And the cells fall into ranks between the ribs when asked to.
+      const MW = 520, MH = 325;
+      const rowiness = (rk) => {
+        const d = renderSketch(cut(g.source, "  return col;\n}\n", "  return vec3(vein);\n}\n"),
+          MW, MH, { frame: 0, time: 0, values: { ...base, cells: [10], ranks: [rk] } })
+          .getContext("2d").getImageData(0, 0, MW, MH).data;
+        const fr = [];
+        for (let y = Math.round(MH * 0.40); y < MH * 0.60; y++) {
+          let on = 0, n = 0;
+          for (let x = Math.round(MW * 0.30); x < MW * 0.70; x++) { if (d[(y * MW + x) * 4] > 128) on++; n++; }
+          fr.push(on / n);
+        }
+        const m2 = fr.reduce((t, x) => t + x, 0) / fr.length;
+        return Math.sqrt(fr.reduce((t, x) => t + (x - m2) ** 2, 0) / fr.length) / Math.max(m2, 1e-6);
+      };
+      const scattered = rowiness(0), ranked = rowiness(1);
+      if (!(ranked > scattered * 1.2)) bad.push(`ranking does not make rows (${scattered.toFixed(2)} to ${ranked.toFixed(2)})`);
+
+      push({ group: "Generate presets", name: "the lamp it is under, and what the wing lets through", ok: bad.length === 0,
+             detail: bad.length ? bad.join(" · ")
+               : `Planck rather than a table, so the colour temperature is a knob and not three tabulated `
+                 + `choices — and illuminant A *is* a blackbody at 2856 K, so tungsten here is the standard `
+                 + `and not an approximation of it. A mirror stays neutral to within ${offNeutral}/255 at `
+                 + `2856, 6500 and 9000 K, which took adapting in Bradford cone space; dividing XYZ by the `
+                 + `illuminant leaves a mirror pink, because the sRGB matrix is built around D65 and not `
+                 + `around equal energy. Everything that is not a mirror still moves: the film shifts `
+                 + `${tungsten}/255 under tungsten and ${cool} under a cool sky. What it lets through is `
+                 + `the complement of what it sends back ${pct}% of the way across the thickness range — `
+                 + `nothing chose that, it is R and 1 − R read by the same eye. The fringe is `
+                 + `${runs.length} columns of setae whose lengths spread ${spread.toFixed(2)} about their `
+                 + `mean, where a comb would spread 0. And the cells fall into ranks between the ribs: row `
+                 + `structure goes ${scattered.toFixed(2)} scattered to ${ranked.toFixed(2)} ranked` });
+    } catch (e) {
+      push({ group: "Generate presets", name: "the lamp it is under, and what the wing lets through",
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 

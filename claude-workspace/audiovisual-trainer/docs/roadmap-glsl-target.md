@@ -3062,6 +3062,64 @@ nothing else; no transmission colour, so a wing held against a bright
 background does not tint what is behind it the way a real one does; and the
 hairs are a comb function rather than hairs.
 
+### Phase 41 — The lamp, the transmission, the setae, and the ranks *(M)* — **shipped**
+
+Four things Phase 40 listed as not done.
+
+**One illuminant became a knob, and it is Planck's law.** The other half of
+the electromagnetism: the film says what a surface does to a wavelength, and
+the illuminant says how much of that wavelength there was. A blackbody rather
+than a table of CIE daylight — and illuminant A *is* a blackbody at 2856 K, so
+tungsten here is the standard rather than an approximation of it. D65 is not:
+it is a measured sky with mercury lines in it, and 6500 K is a near neighbour.
+What is lost is a percent in the blue; what is gained is every colour
+temperature instead of three.
+
+*Getting white right took two goes.* Dividing XYZ by the illuminant's own XYZ
+is the obvious move and wrong twice: it leaves a mirror at XYZ (1,1,1), which
+on an sRGB display is a **pink** (1.20, 0.95, 0.91) because that matrix is
+built around D65 and not around equal energy — and it flattens the real colour
+shift to **0.23/255** between tungsten and daylight, because per-channel
+division in XYZ over-corrects everything rather than only the white.
+
+Von Kries in Bradford cone space instead. A mirror is now neutral to within
+**0/255** at 2856, 6500 and 9000 K, and the film still moves: **5.35/255**
+under tungsten, **1.15** under a cool sky. White is preserved; saturated
+colour is not, which is what adaptation does in an eye.
+
+**Transmission colour, which is the same integral read the other way.** What
+is not sent back goes through, so `T(λ) = 1 − R(λ)`, times Beer–Lambert
+absorption through the membrane. Both come out of one pass. The consequence is
+not a stylistic choice: a wing that flashes green in reflection is **magenta**
+held up to the light. Measured — `1 − T` peaks in the same channel `R` peaks
+in **97% of the way across the thickness range**, and the four disagreements
+are near-neutral crossings where there is no hue to oppose.
+
+The absorption's *shape* is right — an exponential rising into the blue, which
+is what an organic polymer does. The coefficient is fitted by eye and not
+measured, and saying so is cheaper than implying a spectrophotometer.
+
+**The comb became setae.** A comb function is identical teeth at one pitch,
+which is nothing on an animal. These are segments with their own root along
+the margin, their own length, their own backward rake and a taper from base to
+tip; three neighbours suffice because a hair is shorter than the spacing
+between roots. Measured over 427 columns of margin: lengths spread **0.55**
+about their mean, from 1 to 21 pixels, where a comb spreads 0.
+
+**And the cells fall into ranks.** A lattice laid on the raw width knows
+nothing about the ribs and drops cells across them. It is now laid on a *band
+coordinate* — one unit is one gap between two longitudinal veins — so a row of
+cells fills a compartment and the veins are where the rows end; and the
+across-axis jitter is squeezed by a `ranks` knob, 0 being the plain Voronoi of
+the chapter and 1 putting every feature point on its row. Row structure goes
+**0.23 scattered to 0.34 ranked**.
+
+*Left:* the absorption coefficient is fitted rather than measured; the
+Bradford adaptation is applied to the film's colour but the background behind
+the wing is not adapted with it, so a very warm lamp lights a cool room; and
+the ranks are uniform down the wing where a real one has finer compartments
+along the leading edge than the trailing.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -3143,6 +3201,7 @@ hairs are a comb function rather than hairs.
 | 38.1 | ES 1.00 checked, not assumed — **shipped** | S | 37.1 | 34/34 link both ways; integer max() was 3.00-only |
 | 39.1 | Async probe readback — **shipped** | M | 38.1 | 5 reads → 1 buffered read; 6 issued / 3 collected / 0 skipped, values identical |
 | 40.1 | Insect wing, spectrally integrated — **shipped** | M | — | 3 samples wrong by 130.7/255; 24 by 1.0; fringes within 14.8 nm |
+| 41.1 | Lamp, transmission, setae, ranks — **shipped** | M | 40.1 | mirror neutral at any K; 1−T matches R 97%; setae spread 0.55 |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one
