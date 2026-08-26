@@ -67,6 +67,11 @@ Invoiced [with the next milestone / on approval / on completion].
 By signing, the Client approves the work and cost above, and accepts the
 revised schedule.
 
+*Signing electronically? Skip the table — each party's signature, with its
+timestamp and document fingerprint, is recorded in the **Signed** block that
+appears at the end of this document once it's signed. The table below is for
+wet-ink execution on paper.*
+
 | | Studio | Client |
 |---|---|---|
 | Name | | |

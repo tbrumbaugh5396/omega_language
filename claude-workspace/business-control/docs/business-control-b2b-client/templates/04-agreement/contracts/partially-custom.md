@@ -139,6 +139,11 @@ Clauses 1–14 of the [Common Clauses](common-clauses.md) apply in full.
 
 ## Signatures
 
+*Signing electronically? Skip the table — each party's signature, with its
+timestamp and document fingerprint, is recorded in the **Signed** block that
+appears at the end of this document once it's signed. The table below is for
+wet-ink execution on paper.*
+
 | | Studio | Client |
 |---|---|---|
 | Name | | |

@@ -3324,6 +3324,18 @@ ok(not _unlisted, f"and it lists every document in the folder (missing: {_unlist
 ok("business-control-b2b-client" in _pr_txt,
    "and points at the client-facing kit rather than absorbing it")
 
+# A wet-ink signature table next to an electronic Signed block reads as
+# broken blank space. Every template that carries the table says which is
+# which — on its face, where the person filling it in is looking.
+_tabled = [str(p.relative_to(_studio)) for p in
+           (_studio / "templates").rglob("*.md")
+           if "| Signature | | |" in p.read_text()]
+_unnoted = [f for f in _tabled if "Signing electronically?"
+            not in (_studio / f).read_text()]
+ok(_tabled and not _unnoted,
+   f"every signature table explains the electronic path beside the wet-ink "
+   f"one (missing: {_unnoted})")
+
 ok("packages-and-process.md" in _root and "free-consultation.md" in _root,
    "and both consultation documents are in the kit's index, not just on disk")
 
