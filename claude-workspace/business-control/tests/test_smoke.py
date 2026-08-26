@@ -3885,6 +3885,30 @@ ok("button.tpl-line { display: grid" in _css3
    "each on its own full-width line, with the side it lands on visible "
    "rather than hidden in a tooltip")
 
+ok('class="dt-state"' in _ops and 'class="dt-acts"' in _ops
+   and "grid-template-columns: 22px minmax(0, 1fr) 108px 168px auto" in _css3,
+   "the Documents tab gets the same columns — every signed pill and every "
+   "button starts at the same x down the whole list")
+ok('class="sig-line' in _ops and "sl-mail" in _ops and "sl-when" in _ops
+   and "150px minmax(0, 1fr) 84px 132px 104px 116px" in _css3,
+   "and the signers align: who, email, role, state, when, actions")
+
+ok("function trackHtml" in _ops and "tk-client" in _ops
+   and "waiting on the client" in _ops,
+   "the gates draw as a track — done, do next, waiting on the client, "
+   "upcoming — derived from the same gates the list is, so the picture and "
+   "the list can never disagree")
+ok("function gateState" in _ops
+   and "g.kind === \"money\" && g.has_payment_link" in _ops,
+   "'waiting on the client' is a real state: a request that is out or a "
+   "payment link unpaid is time we cannot spend")
+ok("function ganttModal" in _ops and "PARALLEL" in _ops
+   and "What can run in parallel" in _ops,
+   "and a Gantt view shows which work overlaps — the gates are a chain, "
+   "the work between them is not")
+ok("critical path" in _ops.split("PARALLEL")[1][:900],
+   "with content named as the thing that decides the launch date")
+
 for _cls in ("gate-line", "gl-acts", "doc-line", "dl-acts", "log-line"):
     ok(f'class="{_cls}' in _ops or f"'{_cls}'" in _ops,
        f"{_cls} markup exists for the aligned layout")

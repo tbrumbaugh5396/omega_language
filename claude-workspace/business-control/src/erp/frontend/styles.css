@@ -396,7 +396,33 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
   border-radius: var(--r); padding: 14px 16px; margin-bottom: 10px;
   transition: border-color .16s; }
 .doc-card:hover { border-color: var(--dim); }
-.doc-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* the Documents tab, in columns: title block · signed · expiry · actions,
+   so every state pill and every button starts at the same x down the list */
+.doc-top { display: grid; align-items: center; gap: 12px;
+  grid-template-columns: 22px minmax(0, 1fr) 108px 168px auto; }
+.doc-top .dt-state, .doc-top .dt-exp { justify-self: start; }
+.dt-acts { display: grid; grid-template-columns: repeat(4, 62px); gap: 6px; }
+.dt-acts .btn { width: 100%; padding-left: 4px; padding-right: 4px; }
+.doc-card.dl-signed { border-left: 3px solid var(--good); }
+.doc-card.dl-awaiting { border-left: 3px solid var(--warn); }
+
+/* signers, aligned: who · email · role · state · when · actions */
+.sig-line { display: grid; align-items: center; gap: 10px; font-size: 13px;
+  padding: 7px 10px; background: var(--bg); border-radius: var(--r-sm);
+  border-left: 3px solid var(--line);
+  grid-template-columns: 150px minmax(0, 1fr) 84px 132px 104px 116px; }
+.sig-line.sig-signed { border-left-color: var(--good); }
+.sig-line.sig-declined { border-left-color: var(--bad); }
+.sig-line b, .sig-line .sl-mail { overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.sl-acts { display: flex; gap: 6px; justify-content: flex-end; }
+
+@media (max-width: 900px) {
+  .doc-top { grid-template-columns: 22px minmax(0, 1fr); }
+  .doc-top .dt-state, .doc-top .dt-exp, .dt-acts { grid-column: 1 / -1; }
+  .dt-acts { grid-template-columns: repeat(4, 1fr); }
+  .sig-line { grid-template-columns: 1fr; gap: 4px; }
+}
 .doc-ic { display: flex; color: var(--dim); flex: none; }
 .doc-ic svg { width: 20px; height: 20px; stroke: currentColor; fill: none;
   stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -475,6 +501,57 @@ button.tpl-line { display: grid; align-items: center; gap: 10px; width: 100%;
 button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
 .tpl-plus { color: var(--accent); font-weight: 700; }
 .tpl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- the gates as a track ---------- */
+.card-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; }
+.track { display: flex; align-items: flex-start; margin: 16px 0 6px;
+  overflow-x: auto; padding-bottom: 4px; }
+.tk-node { flex: 1 1 0; min-width: 84px; position: relative;
+  text-align: center; padding-top: 16px; }
+/* the connecting line: drawn behind the dots, from each node to the next */
+.tk-node::before { content: ""; position: absolute; top: 5px; left: 50%;
+  width: 100%; height: 2px; background: var(--line); }
+.tk-node:last-child::before { display: none; }
+.tk-dot { position: absolute; top: 0; left: 50%; width: 12px; height: 12px;
+  margin-left: -6px; border-radius: 50%; background: var(--panel2);
+  border: 2px solid var(--line); }
+.tk-label { display: block; font-size: 11px; line-height: 1.3;
+  color: var(--muted, #8b93a4); padding: 0 4px; }
+.tk-done .tk-dot { background: var(--good); border-color: var(--good); }
+.tk-done::before { background: var(--good); }
+.tk-done .tk-label { color: var(--good); }
+.tk-now .tk-dot { background: var(--accent); border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(138,111,240,.22); }
+.tk-now .tk-label { color: var(--text); font-weight: 600; }
+.tk-client .tk-dot { background: var(--warn); border-color: var(--warn); }
+.tk-client .tk-label { color: var(--warn); }
+.tk-key { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px;
+  color: var(--muted, #8b93a4); margin-bottom: 4px; }
+.tk-k::before { content: ""; display: inline-block; width: 8px; height: 8px;
+  border-radius: 50%; margin-right: 5px; background: var(--line); }
+.tk-k.tk-done::before { background: var(--good); }
+.tk-k.tk-now::before { background: var(--accent); }
+.tk-k.tk-client::before { background: var(--warn); }
+
+/* ---------- the parallel-work chart ---------- */
+.gt { display: grid; gap: 6px; margin-top: 14px; }
+.gt-row { display: grid; grid-template-columns: 210px minmax(0, 1fr);
+  gap: 12px; align-items: center; }
+.gt-name { font-size: 12.5px; }
+.gt-track { position: relative; height: 22px; background: var(--bg);
+  border-radius: 99px; }
+.gt-head .gt-track { background: transparent; height: 16px; }
+.gt-tick { position: absolute; top: 0; transform: translateX(-50%);
+  font-size: 11px; color: var(--muted, #8b93a4); }
+.gt-bar { position: absolute; top: 4px; height: 14px; border-radius: 99px;
+  background: var(--panel2); border: 1px solid var(--line); }
+.gt-bar.gt-done { background: rgba(63,189,130,.3); border-color: var(--good); }
+.gt-bar.gt-now { background: rgba(138,111,240,.32); border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .gt-row { grid-template-columns: 1fr; gap: 4px; }
+}
 
 .log-lines { margin-top: 8px; }
 .log-line { display: grid; gap: 12px; align-items: baseline; padding: 5px 0;

@@ -5110,6 +5110,103 @@ async function renderEngagement(id) {
     handover_accepted: "10-handover",
   };
 
+  /* The gates as a track: done · now · waiting on them · waiting on us ·
+     upcoming. "Waiting on the client" is a real state, not a mood — a
+     signature request that is out, or a payment link that is unpaid, is
+     time we cannot spend. Everything derives from the same gates the stage
+     does, so the picture and the list can never disagree. */
+  function gateState(g, isNext) {
+    if (g.passed_at) return "done";
+    const doc = d.docs.find((x) => x.id === g.doc_id);
+    if (doc && doc.awaiting) return "client";
+    if (g.kind === "money" && g.has_payment_link) return "client";
+    return isNext ? "now" : "later";
+  }
+  const STATE_LABEL = { done: "done", now: "do this next",
+    client: "waiting on the client", later: "upcoming" };
+
+  function trackHtml() {
+    const live = d.gates.filter((g) => g.active);
+    const firstOpen = live.find((g) => !g.passed_at);
+    return `<div class="track">
+      ${live.map((g) => {
+        const st = gateState(g, g === firstOpen);
+        return `<div class="tk-node tk-${st}"
+          title="${esc(g.label)} — ${STATE_LABEL[st]}">
+          <span class="tk-dot"></span>
+          <span class="tk-label">${esc(g.label)}</span>
+        </div>`;
+      }).join("")}
+    </div>
+    <div class="tk-key">
+      <span class="tk-k tk-done">done</span>
+      <span class="tk-k tk-now">do next</span>
+      <span class="tk-k tk-client">waiting on the client</span>
+      <span class="tk-k tk-later">upcoming</span>
+    </div>`;
+  }
+
+  /* What can run alongside what. The gates are a chain — each waits on the
+     one before — but the WORK inside a stage mostly isn't: content
+     gathering, brand exploration and build overlap in every real project,
+     which is exactly what a client asks when they ask "can we start X
+     while Y finishes?" */
+  const PARALLEL = [
+    { name: "Discovery & requirements", from: "proposal_accepted",
+      to: "requirements_signed", lane: 0 },
+    { name: "Content & assets from the client", from: "contract_signed",
+      to: "round2_signed_off", lane: 1,
+      note: "starts at kickoff and runs to the end — the critical path" },
+    { name: "Brand exploration", from: "requirements_signed",
+      to: "art_direction_signed", lane: 2, optional: true },
+    { name: "Build", from: "requirements_signed", to: "round2_signed_off",
+      lane: 2, note: "overlaps brand once the direction is signed" },
+    { name: "Launch & handover", from: "round2_signed_off",
+      to: "handover_accepted", lane: 0 },
+    { name: "Money", from: "contract_signed", to: "final_invoice_paid",
+      lane: 3, note: "deposit up front, final before launch" },
+  ];
+
+  function ganttModal() {
+    const live = d.gates.filter((g) => g.active);
+    const idx = {};
+    live.forEach((g, i) => (idx[g.gate] = i));
+    const n = live.length || 1;
+    const pct = (i) => (i / n) * 100;
+    const bars = PARALLEL.filter((b) => idx[b.from] !== undefined
+      && idx[b.to] !== undefined).map((b) => {
+      const a = idx[b.from], z = idx[b.to];
+      const doneTo = live.filter((g) => g.passed_at).length;
+      const state = z < doneTo ? "done" : a <= doneTo ? "now" : "later";
+      return `<div class="gt-row">
+        <span class="gt-name">${esc(b.name)}${b.optional
+          ? ' <span class="opt">optional</span>' : ""}</span>
+        <span class="gt-track">
+          <span class="gt-bar gt-${state}"
+            style="left:${pct(a)}%;width:${Math.max(pct(z - a), 6)}%"
+            title="${esc(b.note || "")}"></span>
+        </span>
+      </div>`;
+    }).join("");
+    modal(`<h3>What can run in parallel</h3>
+      <p class="dim">The gates are a chain — each waits on the one before.
+        The work between them is not: bars on different rows that overlap
+        horizontally can be in flight at the same time.</p>
+      <div class="gt">
+        <div class="gt-row gt-head"><span class="gt-name"></span>
+          <span class="gt-track">${live.map((g, i) =>
+            `<span class="gt-tick" style="left:${pct(i)}%"
+               title="${esc(g.label)}">${g.passed_at ? "•" : "○"}</span>`)
+            .join("")}</span></div>
+        ${bars}
+      </div>
+      <p class="dim" style="margin-top:14px">Content is the one that decides
+        the launch date — it starts at kickoff and runs the whole way, so a
+        week lost there is a week lost at the end.</p>
+      <div class="modal-foot"><button class="btn" data-close>Close</button></div>`,
+      "wide");
+  }
+
   function nextStep() {
     const g = d.gates.find((x) => x.active && !x.passed_at);
     if (!g) return { text: "Every gate has passed — aftercare from here.",
@@ -5251,9 +5348,12 @@ async function renderEngagement(id) {
         `<button class="btn ${i ? "alt " : ""}sm" data-next="${i}">${a.label}</button>`)
         .join("")}</div>` : ""}
     </div>`; })()}
-    <div class="card"><b>Gates</b>
+    <div class="card">
+      <div class="card-head"><b>Gates</b>
+        <button class="btn alt sm" id="eng-gantt">Gantt chart</button></div>
       <p class="dim">The stage is the first gate that hasn't passed — a
         signature gate reads its state from the linked document, live.</p>
+      ${trackHtml()}
       <div class="sig-rows">${d.gates.map(gateRow).join("")}</div>
     </div>
     ${merged.map(stageCard).join("")}
@@ -5285,6 +5385,7 @@ async function renderEngagement(id) {
   $("#eng-back").onclick = () => { S.engId = null; render(); };
   $("#eng-edit").onclick = () => engForm(e);
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
+  $("#eng-gantt").onclick = ganttModal;
   const makePortal = async () => {
     try {
       const out = await api(`/api/store/admin/engagements/${id}/portal`,
@@ -5686,39 +5787,48 @@ function docRow(d) {
   const exp = d.expired ? '<span class="pill bad">expired</span>'
     : d.expiring_soon ? `<span class="pill warn">expires ${fmtDate(d.expires)}</span>`
     : d.expires ? `<span class="dim">expires ${fmtDate(d.expires)}</span>` : "";
-  return `<div class="doc-card" data-doc="${d.id}">
+  /* Same column discipline as a client's stages: title block, then a fixed
+     state column so every "signed" pill starts at the same x down the whole
+     list, then the actions in fixed slots. */
+  return `<div class="doc-card${d.fully_signed ? " dl-signed"
+      : d.awaiting ? " dl-awaiting" : ""}" data-doc="${d.id}">
     <div class="doc-top">
       <span class="doc-ic">${opsIcon("file")}</span>
       <div class="doc-main">
-        <b>${esc(d.title)}</b>
+        <b title="${esc(d.title)}">${esc(d.title)}</b>
         <span class="dim">${esc(d.category_label)}${
           d.party_name ? " · " + esc(d.party_name) : ""} ·
           <span class="tag">${esc(d.party_label)}</span></span>
       </div>
-      ${state} ${exp}
-      <button class="btn alt sm" data-docview="${d.id}"
-        data-kind="${(d.body || "").trim() ? "body" : d.has_file ? "file" : "body"}"
-        data-ext="${d.ext || ""}" data-signed="${(d.signatures || [])
-          .filter((x) => x.status === "signed").length}"
-        data-name="${esc(d.title)}">View</button>
-      ${d.has_file ? `<a class="btn alt sm" href="/api/store/admin/documents/${d.id}/file"
-        title="download">download</a>` : ""}
-      <button class="btn alt sm" data-docedit="${d.id}">Edit</button>
-      <button class="btn alt sm" data-sign="${d.id}">${opsIcon("pen","btn-ic")} Sign</button>
-      <button class="btn alt sm" data-rowdel="doc:${d.id}">Delete</button>
+      <span class="dt-state">${state}</span>
+      <span class="dt-exp">${exp}</span>
+      <span class="dt-acts">
+        <button class="btn alt sm" data-docview="${d.id}"
+          data-kind="${(d.body || "").trim() ? "body" : d.has_file ? "file" : "body"}"
+          data-ext="${d.ext || ""}" data-signed="${(d.signatures || [])
+            .filter((x) => x.status === "signed").length}"
+          data-name="${esc(d.title)}">View</button>
+        <button class="btn alt sm" data-docedit="${d.id}">Edit</button>
+        <button class="btn alt sm" data-sign="${d.id}">Sign</button>
+        <button class="btn alt sm" data-rowdel="doc:${d.id}">Delete</button>
+      </span>
     </div>
     ${sigs.length ? `<div class="sig-rows">${sigs.map((s) => `
-      <div class="sig-row sig-${s.status}">
-        <b>${esc(s.signer_name)}</b>
-        <span class="dim">${esc(s.signer_email)} · ${esc(s.role)}</span>
-        <span class="pill ${s.status === "signed" ? "ok"
-          : s.status === "declined" ? "bad" : "warn"}">${s.status}</span>
-        ${s.provider === "docusign" ? '<span class="tag">DocuSign</span>' : ""}
-        ${s.status === "signed"
-          ? `<span class="dim">${fmtDate(s.signed_at)}</span>`
+      <div class="sig-line sig-${s.status}">
+        <b title="${esc(s.signer_name)}">${esc(s.signer_name)}</b>
+        <span class="sl-mail dim">${esc(s.signer_email)}</span>
+        <span class="sl-role dim">${esc(s.role)}</span>
+        <span class="sl-state"><span class="pill ${s.status === "signed" ? "ok"
+          : s.status === "declined" ? "bad" : "warn"}">${s.status}</span>${
+          s.provider === "docusign"
+            ? ' <span class="tag">DocuSign</span>' : ""}</span>
+        <span class="sl-when dim">${s.status === "signed"
+          ? fmtDate(s.signed_at) : ""}</span>
+        <span class="sl-acts">${s.status === "signed" ? ""
           : `${s.provider === "docusign"
               ? `<button class="btn alt sm" data-sigcheck="${s.id}">check</button>`
               : ""}<button class="btn alt sm" data-void="${s.id}">void</button>`}
+        </span>
       </div>`).join("")}</div>` : ""}
   </div>`;
 }
