@@ -5202,10 +5202,15 @@ async function renderEngagement(id) {
       <b>${esc(st.client_stage.replace(/^\d\d-/, (m) => m.slice(0, 2) + " · ")
         .replace(/-/g, " "))}</b>
       ${docs.length ? `<div class="sig-rows">${docs.map(docRowE).join("")}</div>` : ""}
-      ${st.templates.length ? `<div class="chips" style="margin-top:8px">${
-        st.templates.map((t) => `<button class="chip" data-gen="${esc(t.path)}"
-          title="${t.side === "internal" ? "internal — never sent" : "goes to the client"}">
-          + ${esc(t.name)}</button>`).join("")}</div>` : ""}
+      ${st.templates.length ? `<div class="tpl-list">
+        <span class="tpl-head">Generate for ${esc(e.name)}</span>
+        ${st.templates.map((t) => `<button class="tpl-line"
+          data-gen="${esc(t.path)}">
+          <span class="tpl-plus">+</span>
+          <span class="tpl-name">${esc(t.name)}</span>
+          <span class="pill ${t.side === "internal" ? "warn" : "ok"}">${
+            t.side === "internal" ? "internal" : "to client"}</span>
+        </button>`).join("")}</div>` : ""}
     </div>`;
   };
 

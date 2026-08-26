@@ -3875,6 +3875,16 @@ ok("function fillField" in _ops and 'tok.split(" / ")' in _ops
    "and every fill is labelled optional — blank keeps the brackets")
 ok('<span class="req">required</span>' in _ops,
    "while the fields that genuinely are required say so")
+ok('class="tpl-line"' in _ops and "tpl-head" in _ops
+   and 'class="chips"' not in _ops.split("const stageCard")[1][:900],
+   "a stage's templates stack one per line — a wrapping row of chips read "
+   "as a paragraph, not a menu of things you can create")
+_css3 = c.get("/ops/styles.css").text
+ok("button.tpl-line { display: grid" in _css3
+   and "grid-template-columns: 14px minmax(0, 1fr) auto" in _css3,
+   "each on its own full-width line, with the side it lands on visible "
+   "rather than hidden in a tooltip")
+
 for _cls in ("gate-line", "gl-acts", "doc-line", "dl-acts", "log-line"):
     ok(f'class="{_cls}' in _ops or f"'{_cls}'" in _ops,
        f"{_cls} markup exists for the aligned layout")

@@ -462,6 +462,20 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .dl-acts .btn { width: 100%; padding-left: 4px; padding-right: 4px;
   white-space: nowrap; }
 
+/* the templates a stage can generate: one per line, like a menu of things
+   you can create — a wrapping row of chips read as a paragraph */
+.tpl-list { display: grid; gap: 4px; margin-top: 10px; }
+.tpl-head { font-size: 10.5px; font-weight: 700; letter-spacing: .09em;
+  text-transform: uppercase; color: var(--muted, #8b93a4); margin-bottom: 2px; }
+button.tpl-line { display: grid; align-items: center; gap: 10px; width: 100%;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  background: transparent; border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 7px 10px; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--text); text-align: left; }
+button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
+.tpl-plus { color: var(--accent); font-weight: 700; }
+.tpl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .log-lines { margin-top: 8px; }
 .log-line { display: grid; gap: 12px; align-items: baseline; padding: 5px 0;
   border-bottom: 1px solid var(--line); font-size: 13px;
