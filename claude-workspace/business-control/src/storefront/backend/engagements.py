@@ -903,6 +903,28 @@ def _dropbox_connected(con) -> bool:
     return bool(integrations.creds(con, "dropbox"))
 
 
+@router.delete("/api/store/admin/engagements/{eid}/docs/{did}")
+def unfile_doc(eid: int, did: int, u=Depends(admin_user),
+               con=Depends(get_con)):
+    """Take a document out of this client's folder — the vault keeps it.
+    Deleting from the vault is the other door (and archives when signed);
+    unfiling is for the mis-filed and the superseded."""
+    _eng_or_404(con, eid)
+    r = con.execute(
+        "SELECT d.title FROM engagement_docs ed JOIN documents d"
+        " ON d.id=ed.doc_id WHERE ed.engagement_id=? AND ed.doc_id=?",
+        (eid, did)).fetchone()
+    if r is None:
+        raise HTTPException(404, "not filed under this client")
+    con.execute("DELETE FROM engagement_docs WHERE engagement_id=?"
+                " AND doc_id=?", (eid, did))
+    con.execute("UPDATE engagement_gates SET doc_id=0 WHERE engagement_id=?"
+                " AND doc_id=?", (eid, did))
+    log(con, eid, u["name"], f"unfiled '{r['title']}' — kept in the vault")
+    con.commit()
+    return {"ok": True}
+
+
 # ---------- the client folder: generated, never maintained ----------
 
 def safe_name(s: str) -> str:

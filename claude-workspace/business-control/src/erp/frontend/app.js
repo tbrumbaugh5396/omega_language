@@ -5029,6 +5029,8 @@ async function renderEngagement(id) {
         data-name="${esc(x.filename || x.title)}">PDF</button>
       <button class="btn alt sm" data-engsign="${x.id}">${opsIcon("pen","btn-ic")} Sign</button>
       <button class="btn alt sm" data-engopen="${esc(x.title)}">Open</button>
+      <button class="btn alt sm" data-engrm="${x.id}"
+        data-title="${esc(x.title)}">Remove</button>
     </div>`;
 
   // Two kit stages can share one client folder (the enquiry scripts file
@@ -5344,6 +5346,35 @@ async function renderEngagement(id) {
       URL.revokeObjectURL(a.href);
     } catch (err) { toast(err.message); }
   });
+  view().querySelectorAll("[data-engrm]").forEach((b) => b.onclick = () => {
+    modal(`<h3>Remove — ${esc(b.dataset.title)}</h3>
+      <p class="dim">Unfiling takes it out of this client's folder but keeps
+        it in the Documents vault. Deleting removes it from the vault too —
+        signed documents are archived there, never destroyed.</p>
+      <div class="modal-foot">
+        <button class="btn alt" id="rm-unfile">Unfile from this client</button>
+        <button class="btn alt" id="rm-del">Delete from the vault</button>
+        <button class="btn" data-close>Cancel</button>
+      </div>`);
+    $("#rm-unfile").onclick = async () => {
+      try {
+        await api(`/api/store/admin/engagements/${id}/docs/${b.dataset.engrm}`,
+          { method: "DELETE" });
+        closeModal(); renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    };
+    $("#rm-del").onclick = async () => {
+      try {
+        const out = await api(`/api/store/admin/documents/${b.dataset.engrm}`,
+          { method: "DELETE" });
+        closeModal();
+        toast(out.archived
+          ? "Archived — it carries signatures, so it stays as evidence"
+          : "Deleted");
+        renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    };
+  });
   view().querySelectorAll("[data-engfill]").forEach((b) => b.onclick = async () => {
     const did = +b.dataset.engfill;
     try {
@@ -5495,15 +5526,38 @@ function engSignForm(docId, e) {
         <input id="es-email" type="email" value="${esc(e.approver_email || "")}"></div>
     </div>
     <label>Message (optional)</label><textarea id="es-msg" rows="2"></textarea>
-    <div class="modal-foot"><button class="btn" id="es-go">Send request</button></div>`);
-  $("#es-go").onclick = async () => {
-    try {
+    <div class="modal-foot">
+      <button class="btn alt" id="es-here" title="the pad opens right here —
+        drawn with the mouse; the only email is the receipt, after
+        signing">Sign now — in person</button>
+      <button class="btn" id="es-go">Send request</button>
+    </div>`);
+  const sendIt = async (inPerson) => {
       const out = await api(`/api/store/admin/documents/${docId}/request-signature`, {
         body: { signer_name: $("#es-name").value.trim(),
           signer_email: $("#es-email").value.trim(),
-          role: "approver", message: $("#es-msg").value.trim() },
+          role: "approver", message: $("#es-msg").value.trim(),
+          in_person: !!inPerson },
       });
       closeModal();
+      return out;
+  };
+  $("#es-here").onclick = async () => {
+    try {
+      const out = await sendIt(true);
+      // The signing page, in the viewer modal — the same page an emailed
+      // signer would see, pad and all; closing it refreshes the gate state.
+      modal(`<h3>Sign here</h3>
+        <iframe class="doc-viewer" src="${out.link}" title="sign"></iframe>
+        <div class="modal-foot" style="margin-top:10px">
+          <button class="btn" id="sh-done">Done</button>
+        </div>`, "wide");
+      $("#sh-done").onclick = () => { closeModal(); renderEngagement(S.engId); };
+    } catch (err) { toast(err.message); }
+  };
+  $("#es-go").onclick = async () => {
+    try {
+      const out = await sendIt(false);
       if (out.provider === "docusign") {
         toast("Sent via DocuSign — they'll get DocuSign's own email; " +
               "check the request to pull the status back");

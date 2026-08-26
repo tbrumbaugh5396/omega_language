@@ -619,6 +619,7 @@ class SignRequestBody(BaseModel):
     signer_email: str
     role: str = "signer"
     message: str = ""
+    in_person: bool = False        # sign here and now; the email is a receipt
 
 
 @router.post("/api/store/admin/documents/{did}/request-signature")
@@ -638,6 +639,11 @@ def request_signature(did: int, body: SignRequestBody, request: Request,
         raise HTTPException(400, "unknown role")
 
     provider = esign_provider(con)
+    if body.in_person:
+        # The signer is in the room: the pad opens right here, drawn with a
+        # mouse or a finger, and no request email goes out — the only email
+        # they get is the receipt with the certificate, after signing.
+        provider = "builtin"
     token = secrets.token_urlsafe(32)
     envelope = ""
     if provider == "docusign":
@@ -669,6 +675,12 @@ def request_signature(did: int, body: SignRequestBody, request: Request,
 
     base = str(request.base_url).rstrip("/")
     link = f"{base}/sign/{token}"
+    if body.in_person:
+        log(con, did, u["name"], "in-person signing opened",
+            f"{body.signer_name} <{email}>")
+        con.commit()
+        return {"ok": True, "link": link, "id": cur.lastrowid,
+                "provider": "builtin", "in_person": True}
     try:
         from erp.backend.main import CFG
         mailer.send(

@@ -3739,6 +3739,41 @@ ok("GATE_STAGE" in _ops and "03-proposal" in _ops.split("GATE_STAGE")[1][:400],
    "and each gate names the kit stage whose templates satisfy it, so "
    "generating the right document for this client is the one click")
 
+# --- in-person signing, and taking documents back out ----------------------
+_g3 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "01-potential-customer/email-scripts.md"}).json()
+_ip = c.post(f"/api/store/admin/documents/{_g3['doc_id']}/request-signature",
+             headers=A, json={"signer_name": "Here Now",
+                              "signer_email": "here@now.test",
+                              "role": "signer", "in_person": True}).json()
+ok(_ip.get("in_person") and "/sign/" in _ip["link"],
+   "in-person signing opens the same pad, right here — no request email; "
+   "the only email is the receipt, after signing")
+_ipt = _ip["link"].split("/sign/")[1]
+ok("mousedown" in c.get(f"/sign/{_ipt}").text,
+   "and the pad draws with the mouse, so a cursor is a pen")
+c.post(f"/sign/{_ipt}", json={"typed_name": "Here Now"})
+ok(c.get(f"/sign/{_ipt}").text.count("Signed") >= 1,
+   "signed in the room, recorded like any other signature")
+
+_un = c.request("DELETE",
+                f"/api/store/admin/engagements/{_eid}/docs/{_g3['doc_id']}",
+                headers=A)
+ok(_un.status_code == 200,
+   "a document can be unfiled from the client while the vault keeps it")
+_gd3 = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+ok(all(d["id"] != _g3["doc_id"] for d in _gd3["docs"]),
+   "gone from the client's stages")
+_vd3 = c.get("/api/store/admin/documents", headers=A,
+             params={"q": "Email scripts"}).json()["documents"]
+ok(any(d["id"] == _g3["doc_id"] for d in _vd3),
+   "still in the vault — unfiling is not deleting")
+_del3 = c.delete(f"/api/store/admin/documents/{_g3['doc_id']}",
+                 headers=A).json()
+ok(_del3.get("archived"),
+   "and vault deletion archives it, because it carries a signature — "
+   "evidence is never destroyed by tidying")
+
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.
@@ -3760,6 +3795,10 @@ from erp.backend import db as _dbmod
 con_cleanup = _dbmod.connect()
 con_cleanup.execute("DELETE FROM engagement_docs WHERE engagement_id=?", (_eid,))
 con_cleanup.execute("DELETE FROM engagement_gates WHERE engagement_id=?", (_eid,))
+for _dcl in (_gen["doc_id"], _g3["doc_id"]):
+    con_cleanup.execute("DELETE FROM document_signatures WHERE document_id=?", (_dcl,))
+    con_cleanup.execute("DELETE FROM document_events WHERE document_id=?", (_dcl,))
+    con_cleanup.execute("DELETE FROM documents WHERE id=?", (_dcl,))
 con_cleanup.execute("DELETE FROM document_signatures WHERE document_id=?", (_gen["doc_id"],))
 con_cleanup.execute("DELETE FROM document_events WHERE document_id=?", (_gen["doc_id"],))
 con_cleanup.execute("DELETE FROM documents WHERE id=?", (_gen["doc_id"],))
