@@ -231,6 +231,29 @@ PROVIDERS = {
                 "can be brought in as product media without a download-and-"
                 "upload round trip.",
     },
+    "docusign": {
+        "label": "DocuSign",
+        "blurb": "Route signature requests through DocuSign instead of the "
+                 "built-in signing page.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "token", "label": "Access token", "secret": True,
+             "hint": "An OAuth token for the eSignature API. For testing, "
+                     "the token generator on developers.docusign.com works."},
+            {"k": "account_id", "label": "API account ID", "secret": False,
+             "hint": "From DocuSign admin - Apps and Keys."},
+            {"k": "base_uri", "label": "Base URI", "secret": False,
+             "hint": "e.g. https://demo.docusign.net for the sandbox, or "
+                     "your account's production base URI."},
+        ],
+        "events": [],
+        "does": "While connected, every signature request becomes a "
+                "DocuSign envelope: the signer gets DocuSign's own email "
+                "and signs there, with verified identity if your account "
+                "enforces it. The vault still holds the record - check a "
+                "request to pull its status back. Disconnect and requests "
+                "go back to the built-in signing page.",
+    },
     "laceup": {
         "label": "LaceUp",
         "blurb": "Take orders written on the van.",

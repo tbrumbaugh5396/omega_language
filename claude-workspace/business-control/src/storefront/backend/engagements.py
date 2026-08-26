@@ -930,10 +930,12 @@ def _export_entries(con, eid: int, side: str):
             yield f"{folder}/{stem}.md", r["body"].encode()
             # The PDF beside it: the .md is for editing, the .pdf is for
             # sending — a bundle a client can open needs no explanation.
+            from . import documents as vault
             from . import pdfgen
             try:
-                yield f"{folder}/{stem}.pdf", pdfgen.doc_pdf(r["title"],
-                                                             r["body"])
+                yield f"{folder}/{stem}.pdf", pdfgen.doc_pdf(
+                    r["title"], r["body"],
+                    signatures=vault.signed_rows(con, r["id"]))
             except Exception:
                 pass          # a render bug must not sink the whole export
         sigs = con.execute(
@@ -1344,7 +1346,8 @@ def portal_doc_pdf(token: str, did: int, con=Depends(get_con),
     if row is None:
         raise HTTPException(404, "not found")
     from . import documents as vault
-    return vault._pdf_response(row, inline=False)
+    return vault._pdf_response(row, inline=False,
+                               sigs=vault.signed_rows(con, row["id"]))
 
 
 @router.post("/engage/{token}/direction")

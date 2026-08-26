@@ -5044,6 +5044,62 @@ async function renderEngagement(id) {
 
   const stageName = (st) => st.replace(/^(\d\d)-/, "$1 · ").replace(/-/g, " ");
 
+  /* The one thing to do next, derived from the same gates the stage is.
+     Each gate names the kit stage whose templates satisfy it, so "generate
+     the right document for THIS client" is one click, prefilled from the
+     record. */
+  const GATE_STAGE = {
+    proposal_accepted: "03-proposal", contract_signed: "04-agreement",
+    requirements_signed: "06-requirements",
+    art_direction_signed: "07-brand-exploration",
+    round1_signed_off: "08-build", round2_signed_off: "08-build",
+    handover_accepted: "10-handover",
+  };
+
+  function nextStep() {
+    const g = d.gates.find((x) => x.active && !x.passed_at);
+    if (!g) return { text: "Every gate has passed — aftercare from here.",
+                     actions: [] };
+    const actions = [];
+    if (g.kind === "money") {
+      actions.push({ label: g.has_payment_link ? "Check payment"
+        : "Payment link", act: g.has_payment_link ? "paycheck" : "paylink",
+        gate: g.gate });
+      actions.push({ label: "Confirm by hand", act: "pass", gate: g.gate });
+      return { text: `${g.label} is the gate. Send the link with the `
+        + "invoice, or confirm when the money arrives.", actions };
+    }
+    if (g.doc_id) {
+      const doc = d.docs.find((x) => x.id === g.doc_id) || {};
+      if (doc.awaiting)
+        return { text: `${g.label}: "${doc.title}" is out for signature — `
+          + "chase warmly, or reopen and relink if it went to the wrong "
+          + "person.", actions: [] };
+      if (doc.blanks)
+        return { text: `${g.label}: "${doc.title}" still has `
+          + `${doc.blanks} blank${doc.blanks === 1 ? "" : "s"} — finish it, `
+          + "then send it for signature.",
+          actions: [{ label: `Fill blanks (${doc.blanks})`, act: "fill",
+                      doc: doc.id }] };
+      return { text: `${g.label}: "${doc.title}" is ready — send it for `
+        + "signature.",
+        actions: [{ label: "Send for signature", act: "sign", doc: g.doc_id }] };
+    }
+    const stage = GATE_STAGE[g.gate];
+    const st = merged.find((m) => m.kit.includes(stage))
+      || d.stages.find((x) => x.stage === stage);
+    const stageDocs = (byStage[stage] || []);
+    if (stageDocs.length)
+      return { text: `${g.label}: a document is filed under this stage — `
+        + "link the one whose signature passes the gate.",
+        actions: [{ label: "Link doc", act: "link", gate: g.gate }] };
+    const tpls = (st && st.templates) || [];
+    return { text: `${g.label} is the gate, and nothing is drafted yet — `
+      + `generate it for ${esc(e.name)}.`,
+      actions: tpls.slice(0, 4).map((t) => (
+        { label: `Generate: ${t.name}`, act: "gen", path: t.path })) };
+  }
+
   const gateRow = (g) => {
     if (!g.active) return "";
     const state = g.passed_at
@@ -5119,6 +5175,14 @@ async function renderEngagement(id) {
           only — the internal wall holds">${opsIcon("box","btn-ic")} Client bundle</button>
       </div>
     </div>
+    ${(() => { const n = nextStep(); return `
+    <div class="card" style="border-left:3px solid var(--accent, #7b5cff)">
+      <b>Next step</b>
+      <p class="dim">${n.text}</p>
+      ${n.actions.length ? `<div class="chips">${n.actions.map((a, i) =>
+        `<button class="btn ${i ? "alt " : ""}sm" data-next="${i}">${a.label}</button>`)
+        .join("")}</div>` : ""}
+    </div>`; })()}
     <div class="card"><b>Gates</b>
       <p class="dim">The stage is the first gate that hasn't passed — a
         signature gate reads its state from the linked document, live.</p>
@@ -5130,6 +5194,24 @@ async function renderEngagement(id) {
         <div class="sig-row"><span class="dim">${fmtDate(l.at)}</span>
           <b>${esc(l.actor)}</b> <span>${esc(l.what)}</span></div>`).join("")}
       </div></div>` : ""}`;
+
+  const nActs = nextStep().actions;
+  view().querySelectorAll("[data-next]").forEach((b) => b.onclick = () => {
+    const a = nActs[+b.dataset.next];
+    if (!a) return;
+    if (a.act === "gen") return engGenerate(id, a.path);
+    if (a.act === "sign") return engSignForm(a.doc, e);
+    if (a.act === "fill")
+      return view().querySelector(`[data-engfill="${a.doc}"]`)?.click();
+    if (a.act === "link")
+      return view().querySelector(`[data-gate-link="${a.gate}"]`)?.click();
+    if (a.act === "pass")
+      return view().querySelector(`[data-gate-pass="${a.gate}"]`)?.click();
+    if (a.act === "paylink")
+      return view().querySelector(`[data-gate-paylink="${a.gate}"]`)?.click();
+    if (a.act === "paycheck")
+      return view().querySelector(`[data-gate-paycheck="${a.gate}"]`)?.click();
+  });
 
   $("#eng-back").onclick = () => { S.engId = null; render(); };
   $("#eng-edit").onclick = () => engForm(e);
@@ -5422,8 +5504,13 @@ function engSignForm(docId, e) {
           role: "approver", message: $("#es-msg").value.trim() },
       });
       closeModal();
-      try { await navigator.clipboard.writeText(out.link); } catch {}
-      toast("Signature link created and copied — emailed too, if mail is set up");
+      if (out.provider === "docusign") {
+        toast("Sent via DocuSign — they'll get DocuSign's own email; " +
+              "check the request to pull the status back");
+      } else {
+        try { await navigator.clipboard.writeText(out.link); } catch {}
+        toast("Signature link created and copied — emailed too, if mail is set up");
+      }
       renderEngagement(S.engId);
     } catch (err) { toast(err.message); }
   };
@@ -5507,9 +5594,12 @@ function docRow(d) {
         <span class="dim">${esc(s.signer_email)} · ${esc(s.role)}</span>
         <span class="pill ${s.status === "signed" ? "ok"
           : s.status === "declined" ? "bad" : "warn"}">${s.status}</span>
+        ${s.provider === "docusign" ? '<span class="tag">DocuSign</span>' : ""}
         ${s.status === "signed"
           ? `<span class="dim">${fmtDate(s.signed_at)}</span>`
-          : `<button class="btn alt sm" data-void="${s.id}">void</button>`}
+          : `${s.provider === "docusign"
+              ? `<button class="btn alt sm" data-sigcheck="${s.id}">check</button>`
+              : ""}<button class="btn alt sm" data-void="${s.id}">void</button>`}
       </div>`).join("")}</div>` : ""}
   </div>`;
 }
@@ -5520,6 +5610,15 @@ function wireDocRows() {
     docForm(DOCS.documents.find((x) => x.id === +b.dataset.docedit)));
   view().querySelectorAll("[data-sign]").forEach((b) => b.onclick = () =>
     signForm(+b.dataset.sign));
+  view().querySelectorAll("[data-sigcheck]").forEach((b) => b.onclick = async () => {
+    try {
+      const out = await api(`/api/store/admin/signatures/${b.dataset.sigcheck}/refresh`,
+        { method: "POST" });
+      toast(out.status === "signed" ? "Signed — pulled back from DocuSign"
+        : out.detail || `status: ${out.status}`);
+      renderDocs();
+    } catch (e) { toast(e.message); }
+  });
   view().querySelectorAll("[data-void]").forEach((b) => b.onclick = async () => {
     if (!confirm("Void this signature request?")) return;
     try { await api(`/api/store/admin/signatures/${b.dataset.void}/void`,

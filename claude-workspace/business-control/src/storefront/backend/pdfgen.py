@@ -52,7 +52,62 @@ DIM = (93, 87, 104)
 LINE = (233, 228, 220)
 
 
-def doc_pdf(title: str, md_text: str) -> bytes:
+def _signature_block(pdf, sigs) -> None:
+    """The signatures, on the document itself. A signed PDF that shows no
+    signature reads as unsigned to everyone who wasn't in the audit trail —
+    which is everyone the PDF gets forwarded to."""
+    import base64
+    import io
+    import time as _t
+
+    pdf.ln(6)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(4)
+    pdf.set_font("helvetica", "B", 13)
+    pdf.multi_cell(0, 6.5, "Signed")
+    pdf.ln(1)
+    for s in sigs:
+        drawn = (s.get("signature_data") or "")
+        if drawn.startswith("data:image/png;base64,"):
+            try:
+                img = io.BytesIO(base64.b64decode(drawn.split(",", 1)[1]))
+                pdf.image(img, w=52)
+            except Exception:
+                drawn = ""          # a broken mark falls back to the name
+        if not drawn.startswith("data:image/png;base64,"):
+            # the typed name, set apart so it reads as a mark, not as text
+            pdf.set_font("helvetica", "I", 15)
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 8, _latin(s.get("typed_name")
+                                        or s.get("signer_name") or ""))
+        # multi_cell parks the cursor at the right edge; every full-width
+        # line that follows must walk back to the margin first
+        pdf.set_font("helvetica", "B", 10.5)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, 5.4, _latin(s.get("signer_name") or ""))
+        pdf.set_font("helvetica", size=9)
+        pdf.set_text_color(*DIM)
+        pdf.set_x(pdf.l_margin)
+        when = s.get("signed_at") or 0
+        line = f"{s.get('signer_email', '')} - {s.get('role', 'signer')}"
+        if when:
+            line += " - signed " + _t.strftime("%d %b %Y %H:%M UTC",
+                                               _t.gmtime(when))
+        if s.get("provider") and s.get("provider") != "builtin":
+            line += f" - via {s['provider']}"
+        pdf.multi_cell(0, 4.8, _latin(line))
+        ref = (s.get("token") or "")[:12]
+        sha = (s.get("doc_sha256") or "")[:16]
+        if ref or sha:
+            pdf.set_x(pdf.l_margin)
+            pdf.multi_cell(0, 4.8, _latin(
+                f"reference {ref}" + (f" - document sha256 {sha}..."
+                                      if sha else "")))
+        pdf.set_text_color(*INK)
+        pdf.ln(3)
+
+
+def doc_pdf(title: str, md_text: str, signatures: list | None = None) -> bytes:
     pdf = FPDF(format="letter")
     pdf.set_margins(20, 18, 20)
     pdf.set_auto_page_break(True, margin=18)
@@ -124,5 +179,8 @@ def doc_pdf(title: str, md_text: str) -> bytes:
             pdf.set_font("helvetica", size=10.5)
             pdf.multi_cell(0, 5.6, _inline(b[1]), markdown=True)
             pdf.ln(1.5)
+
+    if signatures:
+        _signature_block(pdf, signatures)
 
     return bytes(pdf.output())

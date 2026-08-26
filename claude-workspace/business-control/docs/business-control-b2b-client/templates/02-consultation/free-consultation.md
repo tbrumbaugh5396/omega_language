@@ -209,6 +209,7 @@ they describe. A module they didn't ask for is a module they won't open.
 | Dropbox | ☐ | ☐ | Signed documents filed; database backups off the one laptop |
 | QuickBooks | ☐ | ☐ | Sales receipts and supply costs into the books |
 | Canva | ☐ | ☐ | Designs listed alongside campaigns |
+| DocuSign | ☐ | ☐ | Signature requests routed through DocuSign, with verified identity if your plan enforces it |
 | LaceUp | ☐ | ☐ | DSD ordering and routes |
 | Other: ______ | ☐ | ☐ | Assess separately — a new connector is a line item |
 

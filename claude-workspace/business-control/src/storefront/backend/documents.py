@@ -465,14 +465,24 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"{md_html(d['body'])}</body></html>")
 
 
-def _pdf_response(d, inline: bool = True):
+def signed_rows(con, doc_id: int) -> list:
+    """The completed signatures, shaped for the PDF's signature block."""
+    return [dict(r) for r in con.execute(
+        "SELECT signer_name, signer_email, role, status, signed_at,"
+        " typed_name, signature_data, token, doc_sha256, provider"
+        " FROM document_signatures WHERE document_id=? AND status='signed'"
+        " ORDER BY signed_at", (doc_id,)).fetchall()]
+
+
+def _pdf_response(d, inline: bool = True, sigs: list | None = None):
     """A PDF for any document that can produce one: authored bodies are
-    rendered; an uploaded PDF is itself. Inline by default so the browser's
-    own viewer is the preview."""
+    rendered — completed signatures printed on them — and an uploaded PDF
+    is itself. Inline by default so the browser's own viewer is the
+    preview."""
     from . import pdfgen
     stem = re.sub(r"[^\w.-]+", "-", d["title"]).strip("-")[:80] or "document"
     if (d["body"] or "").strip():
-        blob = pdfgen.doc_pdf(d["title"], d["body"])
+        blob = pdfgen.doc_pdf(d["title"], d["body"], signatures=sigs)
     elif d["ext"] == "pdf":
         p = doc_path(d)
         if not p.exists():
@@ -495,7 +505,7 @@ def document_pdf(did: int, download: int = 0, u=Depends(admin_user),
     if download:
         log(con, did, u["name"], "downloaded")
         con.commit()
-    return _pdf_response(d, inline=not download)
+    return _pdf_response(d, inline=not download, sigs=signed_rows(con, did))
 
 
 @router.get("/sign/{token}/pdf")
@@ -506,7 +516,8 @@ def signing_pdf(token: str, con=Depends(get_con), _rl=Depends(rate_limit)):
                     (s2["document_id"],)).fetchone()
     if d is None:
         raise HTTPException(404, "document not found")
-    return _pdf_response(d, inline=False)
+    return _pdf_response(d, inline=False,
+                         sigs=signed_rows(con, d["id"]))
 
 
 @router.get("/api/store/admin/documents/{did}/markdown")
@@ -628,13 +639,33 @@ def request_signature(did: int, body: SignRequestBody, request: Request,
 
     provider = esign_provider(con)
     token = secrets.token_urlsafe(32)
+    envelope = ""
+    if provider == "docusign":
+        ok2, envelope = docusign_send(con, d, body.signer_name.strip(),
+                                      email, body.message.strip())
+        if not ok2:
+            # Fall back rather than fail: the client is waiting either way,
+            # and the audit trail records which road the request took.
+            provider = "builtin"
+            log(con, did, u["name"], "docusign failed",
+                str(envelope)[:180])
+            envelope = ""
     cur = con.execute(
         "INSERT INTO document_signatures(document_id,token,signer_name,"
-        " signer_email,role,provider,sent_at) VALUES(?,?,?,?,?,?,?)",
+        " signer_email,role,provider,provider_ref,sent_at)"
+        " VALUES(?,?,?,?,?,?,?,?)",
         (did, token, body.signer_name.strip()[:120], email, body.role,
-         provider, time.time()))
-    log(con, did, u["name"], "signature requested", f"{body.signer_name} <{email}>")
+         provider, envelope, time.time()))
+    log(con, did, u["name"], "signature requested",
+        f"{body.signer_name} <{email}>"
+        + (f" via DocuSign {envelope}" if envelope else ""))
     con.commit()
+
+    if provider == "docusign":
+        # DocuSign sends its own email and hosts its own page; there is no
+        # link of ours to hand out.
+        return {"ok": True, "link": "", "id": cur.lastrowid,
+                "provider": "docusign", "envelope": envelope}
 
     base = str(request.base_url).rstrip("/")
     link = f"{base}/sign/{token}"
@@ -677,9 +708,13 @@ def esign_provider(con) -> str:
     the flow in this module; anything else is expected to be a third-party
     service reached over its own API. Nothing here calls a vendor directly.
     """
+    # Derived, not configured twice: connecting DocuSign in integrations IS
+    # the choice. The store_meta key still wins if someone set it by hand.
     row = con.execute(
         "SELECT v FROM store_meta WHERE k='esign_provider'").fetchone()
-    return (row["v"] if row else "builtin") or "builtin"
+    if row and row["v"]:
+        return row["v"]
+    return "docusign" if docusign_creds(con) else "builtin"
 
 
 # ---------- public: the signing page ----------
@@ -1094,3 +1129,124 @@ signer's identity was not independently verified beyond control of the email
 address the request was sent to.</p>
 </body></html>"""
     return HTMLResponse(page)
+
+
+# ---------- DocuSign, through the esign provider slot ----------
+# The slot existed from day one ("point it at DocuSign and requests route
+# there instead"); this is the pointing. Which provider is in use is DERIVED
+# from whether DocuSign is connected in integrations — connecting it is the
+# choice, and there is no second switch to forget.
+
+def docusign_creds(con) -> dict | None:
+    from erp.backend import integrations
+    c = integrations.creds(con, "docusign")
+    if c and c.get("token") and c.get("account_id") \
+            and c.get("base_uri"):
+        return c
+    return None
+
+
+def docusign_envelope(title: str, pdf_b64: str, signer_name: str,
+                      signer_email: str, message: str) -> dict:
+    """The envelope payload, as a pure function so a test can hold its
+    shape without an account."""
+    return {
+        "emailSubject": f"Please sign: {title}"[:100],
+        "emailBlurb": (message or "Please review and sign.")[:1000],
+        "documents": [{"documentBase64": pdf_b64, "name": f"{title}.pdf",
+                       "fileExtension": "pdf", "documentId": "1"}],
+        "recipients": {"signers": [{
+            "email": signer_email, "name": signer_name,
+            "recipientId": "1", "routingOrder": "1",
+            "tabs": {"signHereTabs": [{
+                "anchorString": "Signed", "anchorUnits": "pixels",
+                "anchorXOffset": "0", "anchorYOffset": "20",
+                "anchorIgnoreIfNotPresent": "true",
+            }]},
+        }]},
+        "status": "sent",
+    }
+
+
+def docusign_send(con, d, signer_name: str, signer_email: str,
+                  message: str) -> tuple:
+    """(ok, envelope_id_or_error). The document travels as our own PDF —
+    the same bytes a builtin signer would have been shown."""
+    import base64
+    c = docusign_creds(con)
+    if not c:
+        return False, "not connected"
+    from erp.backend.integrations import _json_req
+    from . import pdfgen
+    if (d["body"] or "").strip():
+        blob = pdfgen.doc_pdf(d["title"], d["body"])
+    elif d["ext"] == "pdf":
+        p = doc_path(d)
+        if not p.exists():
+            return False, "file missing from storage"
+        blob = p.read_bytes()
+    else:
+        return False, f"a .{d['ext']} file can't go to DocuSign — PDF only"
+    base = c["base_uri"].rstrip("/")
+    ok, out = _json_req(
+        f"{base}/restapi/v2.1/accounts/{c['account_id']}/envelopes", "POST",
+        {"Authorization": f"Bearer {c['token']}"},
+        docusign_envelope(d["title"], base64.b64encode(blob).decode(),
+                          signer_name, signer_email, message))
+    if ok and isinstance(out, dict) and out.get("envelopeId"):
+        return True, out["envelopeId"]
+    return False, str(out)[:200]
+
+
+@router.post("/api/store/admin/signatures/{sid}/refresh")
+def refresh_signature(sid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """Pull a DocuSign envelope's status back into the vault. Polling by
+    button rather than webhook: it needs no public URL, and the person who
+    cares is the one looking at the row anyway."""
+    s = con.execute("SELECT * FROM document_signatures WHERE id=?",
+                    (sid,)).fetchone()
+    if s is None:
+        raise HTTPException(404, "no such signature request")
+    if s["provider"] != "docusign" or not s["provider_ref"]:
+        return {"status": s["status"], "detail": "not a DocuSign request"}
+    if s["status"] in ("signed", "declined", "void"):
+        return {"status": s["status"]}
+    c = docusign_creds(con)
+    if not c:
+        raise HTTPException(400, "DocuSign is no longer connected")
+    from erp.backend.integrations import _req
+    base = c["base_uri"].rstrip("/")
+    ok, out = _req(
+        f"{base}/restapi/v2.1/accounts/{c['account_id']}/envelopes/"
+        f"{s['provider_ref']}", "GET",
+        {"Authorization": f"Bearer {c['token']}"})
+    if not ok or not isinstance(out, dict):
+        raise HTTPException(502, f"DocuSign didn't answer: {str(out)[:120]}")
+    status = out.get("status", "")
+    if status == "completed":
+        d = con.execute("SELECT * FROM documents WHERE id=?",
+                        (s["document_id"],)).fetchone()
+        digest = (file_sha256(doc_path(d)) if d["ext"] and doc_path(d).exists()
+                  else hashlib.sha256((d["body"] or "").encode()).hexdigest())
+        con.execute(
+            "UPDATE document_signatures SET status='signed', signed_at=?,"
+            " typed_name=?, doc_sha256=? WHERE id=?",
+            (time.time(), s["signer_name"], digest, sid))
+        log(con, s["document_id"], "DocuSign",
+            "signed", f"envelope {s['provider_ref']}")
+        con.commit()
+        from .api import fire_webhooks
+        fire_webhooks("document.signed", {
+            "id": s["document_id"], "title": d["title"],
+            "signer": s["signer_name"]})
+        return {"status": "signed"}
+    if status in ("declined", "voided"):
+        new = "declined" if status == "declined" else "void"
+        con.execute("UPDATE document_signatures SET status=? WHERE id=?",
+                    (new, sid))
+        log(con, s["document_id"], "DocuSign", new,
+            f"envelope {s['provider_ref']}")
+        con.commit()
+        return {"status": new}
+    return {"status": s["status"],
+            "detail": f"DocuSign says: {status or 'no status'}"}

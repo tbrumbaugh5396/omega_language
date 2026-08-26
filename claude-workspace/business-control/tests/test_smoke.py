@@ -3696,6 +3696,49 @@ ok(any(f.endswith(".pdf") for f in _exp3["files"]),
    "exports carry the PDF beside the markdown — the .md is for editing, "
    "the .pdf is for sending")
 
+# --- signatures on the PDF, DocuSign in the slot, and the next step --------
+import zlib as _zl
+_spdf = c.get(f"/api/store/admin/documents/{_gen['doc_id']}/pdf",
+              headers=A).content
+_st = ""
+for _m in re.finditer(rb'stream\r?\n(.*?)endstream', _spdf, re.S):
+    try:
+        _st += _zl.decompress(_m.group(1)).decode("latin-1", "replace")
+    except Exception:
+        pass
+_shown = " ".join(re.findall(r'\((.*?)\)\s*Tj', _st))
+ok("Signed" in _shown and "Alex Chen" in _shown and "reference" in _shown,
+   "a signed document's PDF carries the signature on its face — name, date "
+   "and reference; a signed PDF that shows no signature reads as unsigned "
+   "to everyone it gets forwarded to")
+
+from storefront.backend import documents as _docmod
+ok("docusign" in _ig.PROVIDERS,
+   "DocuSign is an integrations provider, so its form comes from the same "
+   "declaration machinery as every other connection")
+_env = _docmod.docusign_envelope("T", "QUJD", "N", "n@x.t", "hi")
+ok(_env["status"] == "sent"
+   and _env["documents"][0]["documentBase64"] == "QUJD"
+   and _env["recipients"]["signers"][0]["tabs"]["signHereTabs"],
+   "the envelope carries our own PDF and a sign-here anchor — the signer "
+   "is shown the same bytes a builtin signer would be")
+_con_p = _db.connect()
+ok(_docmod.esign_provider(_con_p) == "builtin",
+   "with DocuSign unconnected the provider derives to builtin — connecting "
+   "it IS the choice, and there is no second switch to forget")
+_con_p.close()
+_rr = c.post(f"/api/store/admin/signatures/{_sr2['id']}/refresh", headers=A)
+ok(_rr.status_code == 200
+   and _rr.json().get("detail") == "not a DocuSign request",
+   "refreshing a builtin request is a polite no-op, not an error")
+
+ok('data-next=' in _ops and "nextStep" in _ops,
+   "the next step sits atop the gates — derived from the same gates, one "
+   "primary action, so the answer to 'what now?' never needs the manual")
+ok("GATE_STAGE" in _ops and "03-proposal" in _ops.split("GATE_STAGE")[1][:400],
+   "and each gate names the kit stage whose templates satisfy it, so "
+   "generating the right document for this client is the one click")
+
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.
