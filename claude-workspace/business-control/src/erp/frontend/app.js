@@ -5287,54 +5287,14 @@ async function renderEngagement(id) {
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     return r.blob();
   };
-  view().querySelectorAll("[data-engview]").forEach((b) => b.onclick = async () => {
-    /* The PDF is the preview — shown in an in-app viewer, not a popup.
-       A window opened by script after an awaited fetch has left the
-       user-gesture call stack, so popup blockers eat it and the button
-       reads as broken; an iframe in our own modal needs nobody's
-       permission. */
-    const did = b.dataset.engview;
-    const isPdfable = b.dataset.kind === "body" || b.dataset.ext === "pdf";
-    const path = isPdfable
-      ? `/api/store/admin/documents/${did}/pdf`
-      : `/api/store/admin/documents/${did}/file`;
-    try {
-      const name = (b.closest(".sig-row")?.querySelector("b")?.textContent
-        || "document").trim();
-      /* What fills the frame: for authored documents, the HTML preview —
-         the same parser as the PDF, but it renders in every browser and on
-         every phone, where iframe PDF viewers are a lottery. For uploaded
-         files, the file itself. The literal PDF stays one click away in
-         the footer, always. */
-      let frameUrl;
-      if (b.dataset.kind === "body") {
-        const html = await (await authBlob(
-          `/api/store/admin/documents/${did}/preview`)).text();
-        frameUrl = URL.createObjectURL(
-          new Blob([html], { type: "text/html" }));
-      } else {
-        frameUrl = URL.createObjectURL(await authBlob(
-          `/api/store/admin/documents/${did}/file`));
-      }
-      const pdfBlob = isPdfable ? await authBlob(path) : null;
-      const pdfUrl = pdfBlob ? URL.createObjectURL(
-        new Blob([pdfBlob], { type: "application/pdf" })) : frameUrl;
-      const signed = +b.dataset.signed > 0;
-      modal(`<h3>${esc(name)}${signed
-          ? ' <span class="pill ok">signed</span>' : ""}</h3>
-        <iframe class="doc-viewer" src="${frameUrl}"
-          title="${esc(name)}"></iframe>
-        <div class="modal-foot" style="margin-top:10px">
-          <a class="btn" href="${pdfUrl}"
-             download="${esc(name)}${isPdfable ? ".pdf" : ""}"
-             title="the PDF carries the document and every signature on it —
-             mark, name, date, reference and fingerprint">Download
-             ${signed ? "signed " : ""}${isPdfable ? "PDF" : ""}</a>
-          <a class="btn alt" href="${pdfUrl}" target="_blank"
-             rel="noopener">Open ${isPdfable ? "PDF" : ""} in tab</a>
-          <button class="btn alt" data-close>Close</button>
-        </div>`, "wide");
-    } catch (err) { toast(err.message); }
+  view().querySelectorAll("[data-engview]").forEach((b) => b.onclick = () => {
+    /* One shared viewer with the Documents tab — in-app, never a popup:
+       a window opened by script after an awaited fetch has left the
+       user-gesture call stack and blockers silently eat it. */
+    const name = (b.closest(".sig-row")?.querySelector("b")?.textContent
+      || "document").trim();
+    docViewer(+b.dataset.engview, b.dataset.kind, b.dataset.ext, name,
+              b.dataset.signed);
   });
   view().querySelectorAll("[data-engdl]").forEach((b) => b.onclick = async () => {
     const did = b.dataset.engdl;
@@ -5642,6 +5602,11 @@ function docRow(d) {
           <span class="tag">${esc(d.party_label)}</span></span>
       </div>
       ${state} ${exp}
+      <button class="btn alt sm" data-docview="${d.id}"
+        data-kind="${(d.body || "").trim() ? "body" : d.has_file ? "file" : "body"}"
+        data-ext="${d.ext || ""}" data-signed="${(d.signatures || [])
+          .filter((x) => x.status === "signed").length}"
+        data-name="${esc(d.title)}">View</button>
       ${d.has_file ? `<a class="btn alt sm" href="/api/store/admin/documents/${d.id}/file"
         title="download">download</a>` : ""}
       <button class="btn alt sm" data-docedit="${d.id}">Edit</button>
@@ -5664,8 +5629,51 @@ function docRow(d) {
   </div>`;
 }
 
+async function docViewer(did, kind, ext, name, signedN) {
+  /* One viewer for both tabs: the rendered document with its signature
+     block, and the signed PDF as the primary download. */
+  const auth = async (path) => {
+    const r = await fetch(path,
+      { headers: { Authorization: "Bearer " + S.user.token } });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    return r.blob();
+  };
+  const isPdfable = kind === "body" || ext === "pdf";
+  try {
+    let frameUrl;
+    if (kind === "body") {
+      const html = await (await auth(
+        `/api/store/admin/documents/${did}/preview`)).text();
+      frameUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    } else {
+      frameUrl = URL.createObjectURL(
+        await auth(`/api/store/admin/documents/${did}/file`));
+    }
+    const pdfUrl = isPdfable ? URL.createObjectURL(new Blob(
+      [await auth(`/api/store/admin/documents/${did}/pdf`)],
+      { type: "application/pdf" })) : frameUrl;
+    const signed = +signedN > 0;
+    modal(`<h3>${esc(name)}${signed
+        ? ' <span class="pill ok">signed</span>' : ""}</h3>
+      ${signed ? `<p class="dim">The signature block is at the end of the
+        document — scroll down, and it's on the last page of the PDF.</p>` : ""}
+      <iframe class="doc-viewer" src="${frameUrl}" title="${esc(name)}"></iframe>
+      <div class="modal-foot" style="margin-top:10px">
+        <a class="btn" href="${pdfUrl}"
+           download="${esc(name)}${isPdfable ? ".pdf" : ""}">Download
+           ${signed ? "signed " : ""}${isPdfable ? "PDF" : ""}</a>
+        <a class="btn alt" href="${pdfUrl}" target="_blank"
+           rel="noopener">Open ${isPdfable ? "PDF" : ""} in tab</a>
+        <button class="btn alt" data-close>Close</button>
+      </div>`, "wide");
+  } catch (err) { toast(err.message); }
+}
+
 function wireDocRows() {
   wireRows({}, renderDocs);
+  view().querySelectorAll("[data-docview]").forEach((b) => b.onclick = () =>
+    docViewer(+b.dataset.docview, b.dataset.kind, b.dataset.ext,
+              b.dataset.name, b.dataset.signed));
   view().querySelectorAll("[data-docedit]").forEach((b) => b.onclick = () =>
     docForm(DOCS.documents.find((x) => x.id === +b.dataset.docedit)));
   view().querySelectorAll("[data-sign]").forEach((b) => b.onclick = () =>

@@ -3796,12 +3796,16 @@ ok(_del3.get("archived"),
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.
-_viewer = _ops.split('[data-engview]')[1][:2600]
+_viewer = _ops.split("async function docViewer")[1][:2600]
 ok('iframe class="doc-viewer"' in _viewer and "window.open" not in _viewer,
-   "the View button shows the document in an in-app frame — a popup opened "
-   "after an awaited fetch is one a blocker silently eats")
-ok("Open ${" in _viewer or "Open PDF" in _viewer,
-   "with the literal PDF one click away in the same modal")
+   "one shared viewer shows the document in an in-app frame — a popup "
+   "opened after an awaited fetch is one a blocker silently eats")
+ok("Download" in _viewer and "signed " in _viewer,
+   "with the signed PDF as the primary action in the same modal")
+ok("data-docview" in _ops and "data-engview" in _ops
+   and _ops.count("docViewer(") >= 3,
+   "and both the Documents tab and the engagement stages open it — the "
+   "signature must be visible wherever the document is")
 import shutil as _sh3
 _sh3.rmtree(_exp3["root"], ignore_errors=True)
 c.delete(f"/api/store/admin/documents/{_g2['doc_id']}", headers=A)
