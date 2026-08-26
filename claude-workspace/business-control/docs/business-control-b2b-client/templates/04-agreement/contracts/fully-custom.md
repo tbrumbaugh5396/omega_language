@@ -84,6 +84,8 @@ this is why the tier costs what it does.
 - No response within **[10] working days** = approval.
 - Additional rounds: **$[X]** each.
 
+[INITIALS]
+
 ## 5. Fees and schedule
 
 | Milestone | Amount | When |
@@ -112,6 +114,8 @@ the schedule above by written agreement.
 | Rescheduling after a [30]-day stall | $[X] |
 | Source design files | $[X] |
 | Care plan — Priority | $[X]/month |
+
+[INITIALS]
 
 ## 6. Timeline
 
@@ -144,6 +148,8 @@ The site is accepted when:
 Severity 2 and 3 defects do not block launch and are fixed under the [60]-day
 support period.
 
+[INITIALS]
+
 ## 9. Everything else
 
 Clauses 1–14 of the [Common Clauses](common-clauses.md) apply in full. Note
@@ -166,3 +172,5 @@ wet-ink execution on paper.*
 | Title | | |
 | Signature | | |
 | Date | | |
+
+Executed: [SIGN HERE]

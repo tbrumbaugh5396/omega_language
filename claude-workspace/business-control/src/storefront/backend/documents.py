@@ -486,7 +486,8 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"@media print{{body{{padding:0}}}}"
         f"</style></head><body><h1>{sect.esc(d['title'])}</h1>"
         f"{md_html(d['body'])}"
-        f"{signatures_html(signed_rows(con, did))}</body></html>")
+        f"{signatures_html(signed_rows(con, did))}"
+        f"{pending_html(pending_rows(con, did))}</body></html>")
 
 
 def signed_rows(con, doc_id: int) -> list:
@@ -533,7 +534,40 @@ def signatures_html(sigs: list) -> str:
             + "".join(rows))
 
 
-def _pdf_response(d, inline: bool = True, sigs: list | None = None):
+def pending_rows(con, doc_id: int) -> list:
+    """Requests still out — the blank lines on a printed copy."""
+    return [dict(r) for r in con.execute(
+        "SELECT signer_name, signer_email, role FROM document_signatures"
+        " WHERE document_id=? AND status IN ('sent','viewed')"
+        " ORDER BY sent_at", (doc_id,)).fetchall()]
+
+
+def pending_html(pending: list) -> str:
+    """The same blank areas, on every HTML surface — so a preview prints as
+    the form the PDF is."""
+    if not pending:
+        return ""
+    rows = "".join(
+        f'<div style="margin:26px 0 10px;display:flex;gap:26px">'
+        f'<div style="flex:1"><div style="border-bottom:1px solid #1b181f;'
+        f'height:34px"></div><b style="font-size:13px">'
+        f'{sect.esc(p.get("signer_name") or "Signature")}</b><br>'
+        f'<span style="color:#5d5768;font-size:12px">'
+        f'{sect.esc(p.get("signer_email", ""))} · '
+        f'{sect.esc(p.get("role", "signer"))}</span></div>'
+        f'<div style="width:160px"><div style="border-bottom:1px solid '
+        f'#1b181f;height:34px"></div><b style="font-size:13px">Date</b>'
+        f'</div></div>'
+        for p in pending)
+    return ('<hr style="margin:28px 0;border:0;border-top:1px solid #e9e4dc">'
+            '<h3 style="font-family:\'Fraunces\',Georgia,serif">Signatures'
+            '</h3><p style="color:#5d5768;font-size:13px">Awaiting signature '
+            '— sign electronically from the emailed link, or print this, '
+            'sign, and return a scan.</p>' + rows)
+
+
+def _pdf_response(d, inline: bool = True, sigs: list | None = None,
+                  pending: list | None = None):
     """A PDF for any document that can produce one: authored bodies are
     rendered — completed signatures printed on them — and an uploaded PDF
     is itself. Inline by default so the browser's own viewer is the
@@ -541,7 +575,8 @@ def _pdf_response(d, inline: bool = True, sigs: list | None = None):
     from . import pdfgen
     stem = re.sub(r"[^\w.-]+", "-", d["title"]).strip("-")[:80] or "document"
     if (d["body"] or "").strip():
-        blob = pdfgen.doc_pdf(d["title"], d["body"], signatures=sigs)
+        blob = pdfgen.doc_pdf(d["title"], d["body"], signatures=sigs,
+                              pending=pending)
     elif d["ext"] == "pdf":
         p = doc_path(d)
         if not p.exists():
@@ -564,7 +599,9 @@ def document_pdf(did: int, download: int = 0, u=Depends(admin_user),
     if download:
         log(con, did, u["name"], "downloaded")
         con.commit()
-    return _pdf_response(d, inline=not download, sigs=signed_rows(con, did))
+    return _pdf_response(d, inline=not download,
+                         sigs=signed_rows(con, did),
+                         pending=pending_rows(con, did))
 
 
 @router.get("/sign/{token}/pdf")
@@ -576,7 +613,8 @@ def signing_pdf(token: str, con=Depends(get_con), _rl=Depends(rate_limit)):
     if d is None:
         raise HTTPException(404, "document not found")
     return _pdf_response(d, inline=False,
-                         sigs=signed_rows(con, d["id"]))
+                         sigs=signed_rows(con, d["id"]),
+                         pending=pending_rows(con, d["id"]))
 
 
 @router.get("/api/store/admin/documents/{did}/markdown")

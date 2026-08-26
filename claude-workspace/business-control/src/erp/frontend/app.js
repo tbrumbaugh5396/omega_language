@@ -5031,6 +5031,11 @@ async function renderEngagement(id) {
         data-name="${esc(x.filename || x.title)}">PDF</button>
       <button class="btn alt sm" data-engsign="${x.id}">${opsIcon("pen","btn-ic")} Sign</button>
       <button class="btn alt sm" data-engopen="${esc(x.title)}">Open</button>
+      <button class="btn alt sm" data-engscan="${x.id}"
+        data-stage="${x.stage}" data-side="${x.side}"
+        data-title="${esc(x.title)}"
+        title="file the signed paper's scan or photo beside this
+        document">Upload scan</button>
       <button class="btn alt sm" data-engrm="${x.id}"
         data-title="${esc(x.title)}">Remove</button>
     </div>`;
@@ -5311,6 +5316,40 @@ async function renderEngagement(id) {
       a.click();
       URL.revokeObjectURL(a.href);
     } catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-engscan]").forEach((b) => b.onclick = () => {
+    /* The paper came back — a photo or a scanned PDF. It becomes its own
+       vault document filed beside the original in the same stage, so the
+       original's authored text stays exactly what was (or will be) signed
+       electronically, and the wet-ink copy is evidence alongside it. */
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".pdf,.png,.jpg,.jpeg";
+    inp.onchange = async () => {
+      const f = inp.files[0];
+      if (!f) return;
+      try {
+        const doc = await api("/api/store/admin/documents", { body: {
+          title: `Signed scan — ${b.dataset.title}`.slice(0, 190),
+          category: "contract", party_kind: "partner",
+          party_name: e.name,
+          notes: `wet-ink scan of document #${b.dataset.engscan}`,
+        } });
+        const fd = new FormData();
+        fd.append("file", f);
+        const up = await fetch(
+          `/api/store/admin/documents/${doc.id}/file`,
+          { method: "POST", body: fd,
+            headers: { Authorization: "Bearer " + S.user.token } });
+        if (!up.ok) throw new Error((await up.json()).detail || up.status);
+        await api(`/api/store/admin/engagements/${id}/attach`, { body: {
+          doc_id: doc.id, stage: b.dataset.stage,
+          side: b.dataset.side } });
+        toast("Scan filed beside the document");
+        renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    };
+    inp.click();
   });
   view().querySelectorAll("[data-engrm]").forEach((b) => b.onclick = () => {
     modal(`<h3>Remove — ${esc(b.dataset.title)}</h3>

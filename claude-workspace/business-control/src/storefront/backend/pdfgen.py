@@ -113,7 +113,50 @@ def _signature_block(pdf, sigs) -> None:
         pdf.ln(3)
 
 
-def doc_pdf(title: str, md_text: str, signatures: list | None = None) -> bytes:
+def _pending_block(pdf, pending) -> None:
+    """Blank signature areas for the signers who haven't yet — so the PDF
+    prints as a form: a line to sign on, a line to date, the name beneath.
+    The paper comes back as a scan, uploaded beside the document."""
+    pdf.ln(6)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.ln(4)
+    pdf.set_font("helvetica", "B", 13)
+    pdf.multi_cell(0, 6.5, "Signatures")
+    pdf.set_font("helvetica", size=9)
+    pdf.set_text_color(*DIM)
+    pdf.set_x(pdf.l_margin)
+    pdf.multi_cell(0, 4.8, "Awaiting signature - sign electronically from "
+                           "the emailed link, or sign this printed copy and "
+                           "return a scan.")
+    pdf.set_text_color(*INK)
+    pdf.ln(4)
+    for s in pending:
+        y = pdf.get_y()
+        if y > pdf.h - 55:
+            pdf.add_page()
+            y = pdf.get_y()
+        half = (pdf.w - pdf.l_margin - pdf.r_margin - 14) / 2
+        pdf.line(pdf.l_margin, y + 14, pdf.l_margin + half, y + 14)
+        pdf.line(pdf.l_margin + half + 14, y + 14,
+                 pdf.w - pdf.r_margin, y + 14)
+        pdf.set_y(y + 15.5)
+        pdf.set_font("helvetica", "B", 9.5)
+        pdf.set_x(pdf.l_margin)
+        pdf.cell(half, 4.8, _latin(s.get("signer_name") or "Signature"))
+        pdf.set_x(pdf.l_margin + half + 14)
+        pdf.cell(half, 4.8, "Date")
+        pdf.ln(6)
+        pdf.set_font("helvetica", size=8.5)
+        pdf.set_text_color(*DIM)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(0, 4.2, _latin(
+            f"{s.get('signer_email', '')} - {s.get('role', 'signer')}"))
+        pdf.set_text_color(*INK)
+        pdf.ln(5)
+
+
+def doc_pdf(title: str, md_text: str, signatures: list | None = None,
+            pending: list | None = None) -> bytes:
     pdf = FPDF(format="letter")
     pdf.set_margins(20, 18, 20)
     pdf.set_auto_page_break(True, margin=18)
@@ -188,5 +231,7 @@ def doc_pdf(title: str, md_text: str, signatures: list | None = None) -> bytes:
 
     if signatures:
         _signature_block(pdf, signatures)
+    if pending:
+        _pending_block(pdf, pending)
 
     return bytes(pdf.output())

@@ -62,6 +62,8 @@ five-week one.
 Materials outstanding **[14] days** after signature: the project is
 rescheduled and a **$[X]** fee applies.
 
+[INITIALS]
+
 ## 4. Revisions
 
 **One round of feedback is included.**
@@ -78,6 +80,8 @@ rescheduled and a **$[X]** fee applies.
 > At this price, one round is what makes the maths work. Clients who want to
 > iterate should be on the Partially Custom tier, and it's kinder to say so
 > before starting than after.
+
+[INITIALS]
 
 ## 5. Fees and schedule
 
@@ -101,6 +105,8 @@ than they protect.
 | Rescheduling after a stall | $[X] |
 | Block of 5 update hours, 12-month expiry | $[X] |
 | Care plan | $[X]/month |
+
+[INITIALS]
 
 ## 6. Timeline
 
@@ -132,3 +138,5 @@ wet-ink execution on paper.*
 | Name | | |
 | Signature | | |
 | Date | | |
+
+Executed: [SIGN HERE]

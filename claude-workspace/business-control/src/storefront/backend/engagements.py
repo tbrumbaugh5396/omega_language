@@ -1362,7 +1362,9 @@ def portal_doc(token: str, did: int, con=Depends(get_con),
              f"{'signed ' if sigs else ''}PDF</a></p>"
              f"<h1>{sect.esc(row['title'])}</h1>"
              f"<div class=\"card doc-body\">{vault.md_html(row['body'])}"
-             f"{vault.signatures_html(sigs)}</div>")
+             f"{vault.signatures_html(sigs)}"
+             f"{vault.pending_html(vault.pending_rows(con, row['id']))}"
+             f"</div>")
     return HTMLResponse(_portal_shell(row["title"], inner))
 
 
@@ -1378,7 +1380,8 @@ def portal_doc_pdf(token: str, did: int, con=Depends(get_con),
         raise HTTPException(404, "not found")
     from . import documents as vault
     return vault._pdf_response(row, inline=False,
-                               sigs=vault.signed_rows(con, row["id"]))
+                               sigs=vault.signed_rows(con, row["id"]),
+                               pending=vault.pending_rows(con, row["id"]))
 
 
 @router.post("/engage/{token}/direction")

@@ -92,6 +92,8 @@ Rules:
 > one selection, two rounds is the structure that makes a fixed price
 > possible — and it produces better work, because it forces a decision.
 
+[INITIALS]
+
 ## 4. Fees and schedule
 
 | Milestone | Amount | When |
@@ -116,6 +118,8 @@ Rules:
 | Rush | +[25–50]% |
 | Working source files (see clause 6) | $[X] |
 | Creative retainer | $[X]/month |
+
+[INITIALS]
 
 ## 5. Timeline
 
@@ -146,6 +150,8 @@ Rules:
   registrable. The Client should engage a trademark attorney before public
   use — this is normal and worth doing.
 
+[INITIALS]
+
 ## 7. Portfolio rights — replaces Common Clause 8
 
 The Studio may display the work, including unselected routes and process, in
@@ -171,3 +177,5 @@ wet-ink execution on paper.*
 | Name | | |
 | Signature | | |
 | Date | | |
+
+Executed: [SIGN HERE]

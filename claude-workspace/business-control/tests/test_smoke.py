@@ -3827,6 +3827,43 @@ ok(all(x["anchorIgnoreIfNotPresent"] == "true"
        for x in _envt["signHereTabs"] + _envt["initialHereTabs"]),
    "and a document with no markers still signs at its Signed block")
 
+# --- printable signature areas, markers in the contracts, scans back in ----
+for _cf in ("week-website", "partially-custom", "fully-custom",
+            "branding-creative"):
+    _ct2 = (_studio / "templates" / "04-agreement" / "contracts"
+            / f"{_cf}.md").read_text()
+    ok(_ct2.count("[INITIALS]") >= 2 and "[SIGN HERE]" in _ct2,
+       f"{_cf} initials its load-bearing clauses and carries an execution "
+       f"line")
+
+_g4 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "04-agreement/contracts/week-website.md"}).json()
+c.post(f"/api/store/admin/documents/{_g4['doc_id']}/request-signature",
+       headers=A, json={"signer_name": "Pat Lee", "signer_email": "p@x.t",
+                        "role": "signer", "in_person": True})
+_pv4 = c.get(f"/api/store/admin/documents/{_g4['doc_id']}/preview",
+             headers=A).text
+ok("Awaiting signature" in _pv4 and "Pat Lee" in _pv4,
+   "an unsigned request shows as a blank signature area — name and date "
+   "lines — so the form prints, gets signed, and comes back")
+ok("Initials:" in _pv4 and "[INITIALS]" not in _pv4,
+   "and the initials markers render as labelled lines, not literals")
+
+_scan = c.post("/api/store/admin/documents", headers=A, json={
+    "title": "Signed scan — smoke", "category": "contract",
+    "party_kind": "partner", "party_name": "Smoke Test Client"}).json()
+c.post(f"/api/store/admin/documents/{_scan['id']}/file", headers=A,
+       files={"file": ("scan.jpg", b"\xff\xd8\xff\xe0fakejpg",
+                       "image/jpeg")})
+ok(c.post(f"/api/store/admin/engagements/{_eid}/attach", headers=A,
+          json={"doc_id": _scan["id"], "stage": "04-agreement",
+                "side": "to_client"}).status_code == 200,
+   "the returned paper's scan files beside the original, in the same stage "
+   "— the authored text stays exactly what was signed, and the wet-ink "
+   "copy is evidence alongside it")
+c.delete(f"/api/store/admin/documents/{_g4['doc_id']}", headers=A)
+c.delete(f"/api/store/admin/documents/{_scan['id']}", headers=A)
+
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.

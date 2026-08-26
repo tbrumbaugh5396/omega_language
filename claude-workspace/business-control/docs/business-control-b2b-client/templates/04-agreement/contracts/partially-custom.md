@@ -79,6 +79,8 @@ links, mobile behaviour, browser issues.
 > so a fixed price can exist — not to be stingy, and a third round is always
 > available at the price above.
 
+[INITIALS]
+
 ## 4. Fees and schedule
 
 | Milestone | Amount | When |
@@ -104,6 +106,8 @@ links, mobile behaviour, browser issues.
 | Block of 10 update hours, 12-month expiry | $[X] |
 | Source design files | $[X] |
 | Care plan | $[X]/month |
+
+[INITIALS]
 
 ## 5. Timeline
 
@@ -149,3 +153,5 @@ wet-ink execution on paper.*
 | Name | | |
 | Signature | | |
 | Date | | |
+
+Executed: [SIGN HERE]
