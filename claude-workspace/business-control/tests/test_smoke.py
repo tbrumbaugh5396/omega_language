@@ -3876,7 +3876,7 @@ ok("function fillField" in _ops and 'tok.split(" / ")' in _ops
 ok('<span class="req">required</span>' in _ops,
    "while the fields that genuinely are required say so")
 for _cls in ("gate-line", "gl-acts", "doc-line", "dl-acts", "log-line"):
-    ok(f'class="{_cls}"' in _ops or f"'{_cls}'" in _ops,
+    ok(f'class="{_cls}' in _ops or f"'{_cls}'" in _ops,
        f"{_cls} markup exists for the aligned layout")
 _css2 = c.get("/ops/styles.css").text
 ok("grid-template-columns: repeat(3, 92px)" in _css2,

@@ -5054,7 +5054,8 @@ async function renderEngagement(id) {
   d.docs.forEach((x) => (byStage[x.stage] = byStage[x.stage] || []).push(x));
 
   const docRowE = (x) => `
-    <div class="doc-line">
+    <div class="doc-line${x.signed ? " dl-signed"
+      : x.awaiting ? " dl-awaiting" : ""}">
       <span class="dl-title"><b title="${esc(x.title)}">${esc(x.title)}</b>
         <span class="pill ${x.side === "internal" ? "warn" : "ok"}">${
           x.side === "internal" ? "internal" : "to client"}</span>

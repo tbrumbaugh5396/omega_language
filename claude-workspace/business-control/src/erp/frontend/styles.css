@@ -445,10 +445,14 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .ga-slot .btn, .gl-acts .btn { width: 100%; white-space: nowrap;
   padding-left: 4px; padding-right: 4px; }
 
-.doc-line { display: grid; align-items: center; gap: 10px; padding: 8px 0;
-  border-bottom: 1px solid var(--line);
+/* each document is its own bar — stacked, unmistakably, like the sig rows
+   elsewhere in the app — with the signed state on its left edge */
+.doc-line { display: grid; align-items: center; gap: 10px; padding: 7px 10px;
+  background: var(--bg); border-radius: var(--r-sm);
+  border-left: 3px solid var(--line);
   grid-template-columns: minmax(0, 1fr) auto; }
-.doc-line:last-child { border-bottom: 0; }
+.doc-line.dl-signed { border-left-color: var(--good); }
+.doc-line.dl-awaiting { border-left-color: var(--warn, #c90); }
 .dl-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dl-title b { overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
