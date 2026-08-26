@@ -3120,6 +3120,66 @@ the wing is not adapted with it, so a very warm lamp lights a cool room; and
 the ranks are uniform down the wing where a real one has finer compartments
 along the leading edge than the trailing.
 
+### Phase 42 — Urbach's rule, a room lit by the lamp, and two knobs *(M)* — **shipped**
+
+The three things Phase 41 left, and two controls.
+
+**The absorption stopped being fitted.** It was an exponential in *wavelength*,
+chosen because it looked right. It is now an exponential in **photon energy**,
+which is Urbach's rule and has been since 1953: a disordered solid has no
+clean absorption edge but an exponential tail running below it, and chitin is
+a disordered organic solid. The difference is not cosmetic — energy and
+wavelength are reciprocals, so the two curves have different shapes, and the
+shape is what decides how far into the blue the absorption reaches and
+therefore what colour a clear wing looks.
+
+Two numbers, and both are quantities a material has. The edge is at 4.4 eV,
+where chitin's is reported. The Urbach energy is the control, because it sets
+the *colour* of the tint rather than its depth. Measured: widening the tail
+from 0.25 to 0.85 eV warms the membrane by a real margin in red-minus-blue.
+The amplitude remains a knob, and that is still said out loud — the shape is
+physics, how much of it you want is taste.
+
+**The room is lit by the same lamp as the wing**, and the note that said this
+was missing was itself half wrong. With the eye fully adapted the background
+comes out *unchanged*, and that is not a shortcut: a von Kries observer sees
+ordinary surfaces as if under D65, so only something with structure in its
+spectrum still shifts. That is exactly why the film moves when the lamp
+changes and a grey wall does not.
+
+What was actually missing was the ability to *turn adaptation off*. There is
+now an `adapt` knob: at 1, colour constancy and a white wall stays white; at
+0, nothing is corrected and the whole picture goes the colour of the light,
+which is what an unbalanced photograph looks like. Measured — the brightest
+background reads **149,112,63** under tungsten and **99,125,180** under a cold
+sky with adaptation off, and does not move at all with it on.
+
+**The ranks crowd towards the leading edge.** A quadratic in the band
+coordinate, so row spacing falls smoothly from trailing to leading and the map
+stays monotone — the one thing it must be, or rows fold through each other.
+That is the edge that meets the air and the edge that has to be stiff, and it
+is where a real wing's compartments are smallest.
+
+**Two knobs.** `clarity` is how much light gets through unscattered. Energy is
+kept: what stops coming through the back leaves as diffuse glow, so turning it
+down makes the wing *milky* rather than dark — a milky wing measures brighter
+than a clear one, which is the tell that nothing was thrown away. `scale`
+sizes the wing in the frame, and it scales the wing rather than the lattice:
+the same count of cells, drawn larger. Measured at 0.60 and 1.60 against 0.6
+and 1.6 asked for.
+
+*And a tuning mistake worth keeping.* The scatter went in at half the
+highlight's strength, which made it as bright as the interference it sits
+under and greyed the whole wing out. Measured rather than argued: removing it
+*raised* the saturation across the membrane from 16.3 to 21.4. Scattered light
+from something one cell thick is dim, and it is now dim — 23.7 with the film
+term restored to carrying the picture.
+
+*Left:* the Urbach edge is at a literature value but the amplitude is not
+measured; the setae are lit as if they were membrane rather than solid chitin;
+and the lattice still has one cell size per band where a real wing's grade
+along their length as well as across.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -3202,6 +3262,7 @@ along the leading edge than the trailing.
 | 39.1 | Async probe readback — **shipped** | M | 38.1 | 5 reads → 1 buffered read; 6 issued / 3 collected / 0 skipped, values identical |
 | 40.1 | Insect wing, spectrally integrated — **shipped** | M | — | 3 samples wrong by 130.7/255; 24 by 1.0; fringes within 14.8 nm |
 | 41.1 | Lamp, transmission, setae, ranks — **shipped** | M | 40.1 | mirror neutral at any K; 1−T matches R 97%; setae spread 0.55 |
+| 42.1 | Urbach, adaptation knob, clarity, scale — **shipped** | M | 41.1 | room 149,112,63 warm vs 99,125,180 cool unadapted; scale exact |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

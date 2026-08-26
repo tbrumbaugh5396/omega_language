@@ -1179,7 +1179,12 @@ uniform float thickness;  // @range 150 900 @default 430 @help the membrane, in 
 uniform float thickVary;  // @range 0 1 @default 0.55 @help how much it wanders across the wing
 uniform float nFilm;      // @range 1.2 2.2 @default 1.56 @help chitin's refractive index
 uniform float kelvin;     // @range 1800 12000 @step 50 @default 6500 @help the light it is seen under
-uniform float tint;       // @range 0 1.5 @default 0.6 @help how much the chitin absorbs, blue end first
+uniform float tint;       // @range 0 1.5 @default 0.6 @help how much the chitin absorbs
+uniform float urbach;     // @range 0.2 0.9 @default 0.45 @help the absorption tail's width, in eV
+uniform float adapt;      // @range 0 1 @default 1 @help how far the eye is adapted to the lamp
+uniform float clarity;    // @range 0 1 @default 0.93 @help how much light gets through unscattered
+uniform float scale;      // @range 0.3 2.5 @default 1 @help how big it is in the frame
+uniform float leadFine;   // @range 0 1.5 @default 0.7 @help finer cells along the leading edge
 uniform float ranks;      // @range 0 1 @default 0.75 @help how strictly the cells line up between ribs
 uniform float samples;    // @range 3 48 @step 1 @int @default 24 @help wavelengths in the integral
 uniform float jitter;     // @toggle @default 1 @label stratify @help offset the samples per pixel
@@ -1252,17 +1257,30 @@ float planck(float nm, float K) {
 }
 
 /**
- * Beer-Lambert through the membrane. Chitin is not water-clear: it absorbs,
- * and it absorbs more towards the blue, which is why a bare wing held to the
- * light is faintly straw-coloured rather than colourless.
+ * Beer-Lambert through the membrane, with an Urbach edge.
  *
- * The *shape* is right — an exponential rising into the blue and the
- * ultraviolet, which is what an organic polymer does. The coefficient is
- * fitted by eye and not measured, and saying so is cheaper than implying a
- * spectrophotometer was involved.
+ * The first version was an exponential in *wavelength* picked to look right.
+ * This one has a reason. Chitin is a disordered organic solid, and disordered
+ * solids do not have a clean absorption edge — they have an exponential tail
+ * running below it, which is Urbach's rule and has been since 1953. The tail
+ * is exponential in **photon energy**, not in wavelength, and the difference
+ * is not cosmetic: it is what sets how far into the blue the absorption
+ * reaches, and therefore what colour a clear wing looks.
+ *
+ * Two numbers, and both are quantities a material actually has. The edge sits
+ * at 4.4 eV, which is where chitin's is reported — it absorbs hard in the
+ * ultraviolet and is nearly clear either side of it. The Urbach energy is the
+ * width of the tail and is the control here, because it decides the *colour*
+ * of the tint rather than its depth: a wide tail reaches further down into
+ * the visible.
+ *
+ * Still honest about what is not measured — the amplitude remains a knob. The
+ * shape is physics; how much of it you want is taste.
  */
 float absorb(float nm, float path) {
-  return exp(-tint * 3.0e-4 * exp(-(nm - 380.0) / 120.0) * path);
+  float eV = 1239.84 / nm;                           // hc/e, in eV nanometres
+  float tail = exp(-(4.4 - eV) / max(urbach, 0.05));
+  return exp(-tint * 0.006 * tail * path);
 }
 
 // ------------------------------------------------------------- the observer
@@ -1306,7 +1324,13 @@ vec3 adaptToD65(vec3 xyz, vec3 srcWhite) {
   vec3 d65 = vec3(0.95047, 1.0, 1.08883);
   vec3 srcC = toLms * srcWhite;
   vec3 dstC = toLms * d65;
-  return fromLms * ((toLms * xyz) * (dstC / max(srcC, vec3(1e-6))));
+  // …and how far the eye has got. At 1 this is full colour constancy and a
+  // white wall is white under any lamp; at 0 nothing is corrected and the
+  // whole picture goes the colour of the light, which is what an unbalanced
+  // photograph looks like. Both are worth being able to see, and the truth
+  // about a room you have just walked into is somewhere between them.
+  vec3 gain = mix(vec3(1.0), dstC / max(srcC, vec3(1e-6)), clamp(adapt, 0.0, 1.0));
+  return fromLms * ((toLms * xyz) * gain);
 }
 
 vec3 xyzToRgb(vec3 xyz) {
@@ -1317,6 +1341,28 @@ vec3 xyzToRgb(vec3 xyz) {
      3.2406 * xyz.x - 1.5372 * xyz.y - 0.4986 * xyz.z,
     -0.9689 * xyz.x + 1.8758 * xyz.y + 0.0415 * xyz.z,
      0.0557 * xyz.x - 0.2040 * xyz.y + 1.0570 * xyz.z), 0.0);
+}
+
+/**
+ * What a white wall looks like under this lamp, once the eye has done
+ * whatever adapting it is going to do.
+ *
+ * The room has to be lit by the same light as the wing. With the eye fully
+ * adapted this comes out white and the background is untouched — which is not
+ * a shortcut but the actual prediction: a von Kries observer sees ordinary
+ * surfaces as if under D65, and only something with structure in its spectrum
+ * still shifts. That is exactly why the *film* moves when the lamp changes
+ * and a grey wall does not. Turn the adaptation down and the room warms up
+ * with the lamp, as it should.
+ */
+vec3 lampWhite() {
+  vec3 xyzW = vec3(0.0);
+  for (int i = 0; i < 24; i++) {
+    float nm = 380.0 + (float(i) + 0.5) / 24.0 * 350.0;
+    xyzW += cmf(nm) * planck(nm, kelvin);
+  }
+  xyzW /= max(xyzW.y, 1e-5);
+  return max(xyzToRgb(adaptToD65(xyzW, xyzW)), 0.0);
 }
 
 /**
@@ -1472,7 +1518,16 @@ vec2 latticeOf(vec2 q, float e) {
   // …and across, in bands. Five bands, a little over one row of cells in
   // each, so the ranks are the wing's own compartments rather than a grid
   // that happens to lie near them.
-  return vec2(clamp(q.x, 0.0, 1.0) * nAlong, bandCoord(q, e) * 1.15 * grow);
+  //
+  // The rows crowd towards the leading edge, which is what a real wing does:
+  // the compartments along the costa are the small ones, because that is the
+  // edge that meets the air and the edge that has to be stiff. A quadratic in
+  // the band coordinate, so the row spacing falls smoothly from trailing to
+  // leading and the map stays monotone — the one thing it must be, or rows
+  // fold through each other.
+  float bc = bandCoord(q, e);
+  float across = bc * (1.0 + leadFine * bc / 5.0) * 1.15 * grow;
+  return vec2(clamp(q.x, 0.0, 1.0) * nAlong, across);
 }
 
 /**
@@ -1511,6 +1566,8 @@ float setae(vec2 q, float edge) {
 
 // Something for the light to come through, so a transparent thing reads as
 // transparent. A wing photographed against nothing looks like a decal.
+vec3 gLamp;                 // what a white wall is, under this light
+
 vec3 behind(vec2 pp) {
   vec3 c = mix(srgbToLinear(backC) * 2.4, srgbToLinear(backC) * 0.7,
                smoothstep(-1.1, 1.0, pp.y - pp.x * 0.3));
@@ -1520,13 +1577,18 @@ vec3 behind(vec2 pp) {
     float d = length((pp - at) * vec2(1.0, 1.25));
     c += srgbToLinear(vec3(0.30, 0.34, 0.42)) * smoothstep(0.62, 0.0, d) * (0.5 - fi * 0.12);
   }
-  return c;
+  // The room is lit by the same lamp as the wing. It has to be: a warm light
+  // on the wing and a cool one on the wall behind it is two rooms.
+  return c * gLamp;
 }
 
 // -------------------------------------------------------------- the picture
 vec3 shadeWing(vec2 pp) {
   vec3 bg = behind(pp);
-  vec2 r = vec2(pp.x, pp.y - pp.x * 0.10 * tilt);
+  // Scaled about the middle of the frame. The lattice lives in wing
+  // coordinates, so a bigger wing is the same wing seen closer — the same
+  // count of cells, drawn larger — rather than a wing with more of them.
+  vec2 r = vec2(pp.x, pp.y - pp.x * 0.10 * tilt) / max(scale, 0.05);
   vec2 q = vec2((r.x + 1.48) / 2.90, r.y / 0.74);
   if (q.x < -0.03 || q.x > 1.04) return bg;
   float edge = across(q);
@@ -1592,6 +1654,9 @@ vec3 shadeWing(vec2 pp) {
   // micron — but the pleating between veins is a millimetre of curved
   // dielectric, and that is enough to smear a bright edge seen through a
   // wing, which is a thing you can watch happen.
+  // The specular lobe, needed above as well as below, so it is worked out
+  // before either of them wants it.
+  float lobe0 = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 16.0);
   vec3 bent = refract(view, nrm, 1.0 / max(nFilm, 1.05));
   vec3 through = behind(pp + bent.xy * bend * 0.30);
   // …and it comes through *tinted*, which is the other half of the same
@@ -1599,7 +1664,19 @@ vec3 shadeWing(vec2 pp) {
   // wavelength, so the transmitted colour is the reflected one's complement:
   // where the wing flashes green it passes magenta. Nothing here chooses that
   // — it falls out of R and 1 − R being read by the same eye.
-  vec3 col = through * tran;
+  // How much gets through unscattered. A wing is not a window: some of the
+  // light that is not reflected is thrown sideways by the membrane's own
+  // texture rather than passing cleanly, and a wing with a lot of that is
+  // milky. Energy is kept — what stops coming through the back comes out as
+  // diffuse glow instead of vanishing — so turning this down makes the wing
+  // opaque rather than dark.
+  float clear = clamp(clarity, 0.0, 1.0);
+  vec3 col = through * tran * clear;
+  // Dim, because scattered light from something one cell thick is dim. At
+  // half the highlight's strength this was as bright as the interference it
+  // sits under and greyed the whole wing out — measured: taking it away
+  // *raised* the saturation across the membrane from 16.3 to 21.4.
+  col += tran * (1.0 - clear) * gLamp * (0.02 + 0.16 * lobe0);
 
   // A narrow lobe, and that is the difference between a wing and a decal.
   // At an exponent of five the whole wing sits inside the highlight and comes
@@ -1607,9 +1684,9 @@ vec3 shadeWing(vec2 pp) {
   // because what you are looking at is a reflection and a reflection has a
   // direction. The band sweeps across as the wing turns, which is the thing
   // a real one does that a photograph of one cannot.
-  float lobe1 = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 16.0);
+  float lobe1 = lobe0;
   float fres = 0.06 + 0.94 * pow(1.0 - clamp(dot(nrm, -view), 0.0, 1.0), 4.0);
-  col += film * (0.022 + 2.6 * lobe1 * (0.25 + 0.75 * fres));
+  col += film * (0.03 + 3.6 * lobe1 * (0.25 + 0.75 * fres));
 
   // The veins: solid chitin. No film, so no colour — which is the tell that
   // this is interference and not a dye. They stay the same brown at every
@@ -1648,6 +1725,7 @@ vec3 shadeChart(vec2 pp) {
   return filmColour(cosI, d, jit);
 }
 
+gLamp = lampWhite();
 vec3 col = chart > 0.5 ? shadeChart(p) : shadeWing(p);
 col *= exp2(expose);
 

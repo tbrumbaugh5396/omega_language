@@ -4150,6 +4150,121 @@ c`;
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 
+    // The room, the tail, the taper, and the two new knobs.
+    try {
+      const g = GENERATE_PRESETS.find((x) => x.id === "wing");
+      const us = parseUniforms(g.source);
+      const base = {};
+      for (const u of us) if (u.value) base[u.name] = u.value.slice();
+      const W3 = 400, H3 = 250, bad = [];
+      const shot = (src, over) => renderSketch(src, W3, H3,
+          { frame: 0, time: 0, values: { ...base, ...over } })
+        .getContext("2d").getImageData(0, 0, W3, H3).data;
+
+      // 1. The room is lit by the same lamp as the wing. With the eye fully
+      //    adapted it comes out unchanged — which is not a shortcut but the
+      //    actual prediction: a von Kries observer sees ordinary surfaces as
+      //    if under D65, and only something with structure in its spectrum
+      //    still shifts. Turn the adaptation off and the room warms up.
+      const brightest = (over) => { const d = shot(g.source, { expose: [1.6], ...over });
+        let best = -1, bi = 0;
+        for (let y = 4; y < H3 * 0.30; y++) for (let x = 4; x < W3 - 4; x++) {
+          const i = (y * W3 + x) * 4, t = d[i] + d[i + 1] + d[i + 2];
+          if (t > best) { best = t; bi = i; } }
+        return [d[bi], d[bi + 1], d[bi + 2]]; };
+      const warmRaw = brightest({ kelvin: [2856], adapt: [0] });
+      const coolRaw = brightest({ kelvin: [9000], adapt: [0] });
+      const warmFit = brightest({ kelvin: [2856], adapt: [1] });
+      const coolFit = brightest({ kelvin: [9000], adapt: [1] });
+      if (!(warmRaw[0] - warmRaw[2] > 40)) bad.push("an unadapted room is not warm under tungsten");
+      if (!(coolRaw[2] - coolRaw[0] > 40)) bad.push("an unadapted room is not cool under a cold sky");
+      const constancy = Math.max(...warmFit.map((c, k) => Math.abs(c - coolFit[k])));
+      if (constancy > 6) bad.push(`an adapted room moves ${constancy}/255 with the lamp`);
+
+      // 2. The absorption tail is exponential in photon *energy* — Urbach's
+      //    rule — so widening it reaches further down into the visible and
+      //    the membrane gets warmer. In wavelength it would not behave so.
+      const warmthAt = (u2) => { const d = shot(g.source, { expose: [1.4], urbach: [u2], clarity: [1] });
+        let r = 0, b2 = 0, n = 0;
+        for (let y = Math.round(H3 * 0.42); y < H3 * 0.58; y++)
+          for (let x = Math.round(W3 * 0.28); x < W3 * 0.72; x++) {
+            const i = (y * W3 + x) * 4; r += d[i]; b2 += d[i + 2]; n++; }
+        return +((r - b2) / n).toFixed(2); };
+      const narrow = warmthAt(0.25), wide = warmthAt(0.85);
+      if (!(wide > narrow + 1)) bad.push(`a wider Urbach tail did not warm the membrane (${narrow} to ${wide})`);
+      if (!/1239\.84 \/ nm/.test(stripComments(g.source))) bad.push("the tail is not in photon energy");
+
+      // 3. The cells crowd towards the leading edge, which is the edge that
+      //    meets the air. Rows are crossed by going across the wing, so the
+      //    gaps between crossings should be shorter in the leading half.
+      const veinSrc = cut(g.source, "  return col;\n}\n", "  return vec3(vein);\n}\n");
+      const gaps = (lead) => { const d = shot(veinSrc, { cells: [10], leadFine: [1.2] });
+        const all = [];
+        for (let x = Math.round(W3 * 0.35); x < W3 * 0.65; x += 5) {
+          const hits = [];
+          let was = false;
+          for (let y = 0; y < H3; y++) {
+            const on = d[(y * W3 + x) * 4] > 128;
+            if (on && !was) hits.push(y);
+            was = on;
+          }
+          if (hits.length < 4) continue;
+          const mid = (hits[0] + hits[hits.length - 1]) / 2;
+          for (let k = 1; k < hits.length; k++) {
+            const at = (hits[k] + hits[k - 1]) / 2;
+            // y grows downward; the leading edge is the upper half.
+            if (lead === (at < mid)) all.push(hits[k] - hits[k - 1]);
+          }
+        }
+        return all.length ? all.reduce((t, x) => t + x, 0) / all.length : 0; };
+      const leadGap = gaps(true), trailGap = gaps(false);
+      if (!(leadGap > 0 && trailGap > 0 && leadGap < trailGap * 0.92)) {
+        bad.push(`rows are not finer at the leading edge (${leadGap.toFixed(1)} against ${trailGap.toFixed(1)})`);
+      }
+
+      // 4. Clarity, and scale. A wing you can thin out and a wing you can
+      //    resize — and the size has to be the *wing*, not the lattice, so
+      //    the count of cells must not change with it.
+      const span = (over) => { const d = shot(veinSrc, over);
+        let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+        for (let i = 0; i < W3 * H3; i++) if (d[i * 4] > 100) {
+          const x = i % W3, y = (i / W3) | 0;
+          x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+        return x1 < 0 ? [0, 0] : [x1 - x0 + 1, y1 - y0 + 1]; };
+      const small = span({ scale: [0.6] }), norm = span({}), big = span({ scale: [1.6] });
+      const gotSmall = small[1] / Math.max(norm[1], 1), gotBig = big[1] / Math.max(norm[1], 1);
+      if (Math.abs(gotSmall - 0.6) > 0.06) bad.push(`scale 0.6 gave ${gotSmall.toFixed(2)}`);
+      if (Math.abs(gotBig - 1.6) > 0.10) bad.push(`scale 1.6 gave ${gotBig.toFixed(2)}`);
+      const lev = (over) => { const d = shot(g.source, { expose: [1.3], ...over });
+        let t = 0, n = 0;
+        for (let y = Math.round(H3 * 0.42); y < H3 * 0.58; y++)
+          for (let x = Math.round(W3 * 0.28); x < W3 * 0.72; x++) {
+            const i = (y * W3 + x) * 4; t += Math.max(d[i], d[i + 1], d[i + 2]); n++; }
+        return +(t / n).toFixed(1); };
+      const clearL = lev({ clarity: [1] }), milkyL = lev({ clarity: [0] });
+      if (!(milkyL > clearL)) bad.push(`a milky wing is not brighter than a clear one (${clearL} to ${milkyL})`);
+
+      push({ group: "Generate presets", name: "a wing you can resize, thin out, and light how you like",
+             ok: bad.length === 0,
+             detail: bad.length ? bad.join(" · ")
+               : `the room is lit by the same lamp as the wing: unadapted it reads `
+                 + `${warmRaw.join(",")} under tungsten and ${coolRaw.join(",")} under a cold sky, and `
+                 + `adapted it does not move at all (${constancy}/255 between them) — which is the von `
+                 + `Kries prediction rather than a shortcut, and the reason the *film* still shifts while a `
+                 + `grey wall does not. The absorption is Urbach's rule, exponential in photon energy `
+                 + `rather than in wavelength, so widening the tail reaches further into the visible and `
+                 + `the membrane warms from ${narrow} to ${wide} in red-minus-blue. Rows crowd towards the `
+                 + `leading edge — ${leadGap.toFixed(1)} pixels between them against ${trailGap.toFixed(1)} `
+                 + `at the trailing — because that is the edge that meets the air. Scale moves the wing and `
+                 + `not the lattice: 0.6 measured ${gotSmall.toFixed(2)}, 1.6 measured `
+                 + `${gotBig.toFixed(2)}. And a milky wing is brighter than a clear one, ${clearL} to `
+                 + `${milkyL}, because the light it stops passing through comes back out as scatter rather `
+                 + `than disappearing` });
+    } catch (e) {
+      push({ group: "Generate presets", name: "a wing you can resize, thin out, and light how you like",
+             ok: false, detail: String(e.message).split("\n")[0] });
+    }
+
     // An annotation that ate the ones after it.
     { const one = parseUniforms("uniform float k; // @toggle @label the switch @default 1 @help why");
       const two = parseUniforms("uniform float k; // @range 0 4 @label a name @step 2");
