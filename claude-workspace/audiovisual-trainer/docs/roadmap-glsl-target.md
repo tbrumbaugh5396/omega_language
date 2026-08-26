@@ -3240,6 +3240,82 @@ absorption coefficients; the venation is one order of secondaries where a real
 leaf has three or four nested; and there is no specular sheen difference
 between the upper and lower surface, which is most of how you tell them apart.
 
+### Phase 44 — Franck–Condon, four orders, two faces — and a light that was off *(L)* — **shipped**
+
+The leaf's three leftovers, and a bug they turned up that was bigger than all
+three.
+
+**The pigment bands stopped being Gaussians.** A Gaussian at a peak position
+is a curve fitted to a picture of a spectrum. What a molecular band actually
+is: the molecule can arrive in any vibrational level of the excited state, so
+one electronic transition makes a *progression* of sub-bands one vibrational
+quantum apart, with Poisson intensities set by the Huang–Rhys factor. Franck
+and Condon.
+
+Two things follow that a Gaussian cannot give. The spacing is constant in
+**wavenumber**, so a band is symmetric in energy and skewed in nanometres —
+which is the shoulder that had to be hand-added before, now arriving on its
+own. And a carotenoid's three peaks are **one transition**: setting the origin
+at 478 nm with a 1400 cm⁻¹ C=C stretch puts the others at **448 and 422**
+without being told. Measured, and the check counts them.
+
+It is still a model and not a table, so the sketch now takes one: an image
+whose width is 380–730 nm and whose channels are the three specific absorption
+coefficients — the shape PROSPECT's numbers come in. The point of the hook is
+that this sketch should not be the thing standing between you and measured
+data.
+
+*The window narrowed, and that is the model improving.* Gaussians gave 120×
+between the bands and the green; the progression gives **11.5×**, because a
+vibronic progression genuinely reaches up out of the red band and real
+chlorophyll genuinely does absorb weakly at 550 nm.
+
+**Four orders of venation.** Midrib, secondaries, a percurrent third-order
+ladder between them, areoles, and *freely-ending veinlets* — stubs that leave
+a wall, run a little way in and stop without joining anything. Real leaves are
+full of them, and they are what makes a venation read as a leaf rather than as
+a net: a net's business is to connect and these deliberately do not. Each
+order measured by removing it.
+
+*The veinlets were drawn and invisible for a round.* The wall distance is in
+*cell* units and an areole is one unit across, so a width of 0.055 is six
+tenths of a pixel — present in the arithmetic, absent from the picture, and
+contributing exactly zero to any measurement.
+
+**Two faces.** The palisade layer is packed against the *upper* surface, so
+the lower has fewer chloroplasts; what it has instead is spongy mesophyll, all
+air spaces, which scatters hard. Both make it paler, and the cuticle is thick
+and smooth above and thin and broken by stomata below, so the shine very
+nearly goes away. Turning the leaf over mirrors the venation with it, and the
+veins stand *proud* underneath where they are sunk into the blade on top.
+Measured: saturation **29 upper against 16 lower**.
+
+**And the light was pointing the wrong way — in both sketches.**
+
+`reflect(view, nrm)` comes back *out* of the screen. Both sketches put the
+light at negative z, pointing *into* it, so `max(dot(...), 0.0)` was the zero
+every single time. The wing's narrow specular band — tuned over a whole round,
+and written up here as the difference between a wing and a decal — **did
+nothing**. Neither did `lightTurn`, in either sketch. The leaf had no diffuse
+term at all and was lit by its ambient constant alone.
+
+Measured as 0 max and 0 mean over the subject, for `lobe1`, `lam` and `spec`
+alike. Nothing caught it because **a term that is always zero still produces a
+picture**, and a picture was what everything else was checking. Worse: both
+sketches were then tuned to look right *without* those terms, so restoring the
+light broke the tuning of both — the wing's iridescence collapsed into sparks
+at an exponent of 16 chosen while the term was dead, and the leaf blew out to
+a mean of 226 of 255.
+
+There is now a check that asks each lighting term whether it is ever non-zero
+on the thing it lights. It is the cheapest possible question and it would have
+caught this the day it shipped.
+
+*Left:* the pigment table hook is untested against real PROSPECT coefficients,
+because none are to hand; the leaf's areoles do not grade in size from midrib
+to margin as a real one's do; and there is still no third dimension — both
+sketches are a flat sheet seen face-on, so neither can be turned edge-on.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -3324,6 +3400,7 @@ between the upper and lower surface, which is most of how you tell them apart.
 | 41.1 | Lamp, transmission, setae, ranks — **shipped** | M | 40.1 | mirror neutral at any K; 1−T matches R 97%; setae spread 0.55 |
 | 42.1 | Urbach, adaptation knob, clarity, scale — **shipped** | M | 41.1 | room 149,112,63 warm vs 99,125,180 cool unadapted; scale exact |
 | 43.1 | A leaf, sharing the net not the optics — **shipped** | L | 42.1 | green window 170× clearer; hue 111°/40°/342°; R+T ≤ 0.93 |
+| 44.1 | Franck–Condon, four orders, two faces — **shipped** | L | 43.1 | carotenoid peaks 422/448/478 from one transition; the light was zero in both sketches |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

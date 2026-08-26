@@ -1654,7 +1654,16 @@ vec3 shadeWing(vec2 pp) {
                             (hash21(cell.yz + 3.1) - 0.5) * 0.34 * dome + edge * 0.12, 1.0));
 
   vec3 view = normalize(vec3(pp * 0.30, -1.0));
-  vec3 lightDir = normalize(vec3(sin(lightTurn), 0.45 + 0.7 * tilt, -0.8));
+  // The light is on the *viewer's* side of the wing, so its z is positive.
+  //
+  // It was negative, and that made every specular term in this sketch exactly
+  // zero. reflect(view, nrm) points back out of the screen; a light pointing
+  // into it can never be in that direction, so max(dot(...), 0.0) was always
+  // the zero. The narrow lobe tuned over a whole round, the band that was
+  // supposed to sweep as the wing turns, and lightTurn itself: none of them
+  // did anything, and the iridescence was coming from the constant term and
+  // the Fresnel factor alone. Measured as 0 max, 0 mean over the membrane.
+  vec3 lightDir = normalize(vec3(sin(lightTurn), 0.45 + 0.7 * tilt, 0.8));
   vec3 halfv = normalize(lightDir - view);
   float cosI = clamp(abs(dot(halfv, nrm)), 0.05, 1.0);
 
@@ -1671,7 +1680,11 @@ vec3 shadeWing(vec2 pp) {
   // wing, which is a thing you can watch happen.
   // The specular lobe, needed above as well as below, so it is worked out
   // before either of them wants it.
-  float lobe0 = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 16.0);
+  // Broad enough to be a band across the wing rather than a scatter of
+  // sparks. Sixteen was chosen while this term was identically zero, so it
+  // was never a judgement about anything; with the light pointing the right
+  // way it collapsed the iridescence into a handful of bright specks.
+  float lobe0 = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 6.0);
   vec3 bent = refract(view, nrm, 1.0 / max(nFilm, 1.05));
   vec3 through = behind(pp + bent.xy * bend * 0.30);
   // …and it comes through *tinted*, which is the other half of the same
@@ -1701,7 +1714,7 @@ vec3 shadeWing(vec2 pp) {
   // a real one does that a photograph of one cannot.
   float lobe1 = lobe0;
   float fres = 0.06 + 0.94 * pow(1.0 - clamp(dot(nrm, -view), 0.0, 1.0), 4.0);
-  col += film * (0.03 + 3.6 * lobe1 * (0.25 + 0.75 * fres));
+  col += film * (0.05 + 1.25 * lobe1 * (0.25 + 0.75 * fres));
 
   // The veins: solid chitin. No film, so no colour — which is the tell that
   // this is interference and not a dye. They stay the same brown at every
@@ -1782,6 +1795,12 @@ finish(col)` },
 // reuse is the point: the integrator is the general thing, and what you put
 // under it decides whether you get a dragonfly or an oak.
 
+// A measured table, if you have one. The image's width is 380 to 730 nm and
+// its channels are the specific absorption of chlorophyll a, chlorophyll b
+// and the carotenoids — which is the shape PROSPECT's coefficients come in.
+// Without one the sketch falls back to the band model below, and says so.
+uniform sampler2D spectra; // @image
+uniform vec2  spectra_size;
 uniform float chlA;       // @range 0 40 @default 17 @help chlorophyll a, arbitrary units
 uniform float chlB;       // @range 0 20 @default 6 @help chlorophyll b
 uniform float carot;      // @range 0 20 @default 4.5 @help carotenoids, which outlast the chlorophyll
@@ -1797,14 +1816,17 @@ uniform float kelvin;     // @range 1800 12000 @step 50 @default 6500 @help the 
 uniform float adapt;      // @range 0 1 @default 1 @help how far the eye is adapted to it
 uniform float backlight;  // @range 0 1 @default 0.55 @help how much of the light is behind the leaf
 uniform float veinsN;     // @range 3 14 @step 1 @int @default 8 @help pairs of secondary veins
+uniform float tertiary;   // @range 0 14 @step 1 @int @default 6 @help third-order veins, the ladder between the seconds
 uniform float areoles;    // @range 2 20 @step 1 @int @default 9 @help compartments between them
+uniform float veinlets;   // @range 0 1 @default 0.7 @help stubs that end inside an areole and join nothing
+uniform float face;       // @options upper,lower @default 0 @label the face you are looking at
 uniform float teeth;      // @range 0 1 @default 0.6 @help how toothed the margin is
 uniform float gloss;      // @range 0 1 @default 0.45 @help the cuticle's shine
 uniform float bullate;    // @range 0 1 @default 0.5 @help how much the blade puffs between veins
 uniform float lightTurn;  // @range -3.15 3.15 @default -0.8
 uniform float scale;      // @range 0.3 2.5 @default 1
 uniform vec3  backC;      // @color @default #0a0c10
-uniform float expose;     // @range -2 2 @default 0.3
+uniform float expose;     // @range -2 2 @default 0
 
 const float PI = 3.14159265;
 
@@ -1856,29 +1878,77 @@ vec3 lampWhite() {
 }
 
 // -------------------------------------------------------------- the pigments
-// Gaussians at the peaks the pigments are actually reported at. Chlorophyll a
-// takes the blue at 430 and the red at 662; chlorophyll b sits beside it at
-// 453 and 642; the carotenoids are a broad blue band that outlives both, and
-// anthocyanin is the green-absorber a leaf manufactures on its way out.
-//
-// The positions are literature; the widths are approximate and the units are
-// arbitrary, which is the honest description of a Gaussian fit to a molecular
-// spectrum. What matters is not the exact shape but the *gap*: nothing here
-// absorbs much around 550 nm, and that gap is the only reason a leaf is
-// green. There is no green pigment. There is a hole in the absorption.
-float gauss(float x, float mu, float sd) { float k = (x - mu) / sd; return exp(-0.5 * k * k); }
+/**
+ * A molecular absorption band, as spectroscopy has it.
+ *
+ * The first version was Gaussians at the peak positions, with a hand-added
+ * shoulder where the shape came out wrong. That is a curve fitted to a
+ * picture of a spectrum. This is the spectrum's own structure.
+ *
+ * An electronic transition does not make one peak. The molecule can arrive in
+ * any vibrational level of the excited state, so the band is a *progression*:
+ * a series of sub-bands one vibrational quantum apart, with intensities set
+ * by how well the two states overlap — Franck and Condon, and for a displaced
+ * harmonic oscillator those intensities are Poisson, exp(-S)·S^m/m!, with S
+ * the Huang-Rhys factor.
+ *
+ * Two things follow that a Gaussian cannot give. The spacing is constant in
+ * **wavenumber**, not in wavelength, so a band is symmetric plotted against
+ * energy and skewed plotted against nanometres — which is the shoulder that
+ * had to be added by hand before, now arriving on its own. And a carotenoid's
+ * famous three peaks at roughly 425, 450 and 478 are not three pigments or
+ * three Gaussians: they are one transition, three members of one progression,
+ * 1400 wavenumbers apart. Setting the origin at 478 puts the other two where
+ * they belong without being told.
+ */
+float band(float nm, float nm0, float widthCm, float quantumCm, float huang) {
+  float wn = 1.0e7 / nm;                             // wavenumbers, per centimetre
+  float wn0 = 1.0e7 / nm0;
+  float sum = 0.0;
+  float weight = exp(-huang);
+  for (int m = 0; m < 5; m++) {
+    float d = (wn - (wn0 + float(m) * quantumCm)) / widthCm;
+    sum += weight * exp(-0.5 * d * d);
+    weight *= huang / float(m + 1);                  // Poisson, one term at a time
+  }
+  return sum;
+}
 
+/**
+ * What absorbs, and how much of it there is.
+ *
+ * If a table has been supplied it is used and the model is not: the image's
+ * width runs 380 to 730 nm and its channels are the three specific absorption
+ * coefficients. That is the shape PROSPECT's numbers come in, and the point of
+ * the hook is that this sketch should not be the thing standing between you
+ * and measured data.
+ *
+ * Without one, the bands above. They are a model and not a measurement, and
+ * the difference is worth keeping in view — but it is a model of the right
+ * kind, which the Gaussians were not.
+ */
 float pigmentK(float nm) {
-  // The red bands are wider than the first attempt made them. A Q band drawn
-  // at fourteen nanometres wide leaves six hundred to six-forty almost clear,
-  // so the red channel came back nearly full and the leaf read yellow-green
-  // at a hue of 64 degrees. The real band is broad and has a vibronic
-  // shoulder below it; both are here, and the hue moves where it should.
-  return chlA  * (1.00 * gauss(nm, 430.0, 24.0) + 0.88 * gauss(nm, 662.0, 21.0)
-                 + 0.30 * gauss(nm, 615.0, 24.0))
-       + chlB  * (0.86 * gauss(nm, 453.0, 21.0) + 0.48 * gauss(nm, 642.0, 18.0))
-       + carot * (0.90 * gauss(nm, 448.0, 26.0) + 0.72 * gauss(nm, 476.0, 22.0))
-       + antho * gauss(nm, 540.0, 44.0);
+  if (spectra_size.x > 0.5) {
+    vec3 tab = texture2D(spectra, vec2(clamp((nm - 380.0) / 350.0, 0.0, 1.0), 0.5)).rgb;
+    return chlA * tab.r + chlB * tab.g + carot * tab.b + antho * band(nm, 540.0, 1900.0, 0.0, 0.0);
+  }
+  // Chlorophyll: a narrow Q band in the red and a broad Soret in the blue,
+  // each with its own progression. Chlorophyll b sits inside a's window,
+  // which is why a leaf with both is darker than a leaf with either.
+  float a = chlA * (0.92 * band(nm, 662.0, 430.0, 1250.0, 0.55)
+                  + 1.00 * band(nm, 430.0, 1150.0, 1300.0, 0.90));
+  float b = chlB * (0.55 * band(nm, 642.0, 400.0, 1250.0, 0.50)
+                  + 0.92 * band(nm, 453.0, 1050.0, 1300.0, 0.85));
+  // The carotenoids: one transition, three peaks, and nothing said about the
+  // other two. 1400 per centimetre is the C=C stretch they are counted by.
+  // Narrow enough to resolve. At 700 per centimetre against a spacing of
+  // 1400 the members merge into one hump and the three peaks disappear — a
+  // progression you cannot see the members of is a Gaussian with extra steps.
+  float c = carot * 1.05 * band(nm, 478.0, 380.0, 1400.0, 1.00);
+  // Anthocyanin is broad and structureless in the green — a single band with
+  // no progression to speak of, which is what a zero quantum says.
+  float d = antho * band(nm, 540.0, 1900.0, 0.0, 0.0);
+  return a + b + c + d;
 }
 
 /**
@@ -1952,18 +2022,27 @@ float veinPhase(vec2 q, float rAcross) {
 
 vec2 cellJitter(vec2 id) { return vec2(hash21(id), hash21(id + 17.3)); }
 
-/** The same border metric as the wing. A net is a net. */
-float areoleWall(vec2 at) {
+/**
+ * The same border metric as the wing — a net is a net — and one thing the
+ * wing has no use for.
+ *
+ * x is the distance to the wall between two areoles. y is the distance to a
+ * *freely-ending veinlet*: a stub that leaves the wall, runs a little way in,
+ * and stops without joining anything. Real leaves are full of them, and they
+ * are the detail that makes a venation read as a leaf rather than as a net —
+ * a net's business is to connect, and these deliberately do not.
+ */
+vec2 areoleWall(vec2 at) {
   vec2 base = floor(at);
   vec2 f = at - base;
-  vec2 bestR = vec2(0.0);
+  vec2 bestR = vec2(0.0), bestId = base;
   float bestD = 1e9;
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
       vec2 g = vec2(float(i), float(j));
       vec2 r = g + cellJitter(base + g) - f;
       float d = dot(r, r);
-      if (d < bestD) { bestD = d; bestR = r; }
+      if (d < bestD) { bestD = d; bestR = r; bestId = base + g; }
     }
   }
   float wall = 1e9;
@@ -1977,7 +2056,13 @@ float areoleWall(vec2 at) {
       wall = min(wall, dot(0.5 * (bestR + r), diff * inversesqrt(dd)));
     }
   }
-  return wall;
+  // The stub. It starts out from the areole's own centre in a direction the
+  // cell decides for itself and dies partway to the wall.
+  vec2 dir = normalize(vec2(hash21(bestId + 2.3), hash21(bestId + 8.1)) - 0.5 + 1e-4);
+  float len = 0.20 + 0.32 * hash21(bestId + 4.4);
+  vec2 rel = -bestR;                                 // the feature point to here
+  float tAlong = clamp(dot(rel, dir), 0.0, len);
+  return vec2(wall, length(rel - dir * tAlong));
 }
 
 vec3 behind(vec2 pp) {
@@ -1997,8 +2082,12 @@ vec3 behind(vec2 pp) {
 // ------------------------------------------------------------- the picture
 vec3 shadeLeaf(vec2 pp) {
   vec3 bg = behind(pp);
+  // Which side you are looking at. Turning a leaf over mirrors it, so the
+  // venation has to mirror with it — and then everything below changes,
+  // because the two faces of a leaf are two different tissues.
+  float under = face > 0.5 ? 1.0 : 0.0;
   vec2 r0 = pp / max(scale, 0.05);
-  vec2 q = vec2((r0.x + 1.30) / 2.55, r0.y / 0.86);
+  vec2 q = vec2((r0.x + 1.30) / 2.55, (under > 0.5 ? -r0.y : r0.y) / 0.86);
   if (q.x < -0.06 || q.x > 1.06) return bg;
 
   float half_ = wid(q.x) * 0.5;
@@ -2021,9 +2110,32 @@ vec3 shadeLeaf(vec2 pp) {
   float second = smoothstep(0.09, 0.02, abs(fract(ph) - 0.5) * 2.0 - 0.86);
   // The areoles are laid in the vein's own coordinates, so they are elongated
   // along the veins and stop at them — the leaf's version of the wing's ranks.
-  float wall = areoleWall(vec2(ph * 1.15, rAcross * float(areoles)));
-  float mesh = smoothstep(0.10, 0.025, wall);
-  float vein = clamp(midrib + second * 0.85 + mesh * 0.80, 0.0, 1.0);
+  // Third order: the ladder. Percurrent cross-veins run between neighbouring
+  // secondaries at roughly right angles to them, which in this coordinate is
+  // a line of constant distance-across rather than constant phase. Staggered
+  // per band, because a real ladder's rungs do not line up across the leaf.
+  float rung = rAcross * float(tertiary) + 0.42 * hash21(vec2(floor(ph), 3.0));
+  float third = float(tertiary) > 0.5
+    ? smoothstep(0.13, 0.03, abs(fract(rung) - 0.5) * 2.0 - 0.82) * smoothstep(0.06, 0.16, rAcross)
+    : 0.0;
+
+  // Fourth order and below: the areoles, and the stubs inside them.
+  vec2 ar = areoleWall(vec2(ph * 1.15, rAcross * float(areoles)));
+  float mesh = smoothstep(0.10, 0.025, ar.x);
+  // Wide enough to exist. The wall distance is in *cell* units and an areole
+  // is one unit across, so 0.055 of one is a line six tenths of a pixel wide
+  // at any sensible size — drawn, and invisible, and contributing nothing
+  // measurable. A veinlet is a vein; it gets a vein's width.
+  float stub = smoothstep(0.20, 0.075, ar.y) * veinlets;
+
+  // Four orders, each thinner than the one above it. That hierarchy is what
+  // a leaf's venation *is*, and drawing it as one mesh with a midrib through
+  // it was drawing the last order and calling it the whole.
+  // Weighted so each order is thinner than the one above and *all* of them
+  // are veins. At 0.40 the stubs never reached half strength, so they were
+  // drawn and then had no effect on anything downstream — present in the
+  // arithmetic and absent from the picture, which is the worst of both.
+  float vein = clamp(midrib + second * 0.85 + third * 0.70 + mesh * 0.62 + stub * 0.78, 0.0, 1.0);
 
   // A vein is thicker, carries far less pigment, and scatters more — pale
   // vascular tissue rather than green mesophyll. All three matter, and the
@@ -2031,8 +2143,15 @@ vec3 shadeLeaf(vec2 pp) {
   // against pigment down to 0.38 is an optical depth of 1.1x, which is no
   // change at all, and the veins were invisible for exactly that reason.
   float d = thick * (1.0 + 0.5 * vein) * (0.86 + 0.28 * (1.0 - rAcross));
-  float pigmentScale = 1.0 - 0.88 * vein;
-  float scatterScale = 1.0 + 1.6 * vein;
+  // The underside is a different tissue and looks it. The palisade layer —
+  // the dense rank of chloroplasts — is packed against the *upper* surface,
+  // so the lower face has fewer of them and is paler for that reason alone.
+  // What it has instead is spongy mesophyll, all air spaces and cell walls,
+  // which scatters hard: that is the second reason it is paler, and between
+  // them they are most of how you tell a leaf's two sides apart in a
+  // photograph.
+  float pigmentScale = (1.0 - 0.88 * vein) * (1.0 - 0.30 * under);
+  float scatterScale = (1.0 + 1.6 * vein) * (1.0 + 1.10 * under);
 
   vec3 refl, tran;
   // The pigment load is what changes across the leaf; the slab thickness is
@@ -2067,12 +2186,19 @@ vec3 shadeLeaf(vec2 pp) {
   // The blade puffs between the veins — bullate is the word — so the surface
   // is a quilt rather than a plane. The slope comes from how far inside a
   // compartment you are, so each areole domes and the veins are the creases.
-  float puff = bullate * smoothstep(0.0, 0.26, wall) * (1.0 - vein);
+  // …and the veins stand *proud* on the underside, where on the upper face
+  // they are sunk into the blade. Same veins, opposite relief, which is the
+  // other thing your fingers know about a leaf.
+  float puff = bullate * smoothstep(0.0, 0.26, ar.x) * (1.0 - vein);
+  puff -= under * bullate * vein * 0.55;
   vec2 cellId = floor(vec2(ph * 1.15, rAcross * float(areoles)));
   vec3 nrm = normalize(vec3((hash21(cellId) - 0.5) * puff * 1.5 + q.y * 0.10,
                             (hash21(cellId + 5.7) - 0.5) * puff * 1.5 + q.y * 0.30, 1.0));
   vec3 view = normalize(vec3(pp * 0.32, -1.0));
-  vec3 lightDir = normalize(vec3(sin(lightTurn), 0.5, -0.8));
+  // Positive z: the light is in front of the leaf, on the viewer's side. With
+  // it negative both the lambert term and the cuticle's highlight came out
+  // identically zero, and the leaf was lit by its ambient constant alone.
+  vec3 lightDir = normalize(vec3(sin(lightTurn), 0.5, 0.8));
 
   // Front light and back light. A leaf's two faces are two different pictures
   // of the same physics: what bounces off it and what comes through it.
@@ -2087,13 +2213,20 @@ vec3 shadeLeaf(vec2 pp) {
   // two and a tenth of nothing is nothing.
   float back = clamp(backlight, 0.0, 1.0);
   float lam = max(dot(nrm, lightDir), 0.0);
-  vec3 col = refl * gLamp * (0.30 + 1.00 * lam) * (1.0 - back * 0.75)
+  // The reflected term is scaled for a lambert that *works*. It was written
+  // against one that returned zero everywhere, so the leaf was lit by its
+  // ambient constant alone and the numbers were chosen to make that look
+  // right; with the light restored the same numbers blew the blade out to a
+  // mean of 226 of 255.
+  vec3 col = refl * gLamp * (0.075 + 0.30 * lam) * (1.0 - back * 0.75)
            + tran * bg * (0.5 + 7.0 * back);
 
-  // The cuticle: a waxy film on top, and the one thing on a leaf that is not
-  // coloured by pigment. It reflects the lamp's own colour, unchanged.
-  float spec = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 42.0);
-  col += gLamp * spec * gloss * 0.9 * (1.0 - back * 0.75);
+  // The cuticle: a waxy film, and the one thing on a leaf that is not
+  // coloured by pigment — it reflects the lamp's own colour, unchanged. It is
+  // thick and smooth on the upper face and thin and broken by stomata on the
+  // lower, so the shine very nearly goes away when you turn a leaf over.
+  float spec = pow(max(dot(reflect(view, nrm), lightDir), 0.0), mix(42.0, 9.0, under));
+  col += gLamp * spec * gloss * mix(0.9, 0.10, under) * (1.0 - back * 0.75);
 
   // The margin, softened, and a little darkening where the blade turns away.
   float rim = 1.0 - smoothstep(toothed - 0.03, toothed + 0.01, rAcross);

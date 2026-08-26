@@ -4338,12 +4338,20 @@ c`;
       }
 
       // The physics, computed here rather than read off the picture.
-      const gauss = (x, mu, sd) => { const k = (x - mu) / sd; return Math.exp(-0.5 * k * k); };
+      // Franck-Condon, matching the shader: a band is a progression of
+      // sub-bands one vibrational quantum apart in *wavenumber*, weighted by
+      // a Poisson distribution with the Huang-Rhys factor.
+      const band = (nm, nm0, wCm, qCm, S2) => {
+        const wn = 1e7 / nm, wn0 = 1e7 / nm0;
+        let sum = 0, wt = Math.exp(-S2);
+        for (let m = 0; m < 5; m++) { const d = (wn - (wn0 + m * qCm)) / wCm;
+          sum += wt * Math.exp(-0.5 * d * d); wt *= S2 / (m + 1); }
+        return sum; };
       const kAt = (nm, pg) =>
-          pg.chlA * (1.00 * gauss(nm, 430, 24) + 0.88 * gauss(nm, 662, 21) + 0.30 * gauss(nm, 615, 24))
-        + pg.chlB * (0.86 * gauss(nm, 453, 21) + 0.48 * gauss(nm, 642, 18))
-        + pg.carot * (0.90 * gauss(nm, 448, 26) + 0.72 * gauss(nm, 476, 22))
-        + pg.antho * gauss(nm, 540, 44);
+          pg.chlA * (0.92 * band(nm, 662, 430, 1250, 0.55) + 1.00 * band(nm, 430, 1150, 1300, 0.90))
+        + pg.chlB * (0.55 * band(nm, 642, 400, 1250, 0.50) + 0.92 * band(nm, 453, 1050, 1300, 0.85))
+        + pg.carot * 1.05 * band(nm, 478, 380, 1400, 1.00)
+        + pg.antho * band(nm, 540, 1900, 0, 0);
       const slab = (k, s2, d) => { if (s2 < 1e-5) return [0, Math.exp(-k * d)];
         const a2 = (s2 + k) / s2, b2 = Math.sqrt(Math.max(a2 * a2 - 1, 1e-9));
         const e = Math.exp(Math.min(b2 * s2 * d, 24)), ei = 1 / e;
@@ -4355,7 +4363,12 @@ c`;
       // 1. Nothing absorbs the green. That is the whole reason a leaf is one.
       const kBlue = kAt(430, P), kGreen = kAt(550, P), kRed = kAt(662, P);
       const window = Math.min(kBlue, kRed) / Math.max(kGreen, 1e-4);
-      if (!(window > 20)) bad.push(`the green window is only ${window.toFixed(0)} times clearer`);
+      // Eleven, not a hundred. The band model absorbs a little in the green
+      // where the Gaussians absorbed almost nothing, because a vibronic
+      // progression genuinely reaches up out of the red band — and real
+      // chlorophyll genuinely does absorb weakly at 550. A smaller number
+      // here is the model getting *better*, not worse.
+      if (!(window > 7)) bad.push(`the green window is only ${window.toFixed(1)} times clearer`);
 
       // 2. Kubelka and Munk do not make light. R + T must never exceed one.
       let worst = 0;
@@ -4387,9 +4400,91 @@ c`;
       const anthocyanin = hueOf({ chlA: 0, chlB: 0, carot: 5, antho: 12 });
       if (!(summer > 85 && summer < 145)) bad.push(`a summer leaf is not green (hue ${summer})`);
       if (!(autumn > 20 && autumn < 70)) bad.push(`losing the chlorophyll does not give autumn (hue ${autumn})`);
-      if (!(anthocyanin > 300 || anthocyanin < 20)) bad.push(`anthocyanin is not red (hue ${anthocyanin})`);
+      // Anthocyanin alone comes out *purple*, not red, and that is correct:
+      // it absorbs the middle of the spectrum, so what is left is both ends
+      // at once. A red leaf needs carotenoids as well, to take the blue away.
+      if (!(anthocyanin > 255 || anthocyanin < 20)) bad.push(`anthocyanin is not magenta (hue ${anthocyanin})`);
 
-      // 4. And it draws.
+      // 4. The carotenoid's three peaks are one transition, not three
+      //    pigments. Nothing puts them at 422 and 448 — the progression does.
+      const car = (nm) => 1.05 * band(nm, 478, 380, 1400, 1.0);
+      const peaks = [];
+      for (let nm = 400; nm <= 520; nm += 0.5) {
+        if (car(nm) > car(nm - 0.5) && car(nm) >= car(nm + 0.5)) peaks.push(Math.round(nm));
+      }
+      if (peaks.length !== 3) bad.push(`the carotenoid progression shows ${peaks.length} peaks, not 3`);
+      if (!/1\.0e7 \/ nm/.test(src)) bad.push("the bands are not built in wavenumber");
+      if (!/spectra_size\.x > 0\.5/.test(src)) bad.push("there is no hook for a measured table");
+
+      // 5. Four orders of vein, each doing something. Measured by taking one
+      //    away at a time, on the vein mask alone so the background cannot
+      //    be counted as venation — which it was, at 96% of the frame.
+      const VW = 900, VH = 560;
+      const veinOnly = cut(g.source, "  return mix(bg, col, clamp(rim, 0.0, 1.0));\n}\n",
+                           "  return vec3(vein) * clamp(rim, 0.0, 1.0);\n}\n");
+      const veinPx = (over) => { const d = renderSketch(veinOnly, VW, VH,
+          { frame: 0, time: 0, values: { ...base, ...over } })
+          .getContext("2d").getImageData(0, 0, VW, VH).data;
+        let n = 0; for (let i2 = 0; i2 < VW * VH; i2++) if (d[i2 * 4] > 128) n++; return n; };
+      const orders = { all: veinPx({}) };
+      orders.secondAdds = orders.all - veinPx({ veinsN: [3] });
+      orders.thirdAdds = orders.all - veinPx({ tertiary: [0] });
+      // The areoles cannot be measured by removing them: making the lattice
+      // coarse removes no wall, it makes each wall thicker in the same
+      // proportion, so the ink on the page is unchanged. That is the same
+      // scale invariance the wing's net has, and it has now caught me twice.
+      // What changes is how many walls a line across the leaf *crosses*.
+      // …and measured on the areole term *alone*. Counting crossings of the
+      // combined vein mask gave 1.8 against 2.1, because midrib, seconds,
+      // ladder, mesh and stubs together saturate it over most of the blade
+      // and a saturated mask has no edges to count. The question is about one
+      // order, so it is asked of one order.
+      const meshOnly = cut(g.source, "  return mix(bg, col, clamp(rim, 0.0, 1.0));\n}\n",
+                           "  return vec3(mesh) * clamp(rim, 0.0, 1.0);\n}\n");
+      const crossings = (n) => { const d = renderSketch(meshOnly, VW, VH,
+          { frame: 0, time: 0, values: { ...base, areoles: [n] } })
+          .getContext("2d").getImageData(0, 0, VW, VH).data;
+        let total = 0, rows = 0;
+        for (let x = Math.round(VW * 0.40); x < VW * 0.60; x += 7) {
+          let was = false, run = 0;
+          for (let y = Math.round(VH * 0.25); y < VH * 0.75; y++) {
+            const on = d[(y * VW + x) * 4] > 128;
+            if (on && !was) run++;
+            was = on;
+          }
+          total += run; rows++;
+        }
+        return total / Math.max(rows, 1); };
+      const fewAreoles = crossings(4), manyAreoles = crossings(16);
+      orders.veinletsAdd = orders.all - veinPx({ veinlets: [0] });
+      for (const [what, n] of [["the third order", orders.thirdAdds],
+                               ["the veinlets", orders.veinletsAdd]]) {
+        if (!(n > 100)) bad.push(`${what} contribute ${n} pixels`);
+      }
+      if (!(manyAreoles > fewAreoles * 1.4)) {
+        bad.push("a finer areole lattice is not more compartments "
+          + `(${fewAreoles.toFixed(1)} against ${manyAreoles.toFixed(1)} crossed)`);
+      }
+
+      // 6. Two faces. The underside is paler because the palisade layer is
+      //    packed against the *upper* surface and what the lower one has is
+      //    spongy mesophyll, which scatters hard — and it is matte, because
+      //    the cuticle up there is thick and down here is not.
+      const satOf = (over) => { const d = renderSketch(g.source, 340, 212,
+          { frame: 0, time: 0, values: { ...base, backlight: [0], ...over } })
+          .getContext("2d").getImageData(0, 0, 340, 212).data;
+        let t = 0, n = 0;
+        for (let y = Math.round(212 * 0.38); y < 212 * 0.62; y++)
+          for (let x = Math.round(340 * 0.30); x < 340 * 0.70; x++) {
+            const i2 = (y * 340 + x) * 4;
+            t += Math.max(d[i2], d[i2 + 1], d[i2 + 2]) - Math.min(d[i2], d[i2 + 1], d[i2 + 2]); n++; }
+        return t / n; };
+      const upper = satOf({}), lower = satOf({ face: [1] });
+      if (!(upper > lower * 1.4)) {
+        bad.push(`the two faces are alike (saturation ${upper.toFixed(0)} against ${lower.toFixed(0)})`);
+      }
+
+      // 7. And it draws.
       const d2 = renderSketch(g.source, 240, 150, { frame: 0, time: 0, values: { ...base } })
         .getContext("2d").getImageData(0, 0, 240, 150).data;
       let greener = 0;
@@ -4408,10 +4503,66 @@ c`;
                  + `Nothing in the sketch is told to be. Kubelka and Munk keep the books: R + T never `
                  + `exceeds ${worst.toFixed(3)}. And the hue is a consequence — ${summer}° with the `
                  + `chlorophyll in, ${autumn}° with it gone and the carotenoids left, ${anthocyanin}° with `
-                 + `anthocyanin instead, which is a summer, an autumn and a red maple in one integral` });
+                 + `anthocyanin instead — purple rather than red, because anthocyanin takes the middle of `
+                 + `the spectrum and leaves both ends, which is why a red leaf needs carotenoids too. The `
+                 + `pigment bands are Franck-Condon progressions in wavenumber rather than Gaussians in `
+                 + `wavelength, so the carotenoid's three peaks at ${peaks.join(", ")} nm are one `
+                 + `transition and not three pigments — nothing puts the other two there. Four orders of `
+                 + `vein, each measured by taking it away: the third adds ${orders.thirdAdds} pixels, the `
+                 + `areoles take a line across the blade from ${fewAreoles.toFixed(1)} crossings to `
+                 + `${manyAreoles.toFixed(1)} between four rows and sixteen — counted rather than inked, `
+                 + `because a coarser lattice has thicker walls and the same area of them — and the `
+                 + `freely-ending veinlets add ${orders.veinletsAdd} pixels. And the `
+                 + `two faces differ as the anatomy says — saturation ${upper.toFixed(0)} on the upper `
+                 + `against ${lower.toFixed(0)} on the lower, which is the palisade layer being packed `
+                 + `against the top and the spongy mesophyll scattering underneath` });
     } catch (e) {
       push({ group: "Generate presets", name: "a leaf: the same net, and colour by pigment instead of interference",
              ok: false, detail: String(e.message).split("\n")[0] });
+    }
+
+    // Lighting terms that are not identically zero.
+    //
+    // Both of these sketches shipped with their light pointing the wrong way
+    // down the z axis. reflect(view, nrm) comes back *out* of the screen; a
+    // light pointing *into* it can never lie in that direction, so
+    // max(dot(...), 0.0) was the zero every time. The wing's narrow specular
+    // band — tuned over a whole round, and written up as the difference
+    // between a wing and a decal — did nothing at all, and neither did the
+    // leaf's lambert term or its cuticle. Both sketches were then tuned to
+    // look right *without* the term, so restoring it broke the tuning.
+    //
+    // Nothing caught it because a term that is always zero produces a picture,
+    // and a picture is what everything else was checking. This asks the
+    // question directly, of every sketch that has a light to point.
+    { const bad = [];
+      for (const [id, terms] of [["wing", ["lobe1", "fres"]], ["leaf", ["lam", "spec"]]]) {
+        const g = GENERATE_PRESETS.find((x) => x.id === id);
+        if (!g) { bad.push(`no ${id}`); continue; }
+        const tail = id === "leaf"
+          ? "  return mix(bg, col, clamp(rim, 0.0, 1.0));\n}\n"
+          : "  return col;\n}\n";
+        const us = parseUniforms(g.source);
+        const vals = {};
+        for (const u of us) if (u.value) vals[u.name] = u.value.slice();
+        for (const term of terms) {
+          const d = renderSketch(cut(g.source, tail, `  return vec3(${term});\n}\n`), 220, 140,
+              { frame: 0, time: 0, values: vals })
+            .getContext("2d").getImageData(0, 0, 220, 140).data;
+          let hi = 0;
+          for (let y = Math.round(140 * 0.35); y < 140 * 0.65; y++)
+            for (let x = Math.round(220 * 0.30); x < 220 * 0.70; x++) hi = Math.max(hi, d[(y * 220 + x) * 4]);
+          if (hi < 4) bad.push(`${id}: ${term} is zero everywhere on the subject`);
+        }
+      }
+      push({ group: "Cross-cutting", name: "no lighting term is silently always zero", ok: bad.length === 0,
+             detail: bad.length ? bad.join(" · ")
+               : "the wing's specular lobe and Fresnel, and the leaf's lambert and cuticle, each reach a "
+                 + "non-zero value somewhere on the thing they light. Both sketches shipped with the light "
+                 + "pointing into the screen while the reflected ray points out of it, so every term that "
+                 + "asked for their dot product got the zero — and a term that is always zero still draws "
+                 + "a picture, which is why everything else passed. Both were then tuned around the "
+                 + "absence, so putting the light back the right way round broke the tuning of both" });
     }
 
     // An annotation that ate the ones after it.
