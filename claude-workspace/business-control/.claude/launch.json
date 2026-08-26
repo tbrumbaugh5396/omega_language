@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "business-control",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["scripts/launch.py", "--port", "8860"],
+      "port": 8860,
+      "autoPort": false
+    }
+  ]
+}

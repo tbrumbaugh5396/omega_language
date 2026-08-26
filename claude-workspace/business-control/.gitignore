@@ -12,3 +12,11 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Piper TTS voice models — 60–110MB each, re-downloaded from Hugging Face
+# by the video tooling; never versioned.
+assets/video/voices/
+
+# One supplied artwork is 216MB — too heavy for git without LFS. It lives in
+# assets/ on the working machine; the seeder will say plainly if it's absent.
+assets/All Flavors 02 without Background with Colored Lights.png

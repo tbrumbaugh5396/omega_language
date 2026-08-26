@@ -83,6 +83,7 @@ PATH_RULES = [
     ("/api/store/admin/support-contact", "settings"),
     ("/api/store/admin/campaigns", "marketing"),
     ("/api/store/admin/creatives", "marketing"),
+    ("/api/store/admin/engagements", "documents"),
     ("/api/store/admin/documents", "documents"),
     ("/api/store/admin/signatures", "documents"),
     ("/api/store/admin/comments", "content"),

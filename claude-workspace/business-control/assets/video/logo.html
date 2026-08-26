@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><title>rasterise</title>
+<body style="margin:0;background:#222;color:#eee;font:14px system-ui">
+<p id="s">rendering…</p>
+<script>
+const W = 2400, H = 586;
+fetch("/logo.svg").then(r => r.text()).then(txt => {
+  const url = URL.createObjectURL(new Blob([txt], {type: "image/svg+xml"}));
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const g = c.getContext("2d");
+    g.clearRect(0, 0, W, H);          // keep transparency
+    g.drawImage(img, 0, 0, W, H);
+    c.toBlob(b => fetch("/save/logo.png", {method: "POST", body: b})
+      .then(() => { document.getElementById("s").textContent =
+        "saved " + b.size + " bytes"; }));
+  };
+  img.src = url;
+});
+</script></body>

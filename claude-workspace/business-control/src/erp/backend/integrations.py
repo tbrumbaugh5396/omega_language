@@ -136,7 +136,8 @@ PROVIDERS = {
                      "channels:history and chat:write to your app."},
         ],
         "events": ["order.created", "enquiry.created", "ticket.created",
-                   "inventory.low", "document.signed"],
+                   "inventory.low", "document.signed",
+                   "gate.passed", "direction.chosen"],
         "does": "Sends a line to the channel when an order lands, stock runs "
                 "low, a partner enquires, a ticket opens or a document is "
                 "signed. With a bot token it also reads the channels and "
@@ -155,7 +156,8 @@ PROVIDERS = {
              "hint": "The list new cards land in. Open a board, add .json to "
                      "the URL, and find the id of the list you want."},
         ],
-        "events": ["enquiry.created", "ticket.created", "inventory.low"],
+        "events": ["enquiry.created", "ticket.created", "inventory.low",
+                   "direction.chosen"],
         "syncs": True,
         "actions": ["cards"],
         "does": "Creates a card for each new enquiry, support ticket or "
@@ -250,6 +252,8 @@ EVENT_LABELS = {
     "ticket.created": "a support ticket opens",
     "inventory.low": "stock drops below par",
     "document.signed": "a document is signed",
+    "gate.passed": "a client project passes a gate",
+    "direction.chosen": "a client chooses a brand direction",
 }
 
 
@@ -325,7 +329,8 @@ def save(con, name: str, credentials: dict, account: str = "",
     con.commit()
 
 
-KIND_FOR_EVENT = {"enquiry.created": "enquiry", "ticket.created": "ticket"}
+KIND_FOR_EVENT = {"enquiry.created": "enquiry", "ticket.created": "ticket",
+                  "direction.chosen": "engagement"}
 
 
 def link(con, provider_name: str, kind: str, local_id, remote_id: str,
@@ -700,6 +705,16 @@ def _line(event: str, d: dict) -> str:
     if event == "document.signed":
         return f"{d.get('title','A document')} was signed by " \
                f"{d.get('signer','someone')}"
+    if event == "gate.passed":
+        line = (f"{d.get('client','A client')} passed a gate: "
+                f"{d.get('gate','')}")
+        if d.get("warnings"):
+            line += f" — out of order, still open: {d['warnings']}"
+        return line
+    if event == "direction.chosen":
+        return (f"{d.get('client','A client')} chose a brand direction: "
+                f"{d.get('choice','')} — next: write up the art direction "
+                f"for signing")
     return f"{event}: {json.dumps(d)[:200]}"
 
 
@@ -823,6 +838,21 @@ def _deliver(con, name: str, event: str, d: dict, c: dict) -> tuple:
         return ok, "filed (no attachment on the document)"
 
     return True, "connected, nothing to send for this event"
+
+
+def dropbox_put(con, path: str, blob: bytes) -> tuple:
+    """Upload one file to the connected Dropbox. (ok, detail) — and simply
+    (False, "not connected") when there is no connection, so callers can
+    treat Dropbox as optional without checking first."""
+    c = creds(con, "dropbox")
+    if not c:
+        return False, "not connected"
+    return _req(
+        "https://content.dropboxapi.com/2/files/upload", "POST",
+        {"Authorization": f"Bearer {c.get('access_token', '')}",
+         "Dropbox-API-Arg": json.dumps(
+             {"path": path, "mode": "overwrite", "mute": True}),
+         "Content-Type": "application/octet-stream"}, blob)
 
 
 # ---------- Slack, in both directions ----------

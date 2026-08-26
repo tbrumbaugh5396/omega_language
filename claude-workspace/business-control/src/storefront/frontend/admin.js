@@ -6,6 +6,25 @@ let TOKEN = "";
 try { TOKEN = (JSON.parse(localStorage.getItem("bc_user") || "{}").token) || ""; }
 catch {}
 
+
+/* Sign out. The token is the whole session — clearing it and reloading
+   returns to the sign-in screen with nothing left behind.
+
+   Shown on a *working* session (i.e. from boot()), not merely on a stored
+   token: a token that no longer authenticates leaves the sign-in form on
+   screen, and "Sign out" sitting beside "Sign in" reads as a bug. Signing
+   in again overwrites the stale token anyway, so nothing is stranded. */
+function wireSignOut(live) {
+  const btn = document.getElementById("sign-out");
+  if (!btn) return;
+  if (live) btn.hidden = false;
+  btn.onclick = () => {
+    localStorage.removeItem("bc_user");
+    TOKEN = "";
+    location.reload();
+  };
+}
+addEventListener("DOMContentLoaded", () => wireSignOut(false));
 const H = () => ({ "Content-Type": "application/json",
   Authorization: "Bearer " + TOKEN });
 const api = async (url, opts = {}) => {
@@ -1472,6 +1491,10 @@ async function drawAnalytics() {
 async function boot() {
   $("#login-card").classList.add("hidden");
   $("#adm-app").classList.remove("hidden");
+  /* This is the only place a session is known to work — reached both by a
+     stored token that authenticated and by a fresh sign-in, which sets
+     TOKEN without a reload. */
+  wireSignOut(true);
   applyPermissions();
   const can = (p) => !ME || ME.permissions.includes("*") ||
     ME.permissions.includes(p);

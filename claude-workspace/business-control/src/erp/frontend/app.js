@@ -781,6 +781,8 @@ const TABS = [
   { id: "orders", label: "Orders", icon: "box", group: "Sell", roles: "*" },
   { id: "promos", label: "Promos", icon: "megaphone", group: "Sell",
     roles: ["admin", "employee"] },
+  { id: "clients", label: "Clients (B2B)", icon: "handshake", group: "Sell",
+    roles: ["admin"], perm: "documents" },
   { id: "clock", label: "Time Clock", icon: "clock", group: "Operate", roles: "*" },
   { id: "stores", label: "Stores", icon: "pin", group: "Operate",
     roles: ["admin", "employee", "distributor"] },
@@ -1017,7 +1019,8 @@ async function render() {
     inventory: renderInventory,
     routes: renderRoutes, promos: renderPromos, outreach: renderOutreach,
     experiments: renderExperiments, analytics: renderAnalytics,
-    docs: renderDocs, staff: renderStaff, events: renderEvents,
+    docs: renderDocs, clients: renderClients,
+    staff: renderStaff, events: renderEvents,
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
@@ -4851,6 +4854,472 @@ boot();
 
 // ---------- documents & signatures ----------
 let DOCS = null;
+
+// ---------- B2B client engagements ----------
+// The studio kit run from here: one record per client, documents generated
+// from the kit's own templates into the vault, signatures through the vault's
+// flow, and the per-client folder generated on demand — never kept by hand.
+
+function engDatesForm(id, dates) {
+  const row = (r) => `<div class="row2" style="margin-bottom:6px">
+    <input class="ed-label" placeholder="Milestone" value="${esc(r.label || "")}">
+    <div style="display:flex;gap:6px">
+      <input class="ed-planned" placeholder="Planned" value="${esc(r.planned || "")}">
+      <input class="ed-actual" placeholder="Actual" value="${esc(r.actual || "")}">
+      <input class="ed-moved" placeholder="Moved because" value="${esc(r.moved_because || "")}">
+    </div></div>`;
+  modal(`<h3>The dates that matter</h3>
+    <p class="dim">Planned next to actual, with the honest reason when they
+      differ. Shown on the client portal. Blank labels are dropped.</p>
+    <div id="ed-rows">${(dates.length ? dates : [{}]).map(row).join("")}</div>
+    <button class="btn alt sm" id="ed-add">+ row</button>
+    <div class="modal-foot"><button class="btn" id="ed-save">Save</button></div>`);
+  $("#ed-add").onclick = () => $("#ed-rows").insertAdjacentHTML("beforeend", row({}));
+  $("#ed-save").onclick = async () => {
+    const out = [...document.querySelectorAll("#ed-rows > div")].map((d) => ({
+      label: d.querySelector(".ed-label").value.trim(),
+      planned: d.querySelector(".ed-planned").value.trim(),
+      actual: d.querySelector(".ed-actual").value.trim(),
+      moved_because: d.querySelector(".ed-moved").value.trim(),
+    })).filter((r) => r.label);
+    try {
+      await api(`/api/store/admin/engagements/${id}/dates`,
+        { method: "PUT", body: { dates: out } });
+      closeModal(); renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  };
+}
+
+async function renderClients() {
+  if (S.engId) return renderEngagement(S.engId);
+  const data = await api("/api/store/admin/engagements");
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Clients (B2B)</h2>
+        <p class="dim">Studio engagements — the kit's stages, documents and
+          signatures, run from one place.</p></div>
+      <button class="btn" id="eng-new">${opsIcon("handshake","btn-ic")} New client</button>
+    </div>
+    ${data.kit_available ? "" : `<div class="card alert"><b>The template kit
+      isn't on this install</b><p class="dim">docs/business-control-b2b-client/
+      is missing, so documents can't be generated here — records and exports
+      still work.</p></div>`}
+    <div id="eng-list">${data.engagements.map((e) => `
+      <div class="doc-card" data-eng="${e.id}" style="cursor:pointer">
+        <div class="doc-top">
+          <span class="doc-ic">${opsIcon("handshake")}</span>
+          <div class="doc-main"><b>${esc(e.name)}</b>
+            <span class="dim">${esc(e.stage.replace(/^(\d\d)-/, "$1 · ").replace(/-/g, " "))} · ${
+              e.package ? "package " + esc(e.package) + " · " : ""}${
+              e.value_cents ? money(e.value_cents) + " · " : ""}content ${
+              e.content_pct}% · ${e.docs} document${e.docs === 1 ? "" : "s"}, ${
+              e.signed} signed${e.portal_seen_at
+                ? " · client looked " + fmtDate(e.portal_seen_at) : ""}</span></div>
+          ${(e.warnings || []).map((w) =>
+            `<span class="pill warn">${esc(w)}</span>`).join("")}
+          ${e.status === "closed" ? '<span class="pill">closed</span>' : ""}
+          ${e.launch_target ? `<span class="dim">launch ${esc(e.launch_target)}</span>` : ""}
+        </div>
+      </div>`).join("")
+      || `<div class="card empty"><span class="e-ic">${opsIcon("handshake")}</span>
+          <b>No clients yet</b><p class="dim">Create one, then generate its
+          documents from the kit's templates.</p></div>`}</div>`;
+  $("#eng-new").onclick = () => engForm(null);
+  view().querySelectorAll("[data-eng]").forEach((el) => el.onclick = () => {
+    S.engId = +el.dataset.eng; render();
+  });
+}
+
+function engForm(e) {
+  modal(`<h3>${e ? "Edit client" : "New client"}</h3>
+    <label>Client name</label><input id="ef-name" value="${esc(e ? e.name : "")}">
+    <div class="row2">
+      <div><label>Package (A / B / C)</label>
+        <input id="ef-pkg" value="${esc(e ? e.package : "")}"></div>
+      <div><label>Value ($)</label>
+        <input id="ef-val" type="number" min="0"
+          value="${e && e.value_cents ? e.value_cents / 100 : ""}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Approver name</label>
+        <input id="ef-appr" value="${esc(e ? e.approver_name : "")}"></div>
+      <div><label>Approver email</label>
+        <input id="ef-email" type="email" value="${esc(e ? e.approver_email : "")}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Launch target</label>
+        <input id="ef-launch" placeholder="e.g. 2026-11-06"
+          value="${esc(e ? e.launch_target : "")}"></div>
+      <div><label>Status</label>
+        <select id="ef-status">
+          <option value="active" ${!e || e.status === "active" ? "selected" : ""}>active</option>
+          <option value="closed" ${e && e.status === "closed" ? "selected" : ""}>closed</option>
+        </select></div>
+    </div>
+    <div class="row2">
+      <div><label>Staging URL</label>
+        <input id="ef-stag" value="${esc(e ? e.staging_url : "")}"></div>
+      <div><label>Live URL</label>
+        <input id="ef-live" value="${esc(e ? e.live_url : "")}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Content received (%)</label>
+        <input id="ef-pct" type="number" min="0" max="100"
+          value="${e ? e.content_pct : 0}"></div>
+      <div><label>This week, in one sentence (shown on the portal)</label>
+        <input id="ef-week" value="${esc(e ? e.week_note : "")}"></div>
+    </div>
+    <label>Blockers — one per line, empty when none (shown on the portal)</label>
+    <textarea id="ef-block" rows="2">${esc(e ? e.blockers : "")}</textarea>
+    <label>Notes (internal)</label>
+    <textarea id="ef-notes" rows="3">${esc(e ? e.notes : "")}</textarea>
+    <div class="modal-foot"><button class="btn" id="ef-save">Save</button></div>`);
+  $("#ef-save").onclick = async () => {
+    const body = {
+      name: $("#ef-name").value.trim(),
+      package: $("#ef-pkg").value.trim(),
+      value_cents: Math.round((+$("#ef-val").value || 0) * 100),
+      approver_name: $("#ef-appr").value.trim(),
+      approver_email: $("#ef-email").value.trim(),
+      launch_target: $("#ef-launch").value.trim(),
+      staging_url: $("#ef-stag").value.trim(),
+      live_url: $("#ef-live").value.trim(),
+      notes: $("#ef-notes").value.trim(),
+      status: $("#ef-status").value,
+      content_pct: Math.max(0, Math.min(100, +$("#ef-pct").value || 0)),
+      week_note: $("#ef-week").value.trim(),
+      blockers: $("#ef-block").value.trim(),
+    };
+    try {
+      if (e) await api(`/api/store/admin/engagements/${e.id}`,
+        { method: "PATCH", body });
+      else {
+        const out = await api("/api/store/admin/engagements",
+          { method: "POST", body });
+        S.engId = out.id;
+      }
+      closeModal(); render();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+async function renderEngagement(id) {
+  let d;
+  try { d = await api(`/api/store/admin/engagements/${id}`); }
+  catch { S.engId = null; return renderClients(); }
+  const e = d.engagement;
+  const byStage = {};
+  d.docs.forEach((x) => (byStage[x.stage] = byStage[x.stage] || []).push(x));
+
+  const docRowE = (x) => `
+    <div class="sig-row">
+      <b>${esc(x.title)}</b>
+      <span class="pill ${x.side === "internal" ? "warn" : "ok"}">${
+        x.side === "internal" ? "internal" : "to client"}</span>
+      ${x.signed ? `<span class="pill ok">${x.signed} signed</span>` : ""}
+      ${x.awaiting ? `<span class="pill warn">${x.awaiting} awaiting</span>` : ""}
+      ${x.status === "draft" ? '<span class="pill">draft</span>' : ""}
+      <button class="btn alt sm" data-engsign="${x.id}">${opsIcon("pen","btn-ic")} Sign</button>
+      <button class="btn alt sm" data-engopen="${esc(x.title)}">Open</button>
+    </div>`;
+
+  // Two kit stages can share one client folder (the enquiry scripts file
+  // under consultation); merge them so the page shows the client's stages,
+  // exactly like the exported folder does.
+  const merged = [];
+  d.stages.forEach((st) => {
+    const prev = merged.find((m) => m.client_stage === st.client_stage);
+    if (prev) { prev.templates = prev.templates.concat(st.templates);
+      prev.kit = prev.kit.concat([st.stage]); }
+    else merged.push({ ...st, kit: [st.stage] });
+  });
+
+  const stageName = (st) => st.replace(/^(\d\d)-/, "$1 · ").replace(/-/g, " ");
+
+  const gateRow = (g) => {
+    if (!g.active) return "";
+    const state = g.passed_at
+      ? `<span class="pill ok">${g.via === "signature"
+          ? "signed" + (g.signed_by ? " by " + esc(g.signed_by) : "")
+          : "confirmed"} ${fmtDate(g.passed_at)}</span>`
+      : g.doc_id
+        ? '<span class="pill warn">awaiting signature</span>'
+        : '<span class="pill">open</span>';
+    const docBit = g.doc_title
+      ? `<span class="dim">${esc(g.doc_title)}</span>` : "";
+    const noteBit = g.note && !g.doc_id
+      ? `<span class="dim" title="where the evidence is filed">${esc(g.note)}</span>` : "";
+    const pay = g.kind === "money" && !g.passed_at
+      ? (g.has_payment_link
+          ? `<button class="btn alt sm" data-gate-paycheck="${g.gate}"
+               title="ask Stripe whether the link was paid">Check payment</button>`
+          : `<button class="btn alt sm" data-gate-paylink="${g.gate}"
+               title="a Stripe checkout link to send with the invoice">Payment
+               link</button>`)
+      : "";
+    const controls = g.passed_at || g.doc_id
+      ? `<button class="btn alt sm" data-gate-reopen="${g.gate}">Reopen</button>`
+      : `${pay}<button class="btn alt sm" data-gate-link="${g.gate}">Link doc</button>
+         <button class="btn alt sm" data-gate-pass="${g.gate}"
+           data-kind="${g.kind}">${g.kind === "money" ? "Confirm" : "Mark passed"}</button>`;
+    return `<div class="sig-row">
+      <b>${esc(g.label)}</b> ${state} ${docBit} ${noteBit}
+      <span class="dim">closes ${esc(stageName(g.stage))}</span> ${controls}
+    </div>`;
+  };
+
+  const stageCard = (st) => {
+    const docs = st.kit.flatMap((k) => byStage[k] || []);
+    if (!docs.length && !st.templates.length) return "";
+    return `<div class="card">
+      <b>${esc(st.client_stage.replace(/^\d\d-/, (m) => m.slice(0, 2) + " · ")
+        .replace(/-/g, " "))}</b>
+      ${docs.length ? `<div class="sig-rows">${docs.map(docRowE).join("")}</div>` : ""}
+      ${st.templates.length ? `<div class="chips" style="margin-top:8px">${
+        st.templates.map((t) => `<button class="chip" data-gen="${esc(t.path)}"
+          title="${t.side === "internal" ? "internal — never sent" : "goes to the client"}">
+          + ${esc(t.name)}</button>`).join("")}</div>` : ""}
+    </div>`;
+  };
+
+  view().innerHTML = `
+    <div class="page-head">
+      <div>
+        <button class="btn alt sm" id="eng-back">← All clients</button>
+        <h2 style="display:inline;margin-left:8px">${esc(e.name)}</h2>
+        <p class="dim"><span class="pill ok">stage: ${esc(stageName(d.current_stage))}</span>
+          ${e.package ? " package " + esc(e.package) + " · " : ""}${
+          e.value_cents ? money(e.value_cents) + " · " : ""}${
+          e.approver_name ? "approver " + esc(e.approver_name) + " · " : ""}${
+          e.launch_target ? "launch " + esc(e.launch_target) : ""}</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn alt" id="eng-edit">Edit</button>
+        <button class="btn alt" id="eng-dates">Dates</button>
+        ${e.portal_url
+          ? `<button class="btn alt" id="eng-portal-copy"
+               title="the client's live roadmap — everything on it is the
+               to-client side only">Copy portal link</button>
+             <button class="btn alt" id="eng-portal-rotate"
+               title="the old link dies the moment a new one exists">Rotate</button>
+             <button class="btn alt" id="eng-portal-revoke">Revoke</button>`
+          : `<button class="btn alt" id="eng-portal-make">Create portal
+               link</button>`}
+        <button class="btn alt" id="eng-export" title="write the folder tree
+          under data/exports/clients/">${opsIcon("file","btn-ic")} Export folder</button>
+        <button class="btn" id="eng-bundle" title="zip of the to-client side
+          only — the internal wall holds">${opsIcon("box","btn-ic")} Client bundle</button>
+      </div>
+    </div>
+    <div class="card"><b>Gates</b>
+      <p class="dim">The stage is the first gate that hasn't passed — a
+        signature gate reads its state from the linked document, live.</p>
+      <div class="sig-rows">${d.gates.map(gateRow).join("")}</div>
+    </div>
+    ${merged.map(stageCard).join("")}
+    ${d.log.length ? `<div class="card"><b>Activity</b>
+      <div class="sig-rows">${d.log.map((l) => `
+        <div class="sig-row"><span class="dim">${fmtDate(l.at)}</span>
+          <b>${esc(l.actor)}</b> <span>${esc(l.what)}</span></div>`).join("")}
+      </div></div>` : ""}`;
+
+  $("#eng-back").onclick = () => { S.engId = null; render(); };
+  $("#eng-edit").onclick = () => engForm(e);
+  $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
+  const makePortal = async () => {
+    try {
+      const out = await api(`/api/store/admin/engagements/${id}/portal`,
+        { method: "POST" });
+      try { await navigator.clipboard.writeText(out.url); } catch {}
+      toast("Portal link copied — the old one, if any, is dead");
+      renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  };
+  const pMake = $("#eng-portal-make");
+  if (pMake) pMake.onclick = makePortal;
+  const pRot = $("#eng-portal-rotate");
+  if (pRot) pRot.onclick = () => {
+    if (confirm("Rotate the portal link? The current link stops working " +
+                "immediately.")) makePortal();
+  };
+  const pCopy = $("#eng-portal-copy");
+  if (pCopy) pCopy.onclick = async () => {
+    try { await navigator.clipboard.writeText(location.origin + e.portal_url);
+      toast("Portal link copied"); } catch { toast(e.portal_url); }
+  };
+  const pRev = $("#eng-portal-revoke");
+  if (pRev) pRev.onclick = async () => {
+    if (!confirm("Revoke the portal link? The client loses access until a " +
+                 "new one is made.")) return;
+    try {
+      await api(`/api/store/admin/engagements/${id}/portal`,
+        { method: "DELETE" });
+      renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  };
+  $("#eng-export").onclick = async () => {
+    try {
+      const out = await api(`/api/store/admin/engagements/${id}/export`,
+        { method: "POST" });
+      toast(`${out.files.length} files → ${out.root}`);
+      renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  };
+  $("#eng-bundle").onclick = async () => {
+    try {
+      const r = await fetch(`/api/store/admin/engagements/${id}/export.zip`,
+        { headers: { Authorization: "Bearer " + S.user.token } });
+      if (!r.ok) throw new Error((await r.json()).detail || r.status);
+      const blob = await r.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `${e.slug}-client-bundle.zip`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) { toast(err.message); }
+  };
+  view().querySelectorAll("[data-gen]").forEach((b) => b.onclick = () =>
+    engGenerate(id, b.dataset.gen));
+  view().querySelectorAll("[data-engsign]").forEach((b) => b.onclick = () =>
+    engSignForm(+b.dataset.engsign, e));
+  // "Open" lands on the Documents tab, searched to this title, where the
+  // vault's own editor finishes what the fill form started.
+  view().querySelectorAll("[data-engopen]").forEach((b) => b.onclick = () => {
+    S.docQ = b.dataset.engopen; S.tab = "docs"; render();
+  });
+
+  const gateDone = (out) => {
+    if (out.warnings && out.warnings.length)
+      toast("Out of order — still open: " + out.warnings.join(", "));
+    renderEngagement(id);
+  };
+  view().querySelectorAll("[data-gate-pass]").forEach((b) => b.onclick = async () => {
+    const money = b.dataset.kind === "money";
+    const note = prompt(money
+      ? "Confirm — note (e.g. the wire reference), optional:"
+      : "Passing without a linked document — where is the evidence filed?");
+    if (note === null) return;
+    if (!money && !note.trim()) { toast("a signature gate needs the note"); return; }
+    try { gateDone(await api(
+      `/api/store/admin/engagements/${id}/gates/${b.dataset.gatePass}`,
+      { body: { note: note.trim() } })); }
+    catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-gate-link]").forEach((b) => b.onclick = () => {
+    if (!d.docs.length) { toast("no documents filed yet — generate one first"); return; }
+    modal(`<h3>Link a document</h3>
+      <p class="dim">The gate passes when this document is signed — read
+        from the vault, never copied.</p>
+      <label>Document</label>
+      <select id="gl-doc">${d.docs.map((x) =>
+        `<option value="${x.id}">${esc(x.title)}${x.signed ? " (signed)" : ""}</option>`).join("")}</select>
+      <div class="modal-foot"><button class="btn" id="gl-go">Link</button></div>`);
+    $("#gl-go").onclick = async () => {
+      try {
+        const out = await api(
+          `/api/store/admin/engagements/${id}/gates/${b.dataset.gateLink}`,
+          { body: { doc_id: +$("#gl-doc").value } });
+        closeModal(); gateDone(out);
+      } catch (err) { toast(err.message); }
+    };
+  });
+  view().querySelectorAll("[data-gate-paylink]").forEach((b) => b.onclick = async () => {
+    const suggested = b.dataset.gatePaylink === "deposit_cleared" && e.value_cents
+      ? e.value_cents / 200 : "";
+    const amt = prompt("Amount ($):", suggested);
+    if (amt === null) return;
+    try {
+      const out = await api(`/api/store/admin/engagements/${id}/gates/${
+        b.dataset.gatePaylink}/payment-link`,
+        { body: { amount_cents: Math.round((+amt || 0) * 100) } });
+      try { await navigator.clipboard.writeText(out.url); } catch {}
+      toast(`Payment link for ${money(out.amount_cents)} copied — send it ` +
+            "with the invoice");
+      renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-gate-paycheck]").forEach((b) => b.onclick = async () => {
+    try {
+      const out = await api(`/api/store/admin/engagements/${id}/gates/${
+        b.dataset.gatePaycheck}/payment-check`, { method: "POST" });
+      toast(out.paid ? "Paid — gate passed, verified by Stripe"
+                     : out.detail);
+      renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-gate-reopen]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Reopen this gate? The signed document, if any, stays in the vault.")) return;
+    try {
+      await api(`/api/store/admin/engagements/${id}/gates/${b.dataset.gateReopen}`,
+        { method: "DELETE" });
+      renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  });
+}
+
+async function engGenerate(id, path) {
+  const t = await api(`/api/store/admin/engagements/${id}/template?path=`
+    + encodeURIComponent(path));
+  const field = (tok) => `
+    <label>[${esc(tok)}]</label>
+    <input data-fill="${esc(tok)}" value="${esc(t.suggested[tok] || "")}"
+      placeholder="leave blank to keep the brackets">`;
+  modal(`<h3>Generate: ${esc(t.name)}</h3>
+    <p class="dim">Each value fills its token everywhere it appears. Blanks
+      stay bracketed — finish them in the document editor.</p>
+    <label>Title</label><input id="gen-title" value="">
+    <label>Side</label>
+    <select id="gen-side">
+      <option value="to_client" ${t.side === "to_client" ? "selected" : ""}>to client</option>
+      <option value="internal" ${t.side === "internal" ? "selected" : ""}>internal — never sent</option>
+    </select>
+    ${t.placeholders.map(field).join("")}
+    <div class="modal-foot"><button class="btn" id="gen-go">Generate</button></div>`);
+  $("#gen-go").onclick = async () => {
+    const fills = {};
+    document.querySelectorAll("[data-fill]").forEach((i) => {
+      if (i.value.trim()) fills[i.dataset.fill] = i.value.trim();
+    });
+    try {
+      const out = await api(`/api/store/admin/engagements/${id}/docs`, {
+        body: { template_path: path, fills,
+          title: $("#gen-title").value.trim(),
+          side: $("#gen-side").value },
+      });
+      closeModal();
+      toast(out.unfilled.length
+        ? `Created — ${out.unfilled.length} blank${out.unfilled.length === 1
+            ? "" : "s"} left to finish in the editor`
+        : "Created, fully filled");
+      renderEngagement(id);
+    } catch (err) { toast(err.message); }
+  };
+}
+
+function engSignForm(docId, e) {
+  modal(`<h3>Request a signature</h3>
+    <div class="row2">
+      <div><label>Signer name</label>
+        <input id="es-name" value="${esc(e.approver_name || "")}"></div>
+      <div><label>Signer email</label>
+        <input id="es-email" type="email" value="${esc(e.approver_email || "")}"></div>
+    </div>
+    <label>Message (optional)</label><textarea id="es-msg" rows="2"></textarea>
+    <div class="modal-foot"><button class="btn" id="es-go">Send request</button></div>`);
+  $("#es-go").onclick = async () => {
+    try {
+      const out = await api(`/api/store/admin/documents/${docId}/request-signature`, {
+        body: { signer_name: $("#es-name").value.trim(),
+          signer_email: $("#es-email").value.trim(),
+          role: "approver", message: $("#es-msg").value.trim() },
+      });
+      closeModal();
+      try { await navigator.clipboard.writeText(out.link); } catch {}
+      toast("Signature link created and copied — emailed too, if mail is set up");
+      renderEngagement(S.engId);
+    } catch (err) { toast(err.message); }
+  };
+}
 
 async function renderDocs() {
   const q = S.docQ || "";

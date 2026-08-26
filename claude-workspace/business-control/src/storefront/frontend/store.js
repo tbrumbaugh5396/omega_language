@@ -253,8 +253,9 @@ function ringSVG(colour, cls = "ring") {
 }
 
 function art(p, cls = "art", badge = true, mini = false) {
-  const style = ` style="--flavour:${flavourOf(p)};--flavour-soft:${
-    flavourOf(p)}1f"`;
+  // Only the colour: the tint derives from it in CSS, so the two can
+  // never drift apart.
+  const style = ` style="--flavour:${flavourOf(p)}"`;
   const media = p.media || [];
   const first = media[0];
   if (first) {
@@ -299,6 +300,32 @@ function drawTabs() {
 
 let SEARCH = null;  // Set of matching product ids, or null
 
+/* The multipack is merchandised differently everywhere it appears: it is the
+   basket-builder, and a 4-can landscape shot squeezed into a single-can slot
+   reads as a mistake. Recognised by category so a rename cannot lose it. */
+const isCase = (p) => (p.category || "") === "multipacks";
+
+
+const CARD_MIN = 230;           // narrowest a product card reads well at
+
+function layoutGrid(host, n) {
+  if (!n) return;
+  const w = host.clientWidth || host.getBoundingClientRect().width;
+  const fits = Math.max(1, Math.min(4, Math.floor((w + 22) / (CARD_MIN + 22))));
+  let cols = fits;
+  for (let c = fits; c >= 2; c--) {
+    if (n <= c || n % c !== 1) { cols = c; break; }
+  }
+  host.style.setProperty("--cols", String(cols));
+}
+
+/* Widths change without the catalog changing, so the count is recomputed on
+   resize rather than only when the grid is drawn. */
+addEventListener("resize", () => {
+  const host = $("#product-grid");
+  if (host) layoutGrid(host, host.querySelectorAll(".product:not(.feature)").length);
+});
+
 function drawGrid() {
   const gridHost = $("#product-grid");
   if (!gridHost) return;
@@ -317,7 +344,35 @@ function drawGrid() {
     if (col) prods = prods.filter((p) => col.product_ids.includes(p.id));
   }
   if (limit > 0) prods = prods.slice(0, limit);
-  gridHost.innerHTML = prods.map((p) => `
+
+  // The case leads, on a row of its own, and is not repeated below.
+  const feature = prods.find(isCase);
+  prods = prods.filter((p) => !isCase(p));
+  const featureHtml = !feature ? "" : `
+    <div class="product feature" style="--flavour:${flavourOf(feature)}">
+      <a class="feature-art" href="/product/${feature.id}-${feature.slug}"
+         aria-label="${pname(feature)}">${art(feature)}</a>
+      <div class="body">
+        ${feature.badge ? `<span class="feature-kicker">${feature.badge}</span>` : ""}
+        <a href="/product/${feature.id}-${feature.slug}">
+          <b>${pname(feature)}</b></a>
+        <span class="note">${feature.note || pdesc(feature)}</span>
+        <div class="price-row">
+          <span class="price">${money(feature.price_cents)}</span>
+          <button class="add-btn" data-add="${feature.id}">
+            ${t("add_to_cart", "Add")}</button>
+        </div>
+      </div>
+    </div>`;
+
+  /* Column count is a decision, not a side effect of width. Picking by
+     width alone (auto-fill, or a media query) is what left four flavours
+     as a row of three and one lone can. So: work out how many *fit*, then
+     take the largest count at or below that which does not strand a single
+     card — `n % c === 1` is the case being avoided. */
+  layoutGrid(gridHost, prods.length);
+
+  gridHost.innerHTML = featureHtml + prods.map((p) => `
     <div class="product" style="--flavour:${flavourOf(p)}">
       ${p.badge ? `<span class="badge">${p.badge}</span>` : ""}
       <a href="/product/${p.id}-${p.slug}" aria-label="${pname(p)}">${art(p)}</a>
@@ -339,9 +394,9 @@ function drawGrid() {
           <button class="add-btn" data-add="${p.id}">${t("add_to_cart", "Add")}</button>
         </div>
       </div>
-    </div>`).join("") ||
+    </div>`).join("") || (featureHtml ? "" :
     `<p class="dim">${SEARCH != null ? "Nothing matched — try another word."
-      : "No products yet — add some in the store admin."}</p>`;
+      : "No products yet — add some in the store admin."}</p>`);
   document.querySelectorAll("[data-varsel]").forEach((s) => s.onchange = () => {
     document.querySelector(`[data-price-for="${s.dataset.varsel}"]`)
       .textContent = money(+s.selectedOptions[0].dataset.price);
@@ -378,7 +433,7 @@ function drawSideMenu() {
   const host = $("#side-collections");
   // Browse first: the shopper picks a lane, then sees the faces. Putting the
   // tiles above the filters made people scroll past the filters entirely.
-  let html = '<div class="menu-headline">Shop the range</div>' +
+  let html = '<div class="menu-headline">Shop your Zen</div>' +
     '<div class="side-group">Browse</div><div class="menu-cols">' +
     `<a class="side-item" href="/#shop" data-close>${ico("bag", "ico ico-sm")}
       All products</a>`;
@@ -386,11 +441,21 @@ function drawSideMenu() {
     html += `<a class="side-item" href="/#shop" data-close
       data-colnav="${c.id}">${c.name}</a>`;
   }
-  html += '</div><div class="side-group">Every flavour</div>' +
+  html += "</div>";                     // closes .menu-cols
+  const kase = CATALOG.products.find(isCase);
+  if (kase) {
+    html += '<div class="side-group">The case</div>' +
+      `<a class="menu-tile wide" href="/product/${kase.id}-${kase.slug}"
+        style="--flavour:${flavourOf(kase)}">
+        ${art(kase, "art", false)}
+        <div class="mt-copy"><b>${pname(kase)}</b>
+        <span>${money(kase.price_cents)} · all four flavors</span></div></a>`;
+  }
+  html += '<div class="side-group">Every flavor</div>' +
     '<div class="menu-tiles">';
-  for (const p of CATALOG.products) {
+  for (const p of CATALOG.products.filter((x) => !isCase(x))) {
     html += `<a class="menu-tile" href="/product/${p.id}-${p.slug}"
-      style="--flavour:${flavourOf(p)};--flavour-soft:${flavourOf(p)}1f">
+      style="--flavour:${flavourOf(p)}">
       ${art(p, "art", false)}
       <b>${pname(p)}</b>
       <span>${money(p.variants.length
@@ -447,6 +512,7 @@ async function loadCatalog() {
   const r = await fetch("/api/store/catalog");
   CATALOG = await r.json();
   drawTabs(); drawGrid(); drawSideMenu(); drawReviewWall(); hydrateHero();
+  wireReviewButtons();
 }
 
 // ---------- review wall + review modal ----------
@@ -565,7 +631,8 @@ function drawCart() {
   host.innerHTML = lines || `<div class="cart-empty">
     ${ico("bag", "ico")}<p>Your cart is empty.</p>
     <button class="btn-pill ghost sm" id="cart-empty-shop"
-      style="margin-top:14px">Shop the range</button></div>`;
+      style="margin-top:14px">Shop your Zen</button></div>`;
+  drawCodes();
   const shopBtn = $("#cart-empty-shop");
   if (shopBtn) shopBtn.onclick = () => {
     closeMenus();
@@ -634,32 +701,70 @@ function cartSubtotal() {
     const l = cartLine(key); return a + (l ? l.unit * q : 0); }, 0);
 }
 
-$("#discount-apply").onclick = async () => {
-  const code = $("#discount-input").value.trim();
+let GIFT = null;
+
+/* One field, two kinds of code.
+
+   The discount preview is tried first because it is the endpoint that can
+   explain itself — "expired", "minimum spend", "already used" — and that
+   reason is worth more than a generic rejection. Only when it declines does
+   this fall back to a gift-card lookup, so a gift card typed into the one
+   box still works instead of being called invalid.
+
+   Both can be live at once; they are separate slots, and the chips below
+   show what is actually applied so a single input never leaves you guessing. */
+async function applyCode() {
+  const el = $("#code-input"), msg = $("#code-msg");
+  const code = el.value.trim();
   if (!code) return;
+  msg.textContent = "Checking…";
+
   const r = await fetch("/api/store/discount/preview", { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code, subtotal_cents: cartSubtotal() }) });
-  const out = await r.json();
-  if (r.ok) { DISCOUNT = out;
-    $("#discount-msg").textContent = `${out.label} applied`; }
-  else { DISCOUNT = null;
-    // The server explains *why* (min spend, expired, already used…).
-    $("#discount-msg").textContent = out.detail || "invalid code"; }
-  drawCart();
-};
+  const out = await r.json().catch(() => ({}));
+  if (r.ok) {
+    DISCOUNT = out;
+    msg.textContent = `${out.label} applied`;
+    el.value = ""; drawCart(); return;
+  }
 
-// ---------- gift cards ----------
-let GIFT = null;
-$("#gift-apply").onclick = async () => {
-  const code = $("#gift-input").value.trim();
-  if (!code) return;
-  const r = await fetch(`/api/store/gift-card/${encodeURIComponent(code)}`);
-  if (r.ok) { GIFT = await r.json();
-    $("#gift-msg").textContent = `${money(GIFT.balance_cents)} available`; }
-  else { GIFT = null; $("#gift-msg").textContent = "no such gift card"; }
+  const g = await fetch(`/api/store/gift-card/${encodeURIComponent(code)}`);
+  if (g.ok) {
+    GIFT = await g.json();
+    msg.textContent = `Gift card applied · ${money(GIFT.balance_cents)} available`;
+    el.value = ""; drawCart(); return;
+  }
+
+  // The discount endpoint's reason beats "not found" whenever it gave one.
+  msg.textContent = out.detail
+    || "We don't recognise that as a discount or gift card code.";
   drawCart();
-};
+}
+
+$("#code-apply").onclick = applyCode;
+$("#code-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); applyCode(); }
+});
+
+/* What is applied, and how to take it off again. */
+function drawCodes() {
+  const host = $("#code-chips");
+  if (!host) return;
+  const chips = [];
+  if (DISCOUNT) chips.push(`<span class="code-chip">${DISCOUNT.code}
+    <button data-drop="discount" aria-label="Remove discount ${DISCOUNT.code}">
+      ${ico("close", "ico ico-sm")}</button></span>`);
+  if (GIFT) chips.push(`<span class="code-chip">Gift ${GIFT.code}
+    <button data-drop="gift" aria-label="Remove gift card ${GIFT.code}">
+      ${ico("close", "ico ico-sm")}</button></span>`);
+  host.innerHTML = chips.join("");
+  host.querySelectorAll("[data-drop]").forEach((b) => b.onclick = () => {
+    if (b.dataset.drop === "discount") DISCOUNT = null; else GIFT = null;
+    $("#code-msg").textContent = "";
+    drawCart();
+  });
+}
 
 // ---------- cart cross-sell ----------
 let upsellFor = null;
@@ -677,10 +782,11 @@ async function drawUpsell() {
   const show = recs.filter((r) => !inCart.has(r.id)).slice(0, 2);
   host.innerHTML = show.length ? `<div class="upsell">
     <b>Goes well with</b>
-    ${show.map((r) => `<div class="upsell-row">
+    ${show.map((r) => `<div class="upsell-row"
+        style="--flavour:${flavourOf(r)}">
       ${r.media && r.media[0]
         ? `<img src="${r.media[0].thumb}" alt="">`
-        : `<span class="upsell-emoji">${canSVG(u, { k: "up", mini: true })}</span>`}
+        : `<span class="upsell-emoji">${canSVG(r, { k: "up", mini: true })}</span>`}
       <div><b>${pname(r)}</b><span class="dim">${money(r.price_cents)}</span></div>
       <button class="btn-pill ghost sm" data-up="${r.id}">Add</button>
     </div>`).join("")}</div>` : "";
@@ -848,7 +954,13 @@ async function loadPromos() {
 }
 
 // ---------- menus, modal, toast plumbing ----------
-function openCart() { $("#cart-drawer").classList.add("open");
+function openCart() {
+  /* Draw on open, not only when a line changes. The cart is restored from
+     localStorage on load, so opening it after a reload used to show whatever
+     markup was last rendered — for a returning visitor, an empty drawer over
+     a non-empty cart. */
+  drawCart();
+  $("#cart-drawer").classList.add("open");
   $("#scrim").classList.add("show");
   document.body.classList.add("drawer-open"); }
 function closeMenus() {
@@ -894,7 +1006,11 @@ const PARTNER_LINKS = [
   if (!host) return;
   host.innerHTML = PARTNER_LINKS.map(([slug, icn, label, sub]) =>
     `<a class="menu-link" href="/partners/${slug}">${ico(icn)}
-      <span>${label}<small>${sub}</small></span></a>`).join("");
+      <span>${label}<small>${sub}</small></span></a>`).join("")
+    // The affiliate programme is a way to work with us too, and it was
+    // only reachable from a footer link.
+    + `<a class="menu-link" href="/affiliates">${ico("link")}
+      <span>Affiliates<small>Share your link, earn on every order</small></span></a>`;
 })();
 
 function openMenu() {
@@ -1740,8 +1856,35 @@ const PIXEL = (() => {
     }
     const bar = $("#consent-bar");
     if (bar) bar.hidden = true;
+    clearBarRoom();
     paintToggle();
   };
+
+  /* The consent bar and the Buy now button both live in the bottom-right
+     corner, and the bar wins on z-index — so while it is up it covers the
+     one control the whole page exists to lead to.
+
+     The bar's height is not a constant to hard-code against: its copy is
+     merchant-editable and it wraps to two or three lines on a narrow window.
+     So it is measured, published as a custom property, and the floating
+     controls are lifted by that much. ResizeObserver keeps it right when the
+     text reflows on rotate or zoom. */
+  let barWatch = null;
+  function makeBarRoom(bar) {
+    const apply = () => document.documentElement.style.setProperty(
+      "--consent-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+    apply();
+    document.body.classList.add("consent-open");
+    if ("ResizeObserver" in window) {
+      barWatch = new ResizeObserver(apply);
+      barWatch.observe(bar);
+    }
+  }
+  function clearBarRoom() {
+    document.body.classList.remove("consent-open");
+    document.documentElement.style.removeProperty("--consent-h");
+    if (barWatch) { barWatch.disconnect(); barWatch = null; }
+  }
 
   // Show the bar only when there is actually something to consent to.
   if (PREVIEW) { consent = false; } else if (cfg && cfg.consentRequired && consent === null) {
@@ -1751,6 +1894,7 @@ const PIXEL = (() => {
         + "measure our ads. You can say no — the shop works exactly the same "
         + "either way.";
       bar.hidden = false;
+      makeBarRoom(bar);
       $("#consent-yes").onclick = () => applyConsent(true);
       $("#consent-no").onclick = () => applyConsent(false);
     }
@@ -1876,6 +2020,415 @@ const PIXEL = (() => {
   });
   addEventListener("pagehide", flush);
 })();
+
+/* ---------- showcase carousel ----------
+
+   Position is read back from scrollLeft rather than kept in a variable. A
+   scroll-snap rail can be moved by a drag, a trackpad, a shift-wheel or a
+   focus jump, none of which go through the arrow handlers — anything that
+   remembers an index drifts out of step with what is actually on screen the
+   first time someone swipes.
+
+   The film is muted so it can autoplay at all (browsers block sound), and it
+   is paused whenever it scrolls out of view: a hero video that keeps
+   decoding behind six product slides costs battery for something nobody is
+   watching. */
+(function showcase() {
+  const rail = $("#show-rail");
+  if (!rail) return;
+  const slides = [...rail.children];
+  const dots = [...document.querySelectorAll(".show-dot")];
+  const prev = $("#show-prev"), next = $("#show-next");
+  const video = $("#show-video");
+
+  /* Two separate reasons to hold the film: it is not the slide on screen,
+     and the carousel itself has scrolled off the page. Keeping them as one
+     flag conflated them, and a stale value meant the film could stay dark
+     while sitting in plain view. */
+  let onScreen = true;
+
+  const sound = $("#show-sound");
+  let watched = false;                 // has the film genuinely played here?
+
+  /* Sound is wanted on. Browsers will not autoplay audible media without a
+     prior user gesture, so this asks for sound, and falls back to muted
+     playback rather than to no playback at all — a silent film beats a
+     frozen poster. `wantSound` remembers the intent so the first gesture
+     can turn it on for real, and so an explicit mute is not undone. */
+  let wantSound = true;
+
+  function paintSound() {
+    if (!sound) return;
+    sound.setAttribute("aria-pressed", String(!video.muted));
+    sound.querySelector("span").textContent =
+      video.muted ? "Sound on" : "Sound off";
+    sound.setAttribute("aria-label",
+      video.muted ? "Turn sound on" : "Turn sound off");
+  }
+
+  function tryAudible() {
+    if (!video || !wantSound || !video.muted) return;
+    video.muted = false;
+    video.play().catch(() => { video.muted = true; paintSound(); });
+    paintSound();
+  }
+
+  if (video) {
+    video.muted = false;
+    video.play().catch(() => {          // policy said no; play it silent
+      video.muted = true;
+      video.play().catch(() => {});
+    }).finally(paintSound);
+
+    /* If it was blocked, the first deliberate interaction is a gesture the
+       policy accepts. Scoped to the carousel so a click in the footer can
+       never start sound out of nowhere. */
+    $("#showcase").addEventListener("pointerdown", tryAudible);
+
+    /* The film is not looped any more: it runs once and hands over to the
+       first product. Looping would mean `ended` never fires. */
+    /* Hand over only if the film genuinely played here. `ended` also fires
+       for a restored element that was already at the end, before anyone
+       has seen a frame — that is what opened the carousel on Mango. A
+       real viewing crosses the 1s mark through timeupdate; a stale flag
+       never does. */
+    watched = false;
+    video.addEventListener("timeupdate", () => {
+      if (video.currentTime > 1 && !video.paused) watched = true;
+    });
+    video.addEventListener("ended", () => { if (onScreen && watched) go(1); });
+
+    /* ---- pause on click, and a timeline you can scrub ----
+       `held` is a *person's* pause, distinct from the pauses sync() applies
+       when the film scrolls off. Without the distinction, scrolling away
+       and back would restart a film someone had deliberately stopped. */
+    const playBtn = $("#show-play");
+    const scrub = $("#show-scrub"), fill = $("#show-scrub-fill");
+    const knob = $("#show-scrub-knob"), buf = $("#show-scrub-buf");
+    let held = false;
+
+    function paintPlay() {
+      const paused = video.paused;
+      playBtn.querySelector("use").setAttribute("href",
+        paused ? "#i-play" : "#i-pause");
+      playBtn.setAttribute("aria-label", paused ? "Play film" : "Pause film");
+      playBtn.setAttribute("aria-pressed", String(!paused));
+      playBtn.classList.toggle("is-paused", paused);
+    }
+    function toggle() {
+      if (video.paused) { held = false; video.play().catch(() => {}); }
+      else { held = true; video.pause(); }
+      paintPlay();
+    }
+    video.addEventListener("click", toggle);
+    playBtn.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+    video.addEventListener("play", paintPlay);
+    video.addEventListener("pause", paintPlay);
+    // sync() may hold the film for scroll reasons; expose the human flag
+    video._held = () => held;
+
+    function paintTime() {
+      if (!video.duration) return;
+      const p = video.currentTime / video.duration * 100;
+      fill.style.width = p + "%";
+      knob.style.left = p + "%";
+      scrub.setAttribute("aria-valuenow", String(Math.round(p)));
+      if (video.buffered.length) {
+        buf.style.width = (video.buffered.end(video.buffered.length - 1)
+                           / video.duration * 100) + "%";
+      }
+    }
+    video.addEventListener("timeupdate", paintTime);
+    video.addEventListener("progress", paintTime);
+    video.addEventListener("loadedmetadata", paintTime);
+
+    /* Seeking: pointer capture keeps the drag alive if the finger wanders
+       off the track, and it lets one handler serve mouse, pen and touch. */
+    const seekTo = (clientX) => {
+      const r = scrub.getBoundingClientRect();
+      const f = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+      if (video.duration) video.currentTime = f * video.duration;
+      paintTime();
+    };
+    scrub.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      scrub.setPointerCapture(e.pointerId);
+      scrub.classList.add("dragging");
+      seekTo(e.clientX);
+    });
+    scrub.addEventListener("pointermove", (e) => {
+      if (scrub.classList.contains("dragging")) seekTo(e.clientX);
+    });
+    const endDrag = (e) => {
+      if (!scrub.classList.contains("dragging")) return;
+      scrub.classList.remove("dragging");
+      try { scrub.releasePointerCapture(e.pointerId); } catch {}
+    };
+    scrub.addEventListener("pointerup", endDrag);
+    scrub.addEventListener("pointercancel", endDrag);
+    scrub.addEventListener("keydown", (e) => {
+      const step = e.shiftKey ? 5 : 1;
+      if (e.key === "ArrowRight") { e.preventDefault();
+        video.currentTime = Math.min(video.duration || 0, video.currentTime + step); }
+      if (e.key === "ArrowLeft") { e.preventDefault();
+        video.currentTime = Math.max(0, video.currentTime - step); }
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); }
+    });
+    paintPlay();
+  }
+
+  /* Clamped, because the two ways this reads wrong both end in
+     `slides[i]` being undefined and sync() throwing:
+       - a rail that has not been laid out yet (or is inside something
+         hidden) has clientWidth 0, and 0/0 is NaN;
+       - a rounding that lands one past the last slide.
+     Neither is exotic — the first happens on any load where this runs
+     before layout settles. */
+  const at = () => {
+    const w = rail.clientWidth;
+    if (!w) return 0;
+    return Math.max(0, Math.min(slides.length - 1,
+                                Math.round(rail.scrollLeft / w)));
+  };
+  const go = (i) => rail.scrollTo({
+    left: Math.max(0, Math.min(slides.length - 1, i)) * rail.clientWidth,
+  });
+
+  function sync() {
+    const i = at();
+    // Published so the shared controls (arrows) can take the active slide's
+    // colours; they sit on the section, not inside the slide.
+    $("#showcase").dataset.active = slides[i].dataset.pattern || "";
+    dots.forEach((d, k) => d.classList.toggle("on", k === i));
+    prev.disabled = i <= 0;
+    next.disabled = i >= slides.length - 1;
+    if (video) {
+      const want = onScreen && slides[i] === video.closest(".show-slide")
+                   && !(video._held && video._held());
+      /* Guarded both ways: play() returns a promise that rejects if a
+         pause() lands before it settles, and calling either redundantly is
+         how that race gets started. */
+      if (want && video.paused) video.play().catch(() => {});
+      else if (!want && !video.paused) video.pause();
+    }
+  }
+
+  prev.onclick = () => go(at() - 1);
+  next.onclick = () => go(at() + 1);
+  dots.forEach((d) => (d.onclick = () => go(+d.dataset.go)));
+  rail.addEventListener("scroll", () => {
+    clearTimeout(rail._t);
+    rail._t = setTimeout(sync, 90);       // settle first, then read
+  }, { passive: true });
+
+  /* Arrow keys only while the carousel has focus — hijacking them globally
+     breaks scrolling the rest of the page. */
+  rail.tabIndex = 0;
+  rail.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight") { e.preventDefault(); go(at() + 1); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); go(at() - 1); }
+  });
+
+  if (sound && video) {
+    sound.onclick = () => {
+      video.muted = !video.muted;
+      wantSound = !video.muted;           // an explicit choice, remembered
+      if (!video.muted) video.play().catch(() => { video.muted = true;
+                                                   paintSound(); });
+      paintSound();
+    };
+  }
+
+  /* Stop the film when the carousel itself scrolls off the page. */
+  if (video && "IntersectionObserver" in window) {
+    new IntersectionObserver(([e]) => {
+      onScreen = e.isIntersecting;
+      sync();
+    }, { threshold: 0.25 }).observe($("#showcase"));
+  }
+
+  rail.querySelectorAll("[data-add]").forEach((b) => {
+    b.onclick = () => addToCart(+b.dataset.add, 0);
+  });
+
+  /* Sound must not follow the visitor. Three ways to leave, three hooks:
+     - another tab / app  → visibilitychange (a hidden tab keeps playing
+                            audio otherwise, which is the classic complaint)
+     - a route inside the shop (product page, journal) → the carousel is
+                            no longer on screen; the IntersectionObserver
+                            already handles that, but a pushState swap can
+                            remove the section entirely, so watch for that
+     - leaving the page  → pagehide; and bfcache can restore the page with
+                            the film mid-play, so pause on pageshow too and
+                            let sync() decide whether it should resume. */
+  if (video) {
+    /* Pause on *transition* to hidden, not on the standing state. Some
+       embedded and split-screen contexts report document.hidden=true while
+       the page is plainly on a screen; gating play on it would keep the
+       film dark there. What we care about is the moment the visitor
+       switches away — that is when sound following them is a complaint. */
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) video.pause();
+      else sync();
+    });
+    addEventListener("pagehide", () => video.pause());
+    addEventListener("pageshow", () => { video.pause(); sync(); });
+    new MutationObserver(() => {
+      if (!document.body.contains(video)) video.pause();
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+  addEventListener("resize", () => go(at()));
+
+  /* Browsers restore a scroll container's position across a reload, and a
+     snap container does not re-snap on its own — so a reload taken halfway
+     through the rail reopened the page wedged between two slides. The film
+     is the opener; start there every time. Assigning scrollLeft rather than
+     scrollTo() skips the smooth behaviour, so it is the first frame rather
+     than a visible slide-back. */
+  /* Opening the carousel means opening it on the film, from the top. Two
+     things fight that:
+       - the browser restores the rail's scroll position after the first
+         frame on a back/forward navigation, overwriting a rAF reset — so
+         this runs on pageshow as well, which fires after restoration;
+       - a film that already ran to the end (a bfcache restore, or a media
+         element the browser kept warm) reports ended=true immediately, and
+         the ended→next-slide handoff fires before anyone has seen it — the
+         carousel opened on Mango instead of the film. Rewinding it here is
+         what makes "start on the film" actually mean it. */
+  function openOnFilm() {
+    rail.scrollLeft = 0;
+    if (video && (video.ended || video.currentTime > 0.5)) {
+      video.currentTime = 0;
+    }
+    sync();
+  }
+  requestAnimationFrame(openOnFilm);
+  addEventListener("pageshow", openOnFilm);
+  addEventListener("popstate", () => { if (rail.isConnected) openOnFilm(); });
+  /* A reload can hand back a media element already sitting at the end,
+     and it does so *after* the first frame — the rAF above sees t=0 and
+     leaves it, then the real state arrives at 14.6s with ended=true. The
+     metadata event is the moment that state is trustworthy. Guarded on
+     `watched` so a viewer's own seek is never undone. */
+  if (video) {
+    video.addEventListener("loadedmetadata", () => {
+      if (!watched && (video.ended || video.currentTime > 0.5)) {
+        video.currentTime = 0;
+        rail.scrollLeft = 0;
+        sync();
+      }
+    });
+  }
+  sync();
+})();
+
+/* ---------- first-visit offer ----------
+
+   Held back until the visitor has shown some intent — a scroll past the
+   opener, or twenty seconds — because an overlay in the first second is
+   what trained everyone to close these without reading. Shown once ever:
+   the flag is set whether they join, skip or close, so it cannot nag.
+
+   The discount code is not minted here. The client asks for it and the
+   server decides; a code the page could invent would be a code anyone
+   could invent. */
+(function firstVisitOffer() {
+  const wrap = $("#offer");
+  if (!wrap || PREVIEW) return;
+  const KEY = "sf_offer_seen";
+  try { if (localStorage.getItem(KEY)) return; } catch { return; }
+
+  let armed = true;
+  const settle = (why) => {
+    armed = false;
+    try { localStorage.setItem(KEY, why); } catch {}
+    removeEventListener("scroll", onScroll);
+    clearTimeout(timer);
+  };
+  const close = (why) => {
+    settle(why);
+    wrap.hidden = true;
+    document.body.classList.remove("offer-open");
+  };
+  const show = () => {
+    if (!armed || document.body.classList.contains("drawer-open")) return;
+    armed = false;                       // opened once; the flag is set on exit
+    wrap.hidden = false;
+    document.body.classList.add("offer-open");
+    $("#offer-email").focus();
+  };
+
+  const onScroll = () => { if (scrollY > innerHeight * 0.6) show(); };
+  addEventListener("scroll", onScroll, { passive: true });
+  const timer = setTimeout(show, 20000);
+
+  $("#offer-close").onclick = () => close("closed");
+  $("#offer-skip").onclick = () => close("skipped");
+  wrap.onclick = (e) => { if (e.target === wrap) close("closed"); };
+  addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !wrap.hidden) close("closed");
+  });
+
+  $("#offer-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const email = $("#offer-email").value.trim();
+    const msg = $("#offer-msg"), go = $("#offer-go");
+    go.disabled = true;
+    msg.textContent = "Signing you up…";
+    try {
+      const r = await fetch("/api/store/subscribe", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, source: "first-visit-offer" }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(out.detail || "that didn't go through");
+      settle("joined");
+      // The code comes back from the server, or falls back to the standing
+      // welcome discount — never invented on the client.
+      const code = out.code || "WELCOME10";
+      wrap.querySelector(".offer-card").innerHTML = `
+        <span class="offer-badge">You're in</span>
+        <h2>Here's 10% off.</h2>
+        <p>Use this at checkout — we've also emailed it to you.</p>
+        <div class="offer-code"><b>${code}</b>
+          <button class="btn-pill ghost sm" id="offer-copy">Copy</button></div>
+        <button class="offer-skip" id="offer-done">Start shopping</button>`;
+      $("#offer-copy").onclick = () => {
+        navigator.clipboard?.writeText(code);
+        $("#offer-copy").textContent = "Copied";
+      };
+      $("#offer-done").onclick = () => close("joined");
+    } catch (err) {
+      msg.textContent = err.message || "That didn't go through — try again.";
+      go.disabled = false;
+    }
+  };
+})();
+
+/* ---------- entry points into the review form ----------
+
+   openReviews() has always contained a complete write-a-review form; what
+   it lacked was any way in. The product page knows which product it is and
+   says so in a data attribute. The home page's wall is the whole range, so
+   it has to ask. */
+function wireReviewButtons() {
+  document.querySelectorAll("[data-review-for]").forEach((b) => {
+    b.onclick = () => openReviews(+b.dataset.reviewFor);
+  });
+  const wall = $("#write-review");
+  if (wall) {
+    wall.onclick = () => {
+      const list = CATALOG.products.map((p) => `
+        <button class="rev-pick" data-pick="${p.id}"
+                style="--flavour:${flavourOf(p)}">
+          ${art(p, "art", false, true)}<b>${pname(p)}</b></button>`).join("");
+      openModal(`<h3>Which one are you reviewing?</h3>
+        <div class="rev-picks">${list}</div>`);
+      document.querySelectorAll("[data-pick]").forEach((b) => {
+        b.onclick = () => openReviews(+b.dataset.pick);
+      });
+    };
+  }
+}
 
 // ---------- boot ----------
 buildPickers();

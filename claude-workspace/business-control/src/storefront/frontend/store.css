@@ -196,7 +196,7 @@ svg.can { display: block; width: 100%; height: auto; }
    auto-fill rather than a fixed column count: the menu is now full width, so
    the tiles have to stay sane from phone to wide desktop. */
 .menu-tiles { display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .menu-tile { display: block; border-radius: var(--r-md); overflow: hidden;
   background: var(--flavour-soft, var(--lav-soft)); text-align: center;
   padding-bottom: 10px; transition: transform .2s, box-shadow .2s; }
@@ -204,7 +204,8 @@ svg.can { display: block; width: 100%; height: auto; }
 .menu-tile .art { aspect-ratio: 4/5; max-height: 210px; display: flex;
   align-items: center; justify-content: center; overflow: hidden;
   margin-bottom: 8px; }
-.menu-tile .art img { width: 100%; height: 100%; object-fit: cover; }
+.menu-tile .art img { width: 100%; height: 100%; object-fit: contain;
+  padding: 8%; }
 .menu-tile .art svg.can { width: 58%; }
 .menu-tile b { display: block; font-family: var(--display); font-size: 14px;
   font-weight: 600; line-height: 1.2; padding: 0 8px; }
@@ -303,15 +304,23 @@ svg.can { display: block; width: 100%; height: auto; }
   margin-bottom: 26px; flex-wrap: wrap; }
 .sec-head h2 { margin-bottom: 4px; }
 .sec-head > div { flex: 1; min-width: 260px; }
+/* The count comes from drawGrid, which knows both how many cards there are
+   and how many fit — a media query here would override that and put the
+   lone card back. */
 .grid { display: grid; gap: 22px;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+  grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); }
 
 /* benefit strip — the nutrition/claims row */
 .benefits { background: var(--paper); border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line); margin-top: 76px; }
-.benefits-row { max-width: var(--wrap); margin: 0 auto; display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px; padding: 30px 26px; }
+/* Five in a row, or three then two — never a trailing single. The wrap
+   is flex rather than grid precisely so the short last row centres itself
+   under the gaps of the row above instead of left-aligning. */
+.benefits-row { max-width: var(--wrap); margin: 0 auto; display: flex;
+  flex-wrap: wrap; justify-content: center; gap: 8px; padding: 30px 26px; }
+.benefit { flex: 0 1 calc(20% - 8px); min-width: 150px; }
+@media (max-width: 1000px) { .benefit { flex-basis: calc(33.333% - 8px); } }
+@media (max-width: 620px)  { .benefit { flex-basis: calc(50% - 8px); } }
 .benefit { display: flex; flex-direction: column; align-items: center;
   text-align: center; gap: 8px; padding: 4px 10px; }
 .benefit .ico { width: 26px; height: 26px; color: var(--purple); }
@@ -329,7 +338,14 @@ svg.can { display: block; width: 100%; height: auto; }
 .product .art { aspect-ratio: 4/5; display: flex; align-items: center;
   justify-content: center; position: relative; overflow: hidden;
   background: var(--flavour-soft); }
-.product .art img { width: 100%; height: 100%; object-fit: cover;
+/* contain, never cover, for product art. The renders are cut-outs on a
+   tinted panel, and the derivative is trimmed to the product (see
+   make_derivatives) — `cover` on a tight 1:2.8 can in a 4:5 slot crops it
+   to a slice of the label. `cover` is for photographs that fill a frame,
+   which none of these are. The padding is the breathing room the trimmed
+   file no longer carries. */
+.product .art img { width: 100%; height: 100%; object-fit: contain;
+  padding: 10% 12%;
   transition: transform .5s cubic-bezier(.2,0,.2,1); }
 .product:hover .art img { transform: scale(1.04); }
 .product .art svg.can { width: 62%; height: auto;
@@ -396,7 +412,9 @@ svg.can { display: block; width: 100%; height: auto; }
 .pp-stage { background: var(--flavour-soft); border-radius: var(--r-lg);
   aspect-ratio: 4/5; display: flex; align-items: center;
   justify-content: center; overflow: hidden; position: relative; }
-.pp-stage img, .pp-stage video, .pp-stage iframe { width: 100%; height: 100%;
+.pp-stage img { width: 100%; height: 100%; object-fit: contain;
+  padding: 8%; border: none; display: block; }
+.pp-stage video, .pp-stage iframe { width: 100%; height: 100%;
   object-fit: cover; border: none; display: block; }
 .pp-stage svg.can { width: 56%; height: auto; }
 .pp-strip { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
@@ -405,7 +423,8 @@ svg.can { display: block; width: 100%; height: auto; }
   background: var(--flavour-soft); cursor: pointer; display: flex;
   align-items: center; justify-content: center; }
 .pp-thumb.on { border-color: var(--ink); border-width: 2px; }
-.pp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pp-thumb img { width: 100%; height: 100%; object-fit: contain;
+  padding: 10%; display: block; }
 .pp-thumb svg.can { width: 58%; }
 .pp-thumb .play { position: absolute; inset: 0; display: flex;
   align-items: center; justify-content: center; color: #fff;
@@ -466,6 +485,12 @@ svg.can { display: block; width: 100%; height: auto; }
 .sticky-inner { max-width: var(--wrap); margin: 0 auto; display: flex;
   align-items: center; gap: 16px; }
 .sticky-inner svg.can { width: 34px; }
+/* the real product render, on its own flavour, at the size the drawn can was */
+.sticky-shot { flex: none; width: 40px; height: 50px; border-radius: var(--r-sm);
+  background: var(--flavour-soft); display: flex; align-items: center;
+  justify-content: center; overflow: hidden; }
+.sticky-shot img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
+.sticky-buy { --flavour-soft: color-mix(in srgb, var(--flavour, var(--purple)) 13%, #fff); }
 .sticky-inner .who { flex: 1; min-width: 0; }
 .sticky-inner b { font-size: 15px; font-weight: 600; display: block;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -576,7 +601,17 @@ svg.can { display: block; width: 100%; height: auto; }
   border-radius: var(--r-pill); transition: width .4s cubic-bezier(.4,0,.2,1); }
 .ship-meter p { font-size: 13px; color: var(--ink-2); }
 .ship-meter b { color: var(--ink); font-weight: 600; }
-.cart-items { flex: 1; overflow-y: auto; }
+/* `flex: 1` is shorthand for flex-basis 0, and `overflow-y: auto` drops a
+   flex item's automatic minimum size to zero — together they let this pane
+   collapse to 0px while holding full-height lines, which is exactly what it
+   did once the upsell and the footer filled the drawer.
+
+   Sizing it to its content and letting the drawer scroll is the honest
+   model: the lines are what the cart is for, so they are never the thing
+   that gets squeezed. A nested scroller here also hid items behind an inner
+   scrollbar nobody looks for. */
+.cart-items { flex: 0 0 auto; }
+.cart-drawer { overflow-y: auto; }
 .cart-line { display: flex; align-items: center; gap: 14px; padding: 12px;
   margin-bottom: 10px; background: var(--paper);
   border: 1px solid var(--line); border-radius: var(--r-md); }
@@ -584,7 +619,8 @@ svg.can { display: block; width: 100%; height: auto; }
   display: flex; align-items: center; justify-content: center;
   background: var(--flavour-soft); border-radius: var(--r-sm);
   overflow: hidden; }
-.cart-line .art img { width: 100%; height: 100%; object-fit: cover; }
+.cart-line .art img { width: 100%; height: 100%; object-fit: contain;
+  padding: 8%; }
 .cart-line .art svg.can { width: 62%; }
 .cart-line b { font-size: 14.5px; font-weight: 600; display: block; }
 .cart-line .dim { font-size: 12.5px; }
@@ -600,11 +636,20 @@ svg.can { display: block; width: 100%; height: auto; }
 .cart-empty { text-align: center; padding: 60px 20px; color: var(--ink-2); }
 .cart-empty .ico { width: 40px; height: 40px; margin: 0 auto 14px;
   color: var(--ink-3); }
-.cart-discount { display: flex; gap: 8px; align-items: center;
-  padding: 8px 22px; flex-wrap: wrap; }
-.cart-discount input { flex: 1; border: 1px solid var(--line);
+.cart-code { display: flex; gap: 8px; align-items: center;
+  padding: 10px 22px 4px; }
+.cart-code input { flex: 1 1 auto; min-width: 0; border: 1px solid var(--line);
   border-radius: var(--r-sm); padding: 11px 13px; font-family: var(--ui);
-  font-size: 14px; min-width: 130px; }
+  font-size: 14px; }
+.cart-code .btn-pill { flex: none; }
+.cart-code-msg { padding: 0 22px; font-size: 13px; min-height: 18px; }
+.cart-codes { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 22px 6px; }
+.code-chip { display: inline-flex; align-items: center; gap: 6px;
+  background: var(--lav-soft); color: var(--purple); font-size: 13px;
+  font-weight: 600; border-radius: var(--r-pill); padding: 5px 6px 5px 12px; }
+.code-chip button { border: none; background: none; cursor: pointer;
+  color: inherit; display: flex; padding: 2px; border-radius: 50%; }
+.code-chip button:hover { background: rgba(108,0,191,.14); }
 .cart-total { font-size: 15px; padding: 14px 22px 4px; }
 .cart-total .row { display: flex; justify-content: space-between;
   padding: 4px 0; color: var(--ink-2); }
@@ -612,11 +657,15 @@ svg.can { display: block; width: 100%; height: auto; }
   font-family: var(--display); padding-top: 10px; margin-top: 6px;
   border-top: 1px solid var(--line); }
 .cart-total .row span:last-child { font-variant-numeric: tabular-nums; }
-.cart-foot .btn-pill { margin: 10px 22px 8px; width: calc(100% - 44px);
+/* Direct child only. As a descendant rule this also captured the Apply
+   button nested in the code row, stretching it across the drawer and
+   squeezing the input it sits beside down to a stub. */
+.cart-foot > .btn-pill { margin: 10px 22px 8px; width: calc(100% - 44px);
   padding: 16px 28px; font-size: 15.5px; }
 .cart-note { text-align: center; font-size: 12px; color: var(--ink-3);
   padding-bottom: 16px; }
-.cart-discount { padding: 8px 24px; }
+.cart-code { padding: 10px 24px 4px; }
+  .cart-code-msg, .cart-codes { padding-inline: 24px; }
 .cart-total { padding: 10px 24px 4px; }
 .strike { text-decoration: line-through; color: var(--ink-3); font-weight: 400; }
 .upsell { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 8px; }
@@ -624,7 +673,7 @@ svg.can { display: block; width: 100%; height: auto; }
   color: var(--ink-3); font-weight: 700; }
 .upsell-row { display: flex; align-items: center; gap: 11px; margin-top: 12px; }
 .upsell-row img { width: 44px; height: 55px; border-radius: var(--r-sm);
-  object-fit: cover; }
+  object-fit: contain; padding: 4px; background: var(--flavour-soft, #f3eefb); }
 .upsell-emoji { width: 44px; height: 55px; border-radius: var(--r-sm);
   background: var(--lav-soft); display: flex; align-items: center;
   justify-content: center; flex: none; }
@@ -788,12 +837,12 @@ svg.can { display: block; width: 100%; height: auto; }
 .sf-call-bar span { flex: 1; }
 
 /* ---------- measurement consent ---------- */
-.consent-bar { position: fixed; left: 20px; right: 20px; bottom: 20px;
-  z-index: 55; max-width: 620px; margin: 0 auto; display: flex;
-  align-items: center; gap: 18px; flex-wrap: wrap;
+.consent-bar { position: fixed; left: 84px; right: 196px; bottom: 20px;
+  z-index: 55; max-width: 600px; margin: 0 auto; display: flex;
+  align-items: center; gap: 14px; flex-wrap: nowrap;
   background: linear-gradient(140deg, var(--purple) 0%, #5a00a3 60%,
   var(--purple-deep) 100%); color: #fff; border-radius: var(--r-lg);
-  padding: 18px 22px; box-shadow: var(--sh-2); }
+  padding: 12px 18px; box-shadow: var(--sh-2); }
 /* The hidden attribute is only UA-level display:none, and the flex rule
    above outranks it — without this the bar was visible from page load,
    empty and inert, regardless of what the JS thought. */
@@ -802,9 +851,10 @@ svg.can { display: block; width: 100%; height: auto; }
    while a drawer is open so it can never cover the menu's own entries. */
 body.drawer-open .consent-bar { opacity: 0; pointer-events: none;
   transition: opacity .2s; }
-.consent-bar p { font-size: 13.5px; flex: 1; min-width: 220px;
-  color: rgba(255,255,255,.86); }
-.consent-acts { display: flex; gap: 10px; }
+.consent-bar p { font-size: 12.5px; line-height: 1.35; flex: 1 1 auto;
+  min-width: 0; color: rgba(255,255,255,.86); }
+.consent-acts { display: flex; gap: 8px; flex: none; }
+.consent-bar .btn-pill.sm { padding: 7px 13px; font-size: 12.5px; }
 .consent-bar .btn-pill.ghost { color: #fff; border-color: rgba(255,255,255,.4); }
 .consent-bar .btn-pill.ghost:hover { border-color: #fff; background: none; }
 @media (max-width: 620px) { .consent-bar { left: 12px; right: 12px;
@@ -824,6 +874,23 @@ body.drawer-open .consent-bar { opacity: 0; pointer-events: none;
   font-variant-numeric: tabular-nums; }
 body.drawer-open .buy-fab { opacity: 0; pointer-events: none; }
 .buy-fab.lifted { bottom: 88px; }   /* sits above the PDP sticky bar */
+/* While the cookie bar is up it owns the bottom of the screen, so both
+   floating badges step above it rather than being buried under it. The
+   height comes from JS because the bar's copy is merchant-editable and
+   wraps; 12px is the gap between them. */
+/* On a wide screen the bar sits between the two badges, so all three
+   share the row and nothing moves. Below that there is no room for three
+   abreast: the bar goes full width and the badges step above it, which is
+   what --consent-h (measured, because the copy wraps) is for. */
+@media (max-width: 900px) {
+  .consent-bar { left: 12px; right: 12px; flex-wrap: wrap;
+    padding: 14px 16px; }
+  .consent-bar p { min-width: 180px; }
+  body.consent-open .buy-fab,
+  body.consent-open .a11y-fab { bottom: calc(14px + var(--consent-h, 110px) + 10px); }
+  body.consent-open .buy-fab.lifted {
+    bottom: calc(88px + var(--consent-h, 110px) + 10px); }
+}
 
 /* ---------- accessibility menu ---------- */
 .a11y-fab { position: fixed; left: 20px; bottom: 20px; z-index: 48;
@@ -835,6 +902,11 @@ body.drawer-open .buy-fab { opacity: 0; pointer-events: none; }
 /* The fullscreen menu covers this corner and carries its own entry, so the
    badge steps aside while a drawer is open — same rule as the buy button. */
 body.drawer-open .a11y-fab { opacity: 0; pointer-events: none; }
+/* The sticky buy bar is full width, so a badge pinned to the bottom-left
+   lands on top of it — over the product thumbnail. Lift it exactly as far
+   as the buy button lifts, so the two sit on one line above the bar. */
+.a11y-fab { transition: transform .18s, opacity .2s, bottom .3s; }
+.a11y-fab.lifted { bottom: 88px; }
 /* Opened from the menu, so it centres over whatever is on screen rather
    than hanging off a floating badge. */
 .a11y-panel { position: fixed; left: 50%; top: 50%; z-index: 75;
@@ -926,3 +998,349 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
 .cmt-form button { justify-self: start; }
 .cmt-msg { font-size: 14px; color: var(--ink-2); }
 @media (max-width: 620px) { .cmt-row { grid-template-columns: 1fr; } }
+
+/* ---------- showcase carousel ----------
+   The rail is a scroll-snap container, not a transform track. Snapping is
+   what makes a drag on a phone feel native, and it means the arrows only
+   have to call scrollTo — no transform bookkeeping, and no way for the
+   indicator to disagree with what is on screen, because position is read
+   back from scrollLeft rather than remembered. */
+.showcase { position: relative; margin: 0 0 8px; background: var(--paper); }
+.show-rail { display: flex; gap: 0; margin: 0; padding: 0; list-style: none;
+  overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth;
+  scrollbar-width: none; -ms-overflow-style: none; }
+.show-rail::-webkit-scrollbar { display: none; }
+@media (prefers-reduced-motion: reduce) { .show-rail { scroll-behavior: auto; } }
+.showcase { --slide-h: clamp(400px, 60vw, 720px); }
+.show-slide { flex: 0 0 100%; scroll-snap-align: center;
+  height: var(--slide-h); position: relative;
+  display: flex; align-items: center; justify-content: center; gap: 48px;
+  padding: 34px clamp(20px, 6vw, 90px) 58px; }
+
+.show-video { padding: 30px 0 58px; background: #fff;
+  flex-direction: column; justify-content: center; gap: 20px; }
+.show-video video { width: 100%; max-height: calc(0.62 * var(--slide-h));
+  object-fit: contain; display: block; }
+.show-cap { display: flex; flex-direction: column; align-items: center;
+  gap: 14px; font-family: var(--wordmark);
+  font-size: clamp(17px, 2.1vw, 26px); color: var(--ink); }
+.show-sound { position: absolute; right: clamp(20px, 5vw, 46px); top: 24px;
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  border: 1px solid var(--line); background: rgba(255,255,255,.86);
+  color: var(--ink); border-radius: var(--r-pill); padding: 8px 15px;
+  font-family: var(--ui); font-size: 13px; }
+.show-sound:hover { border-color: var(--purple); color: var(--purple); }
+
+.show-shot { flex: 0 0 auto; display: flex; align-items: center;
+  justify-content: center; height: calc(0.70 * var(--slide-h));
+  max-width: 42vw; }
+.show-shot img { height: 100%; width: auto; max-width: 100%;
+  object-fit: contain; }
+.show-copy { max-width: 430px; }
+.show-copy b { display: block; font-family: var(--display);
+  font-size: clamp(26px, 3.4vw, 42px); line-height: 1.1; margin-bottom: 10px; }
+.show-copy p { color: var(--ink-soft); font-size: 15.5px; margin-bottom: 14px; }
+.show-price { display: block; font-weight: 700; margin-bottom: 16px; }
+
+.show-arrow { position: absolute; top: 50%; transform: translateY(-50%);
+  z-index: 3; width: 46px; height: 46px; border-radius: 50%;
+  border: 1px solid var(--line); background: rgba(255,255,255,.92);
+  color: var(--ink); cursor: pointer; display: flex; align-items: center;
+  justify-content: center; box-shadow: var(--sh-1); transition: all .18s; }
+.show-arrow:hover { background: #fff; color: var(--purple);
+  border-color: var(--purple); }
+.show-arrow.prev { left: clamp(8px, 2vw, 22px); }
+.show-arrow.prev .ico { transform: rotate(180deg); }
+.show-arrow.next { right: clamp(8px, 2vw, 22px); }
+.show-arrow[disabled] { opacity: .32; cursor: default; }
+.show-dots { position: absolute; left: 0; right: 0; bottom: 12px; z-index: 3;
+  display: flex; justify-content: center; gap: 8px; }
+.show-dot { width: 8px; height: 8px; padding: 0; border-radius: 50%;
+  border: none; cursor: pointer; background: rgba(60,40,80,.26); }
+.show-dot.on { background: var(--purple); transform: scale(1.35); }
+
+@media (max-width: 780px) {
+  .show-slide { flex-direction: column; gap: 18px; text-align: center;
+    padding: 26px 20px 52px; }
+  /* stacked, the can shares the height with the copy below it */
+  .show-shot { height: calc(0.46 * var(--slide-h)); max-width: 70vw; }
+  .show-wide .show-shot { width: min(86vw, 520px); max-width: 86vw; }
+  .show-copy { max-width: none; }
+  .show-arrow { width: 40px; height: 40px; }
+}
+
+/* ---------- showcase: the film's tessellations, one per SKU ----------
+   The tile PNGs are white-on-transparent and the flat colour sits behind
+   them, so one file covers a flavour at any tint and a palette change is a
+   stylesheet edit rather than a re-export. Tiles are seamless by
+   construction (see assets/video/icons.py), which is what lets
+   background-repeat run edge to edge without a visible join.
+
+   background-size is the tile's own pixel size, not `cover`: scaling a
+   repeating pattern to the viewport is what makes one look stretched on a
+   wide screen and cramped on a phone. */
+.show-slide[data-pattern] { background-repeat: repeat; color: #fff; }
+.show-slide[data-pattern] .show-copy p { color: rgba(255,255,255,.86); }
+.show-slide[data-pattern] .show-price { color: #fff; }
+.pat-mango { background-color: #e27e34;
+  background-image: url("/hero/patterns/mango.png"); background-size: 340px; }
+.pat-passionfruit { background-color: #b03064;
+  background-image: url("/hero/patterns/passionfruit.png"); background-size: 340px; }
+.pat-lavender { background-color: #7466b0;
+  background-image: url("/hero/patterns/lavender.png"); background-size: 340px; }
+.pat-honey { background-color: #7a9e4c;
+  background-image: url("/hero/patterns/honey.png"); background-size: 246px 142px; }
+.pat-all { background-color: #6c00bf;
+  background-image: url("/hero/patterns/all.png"); background-size: 620px; }
+
+/* The white product renders need to stay legible against a saturated
+   ground, so they keep a soft contact shadow the plain slide does not need. */
+.show-slide[data-pattern] .show-shot img {
+  filter: drop-shadow(0 18px 26px rgba(0,0,0,.28)); }
+.show-slide[data-pattern] .show-add { background: #fff; color: var(--purple); }
+.show-slide[data-pattern] .show-add:hover { background: #f4ecff; }
+
+/* Caption and call to action sit under the film, not on it. */
+.show-cap b { font-weight: 600; letter-spacing: .2px; }
+.show-cta { box-shadow: 0 6px 20px rgba(255,105,0,.38); }
+@media (max-width: 780px) {
+  .show-video { padding-bottom: 46px; gap: 12px; }
+  .show-cap { gap: 10px; }
+}
+
+/* ---------- showcase: buttons, the case, and the proof line ----------
+   Add to cart is the orange the whole site uses for "do the thing"; a white
+   pill read as secondary next to the arrows. On mango the orange button sits
+   on an orange field, so there the controls take a purple edge to separate —
+   driven by data-active, which sync() writes, because the arrows belong to
+   the section rather than to any one slide. */
+.show-slide[data-pattern] .show-add { background: var(--orange); color: #fff;
+  border: 2px solid transparent; }
+.show-slide[data-pattern] .show-add:hover { background: #e85f00; }
+.pat-mango .show-add { border-color: var(--purple); }
+#showcase[data-active="mango"] .show-arrow,
+#showcase[data-active="mango"] .show-sound { border-color: var(--purple);
+  color: var(--purple); border-width: 2px; }
+#showcase[data-active="mango"] .show-dot.on { background: var(--purple); }
+
+/* The case is a landscape shot: at 70% tall its width would swallow the
+   copy, so it takes what the width allows and centres on the height. */
+.show-wide .show-shot { width: clamp(240px, 44vw, 620px); max-width: 48vw; }
+.show-wide .show-shot img { height: auto; width: 100%;
+  max-height: 100%; }
+
+/* ---------- the collection's lead row ---------- */
+.product.feature { grid-column: 1 / -1; display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: center;
+  gap: clamp(20px, 4vw, 56px); padding: clamp(20px, 3vw, 40px);
+  background: linear-gradient(120deg, #f7f1ff 0%, #fdf6ff 100%); }
+.product.feature .feature-art { display: flex; align-items: center;
+  justify-content: center; }
+/* The card art normally sits on a flavour-tinted panel; at feature size that
+   panel reads as a stray rectangle around the photograph. */
+.product.feature .feature-art .art { background: none; aspect-ratio: auto; }
+.feature-kicker { justify-self: start; align-self: start; width: fit-content; }
+.product.feature .feature-art img,
+.product.feature .feature-art svg { width: 100%; height: auto;
+  max-height: clamp(200px, 26vw, 330px); object-fit: contain; }
+.product.feature .body { padding: 0; }
+.product.feature b { font-family: var(--display);
+  font-size: clamp(24px, 3vw, 38px); line-height: 1.12; display: block;
+  margin-bottom: 8px; }
+.feature-kicker { display: inline-block; font-size: 11.5px; font-weight: 700;
+  letter-spacing: .10em; text-transform: uppercase; color: var(--purple);
+  background: #efe4ff; border-radius: var(--r-pill); padding: 4px 11px;
+  margin-bottom: 12px; }
+@media (max-width: 720px) {
+  .product.feature { grid-template-columns: 1fr; text-align: center; }
+  .feature-kicker { margin-inline: auto; }
+}
+
+/* ---------- the case in the side menu ---------- */
+.menu-tile.wide { display: grid; grid-template-columns: minmax(0, 1.4fr) 1fr;
+  align-items: center; gap: 16px; text-align: left; margin-bottom: 14px; }
+.menu-tile.wide .art, .menu-tile.wide img, .menu-tile.wide svg {
+  width: 100%; height: auto; max-height: 130px; object-fit: contain;
+  background: none; aspect-ratio: auto; }
+/* Name and price are one block in the right-hand cell; as bare grid children
+   they landed in separate tracks and drifted apart. */
+.menu-tile.wide .mt-copy { display: flex; flex-direction: column; gap: 4px;
+  padding-right: 14px; }
+.menu-tile.wide b { font-size: 16px; line-height: 1.2; }
+.menu-tile.wide span { color: var(--ink-2); font-size: 13.5px; }
+
+/* ---------- social proof ---------- */
+.proof { text-align: center; padding: clamp(30px, 5vw, 58px) 20px; }
+.proof-line { font-family: var(--display);
+  font-size: clamp(26px, 4.2vw, 52px); line-height: 1.12; color: var(--ink); }
+.proof-line b { color: var(--purple); }
+.proof-sub { margin-top: 10px; color: var(--ink-soft); font-size: 15.5px; }
+
+/* ---------- film controls ----------
+   The play/pause glyph rides over the film, quiet while playing and
+   present when paused (a paused film with no affordance looks broken).
+   The scrubber sits directly under the picture, full width of it. */
+.show-video video { cursor: pointer; }
+.show-play { position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%); z-index: 3;
+  width: 66px; height: 66px; border-radius: 50%; border: none;
+  background: var(--purple); color: #fff;
+  box-shadow: 0 6px 20px rgba(108,0,191,.35);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; opacity: 0; transition: opacity .18s, transform .18s;
+  pointer-events: none; }
+.show-play .ico { width: 26px; height: 26px; }
+.show-play.is-paused, .show-video:hover .show-play,
+.show-play:focus-visible { opacity: 1; pointer-events: auto; }
+.show-play:hover { transform: translate(-50%, -50%) scale(1.06); }
+.show-play:focus-visible { outline: 2px solid var(--purple);
+  outline-offset: 3px; }
+/* the play glyph is optically left-heavy; nudge it to the visual centre */
+.show-play.is-paused .ico { margin-left: 3px; }
+/* the film's own click toggles too, so the glyph must not sit on top of
+   the video slide's caption when paused */
+.show-video { padding-top: 30px; }
+.show-video video { width: min(100%, 1400px); }
+.show-scrub { position: relative; width: min(100%, 1400px); height: 22px;
+  margin: 2px auto 0; cursor: pointer; touch-action: none;
+  display: flex; align-items: center; }
+.show-scrub::before { content: ""; position: absolute; left: 0; right: 0;
+  height: 4px; border-radius: 2px; background: rgba(27,24,31,.14); }
+.show-scrub-buf, .show-scrub-fill { position: absolute; left: 0; height: 4px;
+  border-radius: 2px; width: 0; }
+.show-scrub-buf { background: rgba(27,24,31,.10); }
+.show-scrub-fill { background: var(--purple); }
+.show-scrub-knob { position: absolute; left: 0; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--purple); border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,.25); transform: translateX(-50%);
+  transition: transform .12s; }
+.show-scrub:hover .show-scrub-knob, .show-scrub.dragging .show-scrub-knob {
+  transform: translateX(-50%) scale(1.25); }
+.show-scrub:focus-visible { outline: 2px solid var(--purple);
+  outline-offset: 4px; border-radius: 4px; }
+/* the film + scrubber read as one unit; the caption sits below both */
+.show-video .show-scrub { order: 1; }
+.show-video .show-cap { order: 2; }
+
+/* ---------- first-visit offer ---------- */
+.offer-wrap { position: fixed; inset: 0; z-index: 90; display: flex;
+  align-items: center; justify-content: center; padding: 24px;
+  background: rgba(27, 24, 31, .48); backdrop-filter: blur(3px);
+  animation: offer-in .22s ease-out; }
+.offer-wrap[hidden] { display: none; }
+@keyframes offer-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .offer-wrap { animation: none; } }
+.offer-card { position: relative; width: min(100%, 460px); text-align: center;
+  background: var(--bg); border-radius: var(--r-lg); padding: 40px 34px 30px;
+  box-shadow: var(--sh-2); }
+.offer-x { position: absolute; top: 10px; right: 10px; }
+.offer-badge { display: inline-block; font-size: 11.5px; font-weight: 700;
+  letter-spacing: .10em; text-transform: uppercase; color: var(--purple);
+  background: var(--lav-soft); border-radius: var(--r-pill);
+  padding: 5px 12px; margin-bottom: 14px; }
+.offer-card h2 { font-family: var(--display); font-size: clamp(24px, 4vw, 32px);
+  line-height: 1.14; margin-bottom: 10px; }
+.offer-card p { color: var(--ink-2); font-size: 14.5px; margin-bottom: 20px; }
+.offer-form { display: flex; gap: 8px; margin-bottom: 10px; }
+.offer-form input { flex: 1 1 auto; min-width: 0; border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 13px 14px; font-family: var(--ui);
+  font-size: 14.5px; }
+.offer-form input:focus-visible { outline: 2px solid var(--purple);
+  outline-offset: 1px; }
+.offer-form .btn-pill { flex: none; }
+.offer-msg { font-size: 13px; min-height: 18px; color: var(--ink-2); }
+.offer-skip { background: none; border: none; cursor: pointer;
+  font-family: var(--ui); font-size: 13px; color: var(--ink-3);
+  text-decoration: underline; padding: 6px; }
+.offer-skip:hover { color: var(--ink); }
+.offer-code { display: flex; align-items: center; justify-content: center;
+  gap: 12px; margin-bottom: 18px; }
+.offer-code b { font-family: var(--ui); font-size: 22px; font-weight: 700;
+  letter-spacing: .08em; color: var(--purple); background: var(--lav-soft);
+  border-radius: var(--r-sm); padding: 10px 18px; }
+body.offer-open { overflow: hidden; }
+
+/* ---------- product page: its own menu drawer ---------- */
+.pp-menu { position: fixed; top: 0; left: 0; bottom: 0; width: min(88vw, 340px);
+  z-index: 60; background: var(--bg); padding: 22px 20px;
+  transform: translateX(-105%); transition: transform .3s cubic-bezier(.4,0,.2,1);
+  overflow-y: auto; box-shadow: var(--sh-2); }
+.pp-menu.open { transform: none; }
+.pp-menu .side-head { display: flex; align-items: center;
+  justify-content: space-between; margin-bottom: 8px; }
+.pp-menu .side-head b { font-family: var(--display); font-size: 20px; }
+/* The sticky buy bar is fixed to the bottom, so the last thing on the page —
+   the reviews — was sliding under it. Reserve its height.
+
+   `.section:last-of-type` also sets a bottom padding and outranks a plain
+   class, so this matches its specificity rather than reaching for
+   !important; the product page's main IS the last section. */
+.section.pp-main, .section.pp-main:last-of-type {
+  padding-top: 40px; padding-bottom: 132px; }
+
+/* ---------- one colour per product, everywhere it appears ----------
+
+   `--flavour-soft` used to be set by hand alongside `--flavour`, and only in
+   some of the places that read it. Wherever it was missed the tint fell
+   through to whatever an ancestor had — on a product page that is the
+   *current* product, which is why every "you may also like" card wore the
+   colour of the page instead of its own, and why cart lines and upsells came
+   out lavender regardless of what was in them.
+
+   Deriving it from `--flavour` means the two cannot disagree: set the colour,
+   and the tint follows. Anything that carries a flavour gets this. */
+.product, .menu-tile, .cart-line, .upsell-row, .rev-pick, .flav-opt,
+.pp-stage, .pp-thumb, .show-slide,
+/* `.art` is where store.js writes `--flavour`, so it is also where the tint
+   has to be derived. Deriving it only on the ancestors works right up until
+   an `.art` is rendered somewhere that is not one of them — then it carries
+   the right colour over a tint inherited from further up the page, which is
+   the original bug wearing a different hat. */
+.art, .feature-art {
+  --flavour-soft: color-mix(in srgb, var(--flavour, var(--purple)) 13%, #fff);
+}
+
+/* ---------- review entry points ---------- */
+.pp-rev-head { display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap; margin-top: 56px; margin-bottom: 18px; }
+.pp-rev-head h2 { margin: 0; }
+.rev-picks { display: grid; gap: 10px; margin-top: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.rev-pick { display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 12px 8px; cursor: pointer; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: var(--flavour-soft, var(--lav-soft));
+  font-family: var(--ui); font-size: 13px; text-align: center; }
+.rev-pick:hover { border-color: var(--flavour, var(--purple)); }
+.rev-pick .art { width: 46px; }
+.rev-pick .art img { width: 100%; height: auto; }
+
+/* ---------- affiliate programme ---------- */
+.aff-hero { background: linear-gradient(150deg, #f6efff 0%, #fff4ec 100%); }
+.aff-eyebrow { display: inline-block; font-family: var(--ui); font-size: 11.5px;
+  font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--purple); background: #fff; border-radius: var(--r-pill);
+  padding: 6px 14px; margin-bottom: 18px; }
+.aff-steps .story-card { position: relative; }
+.aff-step { position: absolute; top: 16px; right: 18px;
+  font-family: var(--display); font-size: 30px; line-height: 1;
+  color: var(--purple); opacity: .22; }
+.aff-join { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,420px);
+  gap: clamp(24px, 5vw, 64px); align-items: start;
+  background: var(--lav-soft); border-radius: var(--r-lg);
+  padding: clamp(24px, 4vw, 48px); }
+.aff-join h2 { margin-bottom: 10px; }
+.aff-join-copy p { color: var(--ink-2); margin-bottom: 18px; }
+.aff-ticks { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+.aff-ticks li { display: flex; align-items: center; gap: 9px; font-size: 14.5px; }
+.aff-ticks .ico { color: var(--leaf, #7a9e4c); flex: none; }
+.aff-form { display: flex; flex-direction: column; gap: 12px;
+  background: var(--paper); border-radius: var(--r-md); padding: 24px; }
+.aff-form label { display: flex; flex-direction: column; gap: 6px;
+  font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.aff-form input { border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 12px 13px; font-family: var(--ui); font-size: 14.5px;
+  font-weight: 400; color: var(--ink); }
+.aff-form input:focus-visible { outline: 2px solid var(--purple);
+  outline-offset: 1px; }
+.aff-fine { font-size: 12px; color: var(--ink-3); }
+@media (max-width: 780px) { .aff-join { grid-template-columns: 1fr; } }

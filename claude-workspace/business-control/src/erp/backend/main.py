@@ -246,7 +246,13 @@ def product_image(pid: int, con=Depends(get_con)):
         alt = store_api.primary_media_file(con, pid)
         if alt is None:
             raise HTTPException(404, "no image")
-        return FileResponse(alt, media_type="image/jpeg")
+        # Not always a JPEG any more: cut-out product art keeps its alpha,
+        # and mislabelling a PNG here is what puts a white box behind a can.
+        # must-revalidate, not immutable: this path always means "the
+        # current primary image", so it has to notice when that changes.
+        return FileResponse(
+            alt, media_type=store_api.MIME.get(alt.suffix, "image/jpeg"),
+            headers={"Cache-Control": "no-cache"})
     raw2 = f.read_bytes()[:2]
     return FileResponse(f, media_type=IMAGE_MAGIC.get(raw2, "image/jpeg"))
 
@@ -3562,6 +3568,7 @@ from storefront.backend import crud as store_crud  # noqa: E402
 from storefront.backend import discord as store_discord  # noqa: E402
 from storefront.backend import emailer as store_email  # noqa: E402
 from storefront.backend import documents as store_docs  # noqa: E402
+from storefront.backend import engagements as store_eng  # noqa: E402
 from storefront.backend import pixels as store_pixels  # noqa: E402
 from storefront.backend import support as store_support  # noqa: E402
 from storefront.backend import promos as store_promos  # noqa: E402
@@ -3578,6 +3585,7 @@ app.include_router(store_pixels.router)
 app.include_router(store_support.router)
 app.include_router(store_campaigns.router)
 app.include_router(store_docs.router)
+app.include_router(store_eng.router)
 app.include_router(store_crud.router)
 app.include_router(store_discord.router)
 app.include_router(store_email.router)

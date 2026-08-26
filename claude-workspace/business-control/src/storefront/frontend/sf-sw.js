@@ -1,6 +1,6 @@
 /* Storefront service worker — cache-first shell, network-first API.
    Distinct file + cache name so it never collides with /ops/sw.js. */
-const CACHE = "storefront-v2";
+const CACHE = "storefront-v3";
 const SHELL = ["/", "/store.css", "/store.js", "/store.webmanifest"];
 
 self.addEventListener("install", (e) => {
@@ -33,5 +33,19 @@ self.addEventListener("fetch", (e) => {
         caches.open(CACHE).then((c) => c.put(e.request, copy));
       }
       return r;
-    }).catch(() => caches.match(e.request)));
+    }).catch(async () => {
+      /* ignoreSearch matters more than it looks. Assets are requested with
+         a ?v=<mtime> cache-buster, so after any deploy the cached
+         "/store.css" no longer matches "/store.css?v=NEW" and every lookup
+         misses — the offline shell becomes unreachable on exactly the
+         deploy it was meant to survive. The cached copy is still the right
+         answer here; the query string only ever addressed the HTTP cache. */
+      const hit = await caches.match(e.request, { ignoreSearch: true });
+      if (hit) return hit;
+      /* Nothing cached either. Retrying lets the real failure propagate:
+         resolving respondWith() with undefined turns any transient blip
+         into an opaque ERR_FAILED and leaves the page silently unstyled,
+         which is what a restart mid-request used to do. */
+      return fetch(e.request);
+    }));
 });

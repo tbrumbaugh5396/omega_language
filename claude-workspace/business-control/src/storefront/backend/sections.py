@@ -27,13 +27,13 @@ SECTION_TYPES = {
              "default": "Sparkling tea with 200mg L-theanine — calm that "
                         "doesn't cloud. And then it doesn't."},
             {"k": "cta_text", "t": "text", "label": "Primary button",
-             "default": "Shop the range"},
+             "default": "Shop your Zen"},
             {"k": "cta_link", "t": "text", "label": "Primary link",
-             "default": "#shop"},
+             "default": "/#shop"},
             {"k": "cta2_text", "t": "text", "label": "Secondary button",
              "default": ""},
             {"k": "cta2_link", "t": "text", "label": "Secondary link",
-             "default": "#rewards"},
+             "default": "/#rewards"},
             {"k": "layout", "t": "select", "label": "Layout",
              "options": ["split", "centred"], "default": "split"},
             {"k": "show_product", "t": "checkbox",
@@ -43,10 +43,41 @@ SECTION_TYPES = {
             {"k": "stat2", "t": "text", "label": "Stat 2",
              "default": "15|calories"},
             {"k": "stat3", "t": "text", "label": "Stat 3",
-             "default": "5|flavours to find yours"},
+             "default": "4|flavors to find yours"},
             {"k": "bg", "t": "select", "label": "Background",
              "options": ["shader", "gradient", "image"], "default": "gradient"},
             {"k": "media_id", "t": "media", "label": "Background image"},
+        ]},
+    "showcase": {
+        "label": "Showcase carousel", "icon": "play",
+        "help": "The film, then one slide per product. Arrows, dots, "
+                "keyboard and swipe all move it.",
+        "fields": [
+            {"k": "video_src", "t": "text", "label": "Video file",
+             "default": "/hero/zenjoy-hero.mp4"},
+            {"k": "video_poster", "t": "text", "label": "Video poster",
+             "default": "/hero/zenjoy-hero.jpg"},
+            {"k": "video_caption", "t": "text", "label": "Video caption",
+             "default": "4 flavors, 1 calm"},
+            {"k": "cta_text", "t": "text", "label": "Button under the caption",
+             "default": "Find your zen"},
+            {"k": "cta_link", "t": "text", "label": "Button link",
+             "default": "/#shop"},
+            {"k": "collection_id", "t": "text", "label": "Collection id",
+             "default": ""},
+            {"k": "autoplay", "t": "checkbox",
+             "label": "Play the film automatically (muted)", "default": True},
+        ]},
+    "social_proof": {
+        "label": "Customer count", "icon": "heart",
+        "help": "One line of proof, directly under the opener.",
+        "fields": [
+            {"k": "figure", "t": "text", "label": "Figure",
+             "default": "100,000+"},
+            {"k": "label", "t": "text", "label": "Label",
+             "default": "Zen customers"},
+            {"k": "sub", "t": "text", "label": "Sub-line",
+             "default": "and counting, one calm can at a time"},
         ]},
     "benefits": {
         "label": "Benefit strip", "icon": "check",
@@ -59,9 +90,9 @@ SECTION_TYPES = {
                       {"k": "label", "t": "text", "label": "Label"}],
              "default": [
                  {"icon": "leaf", "value": "200mg", "label": "L-theanine"},
-                 {"icon": "drop", "value": "15", "label": "calories"},
-                 {"icon": "sparkle", "value": "2g", "label": "sugar"},
-                 {"icon": "shield", "value": "0", "label": "artificial anything"},
+                 {"icon": "sparkle", "value": "150mg", "label": "ashwagandha"},
+                 {"icon": "drop", "value": "150mg", "label": "lemon balm"},
+                 {"icon": "shield", "value": "70", "label": "calories"},
                  {"icon": "truck", "value": "Free", "label": "shipping over $40"},
              ]},
         ]},
@@ -312,6 +343,117 @@ def _hero(con, s) -> str:
             f'{stage}</div></section>')
 
 
+# Which of the film's tessellations belongs behind which SKU. Keyed on sku
+# rather than derived from the name so a rename cannot silently drop a
+# pattern; anything unlisted falls back to the plain slide, which still reads.
+SKU_PATTERN = {
+    "ZJ-MANGO": "mango", "ZJ-PASSION": "passionfruit",
+    "ZJ-LAVENDER": "lavender", "ZJ-HONEY": "honey", "ZJ-PACK-12": "all",
+}
+
+
+def _showcase(con, s) -> str:
+    """The film and the range in one swipeable rail.
+
+    Slides are rendered server-side rather than fetched: this is the first
+    thing on the page, and a carousel that arrives empty and pops in a
+    moment later is worse than no carousel. Only the wiring is JavaScript,
+    so with none the rail is still a readable, scrollable row of products.
+    """
+    # The primary media id comes along so slides can link the immutable
+    # /media/m/<mid> URL. /media/product/<id> means "whatever art this
+    # product has now" — a mutable pointer that browsers happily cache,
+    # so swapping a photo leaves everyone who saw the old one looking at it.
+    q = ("SELECT p.id, p.sku, p.name, p.description, p.price_cents, p.image,"
+         " p.category,"
+         " (SELECT m.id FROM product_media m WHERE m.product_id=p.id"
+         "  AND m.kind='image' ORDER BY m.position, m.id LIMIT 1) mid"
+         " FROM products p WHERE p.active=1")
+    args = []
+    if s.get("collection_id"):
+        q += (" AND p.id IN (SELECT product_id FROM collection_products"
+              " WHERE collection_id=?)")
+        args.append(s["collection_id"])
+    rows = con.execute(q + " ORDER BY p.category DESC, p.id", args).fetchall()
+
+    slides = []
+    if s.get("video_src"):
+        auto = " autoplay" if s.get("autoplay", True) else ""
+        cta = ""
+        if s.get("cta_text"):
+            cta = (f'<a class="btn-pill primary show-cta"'
+                   f' href="{esc(s.get("cta_link") or "#shop")}">'
+                   f'{esc(s["cta_text"])}{icon("arrow", "ico ico-sm")}</a>')
+        slides.append(
+            f'<li class="show-slide show-video" data-kind="video">'
+            f'<video id="show-video" playsinline preload="metadata"'
+            f' poster="{esc(s["video_poster"])}"{auto}>'
+            f'<source src="{esc(s["video_src"])}" type="video/mp4"></video>'
+            # A play/pause glyph over the film, a scrubber under it. Both are
+            # real controls with names — the film is content, not decor.
+            f'<button class="show-play" id="show-play" type="button"'
+            f' aria-label="Pause film" aria-pressed="false">'
+            f'<svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>'
+            f'</button>'
+            f'<div class="show-scrub" id="show-scrub" role="slider"'
+            f' tabindex="0" aria-label="Film position" aria-valuemin="0"'
+            f' aria-valuemax="100" aria-valuenow="0">'
+            f'<div class="show-scrub-buf" id="show-scrub-buf"></div>'
+            f'<div class="show-scrub-fill" id="show-scrub-fill"></div>'
+            f'<div class="show-scrub-knob" id="show-scrub-knob"></div></div>'
+            f'<button class="show-sound" id="show-sound" type="button"'
+            f' aria-pressed="false" aria-label="Turn sound on">'
+            f'{icon("music", "ico ico-sm")}<span>Sound on</span></button>'
+            f'<div class="show-cap"><b>{esc(s["video_caption"])}</b>{cta}</div>'
+            f'</li>')
+
+    for r in rows:
+        src = (f'/media/m/{r["mid"]}' if r["mid"]
+               else f'/media/product/{r["id"]}')
+        # Eager, deliberately. These sit inside a horizontal scroll-snap
+        # rail; a lazy image in an off-axis slide is not "near the viewport"
+        # by the browser's reckoning until it is scrolled to, and with the
+        # image sized by its own aspect the box is 0px until it loads — so
+        # nothing ever brings it in. Five product renders is a fine cost for
+        # a carousel that is the first thing on the page.
+        img = (f'<img src="{src}" alt="{esc(r["name"])}"'
+               f' decoding="async">' if r["image"] else "")
+        pat = SKU_PATTERN.get(r["sku"] or "")
+        # The case is photographed wide; in a single-can slot it comes out
+        # small enough that you cannot tell there are four in it.
+        wide = " show-wide" if (r["category"] or "") == "multipacks" else ""
+        slides.append(
+            f'<li class="show-slide{f" pat-{pat}" if pat else ""}{wide}"'
+            f' data-kind="product" data-id="{r["id"]}"'
+            f'{f" data-pattern={pat}" if pat else ""}>'
+            f'<div class="show-shot">{img}</div>'
+            f'<div class="show-copy"><b>{esc(r["name"])}</b>'
+            f'<p>{esc((r["description"] or "")[:120])}</p>'
+            f'<span class="show-price">${r["price_cents"] / 100:.2f}</span>'
+            f'<button class="btn-pill primary sm show-add"'
+            f' data-add="{r["id"]}">Add to cart</button></div></li>')
+
+    dots = "".join(
+        f'<button class="show-dot" data-go="{i}" type="button"'
+        f' aria-label="Slide {i + 1} of {len(slides)}"></button>'
+        for i in range(len(slides)))
+    return (
+        f'<section class="showcase" id="showcase" aria-roledescription="carousel"'
+        f' aria-label="Zenjoy film and products">'
+        f'<ul class="show-rail" id="show-rail">{"".join(slides)}</ul>'
+        f'<button class="show-arrow prev" id="show-prev" type="button"'
+        f' aria-label="Previous slide">{icon("arrow")}</button>'
+        f'<button class="show-arrow next" id="show-next" type="button"'
+        f' aria-label="Next slide">{icon("arrow")}</button>'
+        f'<div class="show-dots" id="show-dots">{dots}</div></section>')
+
+
+def _social_proof(con, s) -> str:
+    sub = (f'<p class="proof-sub">{esc(s["sub"])}</p>' if s.get("sub") else "")
+    return (f'<section class="proof"><p class="proof-line">'
+            f'<b>{esc(s["figure"])}</b> {esc(s["label"])}</p>{sub}</section>')
+
+
 def _benefits(con, s) -> str:
     cells = "".join(
         f'<div class="benefit">{icon(i.get("icon"))}'
@@ -391,7 +533,11 @@ def _reviews(con, s) -> str:
     rows = con.execute(
         "SELECT r.name, r.rating, r.body, r.verified, p.name pname"
         " FROM product_reviews r JOIN products p ON p.id=r.product_id"
-        " WHERE r.approved=1 ORDER BY r.id DESC LIMIT ?", (lim,)).fetchall()
+        # Only products still on sale. A retired line keeps its reviews in
+        # the table — correct for the record, wrong on the shelf, where a
+        # tea brand ended up quoting praise for a discontinued hot sauce.
+        " WHERE r.approved=1 AND p.active=1"
+        " ORDER BY r.id DESC LIMIT ?", (lim,)).fetchall()
     verified = (f'<span class="dim">{icon("check", "ico ico-sm")}'
                 f' verified buyer</span>')
     if rows:
@@ -407,8 +553,13 @@ def _reviews(con, s) -> str:
                  f'{icon("star") * 5}</span>'
                  f'<p>Reviews appear here as customers post them.</p>'
                  f'<span class="who">Awaiting your first review</span></div>')
+    # A wall of praise with no way to add to it is a dead end. The button
+    # asks which product first — this section is the whole range, so it
+    # cannot know on its own.
     return (f'<section class="section" id="reviews">'
-            f'<h2>{esc(s["heading"])}</h2>'
+            f'<div class="pp-rev-head"><h2>{esc(s["heading"])}</h2>'
+            f'<button class="btn-pill ghost sm" id="write-review">'
+            f'{icon("star", "ico ico-sm")} Write a review</button></div>'
             f'<div class="grid">{cards}</div></section>')
 
 
@@ -483,6 +634,7 @@ def _latest_posts(con, s) -> str:
 
 
 RENDERERS = {
+    "showcase": _showcase, "social_proof": _social_proof,
     "hero": _hero, "benefits": _benefits,
     "product_grid": _product_grid, "rich_text": _rich_text,
     "feature_columns": _feature_columns, "image_banner": _image_banner,
@@ -518,5 +670,6 @@ def render_page(con, rows, liquid_renderer=None) -> str:
 # Order is a selling argument: hook, proof, product, then the softer story.
 # The benefit strip sits directly under the hero because the numbers (200mg,
 # 15 cal, 2g sugar) are what qualify a functional drink for the shopper.
-HOME_DEFAULT = ["hero", "benefits", "product_grid", "feature_columns",
+HOME_DEFAULT = ["showcase", "social_proof", "benefits", "product_grid",
+                "feature_columns",
                 "reviews", "social", "newsletter", "faq"]

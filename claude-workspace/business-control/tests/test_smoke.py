@@ -3,6 +3,7 @@
 inventory, route planning, funnel analytics, and outreach."""
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -2810,5 +2811,843 @@ for _p in ("/api/admin/integrations/trello/cards",
 # than whatever else is on someone's board.
 ok("FROM integration_links WHERE provider='trello'" in _src_ig,
    "the card list comes from what this system pushed")
+
+# --- the showcase carousel -------------------------------------------------
+# It is the first thing on the page and it is server-rendered, so the checks
+# are about what actually reaches the browser, not what the JS intends to do.
+from storefront.backend import sections as _sect          # noqa: E402
+_sfdir = Path(_sfapi.config.STOREFRONT_DIR)
+_sjs = (_sfdir / "store.js").read_text()
+_scss = (_sfdir / "store.css").read_text()
+_ssw = (_sfdir / "sf-sw.js").read_text()
+
+ok("showcase" in _sect.SECTION_TYPES and "showcase" in _sect.RENDERERS,
+   "the showcase is a real section type, editable like the rest")
+ok(_sect.HOME_DEFAULT[0] == "showcase",
+   "and a fresh store gets it at the top of the home page")
+_home = c.get("/").text
+ok('id="show-rail"' in _home and 'data-kind="video"' in _home,
+   "the film is on the page as markup, not fetched in later")
+ok(_home.count('data-kind="product"') ==
+   len([r for r in bdb.connect().execute(
+       "SELECT 1 FROM products WHERE active=1")]),
+   "one slide per live product, so the rail cannot drift from the catalog")
+
+# Every control the section renders has to be wired; a carousel whose arrow
+# does nothing looks identical to one that is merely slow.
+for _id in ("show-prev", "show-next", "show-rail", "show-sound"):
+    ok(f'id="{_id}"' in _home, f"{_id} is rendered")
+    ok(f'$("#{_id}")' in _sjs, f"and {_id} is wired up")
+
+ok("Math.round(rail.scrollLeft / w)" in _sjs
+   and "let current" not in _sjs.split("const at = () =>")[0][-400:],
+   "position is read back from the rail, so a swipe cannot desync the dots")
+ok("video.muted = true" in _sjs,
+   "the film is muted in JS, not only by attribute, or autoplay is blocked")
+
+import importlib.util as _ilu                             # noqa: E402
+_seed_path = Path(__file__).resolve().parents[1] / "tools/seed_catalog.py"
+_seed_src = _seed_path.read_text()
+_spec = _ilu.spec_from_file_location("_seed", _seed_path)
+_seed_pre = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_seed_pre)
+_sectsrc = Path("src/storefront/backend/sections.py").read_text()
+
+# --- each SKU wears its own pattern from the film --------------------------
+# The rendered page cannot be asserted against here: the suite runs on its
+# own database, which has none of the real SKUs in it. What can be asserted
+# is the invariant that matters — every product the seeder ships has a
+# pattern, that pattern has a tile on disk, and the stylesheet paints it.
+_apisrc = Path("src/storefront/backend/api.py").read_text()
+_pat_dir = Path(_sfapi.config.STOREFRONT_DIR) / "hero/patterns"
+for _sku, *_ in _seed_pre.RANGE:
+    _pat = _sect.SKU_PATTERN.get(_sku)
+    ok(_pat is not None, f"{_sku} is mapped to a pattern")
+    ok((_pat_dir / f"{_pat}.png").exists(), f"and the {_pat} tile is exported")
+    ok(f".pat-{_pat}" in _scss, f"and .pat-{_pat} paints the slide")
+ok("background-repeat: repeat" in _scss and "background-size: 340px" in _scss,
+   "tiles repeat at their own size rather than stretching to the slide")
+ok('f" pat-{pat}" if pat else ""' in _sectsrc,
+   "the renderer only skins a slide it has a pattern for")
+ok('class="btn-pill primary show-cta"' in _home,
+   "the film slide carries its call to action")
+
+# Cut-out product art on a coloured slide is the whole reason this matters.
+ok("def has_alpha" in _apisrc and 'f"{mid}_{suffix}.png"' in _apisrc,
+   "transparent art keeps its alpha through the derivative step")
+ok('f\'/media/m/{r["mid"]}\'' in _sectsrc,
+   "slides link the immutable media id, not the mutable product pointer")
+ok('"Cache-Control": "no-cache"' in _mainsrc.split(
+    "primary_media_file")[1][:700],
+   "and the mutable pointer revalidates, so swapped art actually appears")
+
+# --- this round's fixes ----------------------------------------------------
+_storejs = _sjs  # already read above
+ok("drawCart();" in _storejs.split("function openCart()")[1][:400],
+   "opening the cart draws it, so a restored cart is not shown as empty")
+ok(".cart-items { flex: 0 0 auto; }" in _scss,
+   "and the line list sizes to its content rather than collapsing to 0px")
+
+ok('slides[i].dataset.pattern' in _storejs,
+   "the section publishes which flavour is showing")
+ok('#showcase[data-active="mango"] .show-arrow' in _scss,
+   "so the mango slide can give the shared controls a purple edge")
+ok(".show-slide[data-pattern] .show-add { background: var(--orange)" in _scss,
+   "add to cart is the site's action colour on every pattern slide")
+ok('video.addEventListener("ended"' in _storejs and "go(1)" in _storejs,
+   "the film hands over to the first product when it finishes")
+ok(" loop " not in _sectsrc.split("show-video")[1][:200],
+   "and it is not looped, or ended would never fire")
+ok("video.muted = false" in _storejs,
+   "sound is asked for by default")
+ok("video.muted = true; paintSound();" in _storejs
+   or "video.muted = true;" in _storejs,
+   "with a muted fallback, because policy can refuse audible autoplay")
+
+ok("social_proof" in _sect.SECTION_TYPES
+   and _sect.HOME_DEFAULT[1] == "social_proof",
+   "the customer count sits directly under the carousel")
+ok("100,000+" in _sect.defaults_for("social_proof")["figure"],
+   "and it says 100,000+")
+
+ok("const isCase" in _storejs and 'category || "") === "multipacks"' in _storejs,
+   "the case is recognised by category, so a rename cannot lose it")
+ok(".product.feature { grid-column: 1 / -1" in _scss,
+   "it takes a full row in the collection")
+ok(".menu-tile.wide" in _scss and 'class="menu-tile wide"' in _storejs,
+   "and its own row in the side menu")
+ok(".show-wide .show-shot" in _scss and 'show-wide' in _sectsrc,
+   "the landscape case shot gets a landscape slot in the carousel")
+ok("META = {" in _seed_src and "all four flavors" in _seed_src,
+   "the seeder owns the shelf copy, so it cannot keep saying five flavors")
+
+# --- one code field, and layout symmetry -----------------------------------
+_html = (Path(_sfapi.config.STOREFRONT_DIR) / "index.html").read_text()
+ok('id="code-input"' in _html
+   and 'id="discount-input"' not in _html and 'id="gift-input"' not in _html,
+   "discount and gift card share one field")
+ok("/api/store/discount/preview" in _storejs.split("async function applyCode")[1][:900]
+   and "/api/store/gift-card/" in _storejs.split("async function applyCode")[1][:1400],
+   "and that field tries both kinds before rejecting a code")
+ok("out.detail" in _storejs.split("async function applyCode")[1][:1600],
+   "keeping the server's reason rather than a generic 'invalid'")
+ok("function drawCodes" in _storejs and "code-chip" in _scss,
+   "what is applied is shown as removable chips")
+ok(".cart-foot > .btn-pill" in _scss,
+   "the checkout button rule is a direct child, so it stops stretching "
+   "the Apply button beside the input")
+
+ok("repeat(auto-fit, minmax(140px, 1fr))" in _scss,
+   "menu tiles auto-fit, so four flavours span the row the case sits above")
+ok("auto-fill" not in _scss.split(".menu-tiles {")[1][:160],
+   "and no empty tracks are left holding the row short")
+
+ok("p.active=1" in _sectsrc.split("product_reviews")[1][:400],
+   "the reviews wall only quotes products still on sale")
+
+# --- one click starts everything ------------------------------------------
+# The three surfaces are one server, so the launcher's job is to open all
+# three and not to jump the gun on a cold start.
+_cmds = Path(__file__).resolve().parents[1] / "command_utilities"
+_start = (_cmds / "Start Business Control.command").read_text()
+_https = (_cmds / "Start Business Control (HTTPS).command").read_text()
+_serve = (_cmds / "_serve.sh").read_text()
+
+ok(_serve.count("bc_open") >= 1 and "_serve.sh" in _start and "_serve.sh" in _https,
+   "both launchers share one implementation")
+for _u in ("/admin", "/ops/"):
+    ok(_u in _serve, f"the launcher opens {_u} as well as the storefront")
+ok("seq 1 60" in _serve and "sleep 2;" not in _start,
+   "it waits for the server to answer instead of sleeping a fixed guess")
+ok("bc_exit_if_running" in _start and "bc_exit_if_running" in _https,
+   "a second double-click raises the tabs rather than colliding on the port")
+ok('bc_exit_if_running "$BASE" "-k"' in _https
+   and 'bc_wait_then_open "$BASE" "-k"' in _https
+   and 'curl -fs $2' in _serve,
+   "the HTTPS checks pass -k through to curl, or a self-signed cert would "
+   "make a live server look dead")
+ok("BC_NO_OPEN" in _serve, "and it can be started headless for scripts")
+
+# --- the film is a player, and the cans are 70% of the slide --------------
+_sw = _storejs.split("function showcase()")[1]
+ok('id="show-play"' in _home and 'id="show-scrub"' in _home,
+   "the film has a play/pause control and a timeline")
+ok('role="slider"' in _home and 'aria-valuenow' in _home,
+   "and the timeline is a real slider to assistive tech")
+ok('video.addEventListener("click", toggle)' in _sw,
+   "clicking the film pauses and resumes it")
+ok("let held = false" in _sw and "video._held" in _sw
+   and "!(video._held && video._held())" in _sw,
+   "a person's pause is distinct from a scroll pause, and survives it")
+ok("setPointerCapture" in _sw and "video.currentTime = f * video.duration" in _sw,
+   "dragging the timeline seeks — mouse, pen and touch through one handler")
+ok('"ArrowRight"' in _sw.split("scrub.addEventListener(\"keydown\"")[1][:200],
+   "and the keyboard can seek too")
+for _ev in ("visibilitychange", "pagehide", "pageshow"):
+    ok(f'"{_ev}"' in _sw, f"sound stops on {_ev} — it must not follow the visitor")
+ok("MutationObserver" in _sw and "document.body.contains(video)" in _sw,
+   "and stops if a route swap removes the carousel from the page")
+ok("let watched = false" in _sw and "if (onScreen && watched) go(1)" in _sw,
+   "the end-of-film handoff needs a genuine viewing, not a stale ended flag")
+ok("function openOnFilm" in _sw and '"pageshow", openOnFilm' in _sw,
+   "back-navigation reopens on the film, after the browser restores scroll")
+
+ok("bbox = im.getchannel(\"A\").getbbox()" in _apisrc
+   and "im = im.crop(bbox)" in _apisrc,
+   "derivatives are trimmed to the opaque bounds, so sizing the image sizes "
+   "the can rather than the air around it")
+ok("height: calc(0.70 * var(--slide-h))" in _scss.split(".show-shot {")[1][:200],
+   "the can container is 70% of the slide's height")
+ok(".show-slide { flex: 0 0 100%; scroll-snap-align: center;\n  height: var(--slide-h)" in _scss,
+   "and the slide's height is fixed, so 70% is 70% of what is on screen")
+ok("max-height: calc(0.62 * var(--slide-h))" in _scss,
+   "the film is capped against the same reference, so the row cannot outgrow it")
+
+# Trimming the derivative changed every consumer's input; the fix is that
+# product art is contained, never cropped, wherever it appears.
+for _sel in (".product .art img", ".menu-tile .art img", ".cart-line .art img",
+             ".pp-thumb img", ".pp-stage img", ".upsell-row img"):
+    _blk = _scss.split(_sel + " {")[1].split("}")[0]     # this rule only
+    ok("object-fit: contain" in _blk and "object-fit: cover" not in _blk,
+       f"{_sel} contains the product rather than cropping the trimmed can")
+ok("object-fit: cover" in _scss.split(".pp-stage video")[1][:200],
+   "video in the product stage still fills the frame — cover is for footage")
+ok('decoding="async"' in _sectsrc and 'loading="lazy"' not in _sectsrc.split("def _showcase")[1].split("def _benefits")[0],
+   "carousel images load eagerly — lazy ones in an off-axis slide never do")
+ok('id="i-pause"' in (Path(_sfapi.config.STOREFRONT_DIR) / "icons.svg").read_text(),
+   "the sprite has a pause glyph for the play button to flip to")
+
+# --- this round: product page, layout rules, copy ---------------------------
+# Whatever product this run happens to have — the suite's database is its
+# own, so a hardcoded id fetches someone else's page or a 404.
+_ppid = [r["id"] for r in bdb.connect().execute(
+    "SELECT id FROM products WHERE active=1 ORDER BY id LIMIT 1")][0]
+_pdp = c.get(f"/product/{_ppid}-x").text
+# The product page used to be a standalone document with a hand-rolled
+# topbar, which is why its navigation drifted from every other page.
+ok('id="side-menu"' in _pdp and 'id="menu-btn"' in _pdp
+   and 'id="cart-drawer"' in _pdp,
+   "the product page carries the site's own menu and cart, not its own")
+ok("Back to shop" not in _pdp,
+   "so it needs no 'back to shop' crutch for a missing menu")
+ok('class="top-links"' in _pdp,
+   "and the same header links as every other page")
+ok("head_extra" in _apisrc.split("def render_shell")[1][:400],
+   "the shell takes per-page head content, so canonical and structured "
+   "data survive the move")
+ok('rel="canonical"' in _pdp and "application/ld+json" in _pdp,
+   "and they did")
+ok('class="add-btn" data-rec-add=' in _apisrc, "'You may also like' has an Add")
+_rec_js = _apisrc.split("document.querySelectorAll('[data-rec-add]')")[1][:500]
+ok("sf_cart" in _rec_js and "location.href='/?cart=1'" in _rec_js,
+   "and it writes the cart and opens the drawer, like every other Add")
+ok('class="section pp-main"' in _pdp
+   and ".section.pp-main, .section.pp-main:last-of-type" in _scss,
+   "the page reserves the sticky bar's height, at a specificity that beats "
+   "`.section:last-of-type`, so reviews are not slid under it")
+
+ok("function layoutGrid" in _storejs and "n % c !== 1" in _storejs,
+   "the grid picks a column count that cannot strand one card alone")
+ok("repeat(var(--cols, 4)" in _scss
+   and "@media (max-width: 1080px) { .grid" not in _scss,
+   "and no media query overrides that count — which is what put the lone "
+   "card back the first time")
+ok('addEventListener("resize"' in _storejs.split("function layoutGrid")[1][:600],
+   "the count is recomputed when the width changes")
+
+ok(".benefits-row { max-width: var(--wrap); margin: 0 auto; display: flex;" in _scss
+   and "justify-content: center" in _scss.split(".benefits-row {")[1][:200],
+   "the benefit strip centres its short last row rather than leaving a "
+   "trailing single")
+
+_ci = _html.index('id="cart-total"')
+ok(_ci < _html.index('id="code-input"') < _html.index('id="checkout-btn"'),
+   "in the cart: total, then the code field, then checkout")
+
+ok('id="offer"' in _html and "function firstVisitOffer" in _storejs,
+   "new visitors get an offer for their email")
+ok("sf_offer_seen" in _storejs and 'settle("closed")' in _storejs.replace("close(\"closed\")", 'settle("closed")'),
+   "shown once — dismissing counts, so it cannot nag")
+ok("innerHeight * 0.6" in _storejs or "scrollY >" in _storejs,
+   "and held back until they have actually looked around")
+ok("out.code ||" in _storejs,
+   "the discount code comes from the server, not invented on the client")
+
+ok("Shop your Zen" in _storejs and '"default": "Shop your Zen"' in _sectsrc,
+   "'Shop the range' is now 'Shop your Zen'")
+ok("f'Flavor</span>'" in _apisrc and "f'Flavour</span>'" not in _apisrc,
+   "the product page's switcher is labelled Flavor")
+ok("all four flavors" in _storejs, "and the menu says flavors")
+
+# --- data the range owns, and links that work off the home page ------------
+ok("COLLECTIONS = {" in _seed_src and "def set_collections" in _seed_src,
+   "the seeder owns collection membership")
+ok("DELETE FROM collection_products WHERE product_id NOT IN" in _seed_src,
+   "and clears out products it retired — a deactivated product left in a "
+   "collection shows an empty shelf under a tab that still has a name")
+ok("NUTRITION = {" in _seed_src and '"Calories": "70"' in _seed_src
+   and '"Ashwagandha (KSM-66)": "150mg"' in _seed_src,
+   "the label facts are the client's, in one place")
+
+# A fragment resolves only against ids on the page you are standing on. The
+# nav's "#shop" was written for the home page and went nowhere from /blog or
+# /affiliates; an anchor to a section of *this* page is fine. So the rule is
+# not "no fragments" — it is "no fragment without a target here".
+for _p in ("/blog", "/affiliates"):
+    _txt = c.get(_p).text
+    _ids = set(re.findall(r'id="([\w-]+)"', _txt))
+    _bad = [h for h in re.findall(r'href="(#[a-z][\w-]*)"', _txt)
+            if not h.startswith("#i-") and h[1:] not in _ids]
+    ok(not _bad, f"{_p} has no dead fragment links (found {_bad[:3]})")
+ok('href="/#shop"' in c.get("/blog").text,
+   "and its nav points home, then to the section")
+
+ok('id="write-review"' in _sectsrc and "data-review-for=" in _apisrc,
+   "both review sections have a way in")
+ok("function wireReviewButtons" in _storejs and "rev-picks" in _storejs,
+   "the wall asks which product, since it shows the whole range")
+
+# --- the hero is off the page but kept ------------------------------------
+ok((Path(_sfapi.config.STOREFRONT_DIR) / "reference/hero.html").exists(),
+   "the hero is saved as a standalone reference page")
+ok("hero" in _sect.SECTION_TYPES,
+   "and it is still a section type, so it can be switched back on")
+
+# --- the collection is the real range --------------------------------------
+# Asserted against the seeder rather than this run's throwaway database: the
+# suite creates products of its own, so a live row count would only measure
+# the tests. What matters is what the tool guarantees when it is run.
+_skus = [r[0] for r in _seed_pre.RANGE]
+_seed = _seed_pre
+ok(_skus == ["ZJ-MANGO", "ZJ-PASSION", "ZJ-LAVENDER", "ZJ-HONEY",
+             "ZJ-PACK-12"],
+   "the range is the four flavours and the multipack, in order")
+for _sku, _name, *_rest in _seed.RANGE:
+    _art = Path(_seed.ART) / _rest[-1]
+    ok(_art.exists(), f"{_sku} has its artwork on disk ({_name})")
+
+ok("UPDATE products SET active=0 WHERE id NOT IN" in _seed_src,
+   "everything outside the range is deactivated…")
+ok("DELETE FROM products" not in _seed_src,
+   "…and never deleted, so past orders still resolve to a product")
+ok("DELETE FROM product_media WHERE product_id" in _seed_src,
+   "artwork is replaced rather than piled up")
+ok("digest(src)" in _seed_src,
+   "and re-running with unchanged art does no work, so URLs stay cached")
+
+# --- the cookie bar must not sit on the Buy button -------------------------
+ok('classList.add("consent-open")' in _sjs
+   and "body.consent-open .buy-fab" in _scss,
+   "showing the cookie bar lifts the buy button, in both halves")
+ok("--consent-h" in _sjs and "--consent-h" in _scss,
+   "and the lift is the bar's measured height, not a guessed constant")
+ok("ResizeObserver" in _sjs.split("makeBarRoom")[1][:600],
+   "re-measured when the copy reflows, so a two-line bar still clears")
+ok('classList.remove("consent-open")' in _sjs,
+   "and dismissing it puts the button back")
+
+# A service worker that answers respondWith(undefined) turns any blip into an
+# unstyled page; this is the regression that produced one.
+ok("ignoreSearch: true" in _ssw,
+   "the worker ignores the cache-buster, so a deploy cannot strand a visitor")
+ok(_ssw.rstrip().endswith("});")
+   and "return fetch(e.request);" in _ssw,
+   "and a total miss retries rather than resolving with nothing")
+
+
+# --- one colour per product, everywhere that product appears ---------------
+# The client's words: "the background should be based on the product it is
+# the background of not the product page that you are on."
+#
+# The failure mode was not a missing rule, it was a *duplicated* one:
+# `--flavour-soft` was assigned by hand next to `--flavour` in some places and
+# forgotten in others, so wherever it was forgotten the tint inherited from an
+# ancestor — on a product page, the current product. Deriving the tint from the
+# colour is what makes the two unable to disagree, so that is what is asserted
+# here rather than the symptom.
+_soft_decls = re.findall(r"--flavour-soft:\s*([^;]+);", _scss)
+_derived = [d for d in _soft_decls if "color-mix" in d]
+_ok_literal = {"var(--lav-soft)"}   # the :root fallback for anything unpriced
+ok(_derived, "the flavour tint is derived from the flavour, not written twice")
+ok(all("color-mix" in d or d.strip() in _ok_literal for d in _soft_decls),
+   "and nothing hand-sets it beside the fallback — hand-setting it in some "
+   f"places and not others is the whole bug (stray: "
+   f"{[d for d in _soft_decls if 'color-mix' not in d and d.strip() not in _ok_literal][:2]})")
+for _sel in (".product", ".cart-line", ".upsell-row", ".pp-stage", ".pp-thumb",
+             ".show-slide", ".menu-tile", ".art"):
+    ok(re.search(rf"{re.escape(_sel)}[,\s][^{{}}]*{{[^}}]*--flavour-soft:"
+                 r"\s*color-mix", _scss, re.S),
+       f"{_sel} derives its own tint, so it cannot wear the page's colour")
+
+# A derived tint is only as good as the colour it derives from: a payload that
+# omits `colour` sends every card back to the default purple by another route.
+_promos = Path("src/storefront/backend/promos.py").read_text()
+ok("'colour','flavour','note'" in _promos.replace('"', "'"),
+   "recommendations carry the product's own colour, so cross-sells can use it")
+ok(_sjs.count('style="--flavour:${flavourOf(') >= 7,
+   "and every surface that shows a product sets --flavour from that product")
+
+# The carousel reads its active slide back from scrollLeft/clientWidth. An
+# unlaid-out rail has clientWidth 0, 0/0 is NaN, and slides[NaN] is undefined
+# — sync() then threw on every scroll settle.
+_at = _sjs.split("const at = () =>")[1][:260]
+ok("if (!w) return 0" in _at and "Math.min(slides.length - 1" in _at,
+   "the carousel's slide index is clamped, so a zero-width rail cannot make "
+   "it index past the end or land on NaN")
+
+# --- the rest of this batch ------------------------------------------------
+ok('href="/affiliates"' in _sjs
+   and "PARTNER_LINKS" in _sjs.split('href="/affiliates"')[0][-1200:],
+   "the affiliate programme sits under 'Work with us', not only in the footer")
+
+_admjs = (_sfdir / "admin.js").read_text()
+_admhtml = (_sfdir / "admin.html").read_text()
+ok('id="sign-out"' in _admhtml and "wireSignOut" in _admjs,
+   "the admin can end its session")
+ok('localStorage.removeItem("bc_user")' in _admjs,
+   "and signing out drops the token, which is the whole session")
+ok("wireSignOut(true)" in _admjs.split("async function boot()")[1][:500],
+   "revealed from boot(), which is reached by a fresh sign-in as well as by a "
+   "stored token — otherwise it hides from whoever just started a session")
+ok("wireSignOut(false)" in _admjs,
+   "and never beside the sign-in form, which is what a stale token would do")
+
+ok(".a11y-fab.lifted" in _scss and "'.a11y-fab'" in _apisrc.replace('"', "'"),
+   "the accessibility badge lifts with the buy bar instead of sitting on the "
+   "product")
+ok("sticky-shot" in _apisrc and "/media/product/" in
+   _apisrc.split("sticky-shot")[1][:120],
+   "and the bar shows the real product photo, not a drawn stand-in")
+
+# --- the template kit names real capabilities ------------------------------
+# The free consultation is where a client is told which permissions, roles and
+# integrations they can have. A sales document that promises a connector the
+# code does not have is worse than no document, and the drift is silent — the
+# doc is prose, so nothing else would ever catch it.
+_consult = Path("docs/business-control-b2b-client/templates/02-consultation/free-consultation.md").read_text()
+_gov = Path("src/storefront/backend/governance.py").read_text()
+_intg = Path("src/erp/backend/integrations.py").read_text()
+
+_perms = set(re.findall(r'^    "(\w+)": "',
+                        _gov.split("PERMISSIONS = {")[1].split("}")[0], re.M))
+_missing = sorted(p for p in _perms if f"`{p}`" not in _consult)
+ok(_perms and not _missing,
+   f"the consultation offers every permission the code grants (missing: {_missing})")
+
+_provs = set(re.findall(r'^    "([a-z_]+)": \{', _intg, re.M))
+_unlisted = sorted(p for p in _provs if p not in _consult.lower())
+ok(_provs and not _unlisted,
+   f"and every integration that actually exists (missing: {_unlisted})")
+
+_jobs = set(re.findall(r'"([^"]+)"',
+                       Path("src/erp/frontend/app.js").read_text()
+                       .split("JOB_LABEL = {")[1].split("}")[0]))
+_nojob = sorted(j for j in _jobs - {"general"} if j.lower() not in _consult.lower())
+ok(not _nojob, f"and every staff role that has its own view (missing: {_nojob})")
+
+# --- the kit's shape: stage folders, and the internal wall ----------------
+_studio = Path("docs/business-control-b2b-client")
+_stages = sorted(p.name for p in (_studio / "templates").iterdir() if p.is_dir())
+ok(len(_stages) == 11 and _stages[0].startswith("01-")
+   and all(re.match(r"\d\d-", s) for s in _stages),
+   f"the templates are filed by numbered stage, so the order is the folder "
+   f"listing rather than something to remember ({len(_stages)} stages)")
+
+_no_readme = [s for s in _stages
+              if not (_studio / "templates" / s / "README.md").exists()]
+ok(not _no_readme,
+   f"every stage says what it sends and what opens the next gate "
+   f"(missing: {_no_readme})")
+
+_root = (_studio / "README.md").read_text()
+ok(all(f"templates/{s}/" in _root for s in _stages),
+   "and the index links every one of them")
+
+# The wall between what a client may read and what they may not is the whole
+# reason the per-client folder is shaped this way; a stage folder missing one
+# side is the one that gets zipped and sent by mistake.
+_ct = _studio / "clients" / "_template"
+_cstages = sorted(p.name for p in _ct.iterdir() if p.is_dir())
+_unwalled = [s for s in _cstages
+             if not ((_ct / s / "to-client").is_dir()
+                     and (_ct / s / "internal").is_dir())]
+ok(_cstages and not _unwalled,
+   f"every client stage separates what they receive from what they must not "
+   f"(unwalled: {_unwalled})")
+
+ok("roadmap.md" in _root and (_studio / "roadmap.md").exists(),
+   "the delivery, deployment and setup roadmap is in the kit and linked from it")
+_road = (_studio / "roadmap.md").read_text()
+ok("../product/DEPLOY.md" in _road,
+   "and it points at the technical runbook rather than duplicating it — a "
+   "second copy of deployment steps is a copy that goes stale silently")
+
+# docs/ has two halves and they must not blur: the product's own docs, and
+# the client-facing kit. An index in each is what keeps a stray file from
+# landing in the wrong one and being sent to the wrong audience.
+# docs/ itself needs an index, or the two halves are two piles.
+_docs_idx = Path("docs/README.md")
+ok(_docs_idx.exists(), "docs/ has an index naming both halves")
+_di = _docs_idx.read_text()
+ok("product/" in _di and "business-control-b2b-client/" in _di,
+   "and it points at each of them")
+_docs_dirs = sorted(p.name for p in Path("docs").iterdir() if p.is_dir())
+_unindexed = [d for d in _docs_dirs if d not in _di]
+ok(not _unindexed,
+   f"and every folder under docs/ is accounted for (missing: {_unindexed})")
+
+# The client folder is the thing someone opens under time pressure; a stage
+# that doesn't say what belongs in it gets filled by guesswork.
+_ct = Path("docs/business-control-b2b-client/clients/_template")
+_cst = sorted(p.name for p in _ct.iterdir() if p.is_dir())
+_vague = [d for d in _cst
+          if "What lands here" not in (_ct / d / "README.md").read_text()]
+ok(not _vague,
+   f"every client stage says what lands in it, on both sides of the wall "
+   f"(vague: {_vague})")
+_board = (_ct / "README.md").read_text()
+ok("06 Brand" in _board and "10 Aftercare" in _board,
+   "and the status board's stages match the folders beside it")
+ok("project-roadmap.md" in _board,
+   "and it names its client-facing twin — two status documents that disagree "
+   "is worse than one, because now nobody trusts either")
+ok("Gates passed" in _board and "Deposit cleared" in _board,
+   "the board tracks gates as signatures, not as feelings")
+
+_prod = Path("docs/product/README.md")
+ok(_prod.exists(), "the product docs have an index of their own")
+_pr_txt = _prod.read_text()
+_prod_files = sorted(p.name for p in Path("docs/product").iterdir()
+                     if p.name != "README.md")
+_unlisted = [f for f in _prod_files if f not in _pr_txt]
+ok(not _unlisted, f"and it lists every document in the folder (missing: {_unlisted})")
+ok("business-control-b2b-client" in _pr_txt,
+   "and points at the client-facing kit rather than absorbing it")
+
+ok("packages-and-process.md" in _root and "free-consultation.md" in _root,
+   "and both consultation documents are in the kit's index, not just on disk")
+
+# The client gets their own roadmap — a different document from the studio's
+# delivery guide, and the pair is easy to confuse precisely because both are
+# called a roadmap. Each must say which one it is.
+_proj = _studio / "templates" / "05-kickoff" / "project-roadmap.md"
+ok(_proj.exists(), "the client gets a roadmap of their own, to track execution")
+_pr = _proj.read_text()
+ok("Client-facing" in _pr and "roadmap.md" in _pr,
+   "and it says plainly that it is theirs, and points at the internal one it "
+   "is not")
+ok("internal" in _road.split("\n")[0:6].__str__().lower()
+   or "Internal" in _road[:400],
+   "while the delivery roadmap says plainly that it is not for sending")
+ok("Last updated" in _pr and "Right now" in _pr,
+   "it carries a current status, so re-sending it is the update")
+ok("project-roadmap.md" in (_studio / "procedures" / "weekly-rhythm.md").read_text(),
+   "and the weekly rhythm is what re-sends it — a status document nobody "
+   "updates is worse than none, because it reads as current")
+
+# The rate card must never reach a client. The index is hand-edited, so the
+# guarantee is asserted on the document itself rather than on prose elsewhere.
+_rate = (_studio / "templates" / "03-proposal" / "rate-card.md").read_text()
+ok("Never send this to a client" in _rate,
+   "the rate card says on its own face that it is internal — a price list "
+   "invites line-item haggling over work priced as a whole")
+
+# The optional brand stage, for work where the look is the point.
+_brand = _studio / "templates" / "07-brand-exploration"
+ok(_brand.is_dir() and (_brand / "art-direction.md").exists()
+   and (_brand / "direction-review-form.md").exists()
+   and (_brand / "brand-exploration-brief.md").exists(),
+   "brand exploration is its own stage: a brief, directions to react to, and "
+   "a signed art direction")
+_bre = (_brand / "README.md").read_text()
+ok("Optional" in _bre and "Week website" in _bre,
+   "and it says when to skip it — a stage that always runs is not optional, "
+   "it is overhead")
+ok("art-direction" in (_studio / "clients" / "_template"
+                       / "06-brand-exploration" / "README.md").read_text(),
+   "the client folder has a home for the signed direction, which is what "
+   "settles 'we never agreed to that' in month four")
+
+# --- engagements: the kit, run from the ERP --------------------------------
+# The registry is the kit folder read live, sides are derived from the
+# documents' own faces, and the client bundle is drawn from the to-client
+# side only — each asserted here because each is a wall someone will lean on.
+_tj = c.get("/api/store/admin/engagements/templates", headers=A).json()
+ok(_tj["kit_available"] and len(_tj["stages"]) == 11,
+   "the template registry is the kit folder itself, all eleven stages — "
+   "nothing to keep in sync")
+_all_t = [t for st in _tj["stages"] for t in st["templates"]]
+_by = {t["path"]: t for t in _all_t}
+ok(_by["03-proposal/rate-card.md"]["side"] == "internal",
+   "the rate card derives 'internal' from its own text, not from a list")
+ok(_by["03-proposal/proposal-template.md"]["side"] == "to_client",
+   "and the proposal goes to the client")
+ok(all(t["side"] == "internal" for t in _all_t
+       if "discovery-brief" in t["path"] or "exploration-brief" in t["path"]),
+   "every brief that says 'never send' is born on the internal side")
+
+_eng = c.post("/api/store/admin/engagements", headers=A, json={
+    "name": "Smoke Test Client", "package": "B", "value_cents": 1200000,
+    "approver_name": "Alex Chen", "approver_email": "alex@smoke.test",
+    "launch_target": "2026-12-01"}).json()
+_eid = _eng["id"]
+ok(_eng["slug"] == "smoke-test-client", "a client becomes a slug, safely")
+
+_td = c.get(f"/api/store/admin/engagements/{_eid}/template", headers=A,
+            params={"path": "03-proposal/proposal-template.md"}).json()
+ok("CLIENT NAME" in _td["placeholders"] and "DATE" in _td["placeholders"],
+   "placeholders are read out of the template's brackets")
+ok(_td["suggested"].get("CLIENT NAME") == "Smoke Test Client"
+   and _td["suggested"].get("X") == "12,000",
+   "and the engagement record pre-fills them — the proposal and the record "
+   "cannot disagree about the number, because both read the same row")
+
+_gen = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "03-proposal/proposal-template.md",
+    "fills": {"NAME, ROLE": "Alex Chen, COO"}}).json()
+ok(_gen["side"] == "to_client" and _gen["unfilled"],
+   "generation lands on the derived side and counts what is left to fill")
+_vd = [d for d in c.get("/api/store/admin/documents", headers=A,
+       params={"q": "Smoke Test Client"}).json()["documents"]
+       if d["id"] == _gen["doc_id"]][0]
+ok("[" not in _vd["title"] and "Smoke Test Client" in _vd["title"],
+   "the title is taken from the filled text — no bracket ships in a title")
+c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A,
+       json={"template_path": "03-proposal/rate-card.md"})
+
+ok(c.get(f"/api/store/admin/engagements/{_eid}/template", headers=A,
+         params={"path": "../../../product/DEPLOY.md"}).status_code == 404,
+   "a template path cannot walk out of the kit")
+
+_exp = c.post(f"/api/store/admin/engagements/{_eid}/export",
+              headers=A).json()
+ok(any(f.startswith("02-proposal/to-client/") for f in _exp["files"])
+   and any(f.startswith("02-proposal/internal/") for f in _exp["files"]),
+   "the folder export matches the clients/_template convention, walls intact")
+ok(Path(_exp["root"], "README.md").exists(),
+   "with a generated status board at the root")
+
+import io as _io
+import zipfile as _zip
+_zr = c.get(f"/api/store/admin/engagements/{_eid}/export.zip", headers=A)
+_names = _zip.ZipFile(_io.BytesIO(_zr.content)).namelist()
+ok(_names and all("/internal/" not in n for n in _names),
+   "the client bundle is drawn from side='to_client' only — sending the "
+   "estimate along with the proposal is not possible from this door")
+_zall = c.get(f"/api/store/admin/engagements/{_eid}/export.zip",
+              headers=A, params={"side": "all"})
+ok("full-archive" in _zall.headers.get("content-disposition", ""),
+   "and the everything-zip is named full-archive, so nobody mistakes it")
+
+_sr = c.post(f"/api/store/admin/documents/{_gen['doc_id']}/request-signature",
+             headers=A, json={"signer_name": "Alex Chen",
+                              "signer_email": "alex@smoke.test",
+                              "role": "approver"}).json()
+ok("/sign/" in _sr["link"],
+   "a generated document signs through the vault's own flow — this module "
+   "grew no signature code of its own")
+_det = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+ok(any(d["awaiting"] for d in _det["docs"]),
+   "and the engagement sees the pending signature without copying any state")
+
+# --- gates: signatures with a stage attached -------------------------------
+_gd = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+ok(len(_gd["gates"]) == 9 and _gd["current_stage"] == "02-proposal",
+   "an engagement opens with every gate open, standing at the proposal")
+ok(not next(g for g in _gd["gates"]
+            if g["gate"] == "art_direction_signed")["active"],
+   "the art direction gate doesn't exist until brand work does — a week "
+   "website is never blocked on a stage it skipped")
+
+_dep = c.post(f"/api/store/admin/engagements/{_eid}/gates/deposit_cleared",
+              headers=A, json={"note": "wire ref 9001"}).json()
+ok(_dep["gate"]["via"] == "manual" and _dep["gate"]["passed_at"],
+   "a money gate is a manual confirmation with an actor and a timestamp")
+ok("Proposal accepted" in _dep["warnings"],
+   "and passing it out of order warns loudly instead of silently allowing "
+   "or hard-blocking")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/gates/contract_signed",
+          headers=A, json={}).status_code == 400,
+   "a signature gate passed by hand demands a note saying where the "
+   "evidence is filed — the point of a gate is that you can point at it")
+
+_link = c.post(f"/api/store/admin/engagements/{_eid}/gates/proposal_accepted",
+               headers=A, json={"doc_id": _gen["doc_id"]}).json()
+ok(not _link["gate"]["passed_at"],
+   "linking an unsigned document leaves the gate awaiting, not passed")
+_sr2 = c.post(f"/api/store/admin/documents/{_gen['doc_id']}/request-signature",
+              headers=A, json={"signer_name": "Alex Chen",
+                               "signer_email": "alex@smoke.test",
+                               "role": "approver"}).json()
+_tok = _sr2["link"].split("/sign/")[1]
+_page = c.get(f"/sign/{_tok}").text
+ok("<h3>" in _page or "<table>" in _page or "<ul>" in _page,
+   "the sign page renders the document's structure — a signature attests to "
+   "what the signer was shown, so the shown thing carries the real headings "
+   "and tables, not paragraph soup")
+c.post(f"/sign/{_tok}", json={"typed_name": "Alex Chen"})
+_gd = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+_pa = next(g for g in _gd["gates"] if g["gate"] == "proposal_accepted")
+ok(_pa["via"] == "signature" and _pa["signed_by"] == "Alex Chen",
+   "and once signed, the gate passes by derivation — read from the vault "
+   "at request time, no copied state, no sync job")
+c.post(f"/api/store/admin/engagements/{_eid}/gates/contract_signed",
+       headers=A, json={"note": "countersigned PDF, filed 03-agreement"})
+_gd = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+ok(_gd["current_stage"] == "05-requirements",
+   "the stage is the first open gate — proposal, contract and deposit "
+   "passed walks it to requirements, and no stage column exists to disagree")
+
+_alien = c.post("/api/store/admin/documents", headers=A,
+                json={"title": "Someone else's paper", "body": "x"}).json()
+ok(c.post(f"/api/store/admin/engagements/{_eid}/gates/handover_accepted",
+          headers=A, json={"doc_id": _alien["id"]}).status_code == 400,
+   "a gate only accepts documents filed under its own client — an unrelated "
+   "signature would make the gate attest to nothing")
+c.delete(f"/api/store/admin/documents/{_alien['id']}", headers=A)
+
+c.request("DELETE",
+          f"/api/store/admin/engagements/{_eid}/gates/contract_signed",
+          headers=A)
+_gd = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+ok(_gd["current_stage"] == "03-agreement",
+   "reopening a gate moves the stage back by the same derivation, and the "
+   "signed evidence stays in the vault untouched")
+
+# --- the client portal: one link, drawn from the same rows -----------------
+ok(c.get("/engage/nope").status_code == 404, "a made-up portal token is a 404")
+_purl = c.post(f"/api/store/admin/engagements/{_eid}/portal",
+               headers=A).json()["url"]
+_ptok = _purl.split("/engage/")[1]
+c.patch(f"/api/store/admin/engagements/{_eid}", headers=A,
+        json={"content_pct": 40, "week_note": "Round one went out.",
+              "blockers": "Waiting on photography (since 20 Aug)"})
+c.put(f"/api/store/admin/engagements/{_eid}/dates", headers=A,
+      json={"dates": [{"label": "Launch", "planned": "2026-12-01"}]})
+_pp = c.get(f"/engage/{_ptok}").text
+ok("Round one went out." in _pp and "width:40%" in _pp
+   and "Waiting on photography" in _pp and "2026-12-01" in _pp,
+   "the portal renders the roadmap from the record — note, content bar, "
+   "blockers and dates, nothing retyped")
+ok("done" in _pp and "in progress" in _pp,
+   "and the gate timeline reads live from the same gates the ERP shows")
+ok("Rate card" not in _pp,
+   "the internal side is invisible on the portal — not withheld, unreachable")
+ok(c.get(f"/engage/{_ptok}/doc/{_gen['doc_id']}").status_code == 200,
+   "a to-client document opens from its portal link")
+_rate_id = next(d["id"] for d in _gd["docs"] if d["side"] == "internal")
+ok(c.get(f"/engage/{_ptok}/doc/{_rate_id}").status_code == 404,
+   "and the internal document 404s through the same route — the wall is the "
+   "query, not discipline")
+ok("awaiting your signature" in _pp or "signed" in _pp,
+   "signature state surfaces on the portal; signing stays on /sign/")
+
+ok(c.post(f"/engage/{_ptok}/direction",
+          data={"choice": "1", "name": "P"}).status_code == 400,
+   "a direction can't be chosen before any brand work exists")
+c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A,
+       json={"template_path": "07-brand-exploration/direction-review-form.md"})
+_pp = c.get(f"/engage/{_ptok}").text
+ok("Choose a direction" in _pp,
+   "brand work on the portal brings the choice form with it")
+_dc = c.post(f"/engage/{_ptok}/direction",
+             data={"choice": "Direction 2 — Quiet Authority",
+                   "name": "Alex Chen", "works": "calm palette"})
+ok(_dc.status_code == 200, "the client's choice records from the portal")
+ok(c.post(f"/engage/{_ptok}/direction",
+          data={"choice": "3", "name": "B"}).status_code == 400,
+   "one consolidated response means one — a second submission is refused")
+_gd = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+ok(any("direction chosen" in l["what"] for l in _gd["log"])
+   and any("Direction choice" in d["title"] for d in _gd["docs"]),
+   "and the choice lands as a filed document plus a log entry — the folder "
+   "convention already had a home for the returned form")
+_pgate = next(g for g in _gd["gates"] if g["gate"] == "art_direction_signed")
+ok(_pgate["active"],
+   "brand work existing is also what wakes the art direction gate")
+
+c.request("DELETE", f"/api/store/admin/engagements/{_eid}/portal", headers=A)
+ok(c.get(f"/engage/{_ptok}").status_code == 404,
+   "revoking the link kills it immediately — rotation is revocation with a "
+   "forwarding address")
+
+# --- rhythm and filing -----------------------------------------------------
+_purl2 = c.post(f"/api/store/admin/engagements/{_eid}/portal",
+                headers=A).json()["url"]
+c.patch(f"/api/store/admin/engagements/{_eid}", headers=A,
+        json={"blockers": "waiting on the logo (since Monday)"})
+_me = next(x for x in c.get("/api/store/admin/engagements", headers=A)
+           .json()["engagements"] if x["id"] == _eid)
+ok("blocked" in _me["warnings"],
+   "the dashboard derives the weekly-rhythm checks server-side — a blocked "
+   "engagement says so in the list, not just three clicks deep")
+c.patch(f"/api/store/admin/engagements/{_eid}", headers=A,
+        json={"blockers": ""})
+_me = next(x for x in c.get("/api/store/admin/engagements", headers=A)
+           .json()["engagements"] if x["id"] == _eid)
+ok("blocked" not in _me["warnings"],
+   "and clearing the blockers clears the warning — 'no blockers' is the "
+   "good news, so it must be expressible")
+c.get(_purl2.split("http://testserver")[-1])
+_me = next(x for x in c.get("/api/store/admin/engagements", headers=A)
+           .json()["engagements"] if x["id"] == _eid)
+ok(_me["portal_seen_at"] > 0,
+   "a portal view stamps when the client last looked — the honest half of "
+   "'did they see it'")
+
+from erp.backend import integrations as _intg
+ok("gate.passed" in _intg.EVENT_LABELS
+   and "direction.chosen" in _intg.EVENT_LABELS,
+   "gate passage and direction choices are events on the same bus as "
+   "inventory.low")
+ok("gate.passed" in _intg.PROVIDERS["slack"]["events"]
+   and "direction.chosen" in _intg.PROVIDERS["trello"]["events"],
+   "slack hears both; trello gets a card only for the one that is work — "
+   "writing up the art direction")
+ok("write up the art direction" in _intg._line(
+    "direction.chosen", {"client": "X", "choice": "2"}),
+   "and the prose says what to do next, not just what happened")
+ok(callable(getattr(_intg, "dropbox_put", None)),
+   "the export can file through the same Dropbox connection that files "
+   "signed documents")
+_exp2 = c.post(f"/api/store/admin/engagements/{_eid}/export",
+               headers=A).json()
+ok(_exp2["dropbox"] in ("filing in the background", "not connected"),
+   "and the export says plainly whether Dropbox filing happened — a silent "
+   "non-filing would read as filed")
+
+_pl = c.post(f"/api/store/admin/engagements/{_eid}/gates/deposit_cleared"
+             "/payment-link", headers=A, json={"amount_cents": 500000})
+ok(_pl.status_code == 400 and "manually" in _pl.json()["detail"],
+   "with no Stripe key the payment link refuses and points at the manual "
+   "path — cheques and transfers never stopped working")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/gates/requirements_signed"
+          "/payment-link", headers=A,
+          json={"amount_cents": 1}).status_code == 400,
+   "and payment links exist only for the money gates — a signature gate "
+   "passed by card would attest to nothing")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/gates/deposit_cleared"
+          "/payment-check", headers=A).status_code == 400,
+   "checking a payment that was never linked is a clear error, not a quiet "
+   "'not paid'")
+import shutil as _sh2
+_sh2.rmtree(_exp2["root"], ignore_errors=True)
+
+# leave the live db as we found it
+import shutil as _sh
+for _d in [x["id"] for x in _det["docs"]]:
+    c.delete(f"/api/store/admin/documents/{_d}", headers=A)
+from erp.backend import db as _dbmod
+con_cleanup = _dbmod.connect()
+con_cleanup.execute("DELETE FROM engagement_docs WHERE engagement_id=?", (_eid,))
+con_cleanup.execute("DELETE FROM engagement_gates WHERE engagement_id=?", (_eid,))
+con_cleanup.execute("DELETE FROM document_signatures WHERE document_id=?", (_gen["doc_id"],))
+con_cleanup.execute("DELETE FROM document_events WHERE document_id=?", (_gen["doc_id"],))
+con_cleanup.execute("DELETE FROM documents WHERE id=?", (_gen["doc_id"],))
+con_cleanup.execute("DELETE FROM engagement_log WHERE engagement_id=?", (_eid,))
+con_cleanup.execute("DELETE FROM engagement_dates WHERE engagement_id=?", (_eid,))
+con_cleanup.execute("DELETE FROM engagements WHERE id=?", (_eid,))
+con_cleanup.commit(); con_cleanup.close()
+_sh.rmtree(_exp["root"], ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

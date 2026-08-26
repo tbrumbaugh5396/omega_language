@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Inter:wght@400;600;700&family=Fraunces:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/store.css">
-  <!--THEME-CSS-->
+  <!--THEME-CSS--><!--HEAD-EXTRA-->
   <!--PIXELS-->
   <link rel="manifest" href="/store.webmanifest">
   <link rel="icon" href="/ops/icons/icon-192.png">
@@ -136,17 +136,21 @@
   <div class="cart-items" id="cart-items"></div>
   <div id="cart-upsell"></div>
   <div class="cart-foot">
-    <div class="cart-discount">
-      <input id="discount-input" placeholder="Discount code" aria-label="Discount code">
-      <button class="btn-pill ghost sm" id="discount-apply">Apply</button>
-      <span class="dim" id="discount-msg"></span>
-    </div>
-    <div class="cart-discount">
-      <input id="gift-input" placeholder="Gift card code" aria-label="Gift card code">
-      <button class="btn-pill ghost sm" id="gift-apply">Apply</button>
-      <span class="dim" id="gift-msg"></span>
-    </div>
+    <!-- Total first, then the code field, then Checkout. A code box above
+         the total asks people to hunt for a discount before they know what
+         they owe; below it, it reads as "have a code?" at the moment the
+         number is in front of them. -->
     <div class="cart-total" id="cart-total"></div>
+    <!-- One field for both kinds of code. Two boxes made shoppers pick a
+         category before they could type, and a gift card entered in the
+         discount box just said "invalid". -->
+    <div class="cart-code">
+      <input id="code-input" placeholder="Discount or gift card code"
+             aria-label="Discount or gift card code" autocomplete="off">
+      <button class="btn-pill ghost sm" id="code-apply">Apply</button>
+    </div>
+    <p class="cart-code-msg dim" id="code-msg" role="status"></p>
+    <div class="cart-codes" id="code-chips"></div>
     <button class="btn-pill primary" id="checkout-btn">Checkout
       <svg class="ico ico-sm" aria-hidden="true"><use href="#i-arrow"/></svg></button>
     <p class="cart-note">Free shipping over $40 · skip or cancel boxes any time</p>
@@ -209,6 +213,30 @@
   <span>Buy now</span>
   <span class="buy-fab-count" id="buy-fab-count" hidden>0</span>
 </button>
+
+<!-- First-visit offer. Shown once, only after the visitor has actually
+     looked around (see the trigger in store.js) — an overlay thrown at
+     someone in their first second is the reason people reflexively close
+     these. Never shown to anyone who already subscribed or dismissed it. -->
+<div class="offer-wrap" id="offer" role="dialog" aria-modal="true"
+     aria-labelledby="offer-title" hidden>
+  <div class="offer-card">
+    <button class="icon-btn offer-x" id="offer-close" aria-label="No thanks">
+      <svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button>
+    <span class="offer-badge">New here?</span>
+    <h2 id="offer-title">Take 10% off your first calm.</h2>
+    <p>Join the club for the code, early access to drops, and the occasional
+       note worth opening. No spam — one click to leave, always.</p>
+    <form class="offer-form" id="offer-form">
+      <input type="email" id="offer-email" required autocomplete="email"
+             placeholder="you@example.com" aria-label="Your email">
+      <button class="btn-pill primary" type="submit" id="offer-go">
+        Get my code</button>
+    </form>
+    <p class="offer-msg" id="offer-msg" role="status"></p>
+    <button class="offer-skip" id="offer-skip">No thanks, I'll pay full price</button>
+  </div>
+</div>
 
 <!-- cookie/measurement consent — only rendered when pixels are configured
      and consent is required, and nothing third-party loads until it's answered -->

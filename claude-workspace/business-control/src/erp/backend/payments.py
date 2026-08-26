@@ -59,6 +59,31 @@ def create_checkout(cfg: dict, order_id: int, items: list[dict],
     return {"id": d["id"], "url": d["url"]}
 
 
+def create_simple_checkout(cfg: dict, label: str, amount_cents: int,
+                           ref: str, return_url: str) -> dict | None:
+    """One named amount, one hosted page — for things that aren't orders:
+    a project deposit, a final invoice. Returns {id, url} or None when
+    Stripe is not configured; the manual confirmation path stays for cheques
+    and bank transfers."""
+    if not enabled(cfg) or amount_cents <= 0:
+        return None
+    data = {
+        "mode": "payment",
+        "success_url": return_url,
+        "cancel_url": return_url,
+        "client_reference_id": ref,
+        "line_items[0][quantity]": "1",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]": str(amount_cents),
+        "line_items[0][price_data][product_data][name]": label[:120],
+    }
+    r = httpx.post(f"{API}/checkout/sessions", data=data,
+                   auth=(cfg["stripe_secret_key"], ""), timeout=20)
+    r.raise_for_status()
+    d = r.json()
+    return {"id": d["id"], "url": d["url"]}
+
+
 def refund(cfg: dict, session_id: str, amount_cents: int | None = None) -> bool:
     """Refund a paid Checkout session (full, or partial via amount_cents).
     Returns True when Stripe accepted the refund."""

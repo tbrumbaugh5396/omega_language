@@ -223,9 +223,26 @@ def sniff_media(raw: bytes) -> tuple[str, str] | None:
     return None
 
 
+def has_alpha(im) -> bool:
+    """True if any pixel is actually see-through, not merely capable of it."""
+    if im.mode == "P":
+        im = im.convert("RGBA")
+    if "A" not in im.getbands():
+        return False
+    lo, _ = im.getchannel("A").getextrema()
+    return lo < 250
+
+
 def make_derivatives(mid: int, ext: str) -> None:
-    """Write _lg and _th JPEGs beside the original. No-op without Pillow —
-    the original is then served for every size (correct, just heavier)."""
+    """Write _lg and _th beside the original. No-op without Pillow — the
+    original is then served for every size (correct, just heavier).
+
+    Cut-out product renders stay PNG. Flattening them onto white produced a
+    JPEG with a white rectangle baked in, which is invisible on a white page
+    and glaring the moment the art sits on a coloured background — as it now
+    does on every carousel slide. Photographs still become JPEG, where the
+    size saving is real and there is no transparency to lose.
+    """
     try:
         from PIL import Image
     except ImportError:
@@ -235,18 +252,41 @@ def make_derivatives(mid: int, ext: str) -> None:
         try:
             with Image.open(src) as im:
                 im.seek(0)                        # animated gif → first frame
-                if im.mode in ("RGBA", "LA", "P"):
-                    im = im.convert("RGBA")
-                    flat = Image.new("RGB", im.size, (255, 255, 255))
-                    flat.paste(im, mask=im.split()[-1])
-                    im = flat
-                else:
-                    im = im.convert("RGB")
+                keep = has_alpha(im)
+                im = im.convert("RGBA" if keep else "RGB")
+                if keep:
+                    # Trim to the opaque bounds. Product renders arrive with
+                    # generous transparent margins — the can is often under
+                    # 70% of its own file — and every layout that sizes the
+                    # image ends up sizing the empty air around it instead.
+                    # A tight derivative means "70% tall" means the can.
+                    bbox = im.getchannel("A").getbbox()
+                    if bbox:
+                        im = im.crop(bbox)
                 im.thumbnail((edge, edge), Image.LANCZOS)
-                im.save(MEDIA_DIR / f"{mid}_{suffix}.jpg", "JPEG",
-                        quality=quality, optimize=True)
+                if keep:
+                    im.save(MEDIA_DIR / f"{mid}_{suffix}.png", "PNG",
+                            optimize=True)
+                else:
+                    im.save(MEDIA_DIR / f"{mid}_{suffix}.jpg", "JPEG",
+                            quality=quality, optimize=True)
         except Exception:
             pass
+
+
+# Derivatives are looked up in this order everywhere, so one helper decides
+# it rather than three routes each guessing.
+def derivative(mid: int, suffix: str, ext: str = ""):
+    for cand in (MEDIA_DIR / f"{mid}_{suffix}.png",
+                 MEDIA_DIR / f"{mid}_{suffix}.jpg"):
+        if cand.exists():
+            return cand
+    orig = MEDIA_DIR / f"{mid}.{ext}" if ext else None
+    return orig if orig and orig.exists() else None
+
+
+MIME = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
+        ".gif": "image/gif"}
 
 
 def media_json(rows) -> list[dict]:
@@ -392,8 +432,15 @@ def pixels_snippet(con) -> str:
         return ""
 
 
-def render_shell(con, body_html: str, *, title=None, description=None) -> str:
-    """Wrap rendered sections in the storefront shell (nav, cart, modals)."""
+def render_shell(con, body_html: str, *, title=None, description=None,
+                 head_extra: str = "") -> str:
+    """Wrap rendered sections in the storefront shell (nav, cart, modals).
+
+    `head_extra` is for what only one page can know — a canonical URL, its
+    own structured data, the flavour colour it recolours itself with. It is
+    composed by the caller and inserted verbatim, so nothing page-specific
+    has to leak into the shell.
+    """
     from . import content as content_mod
     t = get_theme(con)
     shell = (config.STOREFRONT_DIR / "index.html").read_text(encoding="utf-8")
@@ -421,6 +468,7 @@ def render_shell(con, body_html: str, *, title=None, description=None) -> str:
         "<!--TITLE-->": sect.esc(title or t["title"]),
         "<!--DESCRIPTION-->": sect.esc(description or t["description"]),
         "<!--FOOTER-->": sect.esc(t["footer"]),
+        "<!--HEAD-EXTRA-->": head_extra,
     }
     for k, v in repl.items():
         shell = shell.replace(k, v)
@@ -440,11 +488,7 @@ def primary_media_file(con, product_id: int):
         " ORDER BY position, id LIMIT 1", (product_id,)).fetchone()
     if row is None:
         return None
-    for cand in (MEDIA_DIR / f"{row['id']}_lg.jpg",
-                 MEDIA_DIR / f"{row['id']}.{row['ext']}"):
-        if cand.exists():
-            return cand
-    return None
+    return derivative(row["id"], "lg", row["ext"])
 
 
 def ensure_search_index(con, force_rebuild: bool = False) -> bool:
@@ -506,14 +550,43 @@ def init_tables():
                     "INSERT INTO page_sections(page_slug,type,settings,"
                     " position) VALUES('home',?,?,?)",
                     (stype, json.dumps(sect.defaults_for(stype)), pos))
+        # A store seeded before the showcase existed keeps its own layout —
+        # HOME_DEFAULT only ever runs on an empty page. Put the carousel on
+        # top once; if a merchant then moves or deletes it, that sticks,
+        # because this only fires when the type is absent entirely.
+        else:
+            # Sections added after a store was seeded have to be placed on
+            # the page that already exists — HOME_DEFAULT only ever runs on
+            # an empty one. Each lands once, directly below the section it
+            # belongs under; a merchant who then moves or deletes it keeps
+            # that, because this only fires when the type is absent.
+            for stype, under in (("showcase", None), ("social_proof",
+                                                      "showcase")):
+                if con.execute("SELECT 1 FROM page_sections WHERE"
+                               " page_slug='home' AND type=?",
+                               (stype,)).fetchone():
+                    continue
+                if under is None:
+                    pos = 0
+                else:
+                    row = con.execute(
+                        "SELECT position FROM page_sections WHERE"
+                        " page_slug='home' AND type=?", (under,)).fetchone()
+                    pos = (row["position"] + 1) if row else 0
+                con.execute("UPDATE page_sections SET position=position+1"
+                            " WHERE page_slug='home' AND position>=?", (pos,))
+                con.execute(
+                    "INSERT INTO page_sections(page_slug,type,settings,"
+                    " position) VALUES('home',?,?,?)",
+                    (stype, json.dumps(sect.defaults_for(stype)), pos))
         if not con.execute("SELECT 1 FROM store_shipping_methods").fetchone():
             con.execute(
                 "INSERT INTO store_shipping_methods(name,price_cents,eta,"
                 " position) VALUES ('Standard',599,'3–5 business days',0),"
                 " ('Express',1499,'1–2 business days',1)")
         from . import (affiliates, campaigns, content, crud, discord,
-                       documents, emailer, governance, partners,
-                       pixels, promos, support)
+                       documents, emailer, engagements, governance,
+                       partners, pixels, promos, support)
         promos.init_tables(con)
         content.init_tables(con)
         governance.init_tables(con)
@@ -523,6 +596,7 @@ def init_tables():
         support.init_tables(con)
         campaigns.init_tables(con)
         documents.init_tables(con)
+        engagements.init_tables(con)
         crud.init_tables(con)
         discord.init_tables(con)
         emailer.init_tables(con)
@@ -701,14 +775,11 @@ def media_file(mid: int, con=Depends(get_con)):
         if not f.exists():
             raise HTTPException(404, "video is an external embed")
         return FileResponse(f, media_type=VIDEO_MIME.get(m["ext"], "video/mp4"))
-    lg = MEDIA_DIR / f"{mid}_lg.jpg"
-    if lg.exists():
-        return FileResponse(lg, media_type="image/jpeg",
-                            headers={"Cache-Control": "public, max-age=31536000"})
-    orig = MEDIA_DIR / f"{mid}.{m['ext']}"
-    if not orig.exists():
+    f = derivative(mid, "lg", m["ext"])
+    if f is None:
         raise HTTPException(404, "file missing")
-    return FileResponse(orig, headers={"Cache-Control": "public, max-age=31536000"})
+    return FileResponse(f, media_type=MIME.get(f.suffix, "image/jpeg"),
+                        headers={"Cache-Control": "public, max-age=31536000"})
 
 
 @router.get("/media/m/{mid}/thumb")
@@ -716,9 +787,9 @@ def media_thumb(mid: int, con=Depends(get_con)):
     m = con.execute("SELECT * FROM product_media WHERE id=?", (mid,)).fetchone()
     if m is None:
         raise HTTPException(404, "no such media")
-    th = MEDIA_DIR / f"{mid}_th.jpg"
-    if th.exists():
-        return FileResponse(th, media_type="image/jpeg",
+    th = derivative(mid, "th")
+    if th is not None:
+        return FileResponse(th, media_type=MIME.get(th.suffix, "image/jpeg"),
                             headers={"Cache-Control": "public, max-age=31536000"})
     orig = MEDIA_DIR / f"{mid}.{m['ext']}"
     if m["kind"] == "image" and orig.exists():
@@ -1159,7 +1230,7 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
             f'</g></svg>{_html.escape(s["name"].split(" ")[0])}</a>'
             for s in sibs)
         flav_html = (f'<div class="pp-block"><span class="eyebrow">'
-                     f'Flavour</span>'
+                     f'Flavor</span>'
                      f'<div class="flavour-picker">{opts}</div></div>')
 
     nutri_html = ""
@@ -1194,42 +1265,36 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
     recs = promos_mod.recommendations(pid, 4, con)
     recs_html = ""
     if recs:
+        # A card, not a link wrapping everything: an Add button cannot live
+        # inside an <a> without breaking both the link and the button.
         cards = "".join(
-            f'<a class="product" href="/product/{r["id"]}-{r["slug"]}"'
+            f'<div class="product"'
             f' style="--flavour:{product_meta(con, r["id"]).get("colour") or "#6c00bf"}">'
+            + f'<a href="/product/{r["id"]}-{r["slug"]}" aria-label="{_html.escape(r["name"])}">'
             + (f'<div class="art"><img src="{r["media"][0]["thumb"]}"'
                f' alt="" loading="lazy"></div>' if r.get("media")
                else f'<div class="art">'
                     f'{can_svg(r["id"], r["name"], product_meta(con, r["id"]).get("colour") or "", "rec")}'
                     f'</div>')
-            + f'<div class="body"><b>{_html.escape(r["name"])}</b>'
+            + '</a>'
+            + f'<div class="body">'
+            f'<a href="/product/{r["id"]}-{r["slug"]}"><b>{_html.escape(r["name"])}</b></a>'
             f'<div class="price-row"><span class="price">'
-            f'${r["price_cents"] / 100:,.2f}</span></div></div></a>'
+            f'${r["price_cents"] / 100:,.2f}</span>'
+            f'<button class="add-btn" data-rec-add="{r["id"]}">Add</button>'
+            f'</div></div></div>'
             for r in recs)
         recs_html = (f'<h2 style="margin-top:56px">You may also like</h2>'
                      f'<div class="grid">{cards}</div>')
-    page = f"""<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{name} — Zenjoy</title>
-<meta name="description" content="{desc[:155]}">
-<link rel="canonical" href="{canonical}">
-<meta property="og:type" content="product">
-<meta property="og:title" content="{name} — Zenjoy">
-<meta property="og:description" content="{desc[:200]}">
-{f'<meta property="og:image" content="{img}">' if img else ''}
-<meta property="og:url" content="{canonical}">
-{FONT_LINK}
-<link rel="stylesheet" href="/store.css?v={asset_version()}">
-<style>:root{{--flavour:{colour};--flavour-soft:{colour}1c}}</style>
-<script type="application/ld+json">{json.dumps(ld)}</script></head>
-<body>{icon_sprite()}
-<a class="skip-link" href="#pp-main">Skip to content</a>
-<nav class="topbar"><a class="brand" href="/">zenjoy<span class="brand-dot">.</span></a>
-<div class="top-actions"><a class="btn-pill ghost sm" href="/">
- {sect.icon("arrow", "ico ico-sm")} Back to shop</a>
- <a class="btn-pill dark sm" href="/?cart=1">
- {sect.icon("cart", "ico ico-sm")} Cart</a></div></nav>
-<main class="section" style="padding-top:40px" id="pp-main">
+    # Rendered through the storefront shell, exactly like the blog, the
+    # partner pages and the locator. It used to be a standalone document
+    # with a hand-rolled topbar and its own drawer, which is precisely why
+    # its navigation drifted from every other page and why it needed a
+    # "back to shop" button to make up for the missing menu. One shell, one
+    # nav, one cart drawer — the product page is part of the storefront, not
+    # a preview of it.
+    body = f"""
+<main class="section pp-main" id="pp-main">
  <div class="pp-grid">
   <div class="pp-art">{art}</div>
   <div class="pp-info">
@@ -1260,20 +1325,22 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
   </div>
  </div>
  {recs_html}
- <h2 style="margin-top:56px">Reviews</h2>
+ <div class="pp-rev-head">
+  <h2>Reviews</h2>
+  <button class="btn-pill ghost sm" data-review-for="{pid}">
+   {sect.icon("star", "ico ico-sm")} Write a review</button>
+ </div>
  {revs_html}
 </main>
-<div class="sticky-buy" id="sticky-buy">
+<div class="sticky-buy" id="sticky-buy" style="--flavour:{colour}">
  <div class="sticky-inner">
-  {can_svg(pid, p["name"], colour, "sticky", mini=True)}
+  {(f'<span class="sticky-shot"><img src="/media/product/{pid}" alt=""></span>')
+   if p["image"] else can_svg(pid, p["name"], colour, "sticky", mini=True)}
   <span class="who"><b>{name}</b><span class="dim" id="sticky-price">${min(prices) / 100:.2f}</span></span>
   <button class="btn-pill primary" id="sticky-add"{"" if in_stock else " disabled"}>
    {"Add to cart" if in_stock else "Sold out"}</button>
  </div>
 </div>
-<button class="buy-fab" id="buy-fab" aria-label="Buy now"{"" if in_stock else " disabled"}>
- {sect.icon("cart", "ico ico-sm")}<span>{"Buy now" if in_stock else "Sold out"}</span>
-</button>
 <script>
 let v=localStorage.getItem('sf_vid')||crypto.randomUUID();localStorage.setItem('sf_vid',v);
 fetch('/api/store/track',{{method:'POST',headers:{{'Content-Type':'application/json'}},
@@ -1314,8 +1381,11 @@ if(window.IntersectionObserver&&realBuy&&sticky){{
  new IntersectionObserver(function(es){{
   const shown=!es[0].isIntersecting&&es[0].boundingClientRect.top<0;
   sticky.classList.toggle('show',shown);
+  // both floating badges clear the bar together, so they stay on one line
   const fab=document.getElementById('buy-fab');
   if(fab)fab.classList.toggle('lifted',shown);
+  const a11y=document.querySelector('.a11y-fab');
+  if(a11y)a11y.classList.toggle('lifted',shown);
  }},{{threshold:0}}).observe(realBuy);
 }}
 document.querySelectorAll('.pp-thumb').forEach(function(b){{
@@ -1346,12 +1416,31 @@ function addToCart(){{
  location.href='/?cart=1';
 }}
 document.getElementById('pp-add').onclick=addToCart;
+// "You may also like" adds straight to the cart, same as everywhere else.
+document.querySelectorAll('[data-rec-add]').forEach(function(b){{
+ b.onclick=function(){{
+  var cart=JSON.parse(localStorage.getItem('sf_cart')||'{{}}');
+  var k=b.dataset.recAdd+':0';
+  cart[k]=(cart[k]||0)+1;
+  localStorage.setItem('sf_cart',JSON.stringify(cart));
+  location.href='/?cart=1';
+ }};}});
 const sa=document.getElementById('sticky-add');
 if(sa)sa.onclick=addToCart;
 const bf=document.getElementById('buy-fab');
 if(bf)bf.onclick=addToCart;
-</script></body></html>"""
-    return HTMLResponse(page)
+</script>"""
+    return HTMLResponse(render_shell(
+        con, body, title=f"{name} — Zenjoy", description=desc[:155],
+        head_extra=(f'<link rel="canonical" href="{canonical}">'
+                    f'<meta property="og:type" content="product">'
+                    + (f'<meta property="og:image" content="{img}">' if img else "")
+                    + f'<meta property="og:url" content="{canonical}">'
+                    # Only the colour. The soft tint derives from it per
+                    # component, so a card on this page keeps its own.
+                    + f'<style>:root{{--flavour:{colour}}}</style>'
+                    + f'<script type="application/ld+json">'
+                      f'{json.dumps(ld)}</script>')))
 
 
 @router.get("/sitemap.xml")

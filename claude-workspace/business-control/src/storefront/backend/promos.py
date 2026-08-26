@@ -274,6 +274,13 @@ def recommendations(pid: int, limit: int = 4, con=Depends(get_con)):
             ids).fetchall():
         d = dict(r)
         d["slug"] = slugify(d["name"])
+        # Colour travels with the product. Without it the client had nothing
+        # to tint with and silently fell back to brand purple, which is why
+        # every cross-sell row looked the same regardless of what was in it.
+        for m in con.execute(
+                "SELECT k, v FROM store_product_meta WHERE product_id=?"
+                " AND k IN ('colour','flavour','note')", (d["id"],)).fetchall():
+            d[m["k"]] = m["v"]
         d["media"] = media_json(con.execute(
             "SELECT * FROM product_media WHERE product_id=?"
             " ORDER BY position, id LIMIT 1", (d["id"],)).fetchall())

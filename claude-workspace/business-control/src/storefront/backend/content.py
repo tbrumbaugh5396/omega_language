@@ -77,13 +77,19 @@ CURRENCY_DEFAULT = [
 
 def init_tables(con):
     con.executescript(TABLES)
+    # Root-relative, not bare fragments. The same nav renders on /blog and
+    # /affiliates, where "#shop" is a fragment of a page that has no such
+    # section — it silently does nothing. "/#shop" navigates home and then
+    # scrolls, and still works as a same-page jump on the home page itself.
     if not con.execute("SELECT 1 FROM store_menus").fetchone():
         con.execute(
             "INSERT INTO store_menus(location,label,url,position) VALUES"
-            " ('header','Shop','#shop',0),('header','Reviews','#reviews',1),"
-            " ('header','FAQ','#faq',2),('header','Blog','/blog',3),"
-            " ('footer','Shop','#shop',0),('footer','Blog','/blog',1),"
-            " ('footer','FAQ','#faq',2)")
+            " ('header','Shop','/#shop',0),('header','Reviews','/#reviews',1),"
+            " ('header','FAQ','/#faq',2),('header','Blog','/blog',3),"
+            " ('footer','Shop','/#shop',0),('footer','Blog','/blog',1),"
+            " ('footer','FAQ','/#faq',2)")
+    # Stores seeded before that fix keep their broken links otherwise.
+    con.execute("UPDATE store_menus SET url='/'||url WHERE url LIKE '#%'")
     # The affiliate programme needs a way in; add it once, idempotently.
     if not con.execute("SELECT 1 FROM store_menus WHERE url='/affiliates'"
                        ).fetchone():

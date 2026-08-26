@@ -1,0 +1,829 @@
+<meta charset="utf-8">
+<title>The ZenJoy Pitch</title>
+<!-- ============================================================
+     Sales deck — customised for the Zenjoy pitch. The generic flow
+     lives in the kit (see README stage 5): duplicate this file and
+     re-skin the tokens + copy for the next client.
+
+     Presenter: Tom Brumbaugh. The deck's palette is Zenjoy's own —
+     paper, ink, purple, one orange moment — because the client
+     should see their brand already at home.
+
+     Present it: open in a browser, arrow keys / click / swipe.
+     Print it: File → Print gives a handout, one slide per page.
+     ============================================================ -->
+<style>
+  /* Zenjoy's storefront tokens, committed light — calm is the brand.
+     body paints its own ground so the deck holds on any host theme. */
+  :root {
+    --ground: #fbf9f6;             /* zenjoy's paper                  */
+    --panel:  #f3eefb;             /* lavender-soft raised panels     */
+    --panel-2:#ece4f8;             /* emphasis panels                 */
+    --ink:    #1b181f;             /* zenjoy's ink                    */
+    --dim:    #6f6879;             /* secondary, purple-biased grey   */
+    --purple: #6c00bf;             /* the working accent              */
+    --deep:   #43007a;             /* headings' dark purple           */
+    --orange: #ff6900;             /* spent once per slide at most    */
+    --leaf:   #7a9e4c;             /* semantic: included / done       */
+    --line:   rgba(27, 24, 31, .16);
+    --serif:  "Iowan Old Style", "Palatino Linotype", "Book Antiqua",
+              Palatino, Georgia, serif;
+    --sans:   system-ui, -apple-system, "Segoe UI", Helvetica, Arial,
+              sans-serif;
+    --mono:   ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+              monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: clamp(14px, 1.35vmin, 19px);
+    line-height: 1.55;
+    overflow: hidden;
+  }
+
+  /* ---------------- deck plumbing ---------------- */
+  .deck { position: relative; width: 100%; height: 100%; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    padding: 6vh 7vw 11vh;
+    overflow: hidden;
+  }
+  .slide.on { display: flex; animation: rise .34s ease-out; }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .slide.on { animation: none; }
+  }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: .72em; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--purple); margin-bottom: 2.2vh;
+  }
+  .eyebrow .n { color: var(--dim); }
+  h1, h2 { font-family: var(--serif); font-weight: 500; color: var(--deep);
+           text-wrap: balance; }
+  h2 { font-size: clamp(26px, 4.4vmin, 58px); line-height: 1.08;
+       margin-bottom: 3.6vh; max-width: 26ch; }
+  .lede { color: var(--dim); font-size: 1.12em; max-width: 58ch;
+          margin-bottom: 4vh; }
+  .lede b { color: var(--ink); font-weight: 600; }
+  em { font-style: italic; }
+
+  /* the client's wordmark habit: lowercase, orange full stop */
+  .wordmark { font-weight: 700; letter-spacing: .01em; }
+  .wordmark::after { content: "."; color: var(--orange); }
+
+  /* ---------------- shared parts ---------------- */
+  .cols { display: grid; grid-template-columns: 1fr 1fr;
+          gap: 3vh 5vw; align-content: start; }
+  .cols h3 {
+    font-family: var(--mono); font-size: .74em; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--dim);
+    border-bottom: 1px solid var(--line); padding-bottom: 1vh;
+    margin-bottom: 1.6vh;
+  }
+  ul.feat { list-style: none; }
+  ul.feat li {
+    padding: .85vh 0 .85vh 1.6em; position: relative;
+    border-bottom: 1px dotted var(--line);
+  }
+  ul.feat li:last-child { border-bottom: none; }
+  ul.feat li::before {
+    content: "—"; position: absolute; left: 0; color: var(--purple);
+  }
+  ul.feat b { font-weight: 600; }
+  ul.feat .why { color: var(--dim); }
+
+  .foot-note { margin-top: auto; padding-top: 2vh; color: var(--dim);
+               font-size: .92em; max-width: 62ch; }
+  .foot-note b { color: var(--ink); }
+
+  .m { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---------------- cover ---------------- */
+  .cover { justify-content: center; }
+  .cover .studio {
+    font-family: var(--mono); letter-spacing: .22em; text-transform: uppercase;
+    color: var(--dim); font-size: .8em; margin-bottom: 5vh;
+  }
+  .cover .studio b { color: var(--ink); }
+  .cover h1 {
+    font-size: clamp(38px, 8.2vmin, 108px); line-height: 1.04;
+    max-width: 15ch; margin-bottom: 4vh;
+  }
+  .cover h1 em { color: var(--purple); }
+  .cover .for { font-family: var(--mono); color: var(--dim);
+                font-size: .95em; line-height: 2; }
+  .cover .for b { color: var(--ink); font-weight: 600; }
+
+  /* ---------------- slide 2: three surfaces ---------------- */
+  .surfaces { display: grid; grid-template-columns: repeat(3, 1fr);
+              gap: 1.6vw; margin-bottom: 2.4vh; }
+  .surface {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 2.4vh 1.6vw;
+  }
+  .surface .who {
+    font-family: var(--mono); font-size: .7em; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--purple); margin-bottom: .8vh;
+  }
+  .surface .name { font-family: var(--serif); font-size: 1.5em;
+                   color: var(--deep); margin-bottom: .8vh; }
+  .surface p { color: var(--dim); font-size: .95em; }
+  .one-bar {
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 12px; padding: 1.8vh 2vw; text-align: center;
+    font-family: var(--mono); font-size: .95em; letter-spacing: .06em;
+  }
+  .one-bar b { color: var(--purple); font-weight: 600; }
+
+  /* ---------------- slide 3: proof ---------------- */
+  .stats { display: grid; grid-template-columns: repeat(4, auto);
+           gap: 4vw; justify-content: start; margin: 1vh 0 4vh; }
+  .stat .num { font-family: var(--serif); font-size: clamp(30px, 5vmin, 62px);
+               color: var(--purple); }
+  .stat .lbl { font-family: var(--mono); font-size: .72em;
+               letter-spacing: .14em; text-transform: uppercase;
+               color: var(--dim); margin-top: .6vh; }
+  .swatches { display: flex; gap: .8vw; align-items: center;
+              margin-top: 2.5vh; }
+  .swatch { width: 2.6em; height: 2.6em; border-radius: 50%;
+            border: 2px solid var(--ground);
+            box-shadow: 0 0 0 1px var(--line); }
+  .swatches .cap { font-family: var(--mono); font-size: .8em;
+                   color: var(--dim); margin-left: 1vw; }
+
+  /* ---------------- roadmap rail ---------------- */
+  .rail { display: grid; grid-template-columns: repeat(5, 1fr);
+          gap: 1vw; align-items: stretch; }
+  .phase { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 12px; padding: 2vh 1.1vw;
+           display: flex; flex-direction: column; }
+  .phase .wk { font-family: var(--mono); font-size: .72em;
+               color: var(--purple); letter-spacing: .1em;
+               margin-bottom: .8vh; }
+  .phase .nm { font-family: var(--serif); font-size: 1.25em;
+               color: var(--deep); margin-bottom: 1vh; }
+  .phase ul { list-style: none; color: var(--dim); font-size: .88em; }
+  .phase li { padding: .35vh 0; }
+  .phase .gate {
+    margin-top: auto; padding-top: 1.2vh; font-family: var(--mono);
+    font-size: .72em; letter-spacing: .08em; color: var(--leaf);
+    border-top: 1px dashed var(--line);
+  }
+  .gate::before { content: "✓ "; }
+
+  /* ---------------- intake ---------------- */
+  .check { list-style: none; }
+  .check li {
+    break-inside: avoid; padding: 1vh 0 1vh 2em;
+    position: relative; border-bottom: 1px dotted var(--line);
+  }
+  .check li::before {
+    content: ""; position: absolute; left: 0; top: 1.35vh;
+    width: .95em; height: .95em; border: 1.5px solid var(--dim);
+    border-radius: 4px;
+  }
+  .check b { font-weight: 600; }
+  .check .why { color: var(--dim); }
+  ul.pack { list-style: none; }
+  ul.pack li { padding: .8vh 0 .8vh 1.6em; position: relative;
+               border-bottom: 1px dotted var(--line); }
+  ul.pack li:last-child { border-bottom: none; }
+  ul.pack li::before { content: "▸"; position: absolute; left: 0;
+                       color: var(--purple); }
+  ul.pack .why { color: var(--dim); }
+
+  /* ---------------- pricing ---------------- */
+  .tiers { display: grid; grid-template-columns: repeat(3, 1fr);
+           gap: 1.6vw; align-items: stretch; }
+  .tier { background: var(--panel); border: 1px solid var(--line);
+          border-radius: 14px; padding: 3vh 1.8vw;
+          display: flex; flex-direction: column; }
+  .tier.pick { border: 2px solid var(--orange); background: #fff7f0; }
+  .tier .tag { font-family: var(--mono); font-size: .7em;
+               letter-spacing: .18em; text-transform: uppercase;
+               color: var(--dim); margin-bottom: 1vh; }
+  .tier.pick .tag { color: var(--orange); }
+  .tier .nm { font-family: var(--serif); font-size: 1.5em;
+              color: var(--deep); margin-bottom: .4vh; }
+  .tier .pr { font-family: var(--mono); font-size: 1.15em;
+              color: var(--purple); margin-bottom: 1.6vh;
+              font-variant-numeric: tabular-nums; }
+  .tier ul { list-style: none; color: var(--dim); font-size: .92em;
+             margin-bottom: 1.5vh; }
+  .tier li { padding: .5vh 0 .5vh 1.4em; position: relative; }
+  .tier li::before { content: "✓"; position: absolute; left: 0;
+                     color: var(--leaf); }
+  .tier .eta { margin-top: auto; font-family: var(--mono);
+               font-size: .78em; color: var(--dim);
+               border-top: 1px solid var(--line); padding-top: 1.2vh; }
+
+  /* ---------------- next steps ---------------- */
+  .steps { list-style: none; counter-reset: s; max-width: 60ch; }
+  .steps li { counter-increment: s; display: flex; gap: 1.6em;
+              padding: 1.8vh 0; border-bottom: 1px solid var(--line);
+              align-items: baseline; }
+  .steps li::before {
+    content: counter(s, decimal-leading-zero);
+    font-family: var(--mono); color: var(--purple); font-size: 1.1em;
+  }
+  .steps b { font-weight: 600; }
+  .steps .why { color: var(--dim); }
+  .contact { margin-top: 4vh; font-family: var(--mono); line-height: 2.1;
+             color: var(--dim); }
+  .contact b { color: var(--ink); }
+
+  /* ---------------- chrome ---------------- */
+  .chrome { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+            display: flex; align-items: center; gap: 2vw;
+            padding: 1.6vh 7vw; }
+  .counter { font-family: var(--mono); font-size: .78em; color: var(--dim);
+             letter-spacing: .1em; font-variant-numeric: tabular-nums; }
+  .dots { display: flex; gap: 9px; margin-inline: auto; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; border: none;
+         background: var(--line); cursor: pointer; padding: 0; }
+  .dot.on { background: var(--purple); transform: scale(1.3); }
+  .dot:focus-visible { outline: 2px solid var(--purple);
+                       outline-offset: 3px; }
+  .navbtns { display: flex; gap: 8px; }
+  .navbtns button {
+    background: #ffffff; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px;
+    font-family: var(--mono); font-size: 14px; width: 40px; height: 34px;
+    cursor: pointer;
+  }
+  .navbtns button:hover { border-color: var(--purple); color: var(--purple); }
+  .navbtns button:focus-visible { outline: 2px solid var(--purple); }
+  .progress { position: fixed; top: 0; left: 0; height: 3px;
+              background: var(--purple); width: 0; z-index: 6;
+              transition: width .3s ease; }
+  .hint { position: fixed; right: 7vw; top: 2.4vh; z-index: 5;
+          font-family: var(--mono); font-size: .7em; letter-spacing: .1em;
+          color: var(--dim); opacity: .8; }
+
+  @media (max-width: 820px) {
+    .slide { padding: 4vh 6vw 12vh; }
+    .cols, .surfaces, .tiers { grid-template-columns: 1fr; }
+    .rail { grid-template-columns: 1fr 1fr; }
+    .stats { grid-template-columns: 1fr 1fr; gap: 2vh 6vw; }
+    h2 { font-size: clamp(24px, 6.4vw, 40px); }
+    .hint { display: none; }
+  }
+
+  @media print {
+    body { overflow: visible; }
+    .slide { position: static; display: flex !important; height: auto;
+             min-height: 95vh; page-break-after: always;
+             animation: none; }
+    .chrome, .progress, .hint { display: none; }
+  }
+</style>
+
+<div class="progress" id="bar"></div>
+<div class="hint" aria-hidden="true">← → to move</div>
+
+<main class="deck" id="deck" aria-live="polite">
+
+  <!-- 1 ─ cover -->
+  <section class="slide cover">
+    <p class="studio"><b>Tom Brumbaugh</b> · web &amp; commerce systems</p>
+    <h1>A website that runs the <em>whole</em> business.</h1>
+    <p class="for">
+      Prepared for <b class="wordmark">zenjoy</b> · August 2026<br>
+      Tom Brumbaugh · thomas.william.brumbaugh@gmail.com · [PHONE]
+    </p>
+  </section>
+
+  <!-- 2 ─ thesis -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">02 ·</span> The idea</p>
+    <h2>Most websites are brochures. Yours can be the machine.</h2>
+    <p class="lede">One build, three doors into the same system — so the
+      shop your customers see, the shelf you merchandise, and the books you
+      run are <b>never out of sync</b>, because there is nothing to sync.</p>
+    <div class="surfaces">
+      <div class="surface">
+        <p class="who">Your customers</p>
+        <p class="name">The storefront</p>
+        <p>Browse the four flavours, fall for the brand, and check out —
+           on any device, installable like an app.</p>
+      </div>
+      <div class="surface">
+        <p class="who">You, daily</p>
+        <p class="name">The store admin</p>
+        <p>Products, prices, photography, pages, promotions — edited by you,
+           no developer on the critical path.</p>
+      </div>
+      <div class="surface">
+        <p class="who">Your team</p>
+        <p class="name">The back office</p>
+        <p>Orders, inventory, staff, suppliers and the P&amp;L — the ERP/CRM
+           your operation actually runs on.</p>
+      </div>
+    </div>
+    <p class="one-bar">one database · one login · <b>one monthly bill</b> —
+       not seven subscriptions taped together</p>
+  </section>
+
+  <!-- 3 ─ proof: it's already running -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">03 ·</span> Already running</p>
+    <h2>This isn't a promise. Your prototype is live.</h2>
+    <p class="lede">The Zenjoy build already exists end to end: the hook film
+      cut to <b>"4 flavors, 1 calm"</b>, the carousel of the range and the
+      Calm Case, checkout with card or pay-on-delivery — and the same system
+      running the time clock, the suppliers and the P&amp;L behind it.</p>
+    <div class="stats">
+      <div class="stat"><div class="num m">3</div>
+        <div class="lbl">surfaces, one process</div></div>
+      <div class="stat"><div class="num m">22s</div>
+        <div class="lbl">hook film, cut to the voice</div></div>
+      <div class="stat"><div class="num m">825</div>
+        <div class="lbl">automated checks passing</div></div>
+      <div class="stat"><div class="num m">0</div>
+        <div class="lbl">required subscriptions</div></div>
+    </div>
+    <div class="swatches" aria-label="The Zenjoy flavour palette">
+      <span class="swatch" style="background:#e27e34"></span>
+      <span class="swatch" style="background:#b03064"></span>
+      <span class="swatch" style="background:#7466b0"></span>
+      <span class="swatch" style="background:#7a9e4c"></span>
+      <span class="cap">mango · passion fruit · lavender · honey —
+        every SKU wears its own pattern, film to shelf</span>
+    </div>
+    <p class="foot-note"><b>We'll walk through it live on this call</b> —
+      the demo is the pitch.</p>
+  </section>
+
+  <!-- 4 ─ storefront -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">04 ·</span> The storefront</p>
+    <h2>A front window that earns attention.</h2>
+    <div class="cols">
+      <div>
+        <h3>First impression</h3>
+        <ul class="feat">
+          <li><b>Hook film + product carousel</b> — <span class="why">the
+            range, swipeable, each flavour on its own tessellated
+            pattern</span></li>
+          <li><b>Design system, not a theme</b> — <span class="why">Zenjoy's
+            purple, patterns and voice everywhere, down to the
+            favicon</span></li>
+          <li><b>Editable page sections</b> — <span class="why">reorder the
+            homepage yourself in the visual editor</span></li>
+          <li><b>Journal, events, store locator</b> —
+            <span class="why">reasons to come back between orders</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Built to reach everyone</h3>
+        <ul class="feat">
+          <li><b>Accessibility menu</b> — <span class="why">text size,
+            contrast, motion — WCAG-minded from day one</span></li>
+          <li><b>Language, region &amp; currency</b> —
+            <span class="why">one shop, every audience</span></li>
+          <li><b>Search that understands typos</b> —
+            <span class="why">full-text, instant, whole catalog</span></li>
+          <li><b>SEO &amp; social cards</b> — <span class="why">structured
+            data, previews that look right when shared</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 ─ selling machinery -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">05 ·</span> The selling machinery</p>
+    <h2>Every step from "curious" to "paid" — handled.</h2>
+    <div class="cols">
+      <div>
+        <h3>Checkout that converts</h3>
+        <ul class="feat">
+          <li><b>Guest checkout</b> — <span class="why">no forced account,
+            no abandoned carts over a password</span></li>
+          <li><b>Card payments + pay-on-delivery</b> — <span class="why">with
+            an email-confirmation gate, so fake orders never count as
+            revenue</span></li>
+          <li><b>One code field</b> — <span class="why">discounts and gift
+            cards in the same box; the system works out which is
+            which</span></li>
+          <li><b>Free-shipping meter &amp; upsells</b> —
+            <span class="why">"you're $0.52 away" sells the next can</span></li>
+          <li><b>Subscriptions</b> — <span class="why">skip, pause or cancel —
+            kept, not trapped</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Growth built in</h3>
+        <ul class="feat">
+          <li><b>Affiliate links</b> — <span class="why">every influencer gets
+            a tracked link and a ledger</span></li>
+          <li><b>A/B testing</b> — <span class="why">headlines and offers
+            tested on real visitors, winners kept</span></li>
+          <li><b>Reviews with verified buyers</b> — <span class="why">social
+            proof you don't have to beg for</span></li>
+          <li><b>Promotions with countdowns</b> — <span class="why">drops
+            with real urgency</span></li>
+          <li><b>Analytics + click heatmap</b> — <span class="why">see where
+            attention actually goes — privacy-first, consent built
+            in</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 ─ the PWA case -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">06 ·</span> The app question</p>
+    <h2>It's an app too — without the app store.</h2>
+    <p class="lede">Zenjoy installs straight from the browser: an icon on the
+      home screen, full-screen, fast. That's a <b>progressive web app</b> —
+      one build that is both your website and your app.</p>
+    <div class="cols">
+      <div>
+        <h3>What customers get</h3>
+        <ul class="feat">
+          <li><b>Install in two taps</b> — <span class="why">from the shop
+            itself; no store listing, no review queue</span></li>
+          <li><b>Works on bad connections</b> — <span class="why">the shop
+            shell keeps working offline and mid-deploy</span></li>
+          <li><b>Push notifications</b> — <span class="why">drops and
+            restocks land on the lock screen</span></li>
+          <li><b>Always current</b> — <span class="why">no "please update
+            the app"; everyone is on the latest version</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>What the business gets</h3>
+        <ul class="feat">
+          <li><b>No 30% platform cut</b> — <span class="why">every sale is
+            yours; there is no store between you and the customer</span></li>
+          <li><b>One codebase</b> — <span class="why">a fraction of the cost
+            of separate iOS and Android builds, forever</span></li>
+          <li><b>Staff devices too</b> — <span class="why">the time clock and
+            back office install on any phone or tablet — QR badge
+            clock-in included</span></li>
+          <li><b>Ship daily</b> — <span class="why">a fix or a promo goes
+            live the moment it's ready, not after review</span></li>
+        </ul>
+      </div>
+    </div>
+    <p class="foot-note"><b>The quiet part:</b> the offline shell is tested —
+      including the case where a deploy lands mid-visit. Most PWAs break
+      exactly there.</p>
+  </section>
+
+  <!-- 7 ─ back office: the day -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">07 ·</span> The back office · ERP / CRM</p>
+    <h2>Run the day from one screen.</h2>
+    <div class="cols">
+      <div>
+        <h3>Orders &amp; stock</h3>
+        <ul class="feat">
+          <li><b>Order management</b> — <span class="why">statuses, customer
+            history, distributor case pricing</span></li>
+          <li><b>Inventory with low-stock alerts</b> — <span class="why">know
+            before you sell out, not after</span></li>
+          <li><b>Delivery routes</b> — <span class="why">plan the truck, not
+            just the order</span></li>
+          <li><b>Support hub</b> — <span class="why">chat, tickets and
+            call-backs land in the same queue</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>People &amp; paper</h3>
+        <ul class="feat">
+          <li><b>Time clock</b> — <span class="why">PIN or QR badge; PINs
+            stored hashed, admin resets</span></li>
+          <li><b>Document vault + e-signature</b> —
+            <span class="why">contracts signed and archived where the work
+            is</span></li>
+          <li><b>Audit log of every edit</b> — <span class="why">who changed
+            what, when — with retention rules</span></li>
+          <li><b>QR sign-in</b> — <span class="why">staff on shared devices
+            without shared passwords</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 ─ back office: the business -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">08 ·</span> The back office · finance &amp; supply</p>
+    <h2>Numbers you can steer by.</h2>
+    <div class="cols">
+      <div>
+        <h3>Supply chain</h3>
+        <ul class="feat">
+          <li><b>Sourcing &amp; suppliers</b> — <span class="why">purchase
+            orders, confirmations feeding receiving</span></li>
+          <li><b>Supplier portal</b> — <span class="why">vendors confirm
+            orders on a revocable link — no login to manage</span></li>
+          <li><b>Demand forecasting</b> — <span class="why">what to order
+            next, counting stock already on the way</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Real margins</h3>
+        <ul class="feat">
+          <li><b>Bill of materials → true COGS</b> — <span class="why">what a
+            can of Mango Black Tea actually costs, not a guess</span></li>
+          <li><b>P&amp;L fed by supply costs</b> — <span class="why">margin
+            per flavour, live</span></li>
+          <li><b>Your data, exportable</b> — <span class="why">database
+            viewer, one-click export and backups — never held
+            hostage</span></li>
+        </ul>
+      </div>
+    </div>
+    <p class="foot-note"><b>The quiet rule behind all of it:</b> revenue,
+      costs and history are derived from one set of records — so the shop,
+      the shelf and the books can't disagree.</p>
+  </section>
+
+  <!-- 9 ─ integrations -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">09 ·</span> Plays well with others</p>
+    <h2>Your tools stay. The copy-pasting goes.</h2>
+    <p class="lede">Connected, tested, two-way where it matters — with
+      live webhook sync, <b>not</b> a wall of logos that "integrate" in
+      name only.</p>
+    <div class="cols">
+      <div>
+        <h3>Where your team talks</h3>
+        <ul class="feat">
+          <li><b>Slack &amp; Discord</b> — <span class="why">orders and
+            enquiries in your channels; reply from either side</span></li>
+          <li><b>Email campaigns</b> — <span class="why">newsletters and
+            drips with one-click unsubscribe handled</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Where your work lives</h3>
+        <ul class="feat">
+          <li><b>QuickBooks</b> — <span class="why">sales land in the
+            books</span></li>
+          <li><b>Trello &amp; Pipedrive</b> — <span class="why">enquiries
+            become cards and deals, status flowing both ways</span></li>
+          <li><b>Dropbox</b> — <span class="why">documents filed, database
+            backed up offsite</span></li>
+          <li><b>Canva &amp; LaceUp</b> — <span class="why">designs and DSD
+            ordering, connected</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 ─ roadmap -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">10 ·</span> The roadmap</p>
+    <h2>Five phases. A gate you approve between each.</h2>
+    <div class="rail">
+      <div class="phase">
+        <p class="wk m">WK 1</p>
+        <p class="nm">Discover</p>
+        <ul><li>Goals &amp; audience</li><li>Content audit</li>
+            <li>Requirements doc</li></ul>
+        <p class="gate">you sign requirements</p>
+      </div>
+      <div class="phase">
+        <p class="wk m">WK 2–4</p>
+        <p class="nm">Design</p>
+        <ul><li>Brand application</li><li>Homepage direction</li>
+            <li>Design system</li></ul>
+        <p class="gate">feedback round 1</p>
+      </div>
+      <div class="phase">
+        <p class="wk m">WK 4–10</p>
+        <p class="nm">Build</p>
+        <ul><li>Storefront &amp; checkout</li><li>Back office</li>
+            <li>Content in</li></ul>
+        <p class="gate">feedback round 2</p>
+      </div>
+      <div class="phase">
+        <p class="wk m">WK 11–12</p>
+        <p class="nm">Launch</p>
+        <ul><li>Launch checklist</li><li>Training session</li>
+            <li>Handover pack</li></ul>
+        <p class="gate">you own the keys</p>
+      </div>
+      <div class="phase">
+        <p class="wk m">ONGOING</p>
+        <p class="nm">Grow</p>
+        <ul><li>Care plan</li><li>Updates &amp; backups</li>
+            <li>New features</li></ul>
+        <p class="gate">monthly, cancel any time</p>
+      </div>
+    </div>
+    <p class="foot-note">That's the from-scratch schedule. <b>Because your
+      prototype already exists, Design and Build start warm</b> — your dates
+      land earlier in the proposal. The gates don't move: nothing proceeds
+      without your sign-off, and anything new after sign-off is a written
+      change order.</p>
+  </section>
+
+  <!-- 11 ─ intake -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">11 ·</span> What we need from you</p>
+    <h2>Your part is smaller than you'd think — but it's real.</h2>
+    <div class="cols">
+      <div>
+        <h3>From Zenjoy</h3>
+        <ul class="check">
+          <li><b>Logo as a vector file</b> —
+            <span class="why">.ai / .svg — the #1 cause of delay</span></li>
+          <li><b>Final can photography</b> — <span class="why">largest
+            originals; we handle cutouts and sizing</span></li>
+          <li><b>The words</b> — <span class="why">your copy, or add
+            copywriting to the proposal</span></li>
+          <li><b>Domain access &amp; a Stripe account</b> —
+            <span class="why">payments go straight to you; we never touch
+            the money</span></li>
+          <li><b>One decision-maker, ~2 hrs a week</b> —
+            <span class="why">feedback from a committee is how timelines
+            die</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>From us: the kickoff pack</h3>
+        <ul class="pack">
+          <li><b>Welcome guide</b> — <span class="why">how the project runs,
+            who does what, when</span></li>
+          <li><b>Branding questionnaire</b> — <span class="why">pins the
+            voice and look before design starts</span></li>
+          <li><b>Technical questionnaire</b> — <span class="why">domains,
+            email, payments — asked once</span></li>
+          <li><b>Asset &amp; image checklist</b> — <span class="why">one
+            list, one due date, one upload link</span></li>
+          <li><b>Content planner</b> — <span class="why">every page's words,
+            tracked to done</span></li>
+        </ul>
+      </div>
+    </div>
+    <p class="foot-note">The paperwork is the painless kind: <b>we chase,
+      you answer.</b> Every form exists so a question gets asked once.</p>
+  </section>
+
+  <!-- 12 ─ investment -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">12 ·</span> The investment</p>
+    <h2>Three ways in. Same craft in all of them.</h2>
+    <div class="tiers">
+      <div class="tier">
+        <p class="tag">Option A</p>
+        <p class="nm">The Storefront</p>
+        <p class="pr m">[$X,XXX]</p>
+        <ul>
+          <li>Full storefront &amp; checkout</li>
+          <li>Store admin — edit it yourself</li>
+          <li>Installable app (PWA)</li>
+          <li>Training + 30 days support</li>
+        </ul>
+        <p class="eta m">[N] weeks</p>
+      </div>
+      <div class="tier pick">
+        <p class="tag">Option B · most chosen</p>
+        <p class="nm">The Whole Business</p>
+        <p class="pr m">[$XX,XXX]</p>
+        <ul>
+          <li>Everything in Option A</li>
+          <li>Back office: orders, inventory, staff</li>
+          <li>Supply chain &amp; real margins</li>
+          <li>Two integrations of your choice</li>
+          <li>The hook film on the homepage</li>
+        </ul>
+        <p class="eta m">[N] weeks</p>
+      </div>
+      <div class="tier">
+        <p class="tag">Option C</p>
+        <p class="nm">Business + Brand</p>
+        <p class="pr m">[$XX,XXX]</p>
+        <ul>
+          <li>Everything in Option B</li>
+          <li>Identity &amp; art direction</li>
+          <li>Campaign assets &amp; motion</li>
+          <li>All integrations connected</li>
+        </ul>
+        <p class="eta m">[N] weeks</p>
+      </div>
+    </div>
+    <p class="foot-note">Every option includes two feedback rounds, WCAG-minded
+      accessibility, analytics, SEO and a handover you own outright —
+      <b>your code, your data, your accounts</b>. Care plans from
+      [$XXX]/month after launch.</p>
+  </section>
+
+  <!-- 13 ─ next steps -->
+  <section class="slide">
+    <p class="eyebrow"><span class="n">13 ·</span> Next steps</p>
+    <h2>From this call to kickoff in a week.</h2>
+    <ol class="steps">
+      <li><div><b>Today</b> — <span class="why">tell me which option fits;
+        I'll answer anything this deck raised.</span></div></li>
+      <li><div><b>Within 3 days</b> — <span class="why">you receive the
+        written proposal with firm numbers and dates. Valid 14
+        days.</span></div></li>
+      <li><div><b>Signature + deposit</b> — <span class="why">books your
+        slot in the schedule. Nothing starts without both — that
+        protects us both.</span></div></li>
+      <li><div><b>Kickoff call</b> — <span class="why">you get the welcome
+        guide, the asset checklist, and a date for the first thing you'll
+        see.</span></div></li>
+    </ol>
+    <p class="contact">
+      <b>Tom Brumbaugh</b> · web &amp; commerce systems<br>
+      thomas.william.brumbaugh@gmail.com · [PHONE]<br>
+      [PORTFOLIO URL]
+    </p>
+  </section>
+
+</main>
+
+<div class="chrome">
+  <span class="counter m" id="counter">01 / 13</span>
+  <nav class="dots" id="dots" aria-label="Slides"></nav>
+  <div class="navbtns">
+    <button id="prev" aria-label="Previous slide">←</button>
+    <button id="next" aria-label="Next slide">→</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var slides = Array.prototype.slice.call(
+    document.querySelectorAll(".slide"));
+  var dots = document.getElementById("dots");
+  var counter = document.getElementById("counter");
+  var bar = document.getElementById("bar");
+  var at = 0;
+
+  slides.forEach(function (_, i) {
+    var d = document.createElement("button");
+    d.className = "dot";
+    d.setAttribute("aria-label", "Slide " + (i + 1));
+    d.addEventListener("click", function () { go(i); });
+    dots.appendChild(d);
+  });
+  var dotEls = Array.prototype.slice.call(dots.children);
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  function go(i) {
+    at = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach(function (s, k) { s.classList.toggle("on", k === at); });
+    dotEls.forEach(function (d, k) { d.classList.toggle("on", k === at); });
+    counter.textContent = pad(at + 1) + " / " + pad(slides.length);
+    bar.style.width = ((at + 1) / slides.length * 100) + "%";
+    if (location.hash !== "#" + (at + 1)) {
+      history.replaceState(null, "", "#" + (at + 1));
+    }
+  }
+
+  document.getElementById("prev").addEventListener("click", function () {
+    go(at - 1);
+  });
+  document.getElementById("next").addEventListener("click", function () {
+    go(at + 1);
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") {
+      e.preventDefault(); go(at + 1);
+    } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
+      e.preventDefault(); go(at - 1);
+    } else if (e.key === "Home") { e.preventDefault(); go(0);
+    } else if (e.key === "End") { e.preventDefault(); go(slides.length - 1); }
+  });
+
+  var x0 = null;
+  document.addEventListener("touchstart", function (e) {
+    x0 = e.touches[0].clientX;
+  }, { passive: true });
+  document.addEventListener("touchend", function (e) {
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0;
+    if (Math.abs(dx) > 48) go(at + (dx < 0 ? 1 : -1));
+    x0 = null;
+  }, { passive: true });
+
+  window.addEventListener("hashchange", function () {
+    var n = parseInt(location.hash.slice(1), 10);
+    if (n >= 1 && n <= slides.length) go(n - 1);
+  });
+
+  var start = parseInt(location.hash.slice(1), 10);
+  go(start >= 1 && start <= slides.length ? start - 1 : 0);
+})();
+</script>

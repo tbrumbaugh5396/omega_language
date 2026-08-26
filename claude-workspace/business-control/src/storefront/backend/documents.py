@@ -153,6 +153,98 @@ ALLOWED_EXT = {
 MAX_BYTES = 25 * 1024 * 1024
 
 
+# ---------- markdown, just enough ----------
+# Documents generated from the studio kit are markdown: headings, tables,
+# lists, bold. Rendering them as flat paragraphs turned a contract's terms
+# table into soup — and a signature attests to what the signer was SHOWN, so
+# the shown thing has to carry the document's actual structure. A subset is
+# deliberate: escape first, then recognise only what the kit uses.
+
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+|/[^)\s]*)\)")
+
+
+def _md_inline(text: str) -> str:
+    t = sect.esc(text)
+    t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
+    t = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", t)
+    t = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", t)
+    t = _MD_LINK.sub(r'<a href="\2" target="_blank" rel="noopener">\1</a>', t)
+    return t
+
+
+def _md_row(line: str) -> list:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def md_html(text: str) -> str:
+    out, para, lines = [], [], text.splitlines()
+    flush = lambda: (out.append(f"<p>{_md_inline(' '.join(para))}</p>"),
+                     para.clear()) if para else None
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        stripped = ln.strip()
+        if not stripped:
+            flush(); i += 1; continue
+        if re.match(r"^#{1,4} ", stripped):
+            flush()
+            depth = len(stripped) - len(stripped.lstrip("#"))
+            # the page already has an h1 (the document title), so shift down
+            out.append(f"<h{min(depth + 1, 5)}>"
+                       f"{_md_inline(stripped.lstrip('#').strip())}"
+                       f"</h{min(depth + 1, 5)}>")
+            i += 1; continue
+        if re.fullmatch(r"[-*_]{3,}", stripped):
+            flush(); out.append("<hr>"); i += 1; continue
+        if (stripped.startswith("|") and i + 1 < len(lines)
+                and re.fullmatch(r"\|[\s:|-]+\|?",
+                                 lines[i + 1].strip())):
+            flush()
+            head = _md_row(stripped)
+            rows, i = [], i + 2
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                rows.append(_md_row(lines[i])); i += 1
+            out.append("<table><thead><tr>"
+                       + "".join(f"<th>{_md_inline(h)}</th>" for h in head)
+                       + "</tr></thead><tbody>"
+                       + "".join("<tr>" + "".join(
+                           f"<td>{_md_inline(c)}</td>" for c in r) + "</tr>"
+                           for r in rows)
+                       + "</tbody></table>")
+            continue
+        if stripped.startswith(("- ", "* ")) or re.match(r"^\d+\. ", stripped):
+            flush()
+            ordered = bool(re.match(r"^\d+\. ", stripped))
+            items = []
+            while i < len(lines):
+                st = lines[i].strip()
+                if st.startswith(("- ", "* ")):
+                    items.append(st[2:])
+                elif re.match(r"^\d+\. ", st):
+                    items.append(re.sub(r"^\d+\. ", "", st))
+                elif st and not st.startswith(("#", "|", ">")):
+                    # a wrapped continuation line belongs to the last item
+                    items[-1] += " " + st
+                else:
+                    break
+                i += 1
+            tag = "ol" if ordered else "ul"
+            out.append(f"<{tag}>" + "".join(
+                f"<li>{_md_inline(x)}</li>" for x in items) + f"</{tag}>")
+            continue
+        if stripped.startswith(">"):
+            flush()
+            quote = []
+            while i < len(lines) and lines[i].strip().startswith(">"):
+                quote.append(lines[i].strip().lstrip(">").strip()); i += 1
+            out.append(f"<blockquote>{_md_inline(' '.join(quote))}"
+                       f"</blockquote>")
+            continue
+        para.append(stripped); i += 1
+    flush()
+    return "".join(out)
+
+
 def init_tables(con):
     con.executescript(TABLES)
     DOC_DIR.mkdir(parents=True, exist_ok=True)
@@ -364,7 +456,12 @@ def delete_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
     except Exception:
         pass                # a missing file must not block the delete
     con.execute("DELETE FROM document_signatures WHERE document_id=?", (did,))
-    con.execute("DELETE FROM document_log WHERE document_id=?", (did,))
+    con.execute("DELETE FROM document_events WHERE document_id=?", (did,))
+    # An engagement link left behind would point at nothing and count wrong,
+    # and a gate resting on the deleted doc would silently reopen anyway —
+    # unlink it so the reopening is visible in the gate row, not a mystery.
+    con.execute("DELETE FROM engagement_docs WHERE doc_id=?", (did,))
+    con.execute("UPDATE engagement_gates SET doc_id=0 WHERE doc_id=?", (did,))
     con.execute("DELETE FROM documents WHERE id=?", (did,))
     con.commit()
     return {"ok": True, "archived": False}
@@ -501,9 +598,7 @@ def signing_page(token: str, request: Request, con=Depends(get_con),
     declined = s["status"] == "declined"
     body_html = ""
     if (d["body"] or "").strip():
-        paras = "".join(f"<p>{sect.esc(p)}</p>"
-                        for p in d["body"].split("\n\n") if p.strip())
-        body_html = f'<div class="doc-body">{paras}</div>'
+        body_html = f'<div class="doc-body">{md_html(d["body"])}</div>'
     elif d["ext"] == "pdf":
         body_html = (f'<iframe class="doc-frame" src="/sign/{token}/file"'
                      f' title="{sect.esc(d["title"])}"></iframe>')

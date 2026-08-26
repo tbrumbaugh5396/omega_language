@@ -13,8 +13,19 @@ external services — everything lives in this folder.
 1. Double-click **`command_utilities/Install Business Control.command`**
    (builds a private `.venv`, creates + seeds the database, prints your
    **admin key**).
-2. Double-click **`command_utilities/Start Business Control.command`** —
-   opens http://127.0.0.1:8860.
+2. Double-click **`command_utilities/Start Business Control.command`** — the
+   one thing you need to start. All three surfaces are the same server on the
+   same port, and it opens a tab on each once the server is actually
+   answering:
+
+   | Surface | URL |
+   |---|---|
+   | Storefront | http://127.0.0.1:8860/ |
+   | ERP / CRM | http://127.0.0.1:8860/ops/ |
+   | Store admin | http://127.0.0.1:8860/admin |
+
+   Double-clicking again while it is running raises the tabs instead of
+   fighting for the port. `BC_NO_OPEN=1` starts it without opening anything.
 3. Sign in with any name and paste the admin key to unlock the admin tabs.
    The admin key is also in `data/config.json`.
 
@@ -46,7 +57,7 @@ data/             SQLite DB + config.json (created at install; gitignored-ish)
 ```
 
 Full guide to accounts, roles (including founders/owners), sign-in, and the
-admin view: **[docs/USERS.md](docs/USERS.md)**.
+admin view: **[docs/USERS.md](docs/product/USERS.md)**.
 
 ## Who sees what
 
@@ -156,7 +167,7 @@ admin view: **[docs/USERS.md](docs/USERS.md)**.
 - **Backups** — `Back Up Data.command` snapshots the DB (WAL-safe) + config +
   keys into `data/backups/` (30 kept); `Restore Data.command` restores the
   newest, keeping the current state aside.
-- **Going public** — see `docs/DEPLOY.md` (VPS + Caddy TLS + systemd);
+- **Going public** — see `docs/product/DEPLOY.md` (VPS + Caddy TLS + systemd);
   `public_base_url` in config flips every QR, sign-in link, email, and Stripe
   return to the public domain.
 
