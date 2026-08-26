@@ -462,7 +462,8 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"color:#5d5768;margin:10px 0}}"
         f"@media print{{body{{padding:0}}}}"
         f"</style></head><body><h1>{sect.esc(d['title'])}</h1>"
-        f"{md_html(d['body'])}</body></html>")
+        f"{md_html(d['body'])}"
+        f"{signatures_html(signed_rows(con, did))}</body></html>")
 
 
 def signed_rows(con, doc_id: int) -> list:
@@ -472,6 +473,41 @@ def signed_rows(con, doc_id: int) -> list:
         " typed_name, signature_data, token, doc_sha256, provider"
         " FROM document_signatures WHERE document_id=? AND status='signed'"
         " ORDER BY signed_at", (doc_id,)).fetchall()]
+
+
+def signatures_html(sigs: list) -> str:
+    """The signature block, for every HTML surface a document renders on —
+    the preview, the portal, the signed page. The same facts the PDF prints,
+    so no surface shows a signed document looking unsigned."""
+    if not sigs:
+        return ""
+    rows = []
+    for s in sigs:
+        drawn = (s.get("signature_data") or "")
+        mark = (f'<img src="{drawn}" alt="signature" style="max-width:220px;'
+                f'display:block">' if drawn.startswith("data:image/png;base64,")
+                else f'<div style="font-style:italic;font-size:22px">'
+                     f'{sect.esc(s.get("typed_name") or s.get("signer_name"))}'
+                     f'</div>')
+        when = s.get("signed_at") or 0
+        line = f'{sect.esc(s.get("signer_email", ""))} · '                f'{sect.esc(s.get("role", "signer"))}'
+        if when:
+            line += " · signed " + time.strftime(
+                "%d %b %Y %H:%M UTC", time.gmtime(when))
+        if s.get("provider") and s.get("provider") != "builtin":
+            line += f' · via {sect.esc(s["provider"])}'
+        ref = sect.esc((s.get("token") or "")[:12])
+        sha = sect.esc((s.get("doc_sha256") or "")[:16])
+        rows.append(
+            f'<div style="margin:14px 0">{mark}'
+            f'<b>{sect.esc(s.get("signer_name", ""))}</b><br>'
+            f'<span style="color:#5d5768;font-size:13px">{line}</span>'
+            + (f'<br><span style="color:#8b8496;font-size:12px">reference '
+               f'{ref}' + (f' · document sha256 {sha}…' if sha else "")
+               + "</span>" if ref or sha else "") + "</div>")
+    return ('<hr style="margin:28px 0;border:0;border-top:1px solid #e9e4dc">'
+            '<h3 style="font-family:\'Fraunces\',Georgia,serif">Signed</h3>'
+            + "".join(rows))
 
 
 def _pdf_response(d, inline: bool = True, sigs: list | None = None):
@@ -759,7 +795,8 @@ def signing_page(token: str, request: Request, con=Depends(get_con),
     declined = s["status"] == "declined"
     body_html = ""
     if (d["body"] or "").strip():
-        body_html = f'<div class="doc-body">{md_html(d["body"])}</div>'
+        body_html = (f'<div class="doc-body">{md_html(d["body"])}'
+                     f'{signatures_html(signed_rows(con, d["id"]))}</div>')
     elif d["ext"] == "pdf":
         body_html = (f'<iframe class="doc-frame" src="/sign/{token}/file"'
                      f' title="{sect.esc(d["title"])}"></iframe>')

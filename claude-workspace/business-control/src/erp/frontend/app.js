@@ -5023,7 +5023,9 @@ async function renderEngagement(id) {
           shorter each time">Fill blanks (${x.blanks})</button>` : ""}
       <button class="btn alt sm" data-engview="${x.id}"
         data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
-        title="opens the PDF — exactly what a signer will be shown">View</button>
+        data-signed="${x.signed || 0}"
+        title="opens the document — signatures shown on it, PDF one click
+        away">View</button>
       <button class="btn alt sm" data-engdl="${x.id}"
         data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
         data-name="${esc(x.filename || x.title)}">PDF</button>
@@ -5317,16 +5319,20 @@ async function renderEngagement(id) {
       const pdfBlob = isPdfable ? await authBlob(path) : null;
       const pdfUrl = pdfBlob ? URL.createObjectURL(
         new Blob([pdfBlob], { type: "application/pdf" })) : frameUrl;
-      modal(`<h3>${esc(name)}</h3>
+      const signed = +b.dataset.signed > 0;
+      modal(`<h3>${esc(name)}${signed
+          ? ' <span class="pill ok">signed</span>' : ""}</h3>
         <iframe class="doc-viewer" src="${frameUrl}"
           title="${esc(name)}"></iframe>
         <div class="modal-foot" style="margin-top:10px">
-          <a class="btn alt" href="${pdfUrl}"
-             download="${esc(name)}${isPdfable ? ".pdf" : ""}">Download
-             ${isPdfable ? "PDF" : ""}</a>
+          <a class="btn" href="${pdfUrl}"
+             download="${esc(name)}${isPdfable ? ".pdf" : ""}"
+             title="the PDF carries the document and every signature on it —
+             mark, name, date, reference and fingerprint">Download
+             ${signed ? "signed " : ""}${isPdfable ? "PDF" : ""}</a>
           <a class="btn alt" href="${pdfUrl}" target="_blank"
              rel="noopener">Open ${isPdfable ? "PDF" : ""} in tab</a>
-          <button class="btn" data-close>Close</button>
+          <button class="btn alt" data-close>Close</button>
         </div>`, "wide");
     } catch (err) { toast(err.message); }
   });

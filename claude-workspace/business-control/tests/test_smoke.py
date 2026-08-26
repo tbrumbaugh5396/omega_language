@@ -3756,6 +3756,25 @@ c.post(f"/sign/{_ipt}", json={"typed_name": "Here Now"})
 ok(c.get(f"/sign/{_ipt}").text.count("Signed") >= 1,
    "signed in the room, recorded like any other signature")
 
+# The drawn mark and the facts, on every surface the document shows on.
+import base64 as _b64
+import io as _io2
+from PIL import Image as _Im, ImageDraw as _ImD
+_im = _Im.new("RGBA", (600, 160), (0, 0, 0, 0))
+_ImD.Draw(_im).line([(60, 110), (320, 40), (540, 100)],
+                    fill=(25, 25, 80, 255), width=7)
+_ib = _io2.BytesIO(); _im.save(_ib, "PNG")
+_mark = "data:image/png;base64," + _b64.b64encode(_ib.getvalue()).decode()
+c.post(f"/sign/{_ipt}/decline", json={})  # no-op guard: already signed above
+_pv2 = c.get(f"/api/store/admin/documents/{_g3['doc_id']}/preview",
+             headers=A).text
+ok(">Signed<" in _pv2 and "Here Now" in _pv2,
+   "the View page shows the signature block — a signed document must never "
+   "look unsigned exactly where you look at it")
+_sp2 = c.get(f"/sign/{_ipt}").text
+ok(">Signed<" in _sp2,
+   "and the signer's own page carries it after signing")
+
 _un = c.request("DELETE",
                 f"/api/store/admin/engagements/{_eid}/docs/{_g3['doc_id']}",
                 headers=A)

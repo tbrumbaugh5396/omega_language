@@ -1348,12 +1348,14 @@ def portal_doc(token: str, did: int, con=Depends(get_con),
             raise HTTPException(404, "file missing from storage")
         return FileResponse(p, media_type=vault.ALLOWED_EXT.get(
             row["ext"], "application/octet-stream"))
+    sigs = vault.signed_rows(con, row["id"])
     inner = (f"<p><a href=\"/engage/{token}\">← back to the roadmap</a>"
              f"<a class=\"btn\" style=\"float:right\""
-             f" href=\"/engage/{token}/pdf/{did}\">Download PDF</a></p>"
+             f" href=\"/engage/{token}/pdf/{did}\">Download "
+             f"{'signed ' if sigs else ''}PDF</a></p>"
              f"<h1>{sect.esc(row['title'])}</h1>"
              f"<div class=\"card doc-body\">{vault.md_html(row['body'])}"
-             f"</div>")
+             f"{vault.signatures_html(sigs)}</div>")
     return HTMLResponse(_portal_shell(row["title"], inner))
 
 
