@@ -3180,6 +3180,66 @@ measured; the setae are lit as if they were membrane rather than solid chitin;
 and the lattice still has one cell size per band where a real wing's grade
 along their length as well as across.
 
+### Phase 43 — A leaf, and what generalises *(L)* — **shipped**
+
+Three leftovers, and an answer to "does this generalise?"
+
+**It generalises, but only half of it does, and the half is the interesting
+part.**
+
+The *structure* carries over entirely. A leaf is the same object as an insect
+wing seen from further away: a thin translucent sheet held on a net of veins
+with compartments between them that a Voronoi diagram draws. The new preset
+shares the two-pass border metric, the colour matching functions, the Planck
+illuminant and the Bradford adaptation — checked as source, character for
+character, in both directions, so neither can drift from the other.
+
+The *optics* do not carry over at all. A wing is coloured by interference in a
+film half a micron thick: the two reflections stay in step across it, so they
+can cancel. A leaf is two hundred microns — five hundred wavelengths — and
+nothing stays in step across that, so every fringe averages away and there is
+no structural colour to have. A leaf is coloured by **absorption**.
+
+**And the green is a hole, not a pigment.** Chlorophyll a takes the blue at
+430 nm and the red at 662; chlorophyll b sits beside it; the carotenoids are a
+broad blue band. Measured: absorption **23.4 at 430 nm and 17.3 at 662,
+against 0.14 at 550** — the green window is **170× clearer** than the bands
+either side of it. That hole is the only reason a leaf is green, and nothing
+in the sketch is told to be.
+
+The hue is therefore a consequence rather than a choice: **111°** with the
+chlorophyll in, **40°** with it gone and the carotenoids left, **342°** with
+anthocyanin instead. A summer, an autumn and a red maple out of one integral
+and three numbers.
+
+**Kubelka and Munk, 1931**, for the slab: a leaf is not a window and not a
+mirror but a scattering medium with absorbers in it, light going both ways at
+once. Two coupled fluxes, closed form, and it keeps the books — R + T never
+exceeds 0.93.
+
+**Two errors worth keeping.** The first chlorophyll red band was drawn 14 nm
+wide, which left 600–640 nm almost clear, so the red channel came back nearly
+full and the leaf read **yellow-green at hue 64°**. The real Q band is broad
+and has a vibronic shoulder below it; with both, the hue moved to 111°. And
+scattering went in at s·d = 22, which is **paper**: 96% reflected and 4%
+through even where nothing absorbs. A real leaf passes ten or twenty per cent
+of the green it does not absorb, so it is now 5.
+
+**The wing's three leftovers.** The Urbach amplitude is now α at the band edge
+in reciprocal micrometres — still unmeasured, but a quantity a paper would
+quote rather than a bare number, which is the difference between unmeasured
+and meaningless. The setae are shaded as solid chitin and *replace* what they
+cover instead of being added over it, with a highlight that goes as the root
+of the lobe because a cylinder gives a line and not a point. And the cells
+grade along their length as well as across: two exponents rather than one, so
+a cell near the base is a long slot and one near the tip is nearly square.
+
+*Left:* the leaf's pigment spectra are Gaussians at literature peak positions
+with approximate widths, where PROSPECT would use tabulated specific
+absorption coefficients; the venation is one order of secondaries where a real
+leaf has three or four nested; and there is no specular sheen difference
+between the upper and lower surface, which is most of how you tell them apart.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -3263,6 +3323,7 @@ along their length as well as across.
 | 40.1 | Insect wing, spectrally integrated — **shipped** | M | — | 3 samples wrong by 130.7/255; 24 by 1.0; fringes within 14.8 nm |
 | 41.1 | Lamp, transmission, setae, ranks — **shipped** | M | 40.1 | mirror neutral at any K; 1−T matches R 97%; setae spread 0.55 |
 | 42.1 | Urbach, adaptation knob, clarity, scale — **shipped** | M | 41.1 | room 149,112,63 warm vs 99,125,180 cool unadapted; scale exact |
+| 43.1 | A leaf, sharing the net not the optics — **shipped** | L | 42.1 | green window 170× clearer; hue 111°/40°/342°; R+T ≤ 0.93 |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

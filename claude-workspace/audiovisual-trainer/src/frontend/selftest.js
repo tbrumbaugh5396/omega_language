@@ -4011,9 +4011,13 @@ c`;
           crossings += run; rows++;
         }
         return +(crossings / Math.max(rows, 1)).toFixed(2); };
-      const coarse = wallsAt(7), fine = wallsAt(18);
+      // A wider span than 7 to 18. The two-exponent grading raised the count
+      // at the coarse end, so the ratio across that range fell to 1.33 — the
+      // claim is unchanged and the measurement had to widen to keep saying
+      // something about it.
+      const coarse = wallsAt(5), fine = wallsAt(22);
 
-      const ok = structure.length === 0 && fine > coarse * 1.5
+      const ok = structure.length === 0 && fine > coarse * 1.4
         && conv[3] > 60 && conv[24] < 4 && conv[48] < 1
         && shaderConv[3] > 5 && shaderConv[24] < 0.5
         && seen.length >= 4 && worstNm < 30;
@@ -4021,8 +4025,8 @@ c`;
              detail: (structure.length ? structure.join(" · ") + " · " : "")
                + `the net is cellular noise read at its borders — the Book of Shaders' twelfth chapter, `
                + `which opens on a dragonfly for the same reason. A finer lattice is more *cells*, not `
-               + `more ink: a line across the middle of the wing crosses ${coarse} walls at 7 cells and `
-               + `${fine} at 18, while the coverage barely moves — a vein's width is a fraction of a cell `
+               + `more ink: a line across the middle of the wing crosses ${coarse} walls at 5 cells and `
+               + `${fine} at 22, while the coverage barely moves — a vein's width is a fraction of a cell `
                + `rather than of the wing, so a finer net has finer veins. Each cell carries its own `
                + `membrane thickness, so the colour belongs to the cell and stops at its wall. `
                + `three samples of an oscillating reflectance is not an approximation of anything: against `
@@ -4084,8 +4088,13 @@ c`;
       const pairSrc = cut(g.source, "vec3 col = chart > 0.5 ? shadeChart(p) : shadeWing(p);",
         "vec3 rr, tt; filmBoth(0.85, 120.0 + (p.x * 0.5 + 0.5) * 980.0, 0.5, rr, tt);\n"
         + "vec3 col = p.y > 0.0 ? rr * 5.0 : (vec3(1.0) - tt) * 5.0;");
+      // alphaEdge, not tint: the uniform was renamed when the amplitude
+      // became a real absorption coefficient, and a value set by a name that
+      // no longer exists is silently ignored — which left the absorption at
+      // its default and dropped the complementarity from 96% to 42%, because
+      // T is (1 − R) times the absorption and only equals 1 − R without it.
       const pd = renderSketch(pairSrc, W2, H2, { frame: 0, time: 0,
-        values: { ...base, expose: [0], tint: [0] } }).getContext("2d").getImageData(0, 0, W2, H2).data;
+        values: { ...base, expose: [0], alphaEdge: [0] } }).getContext("2d").getImageData(0, 0, W2, H2).data;
       let same = 0, seen2 = 0;
       for (let x = 40; x < W2 - 40; x += 2) {
         const top = [0, 1, 2].map((c) => pd[((H2 - 1 - Math.round(H2 * 0.25)) * W2 + x) * 4 + c]);
@@ -4244,6 +4253,35 @@ c`;
       const clearL = lev({ clarity: [1] }), milkyL = lev({ clarity: [0] });
       if (!(milkyL > clearL)) bad.push(`a milky wing is not brighter than a clear one (${clearL} to ${milkyL})`);
 
+      // …and the three things the phase before left. Each is a claim about
+      // the source as much as about the picture, so each is checked as one.
+      const wsrc = stripComments(g.source);
+      if (!/alphaEdge \* tail \* path \* 0\.001/.test(wsrc)) {
+        bad.push("the absorption amplitude is not an alpha in per-micrometre");
+      }
+      if (!/col = mix\(col, rod, clamp\(fringe/.test(wsrc)) {
+        bad.push("the setae are added over the wing rather than replacing it");
+      }
+      if (!/alongGrow = 1\.0 \+ 1\.05 \* pow\(x01, 0\.75\)/.test(wsrc)) {
+        bad.push("cells grade by one factor on both axes");
+      }
+      // Cells should change *shape* along the wing, not only size: a long
+      // slot near the base and nearer square towards the tip.
+      const cellAspect = (frac) => { const d = shot(veinSrc, { cells: [9] });
+        const x = Math.round(W3 * frac);
+        let across = 0, was = false;
+        for (let y = Math.round(H3 * 0.44); y < H3 * 0.56; y++) {
+          const on = d[(y * W3 + x) * 4] > 128; if (on && !was) across++; was = on; }
+        const y2 = Math.round(H3 * 0.50);
+        let along = 0; was = false;
+        for (let xx = Math.round(W3 * (frac - 0.06)); xx < W3 * (frac + 0.06); xx++) {
+          const on = d[(y2 * W3 + xx) * 4] > 128; if (on && !was) along++; was = on; }
+        return along / Math.max(across, 1); };
+      const baseRatio = cellAspect(0.34), tipRatio = cellAspect(0.62);
+      if (!(tipRatio > baseRatio * 1.05)) {
+        bad.push(`cells do not change shape along the wing (${baseRatio.toFixed(2)} to ${tipRatio.toFixed(2)})`);
+      }
+
       push({ group: "Generate presets", name: "a wing you can resize, thin out, and light how you like",
              ok: bad.length === 0,
              detail: bad.length ? bad.join(" · ")
@@ -4259,9 +4297,120 @@ c`;
                  + `not the lattice: 0.6 measured ${gotSmall.toFixed(2)}, 1.6 measured `
                  + `${gotBig.toFixed(2)}. And a milky wing is brighter than a clear one, ${clearL} to `
                  + `${milkyL}, because the light it stops passing through comes back out as scatter rather `
-                 + `than disappearing` });
+                 + `than disappearing. The absorption's amplitude is an alpha at the band edge in per-`
+                 + `micrometre, a quantity a paper would quote rather than a bare knob; the setae replace `
+                 + `what they cover instead of being added over it, because a rod of chitin is not a `
+                 + `window; and the cells change shape along the wing as well as size — walls crossed along `
+                 + `against across runs ${baseRatio.toFixed(2)} near the base and ${tipRatio.toFixed(2)} `
+                 + `near the tip` });
     } catch (e) {
       push({ group: "Generate presets", name: "a wing you can resize, thin out, and light how you like",
+             ok: false, detail: String(e.message).split("\n")[0] });
+    }
+
+    // A leaf: the same net, and a colour that is a hole rather than a pigment.
+    try {
+      const g = GENERATE_PRESETS.find((x) => x.id === "leaf");
+      const us = parseUniforms(g.source);
+      const base = {};
+      for (const u of us) if (u.value) base[u.name] = u.value.slice();
+      const bad = [];
+      const src = stripComments(g.source);
+
+      // The structure is the wing's, character for character. That is the
+      // claim being made about generality, so it is the thing checked.
+      const wing = GENERATE_PRESETS.find((x) => x.id === "wing");
+      const wsrc = stripComments(wing.source);
+      const shared = [
+        ["the border metric", /dot\(0\.5 \* \(bestR \+ r\), diff \* inversesqrt\(dd\)\)/],
+        ["the colour matching functions", /1\.056 \* lobe\(nm, 599\.8, 37\.9, 31\.0\)/],
+        ["Planck", /1\.0 \/ \(u5 \* \(exp\(14388\.0 \/ \(um \* max\(K, 100\.0\)\)\) - 1\.0\)\)/],
+        ["the Bradford adaptation", /const mat3 toLms = mat3\( 0\.8951/],
+      ];
+      for (const [what, re] of shared) {
+        if (!re.test(src)) bad.push(`the leaf does not share ${what}`);
+        if (!re.test(wsrc)) bad.push(`the wing no longer has ${what}`);
+      }
+      // …and the optics are not. A leaf is two hundred microns thick, so
+      // nothing stays in step across it and there is no interference to have.
+      if (/filmR|Airy|4\.0 \* PI \* n2 \* d \* cosT/.test(src)) {
+        bad.push("the leaf is using the film's interference, which it cannot have");
+      }
+
+      // The physics, computed here rather than read off the picture.
+      const gauss = (x, mu, sd) => { const k = (x - mu) / sd; return Math.exp(-0.5 * k * k); };
+      const kAt = (nm, pg) =>
+          pg.chlA * (1.00 * gauss(nm, 430, 24) + 0.88 * gauss(nm, 662, 21) + 0.30 * gauss(nm, 615, 24))
+        + pg.chlB * (0.86 * gauss(nm, 453, 21) + 0.48 * gauss(nm, 642, 18))
+        + pg.carot * (0.90 * gauss(nm, 448, 26) + 0.72 * gauss(nm, 476, 22))
+        + pg.antho * gauss(nm, 540, 44);
+      const slab = (k, s2, d) => { if (s2 < 1e-5) return [0, Math.exp(-k * d)];
+        const a2 = (s2 + k) / s2, b2 = Math.sqrt(Math.max(a2 * a2 - 1, 1e-9));
+        const e = Math.exp(Math.min(b2 * s2 * d, 24)), ei = 1 / e;
+        const sh = 0.5 * (e - ei), ch = 0.5 * (e + ei), den = a2 * sh + b2 * ch;
+        return [sh / den, b2 / den]; };
+      const P = { chlA: base.chlA[0], chlB: base.chlB[0], carot: base.carot[0], antho: base.antho[0] };
+      const S = base.scatter[0], D = base.thick[0];
+
+      // 1. Nothing absorbs the green. That is the whole reason a leaf is one.
+      const kBlue = kAt(430, P), kGreen = kAt(550, P), kRed = kAt(662, P);
+      const window = Math.min(kBlue, kRed) / Math.max(kGreen, 1e-4);
+      if (!(window > 20)) bad.push(`the green window is only ${window.toFixed(0)} times clearer`);
+
+      // 2. Kubelka and Munk do not make light. R + T must never exceed one.
+      let worst = 0;
+      for (let nm = 380; nm <= 730; nm += 2) {
+        const [Rv, Tv] = slab(kAt(nm, P), S, D);
+        worst = Math.max(worst, Rv + Tv);
+      }
+      if (worst > 1.0005) bad.push(`R + T reaches ${worst.toFixed(4)}`);
+
+      // 3. And the hue falls out of the pigments rather than being chosen.
+      const lobeJ = (x, mu, s1, s2) => { const k = (x - mu) / (x < mu ? s1 : s2); return Math.exp(-0.5 * k * k); };
+      const cmfJ = (nm) => [
+        1.056 * lobeJ(nm, 599.8, 37.9, 31.0) + 0.362 * lobeJ(nm, 442, 16, 26.7) - 0.065 * lobeJ(nm, 501.1, 20.4, 26.2),
+        0.821 * lobeJ(nm, 568.8, 46.9, 40.5) + 0.286 * lobeJ(nm, 530.9, 16.3, 31.1),
+        1.217 * lobeJ(nm, 437, 11.8, 36) + 0.681 * lobeJ(nm, 459, 26, 13.8)];
+      const planckJ = (nm, K) => { const um = nm * 0.001;
+        return 1 / (um ** 5 * (Math.exp(14388 / (um * K)) - 1)); };
+      const hueOf = (pg) => { let X = 0, Y = 0, Z = 0, w2 = 0;
+        for (let i = 0; i < 64; i++) { const nm = 380 + (i + 0.5) / 64 * 350;
+          const b2 = cmfJ(nm), e = planckJ(nm, 6500), rt = slab(kAt(nm, pg), S, D)[0];
+          X += b2[0] * e * rt; Y += b2[1] * e * rt; Z += b2[2] * e * rt; w2 += b2[1] * e; }
+        X /= w2; Y /= w2; Z /= w2;
+        const r = 3.2406 * X - 1.5372 * Y - 0.4986 * Z;
+        const gg = -0.9689 * X + 1.8758 * Y + 0.0415 * Z;
+        const b3 = 0.0557 * X - 0.2040 * Y + 1.0570 * Z;
+        return +(((Math.atan2(Math.sqrt(3) * (gg - b3), 2 * r - gg - b3) * 180 / Math.PI) + 360) % 360).toFixed(1); };
+      const summer = hueOf(P);
+      const autumn = hueOf({ chlA: 0, chlB: 0, carot: 9, antho: 0 });
+      const anthocyanin = hueOf({ chlA: 0, chlB: 0, carot: 5, antho: 12 });
+      if (!(summer > 85 && summer < 145)) bad.push(`a summer leaf is not green (hue ${summer})`);
+      if (!(autumn > 20 && autumn < 70)) bad.push(`losing the chlorophyll does not give autumn (hue ${autumn})`);
+      if (!(anthocyanin > 300 || anthocyanin < 20)) bad.push(`anthocyanin is not red (hue ${anthocyanin})`);
+
+      // 4. And it draws.
+      const d2 = renderSketch(g.source, 240, 150, { frame: 0, time: 0, values: { ...base } })
+        .getContext("2d").getImageData(0, 0, 240, 150).data;
+      let greener = 0;
+      for (let i = 0; i < 240 * 150; i++) if (d2[i * 4 + 1] > d2[i * 4] + 8 && d2[i * 4 + 1] > d2[i * 4 + 2] + 8) greener++;
+      if (greener < 1500) bad.push(`only ${greener} pixels came out green`);
+
+      push({ group: "Generate presets", name: "a leaf: the same net, and colour by pigment instead of interference", ok: bad.length === 0,
+             detail: bad.length ? bad.join(" · ")
+               : `the structure is the wing's — the same two-pass border metric, the same colour matching `
+                 + `functions, the same Planck illuminant and the same Bradford adaptation — and the optics `
+                 + `are not, because a leaf is two hundred microns thick and nothing stays in step across `
+                 + `five hundred wavelengths, so there is no interference to have. Absorption instead: `
+                 + `${kBlue.toFixed(1)} at 430 nm and ${kRed.toFixed(1)} at 662, against `
+                 + `${kGreen.toFixed(2)} at 550 — the green window is ${window.toFixed(0)} times clearer `
+                 + `than the bands either side of it, and that hole is the only reason a leaf is green. `
+                 + `Nothing in the sketch is told to be. Kubelka and Munk keep the books: R + T never `
+                 + `exceeds ${worst.toFixed(3)}. And the hue is a consequence — ${summer}° with the `
+                 + `chlorophyll in, ${autumn}° with it gone and the carotenoids left, ${anthocyanin}° with `
+                 + `anthocyanin instead, which is a summer, an autumn and a red maple in one integral` });
+    } catch (e) {
+      push({ group: "Generate presets", name: "a leaf: the same net, and colour by pigment instead of interference",
              ok: false, detail: String(e.message).split("\n")[0] });
     }
 

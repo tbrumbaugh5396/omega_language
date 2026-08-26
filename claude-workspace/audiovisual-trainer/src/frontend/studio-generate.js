@@ -1179,7 +1179,7 @@ uniform float thickness;  // @range 150 900 @default 430 @help the membrane, in 
 uniform float thickVary;  // @range 0 1 @default 0.55 @help how much it wanders across the wing
 uniform float nFilm;      // @range 1.2 2.2 @default 1.56 @help chitin's refractive index
 uniform float kelvin;     // @range 1800 12000 @step 50 @default 6500 @help the light it is seen under
-uniform float tint;       // @range 0 1.5 @default 0.6 @help how much the chitin absorbs
+uniform float alphaEdge;  // @range 0 60 @default 22 @help absorption at the band edge, per micrometre
 uniform float urbach;     // @range 0.2 0.9 @default 0.45 @help the absorption tail's width, in eV
 uniform float adapt;      // @range 0 1 @default 1 @help how far the eye is adapted to the lamp
 uniform float clarity;    // @range 0 1 @default 0.93 @help how much light gets through unscattered
@@ -1259,6 +1259,12 @@ float planck(float nm, float K) {
 /**
  * Beer-Lambert through the membrane, with an Urbach edge.
  *
+ * The amplitude is still not measured, but it is no longer a bare number
+ * between nought and one and a half. It is alpha at the band edge, in
+ * reciprocal micrometres — a quantity a material has, that a paper would
+ * quote, and that somebody can look up and disagree with. That is the
+ * difference between an unmeasured parameter and a meaningless one.
+ *
  * The first version was an exponential in *wavelength* picked to look right.
  * This one has a reason. Chitin is a disordered organic solid, and disordered
  * solids do not have a clean absorption edge — they have an exponential tail
@@ -1280,7 +1286,9 @@ float planck(float nm, float K) {
 float absorb(float nm, float path) {
   float eV = 1239.84 / nm;                           // hc/e, in eV nanometres
   float tail = exp(-(4.4 - eV) / max(urbach, 0.05));
-  return exp(-tint * 0.006 * tail * path);
+  // alphaEdge is per micrometre and the path is in nanometres, so the
+  // thousandth is the unit conversion and not a fudge.
+  return exp(-alphaEdge * tail * path * 0.001);
 }
 
 // ------------------------------------------------------------- the observer
@@ -1513,8 +1521,15 @@ vec2 latticeOf(vec2 q, float e) {
   // saying "this many cells along and this many across" is the description
   // that survives changing either; a single density divided by a stretch put
   // more cells across the wing than along it, which is a wing nothing has.
-  float grow = 1.0 + 0.55 * clamp(q.x, 0.0, 1.0);    // finer towards the tip
-  float nAlong = cells * max(stretch, 0.1) * grow;
+  // Two gradings, not one. The compartments of a real wing get shorter
+  // towards the tip faster than they get narrower, so a cell near the base is
+  // a long slot and one near the tip is nearly square — the aspect changes
+  // along the wing, and one factor for both axes could not say that.
+  // Different exponents are the whole of it.
+  float x01 = clamp(q.x, 0.0, 1.0);
+  float alongGrow = 1.0 + 1.05 * pow(x01, 0.75);
+  float grow = 1.0 + 0.35 * x01;                     // rows crowd more slowly
+  float nAlong = cells * max(stretch, 0.1) * alongGrow;
   // …and across, in bands. Five bands, a little over one row of cells in
   // each, so the ranks are the wing's own compartments rather than a grid
   // that happens to lie near them.
@@ -1703,8 +1718,21 @@ vec3 shadeWing(vec2 pp) {
 
   float rim = 1.0 - smoothstep(0.94, 1.02, abs(edge));
   col = mix(bg, col, rim);
-  float side = edge < 0.0 ? 1.0 : smoothstep(0.62, 0.92, q.x);
-  col += vec3(0.34, 0.32, 0.29) * setae(q, edge) * side * hairs * (0.40 + 0.8 * lobe1);
+  // The fringe, shaded as what it is. A seta is a solid rod of chitin, not a
+  // window: it has no film on it and nothing behind it shows through, so it
+  // *replaces* what it covers rather than being added on top. Being added is
+  // why the hairs read as a haze over the background instead of as hairs in
+  // front of it.
+  //
+  // A cylinder lit from the side gives a *line* of highlight down its length
+  // rather than a point, which is why hair of any kind reads as bright even
+  // when it is dark — hence the square root of the lobe rather than the lobe.
+  float fringe = setae(q, edge) * (edge < 0.0 ? 1.0 : smoothstep(0.62, 0.92, q.x)) * hairs;
+  if (fringe > 0.002) {
+    vec3 rod = srgbToLinear(vec3(0.40, 0.34, 0.26)) * (0.18 + 0.30 * lobe1)
+             + gLamp * 0.42 * sqrt(max(lobe1, 0.0));
+    col = mix(col, rod, clamp(fringe, 0.0, 1.0));
+  }
   return col;
 }
 
@@ -1727,6 +1755,354 @@ vec3 shadeChart(vec2 pp) {
 
 gLamp = lampWhite();
 vec3 col = chart > 0.5 ? shadeChart(p) : shadeWing(p);
+col *= exp2(expose);
+
+finish(col)` },
+
+  { id: "leaf", label: "A leaf — the same net, and colour by pigment instead of interference", preview: [800, 500], source:
+`// A leaf, and what carries over from the wing and what does not.
+//
+// The *structure* carries over entirely. A leaf is the same object as an
+// insect wing seen from a distance: a thin translucent sheet held on a net of
+// veins, with compartments between them that a Voronoi diagram draws. The
+// cellular noise below is the same two-pass border metric, and the areoles it
+// makes are the same shape as the wing's cells.
+//
+// The *optics* do not carry over at all, and that is the interesting half.
+// A wing is coloured by interference in a film half a micron thick: the two
+// reflections stay in step across it, so they can cancel. A leaf is two
+// hundred microns thick — five hundred wavelengths — and nothing stays in
+// step across that, so every fringe averages away and there is no structural
+// colour to have. A leaf is coloured by *absorption*: chlorophyll takes the
+// blue and takes the red, and the green you see is the gap left between them.
+// Nothing here is told to be green.
+//
+// So the sketch keeps the spectral integrator, the Planck illuminant and the
+// adaptation, and swaps the film for pigments and a scattering slab. That
+// reuse is the point: the integrator is the general thing, and what you put
+// under it decides whether you get a dragonfly or an oak.
+
+uniform float chlA;       // @range 0 40 @default 17 @help chlorophyll a, arbitrary units
+uniform float chlB;       // @range 0 20 @default 6 @help chlorophyll b
+uniform float carot;      // @range 0 20 @default 4.5 @help carotenoids, which outlast the chlorophyll
+uniform float antho;      // @range 0 20 @default 0 @help anthocyanin, which a leaf makes on the way out
+uniform float thick;      // @range 0.2 3 @default 1 @help how much leaf the light goes through
+// Scattering, as the product with thickness that Kubelka and Munk actually
+// care about. At 22 a leaf is as opaque as paper — 96% reflected and 4%
+// through, even where nothing absorbs — and a real leaf passes ten or twenty
+// per cent of the green it does not absorb.
+uniform float scatter;    // @range 0.5 30 @default 5 @help how strongly the mesophyll scatters
+uniform float samples;    // @range 3 48 @step 1 @int @default 24 @help wavelengths in the integral
+uniform float kelvin;     // @range 1800 12000 @step 50 @default 6500 @help the light it is under
+uniform float adapt;      // @range 0 1 @default 1 @help how far the eye is adapted to it
+uniform float backlight;  // @range 0 1 @default 0.55 @help how much of the light is behind the leaf
+uniform float veinsN;     // @range 3 14 @step 1 @int @default 8 @help pairs of secondary veins
+uniform float areoles;    // @range 2 20 @step 1 @int @default 9 @help compartments between them
+uniform float teeth;      // @range 0 1 @default 0.6 @help how toothed the margin is
+uniform float gloss;      // @range 0 1 @default 0.45 @help the cuticle's shine
+uniform float bullate;    // @range 0 1 @default 0.5 @help how much the blade puffs between veins
+uniform float lightTurn;  // @range -3.15 3.15 @default -0.8
+uniform float scale;      // @range 0.3 2.5 @default 1
+uniform vec3  backC;      // @color @default #0a0c10
+uniform float expose;     // @range -2 2 @default 0.3
+
+const float PI = 3.14159265;
+
+// ------------------------------------------------------------- the observer
+// The same curves as the wing, because an eye is an eye.
+float lobe(float x, float mu, float s1, float s2) {
+  float k = (x - mu) * (x < mu ? 1.0 / s1 : 1.0 / s2);
+  return exp(-0.5 * k * k);
+}
+vec3 cmf(float nm) {
+  return vec3(
+    1.056 * lobe(nm, 599.8, 37.9, 31.0) + 0.362 * lobe(nm, 442.0, 16.0, 26.7)
+      - 0.065 * lobe(nm, 501.1, 20.4, 26.2),
+    0.821 * lobe(nm, 568.8, 46.9, 40.5) + 0.286 * lobe(nm, 530.9, 16.3, 31.1),
+    1.217 * lobe(nm, 437.0, 11.8, 36.0) + 0.681 * lobe(nm, 459.0, 26.0, 13.8));
+}
+float planck(float nm, float K) {
+  float um = nm * 0.001;
+  float u5 = um * um * um * um * um;
+  return 1.0 / (u5 * (exp(14388.0 / (um * max(K, 100.0))) - 1.0));
+}
+vec3 xyzToRgb(vec3 xyz) {
+  return max(vec3(
+     3.2406 * xyz.x - 1.5372 * xyz.y - 0.4986 * xyz.z,
+    -0.9689 * xyz.x + 1.8758 * xyz.y + 0.0415 * xyz.z,
+     0.0557 * xyz.x - 0.2040 * xyz.y + 1.0570 * xyz.z), 0.0);
+}
+vec3 adaptToD65(vec3 xyz, vec3 srcWhite) {
+  const mat3 toLms = mat3( 0.8951, -0.7502,  0.0389,
+                           0.2664,  1.7135, -0.0685,
+                          -0.1614,  0.0367,  1.0296);
+  const mat3 fromLms = mat3( 0.9869929, 0.4323053, -0.0085287,
+                            -0.1470543, 0.5183603,  0.0400428,
+                             0.1599627, 0.0492912,  0.9684867);
+  vec3 srcC = toLms * srcWhite;
+  vec3 dstC = toLms * vec3(0.95047, 1.0, 1.08883);
+  vec3 gain = mix(vec3(1.0), dstC / max(srcC, vec3(1e-6)), clamp(adapt, 0.0, 1.0));
+  return fromLms * ((toLms * xyz) * gain);
+}
+vec3 gLamp;
+vec3 lampWhite() {
+  vec3 xyzW = vec3(0.0);
+  for (int i = 0; i < 24; i++) {
+    float nm = 380.0 + (float(i) + 0.5) / 24.0 * 350.0;
+    xyzW += cmf(nm) * planck(nm, kelvin);
+  }
+  xyzW /= max(xyzW.y, 1e-5);
+  return max(xyzToRgb(adaptToD65(xyzW, xyzW)), 0.0);
+}
+
+// -------------------------------------------------------------- the pigments
+// Gaussians at the peaks the pigments are actually reported at. Chlorophyll a
+// takes the blue at 430 and the red at 662; chlorophyll b sits beside it at
+// 453 and 642; the carotenoids are a broad blue band that outlives both, and
+// anthocyanin is the green-absorber a leaf manufactures on its way out.
+//
+// The positions are literature; the widths are approximate and the units are
+// arbitrary, which is the honest description of a Gaussian fit to a molecular
+// spectrum. What matters is not the exact shape but the *gap*: nothing here
+// absorbs much around 550 nm, and that gap is the only reason a leaf is
+// green. There is no green pigment. There is a hole in the absorption.
+float gauss(float x, float mu, float sd) { float k = (x - mu) / sd; return exp(-0.5 * k * k); }
+
+float pigmentK(float nm) {
+  // The red bands are wider than the first attempt made them. A Q band drawn
+  // at fourteen nanometres wide leaves six hundred to six-forty almost clear,
+  // so the red channel came back nearly full and the leaf read yellow-green
+  // at a hue of 64 degrees. The real band is broad and has a vibronic
+  // shoulder below it; both are here, and the hue moves where it should.
+  return chlA  * (1.00 * gauss(nm, 430.0, 24.0) + 0.88 * gauss(nm, 662.0, 21.0)
+                 + 0.30 * gauss(nm, 615.0, 24.0))
+       + chlB  * (0.86 * gauss(nm, 453.0, 21.0) + 0.48 * gauss(nm, 642.0, 18.0))
+       + carot * (0.90 * gauss(nm, 448.0, 26.0) + 0.72 * gauss(nm, 476.0, 22.0))
+       + antho * gauss(nm, 540.0, 44.0);
+}
+
+/**
+ * Kubelka and Munk, 1931: what a scattering slab reflects and transmits.
+ *
+ * A leaf is not a window and not a mirror — it is a scattering medium with
+ * absorbers in it, and light inside it is going both ways at once. Two fluxes
+ * up and down, with absorption k and scattering s, give a pair of coupled
+ * equations whose solution for a layer of finite thickness is this. It is the
+ * standard model for paint, paper and leaves, and it is closed form.
+ *
+ * Written with exponentials rather than sinh and cosh because GLSL ES 1.00
+ * has neither, and clamped at the top because a thick dark leaf saturates and
+ * exp of a large number does not.
+ */
+void slab(float k, float s, float d, out float R, out float T) {
+  if (s < 1e-5) { R = 0.0; T = exp(-k * d); return; }   // no scattering: plain Beer-Lambert
+  float a = (s + k) / s;
+  float b = sqrt(max(a * a - 1.0, 1e-9));
+  float e = exp(min(b * s * d, 24.0));
+  float ei = 1.0 / e;
+  float sh = 0.5 * (e - ei), ch = 0.5 * (e + ei);
+  float den = a * sh + b * ch;
+  R = sh / max(den, 1e-6);
+  T = b / max(den, 1e-6);
+}
+
+/** Both, integrated over the spectrum, under this lamp. */
+void leafColour(float d, out vec3 refl, out vec3 tran) {
+  int n = int(samples);
+  vec3 xyzR = vec3(0.0), xyzT = vec3(0.0), xyzW = vec3(0.0);
+  for (int i = 0; i < 48; i++) {
+    if (i >= n) break;
+    float nm = 380.0 + (float(i) + 0.5) / float(n) * 350.0;
+    vec3 bar = cmf(nm);
+    float e = planck(nm, kelvin);
+    float R, T;
+    slab(pigmentK(nm), scatter, d, R, T);
+    xyzR += bar * e * R;
+    xyzT += bar * e * T;
+    xyzW += bar * e;
+  }
+  float wY = max(xyzW.y, 1e-5);
+  vec3 white = xyzW / wY;
+  refl = xyzToRgb(adaptToD65(xyzR / wY, white));
+  tran = xyzToRgb(adaptToD65(xyzT / wY, white));
+}
+
+// --------------------------------------------------------------- the blade
+// Broader than a wing and blunter at the base: the width peaks early and the
+// tip is drawn out. One profile again, and everything hangs off it.
+float wid(float x) {
+  float xx = clamp(x, 0.0, 1.0);
+  return pow(xx, 0.38) * pow(1.0 - xx, 0.62) * 2.35;
+}
+
+/**
+ * Where a secondary vein is, as a coordinate rather than as a list.
+ *
+ * Real secondaries leave the midrib and sweep forward towards the tip, so a
+ * vein is a curve rather than a spoke. Rather than draw each one, the leaf is
+ * given a coordinate that *increases along* the midrib and *decreases across*
+ * the blade, so a line of constant phase is exactly one of those curves. The
+ * veins are then the places where the phase is a whole number — and the
+ * areoles between them, and the teeth on the margin, come out of the same
+ * number for free, which is why a real leaf has one tooth per vein.
+ */
+float veinPhase(vec2 q, float rAcross) {
+  return (clamp(q.x, 0.0, 1.0) - 0.06 + rAcross * 0.34) * veinsN;
+}
+
+vec2 cellJitter(vec2 id) { return vec2(hash21(id), hash21(id + 17.3)); }
+
+/** The same border metric as the wing. A net is a net. */
+float areoleWall(vec2 at) {
+  vec2 base = floor(at);
+  vec2 f = at - base;
+  vec2 bestR = vec2(0.0);
+  float bestD = 1e9;
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 r = g + cellJitter(base + g) - f;
+      float d = dot(r, r);
+      if (d < bestD) { bestD = d; bestR = r; }
+    }
+  }
+  float wall = 1e9;
+  for (int j = -2; j <= 2; j++) {
+    for (int i = -2; i <= 2; i++) {
+      vec2 g = vec2(float(i), float(j));
+      vec2 r = g + cellJitter(base + g) - f;
+      vec2 diff = r - bestR;
+      float dd = dot(diff, diff);
+      if (dd < 1e-5) continue;
+      wall = min(wall, dot(0.5 * (bestR + r), diff * inversesqrt(dd)));
+    }
+  }
+  return wall;
+}
+
+vec3 behind(vec2 pp) {
+  vec3 c = mix(srgbToLinear(backC) * 3.2, srgbToLinear(backC) * 0.8,
+               smoothstep(-1.2, 1.1, pp.y - pp.x * 0.25));
+  // The sky the leaf is held against. This is what a backlit leaf is lit by,
+  // so it is bright on purpose.
+  // Bright, and behind the leaf rather than off to one side. This is the sky
+  // a leaf is held against, and it is the light source for everything the
+  // leaf transmits — put it in the corner and the backlit view has nothing
+  // to be lit by.
+  c += srgbToLinear(vec3(0.66, 0.74, 0.90)) * 2.6
+     * smoothstep(1.9, -0.1, length((pp - vec2(-0.15, 0.28)) * vec2(0.72, 1.0)));
+  return c * gLamp;
+}
+
+// ------------------------------------------------------------- the picture
+vec3 shadeLeaf(vec2 pp) {
+  vec3 bg = behind(pp);
+  vec2 r0 = pp / max(scale, 0.05);
+  vec2 q = vec2((r0.x + 1.30) / 2.55, r0.y / 0.86);
+  if (q.x < -0.06 || q.x > 1.06) return bg;
+
+  float half_ = wid(q.x) * 0.5;
+  float rAcross = abs(q.y) / max(half_, 1e-4);
+  float ph = veinPhase(q, rAcross);
+
+  // The margin, with a tooth for every secondary vein — which is what a real
+  // toothed leaf has, and it costs nothing here because both are the same
+  // number. The teeth point forward, so the wave is skewed rather than a sine.
+  float saw = fract(ph);
+  float toothed = 1.0 - teeth * 0.11 * (1.0 - saw * saw);
+  if (rAcross > toothed * (q.x < 0.04 ? 0.25 : 1.0)) {
+    // The petiole: a stalk at the base, outside the blade.
+    float stalk = smoothstep(0.055, 0.0, abs(q.y)) * smoothstep(-0.06, 0.0, q.x) * step(q.x, 0.09);
+    if (stalk < 0.5) return bg;
+  }
+
+  // The net: midrib, secondaries, and the areoles between them.
+  float midrib = smoothstep(0.055, 0.012, rAcross) * smoothstep(1.02, 0.96, q.x);
+  float second = smoothstep(0.09, 0.02, abs(fract(ph) - 0.5) * 2.0 - 0.86);
+  // The areoles are laid in the vein's own coordinates, so they are elongated
+  // along the veins and stop at them — the leaf's version of the wing's ranks.
+  float wall = areoleWall(vec2(ph * 1.15, rAcross * float(areoles)));
+  float mesh = smoothstep(0.10, 0.025, wall);
+  float vein = clamp(midrib + second * 0.85 + mesh * 0.80, 0.0, 1.0);
+
+  // A vein is thicker, carries far less pigment, and scatters more — pale
+  // vascular tissue rather than green mesophyll. All three matter, and the
+  // first version had the first two very nearly cancel: thickness up 2.9x
+  // against pigment down to 0.38 is an optical depth of 1.1x, which is no
+  // change at all, and the veins were invisible for exactly that reason.
+  float d = thick * (1.0 + 0.5 * vein) * (0.86 + 0.28 * (1.0 - rAcross));
+  float pigmentScale = 1.0 - 0.88 * vein;
+  float scatterScale = 1.0 + 1.6 * vein;
+
+  vec3 refl, tran;
+  // The pigment load is what changes across the leaf; the slab thickness is
+  // separate, so a vein is thicker *and* paler and the two do not cancel.
+  float kSave = 0.0;
+  {
+    // A local copy of the integral with the vein's pigment scaling folded in.
+    int n = int(samples);
+    vec3 xyzR = vec3(0.0), xyzT = vec3(0.0), xyzW = vec3(0.0);
+    for (int i = 0; i < 48; i++) {
+      if (i >= n) break;
+      float nm = 380.0 + (float(i) + 0.5) / float(n) * 350.0;
+      vec3 bar = cmf(nm);
+      float e = planck(nm, kelvin);
+      float R, T;
+      slab(pigmentK(nm) * pigmentScale, scatter * scatterScale, d, R, T);
+      xyzR += bar * e * R;
+      xyzT += bar * e * T;
+      xyzW += bar * e;
+      kSave += 0.0;
+    }
+    float wY = max(xyzW.y, 1e-5);
+    vec3 white = xyzW / wY;
+    refl = xyzToRgb(adaptToD65(xyzR / wY, white));
+    tran = xyzToRgb(adaptToD65(xyzT / wY, white));
+  }
+
+  // The blade puffs between the veins — bullate, in the word for it — so the
+  // surface is a quilt and not a plane. The normal comes from the same wall
+  // distance the mesh is drawn from, which is why the puffing lines up with
+  // the compartments rather than lying across them.
+  // The blade puffs between the veins — bullate is the word — so the surface
+  // is a quilt rather than a plane. The slope comes from how far inside a
+  // compartment you are, so each areole domes and the veins are the creases.
+  float puff = bullate * smoothstep(0.0, 0.26, wall) * (1.0 - vein);
+  vec2 cellId = floor(vec2(ph * 1.15, rAcross * float(areoles)));
+  vec3 nrm = normalize(vec3((hash21(cellId) - 0.5) * puff * 1.5 + q.y * 0.10,
+                            (hash21(cellId + 5.7) - 0.5) * puff * 1.5 + q.y * 0.30, 1.0));
+  vec3 view = normalize(vec3(pp * 0.32, -1.0));
+  vec3 lightDir = normalize(vec3(sin(lightTurn), 0.5, -0.8));
+
+  // Front light and back light. A leaf's two faces are two different pictures
+  // of the same physics: what bounces off it and what comes through it.
+  // Front light and back light. A leaf's two faces are two pictures of the
+  // same physics: what bounces off it and what comes through it.
+  //
+  // The back light has to be *much* stronger than the front, and that is not
+  // a cheat — it is the situation. A leaf held up is between you and the sky,
+  // and a sky is a hundred times brighter than the light bouncing round a
+  // room. Weighted evenly, a backlit leaf came out nearly black, because the
+  // transmittance of a green leaf in its own green window is only a tenth or
+  // two and a tenth of nothing is nothing.
+  float back = clamp(backlight, 0.0, 1.0);
+  float lam = max(dot(nrm, lightDir), 0.0);
+  vec3 col = refl * gLamp * (0.30 + 1.00 * lam) * (1.0 - back * 0.75)
+           + tran * bg * (0.5 + 7.0 * back);
+
+  // The cuticle: a waxy film on top, and the one thing on a leaf that is not
+  // coloured by pigment. It reflects the lamp's own colour, unchanged.
+  float spec = pow(max(dot(reflect(view, nrm), lightDir), 0.0), 42.0);
+  col += gLamp * spec * gloss * 0.9 * (1.0 - back * 0.75);
+
+  // The margin, softened, and a little darkening where the blade turns away.
+  float rim = 1.0 - smoothstep(toothed - 0.03, toothed + 0.01, rAcross);
+  col *= 1.0 - 0.30 * smoothstep(0.78, 1.0, rAcross);
+  return mix(bg, col, clamp(rim, 0.0, 1.0));
+}
+
+gLamp = lampWhite();
+vec3 col = shadeLeaf(p);
 col *= exp2(expose);
 
 finish(col)` },
