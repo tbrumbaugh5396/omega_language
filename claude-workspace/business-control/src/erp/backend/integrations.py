@@ -250,9 +250,11 @@ PROVIDERS = {
         "does": "While connected, every signature request becomes a "
                 "DocuSign envelope: the signer gets DocuSign's own email "
                 "and signs there, with verified identity if your account "
-                "enforces it. The vault still holds the record - check a "
-                "request to pull its status back. Disconnect and requests "
-                "go back to the built-in signing page.",
+                "enforces it. [SIGN HERE] and [INITIALS] markers in a "
+                "document become tabs at every occurrence, so a contract "
+                "can be initialled clause by clause. The vault still holds "
+                "the record - check a request to pull its status back. "
+                "Disconnect and requests go back to the built-in page.",
     },
     "laceup": {
         "label": "LaceUp",

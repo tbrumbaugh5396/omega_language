@@ -425,6 +425,9 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
   max-height: 88vh; overflow-y: auto;
   box-shadow: 0 24px 60px rgba(0,0,0,.5); }
 .ops-modal-card.wide { max-width: 960px; }
+.dv-foot { display: flex; gap: 10px; align-items: center;
+  justify-content: flex-end; margin-top: 12px; }
+.dv-foot .btn { display: inline-flex; align-items: center; gap: 7px; }
 .doc-viewer { width: 100%; height: 72vh; border: 1px solid var(--line);
   border-radius: 10px; background: #fff; }
 .ops-modal-card h3 { margin: 0 0 6px; font-size: 19px; color: var(--text);

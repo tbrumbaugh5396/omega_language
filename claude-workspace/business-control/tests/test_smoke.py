@@ -3805,13 +3805,39 @@ ok(_del3.get("archived"),
    "and vault deletion archives it, because it carries a signature — "
    "evidence is never destroyed by tidying")
 
+# --- per-section signing markers -------------------------------------------
+from storefront.backend.pdfgen import doc_pdf as _dpdf
+from storefront.backend.engagements import placeholders as _phs
+_mk = "A. [INITIALS]\n\nB. [INITIALS]\n\n[SIGN HERE]\n\nFill [X]."
+ok(_phs(_mk) == ["X"],
+   "signing markers are instructions, not blanks — the fill form leaves "
+   "them standing")
+_mh = _docmod.md_html(_mk)
+ok(_mh.count("Initials:") == 2 and "Sign here:" in _mh
+   and "[INITIALS]" not in _mh,
+   "and they render as labelled lines, one per section that carries one")
+_envt = _docmod.docusign_envelope("T", "QQ==", "N", "n@x.t", "")[
+    "recipients"]["signers"][0]["tabs"]
+ok([x["anchorString"] for x in _envt["signHereTabs"]] ==
+   ["Signed", "Sign here:"]
+   and _envt["initialHereTabs"][0]["anchorString"] == "Initials:",
+   "the envelope anchors on those same labels — DocuSign places a tab at "
+   "every occurrence, so initials land clause by clause")
+ok(all(x["anchorIgnoreIfNotPresent"] == "true"
+       for x in _envt["signHereTabs"] + _envt["initialHereTabs"]),
+   "and a document with no markers still signs at its Signed block")
+
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.
-_viewer = _ops.split("async function docViewer")[1][:2600]
-ok('iframe class="doc-viewer"' in _viewer and "window.open" not in _viewer,
-   "one shared viewer shows the document in an in-app frame — a popup "
-   "opened after an awaited fetch is one a blocker silently eats")
+_viewer = _ops.split("async function docViewer")[1][:3400]
+_before_open = _viewer.split('$("#dv-open")')[0]
+ok('iframe class="doc-viewer"' in _viewer
+   and "window.open" not in _before_open
+   and 'window.open(pdfUrl, "_blank")' in _viewer,
+   "one shared viewer shows the document in an in-app frame; window.open "
+   "lives only in a synchronous click handler, where the user gesture is "
+   "still alive and no blocker eats it")
 ok("Download" in _viewer and "signed " in _viewer,
    "with the signed PDF as the primary action in the same modal")
 ok("data-docview" in _ops and "data-engview" in _ops

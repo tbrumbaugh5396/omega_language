@@ -315,11 +315,18 @@ def template_path(rel: str) -> Path:
 PLACEHOLDER = re.compile(r"\[([^\[\]\n(){}`]{1,60})\]")
 
 
+# Signing markers are instructions to the renderer and to DocuSign, not
+# blanks for anyone to fill — the fill machinery must leave them standing.
+RESERVED_MARKERS = {"SIGN HERE", "INITIALS"}
+
+
 def _matches(text: str):
     for m in PLACEHOLDER.finditer(text):
         if text[m.end():m.end() + 1] == "(":     # [label](link) — not a blank
             continue
         if m.group(1).strip() in ("", "x", "✓"):  # checkbox, not a blank
+            continue
+        if m.group(1).strip() in RESERVED_MARKERS:
             continue
         yield m
 

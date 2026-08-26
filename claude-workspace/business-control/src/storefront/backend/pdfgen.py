@@ -39,9 +39,15 @@ _LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+|/[^)\s]*)\)")
 def _inline(text: str) -> str:
     """To fpdf's own markdown flavour: **bold** stays, *em* becomes
     __italic__, code ticks drop, links keep their text and show an external
-    URL beside it."""
+    URL beside it. Signing markers become the labelled lines DocuSign
+    anchors on — the label text must match documents.SIGN_MARKERS exactly,
+    since the PDF is what the anchor search reads."""
+    t = text
+    t = t.replace("[SIGN HERE]", "**Sign here:** ____________________")
+    t = t.replace("[INITIALS]", "**Initials:** ________")
     t = _LINK.sub(lambda m: m.group(1) if m.group(2).startswith("/")
-                  else f"{m.group(1)} ({m.group(2)})", text)
+                  else f"{m.group(1)} ({m.group(2)})", t)
+    t = re.sub(r"\[([^\]]+)\]\([\w./-]+\)", r"\1", t)
     t = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"__\1__", t)
     t = t.replace("`", "")
     return _latin(t)

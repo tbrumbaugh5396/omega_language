@@ -163,13 +163,36 @@ MAX_BYTES = 25 * 1024 * 1024
 _MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+|/[^)\s]*)\)")
 
 
+# Per-section signing markers. Written in a template as [SIGN HERE] or
+# [INITIALS], they render as labelled lines — and because DocuSign anchors
+# on the PDF's text, every occurrence of the label becomes a tab: initials
+# on clause 7, a signature on the last page, however many the document
+# carries. The fill machinery skips them; they are not blanks.
+SIGN_MARKERS = {
+    "[SIGN HERE]": ("Sign here:", "sign"),
+    "[INITIALS]": ("Initials:", "initial"),
+}
+
+
+def _mark_inline_html(t: str) -> str:
+    for raw, (label, _kind) in SIGN_MARKERS.items():
+        t = t.replace(sect.esc(raw),
+                      f'<span style="white-space:nowrap"><b>{label}</b> '
+                      f'<span style="display:inline-block;min-width:150px;'
+                      f'border-bottom:1px solid #8b8496">&nbsp;</span></span>')
+    return t
+
+
 def _md_inline(text: str) -> str:
     t = sect.esc(text)
     t = re.sub(r"`([^`]+)`", r"<code>\1</code>", t)
     t = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", t)
     t = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", t)
     t = _MD_LINK.sub(r'<a href="\2" target="_blank" rel="noopener">\1</a>', t)
-    return t
+    # A relative link points at a kit file that isn't shipped with the
+    # document — render the words, drop the dead target.
+    t = re.sub(r"\[([^\]]+)\]\([\w./-]+\)", r"\1", t)
+    return _mark_inline_html(t)
 
 
 def _md_row(line: str) -> list:
@@ -1207,11 +1230,26 @@ def docusign_envelope(title: str, pdf_b64: str, signer_name: str,
         "recipients": {"signers": [{
             "email": signer_email, "name": signer_name,
             "recipientId": "1", "routingOrder": "1",
-            "tabs": {"signHereTabs": [{
-                "anchorString": "Signed", "anchorUnits": "pixels",
-                "anchorXOffset": "0", "anchorYOffset": "20",
-                "anchorIgnoreIfNotPresent": "true",
-            }]},
+            # DocuSign places a tab at EVERY occurrence of an anchor string,
+            # so "Sign here:" three times in a contract is three signature
+            # tabs, and "Initials:" on each clause is initials on each
+            # clause. All ignore-if-absent: a document with no markers still
+            # signs at its Signed block.
+            "tabs": {
+                "signHereTabs": [
+                    {"anchorString": "Signed", "anchorUnits": "pixels",
+                     "anchorXOffset": "0", "anchorYOffset": "20",
+                     "anchorIgnoreIfNotPresent": "true"},
+                    {"anchorString": "Sign here:", "anchorUnits": "pixels",
+                     "anchorXOffset": "60", "anchorYOffset": "-6",
+                     "anchorIgnoreIfNotPresent": "true"},
+                ],
+                "initialHereTabs": [
+                    {"anchorString": "Initials:", "anchorUnits": "pixels",
+                     "anchorXOffset": "50", "anchorYOffset": "-6",
+                     "anchorIgnoreIfNotPresent": "true"},
+                ],
+            },
         }]},
         "status": "sent",
     }

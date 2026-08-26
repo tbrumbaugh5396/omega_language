@@ -5658,14 +5658,28 @@ async function docViewer(did, kind, ext, name, signedN) {
       ${signed ? `<p class="dim">The signature block is at the end of the
         document — scroll down, and it's on the last page of the PDF.</p>` : ""}
       <iframe class="doc-viewer" src="${frameUrl}" title="${esc(name)}"></iframe>
-      <div class="modal-foot" style="margin-top:10px">
-        <a class="btn" href="${pdfUrl}"
-           download="${esc(name)}${isPdfable ? ".pdf" : ""}">Download
-           ${signed ? "signed " : ""}${isPdfable ? "PDF" : ""}</a>
-        <a class="btn alt" href="${pdfUrl}" target="_blank"
-           rel="noopener">Open ${isPdfable ? "PDF" : ""} in tab</a>
+      <div class="modal-foot dv-foot">
+        <button class="btn" id="dv-dl">${opsIcon("file", "btn-ic")}
+          Download ${signed ? "signed " : ""}${isPdfable ? "PDF" : "file"}</button>
+        <button class="btn alt" id="dv-open">Open ${isPdfable ? "PDF" : ""}
+          in tab</button>
         <button class="btn alt" data-close>Close</button>
       </div>`, "wide");
+    /* Buttons, not anchors: .btn styling is scoped to button.btn, and a
+       synchronous handler keeps the user gesture, so the new tab is never
+       popup-blocked and the download never depends on anchor semantics. */
+    $("#dv-dl").onclick = () => {
+      const a = document.createElement("a");
+      a.href = pdfUrl;
+      a.download = name + (isPdfable ? ".pdf" : "");
+      document.body.appendChild(a); a.click(); a.remove();
+      toast("Downloading — the PDF carries the document and every "
+        + "signature on it");
+    };
+    $("#dv-open").onclick = () => {
+      const w = window.open(pdfUrl, "_blank");
+      if (!w) { $("#dv-dl").click(); }   // a blocker still gets the file
+    };
   } catch (err) { toast(err.message); }
 }
 
