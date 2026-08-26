@@ -503,17 +503,25 @@ def list_templates(u=Depends(admin_user)):
 @router.get("/api/store/admin/engagements/{eid}")
 def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     e = _eng_or_404(con, eid)
-    docs = con.execute(
-        "SELECT ed.stage, ed.side, d.id, d.title, d.category, d.status,"
-        " d.ext, d.filename,"
-        " (SELECT COUNT(*) FROM document_signatures s"
-        "   WHERE s.document_id=d.id AND s.status='signed') AS signed,"
-        " (SELECT COUNT(*) FROM document_signatures s"
-        "   WHERE s.document_id=d.id AND s.status IN ('sent','viewed'))"
-        "   AS awaiting"
-        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
-        " WHERE ed.engagement_id=? ORDER BY ed.stage, d.created_at",
-        (eid,)).fetchall()
+    docs = []
+    for r in con.execute(
+            "SELECT ed.stage, ed.side, d.id, d.title, d.category, d.status,"
+            " d.ext, d.filename, d.body,"
+            " (SELECT COUNT(*) FROM document_signatures s"
+            "   WHERE s.document_id=d.id AND s.status='signed') AS signed,"
+            " (SELECT COUNT(*) FROM document_signatures s"
+            "   WHERE s.document_id=d.id AND s.status IN ('sent','viewed'))"
+            "   AS awaiting"
+            " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+            " WHERE ed.engagement_id=? ORDER BY ed.stage, d.created_at",
+            (eid,)).fetchall():
+        d = dict(r)
+        body = d.pop("body") or ""
+        d["has_body"] = bool(body.strip())
+        # How much of the template is still a bracket. Shown on the row, so
+        # "finished" is a number going to zero, not a feeling.
+        d["blanks"] = len(placeholders(body)) if d["has_body"] else 0
+        docs.append(d)
     events = con.execute(
         "SELECT at, actor, what FROM engagement_log WHERE engagement_id=?"
         " ORDER BY at DESC LIMIT 40", (eid,)).fetchall()
@@ -527,7 +535,7 @@ def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         " WHERE engagement_id=? ORDER BY ord", (eid,)).fetchall()
     return {"engagement": ej,
             "dates": [dict(r) for r in dates],
-            "docs": [dict(r) for r in docs],
+            "docs": docs,
             "gates": gates,
             "current_stage": current_stage(gates),
             "stages": scan_templates(),
@@ -597,6 +605,57 @@ def generate_doc(eid: int, body: GenerateBody, u=Depends(admin_user),
         + (f" ({len(remaining)} blanks left)" if remaining else ""))
     con.commit()
     return {"doc_id": doc_id, "unfilled": remaining, "side": side}
+
+
+@router.get("/api/store/admin/engagements/{eid}/docs/{did}/blanks")
+def doc_blanks(eid: int, did: int, u=Depends(admin_user),
+               con=Depends(get_con)):
+    """The brackets still unfilled on a generated document, with the same
+    suggestions generation had — so finishing a document is the same form
+    as starting one, just shorter each time."""
+    e = _eng_or_404(con, eid)
+    r = con.execute(
+        "SELECT d.body, d.title FROM engagement_docs ed"
+        " JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.doc_id=?", (eid, did)).fetchone()
+    if r is None or not (r["body"] or "").strip():
+        raise HTTPException(404, "no authored document there")
+    toks = placeholders(r["body"])
+    sug = suggested_fills(e)
+    return {"title": r["title"], "placeholders": toks,
+            "suggested": {t: sug[t] for t in toks if t in sug}}
+
+
+class FillBody(BaseModel):
+    fills: dict = {}
+
+
+@router.post("/api/store/admin/engagements/{eid}/docs/{did}/fill")
+def doc_fill(eid: int, did: int, body: FillBody, u=Depends(admin_user),
+             con=Depends(get_con)):
+    _eng_or_404(con, eid)
+    r = con.execute(
+        "SELECT d.body, d.title FROM engagement_docs ed"
+        " JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.doc_id=?", (eid, did)).fetchone()
+    if r is None or not (r["body"] or "").strip():
+        raise HTTPException(404, "no authored document there")
+    signed = con.execute(
+        "SELECT COUNT(*) n FROM document_signatures WHERE document_id=?"
+        " AND status='signed'", (did,)).fetchone()["n"]
+    if signed:
+        raise HTTPException(400, "this document has been signed — its text "
+                                 "is what was attested to. Supersede it "
+                                 "rather than editing it")
+    filled = fill(r["body"], body.fills or {})
+    remaining = placeholders(filled)
+    con.execute("UPDATE documents SET body=?, status=? WHERE id=?",
+                (filled, "draft" if remaining else "active", did))
+    log(con, eid, u["name"],
+        f"filled blanks on '{r['title']}'"
+        + (f" ({len(remaining)} left)" if remaining else " — complete"))
+    con.commit()
+    return {"unfilled": remaining}
 
 
 class AttachBody(BaseModel):

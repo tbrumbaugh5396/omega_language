@@ -5018,7 +5018,15 @@ async function renderEngagement(id) {
         x.side === "internal" ? "internal" : "to client"}</span>
       ${x.signed ? `<span class="pill ok">${x.signed} signed</span>` : ""}
       ${x.awaiting ? `<span class="pill warn">${x.awaiting} awaiting</span>` : ""}
-      ${x.status === "draft" ? '<span class="pill">draft</span>' : ""}
+      ${x.blanks ? `<button class="btn alt sm" data-engfill="${x.id}"
+          title="the brackets still unfilled — same form as generation,
+          shorter each time">Fill blanks (${x.blanks})</button>` : ""}
+      <button class="btn alt sm" data-engview="${x.id}"
+        data-kind="${x.has_body ? "body" : "file"}"
+        title="exactly what a signer will be shown — print it for a PDF">View</button>
+      <button class="btn alt sm" data-engdl="${x.id}"
+        data-kind="${x.has_body ? "body" : "file"}"
+        data-name="${esc(x.filename || x.title)}">Download</button>
       <button class="btn alt sm" data-engsign="${x.id}">${opsIcon("pen","btn-ic")} Sign</button>
       <button class="btn alt sm" data-engopen="${esc(x.title)}">Open</button>
     </div>`;
@@ -5186,6 +5194,71 @@ async function renderEngagement(id) {
   // vault's own editor finishes what the fill form started.
   view().querySelectorAll("[data-engopen]").forEach((b) => b.onclick = () => {
     S.docQ = b.dataset.engopen; S.tab = "docs"; render();
+  });
+  const authBlob = async (path) => {
+    const r = await fetch(path,
+      { headers: { Authorization: "Bearer " + S.user.token } });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    return r.blob();
+  };
+  view().querySelectorAll("[data-engview]").forEach((b) => b.onclick = async () => {
+    const did = b.dataset.engview;
+    const path = b.dataset.kind === "body"
+      ? `/api/store/admin/documents/${did}/preview`
+      : `/api/store/admin/documents/${did}/file`;
+    try {
+      const blob = await authBlob(path);
+      window.open(URL.createObjectURL(
+        b.dataset.kind === "body"
+          ? new Blob([await blob.text()], { type: "text/html" }) : blob));
+    } catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-engdl]").forEach((b) => b.onclick = async () => {
+    const did = b.dataset.engdl;
+    const path = b.dataset.kind === "body"
+      ? `/api/store/admin/documents/${did}/markdown`
+      : `/api/store/admin/documents/${did}/file`;
+    try {
+      const blob = await authBlob(path);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = b.dataset.name + (b.dataset.kind === "body" ? ".md" : "");
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-engfill]").forEach((b) => b.onclick = async () => {
+    const did = +b.dataset.engfill;
+    try {
+      const t = await api(`/api/store/admin/engagements/${id}/docs/${did}/blanks`);
+      const field = (tok) => `
+        <label>[${esc(tok)}]</label>
+        <input data-fill="${esc(tok)}" value="${esc(t.suggested[tok] || "")}"
+          placeholder="leave blank to keep the brackets">`;
+      modal(`<h3>Fill blanks — ${esc(t.title)}</h3>
+        <p class="dim">Each value fills its token everywhere it appears.
+          The document goes active on its own when the last bracket is
+          gone.</p>
+        ${t.placeholders.map(field).join("")}
+        <div class="modal-foot"><button class="btn" id="fb-go">Fill</button></div>`);
+      $("#fb-go").onclick = async () => {
+        const fills = {};
+        document.querySelectorAll("[data-fill]").forEach((i) => {
+          if (i.value.trim()) fills[i.dataset.fill] = i.value.trim();
+        });
+        try {
+          const out = await api(
+            `/api/store/admin/engagements/${id}/docs/${did}/fill`,
+            { body: { fills } });
+          closeModal();
+          toast(out.unfilled.length
+            ? `${out.unfilled.length} blank${out.unfilled.length === 1
+                ? "" : "s"} left`
+            : "Complete — no brackets left");
+          renderEngagement(id);
+        } catch (err) { toast(err.message); }
+      };
+    } catch (err) { toast(err.message); }
   });
 
   const gateDone = (out) => {

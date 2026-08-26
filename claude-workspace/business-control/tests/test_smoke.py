@@ -3633,6 +3633,46 @@ ok(c.post(f"/api/store/admin/engagements/{_eid}/gates/deposit_cleared"
 import shutil as _sh2
 _sh2.rmtree(_exp2["root"], ignore_errors=True)
 
+# --- seeing, downloading and finishing the documents -----------------------
+_det2 = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+_row = next(d for d in _det2["docs"] if d["id"] == _gen["doc_id"])
+ok(_row["has_body"] and _row["blanks"] > 0,
+   "each stage row says how many brackets a document still has — finished "
+   "is a number going to zero, not a feeling")
+_pv = c.get(f"/api/store/admin/documents/{_gen['doc_id']}/preview", headers=A)
+ok(_pv.status_code == 200 and ("<h2" in _pv.text or "<table" in _pv.text),
+   "View renders the document with the sign page's own renderer — what you "
+   "check is exactly what a signer will be shown")
+_dl = c.get(f"/api/store/admin/documents/{_gen['doc_id']}/markdown",
+            headers=A)
+ok(_dl.status_code == 200
+   and "attachment" in _dl.headers.get("content-disposition", ""),
+   "and an authored document downloads as its markdown")
+
+_bl = c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
+            "/blanks", headers=A).json()
+ok(_bl["placeholders"],
+   "the blanks endpoint lists what is left, with the same suggestions "
+   "generation had — finishing is the same form as starting, shorter")
+_locked = c.post(f"/api/store/admin/engagements/{_eid}/docs/"
+                 f"{_gen['doc_id']}/fill", headers=A,
+                 json={"fills": {_bl["placeholders"][0]: "x"}})
+ok(_locked.status_code == 400 and "signed" in _locked.json()["detail"],
+   "a signed document refuses further filling — its text is what was "
+   "attested to; supersede it, don't edit it")
+
+_g2 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "05-kickoff/welcome-guide.md"}).json()
+_b2 = c.get(f"/api/store/admin/engagements/{_eid}/docs/{_g2['doc_id']}"
+            "/blanks", headers=A).json()
+_tok0 = _b2["placeholders"][0]
+_ff = c.post(f"/api/store/admin/engagements/{_eid}/docs/{_g2['doc_id']}"
+             "/fill", headers=A, json={"fills": {_tok0: "filled-now"}}).json()
+ok(_tok0 not in _ff["unfilled"]
+   and len(_ff["unfilled"]) == len(_b2["placeholders"]) - 1,
+   "filling from the UI populates the template in place, token by token")
+c.delete(f"/api/store/admin/documents/{_g2['doc_id']}", headers=A)
+
 # leave the live db as we found it
 import shutil as _sh
 for _d in [x["id"] for x in _det["docs"]]:

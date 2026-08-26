@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
 from erp.backend import auth, config, mailer
@@ -405,6 +405,49 @@ def download_file(did: int, u=Depends(admin_user), con=Depends(get_con)):
     return FileResponse(p, media_type=ALLOWED_EXT.get(d["ext"],
                         "application/octet-stream"),
                         filename=d["filename"] or f"document-{did}.{d['ext']}")
+
+
+@router.get("/api/store/admin/documents/{did}/preview")
+def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
+    """The document as a reader sees it — the sign page's own renderer, so
+    what you check here is exactly what a signer will be shown. Print this
+    page to get a PDF; the browser's print dialog is the converter every
+    machine already has."""
+    d = con.execute("SELECT * FROM documents WHERE id=?", (did,)).fetchone()
+    if d is None:
+        raise HTTPException(404, "no such document")
+    if not (d["body"] or "").strip():
+        raise HTTPException(400, "this document is a file — download it "
+                                 "instead")
+    from .api import FONT_LINK
+    return HTMLResponse(
+        f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<meta name=\"viewport\" content=\"width=device-width,"
+        f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
+        f"{FONT_LINK}<style>"
+        f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
+        f"line-height:1.55;max-width:760px;margin:0 auto;padding:40px 24px}}"
+        f"h1,h2,h3,h4{{font-family:'Fraunces',Georgia,serif}}"
+        f"table{{border-collapse:collapse;width:100%}}"
+        f"td,th{{border-top:1px solid #e9e4dc;padding:6px 10px 6px 0;"
+        f"text-align:left}}"
+        f"blockquote{{border-left:3px solid #e9e4dc;padding-left:14px;"
+        f"color:#5d5768;margin:10px 0}}"
+        f"@media print{{body{{padding:0}}}}"
+        f"</style></head><body><h1>{sect.esc(d['title'])}</h1>"
+        f"{md_html(d['body'])}</body></html>")
+
+
+@router.get("/api/store/admin/documents/{did}/markdown")
+def download_markdown(did: int, u=Depends(admin_user), con=Depends(get_con)):
+    d = con.execute("SELECT * FROM documents WHERE id=?", (did,)).fetchone()
+    if d is None or not (d["body"] or "").strip():
+        raise HTTPException(404, "no authored body on that document")
+    log(con, did, u["name"], "downloaded")
+    con.commit()
+    stem = re.sub(r"[^\w.-]+", "-", d["title"]).strip("-")[:80] or "document"
+    return Response(d["body"], media_type="text/markdown", headers={
+        "Content-Disposition": f'attachment; filename="{stem}.md"'})
 
 
 @router.patch("/api/store/admin/documents/{did}")
