@@ -3316,6 +3316,97 @@ because none are to hand; the leaf's areoles do not grade in size from midrib
 to margin as a real one's do; and there is still no third dimension — both
 sketches are a flat sheet seen face-on, so neither can be turned edge-on.
 
+### Phase 45 — Sheets in space, a graded lattice, and a table you can feed it *(L)* — **shipped**
+
+The last three, and the third was the one worth doing.
+
+**Both sketches are sheets in space now, not pictures of sheets.** Everything
+before this was a flat drawing: the subject lived in screen coordinates and a
+`tilt` control *sheared* it, which is not a rotation. The angle light took
+through the film was then a number invented to stand in for geometry — and
+that angle is the one thing the wing sketch is entirely about.
+
+Now the ray meets a plane, the plane carries the wing, and the angle of
+incidence is whatever the geometry says. The colour sweeps as you turn it
+because it **must**, not because something was told to sweep. The plane is
+exact and the pleats perturb only the shading normal, so this is a
+normal-mapped plane with a normal-mapped plane's one limitation: a corrugation
+you can see the shading of casts no shadow and has no bumpy outline.
+
+**Measured foreshortening:** the wing covers 10,341 pixels flat, 4,981 at
+sixty degrees, 497 near grazing, and **0 exactly edge-on**. That last is not a
+failure to draw it. Half a micron of membrane has no thickness to show.
+
+**A leaf does, and that is where the two objects part company.** Two hundred
+microns against sixty millimetres of blade is one part in three hundred:
+invisible face-on, and most of the picture once the blade is turned away.
+Measured across a twelvefold change of thickness — at a grazing angle the leaf
+goes **197 pixels to 775**; face-on the same change moves it **9,890 to
+10,474**, which is six per cent.
+
+**And turning it lengthens the path.** Kubelka and Munk take a thickness, and
+a slab looked at from an angle is thicker: face-on the light crosses 200
+microns, at sixty degrees four hundred. The leaf is visibly darker for it —
+**155 to 69** through the blade. A real effect with a one-line cause, absent
+entirely while the sketch was flat.
+
+**The areoles grade from midrib to margin.** Largest beside the midrib and
+smaller towards the edge, where the venation has to be finest because it is
+furthest from a supply. Both lattice axes are graded and both maps stay
+monotone in the across-coordinate — `r(1 + kr)` has derivative `1 + 2kr` —
+because a lattice coordinate that folds back makes cells that overlap
+themselves.
+
+Measured **against an ungraded control**, which is the part that makes it a
+measurement: ungraded, the wall density is **2.19 per hundred pixels inside
+and 2.20 outside** — flat, as it should be. Graded, **3.18 against 4.02**, a
+quarter denser at the margin.
+
+**And the table hook is tested — the path, not the data.** No PROSPECT
+coefficients are to hand and inventing some would be worse than saying so. But
+the *mechanism* is checkable without them: feed it a spectrum that absorbs one
+narrow band and see what is left. A table absorbing 450 nm leaves hue **62**,
+550 nm leaves **288**, 660 nm leaves **185** — yellow, magenta and cyan, each
+the exact complement of what was taken. That says both that the table is used
+in place of the model and that its wavelengths land where they claim, since a
+mis-mapped axis would put the complement in the wrong place.
+
+What remains untested is real measured data travelling down a path that is now
+known to work.
+
+**And a measurement mistake that has now happened three times in this file.**
+Turning the wing into a sheet in space broke four checks, all of which were
+measuring structure on a subject that now has a default rotation — a
+foreshortened net is not the net, and they are all held flat-on now.
+
+But two of them stayed broken for a better reason. `ranks` measured as doing
+nothing — 0.357 against 0.353 — because the metric ran on `vein`, which is
+mostly the four longitudinal ribs, and ribs lie in rows whatever the lattice
+does. On the mesh alone it is **0.114 scattered against 0.164 ranked**. And
+"cells change shape along the wing" was asserted as an along-over-across
+*ratio* comparing two segments of the same fraction of a frame in a wing four
+times wider than tall — two very different numbers of cells, and a ratio that
+said nothing about either. Counted properly, cells shorten from **5.4 walls
+per stretch near the base to 7.2 near the tip**.
+
+And a third: **measure at a size that can resolve what you are measuring.**
+The cell walls are a fixed fraction of a cell, so where the cells are smallest
+the walls are thinnest — and near the tip, which is precisely where the claim
+lives, they fall under a pixel at 400 wide and stop being counted. At that
+size the reading is noise that happens to peak in the middle of the wing; at
+1200 it is monotone, **7.2 walls per stretch near the base to 12.2 near the
+tip**. Two samples of the noisy curve had already looked like a trend once.
+
+Ask the question of one order; count crossings rather than ink; and render
+large enough to see the thing. All three were written down in this file
+before today, and all three were forgotten again.
+
+*Left:* exactly edge-on both sheets vanish, because a plane has no thickness
+and the cut edge is drawn by widening the margin rather than by intersecting a
+slab; the pleats and the bullate quilting are shading normals only, so neither
+casts a shadow on itself; and there is one leaf shape and one wing shape, where
+the venation coordinates would carry almost any outline.
+
 ## 4. Decisions and risks
 
 - **WebGL1 → WebGL2 first.** Everything in Phases 1–3 gets simpler and faster
@@ -3401,6 +3492,7 @@ sketches are a flat sheet seen face-on, so neither can be turned edge-on.
 | 42.1 | Urbach, adaptation knob, clarity, scale — **shipped** | M | 41.1 | room 149,112,63 warm vs 99,125,180 cool unadapted; scale exact |
 | 43.1 | A leaf, sharing the net not the optics — **shipped** | L | 42.1 | green window 170× clearer; hue 111°/40°/342°; R+T ≤ 0.93 |
 | 44.1 | Franck–Condon, four orders, two faces — **shipped** | L | 43.1 | carotenoid peaks 422/448/478 from one transition; the light was zero in both sketches |
+| 45.1 | Sheets in space, graded areoles, table hook — **shipped** | L | 44.1 | wing 0 px edge-on; leaf edge 197→775 with thickness; graded 3.18→4.02 |
 
 **First 30 days, concretely:** 0.1, 0.2, 0.3, then 1.1 with exposure, curves,
 blend and blur as the four proving nodes — one per-pixel adjustment, one

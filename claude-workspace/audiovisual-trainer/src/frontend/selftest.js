@@ -3996,9 +3996,13 @@ c`;
       // wing, so a finer net has proportionally finer veins and the ink on
       // the page stays the same. What changes is how many walls a line across
       // the wing crosses, which is what "finer" means and what is counted.
+      // Flat on, for anything that measures structure. The wing is a sheet in
+      // space now with a default pitch, and a foreshortened net is not the
+      // net — every one of these numbers moved when the rotation arrived.
+      const flatOn = { pitch: [0], yaw: [0], roll: [0] };
       const wallsAt = (n) => { const MW = 420, MH = 264;
         const d = renderSketch(cut(g.source, "  return col;\n}\n", "  return vec3(vein);\n}\n"),
-          MW, MH, { frame: 0, time: 0, values: { ...base, cells: [n] } })
+          MW, MH, { frame: 0, time: 0, values: { ...base, ...flatOn, cells: [n] } })
           .getContext("2d").getImageData(0, 0, MW, MH).data;
         let crossings = 0, rows = 0;
         for (let y = Math.round(MH * 0.44); y < MH * 0.56; y += 3) {
@@ -4124,9 +4128,16 @@ c`;
 
       // 5. And the cells fall into ranks between the ribs when asked to.
       const MW = 520, MH = 325;
+      const flatOn2 = { pitch: [0], yaw: [0], roll: [0] };   // structure, flat on
+      // The *mesh*, not the whole venation. Measured on `vein` this reads
+      // 0.357 against 0.353 and says the ranks knob does nothing — because
+      // `vein` is mostly the four longitudinal ribs, which lie in rows
+      // whatever the lattice does, and they drown the thing being asked
+      // about. Third time in this file: ask the question of one order.
       const rowiness = (rk) => {
-        const d = renderSketch(cut(g.source, "  return col;\n}\n", "  return vec3(vein);\n}\n"),
-          MW, MH, { frame: 0, time: 0, values: { ...base, cells: [10], ranks: [rk] } })
+        const d = renderSketch(cut(g.source, "  return col;\n}\n",
+                                   "  return vec3(smoothstep(0.085, 0.020, wall));\n}\n"),
+          MW, MH, { frame: 0, time: 0, values: { ...base, ...flatOn2, cells: [10], ranks: [rk] } })
           .getContext("2d").getImageData(0, 0, MW, MH).data;
         const fr = [];
         for (let y = Math.round(MH * 0.40); y < MH * 0.60; y++) {
@@ -4166,6 +4177,7 @@ c`;
       const base = {};
       for (const u of us) if (u.value) base[u.name] = u.value.slice();
       const W3 = 400, H3 = 250, bad = [];
+      const flatOn3 = { pitch: [0], yaw: [0], roll: [0] };   // structure, flat on
       const shot = (src, over) => renderSketch(src, W3, H3,
           { frame: 0, time: 0, values: { ...base, ...over } })
         .getContext("2d").getImageData(0, 0, W3, H3).data;
@@ -4207,7 +4219,7 @@ c`;
       //    meets the air. Rows are crossed by going across the wing, so the
       //    gaps between crossings should be shorter in the leading half.
       const veinSrc = cut(g.source, "  return col;\n}\n", "  return vec3(vein);\n}\n");
-      const gaps = (lead) => { const d = shot(veinSrc, { cells: [10], leadFine: [1.2] });
+      const gaps = (lead) => { const d = shot(veinSrc, { ...flatOn3, cells: [10], leadFine: [1.2] });
         const all = [];
         for (let x = Math.round(W3 * 0.35); x < W3 * 0.65; x += 5) {
           const hits = [];
@@ -4265,21 +4277,39 @@ c`;
       if (!/alongGrow = 1\.0 \+ 1\.05 \* pow\(x01, 0\.75\)/.test(wsrc)) {
         bad.push("cells grade by one factor on both axes");
       }
-      // Cells should change *shape* along the wing, not only size: a long
-      // slot near the base and nearer square towards the tip.
-      const cellAspect = (frac) => { const d = shot(veinSrc, { cells: [9] });
-        const x = Math.round(W3 * frac);
-        let across = 0, was = false;
-        for (let y = Math.round(H3 * 0.44); y < H3 * 0.56; y++) {
-          const on = d[(y * W3 + x) * 4] > 128; if (on && !was) across++; was = on; }
-        const y2 = Math.round(H3 * 0.50);
-        let along = 0; was = false;
-        for (let xx = Math.round(W3 * (frac - 0.06)); xx < W3 * (frac + 0.06); xx++) {
-          const on = d[(y2 * W3 + xx) * 4] > 128; if (on && !was) along++; was = on; }
-        return along / Math.max(across, 1); };
-      const baseRatio = cellAspect(0.34), tipRatio = cellAspect(0.62);
-      if (!(tipRatio > baseRatio * 1.05)) {
-        bad.push(`cells do not change shape along the wing (${baseRatio.toFixed(2)} to ${tipRatio.toFixed(2)})`);
+      // Cells shorten along their own length towards the tip, which is what
+      // the second exponent is for. Counted as walls crossed over a fixed
+      // stretch of wing, near the base against near the tip.
+      //
+      // Measured as an along-over-across *ratio* first, which compared two
+      // segments of the same fraction of the frame in a wing four times wider
+      // than tall — two very different numbers of cells, and a ratio that
+      // said nothing about either.
+      // On the mesh alone, and at a size that can resolve it. The walls are a
+      // fixed fraction of a cell, so where cells are smallest the walls are
+      // thinnest — and near the tip, which is exactly where the claim lives,
+      // they fall under a pixel at 400 wide and stop being counted. At that
+      // size the reading is noise that peaks in the middle of the wing; at
+      // 1200 it is monotone. Two samples of a noisy curve looked like a
+      // trend once already, so this takes the two ends of a resolved one.
+      const AW = 1200, AH = 750;
+      const meshSrc = cut(g.source, "  return col;\n}\n",
+                          "  return vec3(smoothstep(0.085, 0.020, wall));\n}\n");
+      const alongDensity = (frac) => {
+        const d = renderSketch(meshSrc, AW, AH, { frame: 0, time: 0,
+          values: { ...base, ...flatOn3, cells: [9] } }).getContext("2d").getImageData(0, 0, AW, AH).data;
+        let total = 0, rows = 0;
+        for (let dy = -20; dy <= 20; dy += 9) {
+          const y = Math.round(AH * 0.50) + dy;
+          let was = false, run = 0;
+          for (let x = Math.round(AW * (frac - 0.05)); x < AW * (frac + 0.05); x++) {
+            const on = d[(y * AW + x) * 4] > 128; if (on && !was) run++; was = on; }
+          total += run; rows++;
+        }
+        return total / Math.max(rows, 1); };
+      const baseRatio = alongDensity(0.32), tipRatio = alongDensity(0.64);
+      if (!(tipRatio > baseRatio * 1.25)) {
+        bad.push(`cells do not shorten towards the tip (${baseRatio.toFixed(1)} to ${tipRatio.toFixed(1)})`);
       }
 
       push({ group: "Generate presets", name: "a wing you can resize, thin out, and light how you like",
@@ -4300,9 +4330,9 @@ c`;
                  + `than disappearing. The absorption's amplitude is an alpha at the band edge in per-`
                  + `micrometre, a quantity a paper would quote rather than a bare knob; the setae replace `
                  + `what they cover instead of being added over it, because a rod of chitin is not a `
-                 + `window; and the cells change shape along the wing as well as size — walls crossed along `
-                 + `against across runs ${baseRatio.toFixed(2)} near the base and ${tipRatio.toFixed(2)} `
-                 + `near the tip` });
+                 + `window; and the cells shorten along their own length towards the tip, `
+                 + `${baseRatio.toFixed(1)} walls crossed over a fixed stretch near the base against `
+                 + `${tipRatio.toFixed(1)} near the tip` });
     } catch (e) {
       push({ group: "Generate presets", name: "a wing you can resize, thin out, and light how you like",
              ok: false, detail: String(e.message).split("\n")[0] });
@@ -4419,11 +4449,14 @@ c`;
       // 5. Four orders of vein, each doing something. Measured by taking one
       //    away at a time, on the vein mask alone so the background cannot
       //    be counted as venation — which it was, at 96% of the frame.
+      // Flat on, for anything that measures structure: the sketch now has a
+      // real rotation and a foreshortened net is not the net.
+      const flatOn = { pitch: [0], yaw: [0], roll: [0] };
       const VW = 900, VH = 560;
       const veinOnly = cut(g.source, "  return mix(bg, col, clamp(rim, 0.0, 1.0));\n}\n",
                            "  return vec3(vein) * clamp(rim, 0.0, 1.0);\n}\n");
       const veinPx = (over) => { const d = renderSketch(veinOnly, VW, VH,
-          { frame: 0, time: 0, values: { ...base, ...over } })
+          { frame: 0, time: 0, values: { ...base, ...flatOn, ...over } })
           .getContext("2d").getImageData(0, 0, VW, VH).data;
         let n = 0; for (let i2 = 0; i2 < VW * VH; i2++) if (d[i2 * 4] > 128) n++; return n; };
       const orders = { all: veinPx({}) };
@@ -4442,7 +4475,7 @@ c`;
       const meshOnly = cut(g.source, "  return mix(bg, col, clamp(rim, 0.0, 1.0));\n}\n",
                            "  return vec3(mesh) * clamp(rim, 0.0, 1.0);\n}\n");
       const crossings = (n) => { const d = renderSketch(meshOnly, VW, VH,
-          { frame: 0, time: 0, values: { ...base, areoles: [n] } })
+          { frame: 0, time: 0, values: { ...base, ...flatOn, areoles: [n] } })
           .getContext("2d").getImageData(0, 0, VW, VH).data;
         let total = 0, rows = 0;
         for (let x = Math.round(VW * 0.40); x < VW * 0.60; x += 7) {
@@ -4471,7 +4504,7 @@ c`;
       //    spongy mesophyll, which scatters hard — and it is matte, because
       //    the cuticle up there is thick and down here is not.
       const satOf = (over) => { const d = renderSketch(g.source, 340, 212,
-          { frame: 0, time: 0, values: { ...base, backlight: [0], ...over } })
+          { frame: 0, time: 0, values: { ...base, ...flatOn, backlight: [0], ...over } })
           .getContext("2d").getImageData(0, 0, 340, 212).data;
         let t = 0, n = 0;
         for (let y = Math.round(212 * 0.38); y < 212 * 0.62; y++)
@@ -4485,7 +4518,7 @@ c`;
       }
 
       // 7. And it draws.
-      const d2 = renderSketch(g.source, 240, 150, { frame: 0, time: 0, values: { ...base } })
+      const d2 = renderSketch(g.source, 240, 150, { frame: 0, time: 0, values: { ...base, ...flatOn } })
         .getContext("2d").getImageData(0, 0, 240, 150).data;
       let greener = 0;
       for (let i = 0; i < 240 * 150; i++) if (d2[i * 4 + 1] > d2[i * 4] + 8 && d2[i * 4 + 1] > d2[i * 4 + 2] + 8) greener++;
@@ -4563,6 +4596,152 @@ c`;
                  + "asked for their dot product got the zero — and a term that is always zero still draws "
                  + "a picture, which is why everything else passed. Both were then tuned around the "
                  + "absence, so putting the light back the right way round broke the tuning of both" });
+    }
+
+    // A sheet in space, a lattice that grades, and a table you can feed it.
+    try {
+      const g = GENERATE_PRESETS.find((x) => x.id === "leaf");
+      const wing = GENERATE_PRESETS.find((x) => x.id === "wing");
+      const bad = [];
+      const grab = (pre) => { const us = parseUniforms(pre.source); const o = {};
+        for (const u of us) if (u.value) o[u.name] = u.value.slice(); return o; };
+      const lb = grab(g), wb = grab(wing);
+
+      // 1. Both are sheets now, not pictures of sheets. Turn one and it
+      //    foreshortens; turn it all the way and a plane has no thickness.
+      const areaOf = (pre, tail, vals, over) => {
+        const src = cut(pre.source, tail, "  return vec3(6.0, 0.0, 6.0);\n}\n");
+        const W4 = 320, H4 = 200;
+        const d = renderSketch(src, W4, H4, { frame: 0, time: 0,
+          values: { ...vals, expose: [0], ...over } }).getContext("2d").getImageData(0, 0, W4, H4).data;
+        let n = 0;
+        for (let i = 0; i < W4 * H4; i++) {
+          if (d[i * 4] > 150 && d[i * 4 + 2] > 150 && d[i * 4 + 1] < 110) n++;
+        }
+        return n; };
+      const LT = "  return mix(bg, col, clamp(rim, 0.0, 1.0));\n}\n";
+      const WT = "  return col;\n}\n";
+      const leafFlat = areaOf(g, LT, lb, { pitch: [0] });
+      const leafTurned = areaOf(g, LT, lb, { pitch: [1.047] });
+      const wingFlat = areaOf(wing, WT, wb, { pitch: [0] });
+      const wingEdge = areaOf(wing, WT, wb, { pitch: [1.5707963] });
+      if (!(leafTurned < leafFlat * 0.7)) bad.push("the leaf does not foreshorten when it turns");
+      if (!(wingEdge === 0)) bad.push(`a wing edge-on covers ${wingEdge} pixels, and it has no thickness to show`);
+
+      // 2. …but a leaf does have a thickness, and edge-on it is most of what
+      //    you see. Invisible face-on, and the whole of the picture at a
+      //    grazing angle: that is the one place a leaf and a wing part ways.
+      const thin = areaOf(g, LT, lb, { pitch: [1.555], lamina: [40] });
+      const thick = areaOf(g, LT, lb, { pitch: [1.555], lamina: [500] });
+      const flatThin = areaOf(g, LT, lb, { pitch: [0], lamina: [40] });
+      const flatThick = areaOf(g, LT, lb, { pitch: [0], lamina: [500] });
+      if (!(thick > thin * 2.0)) bad.push(`edge-on, thickness does not tell (${thin} against ${thick})`);
+      if (!(Math.abs(flatThick - flatThin) < flatThin * 0.12)) {
+        bad.push(`face-on, thickness shows too much (${flatThin} against ${flatThick})`);
+      }
+
+      // 3. And the path through it lengthens as it turns, which is what
+      //    Kubelka and Munk are handed. A leaf edge-on is a darker leaf.
+      const litAt = (over) => { const W4 = 300, H4 = 190;
+        const d = renderSketch(g.source, W4, H4, { frame: 0, time: 0,
+          values: { ...lb, backlight: [1], ...over } }).getContext("2d").getImageData(0, 0, W4, H4).data;
+        let t = 0, n = 0;
+        for (let y = Math.round(H4 * 0.42); y < H4 * 0.58; y++)
+          for (let x = Math.round(W4 * 0.40); x < W4 * 0.60; x++) {
+            const i = (y * W4 + x) * 4; t += Math.max(d[i], d[i + 1], d[i + 2]); n++; }
+        return Math.round(t / n); };
+      const litFlat = litAt({ pitch: [0] }), litTurned = litAt({ pitch: [1.047] });
+      if (!(litTurned < litFlat * 0.75)) {
+        bad.push(`turning the leaf does not lengthen the path (${litFlat} to ${litTurned})`);
+      }
+
+      // 4. The areoles grade from midrib to margin — measured against an
+      //    ungraded control, because a number with nothing beside it says
+      //    nothing about whether the grading did it.
+      const density = (gr, lo, hi) => {
+        const src = cut(g.source, LT,
+          `  float inBand = step(${lo.toFixed(2)}, rAcross) * step(rAcross, ${hi.toFixed(2)});\n`
+          + "  return vec3(mesh, inBand, 0.0) * clamp(rim, 0.0, 1.0);\n}\n");
+        const VW2 = 900, VH2 = 560;
+        const d = renderSketch(src, VW2, VH2, { frame: 0, time: 0,
+          values: { ...lb, graded: [gr], pitch: [0], yaw: [0], roll: [0] } })
+          .getContext("2d").getImageData(0, 0, VW2, VH2).data;
+        let walls = 0, covered = 0;
+        for (let x = Math.round(VW2 * 0.34); x < VW2 * 0.66; x += 3) {
+          let was = false;
+          for (let y = 0; y < VH2; y++) {
+            const i = (y * VW2 + x) * 4;
+            if (d[i + 1] < 128) { was = false; continue; }
+            covered++;
+            const on = d[i] > 128;
+            if (on && !was) walls++;
+            was = on;
+          }
+        }
+        return covered > 200 ? 100 * walls / covered : 0; };
+      const flatIn = density(0, 0.05, 0.5), flatOut = density(0, 0.5, 0.95);
+      const gradIn = density(1, 0.05, 0.5), gradOut = density(1, 0.5, 0.95);
+      const flatRatio = flatOut / Math.max(flatIn, 1e-6), gradRatio = gradOut / Math.max(gradIn, 1e-6);
+      if (!(Math.abs(flatRatio - 1) < 0.12)) bad.push(`the ungraded lattice is not uniform (${flatRatio.toFixed(2)})`);
+      if (!(gradRatio > 1.15)) bad.push(`grading does not crowd the margin (${gradRatio.toFixed(2)})`);
+
+      // 5. The table hook. No PROSPECT coefficients are to hand, so what is
+      //    checked is the *path* — that a supplied table is used instead of
+      //    the model, and that its wavelengths land where they claim to.
+      //    A spike that absorbs one band must leave that band's complement.
+      const spikeAt = (nm0) => { const c2 = document.createElement("canvas");
+        c2.width = 350; c2.height = 1;
+        const cx = c2.getContext("2d");
+        const img = cx.createImageData(350, 1);
+        for (let i = 0; i < 350; i++) {
+          const nm = 380 + i + 0.5;
+          img.data[i * 4] = Math.round(255 * Math.exp(-0.5 * ((nm - nm0) / 18) ** 2));
+          img.data[i * 4 + 3] = 255;
+        }
+        cx.putImageData(img, 0, 0);
+        return c2; };
+      const hueWith = (pic, over) => { const W4 = 260, H4 = 162;
+        const d = renderSketch(g.source, W4, H4, { frame: 0, time: 0,
+          values: { ...lb, backlight: [0], pitch: [0], yaw: [0], roll: [0], ...over },
+          images: pic ? { spectra: pic } : {} }).getContext("2d").getImageData(0, 0, W4, H4).data;
+        let r = 0, gg = 0, b2 = 0, n = 0;
+        for (let y = Math.round(H4 * 0.42); y < H4 * 0.58; y++)
+          for (let x = Math.round(W4 * 0.35); x < W4 * 0.65; x++) {
+            const i = (y * W4 + x) * 4; r += d[i]; gg += d[i + 1]; b2 += d[i + 2]; n++; }
+        r /= n; gg /= n; b2 /= n;
+        return +(((Math.atan2(Math.sqrt(3) * (gg - b2), 2 * r - gg - b2) * 180 / Math.PI) + 360) % 360).toFixed(0); };
+      const only = { chlA: [30], chlB: [0], carot: [0], antho: [0] };
+      const hBlue = hueWith(spikeAt(450), only);
+      const hGreen = hueWith(spikeAt(550), only);
+      const hRed = hueWith(spikeAt(660), only);
+      const near = (h, want) => Math.abs(((h - want + 540) % 360) - 180) < 45;
+      if (!near(hBlue, 60)) bad.push(`a table absorbing 450 nm gives hue ${hBlue}, not yellow`);
+      if (!near(hGreen, 300)) bad.push(`a table absorbing 550 nm gives hue ${hGreen}, not magenta`);
+      if (!near(hRed, 190)) bad.push(`a table absorbing 660 nm gives hue ${hRed}, not cyan`);
+
+      push({ group: "Generate presets", name: "a leaf you can turn edge-on, and a table you can feed it",
+             ok: bad.length === 0,
+             detail: bad.length ? bad.join(" · ")
+               : `both sketches are sheets in space now rather than pictures of sheets, so the angle light `
+                 + `takes through them is whatever the geometry says. The leaf goes ${leafFlat} pixels to `
+                 + `${leafTurned} at sixty degrees, and a wing turned exactly edge-on covers ${wingEdge} — `
+                 + `half a micron of membrane has no thickness to show, which is not a failure to draw it. `
+                 + `A leaf does: at a grazing angle its cut edge takes it from ${thin} pixels to ${thick} `
+                 + `across a twelvefold change of thickness, while face-on the same change moves `
+                 + `${flatThin} to ${flatThick}. Invisible flat, and most of the picture edge-on — the one `
+                 + `place a leaf and a wing stop being the same object. Turning it also lengthens the path `
+                 + `Kubelka and Munk are handed, so a leaf held over is a darker leaf: ${litFlat} to `
+                 + `${litTurned}. The areoles crowd towards the margin — ${gradIn.toFixed(2)} walls per `
+                 + `hundred pixels inside against ${gradOut.toFixed(2)} outside, where an ungraded lattice `
+                 + `measures ${flatIn.toFixed(2)} and ${flatOut.toFixed(2)} and is flat. And the table hook `
+                 + `carries: a supplied spectrum absorbing 450, 550 and 660 nm leaves hues ${hBlue}, `
+                 + `${hGreen} and ${hRed} — yellow, magenta and cyan, each the complement of what was `
+                 + `taken, which says both that the table is used and that its wavelengths land where they `
+                 + `claim. What is still untested is real PROSPECT data, because none is to hand — the path `
+                 + `is checked, the numbers that would travel down it are not` });
+    } catch (e) {
+      push({ group: "Generate presets", name: "a leaf you can turn edge-on, and a table you can feed it",
+             ok: false, detail: String(e.message).split("\n")[0] });
     }
 
     // An annotation that ate the ones after it.

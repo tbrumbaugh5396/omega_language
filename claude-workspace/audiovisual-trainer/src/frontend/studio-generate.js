@@ -1188,7 +1188,10 @@ uniform float leadFine;   // @range 0 1.5 @default 0.7 @help finer cells along t
 uniform float ranks;      // @range 0 1 @default 0.75 @help how strictly the cells line up between ribs
 uniform float samples;    // @range 3 48 @step 1 @int @default 24 @help wavelengths in the integral
 uniform float jitter;     // @toggle @default 1 @label stratify @help offset the samples per pixel
-uniform float tilt;       // @range -1.2 1.2 @default 0.35 @help how the wing is held to the light
+uniform float yaw;        // @range -3.15 3.15 @default 0.15 @help turned about its own long axis
+uniform float pitch;      // @range -1.55 1.55 @default 0.5 @help tipped towards you or away
+uniform float roll;       // @range -3.15 3.15 @default -0.2 @help leaned in the frame
+uniform float lightUp;    // @range -1 1.6 @default 0.6 @help how high the lamp sits
 uniform float lightTurn;  // @range -3.15 3.15 @default -0.7
 uniform float cells;      // @range 4 40 @step 1 @int @default 16 @help how fine the net is
 uniform float stretch;    // @range 1 6 @default 3.2 @help cells along the wing, against cells across it
@@ -1598,12 +1601,51 @@ vec3 behind(vec2 pp) {
 }
 
 // -------------------------------------------------------------- the picture
+/** Yaw, then pitch, then roll — the order the words mean about an object. */
+mat3 sheetRot() {
+  float cy = cos(yaw), sy = sin(yaw);
+  float cx = cos(pitch), sx = sin(pitch);
+  float cz = cos(roll), sz = sin(roll);
+  mat3 my = mat3(cy, 0.0, -sy,  0.0, 1.0, 0.0,  sy, 0.0, cy);
+  mat3 mx = mat3(1.0, 0.0, 0.0,  0.0, cx, sx,  0.0, -sx, cx);
+  mat3 mz = mat3(cz, sz, 0.0,  -sz, cz, 0.0,  0.0, 0.0, 1.0);
+  return mz * mx * my;
+}
+
+/**
+ * A sheet in space, and not a picture of one.
+ *
+ * Everything above this was a flat drawing: the wing lived in screen
+ * coordinates and the tilt control skewed it, which is a shear and not a
+ * rotation. The angle light took through the film was then a number invented
+ * to stand in for the geometry, and the one thing this sketch is about is
+ * that angle. Now the ray meets a plane, the plane carries the wing, and the
+ * angle of incidence is whatever the geometry says — so the colour sweeps as
+ * you turn it because it *must*, not because something was told to sweep.
+ *
+ * The plane is exact. The pleats perturb the shading normal only, so the
+ * silhouette stays a straight-edged sheet — a normal-mapped plane, with a
+ * normal-mapped plane's one limitation, which is that a corrugation you can
+ * see the shading of has no shadow and no bumpy outline.
+ */
 vec3 shadeWing(vec2 pp) {
   vec3 bg = behind(pp);
-  // Scaled about the middle of the frame. The lattice lives in wing
-  // coordinates, so a bigger wing is the same wing seen closer — the same
-  // count of cells, drawn larger — rather than a wing with more of them.
-  vec2 r = vec2(pp.x, pp.y - pp.x * 0.10 * tilt) / max(scale, 0.05);
+  mat3 rot = sheetRot();
+  vec3 axisU = rot * vec3(1.0, 0.0, 0.0);
+  vec3 axisV = rot * vec3(0.0, 1.0, 0.0);
+  vec3 axisN = rot * vec3(0.0, 0.0, 1.0);
+
+  vec3 ro = vec3(0.0, 0.0, 3.4);
+  vec3 rd = normalize(vec3(pp * 0.42, -1.0));
+  float denom = dot(rd, axisN);
+  // Exactly edge-on, a sheet half a micron thick is not there. That is not a
+  // failure to draw it — it is what a wing does when you turn it edge-on.
+  if (abs(denom) < 1e-5) return bg;
+  float tHit = dot(-ro, axisN) / denom;
+  if (tHit <= 0.0) return bg;
+  vec3 hit = ro + rd * tHit;
+
+  vec2 r = vec2(dot(hit, axisU), dot(hit, axisV)) / max(scale, 0.05);
   vec2 q = vec2((r.x + 1.48) / 2.90, r.y / 0.74);
   if (q.x < -0.03 || q.x > 1.04) return bg;
   float edge = across(q);
@@ -1650,10 +1692,13 @@ vec3 shadeWing(vec2 pp) {
   // Each panel is taut between its walls, so it domes — and the dome is what
   // gives one cell a sweep of colour across it instead of one flat tint,
   // because the angle through the film changes as the surface curves away.
-  vec3 nrm = normalize(vec3((panel - 0.5) * 0.34 * dome + edge * 0.10,
-                            (hash21(cell.yz + 3.1) - 0.5) * 0.34 * dome + edge * 0.12, 1.0));
+  vec3 localN = normalize(vec3((panel - 0.5) * 0.34 * dome + edge * 0.10,
+                               (hash21(cell.yz + 3.1) - 0.5) * 0.34 * dome + edge * 0.12, 1.0));
+  // Out of the sheet's frame and into the world, so the pleats turn with the
+  // wing rather than staying stuck to the screen.
+  vec3 nrm = normalize(axisU * localN.x + axisV * localN.y + axisN * localN.z);
 
-  vec3 view = normalize(vec3(pp * 0.30, -1.0));
+  vec3 view = rd;
   // The light is on the *viewer's* side of the wing, so its z is positive.
   //
   // It was negative, and that made every specular term in this sketch exactly
@@ -1663,7 +1708,7 @@ vec3 shadeWing(vec2 pp) {
   // supposed to sweep as the wing turns, and lightTurn itself: none of them
   // did anything, and the iridescence was coming from the constant term and
   // the Fresnel factor alone. Measured as 0 max, 0 mean over the membrane.
-  vec3 lightDir = normalize(vec3(sin(lightTurn), 0.45 + 0.7 * tilt, 0.8));
+  vec3 lightDir = normalize(vec3(sin(lightTurn), lightUp, 0.8));
   vec3 halfv = normalize(lightDir - view);
   float cosI = clamp(abs(dot(halfv, nrm)), 0.05, 1.0);
 
@@ -1819,11 +1864,16 @@ uniform float veinsN;     // @range 3 14 @step 1 @int @default 8 @help pairs of 
 uniform float tertiary;   // @range 0 14 @step 1 @int @default 6 @help third-order veins, the ladder between the seconds
 uniform float areoles;    // @range 2 20 @step 1 @int @default 9 @help compartments between them
 uniform float veinlets;   // @range 0 1 @default 0.7 @help stubs that end inside an areole and join nothing
+uniform float graded;     // @range 0 1 @default 0.65 @help how much the areoles shrink towards the margin
 uniform float face;       // @options upper,lower @default 0 @label the face you are looking at
 uniform float teeth;      // @range 0 1 @default 0.6 @help how toothed the margin is
 uniform float gloss;      // @range 0 1 @default 0.45 @help the cuticle's shine
 uniform float bullate;    // @range 0 1 @default 0.5 @help how much the blade puffs between veins
 uniform float lightTurn;  // @range -3.15 3.15 @default -0.8
+uniform float yaw;        // @range -3.15 3.15 @default 0.2 @help turned about its own long axis
+uniform float pitch;      // @range -1.55 1.55 @default 0.35 @help tipped towards you or away
+uniform float roll;       // @range -3.15 3.15 @default -0.12 @help leaned in the frame
+uniform float lamina;     // @range 40 500 @default 200 @help the blade's thickness, in micrometres
 uniform float scale;      // @range 0.3 2.5 @default 1
 uniform vec3  backC;      // @color @default #0a0c10
 uniform float expose;     // @range -2 2 @default 0
@@ -2080,13 +2130,50 @@ vec3 behind(vec2 pp) {
 }
 
 // ------------------------------------------------------------- the picture
+/** Yaw, then pitch, then roll. */
+mat3 sheetRot() {
+  float cy = cos(yaw), sy = sin(yaw);
+  float cx = cos(pitch), sx = sin(pitch);
+  float cz = cos(roll), sz = sin(roll);
+  mat3 my = mat3(cy, 0.0, -sy,  0.0, 1.0, 0.0,  sy, 0.0, cy);
+  mat3 mx = mat3(1.0, 0.0, 0.0,  0.0, cx, sx,  0.0, -sx, cx);
+  mat3 mz = mat3(cz, sz, 0.0,  -sz, cz, 0.0,  0.0, 0.0, 1.0);
+  return mz * mx * my;
+}
+
+/**
+ * A blade in space.
+ *
+ * The same change the wing needed, and it matters here for a second reason:
+ * Kubelka and Munk take a *thickness*, and a slab looked at from an angle is
+ * thicker. Face-on the light crosses 200 microns; at sixty degrees it crosses
+ * four hundred, and the leaf is visibly darker for it. That is a real effect
+ * with a one-line cause, and it was simply absent while the sketch was flat.
+ *
+ * And a leaf has an edge worth seeing. Two hundred microns against sixty
+ * millimetres of blade is one part in three hundred: invisible face-on, and a
+ * line a few pixels wide once the blade is turned away — which is the point
+ * where a leaf and an insect's wing stop looking like the same object, since
+ * half a micron of wing has no edge to show at any angle.
+ */
 vec3 shadeLeaf(vec2 pp) {
   vec3 bg = behind(pp);
-  // Which side you are looking at. Turning a leaf over mirrors it, so the
-  // venation has to mirror with it — and then everything below changes,
-  // because the two faces of a leaf are two different tissues.
   float under = face > 0.5 ? 1.0 : 0.0;
-  vec2 r0 = pp / max(scale, 0.05);
+
+  mat3 rot = sheetRot();
+  vec3 axisU = rot * vec3(1.0, 0.0, 0.0);
+  vec3 axisV = rot * vec3(0.0, 1.0, 0.0);
+  vec3 axisN = rot * vec3(0.0, 0.0, 1.0);
+  vec3 ro = vec3(0.0, 0.0, 3.2);
+  vec3 rd = normalize(vec3(pp * 0.44, -1.0));
+  float denom = dot(rd, axisN);
+  if (abs(denom) < 1e-5) return bg;
+  float tHit = dot(-ro, axisN) / denom;
+  if (tHit <= 0.0) return bg;
+  vec3 hit = ro + rd * tHit;
+
+  vec2 r0 = vec2(dot(hit, axisU), dot(hit, axisV)) / max(scale, 0.05);
+  // Turning a leaf over mirrors it, so the venation mirrors with it.
   vec2 q = vec2((r0.x + 1.30) / 2.55, (under > 0.5 ? -r0.y : r0.y) / 0.86);
   if (q.x < -0.06 || q.x > 1.06) return bg;
 
@@ -2094,12 +2181,17 @@ vec3 shadeLeaf(vec2 pp) {
   float rAcross = abs(q.y) / max(half_, 1e-4);
   float ph = veinPhase(q, rAcross);
 
+  // The cut edge, as wide on screen as the blade is thick — divided by how
+  // far the surface has turned away, which is what makes it appear.
+  float edgeBand = (lamina / 60000.0) * 2.55 / max(half_ * 0.86, 1e-4)
+                 / max(abs(denom), 0.02);
+
   // The margin, with a tooth for every secondary vein — which is what a real
   // toothed leaf has, and it costs nothing here because both are the same
   // number. The teeth point forward, so the wave is skewed rather than a sine.
   float saw = fract(ph);
   float toothed = 1.0 - teeth * 0.11 * (1.0 - saw * saw);
-  if (rAcross > toothed * (q.x < 0.04 ? 0.25 : 1.0)) {
+  if (rAcross > toothed * (q.x < 0.04 ? 0.25 : 1.0) + edgeBand) {
     // The petiole: a stalk at the base, outside the blade.
     float stalk = smoothstep(0.055, 0.0, abs(q.y)) * smoothstep(-0.06, 0.0, q.x) * step(q.x, 0.09);
     if (stalk < 0.5) return bg;
@@ -2120,7 +2212,15 @@ vec3 shadeLeaf(vec2 pp) {
     : 0.0;
 
   // Fourth order and below: the areoles, and the stubs inside them.
-  vec2 ar = areoleWall(vec2(ph * 1.15, rAcross * float(areoles)));
+  // Areoles are not all one size. They are largest beside the midrib and get
+  // smaller towards the margin, which is where the venation has to be finest
+  // because it is furthest from a supply. Both axes are graded, and both maps
+  // stay monotone in rAcross — r(1 + kr) has derivative 1 + 2kr, which is
+  // positive — because a lattice coordinate that folds back makes cells that
+  // overlap themselves.
+  float grade = 1.0 + graded * 1.30 * rAcross;
+  vec2 ar = areoleWall(vec2(ph * 1.15 * grade,
+                            rAcross * float(areoles) * (1.0 + graded * 0.65 * rAcross)));
   float mesh = smoothstep(0.10, 0.025, ar.x);
   // Wide enough to exist. The wall distance is in *cell* units and an areole
   // is one unit across, so 0.055 of one is a line six tenths of a pixel wide
@@ -2142,7 +2242,11 @@ vec3 shadeLeaf(vec2 pp) {
   // first version had the first two very nearly cancel: thickness up 2.9x
   // against pigment down to 0.38 is an optical depth of 1.1x, which is no
   // change at all, and the veins were invisible for exactly that reason.
-  float d = thick * (1.0 + 0.5 * vein) * (0.86 + 0.28 * (1.0 - rAcross));
+  // …and thicker to look through when it is turned away, which is Beer and
+  // Lambert's business and Kubelka and Munk's alike: the path is the slab
+  // over the cosine.
+  float d = thick * (1.0 + 0.5 * vein) * (0.86 + 0.28 * (1.0 - rAcross))
+          / clamp(abs(denom), 0.20, 1.0);
   // The underside is a different tissue and looks it. The palisade layer —
   // the dense rank of chloroplasts — is packed against the *upper* surface,
   // so the lower face has fewer of them and is paler for that reason alone.
@@ -2192,9 +2296,10 @@ vec3 shadeLeaf(vec2 pp) {
   float puff = bullate * smoothstep(0.0, 0.26, ar.x) * (1.0 - vein);
   puff -= under * bullate * vein * 0.55;
   vec2 cellId = floor(vec2(ph * 1.15, rAcross * float(areoles)));
-  vec3 nrm = normalize(vec3((hash21(cellId) - 0.5) * puff * 1.5 + q.y * 0.10,
-                            (hash21(cellId + 5.7) - 0.5) * puff * 1.5 + q.y * 0.30, 1.0));
-  vec3 view = normalize(vec3(pp * 0.32, -1.0));
+  vec3 localN = normalize(vec3((hash21(cellId) - 0.5) * puff * 1.5 + q.y * 0.10,
+                               (hash21(cellId + 5.7) - 0.5) * puff * 1.5 + q.y * 0.30, 1.0));
+  vec3 nrm = normalize(axisU * localN.x + axisV * localN.y + axisN * localN.z);
+  vec3 view = rd;
   // Positive z: the light is in front of the leaf, on the viewer's side. With
   // it negative both the lambert term and the cuticle's highlight came out
   // identically zero, and the leaf was lit by its ambient constant alone.
@@ -2229,8 +2334,12 @@ vec3 shadeLeaf(vec2 pp) {
   col += gLamp * spec * gloss * mix(0.9, 0.10, under) * (1.0 - back * 0.75);
 
   // The margin, softened, and a little darkening where the blade turns away.
-  float rim = 1.0 - smoothstep(toothed - 0.03, toothed + 0.01, rAcross);
   col *= 1.0 - 0.30 * smoothstep(0.78, 1.0, rAcross);
+  // Past the blade, the cut edge: pale, because it is torn mesophyll with no
+  // cuticle over it and nothing much left to absorb.
+  float onEdge = smoothstep(toothed - 0.004, toothed + 0.004, rAcross);
+  col = mix(col, gLamp * 0.30 + refl * 0.35, onEdge);
+  float rim = 1.0 - smoothstep(toothed + edgeBand - 0.006, toothed + edgeBand + 0.004, rAcross);
   return mix(bg, col, clamp(rim, 0.0, 1.0));
 }
 
