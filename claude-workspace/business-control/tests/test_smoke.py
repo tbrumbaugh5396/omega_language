@@ -3864,6 +3864,29 @@ ok(c.post(f"/api/store/admin/engagements/{_eid}/attach", headers=A,
 c.delete(f"/api/store/admin/documents/{_g4['doc_id']}", headers=A)
 c.delete(f"/api/store/admin/documents/{_scan['id']}", headers=A)
 
+# --- routes, choice fields, and columns that line up -----------------------
+ok("function applyRoute" in _ops and "hashchange" in _ops
+   and "#/clients/" in _ops.replace("`", ""),
+   "the unique pages carry real URLs — #/orders, #/clients/3 — read on "
+   "load, written on render, so the address bar and the app can't disagree")
+ok("function fillField" in _ops and 'tok.split(" / ")' in _ops
+   and "— leave the brackets —" in _ops,
+   "a token that lists its own values renders as a select of those values, "
+   "and every fill is labelled optional — blank keeps the brackets")
+ok('<span class="req">required</span>' in _ops,
+   "while the fields that genuinely are required say so")
+for _cls in ("gate-line", "gl-acts", "doc-line", "dl-acts", "log-line"):
+    ok(f'class="{_cls}"' in _ops or f"'{_cls}'" in _ops,
+       f"{_cls} markup exists for the aligned layout")
+_css2 = c.get("/ops/styles.css").text
+ok("grid-template-columns: repeat(3, 92px)" in _css2,
+   "gate buttons live in three fixed slots, so Link doc sits under Link doc "
+   "and Confirm under Mark passed all the way down")
+ok(".doc-line" in _css2 and ".dl-acts" in _css2
+   and ".log-line" in _css2 and "92px 130px minmax(0, 1fr)" in _css2,
+   "documents get one aligned line each, and the activity log's actors "
+   "share a column")
+
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.

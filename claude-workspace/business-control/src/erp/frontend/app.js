@@ -12,6 +12,25 @@ const S = {
 };
 
 const $ = (sel) => document.querySelector(sel);
+
+/* ---------- routes ----------
+   The unique pages get real URLs: #/orders, #/clients, #/clients/3 — enough
+   to bookmark, share, and use the back button; the hash is read on load and
+   written on every render, so the address bar and the app can't disagree. */
+function applyRoute() {
+  const m = location.hash.match(/^#\/([\w-]+)(?:\/(\d+))?$/);
+  if (!m) return false;
+  S.tab = m[1];
+  S.engId = (m[1] === "clients" && m[2]) ? +m[2] : null;
+  return true;
+}
+function syncRoute() {
+  const want = (S.tab === "clients" && S.engId)
+    ? `#/clients/${S.engId}` : `#/${S.tab || "shop"}`;
+  if (location.hash !== want) history.pushState(null, "", want);
+}
+addEventListener("hashchange", () => { if (applyRoute()) render(); });
+addEventListener("popstate", () => { if (applyRoute()) render(); });
 const view = () => $("#view");
 const money = (c) => "$" + (c / 100).toFixed(2);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
@@ -1007,6 +1026,7 @@ function emptyState(icon, title, hint) {
 
 async function render() {
   renderChrome();
+  syncRoute();
   clearInterval(S._dcTimer);        // stop polling Discord once you leave it
   clearInterval(S._slackTimer);     // and Slack
   if (S.promoLanding) return renderPromoLanding();
@@ -4848,6 +4868,7 @@ async function boot() {
     toast("payment cancelled — your order is saved as pay-on-delivery");
     S._payCancelled = false;
   }
+  applyRoute();          // a shared #/clients/3 link opens where it points
   render();
 }
 boot();
@@ -4859,6 +4880,26 @@ let DOCS = null;
 // The studio kit run from here: one record per client, documents generated
 // from the kit's own templates into the vault, signatures through the vault's
 // flow, and the per-client folder generated on demand — never kept by hand.
+
+/* A token that lists its own values — [A / B / C], [Yes / No] — is a set
+   of options, not a free blank; render it as a select. Everything else is
+   optional by design: blank keeps the brackets. */
+function fillField(tok, suggestedVal) {
+  const parts = tok.split(" / ").map((x) => x.trim());
+  const isChoice = parts.length >= 2 && parts.every(
+    (x) => x && x.length <= 24 && !x.includes(":"));
+  const label = `<label>[${esc(tok)}]
+    <span class="opt">optional</span></label>`;
+  if (isChoice) {
+    return `${label}<select data-fill="${esc(tok)}">
+      <option value="">— leave the brackets —</option>
+      ${parts.map((x) => `<option ${suggestedVal === x ? "selected" : ""}
+        >${esc(x)}</option>`).join("")}</select>`;
+  }
+  return `${label}<input data-fill="${esc(tok)}"
+    value="${esc(suggestedVal || "")}"
+    placeholder="leave blank to keep the brackets">`;
+}
 
 function engDatesForm(id, dates) {
   const row = (r) => `<div class="row2" style="margin-bottom:6px">
@@ -4932,7 +4973,8 @@ async function renderClients() {
 
 function engForm(e) {
   modal(`<h3>${e ? "Edit client" : "New client"}</h3>
-    <label>Client name</label><input id="ef-name" value="${esc(e ? e.name : "")}">
+    <label>Client name <span class="req">required</span></label>
+    <input id="ef-name" value="${esc(e ? e.name : "")}">
     <div class="row2">
       <div><label>Package (A / B / C)</label>
         <input id="ef-pkg" value="${esc(e ? e.package : "")}"></div>
@@ -5012,32 +5054,34 @@ async function renderEngagement(id) {
   d.docs.forEach((x) => (byStage[x.stage] = byStage[x.stage] || []).push(x));
 
   const docRowE = (x) => `
-    <div class="sig-row">
-      <b>${esc(x.title)}</b>
-      <span class="pill ${x.side === "internal" ? "warn" : "ok"}">${
-        x.side === "internal" ? "internal" : "to client"}</span>
-      ${x.signed ? `<span class="pill ok">${x.signed} signed</span>` : ""}
-      ${x.awaiting ? `<span class="pill warn">${x.awaiting} awaiting</span>` : ""}
-      ${x.blanks ? `<button class="btn alt sm" data-engfill="${x.id}"
-          title="the brackets still unfilled — same form as generation,
-          shorter each time">Fill blanks (${x.blanks})</button>` : ""}
-      <button class="btn alt sm" data-engview="${x.id}"
-        data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
-        data-signed="${x.signed || 0}"
-        title="opens the document — signatures shown on it, PDF one click
-        away">View</button>
-      <button class="btn alt sm" data-engdl="${x.id}"
-        data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
-        data-name="${esc(x.filename || x.title)}">PDF</button>
-      <button class="btn alt sm" data-engsign="${x.id}">${opsIcon("pen","btn-ic")} Sign</button>
-      <button class="btn alt sm" data-engopen="${esc(x.title)}">Open</button>
-      <button class="btn alt sm" data-engscan="${x.id}"
-        data-stage="${x.stage}" data-side="${x.side}"
-        data-title="${esc(x.title)}"
-        title="file the signed paper's scan or photo beside this
-        document">Upload scan</button>
-      <button class="btn alt sm" data-engrm="${x.id}"
-        data-title="${esc(x.title)}">Remove</button>
+    <div class="doc-line">
+      <span class="dl-title"><b title="${esc(x.title)}">${esc(x.title)}</b>
+        <span class="pill ${x.side === "internal" ? "warn" : "ok"}">${
+          x.side === "internal" ? "internal" : "to client"}</span>
+        ${x.signed ? `<span class="pill ok">${x.signed} signed</span>` : ""}
+        ${x.awaiting ? `<span class="pill warn">${x.awaiting} awaiting</span>` : ""}
+      </span>
+      <span class="dl-acts">
+        <span class="ga-slot">${x.blanks ? `<button class="btn alt sm"
+          data-engfill="${x.id}" title="the brackets still unfilled — same
+          form as generation, shorter each time">Fill (${x.blanks})</button>`
+          : ""}</span>
+        <button class="btn alt sm" data-engview="${x.id}"
+          data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
+          data-signed="${x.signed || 0}"
+          title="opens the document — signatures shown on it">View</button>
+        <button class="btn alt sm" data-engdl="${x.id}"
+          data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
+          data-name="${esc(x.filename || x.title)}">PDF</button>
+        <button class="btn alt sm" data-engsign="${x.id}">Sign</button>
+        <button class="btn alt sm" data-engopen="${esc(x.title)}">Open</button>
+        <button class="btn alt sm" data-engscan="${x.id}"
+          data-stage="${x.stage}" data-side="${x.side}"
+          data-title="${esc(x.title)}" title="file the signed paper's scan
+          or photo beside this document">Scan</button>
+        <button class="btn alt sm" data-engrm="${x.id}"
+          data-title="${esc(x.title)}">Remove</button>
+      </span>
     </div>`;
 
   // Two kit stages can share one client folder (the enquiry scripts file
@@ -5118,26 +5162,35 @@ async function renderEngagement(id) {
       : g.doc_id
         ? '<span class="pill warn">awaiting signature</span>'
         : '<span class="pill">open</span>';
-    const docBit = g.doc_title
-      ? `<span class="dim">${esc(g.doc_title)}</span>` : "";
-    const noteBit = g.note && !g.doc_id
-      ? `<span class="dim" title="where the evidence is filed">${esc(g.note)}</span>` : "";
+    const docBit = g.doc_title ? esc(g.doc_title)
+      : g.note && !g.doc_id ? esc(g.note) : "";
+    /* Three fixed slots, right to left: [payment] [link] [pass]. A row that
+       lacks a button keeps its empty slot, so Link doc sits under Link doc
+       and Confirm under Mark passed all the way down. */
+    const slot = (h) => `<span class="ga-slot">${h || ""}</span>`;
     const pay = g.kind === "money" && !g.passed_at
       ? (g.has_payment_link
           ? `<button class="btn alt sm" data-gate-paycheck="${g.gate}"
-               title="ask Stripe whether the link was paid">Check payment</button>`
+               title="ask Stripe whether the link was paid">Check pay</button>`
           : `<button class="btn alt sm" data-gate-paylink="${g.gate}"
-               title="a Stripe checkout link to send with the invoice">Payment
+               title="a Stripe checkout link to send with the invoice">Pay
                link</button>`)
       : "";
-    const controls = g.passed_at || g.doc_id
-      ? `<button class="btn alt sm" data-gate-reopen="${g.gate}">Reopen</button>`
-      : `${pay}<button class="btn alt sm" data-gate-link="${g.gate}">Link doc</button>
-         <button class="btn alt sm" data-gate-pass="${g.gate}"
-           data-kind="${g.kind}">${g.kind === "money" ? "Confirm" : "Mark passed"}</button>`;
-    return `<div class="sig-row">
-      <b>${esc(g.label)}</b> ${state} ${docBit} ${noteBit}
-      <span class="dim">closes ${esc(stageName(g.stage))}</span> ${controls}
+    const acts = g.passed_at || g.doc_id
+      ? slot("") + slot("") + slot(`<button class="btn alt sm"
+          data-gate-reopen="${g.gate}">Reopen</button>`)
+      : slot(pay)
+        + slot(`<button class="btn alt sm" data-gate-link="${g.gate}">Link
+            doc</button>`)
+        + slot(`<button class="btn alt sm" data-gate-pass="${g.gate}"
+            data-kind="${g.kind}">${g.kind === "money"
+              ? "Confirm" : "Mark passed"}</button>`);
+    return `<div class="gate-line">
+      <b>${esc(g.label)}</b>
+      <span class="gl-state">${state}</span>
+      <span class="gl-doc dim" title="${docBit}">${docBit}</span>
+      <span class="gl-closes dim">closes ${esc(stageName(g.stage))}</span>
+      <span class="gl-acts">${acts}</span>
     </div>`;
   };
 
@@ -5166,22 +5219,22 @@ async function renderEngagement(id) {
           e.approver_name ? "approver " + esc(e.approver_name) + " · " : ""}${
           e.launch_target ? "launch " + esc(e.launch_target) : ""}</p>
       </div>
-      <div class="top-actions">
-        <button class="btn alt" id="eng-edit">Edit</button>
-        <button class="btn alt" id="eng-dates">Dates</button>
+      <div class="top-actions eng-actions">
+        <button class="btn alt sm" id="eng-edit">Edit</button>
+        <button class="btn alt sm" id="eng-dates">Dates</button>
         ${e.portal_url
-          ? `<button class="btn alt" id="eng-portal-copy"
+          ? `<button class="btn alt sm" id="eng-portal-copy"
                title="the client's live roadmap — everything on it is the
-               to-client side only">Copy portal link</button>
-             <button class="btn alt" id="eng-portal-rotate"
+               to-client side only">Portal link</button>
+             <button class="btn alt sm" id="eng-portal-rotate"
                title="the old link dies the moment a new one exists">Rotate</button>
-             <button class="btn alt" id="eng-portal-revoke">Revoke</button>`
-          : `<button class="btn alt" id="eng-portal-make">Create portal
-               link</button>`}
-        <button class="btn alt" id="eng-export" title="write the folder tree
-          under data/exports/clients/">${opsIcon("file","btn-ic")} Export folder</button>
-        <button class="btn" id="eng-bundle" title="zip of the to-client side
-          only — the internal wall holds">${opsIcon("box","btn-ic")} Client bundle</button>
+             <button class="btn alt sm" id="eng-portal-revoke">Revoke</button>`
+          : `<button class="btn alt sm" id="eng-portal-make">Create
+               portal</button>`}
+        <button class="btn alt sm" id="eng-export" title="write the folder
+          tree under data/exports/clients/">Export</button>
+        <button class="btn sm" id="eng-bundle" title="zip of the to-client
+          side only — the internal wall holds">Client bundle</button>
       </div>
     </div>
     ${(() => { const n = nextStep(); return `
@@ -5199,9 +5252,10 @@ async function renderEngagement(id) {
     </div>
     ${merged.map(stageCard).join("")}
     ${d.log.length ? `<div class="card"><b>Activity</b>
-      <div class="sig-rows">${d.log.map((l) => `
-        <div class="sig-row"><span class="dim">${fmtDate(l.at)}</span>
-          <b>${esc(l.actor)}</b> <span>${esc(l.what)}</span></div>`).join("")}
+      <div class="log-lines">${d.log.map((l) => `
+        <div class="log-line"><span class="dim">${fmtDate(l.at)}</span>
+          <b title="${esc(l.actor)}">${esc(l.actor)}</b>
+          <span class="dim">${esc(l.what)}</span></div>`).join("")}
       </div></div>` : ""}`;
 
   const nActs = nextStep().actions;
@@ -5384,10 +5438,7 @@ async function renderEngagement(id) {
     const did = +b.dataset.engfill;
     try {
       const t = await api(`/api/store/admin/engagements/${id}/docs/${did}/blanks`);
-      const field = (tok) => `
-        <label>[${esc(tok)}]</label>
-        <input data-fill="${esc(tok)}" value="${esc(t.suggested[tok] || "")}"
-          placeholder="leave blank to keep the brackets">`;
+      const field = (tok) => fillField(tok, t.suggested[tok]);
       modal(`<h3>Fill blanks — ${esc(t.title)}</h3>
         <p class="dim">Each value fills its token everywhere it appears.
           The document goes active on its own when the last bracket is
@@ -5486,10 +5537,7 @@ async function renderEngagement(id) {
 async function engGenerate(id, path) {
   const t = await api(`/api/store/admin/engagements/${id}/template?path=`
     + encodeURIComponent(path));
-  const field = (tok) => `
-    <label>[${esc(tok)}]</label>
-    <input data-fill="${esc(tok)}" value="${esc(t.suggested[tok] || "")}"
-      placeholder="leave blank to keep the brackets">`;
+  const field = (tok) => fillField(tok, t.suggested[tok]);
   modal(`<h3>Generate: ${esc(t.name)}</h3>
     <p class="dim">Each value fills its token everywhere it appears. Blanks
       stay bracketed — finish them in the document editor.</p>
@@ -5525,12 +5573,13 @@ async function engGenerate(id, path) {
 function engSignForm(docId, e) {
   modal(`<h3>Request a signature</h3>
     <div class="row2">
-      <div><label>Signer name</label>
+      <div><label>Signer name <span class="req">required</span></label>
         <input id="es-name" value="${esc(e.approver_name || "")}"></div>
-      <div><label>Signer email</label>
+      <div><label>Signer email <span class="req">required</span></label>
         <input id="es-email" type="email" value="${esc(e.approver_email || "")}"></div>
     </div>
-    <label>Message (optional)</label><textarea id="es-msg" rows="2"></textarea>
+    <label>Message <span class="opt">optional</span></label>
+    <textarea id="es-msg" rows="2"></textarea>
     <div class="modal-foot">
       <button class="btn alt" id="es-here" title="the pad opens right here —
         drawn with the mouse; the only email is the receipt, after
