@@ -5034,6 +5034,110 @@ async function fillInDoc(did, title, after) {
   } catch (err) { toast(err.message); }
 }
 
+async function binderEditMode(engId, e) {
+  /* The whole binder, editable in place. Each section knows what it is:
+     data-doc sections save through the document editor; data-tpl sections
+     are blank forms — any edit generates the document for this client,
+     then applies the rest. Signed pages sit read-only between them. */
+  try {
+    const html = await (await fetch(
+      `/api/store/admin/engagements/${engId}/binder/editable`,
+      { headers: { Authorization: "Bearer " + S.user.token } })).text();
+    const frame = $("#bd-frame");
+    frame.src = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    $("#bd-edit").hidden = true;
+    $("#bd-dl").hidden = true;
+    $("#bd-save").hidden = false;
+    $("#bd-hint").textContent = "Type anywhere the fields glow — amber is "
+      + "empty, green is filled. Signed pages are read-only. Saving writes "
+      + "every touched page, and a touched blank form becomes a real "
+      + "document for this client.";
+    const initialChecks = new Map();
+    const initialToks = new Map();
+    frame.onload = () => {
+      const doc = frame.contentDocument;
+      doc.querySelectorAll("input.ph-check").forEach((c) =>
+        initialChecks.set(c, c.checked));
+      /* suggested values arrive pre-filled; a card only counts as touched
+         by what YOU changed, or every blank form would "save" itself into
+         existence on the strength of its own suggestions */
+      doc.querySelectorAll("input.ph[data-tok]").forEach((i) =>
+        initialToks.set(i, i.value));
+      const paint = (scope) => {
+        scope.querySelectorAll("input.ph[data-tok]").forEach((i) => {
+          i.classList.toggle("filled", !!i.value.trim());
+          i.size = Math.max((i.value || i.placeholder).length + 2, 10);
+        });
+        scope.querySelectorAll("input.ph-line, textarea.ph-area")
+          .forEach((i) => i.classList.toggle("filled", !!i.value.trim()));
+      };
+      doc.querySelectorAll(".binder-doc[data-doc], .binder-doc[data-tpl]")
+        .forEach((card) => {
+          card.addEventListener("input", (ev) => {
+            const inp = ev.target;
+            if (inp.dataset && inp.dataset.tok) {
+              card.querySelectorAll(
+                `input.ph[data-tok]`).forEach((o) => {
+                  if (o !== inp && o.dataset.tok === inp.dataset.tok)
+                    o.value = inp.value;
+                });
+            }
+            paint(card);
+          });
+          paint(card);
+        });
+    };
+    $("#bd-save").onclick = async () => {
+      const doc = frame.contentDocument;
+      const cards = [...doc.querySelectorAll(
+        ".binder-doc[data-doc], .binder-doc[data-tpl]")];
+      let saved = 0, generated = 0, failed = 0;
+      for (const card of cards) {
+        const fills = {}, regions = {};
+        card.querySelectorAll("input.ph[data-tok]").forEach((i) => {
+          if (i.value.trim() && i.value !== initialToks.get(i))
+            fills[i.dataset.tok] = i.value.trim();
+        });
+        card.querySelectorAll("input.ph-line, textarea.ph-area")
+          .forEach((i) => {
+            if (i.value.trim()) regions[i.dataset.region] = i.value.trim();
+          });
+        card.querySelectorAll("input.ph-check").forEach((c) => {
+          if (c.checked !== initialChecks.get(c))
+            regions[c.dataset.region] = c.checked ? "true" : "false";
+        });
+        const touched = Object.keys(fills).length
+          || Object.keys(regions).length;
+        try {
+          if (card.dataset.doc) {
+            if (!touched) continue;
+            await api(`/api/store/admin/documents/${card.dataset.doc}/edit`,
+              { body: { fills, regions } });
+            saved += 1;
+          } else if (touched) {
+            /* a blank form someone wrote on becomes a real document — the
+               token fills ride along at generation; the regions land right
+               after, on the same scan order */
+            const out = await api(
+              `/api/store/admin/engagements/${engId}/docs`,
+              { body: { template_path: card.dataset.tpl, fills } });
+            if (Object.keys(regions).length)
+              await api(`/api/store/admin/documents/${out.doc_id}/edit`,
+                { body: { fills: {}, regions } });
+            generated += 1;
+          }
+        } catch (err) { failed += 1; toast(
+          `${card.dataset.name || "page"}: ${err.message}`); }
+      }
+      closeModal();
+      toast(`Binder saved — ${saved} page${saved === 1 ? "" : "s"} updated`
+        + (generated ? `, ${generated} generated from blank forms` : "")
+        + (failed ? `, ${failed} failed` : ""));
+      renderEngagement(engId);
+    };
+  } catch (err) { toast(err.message); }
+}
+
 async function renderClients() {
   if (S.engId) return renderEngagement(S.engId);
   const data = await api("/api/store/admin/engagements");
@@ -5568,23 +5672,23 @@ async function renderEngagement(id) {
         `/api/store/admin/engagements/${id}/binder.html`)).text();
       const url = URL.createObjectURL(
         new Blob([html], { type: "text/html" }));
-      const cover = d.docs.find((x) =>
-        x.title.startsWith("Project binder"));
       modal(`<h3>${esc(e.name)} — the binder</h3>
-        <p class="dim">Cover, contents mirroring the stages and their gates,
-          every generated paper, and a blank form for everything not yet
-          generated — printable and fillable with a pen.</p>
-        <iframe class="doc-viewer" src="${url}" title="binder"></iframe>
+        <p class="dim" id="bd-hint">Cover, contents mirroring the stages and
+          their gates, every generated paper, and a blank form for
+          everything not yet generated — printable and fillable with a
+          pen.</p>
+        <iframe class="doc-viewer" src="${url}" id="bd-frame"
+          title="binder"></iframe>
         <div class="modal-foot dv-foot">
-          ${cover ? `<button class="btn alt" id="bd-edit"
-            style="margin-right:auto" title="the title page and introduction
-            are a document like any other">Edit the cover</button>` : ""}
+          <button class="btn alt" id="bd-edit" style="margin-right:auto"
+            title="every unsigned page becomes editable in place — typing
+            into a blank form generates it for this client">Edit the
+            binder</button>
+          <button class="btn" id="bd-save" hidden>Save the binder</button>
           <button class="btn" id="bd-dl">Download binder PDF</button>
           <button class="btn alt" data-close>Close</button>
         </div>`, "wide");
-      const bdEdit = $("#bd-edit");
-      if (bdEdit) bdEdit.onclick = () => { closeModal();
-        fillInDoc(cover.id, cover.title, () => renderEngagement(id)); };
+      $("#bd-edit").onclick = () => binderEditMode(id, e);
       $("#bd-dl").onclick = async () => {
         try {
           const pdf = new Blob([await authBlob(

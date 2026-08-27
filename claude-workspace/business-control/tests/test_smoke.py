@@ -4078,6 +4078,24 @@ ok('id="ef-files"' in _ops and '"01-potential-customer"' in _ops
    and "bd-edit" in _ops,
    "the new-client form takes attachments, and the binder modal edits its "
    "own cover — the title page is a document like any other")
+
+# --- the whole binder, editable --------------------------------------------
+_bed = c.get(f"/api/store/admin/engagements/{_bt['id']}/binder/editable",
+             headers=A)
+ok(_bed.status_code == 200
+   and 'data-doc="' in _bed.text and 'data-tpl="' in _bed.text,
+   "the binder opens as one editable page: authored sections save through "
+   "the document editor, blank forms carry the template they'd generate")
+ok("bd-static" in _bed.text,
+   "with the contents page sitting read-only between them")
+ok("binderEditMode" in _ops
+   and "i.value !== initialToks.get(i)" in _ops,
+   "and only what YOU changed counts as touched — suggested values arrive "
+   "pre-filled, and without the initial-value check every blank form would "
+   "save itself into existence on the strength of its own suggestions")
+ok("out.doc_id" in _ops.split("binderEditMode")[1][:5200],
+   "a touched blank form generates the document for this client, then the "
+   "written answers land on it")
 c.delete(f"/api/store/admin/documents/{_scan2['id']}", headers=A)
 _bf = c.post(f"/api/store/admin/engagements/{_bt['id']}/binder",
              headers=A).json()

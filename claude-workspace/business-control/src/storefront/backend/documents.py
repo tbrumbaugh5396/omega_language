@@ -739,15 +739,10 @@ def download_markdown(did: int, u=Depends(admin_user), con=Depends(get_con)):
         "Content-Disposition": f'attachment; filename="{stem}.md"'})
 
 
-def render_editable(d, suggestions: dict) -> str:
-    """The document as its own form: every blank rendered as a live field
-    where it sits in the text. Tokens become inputs that fill by name;
-    write-in lines become text boxes — a whole line gets a paragraph box, an
-    inline run gets a small one, a run after a $ takes numbers; checkboxes
-    toggle. Everything rides through the markdown renderer as
-    control-character sentinels, which html.escape ignores and no human can
-    type."""
-    body = d["body"]
+def editable_inner(title: str, body: str, suggestions: dict) -> str:
+    """The fields, without the page: the heading and the body with every
+    blank live — shared by the single-document editor and the whole-binder
+    editor, which wraps one of these per section."""
     toks, regions = [], scan_regions(body)
     marks = []
     for m in _matches(body):
@@ -780,13 +775,10 @@ def render_editable(d, suggestions: dict) -> str:
             f = (f'<input type="checkbox" class="ph-check" data-region="{i}"'
                  f'{" checked" if r["checked"] else ""}>')
         html = html.replace(f"\x00R{i}\x01", f)
+    return f"<h1>{sect.esc(title)}</h1>{html}"
 
-    from .api import FONT_LINK
-    return (
-        f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
-        f"<meta name=\"viewport\" content=\"width=device-width,"
-        f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
-        f"{FONT_LINK}<style>"
+
+EDITABLE_CSS = (
         f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
         f"line-height:1.7;max-width:760px;margin:0 auto;padding:32px 24px}}"
         f"h1,h2,h3,h4{{font-family:'Fraunces',Georgia,serif}}"
@@ -806,10 +798,25 @@ def render_editable(d, suggestions: dict) -> str:
         f"input.ph.filled,textarea.ph.filled{{border:1.5px solid #3fbd82;"
         f"background:#effaf4}}"
         f"input.ph-check{{width:15px;height:15px;accent-color:#3fbd82;"
-        f"vertical-align:-2px}}"
-        f"</style></head><body>"
-        f"<h1>{sect.esc(d['title'])}</h1>"
-        f"{html}</body></html>")
+        f"vertical-align:-2px}}")
+
+
+def render_editable(d, suggestions: dict) -> str:
+    """The document as its own form: every blank rendered as a live field
+    where it sits in the text. Tokens become inputs that fill by name;
+    write-in lines become text boxes — a whole line gets a paragraph box, an
+    inline run gets a small one, a run after a $ takes numbers; checkboxes
+    toggle. Everything rides through the markdown renderer as
+    control-character sentinels, which html.escape ignores and no human can
+    type."""
+    from .api import FONT_LINK
+    return (
+        f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<meta name=\"viewport\" content=\"width=device-width,"
+        f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
+        f"{FONT_LINK}<style>{EDITABLE_CSS}</style></head><body>"
+        f"{editable_inner(d['title'], d['body'], suggestions)}"
+        f"</body></html>")
 
 
 def _editable_doc_or_refuse(con, did: int):

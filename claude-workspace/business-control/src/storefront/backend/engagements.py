@@ -1240,9 +1240,11 @@ def _binder_sections(con, eid: int) -> tuple:
         return f"**Gate: {g['label']}** — open"
 
     # the contents, and the section list, walk the stages together
+    _csigs = vault.signed_rows(con, cover[0]["id"])
     sections = [{"title": cover[0]["title"], "body": cover[0]["body"],
-                 "signatures": vault.signed_rows(con, cover[0]["id"]),
-                 "pending": vault.pending_rows(con, cover[0]["id"])}]
+                 "signatures": _csigs,
+                 "pending": vault.pending_rows(con, cover[0]["id"]),
+                 "doc_id": cover[0]["id"], "signed": bool(_csigs)}]
     toc = []
     ordered_docs = []
     for kit_stage in stage_order:
@@ -1272,7 +1274,8 @@ def _binder_sections(con, eid: int) -> tuple:
             toc.append(f"1. **{r['title']}** — {state}")
             ordered_docs.append({"title": r["title"], "body": r["body"],
                                  "signatures": sigs,
-                                 "pending": vault.pending_rows(con, r["id"])})
+                                 "pending": vault.pending_rows(con, r["id"]),
+                                 "doc_id": r["id"], "signed": bool(sigs)})
         for t in stage_tpls:
             toc.append(f"1. {t['name']} — *blank form, print and fill*")
             try:
@@ -1280,12 +1283,13 @@ def _binder_sections(con, eid: int) -> tuple:
             except Exception:
                 toc.pop()
                 continue
-            ordered_docs.append({"title": t["name"], "body": body})
+            ordered_docs.append({"title": t["name"], "body": body,
+                                 "tpl": t["path"]})
         for r in stage_files:
             toc.append(f"1. *{r['title']}* — attachment, filed beside "
                        f"this binder")
     sections.append({"title": "In this binder",
-                     "body": "\n".join(toc).strip()})
+                     "body": "\n".join(toc).strip(), "toc": True})
     sections.extend(ordered_docs)
     return sections, files
 
@@ -1369,6 +1373,67 @@ def binder_html(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         f"padding:34px 38px;margin:0 0 22px;"
         f"box-shadow:0 2px 10px rgba(20,15,30,.07)}}"
         f"</style></head><body>{inner}</body></html>")
+
+
+@router.get("/api/store/admin/engagements/{eid}/binder/editable")
+def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """The whole binder as one editable page. Every unsigned authored
+    section gets live fields; a signed section is read-only — its text is
+    what was attested to; and a BLANK FORM is editable too: type into it,
+    and saving generates the document for this client with those answers.
+    The section list comes from the same gatherer as the preview and the
+    PDF, so editing edits exactly what the binder shows."""
+    e = _eng_or_404(con, eid)
+    from . import documents as vault
+    sections, _ = _binder_sections(con, eid)
+    if not sections:
+        raise HTTPException(404, "nothing to bind yet")
+    sug = suggested_fills(e)
+    parts = []
+    for sec in sections:
+        if sec.get("toc"):
+            parts.append(
+                f'<div class="binder-doc bd-static">'
+                f'<h1>{sect.esc(sec["title"])}</h1>'
+                f'{vault.md_html(sec["body"])}</div>')
+        elif sec.get("signed"):
+            parts.append(
+                f'<div class="binder-doc bd-static">'
+                f'<p class="bd-note">Signed — read only. Its text is what '
+                f'was attested to; supersede it rather than editing it.</p>'
+                f'<h1>{sect.esc(sec["title"])}</h1>'
+                f'{vault.md_html(sec["body"])}'
+                f'{vault.signatures_html(sec.get("signatures") or [])}'
+                f'</div>')
+        elif sec.get("doc_id"):
+            parts.append(
+                f'<div class="binder-doc" data-doc="{sec["doc_id"]}">'
+                f'{vault.editable_inner(sec["title"], sec["body"], sug)}'
+                f'</div>')
+        elif sec.get("tpl"):
+            parts.append(
+                f'<div class="binder-doc bd-blank"'
+                f' data-tpl="{sect.esc(sec["tpl"])}"'
+                f' data-name="{sect.esc(sec["title"])}">'
+                f'<p class="bd-note">Blank form — type into it and saving '
+                f'generates it for {sect.esc(e["name"])}.</p>'
+                f'{vault.editable_inner(sec["title"], sec["body"], sug)}'
+                f'</div>')
+    from .api import FONT_LINK
+    return HTMLResponse(
+        f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<meta name=\"viewport\" content=\"width=device-width,"
+        f" initial-scale=1\"><title>{sect.esc(e['name'])} — edit the "
+        f"binder</title>{FONT_LINK}<style>{vault.EDITABLE_CSS}"
+        f"body{{max-width:800px;background:#f2efe9}}"
+        f".binder-doc{{background:#fff;border-radius:12px;"
+        f"padding:30px 34px;margin:0 0 22px;"
+        f"box-shadow:0 2px 10px rgba(20,15,30,.07)}}"
+        f".bd-static{{opacity:.82}}"
+        f".bd-note{{font-size:12.5px;color:#8a6ff0;font-weight:600;"
+        f"margin:0 0 10px}}"
+        f".bd-blank .bd-note{{color:#d08a00}}"
+        f"</style></head><body>{''.join(parts)}</body></html>")
 
 
 @router.get("/api/store/admin/engagements/{eid}/binder.pdf")
