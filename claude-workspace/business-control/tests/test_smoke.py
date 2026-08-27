@@ -3263,6 +3263,81 @@ _root = (_studio / "README.md").read_text()
 ok(all(f"templates/{s}/" in _root for s in _stages),
    "and the index links every one of them")
 
+# --- aftercare covers the work that is actually continuous ----------------
+# "Ongoing support" in a contract is worth what its schedule says and no more.
+# Clause 15 promises security, monitoring, defect support and compliance; if
+# no page defines them, the clause is a sentence the client reads their own
+# hopes into.
+from storefront.backend.engagements import side_of as _side_of
+_after = _studio / "templates" / "11-aftercare"
+_care = (_after / "care-plan-agreement.md").read_text()
+_supp = (_after / "support-and-defects.md").read_text()
+_mon = (_after / "monitoring-and-incidents.md").read_text()
+_sec = (_after / "security-and-compliance.md").read_text()
+_grow = (_after / "growth-retainer.md").read_text()
+
+ok(all(_side_of(t) == "to_client" for t in (_care, _supp, _mon, _sec, _grow))
+   and all("[SIGN HERE]" in t for t in (_supp, _mon, _sec, _grow)),
+   "every ongoing-work schedule is a client document that gets signed — an "
+   "unsigned promise about response times is a preference")
+
+ok("Defect, or change?" in _supp and _supp.count("**Defect**") >= 4
+   and all(f"**{p} " in _supp for p in ("P1", "P2", "P3", "P4"))
+   and "First response" in _supp,
+   "support defines the bug it will fix free, against the change it will "
+   "bill for, with severities and a first-response time for each")
+
+ok("[SUPPORT EMAIL / PORTAL]" in _supp and "[30] days" in _supp,
+   "one route in, and the no-plan warranty window said out loud")
+
+ok(all(w in _mon for w in ("Uptime", "Key journeys", "SSL certificate",
+                           "Backups", "Malware", "Escalation"))
+   and _mon.count("Every **[") >= 2,
+   "monitoring names what is watched and how often, not just that it is")
+
+ok("Alerts go to the Studio first, not to you" in _mon
+   and "Primary" in _mon and "Backup" in _mon,
+   "and it routes the alert to the studio, with the client contact we may "
+   "ring at night written down before the night we need it")
+
+ok("Critical" in _sec and "[24] hours" in _sec
+   and "Dependency scanning" in _sec and "Restore tested" in _sec,
+   "security is a cadence — patch windows by severity, weekly scanning, and "
+   "a restore actually tested rather than assumed")
+
+ok("72 hours" in _sec and "Compliance in scope" in _sec
+   and all(k in _sec for k in ("WCAG", "GDPR", "PCI")),
+   "and it ticks the compliance scope and states the breach clock, which is "
+   "the client's to run and ours to make runnable")
+
+ok("Who holds what" in _sec and "You own every account" in _sec,
+   "credentials are inventoried and the client owns them — access to work, "
+   "not leverage")
+
+ok("SEO campaigns and advertising" in _care
+   and "growth-retainer.md" in _care and "Ad spend is not the fee" in _grow
+   and "You own every account" in _grow,
+   "growth work is sold beside the care plan and never inside it: separate "
+   "money, separate cancellation, and the ad accounts stay the client's")
+
+for _sched in ("support-and-defects.md", "monitoring-and-incidents.md",
+               "security-and-compliance.md"):
+    ok(_sched in _care, f"the care plan links its {_sched} schedule")
+
+_cc = (_studio / "templates/04-agreement/contracts/common-clauses.md").read_text()
+ok(all(f"11-aftercare/{d}" in _cc for d in
+       ("security-and-compliance.md", "monitoring-and-incidents.md",
+        "support-and-defects.md", "growth-retainer.md")),
+   "and clause 15 points at those schedules by name — the contract promises "
+   "exactly what a page defines, and nothing looser")
+
+ok((_studio / "procedures/running-a-care-plan.md").exists()
+   and "Never send this to a client" in
+       (_studio / "procedures/running-a-care-plan.md").read_text(),
+   "and there is an internal procedure for actually running the cadence the "
+   "client bought, because a plan billed monthly and touched on breakage is "
+   "the one you lose at renewal")
+
 # The wall between what a client may read and what they may not is the whole
 # reason the per-client folder is shaped this way; a stage folder missing one
 # side is the one that gets zipped and sent by mistake.
@@ -3886,9 +3961,17 @@ ok('localStorage.setItem("bc_folded"' in _opsjs
    and 'localStorage.getItem("bc_folded")' in _opsjs,
    "and the fold is remembered, because the page re-renders on every gate "
    "action and a fold that reopened each time would be worthless")
-ok(".foldable.folded .fold-body { display: none; }" in _opscss
-   and ".foldable.folded .fold-caret" in _opscss,
-   "folding hides the body and turns the caret — one class, both signals")
+ok(".foldable.folded > .fold-body { display: none; }" in _opscss
+   and ".foldable.folded > .fold-head .fold-caret" in _opscss,
+   "folding hides the body and turns the caret — one class, both signals, "
+   "and the child selector keeps a folded stage from speaking for the "
+   "documents folded inside it")
+ok('data-fold="doc:${x.id}"' in _opsjs and 'class="dl-title fold-head"' in _opsjs
+   and 'class="dl-acts fold-body"' in _opsjs,
+   "a document folds to its own title line — seven buttons per document is "
+   "a lot of page for a stage you are only reading")
+ok('" blank" + (x.blanks === 1 ? "" : "s") + " left"' in _opsjs,
+   "and the folded line keeps the number that decides whether you open it")
 ok('${done} of ${live.length} passed' in _opsjs
    and 'to generate' in _opsjs and 'entr${' in _opsjs,
    "a folded section still says what it holds — gates passed, documents "

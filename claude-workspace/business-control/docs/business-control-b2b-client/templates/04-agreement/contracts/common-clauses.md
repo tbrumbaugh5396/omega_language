@@ -156,12 +156,22 @@ while remaining responsible for the work.
 Software is not finished at launch; it is maintained or it decays. The
 parties agree up front how the continuous work is carried:
 
-**Covered under a Care Plan** (per the [care plan
-agreement](../../11-aftercare/care-plan-agreement.md), when one is signed):
-security patches and dependency updates, uptime and error monitoring,
-backups and restore tests, bug and error support at the plan's response
-times, and compliance upkeep the plan names ([WCAG / PCI scope / privacy
-obligations — LIST]).
+**Covered under a Care Plan** (the [care plan
+agreement](../../11-aftercare/care-plan-agreement.md) and its three
+schedules, when signed): security patches and dependency updates at the
+cadence in the [security & compliance
+schedule](../../11-aftercare/security-and-compliance.md); uptime, journey and
+error monitoring with the escalation in the [monitoring
+schedule](../../11-aftercare/monitoring-and-incidents.md); backups and dated
+restore tests; defect support at the severities and response times in the
+[support schedule](../../11-aftercare/support-and-defects.md); and the
+compliance scope ticked on the security schedule ([WCAG level / privacy law /
+PCI SAQ type / sector rules]), reviewed annually.
+
+Marketing work — SEO and advertising — is not maintenance and is not in a
+Care Plan. Where the Client wants it, it is a separate
+[retainer](../../11-aftercare/growth-retainer.md) on its own terms, so that
+pausing a campaign never puts the maintenance at risk.
 
 **Without a Care Plan:** the Studio warrants fixes for defects reported
 within **[30] days** of launch at no charge. After that, security updates,

@@ -39,7 +39,7 @@ back, and what opens the next gate.
 | [08 · Build](templates/08-build/) | Making it, showing it | Feedback forms, change orders | Round 2 signed off |
 | [09 · Launch](templates/09-launch/) | Going live | Launch summary | Live, verified, **paid** |
 | [10 · Handover](templates/10-handover/) | Giving them the keys | Handover pack | They can sign in without you |
-| [11 · Aftercare](templates/11-aftercare/) | Keeping it | Care plan, testimonial request | Plan signed or declined |
+| [11 · Aftercare](templates/11-aftercare/) | Keeping it | Care plan + support, monitoring and security schedules; growth retainer; testimonial request | Plan signed or declined |
 
 **Stage 07 is optional.** Skip it for a week website — they have a brand and
 you're applying it. Run it whenever the look is the point: a fully custom

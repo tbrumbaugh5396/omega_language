@@ -522,11 +522,15 @@ button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
 .fold-head > b { display: flex; align-items: center; gap: 8px; }
 .fold-caret { display: inline-block; font-size: 12px; opacity: .6;
   transition: transform .12s ease; }
-.foldable.folded .fold-caret { transform: rotate(-90deg); }
+.foldable.folded > .fold-head .fold-caret { transform: rotate(-90deg); }
 .fold-sum { margin-left: auto; font-size: 12px; white-space: nowrap; }
-.foldable:not(.folded) .fold-sum { display: none; }
-.foldable.folded .fold-body { display: none; }
-.foldable.folded { padding-bottom: 14px; }
+.foldable:not(.folded) > .fold-head .fold-sum { display: none; }
+/* direct child, so folding a stage does not also claim to fold the
+   documents inside it — each fold answers for its own body */
+.foldable.folded > .fold-body { display: none; }
+.card.foldable.folded { padding-bottom: 14px; }
+.doc-line .fold-caret { flex: none; }
+.doc-line .fold-sum { flex: none; margin-left: 0; font-size: 12px; }
 .track { display: flex; align-items: flex-start; margin: 16px 0 6px;
   overflow-x: auto; padding-bottom: 4px; }
 .tk-node { flex: 1 1 0; min-width: 84px; position: relative;

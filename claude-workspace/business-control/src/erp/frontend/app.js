@@ -5630,15 +5630,20 @@ async function renderEngagement(id) {
   d.docs.forEach((x) => (byStage[x.stage] = byStage[x.stage] || []).push(x));
 
   const docRowE = (x) => `
-    <div class="doc-line${x.signed ? " dl-signed"
-      : x.awaiting ? " dl-awaiting" : ""}">
-      <span class="dl-title"><b title="${esc(x.title)}">${esc(x.title)}</b>
+    <div class="doc-line foldable${FOLDED["doc:" + x.id] ? " folded" : ""}${
+      x.signed ? " dl-signed" : x.awaiting ? " dl-awaiting" : ""}"
+      data-fold="doc:${x.id}">
+      <span class="dl-title fold-head"><span class="fold-caret">\u25be</span>
+        <b title="${esc(x.title)}">${esc(x.title)}</b>
         <span class="pill ${x.side === "internal" ? "warn" : "ok"}">${
           x.side === "internal" ? "internal" : "to client"}</span>
         ${x.signed ? `<span class="pill ok">${x.signed} signed</span>` : ""}
         ${x.awaiting ? `<span class="pill warn">${x.awaiting} awaiting</span>` : ""}
+        <span class="fold-sum dim">${x.blanks
+          ? x.blanks + " blank" + (x.blanks === 1 ? "" : "s") + " left"
+          : "nothing left to fill"}</span>
       </span>
-      <span class="dl-acts">
+      <span class="dl-acts fold-body">
         <span class="ga-slot">${x.blanks ? `<button class="btn alt sm"
           data-engfill="${x.id}" title="the brackets still unfilled — same
           form as generation, shorter each time">Fill (${x.blanks})</button>`

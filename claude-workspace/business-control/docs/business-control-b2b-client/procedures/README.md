@@ -14,6 +14,7 @@ it was written, it isn't finished.
 | [Writing a proposal](writing-a-proposal.md) | Whoever prices it |
 | [Deploying a client](deploying-a-client.md) | Whoever ships it |
 | [Handing over](handing-over.md) | Whoever finishes it |
+| [Running a care plan](running-a-care-plan.md) | Whoever holds maintenance this month |
 | [Weekly rhythm](weekly-rhythm.md) | Everyone, every week |
 
 > **These are living documents.** When something goes wrong that a procedure
