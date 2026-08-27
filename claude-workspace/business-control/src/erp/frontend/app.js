@@ -5020,6 +5020,46 @@ function wireAutoGrow(doc) {
   return () => all.forEach(grow);
 }
 
+/* Sections fold, and stay folded: a client's page is a long page, and the
+   stage you are not working in is noise until you are. Kept per section
+   name rather than per client, because the stage you don't care about on
+   one client is usually the one you don't care about on the next. */
+const FOLDED = (() => {
+  try { return JSON.parse(localStorage.getItem("bc_folded") || "{}"); }
+  catch { return {}; }
+})();
+
+function foldable(key, title, right, body, summary) {
+  const shut = !!FOLDED[key];
+  return `<div class="card foldable${shut ? " folded" : ""}"
+      data-fold="${esc(key)}">
+    <div class="card-head fold-head">
+      <b><span class="fold-caret">\u25be</span> ${title}</b>
+      <span class="fold-sum dim">${esc(summary || "")}</span>
+      ${right || ""}
+    </div>
+    <div class="fold-body">${body}</div>
+  </div>`;
+}
+
+/* Set by whatever page owns a fold-all control, so folding one section by
+   hand still corrects what the control says it will do next. */
+let foldAllSync = null;
+
+function wireFolds(scope) {
+  scope.querySelectorAll("[data-fold] .fold-head").forEach((h) => {
+    h.onclick = (ev) => {
+      if (ev.target.closest("button, a, input, select")) return;
+      const card = h.closest("[data-fold]");
+      const shut = card.classList.toggle("folded");
+      FOLDED[card.dataset.fold] = shut;
+      try { localStorage.setItem("bc_folded", JSON.stringify(FOLDED)); }
+      catch {}
+      if (foldAllSync) foldAllSync();
+    };
+  });
+}
+
 /* A title made of parts still has to be one string when it is saved, and
    each part has to be as wide as what is in it. */
 function sizeTitle(el) {
@@ -5836,10 +5876,14 @@ async function renderEngagement(id) {
   const stageCard = (st) => {
     const docs = st.kit.flatMap((k) => byStage[k] || []);
     if (!docs.length && !st.templates.length) return "";
-    return `<div class="card">
-      <b>${esc(st.client_stage.replace(/^\d\d-/, (m) => m.slice(0, 2) + " · ")
-        .replace(/-/g, " "))}</b>
-      ${docs.length ? `<div class="sig-rows">${docs.map(docRowE).join("")}</div>` : ""}
+    const label = esc(st.client_stage
+      .replace(/^\d\d-/, (m) => m.slice(0, 2) + " · ").replace(/-/g, " "));
+    const sum = [docs.length ? `${docs.length} document${
+        docs.length === 1 ? "" : "s"}` : "",
+      st.templates.length ? `${st.templates.length} to generate` : ""]
+      .filter(Boolean).join(" · ");
+    return foldable(`stage:${st.client_stage}`, label, "",
+      `${docs.length ? `<div class="sig-rows">${docs.map(docRowE).join("")}</div>` : ""}
       ${st.templates.length ? `<div class="tpl-list">
         <span class="tpl-head">Generate for ${esc(e.name)}</span>
         ${st.templates.map((t) => `<button class="tpl-line"
@@ -5848,8 +5892,8 @@ async function renderEngagement(id) {
           <span class="tpl-name">${esc(t.name)}</span>
           <span class="pill ${t.side === "internal" ? "warn" : "ok"}">${
             t.side === "internal" ? "internal" : "to client"}</span>
-        </button>`).join("")}</div>` : ""}
-    </div>`;
+        </button>`).join("")}</div>` : ""}`,
+      sum);
   };
 
   view().innerHTML = `
@@ -5910,21 +5954,25 @@ async function renderEngagement(id) {
         `<button class="btn ${i ? "alt " : ""}sm" data-next="${i}">${a.label}</button>`)
         .join("")}</div>` : ""}
     </div>`; })()}
-    <div class="card">
-      <div class="card-head"><b>Gates</b>
-        <button class="btn alt sm" id="eng-gantt">Gantt chart</button></div>
-      <p class="dim">The stage is the first gate that hasn't passed — a
-        signature gate reads its state from the linked document, live.</p>
-      ${trackHtml()}
-      <div class="sig-rows">${d.gates.map(gateRow).join("")}</div>
-    </div>
+    ${foldable("gates", "Gates",
+      `<button class="btn alt sm" id="eng-gantt">Gantt chart</button>`,
+      `<p class="dim">The stage is the first gate that hasn't passed — a
+         signature gate reads its state from the linked document, live.</p>
+       ${trackHtml()}
+       <div class="sig-rows">${d.gates.map(gateRow).join("")}</div>`,
+      (() => { const live = d.gates.filter((g) => g.active);
+        const done = live.filter((g) => g.passed_at).length;
+        return `${done} of ${live.length} passed`; })())}
+    ${merged.some((st) => st.kit.some((k) => byStage[k]) || st.templates.length)
+      ? `<div class="fold-all"><span class="dim">Stages</span>
+          <button class="btn alt sm" id="fold-all">Fold all</button></div>` : ""}
     ${merged.map(stageCard).join("")}
-    ${d.log.length ? `<div class="card"><b>Activity</b>
-      <div class="log-lines">${d.log.map((l) => `
+    ${d.log.length ? foldable("activity", "Activity", "",
+      `<div class="log-lines">${d.log.map((l) => `
         <div class="log-line"><span class="dim">${fmtDate(l.at)}</span>
           <b title="${esc(l.actor)}">${esc(l.actor)}</b>
-          <span class="dim">${esc(l.what)}</span></div>`).join("")}
-      </div></div>` : ""}`;
+          <span class="dim">${esc(l.what)}</span></div>`).join("")}</div>`,
+      `${d.log.length} entr${d.log.length === 1 ? "y" : "ies"}`) : ""}`;
 
   const nActs = nextStep().actions;
   view().querySelectorAll("[data-next]").forEach((b) => b.onclick = () => {
@@ -5946,6 +5994,26 @@ async function renderEngagement(id) {
       return view().querySelector(`[data-gate-paycheck="${a.gate}"]`)?.click();
   });
 
+  foldAllSync = null;
+  wireFolds(view());
+  const foldAll = $("#fold-all");
+  if (foldAll) {
+    const stages = () => [...view().querySelectorAll('[data-fold^="stage:"]')];
+    const sync = () => { foldAll.textContent =
+      stages().every((c) => c.classList.contains("folded"))
+        ? "Unfold all" : "Fold all"; };
+    foldAllSync = sync;
+    sync();
+    foldAll.onclick = () => {
+      const shut = foldAll.textContent === "Fold all";
+      stages().forEach((c) => {
+        c.classList.toggle("folded", shut);
+        FOLDED[c.dataset.fold] = shut;
+      });
+      try { localStorage.setItem("bc_folded", JSON.stringify(FOLDED)); } catch {}
+      sync();
+    };
+  }
   $("#eng-back").onclick = () => { S.engId = null; render(); };
   $("#eng-edit").onclick = () => engForm(e);
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);

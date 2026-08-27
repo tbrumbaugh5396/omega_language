@@ -514,6 +514,19 @@ button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
 /* ---------- the gates as a track ---------- */
 .card-head { display: flex; align-items: center; justify-content: space-between;
   gap: 12px; }
+.fold-all { display: flex; align-items: center; justify-content: space-between;
+  margin: 22px 4px 2px; font-size: 12px; letter-spacing: .06em;
+  text-transform: uppercase; }
+/* a section you can fold away: the head stays, the body goes */
+.fold-head { cursor: pointer; user-select: none; }
+.fold-head > b { display: flex; align-items: center; gap: 8px; }
+.fold-caret { display: inline-block; font-size: 12px; opacity: .6;
+  transition: transform .12s ease; }
+.foldable.folded .fold-caret { transform: rotate(-90deg); }
+.fold-sum { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.foldable:not(.folded) .fold-sum { display: none; }
+.foldable.folded .fold-body { display: none; }
+.foldable.folded { padding-bottom: 14px; }
 .track { display: flex; align-items: flex-start; margin: 16px 0 6px;
   overflow-x: auto; padding-bottom: 4px; }
 .tk-node { flex: 1 1 0; min-width: 84px; position: relative;

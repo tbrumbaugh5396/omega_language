@@ -3875,6 +3875,33 @@ ok(_del3.get("archived"),
    "and vault deletion archives it, because it carries a signature — "
    "evidence is never destroyed by tidying")
 
+# --- sections fold, and stay folded ----------------------------------------
+_opsjs = c.get("/ops/app.js").text
+_opscss = c.get("/ops/styles.css").text
+ok('foldable("gates"' in _opsjs and 'foldable(`stage:' in _opsjs
+   and 'foldable("activity"' in _opsjs,
+   "the gates, each stage and the activity log fold away — a client's page "
+   "is long, and the stage you are not working in is noise")
+ok('localStorage.setItem("bc_folded"' in _opsjs
+   and 'localStorage.getItem("bc_folded")' in _opsjs,
+   "and the fold is remembered, because the page re-renders on every gate "
+   "action and a fold that reopened each time would be worthless")
+ok(".foldable.folded .fold-body { display: none; }" in _opscss
+   and ".foldable.folded .fold-caret" in _opscss,
+   "folding hides the body and turns the caret — one class, both signals")
+ok('${done} of ${live.length} passed' in _opsjs
+   and 'to generate' in _opsjs and 'entr${' in _opsjs,
+   "a folded section still says what it holds — gates passed, documents "
+   "waiting, entries logged — so folding costs no information")
+ok('if (ev.target.closest("button, a, input, select")) return;' in _opsjs,
+   "clicking the Gantt button in a fold head does not also fold the card")
+ok('id="fold-all"' in _opsjs and '"Unfold all" : "Fold all"' in _opsjs,
+   "and one control folds every stage at once, reading back which way it "
+   "will go")
+ok("if (foldAllSync) foldAllSync();" in _opsjs and "foldAllSync = sync;" in _opsjs,
+   "folding the last stage by hand corrects that control too — a button "
+   "that promises the wrong direction is worse than no button")
+
 # --- per-section signing markers -------------------------------------------
 from storefront.backend.pdfgen import doc_pdf as _dpdf
 from storefront.backend.engagements import placeholders as _phs
