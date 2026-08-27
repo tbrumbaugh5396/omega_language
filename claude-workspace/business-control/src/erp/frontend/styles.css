@@ -492,6 +492,18 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .dl-title b { overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
 .dl-title .pill { flex: none; }
+/* What a document is, in three fixed slots, so a stage reads down its
+   column instead of across each title: what it is waiting on, which side
+   of the wall it belongs to, how much of it is still blank. Fixed rather
+   than auto because the alignment IS the information — rows of pills that
+   start wherever the title happens to end cannot be scanned. */
+.dl-meta { display: grid; grid-template-columns: 104px 70px 84px;
+  align-items: center; gap: 6px; margin-left: auto; flex: none; }
+.dl-meta > span { min-width: 0; }
+.dm-state, .dm-side { display: flex; }
+.dm-state .pill, .dm-side .pill { width: 100%; text-align: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-blanks { font-size: 12px; white-space: nowrap; text-align: right; }
 .dl-acts { display: grid; gap: 6px;
   grid-template-columns: 82px 56px 50px 54px 56px 56px 76px; }
 .dl-acts .btn { width: 100%; padding-left: 4px; padding-right: 4px;
@@ -525,12 +537,12 @@ button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
 .foldable.folded > .fold-head .fold-caret { transform: rotate(-90deg); }
 .fold-sum { margin-left: auto; font-size: 12px; white-space: nowrap; }
 .foldable:not(.folded) > .fold-head .fold-sum { display: none; }
+.doc-line:not(.folded) .dm-blanks { visibility: hidden; }
 /* direct child, so folding a stage does not also claim to fold the
    documents inside it — each fold answers for its own body */
 .foldable.folded > .fold-body { display: none; }
 .card.foldable.folded { padding-bottom: 14px; }
 .doc-line .fold-caret { flex: none; }
-.doc-line .fold-sum { flex: none; margin-left: 0; font-size: 12px; }
 .track { display: flex; align-items: flex-start; margin: 16px 0 6px;
   overflow-x: auto; padding-bottom: 4px; }
 .tk-node { flex: 1 1 0; min-width: 84px; position: relative;
@@ -614,6 +626,8 @@ button.btn[hidden], .btn[hidden] { display: none; }
   .gate-line { grid-template-columns: 1fr; gap: 6px; }
   .gl-acts { grid-template-columns: repeat(3, 1fr); }
   .doc-line { grid-template-columns: 1fr; }
+  .dl-title { flex-wrap: wrap; }
+  .dl-meta { margin-left: 0; grid-template-columns: 104px 70px auto; }
   .dl-acts { grid-template-columns: repeat(4, 1fr); }
   .eng-actions { flex-wrap: wrap; }
 }

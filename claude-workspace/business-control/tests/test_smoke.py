@@ -3972,6 +3972,21 @@ ok('data-fold="doc:${x.id}"' in _opsjs and 'class="dl-title fold-head"' in _opsj
    "a lot of page for a stage you are only reading")
 ok('" blank" + (x.blanks === 1 ? "" : "s") + " left"' in _opsjs,
    "and the folded line keeps the number that decides whether you open it")
+ok(_opsjs.index('class="dm-state"') < _opsjs.index('class="dm-side"')
+   < _opsjs.index('class="dm-blanks'),
+   "read in the order the question comes: what is it waiting on, whose "
+   "side is it on, how much of it is still blank")
+ok(".dl-meta { display: grid; grid-template-columns: 104px 70px 84px;"
+   in _opscss,
+   "in fixed slots, because the alignment is the information — pills that "
+   "start wherever each title happens to end cannot be scanned down a "
+   "stage, only read across a row")
+ok(".doc-line:not(.folded) .dm-blanks { visibility: hidden; }" in _opscss,
+   "and the blanks slot holds its width when the row opens: a column that "
+   "appears and disappears is a column that jumps")
+ok('${x.signed} of ${' in _opsjs,
+   "half-signed is its own state — one party done, one still out — and a "
+   "slot that showed only the newer of the two would read as unsigned")
 ok('${done} of ${live.length} passed' in _opsjs
    and 'to generate' in _opsjs and 'entr${' in _opsjs,
    "a folded section still says what it holds — gates passed, documents "

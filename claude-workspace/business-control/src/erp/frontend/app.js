@@ -5675,13 +5675,23 @@ async function renderEngagement(id) {
       data-fold="doc:${x.id}">
       <span class="dl-title fold-head"><span class="fold-caret">\u25be</span>
         <b title="${esc(x.title)}">${esc(x.title)}</b>
-        <span class="pill ${x.side === "internal" ? "warn" : "ok"}">${
-          x.side === "internal" ? "internal" : "to client"}</span>
-        ${x.signed ? `<span class="pill ok">${x.signed} signed</span>` : ""}
-        ${x.awaiting ? `<span class="pill warn">${x.awaiting} awaiting</span>` : ""}
-        <span class="fold-sum dim">${x.blanks
-          ? x.blanks + " blank" + (x.blanks === 1 ? "" : "s") + " left"
-          : "nothing left to fill"}</span>
+        <span class="dl-meta">
+          <span class="dm-state">${x.awaiting && x.signed
+            /* both at once is a real state — two parties, one of them
+               done — and a slot that shows only the newer of the two
+               would report a half-signed contract as unsigned */
+            ? `<span class="pill warn">${x.signed} of ${
+                x.signed + x.awaiting} signed</span>`
+            : x.awaiting ? `<span class="pill warn">${x.awaiting} awaiting</span>`
+            : x.signed ? `<span class="pill ok">${x.signed} signed</span>`
+            : ""}</span>
+          <span class="dm-side"><span class="pill ${
+            x.side === "internal" ? "warn" : "ok"}">${
+            x.side === "internal" ? "internal" : "to client"}</span></span>
+          <span class="dm-blanks fold-sum dim">${x.blanks
+            ? x.blanks + " blank" + (x.blanks === 1 ? "" : "s") + " left"
+            : "no blanks left"}</span>
+        </span>
       </span>
       <span class="dl-acts fold-body">
         <span class="ga-slot">${x.blanks ? `<button class="btn alt sm"
