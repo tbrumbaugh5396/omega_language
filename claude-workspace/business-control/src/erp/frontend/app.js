@@ -4932,6 +4932,30 @@ function engDatesForm(id, dates) {
   };
 }
 
+/* "3 of 15" for a page that isn't paginated: a page is one printable sheet
+   at letter aspect for this content width, and the frame draws a rule at
+   every boundary — so the number always names a line you can see. Fields
+   growing repaginate, which is why input recounts. */
+function wirePageCount(frame, label) {
+  let doc, win;
+  try { doc = frame.contentDocument; win = frame.contentWindow; }
+  catch { label.textContent = ""; return () => {}; }
+  if (!doc || !doc.body) { label.textContent = ""; return () => {}; }
+  const update = () => {
+    const w = doc.body.clientWidth || 760;
+    const h = Math.max(420, Math.round(w * 11 / 8.5));
+    doc.documentElement.style.setProperty("--page-h", h + "px");
+    const total = Math.max(1, Math.ceil(doc.body.scrollHeight / h));
+    const cur = Math.min(total, 1 + Math.floor((win.scrollY || 0) / h));
+    label.textContent = `Page ${cur} of ${total}`;
+  };
+  win.addEventListener("scroll", update, { passive: true });
+  win.addEventListener("resize", update);
+  doc.addEventListener("input", update);
+  update();
+  return update;
+}
+
 async function fillInDoc(did, title, after) {
   /* The document as the form: bracket tokens, write-in answer lines,
      paragraph boxes and checkboxes, all live where they sit in the text.
@@ -4950,6 +4974,7 @@ async function fillInDoc(did, title, after) {
       <iframe class="doc-viewer" src="${url}" id="fid-frame"
         title="fill in the document"></iframe>
       <div class="modal-foot">
+        <span class="dim" id="fid-pages"></span>
         <span class="dim" id="fid-count" style="margin-right:auto"></span>
         <button class="btn alt" id="fid-sign" title="save the fills, then
           send for signature or sign in the room">Save &amp; sign</button>
@@ -4989,6 +5014,7 @@ async function fillInDoc(did, title, after) {
       }));
       areas.forEach((inp) => inp.addEventListener("input", paint));
       paint();
+      wirePageCount(frame, $("#fid-pages"));
     };
     const saveEdits = async () => {
       const doc = frame.contentDocument;
@@ -5071,6 +5097,7 @@ async function binderEditMode(engId, e) {
         scope.querySelectorAll("input.ph-line, textarea.ph-area")
           .forEach((i) => i.classList.toggle("filled", !!i.value.trim()));
       };
+      wirePageCount(frame, $("#bd-pages"));
       doc.querySelectorAll(".binder-doc[data-doc], .binder-doc[data-tpl]")
         .forEach((card) => {
           card.addEventListener("input", (ev) => {
@@ -5683,9 +5710,10 @@ async function renderEngagement(id) {
           everything not yet generated — printable and fillable with a
           pen.</p>
         <iframe class="doc-viewer" src="${url}" id="bd-frame"
-          title="binder"></iframe>
+          title="binder" onload="void 0"></iframe>
         <div class="modal-foot dv-foot">
-          <button class="btn alt" id="bd-edit" style="margin-right:auto"
+          <span class="dim" id="bd-pages" style="margin-right:auto"></span>
+          <button class="btn alt" id="bd-edit"
             title="every unsigned page becomes editable in place — typing
             into a blank form generates it for this client">Edit the
             binder</button>
@@ -5693,6 +5721,11 @@ async function renderEngagement(id) {
           <button class="btn" id="bd-dl">Download binder PDF</button>
           <button class="btn alt" data-close>Close</button>
         </div>`, "wide");
+      const bdFrame = $("#bd-frame");
+      bdFrame.onload = () => wirePageCount(bdFrame, $("#bd-pages"));
+      if (bdFrame.contentDocument
+          && bdFrame.contentDocument.readyState === "complete")
+        wirePageCount(bdFrame, $("#bd-pages"));
       $("#bd-edit").onclick = () => binderEditMode(id, e);
       $("#bd-dl").onclick = async () => {
         try {
@@ -5795,8 +5828,8 @@ async function renderEngagement(id) {
     /* One shared viewer with the Documents tab — in-app, never a popup:
        a window opened by script after an awaited fetch has left the
        user-gesture call stack and blockers silently eat it. */
-    const name = (b.closest(".sig-row")?.querySelector("b")?.textContent
-      || "document").trim();
+    const name = (b.closest(".doc-line, .sig-row")?.querySelector("b")
+      ?.textContent || "document").trim();
     docViewer(+b.dataset.engview, b.dataset.kind, b.dataset.ext, name,
               b.dataset.signed, () => renderEngagement(id));
   });
@@ -6210,15 +6243,18 @@ async function docViewer(did, kind, ext, name, signedN, after) {
         document — scroll down, and it's on the last page of the PDF.</p>` : ""}
       <iframe class="doc-viewer" src="${frameUrl}" title="${esc(name)}"></iframe>
       <div class="modal-foot dv-foot">
+        <span class="dim" id="dv-pages" style="margin-right:auto"></span>
         ${kind === "body" && !signed ? `<button class="btn alt" id="dv-edit"
-          style="margin-right:auto" title="type into the blanks where they
-          sit in the text">Edit</button>` : ""}
+          title="type into the blanks where they sit in the text"
+          >Edit</button>` : ""}
         <button class="btn" id="dv-dl">${opsIcon("file", "btn-ic")}
           Download ${signed ? "signed " : ""}${isPdfable ? "PDF" : "file"}</button>
         <button class="btn alt" id="dv-open">Open ${isPdfable ? "PDF" : ""}
           in tab</button>
         <button class="btn alt" data-close>Close</button>
       </div>`, "wide");
+    const dvFrame = document.querySelector("#ops-modal iframe.doc-viewer");
+    if (dvFrame) dvFrame.onload = () => wirePageCount(dvFrame, $("#dv-pages"));
     const dvEdit = $("#dv-edit");
     if (dvEdit) dvEdit.onclick = () => { closeModal();
       fillInDoc(did, name, after); };

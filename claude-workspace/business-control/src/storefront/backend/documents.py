@@ -621,6 +621,7 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"blockquote{{border-left:3px solid #e9e4dc;padding-left:14px;"
         f"color:#5d5768;margin:10px 0}}"
         f"@media print{{body{{padding:0}}}}"
+        f"html{{background:#fff}}{PAGE_RULE_CSS}"
         f"</style></head><body><h1>{sect.esc(d['title'])}</h1>"
         f"{md_html(d['body'])}"
         f"{signatures_html(signed_rows(con, did))}"
@@ -808,6 +809,18 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
     return f"<h1>{sect.esc(title)}</h1>{html}"
 
 
+# One printable sheet at letter aspect is a page, and the rule that draws
+# the boundary is the same rule the counter counts — so "3 of 15" always
+# names a line you can see. --page-h is set by whoever mounts the frame.
+PAGE_RULE_CSS = (
+    "html{--page-h:1000px}"
+    "body{background-image:repeating-linear-gradient(to bottom,"
+    "rgba(0,0,0,0) 0,rgba(0,0,0,0) calc(var(--page-h) - 1px),"
+    "rgba(139,132,150,.30) calc(var(--page-h) - 1px),"
+    "rgba(139,132,150,.30) var(--page-h))}"
+)
+
+
 EDITABLE_CSS = (
         f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
         f"line-height:1.7;max-width:760px;margin:0 auto;padding:32px 24px}}"
@@ -844,7 +857,8 @@ def render_editable(d, suggestions: dict) -> str:
         f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         f"<meta name=\"viewport\" content=\"width=device-width,"
         f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
-        f"{FONT_LINK}<style>{EDITABLE_CSS}</style></head><body>"
+        f"{FONT_LINK}<style>{EDITABLE_CSS}html{{background:#fff}}"
+        f"{PAGE_RULE_CSS}</style></head><body>"
         f"{editable_inner(d['title'], d['body'], suggestions)}"
         f"</body></html>")
 

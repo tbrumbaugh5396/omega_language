@@ -1388,6 +1388,7 @@ def binder_html(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         f".binder-doc{{background:#fff;border-radius:12px;"
         f"padding:34px 38px;margin:0 0 22px;"
         f"box-shadow:0 2px 10px rgba(20,15,30,.07)}}"
+        f"html{{background:#f2efe9}}{vault.PAGE_RULE_CSS}"
         f"</style></head><body>{inner}</body></html>")
 
 
@@ -1449,6 +1450,7 @@ def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         f".bd-note{{font-size:12.5px;color:#8a6ff0;font-weight:600;"
         f"margin:0 0 10px}}"
         f".bd-blank .bd-note{{color:#d08a00}}"
+        f"html{{background:#f2efe9}}{vault.PAGE_RULE_CSS}"
         f"</style></head><body>{''.join(parts)}</body></html>")
 
 

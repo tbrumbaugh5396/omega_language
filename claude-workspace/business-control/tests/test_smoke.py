@@ -4132,6 +4132,22 @@ for _cf2 in ("week-website", "partially-custom", "fully-custom",
     _inc = [seg[-60:] for seg in _ct3.split("Common Clauses]")[:-1]]
     ok(any("15" in seg for seg in _inc),
        f"{_cf2} incorporates the ongoing-support clause")
+ok("function wirePageCount" in _ops
+   and "Page ${cur} of ${total}" in _ops,
+   "every document view counts its pages — a page being one printable "
+   "sheet at letter aspect, which is the same rule the frame draws, so the "
+   "number always names a line you can see")
+ok("PAGE_RULE_CSS" in Path("src/storefront/backend/documents.py").read_text()
+   and "--page-h" in _ops,
+   "and the boundary is drawn from the height the counter measures — one "
+   "definition of a page, not two")
+for _pid in ("dv-pages", "fid-pages", "bd-pages"):
+    ok(f'id="{_pid}"' in _ops,
+       f"{_pid}: the count shows in view, in the editor, and in the binder")
+ok('closest(".doc-line, .sig-row")' in _ops,
+   "and the viewer reads its title from the row class the rows actually "
+   "have — the stage rows became .doc-line and the lookup went stale")
+
 ok("ongoing_support_agreed" in _ops
    and "Ongoing — security, monitoring, updates, support" in _ops,
    "the ongoing gate is on the track and the Gantt — a lane that starts "
