@@ -4936,6 +4936,73 @@ function engDatesForm(id, dates) {
    at letter aspect for this content width, and the frame draws a rule at
    every boundary — so the number always names a line you can see. Fields
    growing repaginate, which is why input recounts. */
+/* Which page a frame is showing, and how tall a page is on it — the same
+   arithmetic wirePageCount uses, so reading and restoring agree. */
+function framePageH(doc) {
+  return Math.max(420, Math.round((doc.body.clientWidth || 760) * 11 / 8.5));
+}
+function framePage(frame) {
+  try {
+    const doc = frame.contentDocument, win = frame.contentWindow;
+    if (!doc || !doc.body) return 1;
+    return 1 + Math.floor((win.scrollY || 0) / framePageH(doc));
+  } catch { return 1; }
+}
+function goToPage(frame, page) {
+  try {
+    const doc = frame.contentDocument;
+    if (!doc || !doc.body || !page || page < 2) return;
+    frame.contentWindow.scrollTo(0, (page - 1) * framePageH(doc));
+  } catch {}
+}
+
+/* Where you were reading, in terms the other rendering also understands.
+   Page number alone drifts: the editor's input boxes are taller than the
+   text they replace, so the same page number lands on earlier content. And
+   a whole binder section is too coarse — the same offset inside a taller
+   section is the same drift again. So: which section, which block inside
+   it, and how far past that block — the finest thing both renderings agree
+   on. `.bd-note` is skipped because only the editor has it. */
+function _anchorParts(frame) {
+  const doc = frame.contentDocument, win = frame.contentWindow;
+  const y = win.scrollY || 0;
+  const topOf = (el) => el.getBoundingClientRect().top + y;
+  const kidsOf = (el) => [...el.children].filter(
+    (k) => !k.classList.contains("bd-note"));
+  return { doc, win, y, topOf, kidsOf };
+}
+
+function frameAnchor(frame) {
+  try {
+    const { doc, y, topOf, kidsOf } = _anchorParts(frame);
+    if (!doc || !doc.body) return null;
+    const secs = [...doc.querySelectorAll(".binder-doc")];
+    let secIdx = -1, scope = doc.body;
+    secs.forEach((sec, i) => {
+      if (topOf(sec) <= y + 8) { secIdx = i; scope = sec; }
+    });
+    let elIdx = -1, top = topOf(scope);
+    kidsOf(scope).forEach((el, i) => {
+      const t = topOf(el);
+      if (t <= y + 8) { elIdx = i; top = t; }
+    });
+    return { secIdx, elIdx, delta: y - top, page: framePage(frame) };
+  } catch { return null; }
+}
+
+function restoreAnchor(frame, a) {
+  if (!a) return;
+  try {
+    const { doc, win, topOf, kidsOf } = _anchorParts(frame);
+    if (!doc || !doc.body) return;
+    const secs = [...doc.querySelectorAll(".binder-doc")];
+    const scope = a.secIdx >= 0 ? secs[a.secIdx] : doc.body;
+    if (!scope) return goToPage(frame, a.page);
+    const el = a.elIdx >= 0 ? (kidsOf(scope)[a.elIdx] || scope) : scope;
+    win.scrollTo(0, Math.max(0, topOf(el) + (a.delta || 0)));
+  } catch {}
+}
+
 function wirePageCount(frame, label) {
   let doc, win;
   try { doc = frame.contentDocument; win = frame.contentWindow; }
@@ -4956,7 +5023,7 @@ function wirePageCount(frame, label) {
   return update;
 }
 
-async function fillInDoc(did, title, after) {
+async function fillInDoc(did, title, after, anchor) {
   /* The document as the form: bracket tokens, write-in answer lines,
      paragraph boxes and checkboxes, all live where they sit in the text.
      Same-name tokens type together, because the backend fills one value per
@@ -5014,7 +5081,9 @@ async function fillInDoc(did, title, after) {
       }));
       areas.forEach((inp) => inp.addEventListener("input", paint));
       paint();
-      wirePageCount(frame, $("#fid-pages"));
+      const recount = wirePageCount(frame, $("#fid-pages"));
+      restoreAnchor(frame, anchor);
+      recount();
     };
     const saveEdits = async () => {
       const doc = frame.contentDocument;
@@ -5060,7 +5129,7 @@ async function fillInDoc(did, title, after) {
   } catch (err) { toast(err.message); }
 }
 
-async function binderEditMode(engId, e) {
+async function binderEditMode(engId, e, anchor) {
   /* The whole binder, editable in place. Each section knows what it is:
      data-doc sections save through the document editor; data-tpl sections
      are blank forms — any edit generates the document for this client,
@@ -5097,7 +5166,9 @@ async function binderEditMode(engId, e) {
         scope.querySelectorAll("input.ph-line, textarea.ph-area")
           .forEach((i) => i.classList.toggle("filled", !!i.value.trim()));
       };
-      wirePageCount(frame, $("#bd-pages"));
+      const recount = wirePageCount(frame, $("#bd-pages"));
+      restoreAnchor(frame, anchor);
+      recount();
       doc.querySelectorAll(".binder-doc[data-doc], .binder-doc[data-tpl]")
         .forEach((card) => {
           card.addEventListener("input", (ev) => {
@@ -5726,7 +5797,8 @@ async function renderEngagement(id) {
       if (bdFrame.contentDocument
           && bdFrame.contentDocument.readyState === "complete")
         wirePageCount(bdFrame, $("#bd-pages"));
-      $("#bd-edit").onclick = () => binderEditMode(id, e);
+      $("#bd-edit").onclick = () =>
+        binderEditMode(id, e, frameAnchor(bdFrame));
       $("#bd-dl").onclick = async () => {
         try {
           const pdf = new Blob([await authBlob(
@@ -6256,8 +6328,11 @@ async function docViewer(did, kind, ext, name, signedN, after) {
     const dvFrame = document.querySelector("#ops-modal iframe.doc-viewer");
     if (dvFrame) dvFrame.onload = () => wirePageCount(dvFrame, $("#dv-pages"));
     const dvEdit = $("#dv-edit");
-    if (dvEdit) dvEdit.onclick = () => { closeModal();
-      fillInDoc(did, name, after); };
+    if (dvEdit) dvEdit.onclick = () => {
+      const at = frameAnchor(dvFrame);     // read it before the modal goes
+      closeModal();
+      fillInDoc(did, name, after, at);
+    };
     /* Buttons, not anchors: .btn styling is scoped to button.btn, and a
        synchronous handler keeps the user gesture, so the new tab is never
        popup-blocked and the download never depends on anchor semantics. */

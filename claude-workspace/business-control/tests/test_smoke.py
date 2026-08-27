@@ -3973,7 +3973,7 @@ _b6 = _db.connect().execute(
 ok("One sentence a stranger would understand." in _b6,
    "an answer typed on a write-in line lands in the document's own text — "
    "answered is answered, and the region is gone")
-ok('id="dv-edit"' in _ops and "fillInDoc(did, name, after)" in _ops,
+ok('id="dv-edit"' in _ops and "fillInDoc(did, name, after," in _ops,
    "and View offers Edit on any unsigned authored document, from both tabs")
 
 # --- the binder --------------------------------------------------------------
@@ -4144,6 +4144,18 @@ ok("PAGE_RULE_CSS" in Path("src/storefront/backend/documents.py").read_text()
 for _pid in ("dv-pages", "fid-pages", "bd-pages"):
     ok(f'id="{_pid}"' in _ops,
        f"{_pid}: the count shows in view, in the editor, and in the binder")
+ok("function frameAnchor" in _ops and "function restoreAnchor" in _ops
+   and "fillInDoc(did, name, after, at)" in _ops
+   and "binderEditMode(id, e, frameAnchor(bdFrame))" in _ops,
+   "Edit opens where you were reading — the anchor is read before the "
+   "modal goes and restored once the editor has loaded")
+ok("secIdx" in _ops and "elIdx" in _ops
+   and 'classList.contains("bd-note")' in _ops,
+   "and it anchors to the block you were looking at, not the page number "
+   "or the section: input boxes are taller than the text they replace, so "
+   "the same page number — or the same offset into a taller section — "
+   "lands on earlier content")
+
 ok('closest(".doc-line, .sig-row")' in _ops,
    "and the viewer reads its title from the row class the rows actually "
    "have — the stage rows became .doc-line and the lookup went stale")
