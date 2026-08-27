@@ -5361,21 +5361,30 @@ async function binderEditMode(engId, e, anchor) {
 
 async function renderClients() {
   if (S.engId) return renderEngagement(S.engId);
-  const data = await api("/api/store/admin/engagements");
+  const data = await api("/api/store/admin/engagements"
+    + (S.engArchived ? "?archived=1" : ""));
   view().innerHTML = `
     <div class="page-head">
       <div><h2>Clients (B2B)</h2>
         <p class="dim">Studio engagements — the kit's stages, documents and
           signatures, run from one place.</p></div>
-      <button class="btn" id="eng-new">${opsIcon("handshake","btn-ic")} New client</button>
+      <div class="top-actions" style="display:flex;gap:8px">
+        ${data.archived_count || S.engArchived ? `<button
+          class="btn alt ${S.engArchived ? "on" : ""}" id="eng-arch-toggle"
+          title="clients put away — everything they have is intact"
+          >Archived${data.archived_count ? ` (${data.archived_count})`
+            : ""}</button>` : ""}
+        <button class="btn" id="eng-new">${opsIcon("handshake","btn-ic")} New client</button>
+      </div>
     </div>
     ${data.kit_available ? "" : `<div class="card alert"><b>The template kit
       isn't on this install</b><p class="dim">docs/business-control-b2b-client/
       is missing, so documents can't be generated here — records and exports
       still work.</p></div>`}
     <div id="eng-list">${data.engagements.map((e) => `
-      <div class="doc-card" data-eng="${e.id}" style="cursor:pointer">
-        <div class="doc-top">
+      <div class="doc-card eng-card" data-eng="${e.id}"
+        style="cursor:pointer">
+        <div class="eng-top">
           <span class="doc-ic">${opsIcon("handshake")}</span>
           <div class="doc-main"><b>${esc(e.name)}</b>
             <span class="dim">${esc(e.stage.replace(/^(\d\d)-/, "$1 · ").replace(/-/g, " "))} · ${
@@ -5388,17 +5397,40 @@ async function renderClients() {
             `<span class="pill warn">${esc(w)}</span>`).join("")}
           ${e.status === "closed" ? '<span class="pill">closed</span>' : ""}
           ${e.launch_target ? `<span class="dim">launch ${esc(e.launch_target)}</span>` : ""}
+          <button class="btn alt sm" data-engarch="${e.id}"
+            data-name="${esc(e.name)}"
+            data-on="${e.status === "archived" ? 1 : 0}">${
+            e.status === "archived" ? "Restore" : "Archive"}</button>
           <button class="btn alt sm" data-engdel="${e.id}"
             data-name="${esc(e.name)}" data-docs="${e.docs}"
             data-signed="${e.signed}">Delete</button>
         </div>
       </div>`).join("")
       || `<div class="card empty"><span class="e-ic">${opsIcon("handshake")}</span>
-          <b>No clients yet</b><p class="dim">Create one, then generate its
-          documents from the kit's templates.</p></div>`}</div>`;
+          <b>${S.engArchived ? "Nothing archived" : "No clients yet"}</b>
+          <p class="dim">${S.engArchived
+            ? "Archiving a client puts them away without removing anything."
+            : "Create one, then generate its documents from the kit's templates."
+          }</p></div>`}</div>`;
   $("#eng-new").onclick = () => engForm(null);
+  const at = $("#eng-arch-toggle");
+  if (at) at.onclick = () => { S.engArchived = !S.engArchived;
+    renderClients(); };
+  view().querySelectorAll("[data-engarch]").forEach((b) => b.onclick =
+    async (ev) => {
+      ev.stopPropagation();
+      const on = b.dataset.on === "1";
+      try {
+        await api(`/api/store/admin/engagements/${b.dataset.engarch}/archive`,
+          { body: { archived: !on } });
+        toast(on ? `${b.dataset.name} restored`
+          : `${b.dataset.name} archived — everything they have is intact`);
+        renderClients();
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-eng]").forEach((el) => el.onclick = (ev) => {
-    if (ev.target.closest("[data-engdel]")) return;   // the row is a link
+    // the row is a link; its own buttons are not
+    if (ev.target.closest("[data-engdel], [data-engarch]")) return;
     S.engId = +el.dataset.eng; render();
   });
   view().querySelectorAll("[data-engdel]").forEach((b) => b.onclick = (ev) => {
@@ -5469,6 +5501,7 @@ function engForm(e) {
         <select id="ef-status">
           <option value="active" ${!e || e.status === "active" ? "selected" : ""}>active</option>
           <option value="closed" ${e && e.status === "closed" ? "selected" : ""}>closed</option>
+          <option value="archived" ${e && e.status === "archived" ? "selected" : ""}>archived</option>
         </select></div>
     </div>
     <div class="row2">

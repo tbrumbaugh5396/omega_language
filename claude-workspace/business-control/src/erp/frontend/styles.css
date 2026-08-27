@@ -396,6 +396,15 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
   border-radius: var(--r); padding: 14px 16px; margin-bottom: 10px;
   transition: border-color .16s; }
 .doc-card:hover { border-color: var(--dim); }
+/* A client row is not a document row: it carries a variable number of
+   warning pills, so it flows rather than sitting in the Documents grid —
+   where the extras pushed its buttons onto a line of their own. */
+.eng-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.eng-top .doc-main { flex: 1 1 260px; min-width: 200px; }
+.eng-top .pill { flex: none; }
+.eng-top .btn { flex: none; margin-left: auto; }
+.eng-top .btn + .btn { margin-left: 0; }
+
 /* the Documents tab, in columns: title block · signed · expiry · actions,
    so every state pill and every button starts at the same x down the list */
 .doc-top { display: grid; align-items: center; gap: 12px;

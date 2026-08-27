@@ -3530,6 +3530,29 @@ ok(_gd["current_stage"] == "03-agreement",
    "reopening a gate moves the stage back by the same derivation, and the "
    "signed evidence stays in the vault untouched")
 
+# --- archiving a client ----------------------------------------------------
+_ar = c.post("/api/store/admin/engagements", headers=A,
+             json={"name": "Parked Smoke"}).json()
+_arl = lambda a=0: c.get("/api/store/admin/engagements", headers=A,
+                         params={"archived": a}).json()
+ok(any(x["name"] == "Parked Smoke" for x in _arl()["engagements"]),
+   "a new client is on the working list")
+c.post(f"/api/store/admin/engagements/{_ar['id']}/archive", headers=A,
+       json={"archived": True})
+ok(all(x["name"] != "Parked Smoke" for x in _arl()["engagements"])
+   and any(x["name"] == "Parked Smoke" for x in _arl(1)["engagements"]),
+   "archiving puts a client away — off the working list, on the archived "
+   "one, counted on its own chip")
+_ard = c.get(f"/api/store/admin/engagements/{_ar['id']}", headers=A).json()
+ok(len(_ard["docs"]) >= 2 and _ard["engagement"]["status"] == "archived",
+   "and nothing is removed: the documents, gates and dates are as they "
+   "were, which is the difference between archiving and deleting")
+c.post(f"/api/store/admin/engagements/{_ar['id']}/archive", headers=A,
+       json={"archived": False})
+ok(any(x["name"] == "Parked Smoke" for x in _arl()["engagements"]),
+   "so it comes back — one is reversible, the other is a decision")
+c.delete(f"/api/store/admin/engagements/{_ar['id']}", headers=A)
+
 # --- deleting a client -----------------------------------------------------
 _dd = c.post("/api/store/admin/engagements", headers=A,
              json={"name": "Doomed Smoke"}).json()

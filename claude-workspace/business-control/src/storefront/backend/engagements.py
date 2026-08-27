@@ -516,7 +516,8 @@ class EngBody(BaseModel):
 
 
 @router.get("/api/store/admin/engagements")
-def list_engagements(u=Depends(admin_user), con=Depends(get_con)):
+def list_engagements(archived: int = 0, u=Depends(admin_user),
+                     con=Depends(get_con)):
     rows = con.execute(
         "SELECT e.*,"
         " (SELECT COUNT(*) FROM engagement_docs d WHERE d.engagement_id=e.id)"
@@ -528,7 +529,9 @@ def list_engagements(u=Depends(admin_user), con=Depends(get_con)):
         "   JOIN document_signatures s ON s.document_id=d.doc_id"
         "   WHERE d.engagement_id=e.id AND s.status IN ('sent','viewed'))"
         "   AS awaiting"
-        " FROM engagements e ORDER BY e.status='active' DESC, e.updated_at DESC"
+        " FROM engagements e WHERE e.status" + ("=" if archived else "!=")
+        + "'archived'"
+        " ORDER BY e.status='active' DESC, e.updated_at DESC"
     ).fetchall()
     now = time.time()
     week = 7 * 86400
@@ -556,7 +559,10 @@ def list_engagements(u=Depends(admin_user), con=Depends(get_con)):
                 warn.append("blocked")
         e["warnings"] = warn
         out.append(e)
-    return {"engagements": out, "kit_available": KIT.is_dir()}
+    return {"engagements": out, "kit_available": KIT.is_dir(),
+            "archived_count": con.execute(
+                "SELECT COUNT(*) n FROM engagements WHERE status='archived'"
+            ).fetchone()["n"]}
 
 
 # Which record column each global token lives in. Date and brand are not
@@ -724,8 +730,8 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
         fields["value_cents"] = body.value_cents
     if body.content_pct >= 0 and body.content_pct != e["content_pct"]:
         fields["content_pct"] = max(0, min(100, body.content_pct))
-    if fields.get("status") not in (None, "active", "closed"):
-        raise HTTPException(400, "status is active or closed")
+    if fields.get("status") not in (None, "active", "closed", "archived"):
+        raise HTTPException(400, "status is active, closed or archived")
     if fields:
         sets = ", ".join(f"{k}=?" for k in fields)
         con.execute(f"UPDATE engagements SET {sets}, updated_at=? WHERE id=?",
@@ -739,6 +745,29 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
         log(con, eid, u["name"], "updated: " + ", ".join(fields))
         con.commit()
     return {"ok": True}
+
+
+class ArchiveBody(BaseModel):
+    archived: bool = True
+
+
+@router.post("/api/store/admin/engagements/{eid}/archive")
+def archive_engagement(eid: int, body: ArchiveBody, u=Depends(admin_user),
+                       con=Depends(get_con)):
+    """Put a client away, or take them back out. Nothing is removed: the
+    documents, gates, dates and portal link are exactly as they were, which
+    is the difference between archiving and deleting — one is reversible
+    and the other is a decision."""
+    e = _eng_or_404(con, eid)
+    want = "archived" if body.archived else "active"
+    if e["status"] == want:
+        return {"status": want}
+    con.execute("UPDATE engagements SET status=?, updated_at=? WHERE id=?",
+                (want, time.time(), eid))
+    log(con, eid, u["name"],
+        "archived" if body.archived else "restored from the archive")
+    con.commit()
+    return {"status": want, "name": e["name"]}
 
 
 @router.delete("/api/store/admin/engagements/{eid}")
