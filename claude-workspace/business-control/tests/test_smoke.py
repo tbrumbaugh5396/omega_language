@@ -4240,8 +4240,26 @@ ok("[CLIENT NAME=" not in _body1,
    "the token stays a token — baking it here is exactly how one document "
    "starts disagreeing with the next")
 
+# The new name containing the old one is the case that doubled: rename to
+# "X Labs", then swap "X" for "X Labs" inside the result, and the cover
+# says "X Labs Labs".
+c.patch(f"/api/store/admin/engagements/{_ren['id']}", headers=A,
+        json={"name": "Third Name Co Labs"})
+_rt3 = [d["title"] for d in c.get(f"/api/store/admin/engagements/{_ren['id']}",
+        headers=A).json()["docs"]]
+ok(all(t.count("Labs") == 1 for t in _rt3)
+   and all(t.endswith("Third Name Co Labs") for t in _rt3),
+   "renaming to a name that contains the old one renames once, not twice")
+c.patch(f"/api/store/admin/engagements/{_ren['id']}", headers=A,
+        json={"name": "Third Name Co"})
+
 _bed2 = c.get(f"/api/store/admin/engagements/{_ren['id']}/binder/editable",
               headers=A).text
+_sed2 = c.get(f"/api/store/admin/documents/{_one['id']}/editable",
+              headers=A).text
+ok('class="bd-title"' in _sed2,
+   "and a document's title is a field in its own editor too, not only in "
+   "the binder — the name in the heading is the one people read first")
 ok('class="bd-title"' in _bed2,
    "and a title is a field in the editor, because the one thing you could "
    "not change was the line you read first")

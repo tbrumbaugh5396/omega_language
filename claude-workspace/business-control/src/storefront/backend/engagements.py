@@ -569,19 +569,31 @@ GLOBAL_COLUMN = {"client": "name", "client_poc": "approver_name",
 def rename_client(con, eid: int, old: str, new: str) -> None:
     """A client's name is on their documents' titles too, and a binder full
     of papers still saying the old name is a binder that disagrees with its
-    own cover."""
+    own cover.
+
+    Order matters: the swap runs first and never touches the two documents
+    whose titles are known outright. Renaming Lingua to Lingua Labs and
+    then swapping "Lingua" for "Lingua Labs" inside the result is how a
+    cover ends up saying "Lingua Labs Labs" — the new name contains the old
+    one, so the second pass finds it again."""
+    if old and old != new:
+        con.execute(
+            "UPDATE documents SET title=REPLACE(title,?,?)"
+            " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
+            "   WHERE ed.engagement_id=?)"
+            " AND COALESCE(notes,'') NOT IN ('binder cover','binder intro')",
+            (old, new, eid))
     for note, stem in (("binder cover", "Project binder"),
                        ("binder intro", "Introduction")):
         con.execute(
-            "UPDATE documents SET title=?, party_name=?"
-            " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
+            "UPDATE documents SET title=? WHERE id IN"
+            " (SELECT ed.doc_id FROM engagement_docs ed"
             "   WHERE ed.engagement_id=?) AND notes=?",
-            (f"{stem} — {new}"[:200], new[:120], eid, note))
-    if old and old != new:
-        con.execute(
-            "UPDATE documents SET title=REPLACE(title,?,?), party_name=?"
-            " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
-            "   WHERE ed.engagement_id=?)", (old, new, new[:120], eid))
+            (f"{stem} — {new}"[:200], eid, note))
+    con.execute(
+        "UPDATE documents SET party_name=? WHERE id IN"
+        " (SELECT ed.doc_id FROM engagement_docs ed"
+        "  WHERE ed.engagement_id=?)", (new[:120], eid))
 
 
 def apply_globals(con, eid: int, gvals: dict, actor: str) -> list:

@@ -5137,6 +5137,11 @@ async function fillInDoc(did, title, after, anchor) {
     };
     const saveEdits = async () => {
       const doc = frame.contentDocument;
+      // the title is a field on the page, saved with it
+      const tIn = doc.querySelector("input.bd-title");
+      if (tIn && tIn.value.trim() && tIn.value !== tIn.defaultValue)
+        await api(`/api/store/admin/documents/${did}`,
+          { method: "PATCH", body: { title: tIn.value.trim() } });
       const fills = {}, regions = {};
       doc.querySelectorAll("input.ph[data-tok]").forEach((i) => {
         if (i.value.trim()) fills[i.dataset.tok] = i.value.trim();

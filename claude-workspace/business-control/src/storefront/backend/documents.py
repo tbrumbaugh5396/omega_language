@@ -1011,7 +1011,9 @@ def render_editable(d, suggestions: dict) -> str:
         f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
         f"{FONT_LINK}<style>{EDITABLE_CSS}html{{background:#fff}}"
         f"{PAGE_RULE_CSS}</style></head><body>"
-        f"{editable_inner(d['title'], d['body'], suggestions)}"
+        f'<input class="bd-title" data-title="{d["id"]}"'
+        f' value="{sect.esc(d["title"])}" aria-label="document title">'
+        f"{editable_inner('', d['body'], suggestions)}"
         f"</body></html>")
 
 
