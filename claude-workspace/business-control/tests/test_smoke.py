@@ -3985,6 +3985,65 @@ ok("if (foldAllSync) foldAllSync();" in _opsjs and "foldAllSync = sync;" in _ops
    "folding the last stage by hand corrects that control too — a button "
    "that promises the wrong direction is worse than no button")
 
+# --- the record answers on every surface, not just the studio's ------------
+# A record field is deliberately never baked into the body, so each renderer
+# has to resolve it. One that forgets shows a client [CLIENT] where their own
+# name belongs — on the page they are being asked to sign.
+_gsrc = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "05-kickoff/welcome-guide.md"}).json()
+_ename = c.get(f"/api/store/admin/engagements/{_eid}",
+               headers=A).json()["engagement"]["name"]
+_sreq = c.post(
+    f"/api/store/admin/documents/{_gsrc['doc_id']}/request-signature",
+    headers=A, json={"signer_name": "Reads It", "signer_email": "r@x.test",
+                     "role": "signer", "in_person": True}).json()
+_spage = c.get(_sreq["link"].split("localhost")[-1]).text
+ok("[CLIENT]" not in _spage and "[CLIENT NAME]" not in _spage,
+   "the page a client signs never shows a record token raw — asked to sign "
+   "[CLIENT], they have been handed the template, not their document")
+ok("fbox" in _spage,
+   "and it draws blanks the same way the studio's own view does — one look "
+   "for one document, whichever side of the wall you are on")
+ok(_docmod.substitute_globals("For [CLIENT], approved by [CLIENT POC].",
+                              {"client": "Probe Co", "client_poc": "P Poc"})
+   == "For Probe Co, approved by P Poc.",
+   "one resolver answers record tokens, wherever the text is going")
+# PDF streams are compressed, so the bytes cannot be read for a token —
+# what is checkable is that every path that builds one goes through the
+# resolver, which is the property that was actually broken.
+_dsrc = Path("src/storefront/backend/documents.py").read_text()
+_esrc = Path("src/storefront/backend/engagements.py").read_text()
+ok(_dsrc.count("substitute_globals(d[\"body\"], gvals or {})") == 1
+   and "gvals=globals_for(con, did)" in _dsrc
+   and "gvals=globals_for(con, d[\"id\"])" in _dsrc,
+   "the studio's PDF and the signer's own copy resolve the record — the "
+   "printed page outlives the screen, and it is the one that gets argued "
+   "over")
+ok("substitute_globals(d[\"body\"], gv)" in _dsrc.split("def docusign_send")[1],
+   "and so does the file handed to DocuSign, where the client signs "
+   "somewhere we do not control the rendering")
+ok("vault.substitute_globals(r[\"body\"], _gv)" in _esrc
+   and "gvals=global_values(e)" in _esrc
+   and "vault.form_inner('', row['body'], _gv)" in _esrc,
+   "and the export bundle and the client portal, which are the two ways a "
+   "document leaves the building")
+_ptok2 = c.post(f"/api/store/admin/engagements/{_eid}/portal",
+                headers=A).json()["url"].split("/engage/")[1]
+_ppdf = c.get(f"/engage/{_ptok2}/pdf/{_gsrc['doc_id']}")
+_ppage = c.get(f"/engage/{_ptok2}/doc/{_gsrc['doc_id']}").text
+ok(_ppdf.status_code == 200 and "[CLIENT]" not in _ppage
+   and "fbox" in _ppage,
+   "the portal hands over the same document the studio sees — resolved, "
+   "with its blanks drawn as blanks")
+ok(c.get(f"/api/store/admin/documents/{_gsrc['doc_id']}/preview",
+         headers=A).text.count(_ename) >= 1,
+   "the studio's preview still resolves it, from the same call — the point "
+   "is that they agree, not that any one of them is right")
+c.request("DELETE",
+          f"/api/store/admin/engagements/{_eid}/docs/{_gsrc['doc_id']}",
+          headers=A)
+c.delete(f"/api/store/admin/documents/{_gsrc['doc_id']}", headers=A)
+
 # --- per-section signing markers -------------------------------------------
 from storefront.backend.pdfgen import doc_pdf as _dpdf
 from storefront.backend.engagements import placeholders as _phs
@@ -4313,7 +4372,30 @@ ok("binderEditMode" in _ops
    "and only what YOU changed counts as touched — suggested values arrive "
    "pre-filled, and without the initial-value check every blank form would "
    "save itself into existence on the strength of its own suggestions")
-ok("out.doc_id" in _ops.split("binderEditMode")[1][:6800],
+_binderfn = _ops.split("async function binderEditMode")[1].split(
+    "\nasync function ")[0]
+ok('sign.textContent = "Sign this page"' in _binderfn
+   and "signCard = async (card)" in _binderfn
+   and "engSignForm(out.id" in _binderfn,
+   "a page can be signed from inside the binder — a book has many "
+   "signatures and they belong to different pages, not to a footer")
+ok("const saveCard = async (card, force)" in _binderfn
+   and _binderfn.count("await saveCard(") == 2,
+   "and Sign-this-page saves through the same writer as Save-the-binder — "
+   "a signature attesting to a slightly different save path is a signature "
+   "to argue about")
+ok("if (!touched && !force) return null;" in _binderfn,
+   "signing a blank form generates it first: you cannot sign a page that "
+   "does not exist yet")
+ok(".bd-sign" in c.get(
+       f"/api/store/admin/engagements/{_bt['id']}/binder/editable",
+       headers=A).text
+   and "@media print{.bd-sign{display:none}}" in c.get(
+       f"/api/store/admin/engagements/{_bt['id']}/binder/editable",
+       headers=A).text,
+   "the control is styled with the binder and hidden from print — the "
+   "printable book stays a printable book")
+ok("out.doc_id" in _binderfn,
    "a touched blank form generates the document for this client, then the "
    "written answers land on it")
 
@@ -4528,8 +4610,15 @@ c.delete(f"/api/store/admin/documents/{_g5['doc_id']}", headers=A)
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.
-_viewer = _ops.split("async function docViewer")[1][:3400]
+_viewer = _ops.split("async function docViewer")[1][:4200]
 _before_open = _viewer.split('$("#dv-open")')[0]
+ok('id="dv-sign"' in _viewer and "engSignForm(did, preset || {}" in _viewer,
+   "the viewer signs what it is showing: having just read the document, "
+   "closing it to find the row's button is a step that exists only because "
+   "of how the page was built")
+ok('signed ? "Add a signature" : "Sign"' in _viewer,
+   "and it says which it is — a signed document can still take the second "
+   "signature it is waiting on")
 ok('iframe class="doc-viewer"' in _viewer
    and "window.open" not in _before_open
    and 'window.open(pdfUrl, "_blank")' in _viewer,

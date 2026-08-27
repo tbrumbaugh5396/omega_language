@@ -5272,6 +5272,7 @@ async function binderEditMode(engId, e, anchor) {
     const initialChecks = new Map();
     const initialToks = new Map();
     const initialTitles = new Map();
+    let signCard = null;
     frame.onload = () => {
       const doc = frame.contentDocument;
       doc.querySelectorAll("input.ph-check").forEach((c) =>
@@ -5314,6 +5315,17 @@ async function binderEditMode(engId, e, anchor) {
       });
       doc.querySelectorAll(".binder-doc[data-doc], .binder-doc[data-tpl]")
         .forEach((card) => {
+          /* Signing lives on the page, not in the footer: a book has many
+             signatures and they belong to different pages. Injected here
+             rather than rendered server-side, so the printable binder
+             stays a printable binder. */
+          const sign = doc.createElement("button");
+          sign.type = "button";
+          sign.className = "bd-sign";
+          sign.textContent = "Sign this page";
+          sign.title = "saves this page, then opens the pad — or sends it";
+          sign.onclick = () => signCard && signCard(card);
+          card.insertBefore(sign, card.firstChild);
           card.addEventListener("input", (ev) => {
             const inp = ev.target;
             if (inp.dataset && inp.dataset.tok && !inp.dataset.global) {
@@ -5328,64 +5340,92 @@ async function binderEditMode(engId, e, anchor) {
           paint(card);
         });
     };
+    /* One page's worth of saving, so that Save-the-binder and Sign-this-page
+       write by exactly the same rules — a signature that attested to a
+       slightly different save path would be a signature to argue about.
+       Returns the document id the page now has, or null if there was
+       nothing to write.
+
+       Record fields ride along in the ordinary fills — the server knows
+       they belong to the client and writes them there instead of baking
+       them into whichever page you happened to type on. */
+    const saveCard = async (card, force) => {
+      const fills = {}, regions = {};
+      card.querySelectorAll("input.ph[data-tok]").forEach((i) => {
+        if (i.value.trim() && i.value !== initialToks.get(i))
+          fills[i.dataset.tok] = i.value.trim();
+      });
+      card.querySelectorAll("input.ph-line, textarea.ph-area")
+        .forEach((i) => {
+          if (i.value.trim()) regions[i.dataset.region] = i.value.trim();
+        });
+      card.querySelectorAll("input.ph-check").forEach((c) => {
+        if (c.checked !== initialChecks.get(c))
+          regions[c.dataset.region] = c.checked ? "true" : "false";
+      });
+      // the title is fields on the card: what it is called, and who
+      // for — the second being the record's own client field
+      const tIn = card.querySelector('input.bd-title[data-part="pre"]');
+      const titleChanged = tIn && tIn.value !== initialTitles.get(tIn);
+      // A record field is the client's, not this page's: changing the
+      // client must not conjure twenty blank forms into existence just
+      // because their copy of the client's name moved with it.
+      const own = Object.keys(fills).filter((k) => !GLOBAL_TOKS.has(k));
+      const touched = own.length || Object.keys(regions).length
+        || titleChanged;
+      if (card.dataset.doc) {
+        if (!touched) return { id: +card.dataset.doc, wrote: false };
+        if (titleChanged)
+          await api(`/api/store/admin/documents/${card.dataset.doc}`,
+            { method: "PATCH", body: { title: composeTitle(card) } });
+        let record = [];
+        if (Object.keys(fills).length || Object.keys(regions).length) {
+          const out = await api(
+            `/api/store/admin/documents/${card.dataset.doc}/edit`,
+            { body: { fills, regions } });
+          record = out.record || [];
+        }
+        return { id: +card.dataset.doc, wrote: true, record };
+      }
+      if (!touched && !force) return null;
+      /* a blank form someone wrote on becomes a real document — the
+         token fills ride along at generation; the regions land right
+         after, on the same scan order. Signing one generates it too:
+         you cannot sign a page that does not exist yet. */
+      const out = await api(
+        `/api/store/admin/engagements/${engId}/docs`,
+        { body: { template_path: card.dataset.tpl, fills } });
+      if (Object.keys(regions).length)
+        await api(`/api/store/admin/documents/${out.doc_id}/edit`,
+          { body: { fills: {}, regions } });
+      card.dataset.doc = out.doc_id;
+      return { id: out.doc_id, wrote: true, generated: true };
+    };
+
+    /* Sign the page you are looking at, from inside the book. The pad is
+       the same one an emailed signer gets — drawn with the mouse — and the
+       page is saved first, because a signature attests to the text as it
+       stands. */
+    signCard = async (card) => {
+      try {
+        const out = await saveCard(card, true);
+        closeModal();
+        engSignForm(out.id, { name: e.approver_name, email: e.approver_email },
+          () => renderEngagement(engId));
+      } catch (err) { toast(err.message); }
+    };
+
     $("#bd-save").onclick = async () => {
       const doc = frame.contentDocument;
       const cards = [...doc.querySelectorAll(
         ".binder-doc[data-doc], .binder-doc[data-tpl]")];
       let saved = 0, generated = 0, failed = 0, recordChanged = false;
-
-      /* Record fields ride along in the ordinary fills — the server knows
-         they belong to the client and writes them there instead of baking
-         them into whichever page you happened to type on. */
       for (const card of cards) {
-        const fills = {}, regions = {};
-        card.querySelectorAll("input.ph[data-tok]").forEach((i) => {
-          if (i.value.trim() && i.value !== initialToks.get(i))
-            fills[i.dataset.tok] = i.value.trim();
-        });
-        card.querySelectorAll("input.ph-line, textarea.ph-area")
-          .forEach((i) => {
-            if (i.value.trim()) regions[i.dataset.region] = i.value.trim();
-          });
-        card.querySelectorAll("input.ph-check").forEach((c) => {
-          if (c.checked !== initialChecks.get(c))
-            regions[c.dataset.region] = c.checked ? "true" : "false";
-        });
-        // the title is fields on the card: what it is called, and who
-        // for — the second being the record's own client field
-        const tIn = card.querySelector('input.bd-title[data-part="pre"]');
-        const titleChanged = tIn && tIn.value !== initialTitles.get(tIn);
-        // A record field is the client's, not this page's: changing the
-        // client must not conjure twenty blank forms into existence just
-        // because their copy of the client's name moved with it.
-        const own = Object.keys(fills).filter((k) => !GLOBAL_TOKS.has(k));
-        const touched = own.length || Object.keys(regions).length
-          || titleChanged;
         try {
-          if (card.dataset.doc) {
-            if (!touched) continue;
-            if (titleChanged)
-              await api(`/api/store/admin/documents/${card.dataset.doc}`,
-                { method: "PATCH", body: { title: composeTitle(card) } });
-            if (Object.keys(fills).length || Object.keys(regions).length) {
-              const out = await api(
-                `/api/store/admin/documents/${card.dataset.doc}/edit`,
-                { body: { fills, regions } });
-              if ((out.record || []).length) recordChanged = true;
-            }
-            saved += 1;
-          } else if (touched) {
-            /* a blank form someone wrote on becomes a real document — the
-               token fills ride along at generation; the regions land right
-               after, on the same scan order */
-            const out = await api(
-              `/api/store/admin/engagements/${engId}/docs`,
-              { body: { template_path: card.dataset.tpl, fills } });
-            if (Object.keys(regions).length)
-              await api(`/api/store/admin/documents/${out.doc_id}/edit`,
-                { body: { fills: {}, regions } });
-            generated += 1;
-          }
+          const out = await saveCard(card);
+          if (!out || !out.wrote) continue;
+          if (out.generated) generated += 1; else saved += 1;
+          if ((out.record || []).length) recordChanged = true;
         } catch (err) { failed += 1; toast(
           `${card.dataset.name || "page"}: ${err.message}`); }
       }
@@ -6171,7 +6211,8 @@ async function renderEngagement(id) {
     const name = (b.closest(".doc-line, .sig-row")?.querySelector("b")
       ?.textContent || "document").trim();
     docViewer(+b.dataset.engview, b.dataset.kind, b.dataset.ext, name,
-              b.dataset.signed, () => renderEngagement(id));
+              b.dataset.signed, () => renderEngagement(id),
+              { name: e.approver_name, email: e.approver_email });
   });
   view().querySelectorAll("[data-engdl]").forEach((b) => b.onclick = async () => {
     const did = b.dataset.engdl;
@@ -6562,7 +6603,7 @@ function docRow(d) {
   </div>`;
 }
 
-async function docViewer(did, kind, ext, name, signedN, after) {
+async function docViewer(did, kind, ext, name, signedN, after, preset) {
   /* One viewer for both tabs: the rendered document with its signature
      block, and the signed PDF as the primary download. */
   const auth = async (path) => {
@@ -6596,6 +6637,9 @@ async function docViewer(did, kind, ext, name, signedN, after) {
         ${kind === "body" && !signed ? `<button class="btn alt" id="dv-edit"
           title="type into the blanks where they sit in the text"
           >Edit</button>` : ""}
+        <button class="btn alt" id="dv-sign" title="send it for signature, or
+          open the pad here and sign with the mouse">${
+          signed ? "Add a signature" : "Sign"}</button>
         <button class="btn" id="dv-dl">${opsIcon("file", "btn-ic")}
           Download ${signed ? "signed " : ""}${isPdfable ? "PDF" : "file"}</button>
         <button class="btn alt" id="dv-open">Open ${isPdfable ? "PDF" : ""}
@@ -6604,6 +6648,13 @@ async function docViewer(did, kind, ext, name, signedN, after) {
       </div>`, "wide");
     const dvFrame = document.querySelector("#ops-modal iframe.doc-viewer");
     if (dvFrame) dvFrame.onload = () => wirePageCount(dvFrame, $("#dv-pages"));
+    /* Signing belongs where you are reading: having just read the thing,
+       closing the viewer to find the row's button is a step that exists
+       only because of how the page was built. */
+    $("#dv-sign").onclick = () => {
+      closeModal();
+      engSignForm(did, preset || {}, after || (() => render()));
+    };
     const dvEdit = $("#dv-edit");
     if (dvEdit) dvEdit.onclick = () => {
       const at = frameAnchor(dvFrame);     // read it before the modal goes

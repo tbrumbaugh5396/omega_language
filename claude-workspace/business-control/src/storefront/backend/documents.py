@@ -670,15 +670,7 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
     if not (d["body"] or "").strip():
         raise HTTPException(400, "this document is a file — download it "
                                  "instead")
-    gv = {}
-    row = con.execute("SELECT engagement_id FROM engagement_docs"
-                      " WHERE doc_id=?", (did,)).fetchone()
-    if row:
-        from . import engagements as eng
-        e = con.execute("SELECT * FROM engagements WHERE id=?",
-                        (row["engagement_id"],)).fetchone()
-        if e:
-            gv = eng.global_values(e)
+    gv = globals_for(con, did)
     from .api import FONT_LINK
     return HTMLResponse(
         f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -770,7 +762,7 @@ def pending_html(pending: list) -> str:
 
 
 def _pdf_response(d, inline: bool = True, sigs: list | None = None,
-                  pending: list | None = None):
+                  pending: list | None = None, gvals: dict | None = None):
     """A PDF for any document that can produce one: authored bodies are
     rendered — completed signatures printed on them — and an uploaded PDF
     is itself. Inline by default so the browser's own viewer is the
@@ -778,8 +770,12 @@ def _pdf_response(d, inline: bool = True, sigs: list | None = None,
     from . import pdfgen
     stem = re.sub(r"[^\w.-]+", "-", d["title"]).strip("-")[:80] or "document"
     if (d["body"] or "").strip():
-        blob = pdfgen.doc_pdf(d["title"], d["body"], signatures=sigs,
-                              pending=pending)
+        # The PDF cannot ask the record, so the record is resolved into the
+        # text on the way in — the same call the binder makes, because a
+        # second resolver is a second answer waiting to happen.
+        blob = pdfgen.doc_pdf(substitute_globals(d["title"], gvals or {}),
+                              substitute_globals(d["body"], gvals or {}),
+                              signatures=sigs, pending=pending)
     elif d["ext"] == "pdf":
         p = doc_path(d)
         if not p.exists():
@@ -804,7 +800,8 @@ def document_pdf(did: int, download: int = 0, u=Depends(admin_user),
         con.commit()
     return _pdf_response(d, inline=not download,
                          sigs=signed_rows(con, did),
-                         pending=pending_rows(con, did))
+                         pending=pending_rows(con, did),
+                         gvals=globals_for(con, did))
 
 
 @router.get("/sign/{token}/pdf")
@@ -817,7 +814,8 @@ def signing_pdf(token: str, con=Depends(get_con), _rl=Depends(rate_limit)):
         raise HTTPException(404, "document not found")
     return _pdf_response(d, inline=False,
                          sigs=signed_rows(con, d["id"]),
-                         pending=pending_rows(con, d["id"]))
+                         pending=pending_rows(con, d["id"]),
+                         gvals=globals_for(con, d["id"]))
 
 
 @router.get("/api/store/admin/documents/{did}/markdown")
@@ -919,6 +917,20 @@ def title_fields_html(doc_id: int, title: str, client: str) -> str:
             f' value="{esc(title)}" aria-label="document title">')
 
 
+def globals_for(con, did: int) -> dict:
+    """The record behind a document, if it belongs to a client at all."""
+    row = con.execute("SELECT engagement_id FROM engagement_docs"
+                      " WHERE doc_id=?", (did,)).fetchone()
+    if not row:
+        return {}
+    e = con.execute("SELECT * FROM engagements WHERE id=?",
+                    (row["engagement_id"],)).fetchone()
+    if not e:
+        return {}
+    from . import engagements as eng
+    return eng.global_values(e)
+
+
 def form_inner(title: str, body: str, gvals: dict | None = None) -> str:
     """Every blank as a box you write on. Reading a document should show
     where the answers go — print it and fill it in with a pen — instead of
@@ -938,7 +950,9 @@ def form_inner(title: str, body: str, gvals: dict | None = None) -> str:
                 # what was set and that it can be set again.
                 return (f'<span class="fbox fbox-set" title="{sect.esc(tok)}">'
                         f'{sect.esc(have)}</span>')
-            w = max(len(tok) + 2, 9)
+            # capped: min-width beats max-width in CSS, so a long label
+            # would otherwise push its own box off the right of the page
+            w = min(max(len(tok) + 2, 9), 34)
             return (f'<span class="fbox" style="min-width:{w}ch">'
                     f'<span class="flab">{sect.esc(tok)}</span></span>')
         if kind == "area":
@@ -970,6 +984,29 @@ PAGE_RULE_CSS = (
 # binder page. When these drifted (line-height 1.7 here, 1.6 there) the
 # editor was a different document that happened to hold the same words,
 # and it paginated like one.
+# A blank you can see and write on, on screen and on paper. Its own
+# constant because the studio's view is not the only page that draws one:
+# the signer's page draws the same document, and a blank that renders as a
+# bare sentence there is a blank the client will not know to fill.
+FIELD_BOX_CSS = (
+    # max-width so a long label cannot push the box off the page: the same
+    # blank has to fit a phone, a modal and a sheet of letter paper
+    ".fbox{display:inline-block;border:1px solid #b9b2a6;border-radius:5px;"
+    "background:#fcfaf6;padding:1px 6px;margin:0 1px;min-height:1.35em;"
+    "max-width:100%;overflow:hidden;text-overflow:ellipsis;"
+    "vertical-align:baseline;line-height:1.35}"
+    ".flab{font-size:.72em;letter-spacing:.02em;color:#a9a294;"
+    "text-transform:none;white-space:nowrap}"
+    ".fbox-area{display:block;width:100%;min-height:3.1em;margin:6px 0 10px;"
+    "padding:5px 8px}"
+    ".fbox-cell{display:inline-block;min-width:6ch;min-height:1.3em}"
+    ".fcheck{display:inline-block;width:12px;height:12px;border:1px solid "
+    "#8b8496;border-radius:3px;vertical-align:-1px}"
+    ".fcheck.on{background:#3fbd82;border-color:#3fbd82}"
+    ".fbox-set{border-color:#8fcfae;background:#f1faf5;color:#1b181f;"
+    "min-width:0}"
+)
+
 DOC_BASE_CSS = (
     "body{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
     "line-height:1.6;max-width:760px;margin:0 auto;padding:32px 24px}"
@@ -982,20 +1019,7 @@ DOC_BASE_CSS = (
     "img{max-width:100%}"
     ".pgbreak{break-before:page;page-break-before:always;height:0;"
     "margin:34px 0;border-top:1px dashed #cfc8bd}"
-    # a blank you can see and write on, on screen and on paper
-    ".fbox{display:inline-block;border:1px solid #b9b2a6;border-radius:5px;"
-    "background:#fcfaf6;padding:1px 6px;margin:0 1px;min-height:1.35em;"
-    "vertical-align:baseline;line-height:1.35}"
-    ".flab{font-size:.72em;letter-spacing:.02em;color:#a9a294;"
-    "text-transform:none;white-space:nowrap}"
-    ".fbox-area{display:block;width:100%;min-height:3.1em;margin:6px 0 10px;"
-    "padding:5px 8px}"
-    ".fbox-cell{display:inline-block;min-width:6ch;min-height:1.3em}"
-    ".fcheck{display:inline-block;width:12px;height:12px;border:1px solid "
-    "#8b8496;border-radius:3px;vertical-align:-1px}"
-    ".fcheck.on{background:#3fbd82;border-color:#3fbd82}"
-    ".fbox-set{border-color:#8fcfae;background:#f1faf5;color:#1b181f;"
-    "min-width:0}"
+    + FIELD_BOX_CSS
 )
 
 # A field should cost the line it sits on as little as possible: hundreds
@@ -1376,7 +1400,11 @@ def signing_page(token: str, request: Request, con=Depends(get_con),
     declined = s["status"] == "declined"
     body_html = ""
     if (d["body"] or "").strip():
-        body_html = (f'<div class="doc-body">{md_html(d["body"])}'
+        # The same text the studio sees, drawn the same way: a client asked
+        # to sign a page that reads [CLIENT] has been shown the template,
+        # not their document.
+        body_html = (f'<div class="doc-body">'
+                     f'{form_inner("", d["body"], globals_for(con, d["id"]))}'
                      f'{signatures_html(signed_rows(con, d["id"]))}</div>')
     elif d["ext"] == "pdf":
         body_html = (f'<iframe class="doc-frame" src="/sign/{token}/file"'
@@ -1457,6 +1485,13 @@ h2{{font-family:'Fraunces',Georgia,serif;font-size:21px;font-weight:600;
 .card{{background:var(--paper);border:1px solid var(--line);
   border-radius:16px;padding:26px;margin-top:18px}}
 .doc-body p{{margin-bottom:12px}}
+.doc-body table{{border-collapse:collapse;width:100%;font-size:14px;
+  margin:10px 0}}
+.doc-body td,.doc-body th{{border-top:1px solid var(--line);
+  padding:6px 10px 6px 0;text-align:left}}
+.doc-body h2,.doc-body h3{{margin:16px 0 6px}}
+.doc-body ul,.doc-body ol{{margin:0 0 12px 20px}}
+{FIELD_BOX_CSS}
 .doc-frame{{width:100%;height:70vh;border:1px solid var(--line);
   border-radius:10px}}
 .doc-img{{width:100%;border-radius:10px}}
@@ -1824,7 +1859,9 @@ def docusign_send(con, d, signer_name: str, signer_email: str,
     from erp.backend.integrations import _json_req
     from . import pdfgen
     if (d["body"] or "").strip():
-        blob = pdfgen.doc_pdf(d["title"], d["body"])
+        gv = globals_for(con, d["id"])
+        blob = pdfgen.doc_pdf(substitute_globals(d["title"], gv),
+                              substitute_globals(d["body"], gv))
     elif d["ext"] == "pdf":
         p = doc_path(d)
         if not p.exists():

@@ -1303,8 +1303,10 @@ def _export_entries(con, eid: int, side: str):
             from . import documents as vault
             from . import pdfgen
             try:
+                _gv = vault.globals_for(con, r["id"])
                 yield f"{folder}/{stem}.pdf", pdfgen.doc_pdf(
-                    r["title"], r["body"],
+                    vault.substitute_globals(r["title"], _gv),
+                    vault.substitute_globals(r["body"], _gv),
                     signatures=vault.signed_rows(con, r["id"]))
             except Exception:
                 pass          # a render bug must not sink the whole export
@@ -1706,6 +1708,13 @@ def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         f".bd-note{{font-size:12.5px;color:#8a6ff0;font-weight:600;"
         f"margin:0 0 10px}}"
         f".bd-blank .bd-note{{color:#d08a00}}"
+        # the per-page sign control the editor injects: on the page it
+        # signs, out of the way of the text it attests to
+        f".bd-sign{{float:right;margin:-8px -10px 4px 12px;border:0;"
+        f"border-radius:999px;padding:7px 13px;background:#8a6ff0;"
+        f"color:#fff;font:600 12px/1 inherit;cursor:pointer}}"
+        f".bd-sign:hover{{background:#7358e8}}"
+        f"@media print{{.bd-sign{{display:none}}}}"
         f"{vault.PAGE_RULE_CSS}"
         f"</style></head><body>{''.join(parts)}</body></html>")
 
@@ -2023,12 +2032,16 @@ def portal_doc(token: str, did: int, con=Depends(get_con),
         return FileResponse(p, media_type=vault.ALLOWED_EXT.get(
             row["ext"], "application/octet-stream"))
     sigs = vault.signed_rows(con, row["id"])
+    # The client's own copy reads like the studio's: record fields answered,
+    # blanks shown as the blanks they are.
+    _gv = global_values(e)
     inner = (f"<p><a href=\"/engage/{token}\">← back to the roadmap</a>"
              f"<a class=\"btn\" style=\"float:right\""
              f" href=\"/engage/{token}/pdf/{did}\">Download "
              f"{'signed ' if sigs else ''}PDF</a></p>"
-             f"<h1>{sect.esc(row['title'])}</h1>"
-             f"<div class=\"card doc-body\">{vault.md_html(row['body'])}"
+             f"<h1>{sect.esc(vault.substitute_globals(row['title'], _gv))}</h1>"
+             f"<div class=\"card doc-body\">"
+             f"{vault.form_inner('', row['body'], _gv)}"
              f"{vault.signatures_html(sigs)}"
              f"{vault.pending_html(vault.pending_rows(con, row['id']))}"
              f"</div>")
@@ -2048,7 +2061,8 @@ def portal_doc_pdf(token: str, did: int, con=Depends(get_con),
     from . import documents as vault
     return vault._pdf_response(row, inline=False,
                                sigs=vault.signed_rows(con, row["id"]),
-                               pending=vault.pending_rows(con, row["id"]))
+                               pending=vault.pending_rows(con, row["id"]),
+                               gvals=global_values(e))
 
 
 @router.post("/engage/{token}/direction")
