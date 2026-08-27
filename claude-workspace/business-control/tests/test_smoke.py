@@ -1942,9 +1942,60 @@ ok(_ops.count("clearTimeout(S._wsRetry)") >= 2,
 
 # --- the service worker caches the shell, not everything ---
 _sw = c.get("/ops/sw.js").text
+_sfsw = c.get("/sf-sw.js").text
+_store_js2 = c.get("/store.js").text
 ok("CACHEABLE" in _sw, "the worker decides what is worth caching")
 ok("r.ok && r.type" in _sw,
    "and never stores an error response, which would strand a broken shell")
+
+# Both workers, one rule each way. These are the two failures that make a
+# restart look like a broken build: a lookup that cannot find what it
+# stored, and a fallback that answers with nothing at all.
+for _name, _src in (("ops", _sw), ("storefront", _sfsw)):
+    ok("const key = url.pathname;" in _src
+       and "c.put(key, copy)" in _src
+       and "caches.match(key, { ignoreSearch: true })" in _src,
+       f"the {_name} worker keys its cache by path: every asset arrives as "
+       f"?v=<mtime>, so a full-URL key stores a fresh copy each restart and "
+       f"matches none of them afterwards — the offline shell goes missing "
+       f"on exactly the restart it was meant to survive")
+    ok("return fetch(e.request);" in _src.split(".catch(")[1],
+       f"and the {_name} worker's last resort is a real request, never an "
+       f"implicit undefined — resolving respondWith() with undefined is "
+       f"itself a network error, which turns a server that was merely "
+       f"restarting into ERR_FAILED and a page left silently unstyled")
+    ok('e.request.mode === "navigate"' in _src,
+       f"a navigation with nothing cached falls back to the {_name} shell, "
+       f"which is what every route renders from anyway")
+    ok("Promise.allSettled(SHELL.map((u) => c.add(u)))" in _src,
+       f"and the {_name} shell is cached one file at a time: addAll() "
+       f"rejects wholesale on a single 404, leaving nothing cached at all")
+
+for _wpath in ("/ops/sw.js", "/sf-sw.js"):
+    ok(c.get(_wpath).headers.get("cache-control") == "no-cache",
+       f"{_wpath} is served must-revalidate: a worker kept on heuristic "
+       f"freshness is a fix that lands a day late for everyone already "
+       f"running the old one")
+ok('{ updateViaCache: "none" }' in _ops
+   and '{ updateViaCache: "none" }' in _store_js2,
+   "and both registrations refuse the HTTP cache outright — the worker is "
+   "what ships the fix, so it cannot be the thing that arrives stale")
+
+# Reading the worker is not the same as running it. The harness loads both
+# workers against a stubbed browser and puts them in the states that matter
+# — server unreachable, cache holding a copy under a different ?v=, nothing
+# cached at all — which is where the old one turned a restart into a page
+# with no CSS. Pointed at the pre-fix worker, every ops case fails.
+_swh = subprocess.run(["node", str(ROOT / "tests" / "sw_harness.mjs")],
+                      capture_output=True, text=True, cwd=ROOT)
+for _line in _swh.stdout.strip().splitlines():
+    ok(_line.startswith("PASS "), _line)
+ok(_swh.returncode == 0 and _swh.stdout.count("PASS ") >= 7,
+   "the workers survive a restart when run, not just when read")
+
+ok('"business-control-ops-v6"' in _sw and '"storefront-v4"' in _sfsw,
+   "both cache names move when the keying changes, so the entries written "
+   "under the old scheme are retired rather than half-matched")
 
 # --- the hero shader can't run unattended ---
 _store_js = c.get("/store.js").text

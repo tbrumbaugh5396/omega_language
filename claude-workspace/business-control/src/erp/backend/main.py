@@ -3641,6 +3641,28 @@ def ops_index():
     return HTMLResponse(shell)
 
 
+def _worker_response(p):
+    """A worker script the browser has to revalidate.
+
+    Served by StaticFiles it carries no cache headers at all, so a browser
+    is free to keep it on heuristic freshness — and a service worker that
+    updates a day late is a fix that lands a day late for everyone already
+    running the old one. It is one small file; asking every time is free.
+    """
+    return Response(p.read_bytes(), media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/ops/sw.js")
+def ops_worker():
+    return _worker_response(config.FRONTEND_DIR / "sw.js")
+
+
+@app.get("/sf-sw.js")
+def store_worker():
+    return _worker_response(config.STOREFRONT_DIR / "sf-sw.js")
+
+
 app.mount("/ops", StaticFiles(directory=config.FRONTEND_DIR, html=True),
           name="ops")
 

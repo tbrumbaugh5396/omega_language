@@ -1,6 +1,6 @@
 /* Service worker: cache the app shell (network-first for /api), and surface
    Web Push notifications. */
-const CACHE = "business-control-ops-v5";
+const CACHE = "business-control-ops-v6";
 
 self.addEventListener("push", (e) => {
   let d = {};
@@ -20,7 +20,12 @@ const SHELL = ["/ops/", "/ops/styles.css", "/ops/app.js", "/ops/manifest.webmani
   "/ops/icons/icon-192.png", "/ops/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+  /* One at a time, and failures allowed to be failures: cache.addAll()
+     rejects wholesale if any single URL 404s, which silently leaves the
+     shell entirely uncached — the one state this worker exists to prevent.
+     A missing icon should cost the icon, not the app. */
+  e.waitUntil(caches.open(CACHE).then((c) =>
+    Promise.allSettled(SHELL.map((u) => c.add(u)))));
   self.skipWaiting();
 });
 
@@ -29,7 +34,7 @@ self.addEventListener("activate", (e) => {
   // and owns the "storefront-*" ones.
   e.waitUntil(caches.keys().then((keys) => Promise.all(
     keys.filter((k) => k.startsWith("business-control-ops-") && k !== CACHE)
-      .map((k) => caches.delete(k)))));
+      .map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 /* Only the shell is worth keeping offline. Caching every GET meant uploaded
@@ -41,8 +46,16 @@ const CACHEABLE = /^\/ops\/(?!.*\bexport\b)|^\/manifest|\.(css|js|png|svg|webman
 
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api") || e.request.method !== "GET") return;
   if (!CACHEABLE.test(url.pathname)) return;
+  /* Keyed by path, deliberately. Every asset is requested as
+     app.js?v=<mtime>, so keying on the full URL stores a fresh copy on
+     every restart and matches none of them afterwards: the offline shell
+     goes missing on exactly the restart it was meant to survive. The query
+     only ever addressed the HTTP cache, so it is not part of the identity
+     of the file. */
+  const key = url.pathname;
   e.respondWith(
     fetch(e.request)
       .then((r) => {
@@ -50,10 +63,25 @@ self.addEventListener("fetch", (e) => {
         // 404 is how a deploy leaves someone stuck on a broken shell.
         if (r.ok && r.type === "basic") {
           const copy = r.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
+          caches.open(CACHE).then((c) => c.put(key, copy));
         }
         return r;
       })
-      .catch(() => caches.match(e.request))
+      .catch(async () => {
+        const hit = await caches.match(key, { ignoreSearch: true });
+        if (hit) return hit;
+        /* A navigation with nothing cached for it is still worth answering
+           with the shell: this is a single-page app, and the shell is what
+           every route renders from. */
+        if (e.request.mode === "navigate") {
+          const shell = await caches.match("/ops/", { ignoreSearch: true });
+          if (shell) return shell;
+        }
+        /* Nothing cached either. Retry, and let the real failure be the
+           failure: resolving respondWith() with undefined is itself a
+           network error, which turns a server that was merely restarting
+           into an opaque ERR_FAILED and a page left silently unstyled. */
+        return fetch(e.request);
+      })
   );
 });

@@ -1,10 +1,14 @@
 /* Storefront service worker — cache-first shell, network-first API.
    Distinct file + cache name so it never collides with /ops/sw.js. */
-const CACHE = "storefront-v3";
+const CACHE = "storefront-v4";
 const SHELL = ["/", "/store.css", "/store.js", "/store.webmanifest"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+  /* One at a time: addAll() rejects wholesale if any single URL 404s, and
+     the shell then goes entirely uncached — the one state this exists to
+     prevent. */
+  e.waitUntil(caches.open(CACHE).then((c) =>
+    Promise.allSettled(SHELL.map((u) => c.add(u)))));
   self.skipWaiting();
 });
 
@@ -26,11 +30,14 @@ self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET" || url.pathname.startsWith("/api") ||
       url.pathname.startsWith("/ops")) return;
   if (!CACHEABLE.test(url.pathname)) return;
+  /* Keyed by path: the ?v=<mtime> cache-buster means a full-URL key would
+     store one copy per deploy and match none of them next time. */
+  const key = url.pathname;
   e.respondWith(
     fetch(e.request).then((r) => {
       if (r.ok && r.type === "basic") {
         const copy = r.clone();
-        caches.open(CACHE).then((c) => c.put(e.request, copy));
+        caches.open(CACHE).then((c) => c.put(key, copy));
       }
       return r;
     }).catch(async () => {
@@ -40,8 +47,12 @@ self.addEventListener("fetch", (e) => {
          misses — the offline shell becomes unreachable on exactly the
          deploy it was meant to survive. The cached copy is still the right
          answer here; the query string only ever addressed the HTTP cache. */
-      const hit = await caches.match(e.request, { ignoreSearch: true });
+      const hit = await caches.match(key, { ignoreSearch: true });
       if (hit) return hit;
+      if (e.request.mode === "navigate") {
+        const shell = await caches.match("/", { ignoreSearch: true });
+        if (shell) return shell;
+      }
       /* Nothing cached either. Retrying lets the real failure propagate:
          resolving respondWith() with undefined turns any transient blip
          into an opaque ERR_FAILED and leaves the page silently unstyled,

@@ -1489,7 +1489,11 @@ $("#support-btn").onclick = openSupport;
 
 // ---------- PWA ----------
 if ("serviceWorker" in navigator)
-  navigator.serviceWorker.register("/sf-sw.js").catch(() => {});
+  navigator.serviceWorker.register("/sf-sw.js",
+    /* never from the HTTP cache: the worker is the thing that
+       ships the fix, so it cannot be the thing that arrives
+       stale */
+    { updateViaCache: "none" }).catch(() => {});
 
 // ---------- Stripe return: confirm payment server-side ----------
 async function confirmPaidReturn() {

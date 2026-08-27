@@ -4844,7 +4844,11 @@ async function renderAdmin() {
 
 async function boot() {
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/ops/sw.js").catch(() => {});
+    navigator.serviceWorker.register("/ops/sw.js",
+    /* never from the HTTP cache: the worker is the thing that
+       ships the fix, so it cannot be the thing that arrives
+       stale */
+    { updateViaCache: "none" }).catch(() => {});
   }
   S.meta = await api("/api/meta").catch(() => S.meta);
   $("#brand").innerHTML = esc(S.meta.brand || "Business Control") +
