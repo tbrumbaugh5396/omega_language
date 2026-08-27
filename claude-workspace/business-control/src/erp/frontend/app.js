@@ -5889,15 +5889,21 @@ async function renderEngagement(id) {
 
   const gateRow = (g) => {
     if (!g.active) return "";
+    /* The pill says where the gate stands, in one word that is the same
+       width on every row; who and when belong with the evidence, because
+       that is the sentence they finish — "signed, by Tom, on the 26th, on
+       this document" reads as one fact, not four columns. */
     const state = g.passed_at
       ? `<span class="pill ok">${g.via === "signature"
-          ? "signed" + (g.signed_by ? " by " + esc(g.signed_by) : "")
-          : "confirmed"} ${fmtDate(g.passed_at)}</span>`
+          ? "signed" : "confirmed"}</span>`
       : g.doc_id
-        ? '<span class="pill warn">awaiting signature</span>'
+        ? '<span class="pill warn">awaiting</span>'
         : '<span class="pill">open</span>';
-    const docBit = g.doc_title ? esc(g.doc_title)
-      : g.note && !g.doc_id ? esc(g.note) : "";
+    const by = [g.signed_by || g.actor || "",
+      g.passed_at ? fmtDate(g.passed_at) : ""].filter(Boolean).join(", ");
+    const docBit = [g.doc_title ? esc(g.doc_title)
+      : g.note && !g.doc_id ? esc(g.note) : "",
+      g.passed_at ? esc(by) : ""].filter(Boolean).join(" · ");
     /* Three fixed slots, right to left: [payment] [link] [pass]. A row that
        lacks a button keeps its empty slot, so Link doc sits under Link doc
        and Confirm under Mark passed all the way down. */
@@ -5920,7 +5926,7 @@ async function renderEngagement(id) {
             data-kind="${g.kind}">${g.kind === "money"
               ? "Confirm" : "Mark passed"}</button>`);
     return `<div class="gate-line">
-      <b>${esc(g.label)}</b>
+      <b title="${esc(g.label)}">${esc(g.label)}</b>
       <span class="gl-state">${state}</span>
       <span class="gl-doc dim" title="${docBit}">${docBit}</span>
       <span class="gl-closes dim">closes ${esc(stageName(g.stage))}</span>
@@ -6441,7 +6447,14 @@ async function engGenerate(id, path) {
         ? `Created — ${out.unfilled.length} blank${out.unfilled.length === 1
             ? "" : "s"} left to finish in the editor`
         : "Created, fully filled");
-      renderEngagement(id);
+      await renderEngagement(id);
+      /* Then open it. Generating a document is asking for the document,
+         and the next thing anyone does is look at what came out. Clicking
+         its own View button rather than calling the viewer directly keeps
+         one path: whatever the row knows about the document — its name,
+         whether it is a body or a file, what it is signed with — the
+         viewer is told by the row, and cannot be told something else. */
+      view().querySelector(`[data-engview="${out.doc_id}"]`)?.click();
     } catch (err) { toast(err.message); }
   };
 }

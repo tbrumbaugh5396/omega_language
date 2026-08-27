@@ -3987,6 +3987,23 @@ ok(".doc-line:not(.folded) .dm-blanks { visibility: hidden; }" in _opscss,
 ok('${x.signed} of ${' in _opsjs,
    "half-signed is its own state — one party done, one still out — and a "
    "slot that showed only the newer of the two would read as unsigned")
+ok("grid-template-columns: minmax(0, 1.35fr) 92px minmax(0, 1fr) 122px auto;"
+   in _opscss and ".gate-line > b { overflow: hidden;" in _opscss,
+   "the gates line up the same way — one line per gate, one width per "
+   "column, so ten gates read as a list rather than ten sentences")
+ok('? "signed" : "confirmed"}</span>' in " ".join(_opsjs.split())
+   and 'awaiting</span>' in _opsjs,
+   "the state is one word wide on every row")
+ok('g.passed_at ? esc(by) : ""' in _opsjs,
+   "and who signed it and when travel with the document they attest to, "
+   "which is the sentence they finish")
+
+# --- a document you just asked for opens ----------------------------------
+ok('view().querySelector(`[data-engview="${out.doc_id}"]`)?.click()'
+   in _opsjs,
+   "generating a document opens it: asking for a document is asking to see "
+   "it, and clicking its own row's View button means the viewer is told "
+   "what the row knows rather than a second guess at the same facts")
 ok('${done} of ${live.length} passed' in _opsjs
    and 'to generate' in _opsjs and 'entr${' in _opsjs,
    "a folded section still says what it holds — gates passed, documents "
