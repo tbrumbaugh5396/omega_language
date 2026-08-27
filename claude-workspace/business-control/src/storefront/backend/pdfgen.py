@@ -188,6 +188,15 @@ def doc_pdf(title: str, md_text: str, signatures: list | None = None,
             pdf.line(pdf.l_margin, pdf.get_y(),
                      pdf.w - pdf.r_margin, pdf.get_y())
             pdf.ln(3)
+        elif kind == "aline":
+            # a write-in line: lower and lighter than a section rule, so a
+            # printed questionnaire reads as a form, not a page of dividers
+            pdf.ln(6)
+            pdf.set_draw_color(*DIM)
+            pdf.line(pdf.l_margin, pdf.get_y(),
+                     pdf.w - pdf.r_margin, pdf.get_y())
+            pdf.set_draw_color(*LINE)
+            pdf.ln(5)
         elif kind == "table":
             pdf.set_font("helvetica", size=9)
             with pdf.table(line_height=5.2,

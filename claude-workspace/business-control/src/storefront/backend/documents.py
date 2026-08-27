@@ -153,6 +153,108 @@ ALLOWED_EXT = {
 MAX_BYTES = 25 * 1024 * 1024
 
 
+# ---------- the fillable parts of a document ----------
+# Three kinds of blank, all of them the kit's own affordances:
+#   [TOKENS]        one value per name, filled everywhere it appears
+#   ______ runs     write-in lines — a sentence, a paragraph, a number
+#   - [ ] and ☐     checkboxes, toggled
+# One scanner feeds the editor, the renderer and the save, so a document
+# can never be scanned two ways.
+
+# A short bracketed token that isn't a markdown link target or a checkbox.
+PLACEHOLDER = re.compile(r"\[([^\[\]\n(){}`]{1,60})\]")
+
+# Signing markers are instructions to the renderer and to DocuSign, not
+# blanks for anyone to fill — the fill machinery must leave them standing.
+RESERVED_MARKERS = {"SIGN HERE", "INITIALS"}
+
+
+def _matches(text: str):
+    for m in PLACEHOLDER.finditer(text):
+        if text[m.end():m.end() + 1] == "(":     # [label](link) — not a blank
+            continue
+        if m.group(1).strip() in ("", "x", "✓"):  # checkbox, not a blank
+            continue
+        if m.group(1).strip() in RESERVED_MARKERS:
+            continue
+        yield m
+
+
+def placeholders(text: str) -> list:
+    seen, out = set(), []
+    for m in _matches(text):
+        tok = m.group(1)
+        if tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+    return out
+
+
+def fill(text: str, fills: dict) -> str:
+    """Replace each filled token everywhere it appears; leave the rest
+    bracketed so the document can be finished by hand in the editor."""
+    out, last = [], 0
+    for m in _matches(text):
+        val = (fills or {}).get(m.group(1), "")
+        if str(val).strip():
+            out.append(text[last:m.start()])
+            out.append(str(val).strip())
+            last = m.end()
+    out.append(text[last:])
+    return "".join(out)
+
+
+_UNDERS = re.compile(r"_{3,}")
+_CHECKBOX = re.compile(r"(?<=[-*] )\[( |x)\]")
+_BOXCHAR = re.compile(r"[☐☑]")
+
+
+def scan_regions(text: str) -> list:
+    """The write-in lines and checkboxes, in source order. Deterministic on
+    the source text: the editor numbers them, the save endpoint re-scans and
+    applies by number, and both see the same regions or neither does."""
+    out = []
+    for m in _UNDERS.finditer(text):
+        ls = text.rfind("\n", 0, m.start()) + 1
+        le = text.find("\n", m.end())
+        le = len(text) if le == -1 else le
+        out.append({"kind": "area" if text[ls:le].strip() == m.group(0)
+                    else "line",
+                    "start": m.start(), "end": m.end(),
+                    "money": text[:m.start()].rstrip()[-1:] == "$"})
+    for m in _CHECKBOX.finditer(text):
+        out.append({"kind": "check", "start": m.start(), "end": m.end(),
+                    "checked": m.group(1) == "x", "box": False})
+    for m in _BOXCHAR.finditer(text):
+        out.append({"kind": "check", "start": m.start(), "end": m.end(),
+                    "checked": text[m.start()] == "☑", "box": True})
+    out.sort(key=lambda r: r["start"])
+    return out
+
+
+def apply_regions(text: str, edits: dict) -> str:
+    """Apply {index: value} to the scanned regions, from the end backwards
+    so earlier offsets stay true. A filled write-in line replaces its
+    underscores and stops being a region — answered is answered."""
+    regions = scan_regions(text)
+    for i in sorted((int(k) for k in (edits or {})), reverse=True):
+        if not 0 <= i < len(regions):
+            continue
+        r = regions[i]
+        v = str(edits[str(i)] if str(i) in edits else edits[i])
+        if r["kind"] in ("line", "area"):
+            v = v.strip()
+            if not v:
+                continue
+            text = text[:r["start"]] + v + text[r["end"]:]
+        else:
+            on = v in ("true", "1", "on", "x")
+            rep = ("☑" if on else "☐") if r["box"] else \
+                ("[x]" if on else "[ ]")
+            text = text[:r["start"]] + rep + text[r["end"]:]
+    return text
+
+
 # ---------- markdown, just enough ----------
 # Documents generated from the studio kit are markdown: headings, tables,
 # lists, bold. Rendering them as flat paragraphs turned a contract's terms
@@ -224,7 +326,12 @@ def md_blocks(text: str) -> list:
             depth = len(stripped) - len(stripped.lstrip("#"))
             out.append(("h", depth, stripped.lstrip("#").strip()))
             i += 1; continue
-        if re.fullmatch(r"[-*_]{3,}", stripped):
+        if re.fullmatch(r"_{3,}", stripped):
+            # a run of underscores on its own line is the kit's write-in
+            # answer line — rendering it as a separator was why the
+            # questionnaires looked like they had nowhere to answer
+            flush(); out.append(("aline",)); i += 1; continue
+        if re.fullmatch(r"[-*]{3,}", stripped):
             flush(); out.append(("hr",)); i += 1; continue
         if (stripped.startswith("|") and i + 1 < len(lines)
                 and re.fullmatch(r"\|[\s:|-]+\|?",
@@ -276,6 +383,9 @@ def md_html(text: str) -> str:
             out.append(f"<h{lvl}>{_md_inline(b[2])}</h{lvl}>")
         elif kind == "hr":
             out.append("<hr>")
+        elif kind == "aline":
+            out.append('<div style="border-bottom:1px solid #8b8496;'
+                       'height:26px;margin:10px 0 14px"></div>')
         elif kind == "table":
             out.append("<table><thead><tr>"
                        + "".join(f"<th>{_md_inline(h)}</th>" for h in b[1])
@@ -627,6 +737,136 @@ def download_markdown(did: int, u=Depends(admin_user), con=Depends(get_con)):
     stem = re.sub(r"[^\w.-]+", "-", d["title"]).strip("-")[:80] or "document"
     return Response(d["body"], media_type="text/markdown", headers={
         "Content-Disposition": f'attachment; filename="{stem}.md"'})
+
+
+def render_editable(d, suggestions: dict) -> str:
+    """The document as its own form: every blank rendered as a live field
+    where it sits in the text. Tokens become inputs that fill by name;
+    write-in lines become text boxes — a whole line gets a paragraph box, an
+    inline run gets a small one, a run after a $ takes numbers; checkboxes
+    toggle. Everything rides through the markdown renderer as
+    control-character sentinels, which html.escape ignores and no human can
+    type."""
+    body = d["body"]
+    toks, regions = [], scan_regions(body)
+    marks = []
+    for m in _matches(body):
+        marks.append(("T", len(toks), m.start(), m.end()))
+        toks.append(m.group(1))
+    for i, r in enumerate(regions):
+        marks.append(("R", i, r["start"], r["end"]))
+    for kind, i, a, z in sorted(marks, key=lambda x: -x[2]):
+        body = body[:a] + f"\x00{kind}{i}\x01" + body[z:]
+
+    html = md_html(body)
+    for i, tok in enumerate(toks):
+        val = sect.esc(str(suggestions.get(tok, "")))
+        html = html.replace(
+            f"\x00T{i}\x01",
+            f'<input class="ph{" filled" if val else ""}"'
+            f' data-tok="{sect.esc(tok)}" value="{val}"'
+            f' placeholder="{sect.esc(tok)}"'
+            f' size="{max(len(tok) + 2, 10)}">')
+    for i, r in enumerate(regions):
+        if r["kind"] == "area":
+            f = (f'<textarea class="ph ph-area" data-region="{i}" rows="2"'
+                 f' placeholder="Type your answer — a sentence or a'
+                 f' paragraph"></textarea>')
+        elif r["kind"] == "line":
+            f = (f'<input class="ph ph-line" data-region="{i}"'
+                 f'{" inputmode=\"decimal\"" if r["money"] else ""}'
+                 f' placeholder="write in" size="14">')
+        else:
+            f = (f'<input type="checkbox" class="ph-check" data-region="{i}"'
+                 f'{" checked" if r["checked"] else ""}>')
+        html = html.replace(f"\x00R{i}\x01", f)
+
+    from .api import FONT_LINK
+    return (
+        f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<meta name=\"viewport\" content=\"width=device-width,"
+        f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
+        f"{FONT_LINK}<style>"
+        f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
+        f"line-height:1.7;max-width:760px;margin:0 auto;padding:32px 24px}}"
+        f"h1,h2,h3,h4{{font-family:'Fraunces',Georgia,serif}}"
+        f"table{{border-collapse:collapse;width:100%}}"
+        f"td,th{{border-top:1px solid #e9e4dc;padding:6px 10px 6px 0;"
+        f"text-align:left}}"
+        f"blockquote{{border-left:3px solid #e9e4dc;padding-left:14px;"
+        f"color:#5d5768;margin:10px 0}}"
+        f"input.ph,textarea.ph{{font:inherit;font-size:.92em;"
+        f"padding:1px 7px;margin:0 1px;border:1.5px dashed #d08a00;"
+        f"border-radius:7px;background:#fff8ec;color:#1b181f;min-width:44px;"
+        f"vertical-align:baseline}}"
+        f"textarea.ph-area{{display:block;width:100%;margin:6px 0 12px;"
+        f"padding:8px 10px;resize:vertical;line-height:1.5}}"
+        f"input.ph:focus,textarea.ph:focus{{outline:2px solid #8a6ff0;"
+        f"border-style:solid}}"
+        f"input.ph.filled,textarea.ph.filled{{border:1.5px solid #3fbd82;"
+        f"background:#effaf4}}"
+        f"input.ph-check{{width:15px;height:15px;accent-color:#3fbd82;"
+        f"vertical-align:-2px}}"
+        f"</style></head><body>"
+        f"<h1>{sect.esc(d['title'])}</h1>"
+        f"{html}</body></html>")
+
+
+def _editable_doc_or_refuse(con, did: int):
+    d = con.execute("SELECT * FROM documents WHERE id=?", (did,)).fetchone()
+    if d is None or not (d["body"] or "").strip():
+        raise HTTPException(404, "no authored document there")
+    signed = con.execute(
+        "SELECT COUNT(*) n FROM document_signatures WHERE document_id=?"
+        " AND status='signed'", (did,)).fetchone()["n"]
+    if signed:
+        raise HTTPException(400, "this document has been signed — its text "
+                                 "is what was attested to. Supersede it "
+                                 "rather than editing it")
+    return d
+
+
+@router.get("/api/store/admin/documents/{did}/editable")
+def vault_editable(did: int, u=Depends(admin_user), con=Depends(get_con)):
+    d = _editable_doc_or_refuse(con, did)
+    # a document filed under a client borrows that client's suggestions
+    sug = {}
+    row = con.execute("SELECT engagement_id FROM engagement_docs"
+                      " WHERE doc_id=?", (did,)).fetchone()
+    if row:
+        from . import engagements as eng
+        e = con.execute("SELECT * FROM engagements WHERE id=?",
+                        (row["engagement_id"],)).fetchone()
+        if e:
+            sug = eng.suggested_fills(e)
+    return HTMLResponse(render_editable(d, sug))
+
+
+class EditBody(BaseModel):
+    fills: dict = {}
+    regions: dict = {}
+
+
+@router.post("/api/store/admin/documents/{did}/edit")
+def vault_edit(did: int, body: EditBody, u=Depends(admin_user),
+               con=Depends(get_con)):
+    """One save for every kind of blank: regions first (by position, from
+    the end backwards), then token fills by name — the same functions the
+    scanner and the renderer use."""
+    d = _editable_doc_or_refuse(con, did)
+    text = apply_regions(d["body"], body.regions or {})
+    text = fill(text, body.fills or {})
+    remaining = placeholders(text)
+    con.execute("UPDATE documents SET body=?, status=? WHERE id=?",
+                (text, "draft" if remaining else "active", did))
+    n_edits = len([v for v in (body.regions or {}).values()
+                   if str(v).strip()]) \
+        + len([v for v in (body.fills or {}).values() if str(v).strip()])
+    log(con, did, u["name"], "edited in place",
+        f"{n_edits} field(s)"
+        + (f", {len(remaining)} bracket(s) left" if remaining else ""))
+    con.commit()
+    return {"unfilled": remaining}
 
 
 @router.patch("/api/store/admin/documents/{did}")

@@ -3939,11 +3939,39 @@ ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
          "/editable", headers=A).status_code == 400,
    "a signed document refuses the in-place editor for the same reason it "
    "refuses the form — its text is what was attested to")
-ok("engFillInDoc" in _ops and "fb-indoc" in _ops
+ok("function fillInDoc" in _ops and "fb-indoc" in _ops
    and "dataset.tok === inp.dataset.tok" in _ops,
    "the form offers the in-document road, and same-token fields type "
    "together — the editor shows the one-value rule live instead of "
    "surprising anyone at save")
+
+# --- every kind of blank is fillable ---------------------------------------
+_g6 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "05-kickoff/branding-questionnaire.md"}).json()
+_eh = c.get(f"/api/store/admin/documents/{_g6['doc_id']}/editable",
+            headers=A).text
+ok(_eh.count('class="ph ph-area"') >= 20
+   and 'class="ph-check"' in _eh,
+   "a questionnaire's answer lines become paragraph boxes and its "
+   "checkboxes toggle — not just the bracket tokens")
+_pv6 = c.get(f"/api/store/admin/documents/{_g6['doc_id']}/preview",
+             headers=A).text
+ok(_pv6.count("height:26px") >= 20 and _pv6.count("<hr>") <= 3,
+   "and the preview draws write-in lines where the underscore runs are — "
+   "rendering them as section rules was why the questionnaires looked like "
+   "they had nowhere to answer")
+c.post(f"/api/store/admin/documents/{_g6['doc_id']}/edit", headers=A,
+       json={"regions": {"0": "One sentence a stranger would understand."},
+             "fills": {}})
+_b6 = _db.connect().execute(
+    "SELECT body FROM documents WHERE id=?",
+    (_g6["doc_id"],)).fetchone()["body"]
+ok("One sentence a stranger would understand." in _b6,
+   "an answer typed on a write-in line lands in the document's own text — "
+   "answered is answered, and the region is gone")
+ok('id="dv-edit"' in _ops and "fillInDoc(did, name, after)" in _ops,
+   "and View offers Edit on any unsigned authored document, from both tabs")
+c.delete(f"/api/store/admin/documents/{_g6['doc_id']}", headers=A)
 c.delete(f"/api/store/admin/documents/{_g5['doc_id']}", headers=A)
 
 # View opens an in-app viewer, never window.open after an await: the popup

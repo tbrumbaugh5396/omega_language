@@ -4931,69 +4931,85 @@ function engDatesForm(id, dates) {
   };
 }
 
-async function engFillInDoc(engId, did, title) {
-  /* The document as the form. Same-token fields type together, because the
-     backend fills every occurrence of a token with one value — the editor
-     shows that truth live instead of surprising anyone at save. */
+async function fillInDoc(did, title, after) {
+  /* The document as the form: bracket tokens, write-in answer lines,
+     paragraph boxes and checkboxes, all live where they sit in the text.
+     Same-name tokens type together, because the backend fills one value per
+     token everywhere it appears — the editor shows that truth live. */
   try {
-    const r = await fetch(
-      `/api/store/admin/engagements/${engId}/docs/${did}/editable`,
+    const r = await fetch(`/api/store/admin/documents/${did}/editable`,
       { headers: { Authorization: "Bearer " + S.user.token } });
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     const url = URL.createObjectURL(
       new Blob([await r.text()], { type: "text/html" }));
     modal(`<h3>Fill in the document — ${esc(title)}</h3>
-      <p class="dim">Type straight into the highlighted fields, where they
-        sit in the text. Fields with the same name fill together — one value
-        per blank, everywhere it appears. Amber is still empty; green is
-        filled.</p>
+      <p class="dim">Type straight into the highlighted fields — named
+        blanks, answer lines, paragraphs and checkboxes. Amber is still
+        empty; green is filled. Fields with the same name fill together.</p>
       <iframe class="doc-viewer" src="${url}" id="fid-frame"
         title="fill in the document"></iframe>
       <div class="modal-foot">
         <span class="dim" id="fid-count" style="margin-right:auto"></span>
-        <button class="btn" id="fid-save">Save the fills</button>
+        <button class="btn" id="fid-save">Save</button>
         <button class="btn alt" data-close>Cancel</button>
       </div>`, "wide");
     const frame = $("#fid-frame");
+    let initialChecks = {};
     frame.onload = () => {
       const doc = frame.contentDocument;
-      const all = [...doc.querySelectorAll("input.ph")];
+      const toks = [...doc.querySelectorAll("input.ph[data-tok]")];
+      const areas = [...doc.querySelectorAll(
+        "input.ph-line, textarea.ph-area")];
+      doc.querySelectorAll("input.ph-check").forEach((c) => {
+        initialChecks[c.dataset.region] = c.checked;
+      });
       const paint = () => {
-        all.forEach((i) => {
+        toks.forEach((i) => {
           i.classList.toggle("filled", !!i.value.trim());
           i.size = Math.max((i.value || i.placeholder).length + 2, 10);
         });
-        const left = new Set(all.filter((i) => !i.value.trim())
-          .map((i) => i.dataset.tok)).size;
+        areas.forEach((i) =>
+          i.classList.toggle("filled", !!i.value.trim()));
+        const left = new Set(toks.filter((i) => !i.value.trim())
+          .map((i) => i.dataset.tok)).size
+          + areas.filter((i) => !i.value.trim()).length;
         $("#fid-count").textContent = left
-          ? `${left} blank${left === 1 ? "" : "s"} left`
-          : "every blank is filled";
+          ? `${left} field${left === 1 ? "" : "s"} still empty`
+          : "everything is filled in";
       };
-      all.forEach((inp) => inp.addEventListener("input", () => {
-        all.forEach((o) => {
+      toks.forEach((inp) => inp.addEventListener("input", () => {
+        toks.forEach((o) => {
           if (o !== inp && o.dataset.tok === inp.dataset.tok)
             o.value = inp.value;
         });
         paint();
       }));
+      areas.forEach((inp) => inp.addEventListener("input", paint));
       paint();
     };
     $("#fid-save").onclick = async () => {
       const doc = frame.contentDocument;
-      const fills = {};
-      [...doc.querySelectorAll("input.ph")].forEach((i) => {
+      const fills = {}, regions = {};
+      doc.querySelectorAll("input.ph[data-tok]").forEach((i) => {
         if (i.value.trim()) fills[i.dataset.tok] = i.value.trim();
       });
+      doc.querySelectorAll("input.ph-line, textarea.ph-area").forEach((i) => {
+        if (i.value.trim()) regions[i.dataset.region] = i.value.trim();
+      });
+      doc.querySelectorAll("input.ph-check").forEach((c) => {
+        // only send toggles that changed — an untouched box is not an edit
+        if (c.checked !== initialChecks[c.dataset.region])
+          regions[c.dataset.region] = c.checked ? "true" : "false";
+      });
       try {
-        const out = await api(
-          `/api/store/admin/engagements/${engId}/docs/${did}/fill`,
-          { body: { fills } });
+        const out = await api(`/api/store/admin/documents/${did}/edit`,
+          { body: { fills, regions } });
         closeModal();
         toast(out.unfilled.length
-          ? `Saved — ${out.unfilled.length} blank${
+          ? `Saved — ${out.unfilled.length} bracket${
               out.unfilled.length === 1 ? "" : "s"} left`
-          : "Saved — complete, no brackets left");
-        renderEngagement(engId);
+          : "Saved — no brackets left");
+        if (after) after();
       } catch (err) { toast(err.message); }
     };
   } catch (err) { toast(err.message); }
@@ -5528,7 +5544,7 @@ async function renderEngagement(id) {
     const name = (b.closest(".sig-row")?.querySelector("b")?.textContent
       || "document").trim();
     docViewer(+b.dataset.engview, b.dataset.kind, b.dataset.ext, name,
-              b.dataset.signed);
+              b.dataset.signed, () => renderEngagement(id));
   });
   view().querySelectorAll("[data-engdl]").forEach((b) => b.onclick = async () => {
     const did = b.dataset.engdl;
@@ -5626,7 +5642,7 @@ async function renderEngagement(id) {
           <button class="btn" id="fb-go">Fill</button>
         </div>`);
       $("#fb-indoc").onclick = () => { closeModal();
-        engFillInDoc(id, did, t.title); };
+        fillInDoc(did, t.title, () => renderEngagement(id)); };
       $("#fb-go").onclick = async () => {
         const fills = {};
         document.querySelectorAll("[data-fill]").forEach((i) => {
@@ -5908,7 +5924,7 @@ function docRow(d) {
   </div>`;
 }
 
-async function docViewer(did, kind, ext, name, signedN) {
+async function docViewer(did, kind, ext, name, signedN, after) {
   /* One viewer for both tabs: the rendered document with its signature
      block, and the signed PDF as the primary download. */
   const auth = async (path) => {
@@ -5938,12 +5954,18 @@ async function docViewer(did, kind, ext, name, signedN) {
         document — scroll down, and it's on the last page of the PDF.</p>` : ""}
       <iframe class="doc-viewer" src="${frameUrl}" title="${esc(name)}"></iframe>
       <div class="modal-foot dv-foot">
+        ${kind === "body" && !signed ? `<button class="btn alt" id="dv-edit"
+          style="margin-right:auto" title="type into the blanks where they
+          sit in the text">Edit</button>` : ""}
         <button class="btn" id="dv-dl">${opsIcon("file", "btn-ic")}
           Download ${signed ? "signed " : ""}${isPdfable ? "PDF" : "file"}</button>
         <button class="btn alt" id="dv-open">Open ${isPdfable ? "PDF" : ""}
           in tab</button>
         <button class="btn alt" data-close>Close</button>
       </div>`, "wide");
+    const dvEdit = $("#dv-edit");
+    if (dvEdit) dvEdit.onclick = () => { closeModal();
+      fillInDoc(did, name, after); };
     /* Buttons, not anchors: .btn styling is scoped to button.btn, and a
        synchronous handler keeps the user gesture, so the new tab is never
        popup-blocked and the download never depends on anchor semantics. */
@@ -5966,7 +5988,7 @@ function wireDocRows() {
   wireRows({}, renderDocs);
   view().querySelectorAll("[data-docview]").forEach((b) => b.onclick = () =>
     docViewer(+b.dataset.docview, b.dataset.kind, b.dataset.ext,
-              b.dataset.name, b.dataset.signed));
+              b.dataset.name, b.dataset.signed, renderDocs));
   view().querySelectorAll("[data-docedit]").forEach((b) => b.onclick = () =>
     docForm(DOCS.documents.find((x) => x.id === +b.dataset.docedit)));
   view().querySelectorAll("[data-sign]").forEach((b) => b.onclick = () =>
