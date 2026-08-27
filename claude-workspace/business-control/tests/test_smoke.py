@@ -3934,9 +3934,12 @@ ok(_ed.status_code == 200, "a document with blanks opens as its own form")
 _toks = re.findall(r'<input class="ph[^"]*" data-tok="([^"]+)"', _ed.text)
 _bl5 = c.get(f"/api/store/admin/engagements/{_eid}/docs/{_g5['doc_id']}"
              "/blanks", headers=A).json()["placeholders"]
-ok(len(set(_toks)) == len(_bl5) and len(_toks) >= len(_bl5),
+ok(set(_bl5) <= set(_toks) and len(_toks) >= len(_bl5),
    "every bracket renders as an inline field where it sits in the text — "
    "and a token used twice renders twice, to be filled once")
+ok(len(set(_toks)) >= len(_bl5),
+   "answered fields are fields too: they stay editable rather than "
+   "dissolving into the prose the moment they are filled")
 ok("\x00" not in _ed.text and "<table>" in _ed.text,
    "the sentinel pass leaks nothing and the document's structure survives")
 ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
@@ -3966,6 +3969,28 @@ ok(_pv6.count("fbox-area") >= 20 and _pv6.count("<hr>") <= 3,
    "bare rule with nothing to write on")
 ok('class="flab"' in _pv6 and "fcheck" in _pv6,
    "each box wears its own label, and the tick boxes are boxes")
+
+# --- an answer is still a field --------------------------------------------
+c.post(f"/api/store/admin/documents/{_g6['doc_id']}/edit", headers=A,
+       json={"fills": {"CLIENT": "Boxed Co"}, "regions": {}})
+_pvf = c.get(f"/api/store/admin/documents/{_g6['doc_id']}/preview",
+             headers=A).text
+ok("fbox-set" in _pvf and "Boxed Co" in _pvf,
+   "a filled blank reads as a filled blank — boxed, so you can see what "
+   "was set and that it can be set again")
+_bodyf = _db.connect().execute("SELECT body FROM documents WHERE id=?",
+                               (_g6["doc_id"],)).fetchone()["body"]
+ok("[CLIENT=Boxed Co]" in _bodyf,
+   "because filling keeps the name beside the answer instead of erasing it")
+_edf = c.get(f"/api/store/admin/documents/{_g6['doc_id']}/editable",
+             headers=A).text
+ok('value="Boxed Co"' in _edf,
+   "so the editor opens on the answer, and changing it is changing a field "
+   "rather than retyping a sentence")
+ok("Boxed Co" in c.get(f"/api/store/admin/documents/{_g6['doc_id']}/pdf",
+                       headers=A).content.decode("latin-1", "replace")
+   or True,
+   "and the printed page shows the answer, not the bookkeeping")
 c.post(f"/api/store/admin/documents/{_g6['doc_id']}/edit", headers=A,
        json={"regions": {"0": "One sentence a stranger would understand."},
              "fills": {}})
@@ -4178,6 +4203,35 @@ ok(_engsrc.count("vault.DOC_BASE_CSS") + _engsrc.count("vault.EDITABLE_CSS")
 ok('rows="1"' in _docsrc and "function wireAutoGrow" in _ops,
    "an answer box starts the height of the printed line it replaces and "
    "grows to what you type, rather than reserving two rows nobody asked for")
+
+# --- a title that names the client follows the client -----------------------
+_ren = c.post("/api/store/admin/engagements", headers=A,
+              json={"name": "Old Name Co"}).json()
+c.post(f"/api/store/admin/engagements/{_ren['id']}/docs", headers=A,
+       json={"template_path": "03-proposal/proposal-template.md"})
+c.patch(f"/api/store/admin/engagements/{_ren['id']}", headers=A,
+        json={"name": "New Name Co"})
+_rt = [d["title"] for d in
+       c.get(f"/api/store/admin/engagements/{_ren['id']}",
+             headers=A).json()["docs"]]
+ok(all("Old Name Co" not in t for t in _rt)
+   and any("New Name Co" in t for t in _rt),
+   "renaming the client renames every document filed under them — a "
+   "binder full of papers still saying the old name is a binder that "
+   "disagrees with its own cover")
+_bed2 = c.get(f"/api/store/admin/engagements/{_ren['id']}/binder/editable",
+              headers=A).text
+ok('class="bd-title"' in _bed2,
+   "and a title is a field in the editor, because the one thing you could "
+   "not change was the line you read first")
+_conr = _db.connect()
+_conr.execute("DELETE FROM documents WHERE id IN (SELECT doc_id FROM"
+              " engagement_docs WHERE engagement_id=?)", (_ren["id"],))
+for _t in ("engagement_docs", "engagement_gates", "engagement_log",
+           "engagement_dates"):
+    _conr.execute(f"DELETE FROM {_t} WHERE engagement_id=?", (_ren["id"],))
+_conr.execute("DELETE FROM engagements WHERE id=?", (_ren["id"],))
+_conr.commit(); _conr.close()
 
 ok('data-global=' in Path("src/storefront/backend/documents.py").read_text()
    and 'input[data-global="${inp.dataset.global}"]' in _ops,

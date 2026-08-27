@@ -43,6 +43,8 @@ def _inline(text: str) -> str:
     anchors on — the label text must match documents.SIGN_MARKERS exactly,
     since the PDF is what the anchor search reads."""
     t = text
+    # a filled blank prints its answer, not its bookkeeping
+    t = re.sub(r"\[([^\[\]\n=]{1,60})=([^\[\]\n]{0,200})\]", r"\2", t)
     t = t.replace("[PAGE BREAK]", "")
     t = t.replace("[SIGN HERE]", "**Sign here:** ____________________")
     t = t.replace("[INITIALS]", "**Initials:** ________")

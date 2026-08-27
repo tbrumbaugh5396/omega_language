@@ -161,8 +161,18 @@ MAX_BYTES = 25 * 1024 * 1024
 # One scanner feeds the editor, the renderer and the save, so a document
 # can never be scanned two ways.
 
-# A short bracketed token that isn't a markdown link target or a checkbox.
-PLACEHOLDER = re.compile(r"\[([^\[\]\n(){}`]{1,60})\]")
+# A blank, filled or not: [CLIENT NAME] before, [CLIENT NAME=Acme] after.
+# Filling used to erase the name along with the blank, which left a filled
+# value indistinguishable from the document's own prose — you could not see
+# that it was a field, and you could not change it again. Keeping the name
+# costs one "=" and buys both.
+PLACEHOLDER = re.compile(
+    r"\[([^\[\]\n(){}`=]{1,60})(?:=([^\[\]\n]{0,200}))?\]")
+
+
+def token_value(m):
+    """(name, value or None) for a placeholder match."""
+    return m.group(1), m.group(2)
 
 # Signing markers are instructions to the renderer and to DocuSign, not
 # blanks for anyone to fill — the fill machinery must leave them standing.
@@ -212,24 +222,32 @@ def _matches(text: str):
 
 
 def placeholders(text: str) -> list:
+    """The blanks still to fill — a blank that has an answer is not one."""
     seen, out = set(), []
     for m in _matches(text):
-        tok = m.group(1)
-        if tok not in seen:
+        tok, val = token_value(m)
+        if val is None and tok not in seen:
             seen.add(tok)
             out.append(tok)
     return out
 
 
+def clean_value(v) -> str:
+    return str(v).strip().replace("[", "(").replace("]", ")").replace(
+        "\n", " ")[:200]
+
+
 def fill(text: str, fills: dict) -> str:
-    """Replace each filled token everywhere it appears; leave the rest
-    bracketed so the document can be finished by hand in the editor."""
+    """Answer each named blank everywhere it appears, keeping the name
+    beside the answer so it stays a field: visible as one when reading, and
+    changeable again later."""
     out, last = [], 0
     for m in _matches(text):
-        val = (fills or {}).get(m.group(1), "")
-        if str(val).strip():
+        tok, _ = token_value(m)
+        val = clean_value((fills or {}).get(tok, ""))
+        if val:
             out.append(text[last:m.start()])
-            out.append(str(val).strip())
+            out.append(f"[{tok}={val}]")
             last = m.end()
     out.append(text[last:])
     return "".join(out)
@@ -334,7 +352,11 @@ SIGN_MARKERS = {
 }
 
 
+_FILLED = re.compile(r"\[([^\[\]\n=]{1,60})=([^\[\]\n]{0,200})\]")
+
+
 def _mark_inline_html(t: str) -> str:
+    t = _FILLED.sub(lambda m: m.group(2), t)
     for raw, (label, _kind) in SIGN_MARKERS.items():
         t = t.replace(sect.esc(raw),
                       f'<span style="white-space:nowrap"><b>{label}</b> '
@@ -641,6 +663,15 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
     if not (d["body"] or "").strip():
         raise HTTPException(400, "this document is a file — download it "
                                  "instead")
+    gv = {}
+    row = con.execute("SELECT engagement_id FROM engagement_docs"
+                      " WHERE doc_id=?", (did,)).fetchone()
+    if row:
+        from . import engagements as eng
+        e = con.execute("SELECT * FROM engagements WHERE id=?",
+                        (row["engagement_id"],)).fetchone()
+        if e:
+            gv = eng.global_values(e)
     from .api import FONT_LINK
     return HTMLResponse(
         f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -650,7 +681,7 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"@media print{{body{{padding:0}}}}"
         f"html{{background:#fff}}{PAGE_RULE_CSS}"
         f"</style></head><body>"
-        f"{form_inner(d['title'], d['body'])}"
+        f"{form_inner(d['title'], d['body'], gv)}"
         f"{signatures_html(signed_rows(con, did))}"
         f"{pending_html(pending_rows(con, did))}</body></html>")
 
@@ -806,26 +837,29 @@ def marked_inner(title: str, body: str, field) -> str:
     marks = []
     for m in _matches(body):
         marks.append(("T", len(toks), m.start(), m.end()))
-        toks.append(m.group(1))
+        toks.append(token_value(m))
     for i, r in enumerate(regions):
         marks.append(("R", i, r["start"], r["end"]))
     for kind, i, a, z in sorted(marks, key=lambda x: -x[2]):
         body = body[:a] + f"\x00{kind}{i}\x01" + body[z:]
 
     html = md_html(body)
-    for i, tok in enumerate(toks):
-        html = html.replace(f"\x00T{i}\x01", field("token", i, tok))
+    for i, tv in enumerate(toks):
+        html = html.replace(f"\x00T{i}\x01", field("token", i, tv))
     for i, r in enumerate(regions):
         html = html.replace(f"\x00R{i}\x01", field(r["kind"], i, r))
-    return f"<h1>{sect.esc(title)}</h1>{html}"
+    head = f"<h1>{sect.esc(title)}</h1>" if title else ""
+    return f"{head}{html}"
 
 
 def editable_inner(title: str, body: str, suggestions: dict) -> str:
     """Every blank as something you type into."""
     def field(kind, i, meta):
         if kind == "token":
-            tok = meta
-            val = sect.esc(str(suggestions.get(tok, "")))
+            tok, have = meta
+            # what the document already says wins over what we'd suggest
+            val = sect.esc(str(have if have is not None
+                               else suggestions.get(tok, "")))
             key = GLOBAL_TOKENS.get(tok.strip())
             # A record field, not a blank: the same everywhere it appears,
             # so it is marked and the editor keeps them all in step.
@@ -851,16 +885,28 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
     return marked_inner(title, body, field)
 
 
-def form_inner(title: str, body: str) -> str:
+def form_inner(title: str, body: str, gvals: dict | None = None) -> str:
     """Every blank as a box you write on. Reading a document should show
     where the answers go — print it and fill it in with a pen — instead of
-    hiding them as bracketed words or a bare rule."""
+    hiding them as bracketed words or a bare rule. A field the record
+    answers reads as answered, and still reads as a field: that is how you
+    can tell the client's name from the sentence around it."""
     def field(kind, i, meta):
         if kind == "token":
-            lab = sect.esc(meta)
-            w = max(len(meta) + 2, 9)
+            tok, have = meta
+            if have is None:
+                key = GLOBAL_TOKENS.get(tok.strip())
+                gv = str((gvals or {}).get(key or "", "")).strip()
+                if gv:
+                    have = gv
+            if have is not None:
+                # An answer is still a field: shown as one, so you can see
+                # what was set and that it can be set again.
+                return (f'<span class="fbox fbox-set" title="{sect.esc(tok)}">'
+                        f'{sect.esc(have)}</span>')
+            w = max(len(tok) + 2, 9)
             return (f'<span class="fbox" style="min-width:{w}ch">'
-                    f'<span class="flab">{lab}</span></span>')
+                    f'<span class="flab">{sect.esc(tok)}</span></span>')
         if kind == "area":
             return ('<span class="fbox fbox-area">'
                     '<span class="flab">write your answer here</span></span>')
@@ -914,6 +960,8 @@ DOC_BASE_CSS = (
     ".fcheck{display:inline-block;width:12px;height:12px;border:1px solid "
     "#8b8496;border-radius:3px;vertical-align:-1px}"
     ".fcheck.on{background:#3fbd82;border-color:#3fbd82}"
+    ".fbox-set{border-color:#8fcfae;background:#f1faf5;color:#1b181f;"
+    "min-width:0}"
 )
 
 # A field should cost the line it sits on as little as possible: hundreds
@@ -930,6 +978,13 @@ FIELD_CSS = (
     "input.ph-cell{padding:0 4px}"
     "input.ph-global{border-style:solid;border-color:#8a6ff0;"
     "background:#f4f0ff}"
+    "input.bd-title{display:block;width:100%;font-family:'Fraunces',"
+    "Georgia,serif;font-size:1.7em;font-weight:600;color:#1b181f;"
+    "border:1px dashed transparent;border-radius:8px;padding:2px 6px;"
+    "margin:0 0 6px -6px;background:transparent}"
+    "input.bd-title:hover{border-color:#d5cec2}"
+    "input.bd-title:focus{outline:2px solid #8a6ff0;border-color:#8a6ff0;"
+    "background:#fff}"
     "input.ph:focus,textarea.ph:focus{outline:2px solid #8a6ff0;"
     "border-style:solid}"
     "input.ph.filled,textarea.ph.filled{border:1px solid #3fbd82;"

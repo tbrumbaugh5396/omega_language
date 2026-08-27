@@ -5196,6 +5196,7 @@ async function binderEditMode(engId, e, anchor) {
       + "document for this client.";
     const initialChecks = new Map();
     const initialToks = new Map();
+    const initialTitles = new Map();
     frame.onload = () => {
       const doc = frame.contentDocument;
       doc.querySelectorAll("input.ph-check").forEach((c) =>
@@ -5205,6 +5206,8 @@ async function binderEditMode(engId, e, anchor) {
          existence on the strength of its own suggestions */
       doc.querySelectorAll("input.ph[data-tok]").forEach((i) =>
         initialToks.set(i, i.value));
+      doc.querySelectorAll("input.bd-title").forEach((i) =>
+        initialTitles.set(i, i.value));
       const paint = (scope) => {
         scope.querySelectorAll("input.ph[data-tok]").forEach((i) => {
           i.classList.toggle("filled", !!i.value.trim());
@@ -5284,13 +5287,21 @@ async function binderEditMode(engId, e, anchor) {
           if (c.checked !== initialChecks.get(c))
             regions[c.dataset.region] = c.checked ? "true" : "false";
         });
+        // the title is a field on the card, saved with the page it names
+        const tIn = card.querySelector("input.bd-title");
+        const titleChanged = tIn && tIn.value.trim()
+          && tIn.value !== initialTitles.get(tIn);
         const touched = Object.keys(fills).length
-          || Object.keys(regions).length;
+          || Object.keys(regions).length || titleChanged;
         try {
           if (card.dataset.doc) {
             if (!touched) continue;
-            await api(`/api/store/admin/documents/${card.dataset.doc}/edit`,
-              { body: { fills, regions } });
+            if (titleChanged)
+              await api(`/api/store/admin/documents/${card.dataset.doc}`,
+                { method: "PATCH", body: { title: tIn.value.trim() } });
+            if (Object.keys(fills).length || Object.keys(regions).length)
+              await api(`/api/store/admin/documents/${card.dataset.doc}/edit`,
+                { body: { fills, regions } });
             saved += 1;
           } else if (touched) {
             /* a blank form someone wrote on becomes a real document — the

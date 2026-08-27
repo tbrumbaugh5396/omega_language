@@ -374,10 +374,15 @@ def global_values(e) -> dict:
     poc = (e["approver_name"] or "").strip()
     if e["approver_email"]:
         poc = f"{poc} ({e['approver_email']})" if poc else e["approver_email"]
+    from erp.backend.main import CFG
     return {"client": e["name"], "client_poc": poc or "—",
             "internal_poc": (e["internal_poc"] or "—"),
             "originator": (e["originator"] or "—"),
-            "date": time.strftime("%B %d, %Y").replace(" 0", " ")}
+            "date": time.strftime("%B %d, %Y").replace(" 0", " "),
+            "brand": CFG.get("brand_name", "Business Control"),
+            "package": e["package"] or "—",
+            "value": (f"${e['value_cents'] / 100:,.2f}"
+                      if e["value_cents"] else "—")}
 
 
 def binder_body() -> str:
@@ -660,14 +665,24 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
         # from the record already; titles are plain strings, so they are
         # rewritten here.
         if "name" in fields:
+            old_name, new_name = e["name"], fields["name"]
             for note, stem in (("binder cover", "Project binder"),
                                ("binder intro", "Introduction")):
                 con.execute(
                     "UPDATE documents SET title=?, party_name=?"
                     " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
                     "   WHERE ed.engagement_id=?) AND notes=?",
-                    (f"{stem} — {fields['name']}"[:200],
-                     fields["name"][:120], eid, note))
+                    (f"{stem} — {new_name}"[:200], new_name[:120],
+                     eid, note))
+            # "Proposal — Lingua" must stop saying Lingua too. Titles are
+            # plain strings, so the old name is swapped for the new one
+            # wherever it stands in a document filed under this client.
+            if old_name and old_name != new_name:
+                con.execute(
+                    "UPDATE documents SET title=REPLACE(title,?,?),"
+                    " party_name=? WHERE id IN (SELECT ed.doc_id FROM"
+                    " engagement_docs ed WHERE ed.engagement_id=?)",
+                    (old_name, new_name, new_name[:120], eid))
         log(con, eid, u["name"], "updated: " + ", ".join(fields))
         con.commit()
     return {"ok": True}
@@ -1471,9 +1486,10 @@ def binder_html(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     sections, _ = _binder_sections(con, eid)
     if not sections:
         raise HTTPException(404, "nothing to bind yet")
+    gv = global_values(e)
     inner = "".join(
         f'<div class="binder-doc">'
-        f'{vault.form_inner(sec["title"], sec["body"])}'
+        f'{vault.form_inner(sec["title"], sec.get("raw", sec["body"]), gv)}'
         f'{vault.signatures_html(sec.get("signatures") or [])}'
         f'{vault.pending_html(sec.get("pending") or [])}'
         f"</div>" for sec in sections)
@@ -1506,24 +1522,28 @@ def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     if not sections:
         raise HTTPException(404, "nothing to bind yet")
     sug = suggested_fills(e)
+    gv = global_values(e)
     parts = []
     for sec in sections:
         if sec.get("toc"):
             parts.append(
                 f'<div class="binder-doc bd-static">'
-                f'{vault.form_inner(sec["title"], sec["body"])}</div>')
+                f'{vault.form_inner(sec["title"], sec.get("raw", sec["body"]), gv)}</div>')
         elif sec.get("signed"):
             parts.append(
                 f'<div class="binder-doc bd-static">'
                 f'<p class="bd-note">Signed — read only. Its text is what '
                 f'was attested to; supersede it rather than editing it.</p>'
-                f'{vault.form_inner(sec["title"], sec["body"])}'
+                f'{vault.form_inner(sec["title"], sec.get("raw", sec["body"]), gv)}'
                 f'{vault.signatures_html(sec.get("signatures") or [])}'
                 f'</div>')
         elif sec.get("doc_id"):
             parts.append(
                 f'<div class="binder-doc" data-doc="{sec["doc_id"]}">'
-                f'{vault.editable_inner(sec["title"], sec.get("raw", sec["body"]), sug)}'
+                f'<input class="bd-title" data-title="{sec["doc_id"]}"'
+                f' value="{sect.esc(sec["title"])}"'
+                f' aria-label="document title">'
+                f'{vault.editable_inner("", sec.get("raw", sec["body"]), sug)}'
                 f'</div>')
         elif sec.get("tpl"):
             parts.append(
