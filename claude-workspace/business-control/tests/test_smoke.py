@@ -3530,6 +3530,49 @@ ok(_gd["current_stage"] == "03-agreement",
    "reopening a gate moves the stage back by the same derivation, and the "
    "signed evidence stays in the vault untouched")
 
+# --- deleting a client -----------------------------------------------------
+_dd = c.post("/api/store/admin/engagements", headers=A,
+             json={"name": "Doomed Smoke"}).json()
+_dsign = c.post(f"/api/store/admin/engagements/{_dd['id']}/docs", headers=A,
+                json={"template_path": "05-kickoff/welcome-guide.md"}).json()
+_dplain = c.post(f"/api/store/admin/engagements/{_dd['id']}/docs", headers=A,
+                 json={"template_path": "03-proposal/proposal-template.md"}
+                 ).json()
+_dsr = c.post(f"/api/store/admin/documents/{_dsign['doc_id']}"
+              "/request-signature", headers=A,
+              json={"signer_name": "Pat", "signer_email": "p@x.t",
+                    "role": "signer", "in_person": True}).json()
+c.post(f"/sign/{_dsr['link'].split('/sign/')[1]}",
+       json={"typed_name": "Pat"})
+_dout = c.delete(f"/api/store/admin/engagements/{_dd['id']}",
+                 headers=A).json()
+ok(_dout["kept"] == 1 and _dout["removed"] >= 2,
+   "deleting a client takes the paperwork that only existed for them — "
+   "except anything signed, because deleting the client does not un-agree "
+   "what a named person agreed to")
+ok(c.get(f"/api/store/admin/engagements/{_dd['id']}",
+         headers=A).status_code == 404, "and the client is gone")
+_gone = _db.connect().execute("SELECT status FROM documents WHERE id=?",
+                              (_dplain["doc_id"],)).fetchone()
+ok(_gone is None, "an unsigned draft goes with it")
+_kept = _db.connect().execute("SELECT status FROM documents WHERE id=?",
+                              (_dsign["doc_id"],)).fetchone()
+ok(_kept and _kept["status"] == "archived",
+   "the signed one is archived, not destroyed")
+_arch = c.get("/api/store/admin/documents", headers=A,
+              params={"archived": 1}).json()
+ok(any(d["id"] == _dsign["doc_id"] for d in _arch["documents"])
+   and _arch["archived_count"] >= 1,
+   "and it is findable — evidence you cannot find is a gesture, so "
+   "Documents has an Archived view rather than hiding it for good")
+_conk = _db.connect()
+_conk.execute("DELETE FROM document_signatures WHERE document_id=?",
+              (_dsign["doc_id"],))
+_conk.execute("DELETE FROM document_events WHERE document_id=?",
+              (_dsign["doc_id"],))
+_conk.execute("DELETE FROM documents WHERE id=?", (_dsign["doc_id"],))
+_conk.commit(); _conk.close()
+
 # --- the client portal: one link, drawn from the same rows -----------------
 ok(c.get("/engage/nope").status_code == 404, "a made-up portal token is a 404")
 _purl = c.post(f"/api/store/admin/engagements/{_eid}/portal",

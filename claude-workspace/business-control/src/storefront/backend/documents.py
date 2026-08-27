@@ -538,8 +538,12 @@ def doc_json(con, d, with_sigs=True) -> dict:
 
 @router.get("/api/store/admin/documents")
 def list_documents(party_kind: str = "", category: str = "", q: str = "",
+                   archived: int = 0,
                    u=Depends(admin_user), con=Depends(get_con)):
-    sql = "SELECT * FROM documents WHERE status != 'archived'"
+    # Archived documents are out of the way, not out of reach: a signature
+    # kept as evidence has to be findable, or keeping it was a gesture.
+    sql = ("SELECT * FROM documents WHERE status='archived'" if archived
+           else "SELECT * FROM documents WHERE status != 'archived'")
     args: list = []
     if party_kind in PARTY_KINDS:
         sql += " AND party_kind=?"
@@ -561,6 +565,9 @@ def list_documents(party_kind: str = "", category: str = "", q: str = "",
         "documents": [doc_json(con, r) for r in rows],
         "expiring": [doc_json(con, r, with_sigs=False) for r in expiring],
         "categories": CATEGORIES, "party_kinds": PARTY_KINDS,
+        "archived_count": con.execute(
+            "SELECT COUNT(*) n FROM documents WHERE status='archived'"
+        ).fetchone()["n"],
         "expiry_expected": list(EXPIRY_EXPECTED),
     }
 

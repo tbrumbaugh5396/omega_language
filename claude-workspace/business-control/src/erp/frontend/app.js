@@ -5388,14 +5388,50 @@ async function renderClients() {
             `<span class="pill warn">${esc(w)}</span>`).join("")}
           ${e.status === "closed" ? '<span class="pill">closed</span>' : ""}
           ${e.launch_target ? `<span class="dim">launch ${esc(e.launch_target)}</span>` : ""}
+          <button class="btn alt sm" data-engdel="${e.id}"
+            data-name="${esc(e.name)}" data-docs="${e.docs}"
+            data-signed="${e.signed}">Delete</button>
         </div>
       </div>`).join("")
       || `<div class="card empty"><span class="e-ic">${opsIcon("handshake")}</span>
           <b>No clients yet</b><p class="dim">Create one, then generate its
           documents from the kit's templates.</p></div>`}</div>`;
   $("#eng-new").onclick = () => engForm(null);
-  view().querySelectorAll("[data-eng]").forEach((el) => el.onclick = () => {
+  view().querySelectorAll("[data-eng]").forEach((el) => el.onclick = (ev) => {
+    if (ev.target.closest("[data-engdel]")) return;   // the row is a link
     S.engId = +el.dataset.eng; render();
+  });
+  view().querySelectorAll("[data-engdel]").forEach((b) => b.onclick = (ev) => {
+    ev.stopPropagation();
+    const n = +b.dataset.docs, sg = +b.dataset.signed;
+    modal(`<h3>Delete ${esc(b.dataset.name)}?</h3>
+      <p class="dim">This removes the client, their gates, dates, activity
+        and exported folder${n ? `, and the ${n} document${n === 1 ? "" : "s"}
+        filed under them` : ""}.</p>
+      ${sg ? `<p class="dim"><b>${sg} signed document${sg === 1 ? " is" :
+        "s are"} kept.</b> A signature is evidence that a named person
+        agreed to a specific text on a date — deleting the client does not
+        un-agree it. ${sg === 1 ? "It moves" : "They move"} to Documents →
+        Archived, where deleting ${sg === 1 ? "it" : "them"} is its own
+        decision.</p>` : ""}
+      <p class="dim">There is no undo.</p>
+      <div class="modal-foot">
+        <button class="btn danger" id="ed-go">Delete the client</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`);
+    $("#ed-go").onclick = async () => {
+      try {
+        const out = await api(
+          `/api/store/admin/engagements/${b.dataset.engdel}`,
+          { method: "DELETE" });
+        closeModal();
+        toast(`${out.name} deleted — ${out.removed} document${
+          out.removed === 1 ? "" : "s"} removed`
+          + (out.kept ? `, ${out.kept} signed kept in Documents` : ""));
+        S.engId = null;
+        renderClients();
+      } catch (err) { toast(err.message); }
+    };
   });
 }
 
@@ -6313,7 +6349,8 @@ async function renderDocs() {
   const q = S.docQ || "";
   const kind = S.docKind || "";
   DOCS = await api("/api/store/admin/documents?party_kind="
-    + encodeURIComponent(kind) + "&q=" + encodeURIComponent(q));
+    + encodeURIComponent(kind) + "&q=" + encodeURIComponent(q)
+    + (S.docArchived ? "&archived=1" : ""));
 
   const expiring = DOCS.expiring.filter((d) => !d.expired);
   const expired = DOCS.expiring.filter((d) => d.expired);
@@ -6342,7 +6379,12 @@ async function renderDocs() {
     ${alert}
     <div class="filters">
       <input id="doc-q" placeholder="Search titles, parties, notes" value="${esc(q)}">
-      <div class="chips"><button class="chip ${kind ? "" : "on"}" data-kind="">All</button>${kinds}</div>
+      <div class="chips"><button class="chip ${kind ? "" : "on"}" data-kind="">All</button>${kinds}
+        ${DOCS.archived_count || S.docArchived ? `<button class="chip ${
+          S.docArchived ? "on" : ""}" id="doc-arch" title="kept as evidence —
+          signed papers whose client was deleted, and superseded versions"
+          >Archived${DOCS.archived_count ? ` (${DOCS.archived_count})`
+            : ""}</button>` : ""}</div>
     </div>
     <div id="doc-list">${DOCS.documents.map(docRow).join("")
       || '<div class="card empty"><span class="e-ic">' + opsIcon("file")
@@ -6354,6 +6396,9 @@ async function renderDocs() {
     t = setTimeout(() => { S.docQ = e.target.value; renderDocs(); }, 250); };
   view().querySelectorAll("[data-kind]").forEach((b) => b.onclick = () => {
     S.docKind = b.dataset.kind; renderDocs(); });
+  const arch = $("#doc-arch");
+  if (arch) arch.onclick = () => { S.docArchived = !S.docArchived;
+    renderDocs(); };
   wireDocRows();
 }
 

@@ -741,6 +741,56 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
     return {"ok": True}
 
 
+@router.delete("/api/store/admin/engagements/{eid}")
+def delete_engagement(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """Remove a client and the paperwork that only existed for them —
+    except anything signed, which stays in the vault.
+
+    A signature is evidence that a named person agreed to a specific text
+    on a specific date. Deleting the client does not un-agree it, so signed
+    documents are unfiled and archived rather than destroyed; they remain
+    findable in Documents, where deleting them is its own decision."""
+    e = _eng_or_404(con, eid)
+    rows = con.execute(
+        "SELECT d.id, d.ext,"
+        " (SELECT COUNT(*) FROM document_signatures s"
+        "   WHERE s.document_id=d.id AND s.status='signed') AS signed"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=?", (eid,)).fetchall()
+    from . import documents as vault
+    removed = kept = 0
+    for r in rows:
+        if r["signed"]:
+            con.execute("UPDATE documents SET status='archived' WHERE id=?",
+                        (r["id"],))
+            vault.log(con, r["id"], u["name"], "archived",
+                      f"client '{e['name']}' deleted — kept as evidence")
+            kept += 1
+            continue
+        if r["ext"]:
+            try:
+                p = vault.doc_path(con.execute(
+                    "SELECT * FROM documents WHERE id=?",
+                    (r["id"],)).fetchone())
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass          # a missing file must not block the delete
+        for t, col in (("document_signatures", "document_id"),
+                       ("document_events", "document_id")):
+            con.execute(f"DELETE FROM {t} WHERE {col}=?", (r["id"],))
+        con.execute("DELETE FROM documents WHERE id=?", (r["id"],))
+        removed += 1
+    for t in ("engagement_docs", "engagement_gates", "engagement_log",
+              "engagement_dates"):
+        con.execute(f"DELETE FROM {t} WHERE engagement_id=?", (eid,))
+    con.execute("DELETE FROM engagements WHERE id=?", (eid,))
+    con.commit()
+    shutil.rmtree(EXPORT_ROOT / e["slug"], ignore_errors=True)
+    _PAGE_MAP.clear()
+    return {"ok": True, "name": e["name"], "removed": removed, "kept": kept}
+
+
 @router.get("/api/store/admin/engagements/templates")
 def list_templates(u=Depends(admin_user)):
     return {"stages": scan_templates(), "kit_available": KIT.is_dir()}
