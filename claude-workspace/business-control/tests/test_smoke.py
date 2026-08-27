@@ -4050,6 +4050,35 @@ ok(_bh.status_code == 200 and "binder-doc" in _bh.text
    and "Project binder" in _bh.text,
    "the binder previews as a page — an embedded PDF is a lottery across "
    "browsers, and a blank frame reads as a broken binder")
+ok("blank form, print and fill" in _bh.text
+   and "Project roadmap" in _bh.text
+   and "Website handover" in _bh.text,
+   "every client-side paper is in the binder even before it's generated — "
+   "the roadmap included — so the printed binder is the complete packet, "
+   "fillable with a pen")
+ok("Gate: Proposal accepted" in _bh.text
+   and _bh.text.count("<h2") >= 8,
+   "and the contents mirror the client's own screen: the stages as "
+   "sections, each with its gates and their state, every paper beneath")
+_scan2 = c.post("/api/store/admin/documents", headers=A, json={
+    "title": "site-photos.jpg", "category": "other",
+    "party_kind": "partner", "party_name": "Title Probe"}).json()
+c.post(f"/api/store/admin/documents/{_scan2['id']}/file", headers=A,
+       files={"file": ("site-photos.jpg", b"\xff\xd8\xff\xe0x",
+                       "image/jpeg")})
+c.post(f"/api/store/admin/engagements/{_bt['id']}/attach", headers=A,
+       json={"doc_id": _scan2["id"], "stage": "01-potential-customer",
+             "side": "to_client"})
+_bh2 = c.get(f"/api/store/admin/engagements/{_bt['id']}/binder.html",
+             headers=A).text
+ok("site-photos.jpg" in _bh2 and "attachment, filed beside" in _bh2,
+   "attachments are listed in the contents, filed beside the binder — a "
+   "markdown PDF can't swallow a photograph, but it can say where it lives")
+ok('id="ef-files"' in _ops and '"01-potential-customer"' in _ops
+   and "bd-edit" in _ops,
+   "the new-client form takes attachments, and the binder modal edits its "
+   "own cover — the title page is a document like any other")
+c.delete(f"/api/store/admin/documents/{_scan2['id']}", headers=A)
 _bf = c.post(f"/api/store/admin/engagements/{_bt['id']}/binder",
              headers=A).json()
 ok(not _bf["created"],

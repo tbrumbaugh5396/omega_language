@@ -293,7 +293,7 @@ def _md_inline(text: str) -> str:
     t = _MD_LINK.sub(r'<a href="\2" target="_blank" rel="noopener">\1</a>', t)
     # A relative link points at a kit file that isn't shipped with the
     # document — render the words, drop the dead target.
-    t = re.sub(r"\[([^\]]+)\]\([\w./-]+\)", r"\1", t)
+    t = re.sub(r"\[([^\]]+)\]\([#\w./-]+\)", r"\1", t)
     return _mark_inline_html(t)
 
 

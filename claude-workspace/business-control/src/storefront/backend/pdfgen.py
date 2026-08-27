@@ -47,7 +47,7 @@ def _inline(text: str) -> str:
     t = t.replace("[INITIALS]", "**Initials:** ________")
     t = _LINK.sub(lambda m: m.group(1) if m.group(2).startswith("/")
                   else f"{m.group(1)} ({m.group(2)})", t)
-    t = re.sub(r"\[([^\]]+)\]\([\w./-]+\)", r"\1", t)
+    t = re.sub(r"\[([^\]]+)\]\([#\w./-]+\)", r"\1", t)
     t = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"__\1__", t)
     t = t.replace("`", "")
     return _latin(t)

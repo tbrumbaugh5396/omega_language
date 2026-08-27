@@ -5127,6 +5127,11 @@ function engForm(e) {
     <textarea id="ef-block" rows="2">${esc(e ? e.blockers : "")}</textarea>
     <label>Notes (internal)</label>
     <textarea id="ef-notes" rows="3">${esc(e ? e.notes : "")}</textarea>
+    ${e ? "" : `<label>Attachments
+        <span class="opt">filed with the client, listed in the binder</span>
+      </label>
+      <input type="file" id="ef-files" multiple
+        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.csv,.txt">`}
     <div class="modal-foot"><button class="btn" id="ef-save">Save</button></div>`);
   $("#ef-save").onclick = async () => {
     const body = {
@@ -5153,6 +5158,29 @@ function engForm(e) {
         const out = await api("/api/store/admin/engagements",
           { method: "POST", body });
         S.engId = out.id;
+        // attachments ride in with the client: each becomes its own vault
+        // document, filed under the first stage, listed in the binder
+        const files = [...($("#ef-files")?.files || [])];
+        for (const f of files) {
+          try {
+            const doc = await api("/api/store/admin/documents", { body: {
+              title: f.name.slice(0, 190), category: "other",
+              party_kind: "partner", party_name: body.name,
+            } });
+            const fd = new FormData();
+            fd.append("file", f);
+            const up = await fetch(
+              `/api/store/admin/documents/${doc.id}/file`,
+              { method: "POST", body: fd,
+                headers: { Authorization: "Bearer " + S.user.token } });
+            if (!up.ok) throw new Error((await up.json()).detail);
+            await api(`/api/store/admin/engagements/${out.id}/attach`,
+              { body: { doc_id: doc.id, stage: "01-potential-customer",
+                        side: "to_client" } });
+          } catch (err) { toast(`${f.name}: ${err.message}`); }
+        }
+        if (files.length) toast(`${files.length} attachment${
+          files.length === 1 ? "" : "s"} filed`);
       }
       closeModal(); render();
     } catch (err) { toast(err.message); }
@@ -5540,12 +5568,23 @@ async function renderEngagement(id) {
         `/api/store/admin/engagements/${id}/binder.html`)).text();
       const url = URL.createObjectURL(
         new Blob([html], { type: "text/html" }));
+      const cover = d.docs.find((x) =>
+        x.title.startsWith("Project binder"));
       modal(`<h3>${esc(e.name)} — the binder</h3>
+        <p class="dim">Cover, contents mirroring the stages and their gates,
+          every generated paper, and a blank form for everything not yet
+          generated — printable and fillable with a pen.</p>
         <iframe class="doc-viewer" src="${url}" title="binder"></iframe>
         <div class="modal-foot dv-foot">
+          ${cover ? `<button class="btn alt" id="bd-edit"
+            style="margin-right:auto" title="the title page and introduction
+            are a document like any other">Edit the cover</button>` : ""}
           <button class="btn" id="bd-dl">Download binder PDF</button>
           <button class="btn alt" data-close>Close</button>
         </div>`, "wide");
+      const bdEdit = $("#bd-edit");
+      if (bdEdit) bdEdit.onclick = () => { closeModal();
+        fillInDoc(cover.id, cover.title, () => renderEngagement(id)); };
       $("#bd-dl").onclick = async () => {
         try {
           const pdf = new Blob([await authBlob(

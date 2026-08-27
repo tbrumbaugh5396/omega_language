@@ -1187,35 +1187,106 @@ def export_folder(eid: int, u=Depends(admin_user), con=Depends(get_con)):
 
 
 def _binder_sections(con, eid: int) -> tuple:
-    """(sections, files): the binder cover first, a contents page, then
-    every to-client authored paper in process order — one gatherer behind
-    the PDF and the HTML preview, so they can never disagree."""
+    """(sections, files): the whole binder, printable and complete.
+
+    The cover opens it; a contents page mirrors the client's own screen —
+    the stages as sections, each with its gates and their state, and every
+    paper beneath. Then the documents themselves: the generated ones with
+    their signatures, and for every client-side template NOT yet generated,
+    the blank form — brackets, write-in lines and checkboxes intact — so a
+    printed binder can be filled with a pen. One gatherer behind the PDF
+    and the HTML preview, so they can never disagree."""
     from . import documents as vault
+    e = con.execute("SELECT * FROM engagements WHERE id=?", (eid,)).fetchone()
     rows = con.execute(
         "SELECT ed.stage, d.* FROM engagement_docs ed"
         " JOIN documents d ON d.id=ed.doc_id"
         " WHERE ed.engagement_id=? AND ed.side='to_client'"
         " ORDER BY ed.stage, d.created_at", (eid,)).fetchall()
-    stage_order = list(KIT_TO_CLIENT_STAGE)
-    rows = sorted(rows, key=lambda r: (
-        0 if (r["notes"] or "") == "binder cover" else 1,
-        stage_order.index(r["stage"]) if r["stage"] in stage_order else 99))
     authored = [r for r in rows if (r["body"] or "").strip()]
     files = [r for r in rows if not (r["body"] or "").strip() and r["ext"]]
-    sections = []
-    for i, r in enumerate(authored):
-        sections.append({"title": r["title"], "body": r["body"],
-                         "signatures": vault.signed_rows(con, r["id"]),
-                         "pending": vault.pending_rows(con, r["id"])})
-        if i == 0:
-            toc = "\n".join(
-                f"{n}. **{x['title']}** — "
-                f"{STAGE_LABELS.get(KIT_TO_CLIENT_STAGE.get(x['stage'], ''), x['stage'])}"
-                for n, x in enumerate(authored, 1))
-            if files:
-                toc += ("\n\nFiled beside this binder: "
-                        + ", ".join(f"*{f['title']}*" for f in files))
-            sections.append({"title": "In this binder", "body": toc})
+    cover = [r for r in authored if (r["notes"] or "") == "binder cover"]
+    if not cover:
+        return [], files
+    authored = [r for r in authored if (r["notes"] or "") != "binder cover"]
+
+    # which templates already became documents, by the path in their notes
+    generated_paths = {
+        (r["notes"] or "").replace("Generated from the kit: ", "").strip()
+        for r in rows if (r["notes"] or "").startswith("Generated from")}
+    tpl_by_stage = {}
+    for st in scan_templates():
+        tpl_by_stage[st["stage"]] = [
+            t for t in st["templates"]
+            if t["side"] == "to_client" and t["path"] not in generated_paths]
+
+    gates = resolve_gates(con, eid)
+    stage_order = list(KIT_TO_CLIENT_STAGE)
+    by_stage = {}
+    for r in authored:
+        by_stage.setdefault(r["stage"], []).append(r)
+    file_stage = {}
+    for r in files:
+        file_stage.setdefault(r["stage"], []).append(r)
+
+    def gate_line(g):
+        if g["passed_at"]:
+            who = g["signed_by"] or g["actor"] or ""
+            how = "signed" if g["via"] == "signature" else "confirmed"
+            return (f"**Gate: {g['label']}** — {how}"
+                    + (f" by {who}" if who else ""))
+        if g["doc_id"]:
+            return f"**Gate: {g['label']}** — awaiting signature"
+        return f"**Gate: {g['label']}** — open"
+
+    # the contents, and the section list, walk the stages together
+    sections = [{"title": cover[0]["title"], "body": cover[0]["body"],
+                 "signatures": vault.signed_rows(con, cover[0]["id"]),
+                 "pending": vault.pending_rows(con, cover[0]["id"])}]
+    toc = []
+    ordered_docs = []
+    for kit_stage in stage_order:
+        cstage = KIT_TO_CLIENT_STAGE[kit_stage]
+        stage_docs = by_stage.get(kit_stage, [])
+        stage_tpls = tpl_by_stage.get(kit_stage, [])
+        stage_files = file_stage.get(kit_stage, [])
+        stage_gates = [g for g in gates
+                       if g["stage"] == cstage and g["active"]]
+        if not (stage_docs or stage_tpls or stage_files or stage_gates):
+            continue
+        label = STAGE_LABELS.get(cstage, cstage)
+        toc.append("")
+        toc.append(f"## {label}")
+        toc.append("")
+        for g in stage_gates:
+            toc.append(gate_line(g))
+            toc.append("")
+        # consecutive numbered lines form ONE list, so the browser and the
+        # PDF number them 1..k within the stage — binder numbering, not a
+        # column of stray "1."s
+        for r in stage_docs:
+            sigs = vault.signed_rows(con, r["id"])
+            state = (f"signed by {sigs[-1]['signer_name']}" if sigs
+                     else "awaiting signature"
+                     if vault.pending_rows(con, r["id"]) else "draft")
+            toc.append(f"1. **{r['title']}** — {state}")
+            ordered_docs.append({"title": r["title"], "body": r["body"],
+                                 "signatures": sigs,
+                                 "pending": vault.pending_rows(con, r["id"])})
+        for t in stage_tpls:
+            toc.append(f"1. {t['name']} — *blank form, print and fill*")
+            try:
+                body = template_path(t["path"]).read_text()
+            except Exception:
+                toc.pop()
+                continue
+            ordered_docs.append({"title": t["name"], "body": body})
+        for r in stage_files:
+            toc.append(f"1. *{r['title']}* — attachment, filed beside "
+                       f"this binder")
+    sections.append({"title": "In this binder",
+                     "body": "\n".join(toc).strip()})
+    sections.extend(ordered_docs)
     return sections, files
 
 
