@@ -151,6 +151,31 @@ while remaining responsible for the work.
 
 ---
 
+## 15. Ongoing support — security, compliance, monitoring, updates
+
+Software is not finished at launch; it is maintained or it decays. The
+parties agree up front how the continuous work is carried:
+
+**Covered under a Care Plan** (per the [care plan
+agreement](../../11-aftercare/care-plan-agreement.md), when one is signed):
+security patches and dependency updates, uptime and error monitoring,
+backups and restore tests, bug and error support at the plan's response
+times, and compliance upkeep the plan names ([WCAG / PCI scope / privacy
+obligations — LIST]).
+
+**Without a Care Plan:** the Studio warrants fixes for defects reported
+within **[30] days** of launch at no charge. After that, security updates,
+monitoring, bug fixes and compliance changes are available ad hoc at the
+Studio's prevailing hourly rate, on the Studio's schedule — the Client
+acknowledges that unmaintained software accrues risk, and that declining a
+plan is a decision, recorded in writing.
+
+**Either way:** the Studio will disclose actively exploited vulnerabilities
+it becomes aware of in software it delivered, and hand over everything
+needed for a third party to take maintenance on at any time.
+
+[INITIALS]
+
 ## Signatures
 
 *Signing electronically? Skip the table — each party's signature, with its

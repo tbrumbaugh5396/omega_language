@@ -3464,8 +3464,12 @@ ok(any(d["awaiting"] for d in _det["docs"]),
 
 # --- gates: signatures with a stage attached -------------------------------
 _gd = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
-ok(len(_gd["gates"]) == 9 and _gd["current_stage"] == "02-proposal",
+ok(len(_gd["gates"]) == 10 and _gd["current_stage"] == "02-proposal",
    "an engagement opens with every gate open, standing at the proposal")
+ok(_gd["gates"][-1]["gate"] == "ongoing_support_agreed",
+   "and the last gate is the ongoing one — security, monitoring, updates "
+   "and bug support are continuous work, not an afterthought, and the care "
+   "plan is where the contract says how they're carried")
 ok(not next(g for g in _gd["gates"]
             if g["gate"] == "art_direction_signed")["active"],
    "the art direction gate doesn't exist until brand work does — a week "
@@ -4096,6 +4100,42 @@ ok("binderEditMode" in _ops
 ok("out.doc_id" in _ops.split("binderEditMode")[1][:5200],
    "a touched blank form generates the document for this client, then the "
    "written answers land on it")
+
+# --- cells, names, and the ongoing clause ----------------------------------
+from storefront.backend.documents import scan_regions as _scan_r
+_cells = [r for r in _scan_r("| A | B |\n|---|---|\n| x | |\n")
+          if r["kind"] == "cell"]
+ok(len(_cells) == 1,
+   "an empty table cell is a blank the template meant to be filled — "
+   "whitespace nobody can type into is a form with holes in it")
+ok('ph-cell' in _bed.text or 'ph-cell' in c.get(
+    f"/api/store/admin/engagements/{_bt['id']}/binder/editable",
+    headers=A).text,
+   "and the binder editor renders them as fields")
+_bh3 = c.get(f"/api/store/admin/engagements/{_bt['id']}/binder.html",
+             headers=A).text
+ok("[CLIENT]" not in _bh3.split("In this binder")[1].split("</div>")[0]
+   and "[PROJECT]" not in _bh3.split("In this binder")[1].split("</div>")[0],
+   "blank forms in the contents already belong to the client — 'Project "
+   "roadmap — Title Probe', never '— [CLIENT]'")
+_cc = (_studio / "templates" / "04-agreement" / "contracts"
+       / "common-clauses.md").read_text()
+ok("## 15. Ongoing support" in _cc and "[INITIALS]" in _cc.split("## 15.")[1]
+   and "actively exploited vulnerabilities" in _cc,
+   "the contract says how continuous work is carried — under a care plan, "
+   "or ad hoc with the risk of declining recorded in writing — and the "
+   "clause takes initials like the other load-bearing ones")
+for _cf2 in ("week-website", "partially-custom", "fully-custom",
+             "branding-creative"):
+    _ct3 = (_studio / "templates" / "04-agreement" / "contracts"
+            / f"{_cf2}.md").read_text()
+    _inc = [seg[-60:] for seg in _ct3.split("Common Clauses]")[:-1]]
+    ok(any("15" in seg for seg in _inc),
+       f"{_cf2} incorporates the ongoing-support clause")
+ok("ongoing_support_agreed" in _ops
+   and "Ongoing — security, monitoring, updates, support" in _ops,
+   "the ongoing gate is on the track and the Gantt — a lane that starts "
+   "when handover ends and does not stop")
 c.delete(f"/api/store/admin/documents/{_scan2['id']}", headers=A)
 _bf = c.post(f"/api/store/admin/engagements/{_bt['id']}/binder",
              headers=A).json()

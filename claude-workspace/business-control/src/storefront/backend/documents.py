@@ -207,6 +207,8 @@ def fill(text: str, fills: dict) -> str:
 _UNDERS = re.compile(r"_{3,}")
 _CHECKBOX = re.compile(r"(?<=[-*] )\[( |x)\]")
 _BOXCHAR = re.compile(r"[☐☑]")
+_TABLE_LINE = re.compile(r"^\|.*\|[ \t]*$", re.M)
+_TABLE_SEP = re.compile(r"\|(?:\s*:?-{2,}:?\s*\|)+\s*")
 
 
 def scan_regions(text: str) -> list:
@@ -228,6 +230,26 @@ def scan_regions(text: str) -> list:
     for m in _BOXCHAR.finditer(text):
         out.append({"kind": "check", "start": m.start(), "end": m.end(),
                     "checked": text[m.start()] == "☑", "box": True})
+    # An empty table cell is a blank the template meant to be filled — the
+    # audit grids, the roles table, the wet-ink signature rows. Whitespace
+    # nobody can type into is a form with holes in it.
+    for lm in _TABLE_LINE.finditer(text):
+        line = lm.group(0)
+        if _TABLE_SEP.fullmatch(line.strip()):
+            continue
+        # a header row's empty cells are layout, not blanks — the kit's
+        # key-facts tables open with "| | |" on purpose
+        nxt_start = lm.end() + 1
+        nxt_end = text.find("\n", nxt_start)
+        nxt = text[nxt_start:nxt_end if nxt_end != -1 else len(text)]
+        if _TABLE_SEP.fullmatch(nxt.strip()):
+            continue
+        base = lm.start()
+        pipes = [i for i, ch in enumerate(line) if ch == "|"]
+        for a, b in zip(pipes, pipes[1:]):
+            if b - a > 1 and line[a + 1:b].strip() == "":
+                out.append({"kind": "cell", "start": base + a + 1,
+                            "end": base + b})
     out.sort(key=lambda r: r["start"])
     return out
 
@@ -247,6 +269,11 @@ def apply_regions(text: str, edits: dict) -> str:
             if not v:
                 continue
             text = text[:r["start"]] + v + text[r["end"]:]
+        elif r["kind"] == "cell":
+            v = v.strip().replace("|", "/").replace("\n", " ")
+            if not v:
+                continue
+            text = text[:r["start"]] + f" {v} " + text[r["end"]:]
         else:
             on = v in ("true", "1", "on", "x")
             rep = ("☑" if on else "☐") if r["box"] else \
@@ -771,6 +798,9 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
             f = (f'<input class="ph ph-line" data-region="{i}"'
                  f'{" inputmode=\"decimal\"" if r["money"] else ""}'
                  f' placeholder="write in" size="14">')
+        elif r["kind"] == "cell":
+            f = (f'<input class="ph ph-line ph-cell" data-region="{i}"'
+                 f' placeholder="…" size="8">')
         else:
             f = (f'<input type="checkbox" class="ph-check" data-region="{i}"'
                  f'{" checked" if r["checked"] else ""}>')

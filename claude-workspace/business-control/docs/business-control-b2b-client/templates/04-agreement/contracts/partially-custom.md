@@ -137,7 +137,7 @@ Content is the critical path on every project of this size.
 
 ## 7. Everything else
 
-Clauses 1–14 of the [Common Clauses](common-clauses.md) apply in full.
+Clauses 1–15 of the [Common Clauses](common-clauses.md) apply in full.
 
 ---
 

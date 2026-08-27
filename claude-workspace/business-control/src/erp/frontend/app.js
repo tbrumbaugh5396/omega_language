@@ -5354,6 +5354,7 @@ async function renderEngagement(id) {
     art_direction_signed: "07-brand-exploration",
     round1_signed_off: "08-build", round2_signed_off: "08-build",
     handover_accepted: "10-handover",
+    ongoing_support_agreed: "11-aftercare",
   };
 
   /* The gates as a track: done · now · waiting on them · waiting on us ·
@@ -5411,6 +5412,10 @@ async function renderEngagement(id) {
       to: "handover_accepted", lane: 0 },
     { name: "Money", from: "contract_signed", to: "final_invoice_paid",
       lane: 3, note: "deposit up front, final before launch" },
+    { name: "Ongoing — security, monitoring, updates, support",
+      from: "handover_accepted", to: "ongoing_support_agreed", lane: 1,
+      note: "continuous work, carried by the care plan agreed in the "
+        + "contract — it starts when handover ends and does not stop" },
   ];
 
   function ganttModal() {

@@ -191,6 +191,12 @@ GATES = [
     ("round2_signed_off",   "Round 2 signed off",   "signature", "07-build"),
     ("final_invoice_paid",  "Final invoice paid",   "money",     "08-launch"),
     ("handover_accepted",   "Handover accepted",    "signature", "09-handover"),
+    # Ongoing is a gate, not an afterthought: security patches, monitoring,
+    # compliance and bug support are continuous work, and the care plan is
+    # where the contract says how they're carried. Passed = the plan (or its
+    # written decline) is signed.
+    ("ongoing_support_agreed", "Ongoing support agreed", "signature",
+     "10-aftercare"),
 ]
 GATE_KEYS = {g[0] for g in GATES}
 
@@ -1229,6 +1235,15 @@ def _binder_sections(con, eid: int) -> tuple:
     for r in files:
         file_stage.setdefault(r["stage"], []).append(r)
 
+    def client_named(title: str) -> str:
+        """A blank form's name in the contents should already belong to the
+        client — 'Project roadmap — Lingua', not '— [CLIENT]'. Generation
+        does the same substitution to the body; the shelf label matches."""
+        for tok in ("[CLIENT NAME]", "[CLIENT]", "[PROJECT NAME]",
+                    "[PROJECT]"):
+            title = title.replace(tok, e["name"])
+        return title
+
     def gate_line(g):
         if g["passed_at"]:
             who = g["signed_by"] or g["actor"] or ""
@@ -1277,13 +1292,14 @@ def _binder_sections(con, eid: int) -> tuple:
                                  "pending": vault.pending_rows(con, r["id"]),
                                  "doc_id": r["id"], "signed": bool(sigs)})
         for t in stage_tpls:
-            toc.append(f"1. {t['name']} — *blank form, print and fill*")
+            disp = client_named(t["name"])
+            toc.append(f"1. {disp} — *blank form, print and fill*")
             try:
                 body = template_path(t["path"]).read_text()
             except Exception:
                 toc.pop()
                 continue
-            ordered_docs.append({"title": t["name"], "body": body,
+            ordered_docs.append({"title": disp, "body": body,
                                  "tpl": t["path"]})
         for r in stage_files:
             toc.append(f"1. *{r['title']}* — attachment, filed beside "

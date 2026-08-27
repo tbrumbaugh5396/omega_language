@@ -161,7 +161,7 @@ by written request.
 
 ## 8. Everything else
 
-Clauses 1–6 and 9–14 of the [Common Clauses](common-clauses.md) apply.
+Clauses 1–6, 9–14 and 15 of the [Common Clauses](common-clauses.md) apply.
 
 ---
 

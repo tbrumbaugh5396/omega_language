@@ -152,7 +152,7 @@ support period.
 
 ## 9. Everything else
 
-Clauses 1–14 of the [Common Clauses](common-clauses.md) apply in full. Note
+Clauses 1–15 of the [Common Clauses](common-clauses.md) apply in full. Note
 particularly clause 7 (IP) — at this value, the Client owns the delivered
 design and custom code on final payment, while the Studio retains its
 pre-existing frameworks and tooling.

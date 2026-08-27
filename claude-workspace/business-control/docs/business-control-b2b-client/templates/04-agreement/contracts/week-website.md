@@ -120,7 +120,7 @@ than they protect.
 
 ## 7. Everything else
 
-Clauses 1–14 of the [Common Clauses](common-clauses.md) apply in full:
+Clauses 1–15 of the [Common Clauses](common-clauses.md) apply in full:
 payment, approvals, changes, Client responsibilities, IP, portfolio rights,
 warranties, liability, confidentiality, termination and general terms.
 
