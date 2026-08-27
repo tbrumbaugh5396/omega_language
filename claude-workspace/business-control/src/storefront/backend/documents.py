@@ -611,15 +611,7 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         f"<meta name=\"viewport\" content=\"width=device-width,"
         f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
-        f"{FONT_LINK}<style>"
-        f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
-        f"line-height:1.55;max-width:760px;margin:0 auto;padding:40px 24px}}"
-        f"h1,h2,h3,h4{{font-family:'Fraunces',Georgia,serif}}"
-        f"table{{border-collapse:collapse;width:100%}}"
-        f"td,th{{border-top:1px solid #e9e4dc;padding:6px 10px 6px 0;"
-        f"text-align:left}}"
-        f"blockquote{{border-left:3px solid #e9e4dc;padding-left:14px;"
-        f"color:#5d5768;margin:10px 0}}"
+        f"{FONT_LINK}<style>{DOC_BASE_CSS}"
         f"@media print{{body{{padding:0}}}}"
         f"html{{background:#fff}}{PAGE_RULE_CSS}"
         f"</style></head><body><h1>{sect.esc(d['title'])}</h1>"
@@ -792,7 +784,7 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
             f' size="{max(len(tok) + 2, 10)}">')
     for i, r in enumerate(regions):
         if r["kind"] == "area":
-            f = (f'<textarea class="ph ph-area" data-region="{i}" rows="2"'
+            f = (f'<textarea class="ph ph-area" data-region="{i}" rows="1"'
                  f' placeholder="Type your answer — a sentence or a'
                  f' paragraph"></textarea>')
         elif r["kind"] == "line":
@@ -821,27 +813,43 @@ PAGE_RULE_CSS = (
 )
 
 
-EDITABLE_CSS = (
-        f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
-        f"line-height:1.7;max-width:760px;margin:0 auto;padding:32px 24px}}"
-        f"h1,h2,h3,h4{{font-family:'Fraunces',Georgia,serif}}"
-        f"table{{border-collapse:collapse;width:100%}}"
-        f"td,th{{border-top:1px solid #e9e4dc;padding:6px 10px 6px 0;"
-        f"text-align:left}}"
-        f"blockquote{{border-left:3px solid #e9e4dc;padding-left:14px;"
-        f"color:#5d5768;margin:10px 0}}"
-        f"input.ph,textarea.ph{{font:inherit;font-size:.92em;"
-        f"padding:1px 7px;margin:0 1px;border:1.5px dashed #d08a00;"
-        f"border-radius:7px;background:#fff8ec;color:#1b181f;min-width:44px;"
-        f"vertical-align:baseline}}"
-        f"textarea.ph-area{{display:block;width:100%;margin:6px 0 12px;"
-        f"padding:8px 10px;resize:vertical;line-height:1.5}}"
-        f"input.ph:focus,textarea.ph:focus{{outline:2px solid #8a6ff0;"
-        f"border-style:solid}}"
-        f"input.ph.filled,textarea.ph.filled{{border:1.5px solid #3fbd82;"
-        f"background:#effaf4}}"
-        f"input.ph-check{{width:15px;height:15px;accent-color:#3fbd82;"
-        f"vertical-align:-2px}}")
+# One typography for every rendering of a document — preview, editor,
+# binder page. When these drifted (line-height 1.7 here, 1.6 there) the
+# editor was a different document that happened to hold the same words,
+# and it paginated like one.
+DOC_BASE_CSS = (
+    "body{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
+    "line-height:1.6;max-width:760px;margin:0 auto;padding:32px 24px}"
+    "h1,h2,h3,h4{font-family:'Fraunces',Georgia,serif}"
+    "table{border-collapse:collapse;width:100%}"
+    "td,th{border-top:1px solid #e9e4dc;padding:6px 10px 6px 0;"
+    "text-align:left}"
+    "blockquote{border-left:3px solid #e9e4dc;padding-left:14px;"
+    "color:#5d5768;margin:10px 0}"
+    "img{max-width:100%}"
+)
+
+# A field should cost the line it sits on as little as possible: hundreds
+# of them across a binder, and every pixel of vertical padding is a pixel
+# the editor drifts away from the printed page.
+FIELD_CSS = (
+    "input.ph,textarea.ph{font:inherit;font-size:.92em;"
+    "padding:0 6px;margin:0 1px;border:1px dashed #d08a00;"
+    "border-radius:7px;background:#fff8ec;color:#1b181f;min-width:44px;"
+    "line-height:1.3;vertical-align:baseline}"
+    "textarea.ph-area{display:block;width:100%;margin:4px 0 8px;"
+    "padding:4px 8px;resize:vertical;line-height:1.45;"
+    "overflow:hidden;box-sizing:border-box}"
+    "input.ph-cell{padding:0 4px}"
+    "input.ph:focus,textarea.ph:focus{outline:2px solid #8a6ff0;"
+    "border-style:solid}"
+    "input.ph.filled,textarea.ph.filled{border:1px solid #3fbd82;"
+    "background:#effaf4}"
+    "input.ph-check{width:15px;height:15px;accent-color:#3fbd82;"
+    "vertical-align:-2px}"
+)
+
+EDITABLE_CSS = DOC_BASE_CSS + FIELD_CSS
 
 
 def render_editable(d, suggestions: dict) -> str:

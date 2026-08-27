@@ -5003,6 +5003,23 @@ function restoreAnchor(frame, a) {
   } catch {}
 }
 
+/* A one-row answer box that grows to what you type: it starts the height
+   of the printed write-in line it replaces, so the editor paginates close
+   to the page, and it never traps text in a scrollbar. */
+function wireAutoGrow(doc) {
+  const grow = (el) => {
+    el.style.height = "auto";
+    el.style.height = (el.scrollHeight + 2) + "px";
+  };
+  const all = [...doc.querySelectorAll("textarea.ph-area")];
+  all.forEach(grow);
+  doc.addEventListener("input", (e) => {
+    if (e.target.classList && e.target.classList.contains("ph-area"))
+      grow(e.target);
+  });
+  return () => all.forEach(grow);
+}
+
 function wirePageCount(frame, label) {
   let doc, win;
   try { doc = frame.contentDocument; win = frame.contentWindow; }
@@ -5081,6 +5098,7 @@ async function fillInDoc(did, title, after, anchor) {
       }));
       areas.forEach((inp) => inp.addEventListener("input", paint));
       paint();
+      wireAutoGrow(doc);
       const recount = wirePageCount(frame, $("#fid-pages"));
       restoreAnchor(frame, anchor);
       recount();
@@ -5166,6 +5184,7 @@ async function binderEditMode(engId, e, anchor) {
         scope.querySelectorAll("input.ph-line, textarea.ph-area")
           .forEach((i) => i.classList.toggle("filled", !!i.value.trim()));
       };
+      wireAutoGrow(doc);
       const recount = wirePageCount(frame, $("#bd-pages"));
       restoreAnchor(frame, anchor);
       recount();

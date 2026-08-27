@@ -4144,6 +4144,23 @@ ok("PAGE_RULE_CSS" in Path("src/storefront/backend/documents.py").read_text()
 for _pid in ("dv-pages", "fid-pages", "bd-pages"):
     ok(f'id="{_pid}"' in _ops,
        f"{_pid}: the count shows in view, in the editor, and in the binder")
+# One typography for every rendering: when preview and editor disagreed
+# about line-height, the editor was a different document that happened to
+# hold the same words — and it paginated like one.
+_docsrc = Path("src/storefront/backend/documents.py").read_text()
+ok("DOC_BASE_CSS = (" in _docsrc and "FIELD_CSS = (" in _docsrc
+   and "EDITABLE_CSS = DOC_BASE_CSS + FIELD_CSS" in _docsrc,
+   "the reading shell and the editing shell are one base plus fields, not "
+   "two stylesheets that drifted apart")
+_engsrc = Path("src/storefront/backend/engagements.py").read_text()
+ok(_engsrc.count("vault.DOC_BASE_CSS") + _engsrc.count("vault.EDITABLE_CSS")
+   >= 2 and "line-height:1.6" not in _engsrc,
+   "and both binder shells render from it, so neither can set its own "
+   "line-height behind the other's back")
+ok('rows="1"' in _docsrc and "function wireAutoGrow" in _ops,
+   "an answer box starts the height of the printed line it replaces and "
+   "grows to what you type, rather than reserving two rows nobody asked for")
+
 ok("function frameAnchor" in _ops and "function restoreAnchor" in _ops
    and "fillInDoc(did, name, after, at)" in _ops
    and "binderEditMode(id, e, frameAnchor(bdFrame))" in _ops,
