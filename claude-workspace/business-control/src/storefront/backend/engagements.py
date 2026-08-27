@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS engagements (
   live_url TEXT DEFAULT '',
   notes TEXT DEFAULT '',
   status TEXT DEFAULT 'active',            -- active|closed
+  originator TEXT DEFAULT '',              -- who brought the client in
+  internal_poc TEXT DEFAULT '',            -- who runs it day to day
+  internal_poc_user_id INTEGER DEFAULT 0,
+  internal_poc_status TEXT DEFAULT 'accepted',  -- accepted|pending|declined
   portal_token TEXT DEFAULT '',            -- the client's login-free link
   content_pct INTEGER DEFAULT 0,           -- the number that predicts lateness
   week_note TEXT DEFAULT '',               -- one sentence: what changed this week
@@ -118,6 +122,11 @@ MIGRATIONS = (
     "ALTER TABLE engagements ADD COLUMN week_note_at REAL DEFAULT 0",
     "ALTER TABLE engagements ADD COLUMN portal_seen_at REAL DEFAULT 0",
     "ALTER TABLE engagement_gates ADD COLUMN stripe_session TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN originator TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN internal_poc TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN internal_poc_user_id INTEGER DEFAULT 0",
+    "ALTER TABLE engagements ADD COLUMN internal_poc_status TEXT"
+    " DEFAULT 'accepted'",
 )
 
 
@@ -341,19 +350,33 @@ def suggested_fills(e) -> dict:
 # ---------- engagements ----------
 
 def binder_body(name: str, package: str, value_cents: int,
-                approver_name: str, approver_email: str,
+                client_poc_name: str, client_poc_email: str,
+                internal_poc: str, originator: str,
                 launch_target: str) -> str:
-    """The binder's opening document: cover, introduction, what the binder
-    holds, and — only where the record has them — pricing and the lead. It
-    is a real vault document, so the editor fills its brackets and the
-    binder PDF opens with it."""
+    """The binder's opening document. The title page names the five facts a
+    binder pulled off a shelf must answer at a glance: whose it is, who to
+    call on each side, who started it, and when. Pricing and lead sections
+    appear only where the record has them."""
+    from erp.backend.main import CFG
+    brand = CFG.get("brand_name", "Business Control")
     today = time.strftime("%B %d, %Y").replace(" 0", " ")
     nl = "\n"
+    dash = "—"
+    poc = client_poc_name or dash
+    if client_poc_email:
+        poc += f" ({client_poc_email})"
     parts = [
-        f"# {name} — Project binder",
+        f"# {brand}",
         "",
-        f"**Prepared for** {name} · **Prepared by** [PREPARED BY] · "
-        f"**Date** {today}",
+        f"## Project binder — {name}",
+        "",
+        "| | |",
+        "|---|---|",
+        f"| Client | {name} |",
+        f"| Client POC | {poc} |",
+        f"| Internal POC | {internal_poc or dash} |",
+        f"| Originator | {originator or dash} |",
+        f"| Date | {today} |",
         "",
         "*Everything this project produces, in one place. This binder opens "
         "with who and what; every agreement, questionnaire and sign-off "
@@ -386,17 +409,37 @@ def binder_body(name: str, package: str, value_cents: int,
         if value_cents:
             parts.append(f"| Value | ${value_cents / 100:,.2f} |")
         parts.append("| Payment | Per the schedule in the agreement |")
-    if approver_name or approver_email or launch_target:
+    if client_poc_name or client_poc_email or launch_target:
         parts += ["", "## Lead information", "", "| | |", "|---|---|"]
-        if approver_name or approver_email:
-            parts.append(
-                f"| Approver | {approver_name}"
-                + (f" ({approver_email})" if approver_email else "") + " |")
+        if client_poc_name or client_poc_email:
+            parts.append(f"| Client POC | {poc} |")
         if launch_target:
             parts.append(f"| Launch target | {launch_target} |")
         parts.append("| One consolidated response per round | "
                      "Named in the agreement |")
     return nl.join(parts) + nl
+
+
+def _create_binder(con, eid: int, e: dict, u) -> int:
+    """One binder per client, shared by birth and backfill."""
+    cur = con.execute(
+        "INSERT INTO documents(title,category,party_kind,party_name,"
+        " party_email,body,notes,status,confidential,uploaded_by,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (f"Project binder — {e['name']}"[:200], "other", "partner",
+         e["name"][:120], e["approver_email"],
+         binder_body(e["name"], e["package"], e["value_cents"],
+                     e["approver_name"], e["approver_email"],
+                     e["internal_poc"], e["originator"],
+                     e["launch_target"]),
+         "binder cover", "draft", 1, u["id"], time.time()))
+    con.execute(
+        "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (eid, cur.lastrowid, "01-potential-customer", "to_client",
+         time.time()))
+    log(con, eid, u["name"], "project binder created")
+    return cur.lastrowid
 
 
 class EngBody(BaseModel):
@@ -410,6 +453,8 @@ class EngBody(BaseModel):
     live_url: str = ""
     notes: str = ""
     status: str = ""
+    originator: str = ""
+    internal_poc: str = ""
     content_pct: int = -1          # -1 = not sent; 0 is a real value
     week_note: str = "\x00"       # sentinel: absent, not cleared
     blockers: str = "\x00"
@@ -459,6 +504,21 @@ def list_engagements(u=Depends(admin_user), con=Depends(get_con)):
     return {"engagements": out, "kit_available": KIT.is_dir()}
 
 
+def _resolve_poc(con, name: str, u) -> tuple:
+    """(name, user_id, status). Naming yourself is accepted on the spot;
+    naming a colleague makes it PENDING and tells them — being someone's
+    internal POC is a job, and a job you haven't agreed to isn't yours yet.
+    A name that matches no account is recorded as-is with nobody to ask."""
+    name = (name or "").strip()[:120] or u["name"]
+    row = con.execute("SELECT id FROM users WHERE lower(name)=lower(?)"
+                      " AND active=1", (name,)).fetchone()
+    if row is None:
+        return name, 0, "accepted"
+    if row["id"] == u["id"]:
+        return name, row["id"], "accepted"
+    return name, row["id"], "pending"
+
+
 @router.post("/api/store/admin/engagements")
 def create_engagement(body: EngBody, u=Depends(admin_user),
                       con=Depends(get_con)):
@@ -470,39 +530,30 @@ def create_engagement(body: EngBody, u=Depends(admin_user),
                    (slug,)).fetchone():
         raise HTTPException(400, f"'{slug}' already exists")
     now = time.time()
+    originator = (body.originator or "").strip()[:120] or u["name"]
+    poc_name, poc_uid, poc_status = _resolve_poc(con, body.internal_poc, u)
     cur = con.execute(
         "INSERT INTO engagements(name,slug,package,value_cents,approver_name,"
         " approver_email,launch_target,staging_url,live_url,notes,status,"
-        " created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " originator,internal_poc,internal_poc_user_id,internal_poc_status,"
+        " created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (name[:120], slug, body.package.strip()[:40], body.value_cents,
          body.approver_name.strip()[:120], body.approver_email.strip()[:200],
          body.launch_target.strip()[:40], body.staging_url.strip()[:300],
          body.live_url.strip()[:300], body.notes.strip()[:2000],
-         "active", now, now))
+         "active", originator, poc_name, poc_uid, poc_status, now, now))
     eid = cur.lastrowid
     log(con, eid, u["name"], f"engagement created: {name}")
-    # The binder opens the paperwork: cover, introduction, contents, and —
-    # where the record has them — pricing and the lead. Born with the
-    # client, filled like any other document, first page of the binder PDF.
-    bcur = con.execute(
-        "INSERT INTO documents(title,category,party_kind,party_name,"
-        " party_email,body,notes,status,confidential,uploaded_by,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        (f"Project binder — {name}"[:200], "other", "partner", name[:120],
-         body.approver_email.strip()[:200],
-         binder_body(name, body.package.strip(), body.value_cents,
-                     body.approver_name.strip(),
-                     body.approver_email.strip(),
-                     body.launch_target.strip()),
-         "binder cover", "draft", 1, u["id"], time.time()))
-    con.execute(
-        "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
-        " created_at) VALUES(?,?,?,?,?)",
-        (eid, bcur.lastrowid, "01-potential-customer", "to_client",
-         time.time()))
-    log(con, eid, u["name"], "project binder created")
+    e = con.execute("SELECT * FROM engagements WHERE id=?", (eid,)).fetchone()
+    binder_id = _create_binder(con, eid, e, u)
     con.commit()
-    return {"id": eid, "slug": slug, "binder_doc_id": bcur.lastrowid}
+    if poc_status == "pending":
+        from erp.backend import notify
+        notify.push(con, f"Internal POC for {name} — yours?",
+                    f"{u['name']} named you internal POC. Open the client "
+                    f"to accept or decline.", kind="engagement",
+                    user_id=poc_uid)
+    return {"id": eid, "slug": slug, "binder_doc_id": binder_id}
 
 
 def _eng_or_404(con, eid: int):
@@ -524,6 +575,20 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
             fields[k] = v
     # Blockers and the week note must be CLEARABLE — "no blockers" is the
     # good news, and a sentinel keeps an absent field from wiping anything.
+    if body.originator.strip() and body.originator.strip() != e["originator"]:
+        fields["originator"] = body.originator.strip()[:120]
+    poc_in = body.internal_poc.strip()
+    if poc_in and poc_in.lower() != (e["internal_poc"] or "").lower():
+        poc_name, poc_uid, poc_status = _resolve_poc(con, poc_in, u)
+        fields["internal_poc"] = poc_name
+        fields["internal_poc_user_id"] = poc_uid
+        fields["internal_poc_status"] = poc_status
+        if poc_status == "pending":
+            from erp.backend import notify
+            notify.push(con, f"Internal POC for {e['name']} — yours?",
+                        f"{u['name']} named you internal POC. Open the "
+                        f"client to accept or decline.", kind="engagement",
+                        user_id=poc_uid)
     for k in ("week_note", "blockers"):
         v = getattr(body, k)
         if v != "\x00" and v.strip() != e[k]:
@@ -1121,17 +1186,11 @@ def export_folder(eid: int, u=Depends(admin_user), con=Depends(get_con)):
             if _dropbox_connected(con) else "not connected"}
 
 
-@router.get("/api/store/admin/engagements/{eid}/binder.pdf")
-def binder_pdf_route(eid: int, u=Depends(admin_user), con=Depends(get_con)):
-    """The whole packet as one book. The binder cover opens it, a contents
-    page lists what follows in process order, and every to-client authored
-    document takes its pages — signatures printed, blank signature areas
-    where requests are still out. Uploaded files (scans) are listed in the
-    contents but live beside the binder in the export, since a PDF made of
-    markdown can't swallow a photograph of paper."""
-    e = _eng_or_404(con, eid)
+def _binder_sections(con, eid: int) -> tuple:
+    """(sections, files): the binder cover first, a contents page, then
+    every to-client authored paper in process order — one gatherer behind
+    the PDF and the HTML preview, so they can never disagree."""
     from . import documents as vault
-    from . import pdfgen
     rows = con.execute(
         "SELECT ed.stage, d.* FROM engagement_docs ed"
         " JOIN documents d ON d.id=ed.doc_id"
@@ -1143,9 +1202,6 @@ def binder_pdf_route(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         stage_order.index(r["stage"]) if r["stage"] in stage_order else 99))
     authored = [r for r in rows if (r["body"] or "").strip()]
     files = [r for r in rows if not (r["body"] or "").strip() and r["ext"]]
-    if not authored:
-        raise HTTPException(404, "nothing to bind yet")
-
     sections = []
     for i, r in enumerate(authored):
         sections.append({"title": r["title"], "body": r["body"],
@@ -1160,13 +1216,107 @@ def binder_pdf_route(eid: int, u=Depends(admin_user), con=Depends(get_con)):
                 toc += ("\n\nFiled beside this binder: "
                         + ", ".join(f"*{f['title']}*" for f in files))
             sections.append({"title": "In this binder", "body": toc})
-    log(con, eid, u["name"],
-        f"binder PDF ({len(authored)} documents)")
+    return sections, files
+
+
+@router.post("/api/store/admin/engagements/{eid}/binder")
+def binder_backfill(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """Create the binder for a client that predates binder-at-birth. One
+    per client — asking again returns the one that exists."""
+    e = _eng_or_404(con, eid)
+    row = con.execute(
+        "SELECT d.id FROM engagement_docs ed JOIN documents d"
+        " ON d.id=ed.doc_id WHERE ed.engagement_id=?"
+        " AND d.notes='binder cover'", (eid,)).fetchone()
+    if row:
+        return {"binder_doc_id": row["id"], "created": False}
+    did = _create_binder(con, eid, e, u)
     con.commit()
-    blob = pdfgen.binder_pdf(sections)
-    stem = f"{e['slug']}-binder"
-    return Response(blob, media_type="application/pdf", headers={
-        "Content-Disposition": f'inline; filename="{stem}.pdf"'})
+    return {"binder_doc_id": did, "created": True}
+
+
+@router.post("/api/store/admin/engagements/{eid}/poc/{verdict}")
+def poc_verdict(eid: int, verdict: str, u=Depends(admin_user),
+                con=Depends(get_con)):
+    """The named internal POC accepts or declines the job. Declining tells
+    the originator — silence is the one outcome that helps nobody."""
+    e = _eng_or_404(con, eid)
+    if verdict not in ("accept", "decline"):
+        raise HTTPException(404, "accept or decline")
+    if e["internal_poc_user_id"] != u["id"]:
+        raise HTTPException(403, "only the named internal POC can answer")
+    if e["internal_poc_status"] != "pending":
+        return {"status": e["internal_poc_status"]}
+    status = "accepted" if verdict == "accept" else "declined"
+    con.execute("UPDATE engagements SET internal_poc_status=?, updated_at=?"
+                " WHERE id=?", (status, time.time(), eid))
+    log(con, eid, u["name"], f"internal POC {status}")
+    con.commit()
+    if status == "declined":
+        from erp.backend import notify
+        orig = con.execute("SELECT id FROM users WHERE lower(name)=lower(?)"
+                           " AND active=1", (e["originator"],)).fetchone()
+        notify.push(con, f"{u['name']} declined internal POC for {e['name']}",
+                    "Pick another internal POC on the client's Edit form.",
+                    kind="engagement",
+                    user_id=orig["id"] if orig else None)
+    return {"status": status}
+
+
+@router.get("/api/store/admin/engagements/{eid}/binder.html")
+def binder_html(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """The binder as a page — for the in-app preview, where an embedded PDF
+    is a lottery. Same sections as the PDF, from the same gatherer."""
+    e = _eng_or_404(con, eid)
+    from . import documents as vault
+    sections, _ = _binder_sections(con, eid)
+    if not sections:
+        raise HTTPException(404, "nothing to bind yet")
+    inner = "".join(
+        f'<div class="binder-doc">'
+        f'<h1>{sect.esc(sec["title"])}</h1>'
+        f'{vault.md_html(sec["body"])}'
+        f'{vault.signatures_html(sec.get("signatures") or [])}'
+        f'{vault.pending_html(sec.get("pending") or [])}'
+        f"</div>" for sec in sections)
+    from .api import FONT_LINK
+    return HTMLResponse(
+        f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<meta name=\"viewport\" content=\"width=device-width,"
+        f" initial-scale=1\"><title>{sect.esc(e['name'])} — binder</title>"
+        f"{FONT_LINK}<style>"
+        f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
+        f"line-height:1.6;max-width:760px;margin:0 auto;padding:28px 24px;"
+        f"background:#f2efe9}}"
+        f"h1,h2,h3,h4{{font-family:'Fraunces',Georgia,serif}}"
+        f"table{{border-collapse:collapse;width:100%}}"
+        f"td,th{{border-top:1px solid #e9e4dc;padding:6px 10px 6px 0;"
+        f"text-align:left}}"
+        f"blockquote{{border-left:3px solid #e9e4dc;padding-left:14px;"
+        f"color:#5d5768;margin:10px 0}}"
+        f".binder-doc{{background:#fff;border-radius:12px;"
+        f"padding:34px 38px;margin:0 0 22px;"
+        f"box-shadow:0 2px 10px rgba(20,15,30,.07)}}"
+        f"</style></head><body>{inner}</body></html>")
+
+
+@router.get("/api/store/admin/engagements/{eid}/binder.pdf")
+def binder_pdf_route(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """The whole packet as one book, from the same gatherer as the HTML
+    preview. Uploaded files (scans) are listed in the contents but travel
+    beside the binder in the export — a PDF made of markdown can't swallow
+    a photograph of paper."""
+    e = _eng_or_404(con, eid)
+    from . import pdfgen
+    sections, _ = _binder_sections(con, eid)
+    if not sections:
+        raise HTTPException(404, "nothing to bind yet")
+    log(con, eid, u["name"], f"binder PDF ({len(sections)} sections)")
+    con.commit()
+    return Response(pdfgen.binder_pdf(sections),
+                    media_type="application/pdf", headers={
+        "Content-Disposition":
+            f'inline; filename="{e["slug"]}-binder.pdf"'})
 
 
 @router.get("/api/store/admin/engagements/{eid}/export.zip")

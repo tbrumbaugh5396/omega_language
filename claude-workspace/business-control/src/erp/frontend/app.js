@@ -3548,6 +3548,7 @@ const NOTIF_TAB = {
   affiliate: "affiliates", analytics: "analytics",
   experiment: "experiments", achievement: "profile",
   document: "docs", ticket: "chat", enquiry: "outreach",
+  engagement: "clients",
 };
 const NOTIF_LABEL = {
   order: "open orders", inventory: "open inventory", logistics: "open routes",
@@ -5085,10 +5086,19 @@ function engForm(e) {
           value="${e && e.value_cents ? e.value_cents / 100 : ""}"></div>
     </div>
     <div class="row2">
-      <div><label>Approver name</label>
+      <div><label>Client POC name</label>
         <input id="ef-appr" value="${esc(e ? e.approver_name : "")}"></div>
-      <div><label>Approver email</label>
+      <div><label>Client POC email</label>
         <input id="ef-email" type="email" value="${esc(e ? e.approver_email : "")}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Internal POC
+          <span class="opt">must accept if it isn't you</span></label>
+        <input id="ef-ipoc" value="${esc(e ? e.internal_poc || ""
+          : (S.user ? S.user.name : ""))}"></div>
+      <div><label>Originator</label>
+        <input id="ef-orig" value="${esc(e ? e.originator || ""
+          : (S.user ? S.user.name : ""))}"></div>
     </div>
     <div class="row2">
       <div><label>Launch target</label>
@@ -5125,6 +5135,8 @@ function engForm(e) {
       value_cents: Math.round((+$("#ef-val").value || 0) * 100),
       approver_name: $("#ef-appr").value.trim(),
       approver_email: $("#ef-email").value.trim(),
+      internal_poc: $("#ef-ipoc").value.trim(),
+      originator: $("#ef-orig").value.trim(),
       launch_target: $("#ef-launch").value.trim(),
       staging_url: $("#ef-stag").value.trim(),
       live_url: $("#ef-live").value.trim(),
@@ -5421,7 +5433,13 @@ async function renderEngagement(id) {
         <p class="dim"><span class="pill ok">stage: ${esc(stageName(d.current_stage))}</span>
           ${e.package ? " package " + esc(e.package) + " · " : ""}${
           e.value_cents ? money(e.value_cents) + " · " : ""}${
-          e.approver_name ? "approver " + esc(e.approver_name) + " · " : ""}${
+          e.approver_name ? "client POC " + esc(e.approver_name) + " · " : ""}${
+          e.internal_poc ? "internal POC " + esc(e.internal_poc)
+            + (e.internal_poc_status === "pending"
+                ? ' <span class="pill warn">unconfirmed</span>'
+                : e.internal_poc_status === "declined"
+                  ? ' <span class="pill bad">declined</span>' : "")
+            + " · " : ""}${
           e.launch_target ? "launch " + esc(e.launch_target) : ""}</p>
       </div>
       <div class="top-actions eng-actions">
@@ -5445,6 +5463,18 @@ async function renderEngagement(id) {
           side only — the internal wall holds">Client bundle</button>
       </div>
     </div>
+    ${e.internal_poc_status === "pending" && S.user
+        && e.internal_poc_user_id === S.user.id ? `
+    <div class="card" style="border-left:3px solid var(--warn)">
+      <b>You've been named internal POC for ${esc(e.name)}</b>
+      <p class="dim">${esc(e.originator || "Someone")} put your name on this
+        client. It's a job, not a label — take it or hand it back, and
+        declining tells them so nobody assumes it's covered.</p>
+      <div class="chips">
+        <button class="btn sm" id="poc-accept">I'm the internal POC</button>
+        <button class="btn alt sm" id="poc-decline">Decline</button>
+      </div>
+    </div>` : ""}
     ${(() => { const n = nextStep(); return `
     <div class="card" style="border-left:3px solid var(--accent, #7b5cff)">
       <b>Next step</b>
@@ -5494,23 +5524,55 @@ async function renderEngagement(id) {
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
   $("#eng-gantt").onclick = ganttModal;
   $("#eng-binder").onclick = async () => {
+    /* The preview frame shows the HTML rendering — an embedded PDF is a
+       lottery across browsers, and a blank frame reads as a broken binder.
+       The download is the real PDF, from the same section gatherer. */
     try {
-      const blob = new Blob([await authBlob(
-        `/api/store/admin/engagements/${id}/binder.pdf`)],
-        { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
+      const hasBinder = d.docs.some((x) =>
+        x.title.startsWith("Project binder"));
+      if (!hasBinder) {
+        const made = await api(
+          `/api/store/admin/engagements/${id}/binder`, { method: "POST" });
+        if (made.created) { toast("Binder created — cover page filed under "
+          + "consultation"); return renderEngagement(id); }
+      }
+      const html = await (await authBlob(
+        `/api/store/admin/engagements/${id}/binder.html`)).text();
+      const url = URL.createObjectURL(
+        new Blob([html], { type: "text/html" }));
       modal(`<h3>${esc(e.name)} — the binder</h3>
         <iframe class="doc-viewer" src="${url}" title="binder"></iframe>
         <div class="modal-foot dv-foot">
           <button class="btn" id="bd-dl">Download binder PDF</button>
           <button class="btn alt" data-close>Close</button>
         </div>`, "wide");
-      $("#bd-dl").onclick = () => {
-        const a = document.createElement("a");
-        a.href = url; a.download = `${e.slug}-binder.pdf`;
-        document.body.appendChild(a); a.click(); a.remove();
+      $("#bd-dl").onclick = async () => {
+        try {
+          const pdf = new Blob([await authBlob(
+            `/api/store/admin/engagements/${id}/binder.pdf`)],
+            { type: "application/pdf" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(pdf);
+          a.download = `${e.slug}-binder.pdf`;
+          document.body.appendChild(a); a.click(); a.remove();
+          URL.revokeObjectURL(a.href);
+        } catch (err) { toast(err.message); }
       };
     } catch (err) { toast(err.message); }
+  };
+  const pocAcc = $("#poc-accept");
+  if (pocAcc) pocAcc.onclick = async () => {
+    try { await api(`/api/store/admin/engagements/${id}/poc/accept`,
+      { method: "POST" }); toast("Yours now"); renderEngagement(id); }
+    catch (err) { toast(err.message); }
+  };
+  const pocDec = $("#poc-decline");
+  if (pocDec) pocDec.onclick = async () => {
+    try { await api(`/api/store/admin/engagements/${id}/poc/decline`,
+      { method: "POST" });
+      toast("Declined — the originator has been told");
+      renderEngagement(id); }
+    catch (err) { toast(err.message); }
   };
   const makePortal = async () => {
     try {

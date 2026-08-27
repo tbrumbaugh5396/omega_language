@@ -4000,6 +4000,72 @@ _ee = c.post(f"/api/store/admin/documents/{_be['binder_doc_id']}/edit",
 ok(_ee["party"]["name"] == "Kim Doe",
    "Save & sign prefills the client's named approver — the approver signs, "
    "not the company")
+# --- the title page, the people, and the POC handshake ---------------------
+# the admin's name may have been changed by an earlier test — the
+# originator default is whatever it is NOW, so read it, don't assume it
+_me_name = _db.connect().execute(
+    "SELECT name FROM users WHERE token=?",
+    (admin["token"],)).fetchone()["name"]
+# mint the colleague first — this suite's db starts empty, and a POC
+# that matches no account is just a label with nobody to ask
+_dev = c.post("/api/login", json={"name": "Poc Colleague",
+                                  "admin_key": CFG["admin_key"]}).json()
+_DA = {"Authorization": f"Bearer {_dev['token']}"}
+_bt = c.post("/api/store/admin/engagements", headers=A, json={
+    "name": "Title Probe", "approver_name": "Pat Client",
+    "approver_email": "pat@client.test", "internal_poc": "Poc Colleague",
+    "originator": ""}).json()
+_btb = _db.connect().execute("SELECT body FROM documents WHERE id=?",
+                             (_bt["binder_doc_id"],)).fetchone()["body"]
+ok(f"# {CFG['brand_name']}" in _btb and "| Client | Title Probe |" in _btb
+   and "| Client POC | Pat Client (pat@client.test) |" in _btb
+   and "| Internal POC | Poc Colleague |" in _btb
+   and f"| Originator | {_me_name} |" in _btb and "| Date |" in _btb,
+   "the binder's title page names the five facts a binder off a shelf must "
+   "answer: the brand, the client, both POCs, who started it, and when")
+_bte = c.get(f"/api/store/admin/engagements/{_bt['id']}",
+             headers=A).json()["engagement"]
+ok(_bte["internal_poc_status"] == "pending",
+   "naming a colleague internal POC is pending until they take it — a job "
+   "you haven't agreed to isn't yours yet")
+ok(c.post(f"/api/store/admin/engagements/{_bt['id']}/poc/accept",
+          headers=A).status_code == 403,
+   "and nobody else can answer for them, the originator included")
+_dn = c.get("/api/notifications", headers=_DA).json()["items"]
+ok(any("Internal POC for Title Probe" in (n.get("title") or "")
+       for n in _dn),
+   "the named colleague is told, not assumed")
+c.post(f"/api/store/admin/engagements/{_bt['id']}/poc/decline", headers=_DA)
+_bte = c.get(f"/api/store/admin/engagements/{_bt['id']}",
+             headers=A).json()["engagement"]
+ok(_bte["internal_poc_status"] == "declined",
+   "declining is recorded — silence is the one outcome that helps nobody")
+_bn = c.get("/api/notifications", headers=A).json()["items"]
+ok(any("declined internal POC" in (n.get("title") or "") for n in _bn),
+   "and the originator hears about it")
+
+_bh = c.get(f"/api/store/admin/engagements/{_bt['id']}/binder.html",
+            headers=A)
+ok(_bh.status_code == 200 and "binder-doc" in _bh.text
+   and "Project binder" in _bh.text,
+   "the binder previews as a page — an embedded PDF is a lottery across "
+   "browsers, and a blank frame reads as a broken binder")
+_bf = c.post(f"/api/store/admin/engagements/{_bt['id']}/binder",
+             headers=A).json()
+ok(not _bf["created"],
+   "one binder per client — backfill returns the one that exists")
+
+_conb2 = _db.connect()
+for _t in ("engagement_docs", "engagement_gates", "engagement_log",
+           "engagement_dates"):
+    _conb2.execute(f"DELETE FROM {_t} WHERE engagement_id=?", (_bt["id"],))
+_conb2.execute("DELETE FROM document_events WHERE document_id=?",
+               (_bt["binder_doc_id"],))
+_conb2.execute("DELETE FROM documents WHERE id=?", (_bt["binder_doc_id"],))
+_conb2.execute("DELETE FROM engagements WHERE id=?", (_bt["id"],))
+_conb2.execute("DELETE FROM notifications WHERE title LIKE '%Title Probe%'")
+_conb2.commit(); _conb2.close()
+
 ok('id="fid-sign"' in _ops and "engSignForm(did, out.party" in _ops,
    "and the editor's own footer carries Save & sign, edits landing before "
    "the request — a signature attests to the text as it stands")
