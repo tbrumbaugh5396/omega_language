@@ -3960,10 +3960,12 @@ ok(_eh.count('class="ph ph-area"') >= 20
    "checkboxes toggle — not just the bracket tokens")
 _pv6 = c.get(f"/api/store/admin/documents/{_g6['doc_id']}/preview",
              headers=A).text
-ok(_pv6.count("height:26px") >= 20 and _pv6.count("<hr>") <= 3,
-   "and the preview draws write-in lines where the underscore runs are — "
-   "rendering them as section rules was why the questionnaires looked like "
-   "they had nowhere to answer")
+ok(_pv6.count("fbox-area") >= 20 and _pv6.count("<hr>") <= 3,
+   "and reading a document shows every blank as a box you could write on — "
+   "print it and fill it in with a pen — rather than a bracketed word or a "
+   "bare rule with nothing to write on")
+ok('class="flab"' in _pv6 and "fcheck" in _pv6,
+   "each box wears its own label, and the tick boxes are boxes")
 c.post(f"/api/store/admin/documents/{_g6['doc_id']}/edit", headers=A,
        json={"regions": {"0": "One sentence a stranger would understand."},
              "fills": {}})
@@ -3995,9 +3997,16 @@ _bh0 = c.get(f"/api/store/admin/engagements/{_be['id']}/binder.html",
 ok("Binder Smoke" in _bh0 and "[CLIENT]" not in _bh0
    and "Kim Doe" in _bh0 and "$12,000.00" in _bh0,
    "and a reader sees the values, never the tokens")
-ok(_bb.count("[PAGE BREAK]") >= 2 and "pgbreak" in _bh0,
-   "the introduction gets its own page, because a cover with an essay "
-   "under it is not a cover")
+_intro = _db.connect().execute(
+    "SELECT d.title, d.body FROM engagement_docs ed JOIN documents d"
+    " ON d.id=ed.doc_id WHERE ed.engagement_id=? AND d.notes='binder intro'",
+    (_be["id"],)).fetchone()
+ok(_intro and "[INTRODUCTION" in _intro["body"],
+   "the introduction is its own document, and so its own page — a cover "
+   "with an essay under it is not a cover")
+ok(_bh0.index("Introduction") < _bh0.index("Table of contents"),
+   "and it sits between the title page and the contents, where a foreword "
+   "goes")
 _bp = c.get(f"/api/store/admin/engagements/{_be['id']}/binder.pdf",
             headers=A)
 ok(_bp.status_code == 200 and _bp.content[:5] == b"%PDF-",
@@ -4138,11 +4147,14 @@ for _cf2 in ("week-website", "partially-custom", "fully-custom",
     _inc = [seg[-60:] for seg in _ct3.split("Common Clauses]")[:-1]]
     ok(any("15" in seg for seg in _inc),
        f"{_cf2} incorporates the ongoing-support clause")
-ok("function wirePageCount" in _ops
-   and "Page ${cur} of ${total}" in _ops,
+ok("function wirePageCount" in _ops and 'class="pg-in"' in _ops,
    "every document view counts its pages — a page being one printable "
    "sheet at letter aspect, which is the same rule the frame draws, so the "
    "number always names a line you can see")
+ok('e.key === "Enter"' in _ops.split("function wirePageCount")[1][:2600]
+   and 'behavior: near ? "smooth" : "auto"' in _ops,
+   "and the count is the way in: type a page, press enter, and a "
+   "hundred-page binder is one keystroke from any page in it")
 ok("PAGE_RULE_CSS" in Path("src/storefront/backend/documents.py").read_text()
    and "--page-h" in _ops,
    "and the boundary is drawn from the height the counter measures — one "
@@ -4176,6 +4188,11 @@ ok('if (i.dataset.global) return;' in _ops
    "and it saves to the client record rather than being baked into one "
    "document's text, which is what keeps the next form agreeing with this "
    "one")
+
+ok("button.btn[hidden]" in _css3 or "btn[hidden]" in c.get(
+    "/ops/styles.css").text,
+   "a button marked hidden is hidden — .btn sets its own display, which "
+   "beats the browser's own [hidden] rule")
 
 ok("function frameAnchor" in _ops and "function restoreAnchor" in _ops
    and "fillInDoc(did, name, after, at)" in _ops

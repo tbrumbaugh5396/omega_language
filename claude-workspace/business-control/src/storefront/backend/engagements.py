@@ -407,18 +407,6 @@ def binder_body() -> str:
         "that follows is filed behind it, and the whole packet exports "
         "together — printed or as one PDF.*",
         "",
-        "[PAGE BREAK]",
-        "",
-        "## Introduction",
-        "",
-        "[INTRODUCTION — who they are, what we build, what done means]",
-        "",
-        "**Client:** [CLIENT] · **Client POC:** [CLIENT POC]",
-        "",
-        "**Internal POC:** [INTERNAL POC] · **Originator:** [ORIGINATOR]",
-        "",
-        "[PAGE BREAK]",
-        "",
         "## What this binder holds",
         "",
         "| Stage | Papers |",
@@ -444,6 +432,36 @@ def binder_body() -> str:
     return nl.join(parts) + nl
 
 
+def intro_body() -> str:
+    """The introduction, its own document and so its own page — a cover
+    with an essay under it is not a cover."""
+    return "\n".join([
+        "# Introduction",
+        "",
+        "[INTRODUCTION — who they are, what we build, what done means]",
+        "",
+        "## Who is who",
+        "",
+        "| | |",
+        "|---|---|",
+        "| Client | [CLIENT] |",
+        "| Client POC | [CLIENT POC] |",
+        "| Internal POC | [INTERNAL POC] |",
+        "| Originator | [ORIGINATOR] |",
+        "",
+        "## What done looks like",
+        "",
+        "[WHAT DONE LOOKS LIKE — the measurable end state]",
+        "",
+        "## How we will work",
+        "",
+        "Each phase ends at a gate you approve. Nothing proceeds without "
+        "your sign-off, and anything new after a gate is a written change "
+        "order — that protects your budget more than it protects our "
+        "schedule.",
+    ]) + "\n"
+
+
 def _create_binder(con, eid: int, e, u) -> int:
     """One binder per client, shared by birth and backfill."""
     cur = con.execute(
@@ -457,6 +475,18 @@ def _create_binder(con, eid: int, e, u) -> int:
         "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
         " created_at) VALUES(?,?,?,?,?)",
         (eid, cur.lastrowid, "01-potential-customer", "to_client",
+         time.time()))
+    icur = con.execute(
+        "INSERT INTO documents(title,category,party_kind,party_name,"
+        " party_email,body,notes,status,confidential,uploaded_by,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (f"Introduction — {e['name']}"[:200], "other", "partner",
+         e["name"][:120], e["approver_email"], intro_body(),
+         "binder intro", "draft", 1, u["id"], time.time()))
+    con.execute(
+        "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (eid, icur.lastrowid, "01-potential-customer", "to_client",
          time.time()))
     log(con, eid, u["name"], "project binder created")
     return cur.lastrowid
@@ -625,6 +655,19 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
         sets = ", ".join(f"{k}=?" for k in fields)
         con.execute(f"UPDATE engagements SET {sets}, updated_at=? WHERE id=?",
                     (*fields.values(), time.time(), eid))
+        # A document titled "Project binder — Lingua" must stop saying
+        # Lingua the moment the client stops being Lingua. The bodies read
+        # from the record already; titles are plain strings, so they are
+        # rewritten here.
+        if "name" in fields:
+            for note, stem in (("binder cover", "Project binder"),
+                               ("binder intro", "Introduction")):
+                con.execute(
+                    "UPDATE documents SET title=?, party_name=?"
+                    " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
+                    "   WHERE ed.engagement_id=?) AND notes=?",
+                    (f"{stem} — {fields['name']}"[:200],
+                     fields["name"][:120], eid, note))
         log(con, eid, u["name"], "updated: " + ", ".join(fields))
         con.commit()
     return {"ok": True}
@@ -1226,9 +1269,11 @@ def _binder_sections(con, eid: int) -> tuple:
     authored = [r for r in rows if (r["body"] or "").strip()]
     files = [r for r in rows if not (r["body"] or "").strip() and r["ext"]]
     cover = [r for r in authored if (r["notes"] or "") == "binder cover"]
+    intro = [r for r in authored if (r["notes"] or "") == "binder intro"]
     if not cover:
         return [], files
-    authored = [r for r in authored if (r["notes"] or "") != "binder cover"]
+    authored = [r for r in authored
+                if (r["notes"] or "") not in ("binder cover", "binder intro")]
 
     # which templates already became documents, by the path in their notes
     generated_paths = {
@@ -1277,11 +1322,17 @@ def _binder_sections(con, eid: int) -> tuple:
 
     # the contents, and the section list, walk the stages together
     _csigs = vault.signed_rows(con, cover[0]["id"])
-    sections = [{"title": cover[0]["title"], "body": sub(cover[0]["body"]),
+    sections = [{"title": sub(cover[0]["title"]),
+                 "body": sub(cover[0]["body"]),
                  "raw": cover[0]["body"],
                  "signatures": _csigs,
                  "pending": vault.pending_rows(con, cover[0]["id"]),
                  "doc_id": cover[0]["id"], "signed": bool(_csigs)}]
+    for r in intro:
+        sections.append({"title": sub(r["title"]), "body": sub(r["body"]),
+                         "raw": r["body"], "doc_id": r["id"],
+                         "signatures": vault.signed_rows(con, r["id"]),
+                         "pending": vault.pending_rows(con, r["id"])})
     toc = []
     ordered_docs = []
     for kit_stage in stage_order:
@@ -1333,7 +1384,7 @@ def _binder_sections(con, eid: int) -> tuple:
     # pushes each document to is arithmetic on that one result.
     from . import pdfgen
     key = hashlib.md5(json.dumps(
-        [sections[0]["title"], sections[0]["body"]]
+        [[x["title"], x["body"]] for x in sections]
         + [[d["title"], d["body"], len(d.get("signatures") or []),
             len(d.get("pending") or [])] for d in ordered_docs]
         + toc, ensure_ascii=False).encode()).hexdigest()
@@ -1344,15 +1395,17 @@ def _binder_sections(con, eid: int) -> tuple:
         return ("## Table of contents\n\n| Page | Document |\n|---|---|\n"
                 + rows + "\n\n[PAGE BREAK]\n\n" + "\n".join(toc).strip())
 
+    front = list(sections)          # title page, and the introduction
     numbers = _PAGE_MAP.get(key)
     if numbers is None:
-        raw, total = pdfgen.binder_pages([sections[0], *ordered_docs])
+        raw, total = pdfgen.binder_pages([*front, *ordered_docs])
+        nf = len(front)
         counts = [(raw[i + 1] - raw[i]) if i + 1 < len(raw)
-                  else (total - raw[i] + 1) for i in range(1, len(raw))]
-        cover_pages = raw[1] - raw[0] if len(raw) > 1 else total
+                  else (total - raw[i] + 1) for i in range(nf, len(raw))]
+        front_pages = (raw[nf] - raw[0]) if len(raw) > nf else total
         toc_pages = pdfgen.section_pages(
             {"title": "In this binder", "body": toc_body([0] * len(counts))})
-        at, numbers = cover_pages + toc_pages + 1, []
+        at, numbers = front_pages + toc_pages + 1, []
         for n in counts:
             numbers.append(at)
             at += n
@@ -1420,8 +1473,7 @@ def binder_html(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         raise HTTPException(404, "nothing to bind yet")
     inner = "".join(
         f'<div class="binder-doc">'
-        f'<h1>{sect.esc(sec["title"])}</h1>'
-        f'{vault.md_html(sec["body"])}'
+        f'{vault.form_inner(sec["title"], sec["body"])}'
         f'{vault.signatures_html(sec.get("signatures") or [])}'
         f'{vault.pending_html(sec.get("pending") or [])}'
         f"</div>" for sec in sections)
@@ -1459,15 +1511,13 @@ def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         if sec.get("toc"):
             parts.append(
                 f'<div class="binder-doc bd-static">'
-                f'<h1>{sect.esc(sec["title"])}</h1>'
-                f'{vault.md_html(sec["body"])}</div>')
+                f'{vault.form_inner(sec["title"], sec["body"])}</div>')
         elif sec.get("signed"):
             parts.append(
                 f'<div class="binder-doc bd-static">'
                 f'<p class="bd-note">Signed — read only. Its text is what '
                 f'was attested to; supersede it rather than editing it.</p>'
-                f'<h1>{sect.esc(sec["title"])}</h1>'
-                f'{vault.md_html(sec["body"])}'
+                f'{vault.form_inner(sec["title"], sec["body"])}'
                 f'{vault.signatures_html(sec.get("signatures") or [])}'
                 f'</div>')
         elif sec.get("doc_id"):

@@ -5021,18 +5021,47 @@ function wireAutoGrow(doc) {
 }
 
 function wirePageCount(frame, label) {
+  /* The count is also the way in: the number is a field, so a hundred-page
+     binder is one keystroke from any page in it rather than a scrollbar to
+     aim at. */
   let doc, win;
   try { doc = frame.contentDocument; win = frame.contentWindow; }
   catch { label.textContent = ""; return () => {}; }
   if (!doc || !doc.body) { label.textContent = ""; return () => {}; }
+  label.innerHTML = `Page <input class="pg-in" type="text" inputmode="numeric"
+    aria-label="page number — type one and press enter"> of
+    <span class="pg-tot"></span>`;
+  const box = label.querySelector(".pg-in");
+  const tot = label.querySelector(".pg-tot");
+  const pageH = () =>
+    Math.max(420, Math.round((doc.body.clientWidth || 760) * 11 / 8.5));
   const update = () => {
-    const w = doc.body.clientWidth || 760;
-    const h = Math.max(420, Math.round(w * 11 / 8.5));
+    const h = pageH();
     doc.documentElement.style.setProperty("--page-h", h + "px");
     const total = Math.max(1, Math.ceil(doc.body.scrollHeight / h));
     const cur = Math.min(total, 1 + Math.floor((win.scrollY || 0) / h));
-    label.textContent = `Page ${cur} of ${total}`;
+    if (doc.activeElement !== box && box !== document.activeElement)
+      box.value = cur;
+    tot.textContent = total;
+    box.dataset.total = total;
   };
+  const go = () => {
+    const total = +box.dataset.total || 1;
+    const want = Math.min(total, Math.max(1, parseInt(box.value, 10) || 1));
+    const h = pageH();
+    // A page you typed is a jump, not a glide: gliding forty pages is two
+    // seconds of blur. Neighbouring pages still slide, because there the
+    // movement tells you which way you went.
+    const near = Math.abs(want - 1 - (win.scrollY || 0) / h) <= 3;
+    win.scrollTo({ top: (want - 1) * h,
+                   behavior: near ? "smooth" : "auto" });
+    box.value = want;
+  };
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); go(); }
+  });
+  box.addEventListener("blur", update);
+  box.addEventListener("focus", () => box.select());
   win.addEventListener("scroll", update, { passive: true });
   win.addEventListener("resize", update);
   doc.addEventListener("input", update);

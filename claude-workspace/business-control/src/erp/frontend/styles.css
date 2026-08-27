@@ -553,6 +553,23 @@ button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
   .gt-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
+/* the page box sits inside the modal footer, where a blanket
+   `input { width:100% }` would otherwise stretch it across the row */
+.dv-foot .dim, .modal-foot .dim { display: inline-flex; align-items: center;
+  gap: 6px; white-space: nowrap; font-size: 12.5px; }
+.ops-modal-card .pg-in, .pg-in { width: 52px; flex: none; margin: 0;
+  padding: 2px 6px; text-align: center; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel2); color: var(--text);
+  font: inherit; font-size: 12.5px; }
+.ops-modal-card .pg-in:focus { outline: 2px solid var(--accent);
+  border-color: var(--accent); }
+.pg-tot { font-variant-numeric: tabular-nums; }
+/* .btn sets its own display, which beats the UA's [hidden] rule — so a
+   button marked hidden stayed on screen */
+button.btn[hidden], .btn[hidden] { display: none; }
+.dv-foot { flex-wrap: wrap; }
+.dv-foot .btn { white-space: nowrap; }
+
 .log-lines { margin-top: 8px; }
 .log-line { display: grid; gap: 12px; align-items: baseline; padding: 5px 0;
   border-bottom: 1px solid var(--line); font-size: 13px;

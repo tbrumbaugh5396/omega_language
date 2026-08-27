@@ -649,8 +649,8 @@ def preview_document(did: int, u=Depends(admin_user), con=Depends(get_con)):
         f"{FONT_LINK}<style>{DOC_BASE_CSS}"
         f"@media print{{body{{padding:0}}}}"
         f"html{{background:#fff}}{PAGE_RULE_CSS}"
-        f"</style></head><body><h1>{sect.esc(d['title'])}</h1>"
-        f"{md_html(d['body'])}"
+        f"</style></head><body>"
+        f"{form_inner(d['title'], d['body'])}"
         f"{signatures_html(signed_rows(con, did))}"
         f"{pending_html(pending_rows(con, did))}</body></html>")
 
@@ -794,10 +794,14 @@ def download_markdown(did: int, u=Depends(admin_user), con=Depends(get_con)):
         "Content-Disposition": f'attachment; filename="{stem}.md"'})
 
 
-def editable_inner(title: str, body: str, suggestions: dict) -> str:
-    """The fields, without the page: the heading and the body with every
-    blank live — shared by the single-document editor and the whole-binder
-    editor, which wraps one of these per section."""
+def marked_inner(title: str, body: str, field) -> str:
+    """The heading and the body with every blank marked — `field` decides
+    what a blank becomes. One walk over the document serves both the editor
+    (inputs you type into) and the printable view (boxes you write on), so
+    a blank can never appear in one and be missing from the other.
+
+    `field(kind, index, meta)` returns the HTML: kind is "token" or a
+    region kind; meta is the token name or the region dict."""
     toks, regions = [], scan_regions(body)
     marks = []
     for m in _matches(body):
@@ -810,35 +814,64 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
 
     html = md_html(body)
     for i, tok in enumerate(toks):
-        val = sect.esc(str(suggestions.get(tok, "")))
-        key = GLOBAL_TOKENS.get(tok.strip())
-        # A record field, not a blank: it is the same everywhere it appears,
-        # so it is marked as such and the editor keeps them all in step.
-        g = f' data-global="{key}"' if key else ""
-        html = html.replace(
-            f"\x00T{i}\x01",
-            f'<input class="ph{" filled" if val else ""}'
-            f'{" ph-global" if key else ""}"'
-            f' data-tok="{sect.esc(tok)}"{g} value="{val}"'
-            f' placeholder="{sect.esc(tok)}"'
-            f' size="{max(len(tok) + 2, 10)}">')
+        html = html.replace(f"\x00T{i}\x01", field("token", i, tok))
     for i, r in enumerate(regions):
-        if r["kind"] == "area":
-            f = (f'<textarea class="ph ph-area" data-region="{i}" rows="1"'
-                 f' placeholder="Type your answer — a sentence or a'
-                 f' paragraph"></textarea>')
-        elif r["kind"] == "line":
-            f = (f'<input class="ph ph-line" data-region="{i}"'
-                 f'{" inputmode=\"decimal\"" if r["money"] else ""}'
-                 f' placeholder="write in" size="14">')
-        elif r["kind"] == "cell":
-            f = (f'<input class="ph ph-line ph-cell" data-region="{i}"'
-                 f' placeholder="…" size="8">')
-        else:
-            f = (f'<input type="checkbox" class="ph-check" data-region="{i}"'
-                 f'{" checked" if r["checked"] else ""}>')
-        html = html.replace(f"\x00R{i}\x01", f)
+        html = html.replace(f"\x00R{i}\x01", field(r["kind"], i, r))
     return f"<h1>{sect.esc(title)}</h1>{html}"
+
+
+def editable_inner(title: str, body: str, suggestions: dict) -> str:
+    """Every blank as something you type into."""
+    def field(kind, i, meta):
+        if kind == "token":
+            tok = meta
+            val = sect.esc(str(suggestions.get(tok, "")))
+            key = GLOBAL_TOKENS.get(tok.strip())
+            # A record field, not a blank: the same everywhere it appears,
+            # so it is marked and the editor keeps them all in step.
+            g = f' data-global="{key}"' if key else ""
+            return (f'<input class="ph{" filled" if val else ""}'
+                    f'{" ph-global" if key else ""}"'
+                    f' data-tok="{sect.esc(tok)}"{g} value="{val}"'
+                    f' placeholder="{sect.esc(tok)}"'
+                    f' size="{max(len(tok) + 2, 10)}">')
+        if kind == "area":
+            return ('<textarea class="ph ph-area" data-region="%d" rows="1"'
+                    ' placeholder="Type your answer — a sentence or a'
+                    ' paragraph"></textarea>' % i)
+        if kind == "line":
+            return (f'<input class="ph ph-line" data-region="{i}"'
+                    f'{" inputmode=\"decimal\"" if meta["money"] else ""}'
+                    f' placeholder="write in" size="14">')
+        if kind == "cell":
+            return (f'<input class="ph ph-line ph-cell" data-region="{i}"'
+                    f' placeholder="…" size="8">')
+        return (f'<input type="checkbox" class="ph-check" data-region="{i}"'
+                f'{" checked" if meta["checked"] else ""}>')
+    return marked_inner(title, body, field)
+
+
+def form_inner(title: str, body: str) -> str:
+    """Every blank as a box you write on. Reading a document should show
+    where the answers go — print it and fill it in with a pen — instead of
+    hiding them as bracketed words or a bare rule."""
+    def field(kind, i, meta):
+        if kind == "token":
+            lab = sect.esc(meta)
+            w = max(len(meta) + 2, 9)
+            return (f'<span class="fbox" style="min-width:{w}ch">'
+                    f'<span class="flab">{lab}</span></span>')
+        if kind == "area":
+            return ('<span class="fbox fbox-area">'
+                    '<span class="flab">write your answer here</span></span>')
+        if kind == "line":
+            return ('<span class="fbox" style="min-width:12ch">'
+                    '<span class="flab">write in</span></span>')
+        if kind == "cell":
+            return '<span class="fbox fbox-cell"></span>'
+        return ('<span class="fcheck%s"></span>'
+                % (" on" if meta["checked"] else ""))
+    return marked_inner(title, body, field)
 
 
 # One printable sheet at letter aspect is a page, and the rule that draws
@@ -869,6 +902,18 @@ DOC_BASE_CSS = (
     "img{max-width:100%}"
     ".pgbreak{break-before:page;page-break-before:always;height:0;"
     "margin:34px 0;border-top:1px dashed #cfc8bd}"
+    # a blank you can see and write on, on screen and on paper
+    ".fbox{display:inline-block;border:1px solid #b9b2a6;border-radius:5px;"
+    "background:#fcfaf6;padding:1px 6px;margin:0 1px;min-height:1.35em;"
+    "vertical-align:baseline;line-height:1.35}"
+    ".flab{font-size:.72em;letter-spacing:.02em;color:#a9a294;"
+    "text-transform:none;white-space:nowrap}"
+    ".fbox-area{display:block;width:100%;min-height:3.1em;margin:6px 0 10px;"
+    "padding:5px 8px}"
+    ".fbox-cell{display:inline-block;min-width:6ch;min-height:1.3em}"
+    ".fcheck{display:inline-block;width:12px;height:12px;border:1px solid "
+    "#8b8496;border-radius:3px;vertical-align:-1px}"
+    ".fcheck.on{background:#3fbd82;border-color:#3fbd82}"
 )
 
 # A field should cost the line it sits on as little as possible: hundreds
