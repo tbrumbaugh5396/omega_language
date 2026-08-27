@@ -166,7 +166,38 @@ PLACEHOLDER = re.compile(r"\[([^\[\]\n(){}`]{1,60})\]")
 
 # Signing markers are instructions to the renderer and to DocuSign, not
 # blanks for anyone to fill — the fill machinery must leave them standing.
-RESERVED_MARKERS = {"SIGN HERE", "INITIALS"}
+RESERVED_MARKERS = {"SIGN HERE", "INITIALS", "PAGE BREAK"}
+
+# Facts that belong to the client, not to a document. A binder full of
+# forms all naming the same company should name it once: these tokens read
+# from the engagement record wherever they appear, so the client cannot say
+# one thing on the cover and another three forms later.
+GLOBAL_TOKENS = {
+    "CLIENT": "client", "CLIENT NAME": "client",
+    "PROJECT": "client", "PROJECT NAME": "client",
+    "CLIENT POC": "client_poc", "APPROVER": "client_poc",
+    "INTERNAL POC": "internal_poc",
+    "ORIGINATOR": "originator",
+    "DATE": "date",
+    "BRAND": "brand", "PACKAGE": "package", "VALUE": "value",
+}
+
+
+def substitute_globals(text: str, values: dict) -> str:
+    """Render-time only: the token stays in the source, so the day the
+    record changes every document changes with it."""
+    if not values:
+        return text
+    out, last = [], 0
+    for m in PLACEHOLDER.finditer(text):
+        key = GLOBAL_TOKENS.get(m.group(1).strip())
+        val = (values or {}).get(key or "", "")
+        if key and str(val).strip():
+            out.append(text[last:m.start()])
+            out.append(str(val).strip())
+            last = m.end()
+    out.append(text[last:])
+    return "".join(out)
 
 
 def _matches(text: str):
@@ -358,6 +389,8 @@ def md_blocks(text: str) -> list:
             # answer line — rendering it as a separator was why the
             # questionnaires looked like they had nowhere to answer
             flush(); out.append(("aline",)); i += 1; continue
+        if stripped == "[PAGE BREAK]":
+            flush(); out.append(("pagebreak",)); i += 1; continue
         if re.fullmatch(r"[-*]{3,}", stripped):
             flush(); out.append(("hr",)); i += 1; continue
         if (stripped.startswith("|") and i + 1 < len(lines)
@@ -410,6 +443,8 @@ def md_html(text: str) -> str:
             out.append(f"<h{lvl}>{_md_inline(b[2])}</h{lvl}>")
         elif kind == "hr":
             out.append("<hr>")
+        elif kind == "pagebreak":
+            out.append('<div class="pgbreak"></div>')
         elif kind == "aline":
             out.append('<div style="border-bottom:1px solid #8b8496;'
                        'height:26px;margin:10px 0 14px"></div>')
@@ -776,10 +811,15 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
     html = md_html(body)
     for i, tok in enumerate(toks):
         val = sect.esc(str(suggestions.get(tok, "")))
+        key = GLOBAL_TOKENS.get(tok.strip())
+        # A record field, not a blank: it is the same everywhere it appears,
+        # so it is marked as such and the editor keeps them all in step.
+        g = f' data-global="{key}"' if key else ""
         html = html.replace(
             f"\x00T{i}\x01",
-            f'<input class="ph{" filled" if val else ""}"'
-            f' data-tok="{sect.esc(tok)}" value="{val}"'
+            f'<input class="ph{" filled" if val else ""}'
+            f'{" ph-global" if key else ""}"'
+            f' data-tok="{sect.esc(tok)}"{g} value="{val}"'
             f' placeholder="{sect.esc(tok)}"'
             f' size="{max(len(tok) + 2, 10)}">')
     for i, r in enumerate(regions):
@@ -827,6 +867,8 @@ DOC_BASE_CSS = (
     "blockquote{border-left:3px solid #e9e4dc;padding-left:14px;"
     "color:#5d5768;margin:10px 0}"
     "img{max-width:100%}"
+    ".pgbreak{break-before:page;page-break-before:always;height:0;"
+    "margin:34px 0;border-top:1px dashed #cfc8bd}"
 )
 
 # A field should cost the line it sits on as little as possible: hundreds
@@ -841,6 +883,8 @@ FIELD_CSS = (
     "padding:4px 8px;resize:vertical;line-height:1.45;"
     "overflow:hidden;box-sizing:border-box}"
     "input.ph-cell{padding:0 4px}"
+    "input.ph-global{border-style:solid;border-color:#8a6ff0;"
+    "background:#f4f0ff}"
     "input.ph:focus,textarea.ph:focus{outline:2px solid #8a6ff0;"
     "border-style:solid}"
     "input.ph.filled,textarea.ph.filled{border:1px solid #3fbd82;"

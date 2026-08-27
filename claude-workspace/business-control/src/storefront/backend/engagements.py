@@ -21,6 +21,7 @@ module makes that kit executable without duplicating it:
   mistake (zipping the whole folder, estimate and gut-calls included) is
   not possible from that door.
 """
+import hashlib
 import io
 import json
 import re
@@ -47,6 +48,10 @@ KIT = Path(__file__).resolve().parents[3] \
     / "docs" / "business-control-b2b-client" / "templates"
 
 EXPORT_ROOT = config.DATA_DIR / "exports" / "clients"
+
+# Page maps, keyed on the content they describe — so a binder opened twice,
+# or previewed and then downloaded, renders once.
+_PAGE_MAP: dict = {}
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS engagements (
@@ -337,8 +342,16 @@ def suggested_fills(e) -> dict:
     """What the engagement record already knows. One source: the proposal and
     the status board cannot disagree about the number, because both read it
     from here."""
-    today = time.strftime("%B %d, %Y").replace(" 0", " ")
-    s = {"CLIENT": e["name"], "CLIENT NAME": e["name"], "DATE": today}
+    g = global_values(e)
+    from erp.backend.main import CFG
+    s = {"CLIENT": e["name"], "CLIENT NAME": e["name"],
+         "PROJECT": e["name"], "PROJECT NAME": e["name"],
+         "DATE": g["date"], "BRAND": CFG.get("brand_name", "Business Control"),
+         "CLIENT POC": g["client_poc"], "INTERNAL POC": g["internal_poc"],
+         "ORIGINATOR": g["originator"],
+         "PACKAGE": e["package"] or "—",
+         "VALUE": f"${e['value_cents'] / 100:,.2f}" if e["value_cents"]
+                  else "—"}
     if e["package"]:
         s["A / B / C"] = e["package"]
     if e["value_cents"]:
@@ -355,45 +368,56 @@ def suggested_fills(e) -> dict:
 
 # ---------- engagements ----------
 
-def binder_body(name: str, package: str, value_cents: int,
-                client_poc_name: str, client_poc_email: str,
-                internal_poc: str, originator: str,
-                launch_target: str) -> str:
-    """The binder's opening document. The title page names the five facts a
-    binder pulled off a shelf must answer at a glance: whose it is, who to
-    call on each side, who started it, and when. Pricing and lead sections
-    appear only where the record has them."""
-    from erp.backend.main import CFG
-    brand = CFG.get("brand_name", "Business Control")
-    today = time.strftime("%B %d, %Y").replace(" 0", " ")
+def global_values(e) -> dict:
+    """What the record says, for the tokens that belong to the client
+    rather than to any one document."""
+    poc = (e["approver_name"] or "").strip()
+    if e["approver_email"]:
+        poc = f"{poc} ({e['approver_email']})" if poc else e["approver_email"]
+    return {"client": e["name"], "client_poc": poc or "—",
+            "internal_poc": (e["internal_poc"] or "—"),
+            "originator": (e["originator"] or "—"),
+            "date": time.strftime("%B %d, %Y").replace(" 0", " ")}
+
+
+def binder_body() -> str:
+    """The binder's opening document. The facts on the title page are
+    written as tokens, not values: they read from the client record at
+    render time, so changing the client's name or POC changes every page
+    that names them instead of leaving the binder disagreeing with itself.
+
+    The introduction gets its own page, because a cover with an essay under
+    it is not a cover."""
     nl = "\n"
-    dash = "—"
-    poc = client_poc_name or dash
-    if client_poc_email:
-        poc += f" ({client_poc_email})"
     parts = [
-        f"# {brand}",
+        "# [BRAND]",
         "",
-        f"## Project binder — {name}",
+        "## Project binder — [CLIENT]",
         "",
         "| | |",
         "|---|---|",
-        f"| Client | {name} |",
-        f"| Client POC | {poc} |",
-        f"| Internal POC | {internal_poc or dash} |",
-        f"| Originator | {originator or dash} |",
-        f"| Date | {today} |",
+        "| Client | [CLIENT] |",
+        "| Client POC | [CLIENT POC] |",
+        "| Internal POC | [INTERNAL POC] |",
+        "| Originator | [ORIGINATOR] |",
+        "| Date | [DATE] |",
         "",
         "*Everything this project produces, in one place. This binder opens "
         "with who and what; every agreement, questionnaire and sign-off "
         "that follows is filed behind it, and the whole packet exports "
         "together — printed or as one PDF.*",
         "",
-        "---",
+        "[PAGE BREAK]",
         "",
         "## Introduction",
         "",
         "[INTRODUCTION — who they are, what we build, what done means]",
+        "",
+        "**Client:** [CLIENT] · **Client POC:** [CLIENT POC]",
+        "",
+        "**Internal POC:** [INTERNAL POC] · **Originator:** [ORIGINATOR]",
+        "",
+        "[PAGE BREAK]",
         "",
         "## What this binder holds",
         "",
@@ -407,37 +431,27 @@ def binder_body(name: str, package: str, value_cents: int,
         "| Brand | Directions and the signed art direction *(when bought)* |",
         "| Build | Feedback rounds and change orders |",
         "| Launch & handover | The launch summary and the handover pack |",
+        "| Ongoing | Security, monitoring, updates and support |",
+        "",
+        "## Pricing",
+        "",
+        "| | |",
+        "|---|---|",
+        "| Package | [PACKAGE] |",
+        "| Value | [VALUE] |",
+        "| Payment | Per the schedule in the agreement |",
     ]
-    if package or value_cents:
-        parts += ["", "## Pricing", "", "| | |", "|---|---|"]
-        if package:
-            parts.append(f"| Package | {package} |")
-        if value_cents:
-            parts.append(f"| Value | ${value_cents / 100:,.2f} |")
-        parts.append("| Payment | Per the schedule in the agreement |")
-    if client_poc_name or client_poc_email or launch_target:
-        parts += ["", "## Lead information", "", "| | |", "|---|---|"]
-        if client_poc_name or client_poc_email:
-            parts.append(f"| Client POC | {poc} |")
-        if launch_target:
-            parts.append(f"| Launch target | {launch_target} |")
-        parts.append("| One consolidated response per round | "
-                     "Named in the agreement |")
     return nl.join(parts) + nl
 
 
-def _create_binder(con, eid: int, e: dict, u) -> int:
+def _create_binder(con, eid: int, e, u) -> int:
     """One binder per client, shared by birth and backfill."""
     cur = con.execute(
         "INSERT INTO documents(title,category,party_kind,party_name,"
         " party_email,body,notes,status,confidential,uploaded_by,created_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (f"Project binder — {e['name']}"[:200], "other", "partner",
-         e["name"][:120], e["approver_email"],
-         binder_body(e["name"], e["package"], e["value_cents"],
-                     e["approver_name"], e["approver_email"],
-                     e["internal_poc"], e["originator"],
-                     e["launch_target"]),
+         e["name"][:120], e["approver_email"], binder_body(),
          "binder cover", "draft", 1, u["id"], time.time()))
     con.execute(
         "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
@@ -1254,9 +1268,17 @@ def _binder_sections(con, eid: int) -> tuple:
             return f"**Gate: {g['label']}** — awaiting signature"
         return f"**Gate: {g['label']}** — open"
 
+    # Tokens that name the client read from the record at render time —
+    # here and in the PDF — so a blank form never shows "[CLIENT]" to
+    # anyone, and the day the record changes every page changes with it.
+    gv = {**global_values(e), **{k.lower().replace(" ", "_"): v
+                                 for k, v in suggested_fills(e).items()}}
+    sub = lambda t: vault.substitute_globals(t, gv)
+
     # the contents, and the section list, walk the stages together
     _csigs = vault.signed_rows(con, cover[0]["id"])
-    sections = [{"title": cover[0]["title"], "body": cover[0]["body"],
+    sections = [{"title": cover[0]["title"], "body": sub(cover[0]["body"]),
+                 "raw": cover[0]["body"],
                  "signatures": _csigs,
                  "pending": vault.pending_rows(con, cover[0]["id"]),
                  "doc_id": cover[0]["id"], "signed": bool(_csigs)}]
@@ -1287,8 +1309,8 @@ def _binder_sections(con, eid: int) -> tuple:
                      else "awaiting signature"
                      if vault.pending_rows(con, r["id"]) else "draft")
             toc.append(f"1. **{r['title']}** — {state}")
-            ordered_docs.append({"title": r["title"], "body": r["body"],
-                                 "signatures": sigs,
+            ordered_docs.append({"title": r["title"], "body": sub(r["body"]),
+                                 "raw": r["body"], "signatures": sigs,
                                  "pending": vault.pending_rows(con, r["id"]),
                                  "doc_id": r["id"], "signed": bool(sigs)})
         for t in stage_tpls:
@@ -1299,13 +1321,46 @@ def _binder_sections(con, eid: int) -> tuple:
             except Exception:
                 toc.pop()
                 continue
-            ordered_docs.append({"title": disp, "body": body,
-                                 "tpl": t["path"]})
+            ordered_docs.append({"title": disp, "body": sub(body),
+                                 "raw": body, "tpl": t["path"]})
         for r in stage_files:
             toc.append(f"1. *{r['title']}* — attachment, filed beside "
                        f"this binder")
-    sections.append({"title": "In this binder",
-                     "body": "\n".join(toc).strip(), "toc": True})
+    # The contents page carries a real table of contents: every section in
+    # order with the page it starts on in the printed binder, from the same
+    # renderer that makes the PDF. Rendering the book costs seconds, so it
+    # is done once and cached against the content; where the contents page
+    # pushes each document to is arithmetic on that one result.
+    from . import pdfgen
+    key = hashlib.md5(json.dumps(
+        [sections[0]["title"], sections[0]["body"]]
+        + [[d["title"], d["body"], len(d.get("signatures") or []),
+            len(d.get("pending") or [])] for d in ordered_docs]
+        + toc, ensure_ascii=False).encode()).hexdigest()
+
+    def toc_body(starts):
+        rows = "\n".join(f"| {p} | {x['title']} |"
+                          for x, p in zip(ordered_docs, starts))
+        return ("## Table of contents\n\n| Page | Document |\n|---|---|\n"
+                + rows + "\n\n[PAGE BREAK]\n\n" + "\n".join(toc).strip())
+
+    numbers = _PAGE_MAP.get(key)
+    if numbers is None:
+        raw, total = pdfgen.binder_pages([sections[0], *ordered_docs])
+        counts = [(raw[i + 1] - raw[i]) if i + 1 < len(raw)
+                  else (total - raw[i] + 1) for i in range(1, len(raw))]
+        cover_pages = raw[1] - raw[0] if len(raw) > 1 else total
+        toc_pages = pdfgen.section_pages(
+            {"title": "In this binder", "body": toc_body([0] * len(counts))})
+        at, numbers = cover_pages + toc_pages + 1, []
+        for n in counts:
+            numbers.append(at)
+            at += n
+        if len(_PAGE_MAP) > 24:
+            _PAGE_MAP.clear()
+        _PAGE_MAP[key] = numbers
+    sections.append({"title": "In this binder", "body": toc_body(numbers),
+                     "toc": True})
     sections.extend(ordered_docs)
     return sections, files
 
@@ -1418,7 +1473,7 @@ def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         elif sec.get("doc_id"):
             parts.append(
                 f'<div class="binder-doc" data-doc="{sec["doc_id"]}">'
-                f'{vault.editable_inner(sec["title"], sec["body"], sug)}'
+                f'{vault.editable_inner(sec["title"], sec.get("raw", sec["body"]), sug)}'
                 f'</div>')
         elif sec.get("tpl"):
             parts.append(
@@ -1427,7 +1482,7 @@ def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
                 f' data-name="{sect.esc(sec["title"])}">'
                 f'<p class="bd-note">Blank form — type into it and saving '
                 f'generates it for {sect.esc(e["name"])}.</p>'
-                f'{vault.editable_inner(sec["title"], sec["body"], sug)}'
+                f'{vault.editable_inner(sec["title"], sec.get("raw", sec["body"]), sug)}'
                 f'</div>')
     from .api import FONT_LINK
     return HTMLResponse(

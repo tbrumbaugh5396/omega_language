@@ -5188,11 +5188,24 @@ async function binderEditMode(engId, e, anchor) {
       const recount = wirePageCount(frame, $("#bd-pages"));
       restoreAnchor(frame, anchor);
       recount();
+      /* A record field is the same fact wherever it appears — the client
+         does not change from one form to the next — so editing one moves
+         every one of them, in every document in the book. A plain token
+         stays local to its own page. */
+      doc.addEventListener("input", (ev) => {
+        const inp = ev.target;
+        if (!inp.dataset || !inp.dataset.global) return;
+        doc.querySelectorAll(
+          `input[data-global="${inp.dataset.global}"]`).forEach((o) => {
+            if (o !== inp) o.value = inp.value;
+          });
+        doc.querySelectorAll(".binder-doc").forEach(paint);
+      });
       doc.querySelectorAll(".binder-doc[data-doc], .binder-doc[data-tpl]")
         .forEach((card) => {
           card.addEventListener("input", (ev) => {
             const inp = ev.target;
-            if (inp.dataset && inp.dataset.tok) {
+            if (inp.dataset && inp.dataset.tok && !inp.dataset.global) {
               card.querySelectorAll(
                 `input.ph[data-tok]`).forEach((o) => {
                   if (o !== inp && o.dataset.tok === inp.dataset.tok)
@@ -5208,10 +5221,29 @@ async function binderEditMode(engId, e, anchor) {
       const doc = frame.contentDocument;
       const cards = [...doc.querySelectorAll(
         ".binder-doc[data-doc], .binder-doc[data-tpl]")];
-      let saved = 0, generated = 0, failed = 0;
+      let saved = 0, generated = 0, failed = 0, recordChanged = false;
+
+      /* The record fields first, and to the record — not baked into one
+         document's text, or the next form would disagree with this one. */
+      const FIELD = { client: "name", client_poc: "approver_name",
+        internal_poc: "internal_poc", originator: "originator" };
+      const rec = {};
+      doc.querySelectorAll("input[data-global]").forEach((i) => {
+        const col = FIELD[i.dataset.global];
+        if (col && i.value.trim() && i.value !== initialToks.get(i))
+          rec[col] = i.value.trim();
+      });
+      if (Object.keys(rec).length) {
+        try {
+          await api(`/api/store/admin/engagements/${engId}`,
+            { method: "PATCH", body: rec });
+          recordChanged = true;
+        } catch (err) { toast("client record: " + err.message); }
+      }
       for (const card of cards) {
         const fills = {}, regions = {};
         card.querySelectorAll("input.ph[data-tok]").forEach((i) => {
+          if (i.dataset.global) return;      // lives on the record
           if (i.value.trim() && i.value !== initialToks.get(i))
             fills[i.dataset.tok] = i.value.trim();
         });
@@ -5248,6 +5280,7 @@ async function binderEditMode(engId, e, anchor) {
       }
       closeModal();
       toast(`Binder saved — ${saved} page${saved === 1 ? "" : "s"} updated`
+        + (recordChanged ? ", client record updated everywhere" : "")
         + (generated ? `, ${generated} generated from blank forms` : "")
         + (failed ? `, ${failed} failed` : ""));
       renderEngagement(engId);
@@ -5778,6 +5811,9 @@ async function renderEngagement(id) {
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
   $("#eng-gantt").onclick = ganttModal;
   $("#eng-binder").onclick = async () => {
+    // The first open lays the whole book out to number its contents; say so
+    // rather than leaving a dead button under the cursor.
+    toast("Building the binder — numbering the contents…");
     /* The preview frame shows the HTML rendering — an embedded PDF is a
        lottery across browsers, and a blank frame reads as a broken binder.
        The download is the real PDF, from the same section gatherer. */

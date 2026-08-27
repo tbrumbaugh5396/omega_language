@@ -3985,15 +3985,19 @@ ok(_be.get("binder_doc_id"),
    "contents, and the pricing and lead sections where the record has them")
 _bb = _db.connect().execute("SELECT body FROM documents WHERE id=?",
                             (_be["binder_doc_id"],)).fetchone()["body"]
-ok("## Pricing" in _bb and "$12,000.00" in _bb
-   and "## Lead information" in _bb and "Kim Doe" in _bb,
-   "filled sections appear")
-_be2 = c.post("/api/store/admin/engagements", headers=A,
-              json={"name": "Bare Binder Smoke"}).json()
-_bb2 = _db.connect().execute("SELECT body FROM documents WHERE id=?",
-                             (_be2["binder_doc_id"],)).fetchone()["body"]
-ok("## Pricing" not in _bb2 and "## Lead information" not in _bb2,
-   "and empty ones don't — a binder with blank pricing reads as a mistake")
+ok("[CLIENT]" in _bb and "[CLIENT POC]" in _bb and "[INTERNAL POC]" in _bb
+   and "[ORIGINATOR]" in _bb and "[DATE]" in _bb,
+   "the cover names the client with tokens, not with values — the record "
+   "is the source, so the day it changes every page that names the client "
+   "changes with it")
+_bh0 = c.get(f"/api/store/admin/engagements/{_be['id']}/binder.html",
+             headers=A).text
+ok("Binder Smoke" in _bh0 and "[CLIENT]" not in _bh0
+   and "Kim Doe" in _bh0 and "$12,000.00" in _bh0,
+   "and a reader sees the values, never the tokens")
+ok(_bb.count("[PAGE BREAK]") >= 2 and "pgbreak" in _bh0,
+   "the introduction gets its own page, because a cover with an essay "
+   "under it is not a cover")
 _bp = c.get(f"/api/store/admin/engagements/{_be['id']}/binder.pdf",
             headers=A)
 ok(_bp.status_code == 200 and _bp.content[:5] == b"%PDF-",
@@ -4019,14 +4023,16 @@ _bt = c.post("/api/store/admin/engagements", headers=A, json={
     "name": "Title Probe", "approver_name": "Pat Client",
     "approver_email": "pat@client.test", "internal_poc": "Poc Colleague",
     "originator": ""}).json()
-_btb = _db.connect().execute("SELECT body FROM documents WHERE id=?",
-                             (_bt["binder_doc_id"],)).fetchone()["body"]
-ok(f"# {CFG['brand_name']}" in _btb and "| Client | Title Probe |" in _btb
-   and "| Client POC | Pat Client (pat@client.test) |" in _btb
-   and "| Internal POC | Poc Colleague |" in _btb
-   and f"| Originator | {_me_name} |" in _btb and "| Date |" in _btb,
+_btb = c.get(f"/api/store/admin/engagements/{_bt['id']}/binder.html",
+             headers=A).text
+ok(CFG["brand_name"] in _btb and "Title Probe" in _btb
+   and "Pat Client (pat@client.test)" in _btb
+   and "Poc Colleague" in _btb and _me_name in _btb,
    "the binder's title page names the five facts a binder off a shelf must "
    "answer: the brand, the client, both POCs, who started it, and when")
+ok("Table of contents" in _btb and "<th>Page</th>" in _btb,
+   "and the contents page carries a real table of contents — every "
+   "document with the page it starts on in the printed binder")
 _bte = c.get(f"/api/store/admin/engagements/{_bt['id']}",
              headers=A).json()["engagement"]
 ok(_bte["internal_poc_status"] == "pending",
@@ -4097,7 +4103,7 @@ ok("binderEditMode" in _ops
    "and only what YOU changed counts as touched — suggested values arrive "
    "pre-filled, and without the initial-value check every blank form would "
    "save itself into existence on the strength of its own suggestions")
-ok("out.doc_id" in _ops.split("binderEditMode")[1][:5200],
+ok("out.doc_id" in _ops.split("binderEditMode")[1][:6800],
    "a touched blank form generates the document for this client, then the "
    "written answers land on it")
 
@@ -4161,6 +4167,16 @@ ok('rows="1"' in _docsrc and "function wireAutoGrow" in _ops,
    "an answer box starts the height of the printed line it replaces and "
    "grows to what you type, rather than reserving two rows nobody asked for")
 
+ok('data-global=' in Path("src/storefront/backend/documents.py").read_text()
+   and 'input[data-global="${inp.dataset.global}"]' in _ops,
+   "a record field moves every one of its twins in the whole book — the "
+   "client does not change from one form to the next")
+ok('if (i.dataset.global) return;' in _ops
+   and 'FIELD = { client: "name"' in _ops,
+   "and it saves to the client record rather than being baked into one "
+   "document's text, which is what keeps the next form agreeing with this "
+   "one")
+
 ok("function frameAnchor" in _ops and "function restoreAnchor" in _ops
    and "fillInDoc(did, name, after, at)" in _ops
    and "binderEditMode(id, e, frameAnchor(bdFrame))" in _ops,
@@ -4204,13 +4220,11 @@ ok('id="fid-sign"' in _ops and "engSignForm(did, out.party" in _ops,
 _conb = _db.connect()
 for _t in ("engagement_docs", "engagement_gates", "engagement_log",
            "engagement_dates"):
-    _conb.execute(f"DELETE FROM {_t} WHERE engagement_id IN (?,?)",
-                  (_be["id"], _be2["id"]))
-for _d2 in (_be["binder_doc_id"], _be2["binder_doc_id"]):
+    _conb.execute(f"DELETE FROM {_t} WHERE engagement_id=?", (_be["id"],))
+for _d2 in (_be["binder_doc_id"],):
     _conb.execute("DELETE FROM document_events WHERE document_id=?", (_d2,))
     _conb.execute("DELETE FROM documents WHERE id=?", (_d2,))
-_conb.execute("DELETE FROM engagements WHERE id IN (?,?)",
-              (_be["id"], _be2["id"]))
+_conb.execute("DELETE FROM engagements WHERE id=?", (_be["id"],))
 _conb.commit(); _conb.close()
 c.delete(f"/api/store/admin/documents/{_g6['doc_id']}", headers=A)
 c.delete(f"/api/store/admin/documents/{_g5['doc_id']}", headers=A)

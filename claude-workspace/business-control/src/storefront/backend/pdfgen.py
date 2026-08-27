@@ -43,6 +43,7 @@ def _inline(text: str) -> str:
     anchors on — the label text must match documents.SIGN_MARKERS exactly,
     since the PDF is what the anchor search reads."""
     t = text
+    t = t.replace("[PAGE BREAK]", "")
     t = t.replace("[SIGN HERE]", "**Sign here:** ____________________")
     t = t.replace("[INITIALS]", "**Initials:** ________")
     t = _LINK.sub(lambda m: m.group(1) if m.group(2).startswith("/")
@@ -193,6 +194,8 @@ def _render_into(pdf: FPDF, title: str, md_text: str,
             pdf.line(pdf.l_margin, pdf.get_y(),
                      pdf.w - pdf.r_margin, pdf.get_y())
             pdf.ln(3)
+        elif kind == "pagebreak":
+            pdf.add_page()
         elif kind == "aline":
             # a write-in line: lower and lighter than a section rule, so a
             # printed questionnaire reads as a form, not a page of dividers
@@ -255,6 +258,32 @@ def doc_pdf(title: str, md_text: str, signatures: list | None = None,
     pdf.add_page()
     _render_into(pdf, title, md_text, signatures, pending)
     return bytes(pdf.output())
+
+
+def section_pages(sec: dict) -> int:
+    """How many pages one section takes. Exact for a binder, because every
+    section starts on a fresh page — so rendering it alone and rendering it
+    in sequence lay out identically."""
+    pdf = _new_pdf()
+    pdf.add_page()
+    _render_into(pdf, sec["title"], sec["body"], sec.get("signatures"),
+                 sec.get("pending"))
+    return max(1, pdf.page_no())
+
+
+def binder_pages(sections: list) -> list:
+    """(start page of each section, total pages) from ONE pass over the
+    whole book. Rendering the binder is seconds of work, so it is done once
+    and everything else — where the contents page pushes each document to —
+    is arithmetic on the result."""
+    pdf = _new_pdf()
+    starts = []
+    for sec in sections:
+        pdf.add_page()
+        starts.append(pdf.page_no())
+        _render_into(pdf, sec["title"], sec["body"], sec.get("signatures"),
+                     sec.get("pending"))
+    return starts, pdf.page_no()
 
 
 def binder_pdf(sections: list) -> bytes:
