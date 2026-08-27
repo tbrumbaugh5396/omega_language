@@ -4950,6 +4950,8 @@ async function fillInDoc(did, title, after) {
         title="fill in the document"></iframe>
       <div class="modal-foot">
         <span class="dim" id="fid-count" style="margin-right:auto"></span>
+        <button class="btn alt" id="fid-sign" title="save the fills, then
+          send for signature or sign in the room">Save &amp; sign</button>
         <button class="btn" id="fid-save">Save</button>
         <button class="btn alt" data-close>Cancel</button>
       </div>`, "wide");
@@ -4987,7 +4989,7 @@ async function fillInDoc(did, title, after) {
       areas.forEach((inp) => inp.addEventListener("input", paint));
       paint();
     };
-    $("#fid-save").onclick = async () => {
+    const saveEdits = async () => {
       const doc = frame.contentDocument;
       const fills = {}, regions = {};
       doc.querySelectorAll("input.ph[data-tok]").forEach((i) => {
@@ -5001,15 +5003,31 @@ async function fillInDoc(did, title, after) {
         if (c.checked !== initialChecks[c.dataset.region])
           regions[c.dataset.region] = c.checked ? "true" : "false";
       });
+      return api(`/api/store/admin/documents/${did}/edit`,
+        { body: { fills, regions } });
+    };
+    $("#fid-save").onclick = async () => {
       try {
-        const out = await api(`/api/store/admin/documents/${did}/edit`,
-          { body: { fills, regions } });
+        const out = await saveEdits();
         closeModal();
         toast(out.unfilled.length
           ? `Saved — ${out.unfilled.length} bracket${
               out.unfilled.length === 1 ? "" : "s"} left`
           : "Saved — no brackets left");
         if (after) after();
+      } catch (err) { toast(err.message); }
+    };
+    $("#fid-sign").onclick = async () => {
+      /* Fill, then sign, without leaving the flow — the edits land first,
+         because a signature attests to the text as it stands. */
+      try {
+        const out = await saveEdits();
+        closeModal();
+        if (out.party) {
+          engSignForm(did, out.party, after);
+        } else {
+          engSignForm(did, {}, after);
+        }
       } catch (err) { toast(err.message); }
     };
   } catch (err) { toast(err.message); }
@@ -5420,6 +5438,9 @@ async function renderEngagement(id) {
                portal</button>`}
         <button class="btn alt sm" id="eng-export" title="write the folder
           tree under data/exports/clients/">Export</button>
+        <button class="btn alt sm" id="eng-binder" title="the whole packet
+          as one PDF — cover, contents, then every client-side paper with
+          its signatures">Binder PDF</button>
         <button class="btn sm" id="eng-bundle" title="zip of the to-client
           side only — the internal wall holds">Client bundle</button>
       </div>
@@ -5453,7 +5474,9 @@ async function renderEngagement(id) {
     const a = nActs[+b.dataset.next];
     if (!a) return;
     if (a.act === "gen") return engGenerate(id, a.path);
-    if (a.act === "sign") return engSignForm(a.doc, e);
+    if (a.act === "sign") return engSignForm(a.doc,
+      { name: e.approver_name, email: e.approver_email },
+      () => renderEngagement(id));
     if (a.act === "fill")
       return view().querySelector(`[data-engfill="${a.doc}"]`)?.click();
     if (a.act === "link")
@@ -5470,6 +5493,25 @@ async function renderEngagement(id) {
   $("#eng-edit").onclick = () => engForm(e);
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
   $("#eng-gantt").onclick = ganttModal;
+  $("#eng-binder").onclick = async () => {
+    try {
+      const blob = new Blob([await authBlob(
+        `/api/store/admin/engagements/${id}/binder.pdf`)],
+        { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      modal(`<h3>${esc(e.name)} — the binder</h3>
+        <iframe class="doc-viewer" src="${url}" title="binder"></iframe>
+        <div class="modal-foot dv-foot">
+          <button class="btn" id="bd-dl">Download binder PDF</button>
+          <button class="btn alt" data-close>Close</button>
+        </div>`, "wide");
+      $("#bd-dl").onclick = () => {
+        const a = document.createElement("a");
+        a.href = url; a.download = `${e.slug}-binder.pdf`;
+        document.body.appendChild(a); a.click(); a.remove();
+      };
+    } catch (err) { toast(err.message); }
+  };
   const makePortal = async () => {
     try {
       const out = await api(`/api/store/admin/engagements/${id}/portal`,
@@ -5525,7 +5567,9 @@ async function renderEngagement(id) {
   view().querySelectorAll("[data-gen]").forEach((b) => b.onclick = () =>
     engGenerate(id, b.dataset.gen));
   view().querySelectorAll("[data-engsign]").forEach((b) => b.onclick = () =>
-    engSignForm(+b.dataset.engsign, e));
+    engSignForm(+b.dataset.engsign,
+      { name: e.approver_name, email: e.approver_email },
+      () => renderEngagement(id)));
   // "Open" lands on the Documents tab, searched to this title, where the
   // vault's own editor finishes what the fill form started.
   view().querySelectorAll("[data-engopen]").forEach((b) => b.onclick = () => {
@@ -5768,13 +5812,15 @@ async function engGenerate(id, path) {
   };
 }
 
-function engSignForm(docId, e) {
+function engSignForm(docId, preset, after) {
+  preset = preset || {};
+  after = after || (() => renderEngagement(S.engId));
   modal(`<h3>Request a signature</h3>
     <div class="row2">
       <div><label>Signer name <span class="req">required</span></label>
-        <input id="es-name" value="${esc(e.approver_name || "")}"></div>
+        <input id="es-name" value="${esc(preset.name || "")}"></div>
       <div><label>Signer email <span class="req">required</span></label>
-        <input id="es-email" type="email" value="${esc(e.approver_email || "")}"></div>
+        <input id="es-email" type="email" value="${esc(preset.email || "")}"></div>
     </div>
     <label>Message <span class="opt">optional</span></label>
     <textarea id="es-msg" rows="2"></textarea>
@@ -5804,7 +5850,7 @@ function engSignForm(docId, e) {
         <div class="modal-foot" style="margin-top:10px">
           <button class="btn" id="sh-done">Done</button>
         </div>`, "wide");
-      $("#sh-done").onclick = () => { closeModal(); renderEngagement(S.engId); };
+      $("#sh-done").onclick = () => { closeModal(); after(); };
     } catch (err) { toast(err.message); }
   };
   $("#es-go").onclick = async () => {
@@ -5817,7 +5863,7 @@ function engSignForm(docId, e) {
         try { await navigator.clipboard.writeText(out.link); } catch {}
         toast("Signature link created and copied — emailed too, if mail is set up");
       }
-      renderEngagement(S.engId);
+      after();
     } catch (err) { toast(err.message); }
   };
 }

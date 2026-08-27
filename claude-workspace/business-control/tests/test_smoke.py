@@ -3971,6 +3971,49 @@ ok("One sentence a stranger would understand." in _b6,
    "answered is answered, and the region is gone")
 ok('id="dv-edit"' in _ops and "fillInDoc(did, name, after)" in _ops,
    "and View offers Edit on any unsigned authored document, from both tabs")
+
+# --- the binder --------------------------------------------------------------
+_be = c.post("/api/store/admin/engagements", headers=A, json={
+    "name": "Binder Smoke", "package": "B", "value_cents": 1200000,
+    "approver_name": "Kim Doe", "approver_email": "kim@x.test"}).json()
+ok(_be.get("binder_doc_id"),
+   "a new client is born with its project binder — cover, introduction, "
+   "contents, and the pricing and lead sections where the record has them")
+_bb = _db.connect().execute("SELECT body FROM documents WHERE id=?",
+                            (_be["binder_doc_id"],)).fetchone()["body"]
+ok("## Pricing" in _bb and "$12,000.00" in _bb
+   and "## Lead information" in _bb and "Kim Doe" in _bb,
+   "filled sections appear")
+_be2 = c.post("/api/store/admin/engagements", headers=A,
+              json={"name": "Bare Binder Smoke"}).json()
+_bb2 = _db.connect().execute("SELECT body FROM documents WHERE id=?",
+                             (_be2["binder_doc_id"],)).fetchone()["body"]
+ok("## Pricing" not in _bb2 and "## Lead information" not in _bb2,
+   "and empty ones don't — a binder with blank pricing reads as a mistake")
+_bp = c.get(f"/api/store/admin/engagements/{_be['id']}/binder.pdf",
+            headers=A)
+ok(_bp.status_code == 200 and _bp.content[:5] == b"%PDF-",
+   "the whole packet renders as one book — cover first, contents, then "
+   "every client-side paper with its signatures")
+_ee = c.post(f"/api/store/admin/documents/{_be['binder_doc_id']}/edit",
+             headers=A, json={"fills": {"PREPARED BY": "Tom"}}).json()
+ok(_ee["party"]["name"] == "Kim Doe",
+   "Save & sign prefills the client's named approver — the approver signs, "
+   "not the company")
+ok('id="fid-sign"' in _ops and "engSignForm(did, out.party" in _ops,
+   "and the editor's own footer carries Save & sign, edits landing before "
+   "the request — a signature attests to the text as it stands")
+_conb = _db.connect()
+for _t in ("engagement_docs", "engagement_gates", "engagement_log",
+           "engagement_dates"):
+    _conb.execute(f"DELETE FROM {_t} WHERE engagement_id IN (?,?)",
+                  (_be["id"], _be2["id"]))
+for _d2 in (_be["binder_doc_id"], _be2["binder_doc_id"]):
+    _conb.execute("DELETE FROM document_events WHERE document_id=?", (_d2,))
+    _conb.execute("DELETE FROM documents WHERE id=?", (_d2,))
+_conb.execute("DELETE FROM engagements WHERE id IN (?,?)",
+              (_be["id"], _be2["id"]))
+_conb.commit(); _conb.close()
 c.delete(f"/api/store/admin/documents/{_g6['doc_id']}", headers=A)
 c.delete(f"/api/store/admin/documents/{_g5['doc_id']}", headers=A)
 

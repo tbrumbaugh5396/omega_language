@@ -340,6 +340,65 @@ def suggested_fills(e) -> dict:
 
 # ---------- engagements ----------
 
+def binder_body(name: str, package: str, value_cents: int,
+                approver_name: str, approver_email: str,
+                launch_target: str) -> str:
+    """The binder's opening document: cover, introduction, what the binder
+    holds, and — only where the record has them — pricing and the lead. It
+    is a real vault document, so the editor fills its brackets and the
+    binder PDF opens with it."""
+    today = time.strftime("%B %d, %Y").replace(" 0", " ")
+    nl = "\n"
+    parts = [
+        f"# {name} — Project binder",
+        "",
+        f"**Prepared for** {name} · **Prepared by** [PREPARED BY] · "
+        f"**Date** {today}",
+        "",
+        "*Everything this project produces, in one place. This binder opens "
+        "with who and what; every agreement, questionnaire and sign-off "
+        "that follows is filed behind it, and the whole packet exports "
+        "together — printed or as one PDF.*",
+        "",
+        "---",
+        "",
+        "## Introduction",
+        "",
+        "[INTRODUCTION — who they are, what we build, what done means]",
+        "",
+        "## What this binder holds",
+        "",
+        "| Stage | Papers |",
+        "|---|---|",
+        "| Consultation | How this works, and the written map of the stack |",
+        "| Proposal | The proposal, and the option chosen in writing |",
+        "| Agreement | The signed contract and the deposit record |",
+        "| Kickoff | The questionnaires, checklists and project roadmap |",
+        "| Requirements | The signed requirements |",
+        "| Brand | Directions and the signed art direction *(when bought)* |",
+        "| Build | Feedback rounds and change orders |",
+        "| Launch & handover | The launch summary and the handover pack |",
+    ]
+    if package or value_cents:
+        parts += ["", "## Pricing", "", "| | |", "|---|---|"]
+        if package:
+            parts.append(f"| Package | {package} |")
+        if value_cents:
+            parts.append(f"| Value | ${value_cents / 100:,.2f} |")
+        parts.append("| Payment | Per the schedule in the agreement |")
+    if approver_name or approver_email or launch_target:
+        parts += ["", "## Lead information", "", "| | |", "|---|---|"]
+        if approver_name or approver_email:
+            parts.append(
+                f"| Approver | {approver_name}"
+                + (f" ({approver_email})" if approver_email else "") + " |")
+        if launch_target:
+            parts.append(f"| Launch target | {launch_target} |")
+        parts.append("| One consolidated response per round | "
+                     "Named in the agreement |")
+    return nl.join(parts) + nl
+
+
 class EngBody(BaseModel):
     name: str = ""
     package: str = ""
@@ -420,9 +479,30 @@ def create_engagement(body: EngBody, u=Depends(admin_user),
          body.launch_target.strip()[:40], body.staging_url.strip()[:300],
          body.live_url.strip()[:300], body.notes.strip()[:2000],
          "active", now, now))
-    log(con, cur.lastrowid, u["name"], f"engagement created: {name}")
+    eid = cur.lastrowid
+    log(con, eid, u["name"], f"engagement created: {name}")
+    # The binder opens the paperwork: cover, introduction, contents, and —
+    # where the record has them — pricing and the lead. Born with the
+    # client, filled like any other document, first page of the binder PDF.
+    bcur = con.execute(
+        "INSERT INTO documents(title,category,party_kind,party_name,"
+        " party_email,body,notes,status,confidential,uploaded_by,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (f"Project binder — {name}"[:200], "other", "partner", name[:120],
+         body.approver_email.strip()[:200],
+         binder_body(name, body.package.strip(), body.value_cents,
+                     body.approver_name.strip(),
+                     body.approver_email.strip(),
+                     body.launch_target.strip()),
+         "binder cover", "draft", 1, u["id"], time.time()))
+    con.execute(
+        "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (eid, bcur.lastrowid, "01-potential-customer", "to_client",
+         time.time()))
+    log(con, eid, u["name"], "project binder created")
     con.commit()
-    return {"id": cur.lastrowid, "slug": slug}
+    return {"id": eid, "slug": slug, "binder_doc_id": bcur.lastrowid}
 
 
 def _eng_or_404(con, eid: int):
@@ -1039,6 +1119,54 @@ def export_folder(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     return {"root": str(root), "files": sorted(files),
             "dropbox": "filing in the background"
             if _dropbox_connected(con) else "not connected"}
+
+
+@router.get("/api/store/admin/engagements/{eid}/binder.pdf")
+def binder_pdf_route(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """The whole packet as one book. The binder cover opens it, a contents
+    page lists what follows in process order, and every to-client authored
+    document takes its pages — signatures printed, blank signature areas
+    where requests are still out. Uploaded files (scans) are listed in the
+    contents but live beside the binder in the export, since a PDF made of
+    markdown can't swallow a photograph of paper."""
+    e = _eng_or_404(con, eid)
+    from . import documents as vault
+    from . import pdfgen
+    rows = con.execute(
+        "SELECT ed.stage, d.* FROM engagement_docs ed"
+        " JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.side='to_client'"
+        " ORDER BY ed.stage, d.created_at", (eid,)).fetchall()
+    stage_order = list(KIT_TO_CLIENT_STAGE)
+    rows = sorted(rows, key=lambda r: (
+        0 if (r["notes"] or "") == "binder cover" else 1,
+        stage_order.index(r["stage"]) if r["stage"] in stage_order else 99))
+    authored = [r for r in rows if (r["body"] or "").strip()]
+    files = [r for r in rows if not (r["body"] or "").strip() and r["ext"]]
+    if not authored:
+        raise HTTPException(404, "nothing to bind yet")
+
+    sections = []
+    for i, r in enumerate(authored):
+        sections.append({"title": r["title"], "body": r["body"],
+                         "signatures": vault.signed_rows(con, r["id"]),
+                         "pending": vault.pending_rows(con, r["id"])})
+        if i == 0:
+            toc = "\n".join(
+                f"{n}. **{x['title']}** — "
+                f"{STAGE_LABELS.get(KIT_TO_CLIENT_STAGE.get(x['stage'], ''), x['stage'])}"
+                for n, x in enumerate(authored, 1))
+            if files:
+                toc += ("\n\nFiled beside this binder: "
+                        + ", ".join(f"*{f['title']}*" for f in files))
+            sections.append({"title": "In this binder", "body": toc})
+    log(con, eid, u["name"],
+        f"binder PDF ({len(authored)} documents)")
+    con.commit()
+    blob = pdfgen.binder_pdf(sections)
+    stem = f"{e['slug']}-binder"
+    return Response(blob, media_type="application/pdf", headers={
+        "Content-Disposition": f'inline; filename="{stem}.pdf"'})
 
 
 @router.get("/api/store/admin/engagements/{eid}/export.zip")

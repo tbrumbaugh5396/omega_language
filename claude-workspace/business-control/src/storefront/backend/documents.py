@@ -866,7 +866,18 @@ def vault_edit(did: int, body: EditBody, u=Depends(admin_user),
         f"{n_edits} field(s)"
         + (f", {len(remaining)} bracket(s) left" if remaining else ""))
     con.commit()
-    return {"unfilled": remaining}
+    # The party rides back so "Save & sign" can prefill the signer without
+    # a second request — and a document filed under a client prefers that
+    # client's named approver, because the approver signs, not the company.
+    party = {"name": d["party_name"], "email": d["party_email"]}
+    row = con.execute(
+        "SELECT e.approver_name, e.approver_email FROM engagement_docs ed"
+        " JOIN engagements e ON e.id=ed.engagement_id WHERE ed.doc_id=?",
+        (did,)).fetchone()
+    if row and (row["approver_name"] or row["approver_email"]):
+        party = {"name": row["approver_name"] or party["name"],
+                 "email": row["approver_email"] or party["email"]}
+    return {"unfilled": remaining, "party": party}
 
 
 @router.patch("/api/store/admin/documents/{did}")

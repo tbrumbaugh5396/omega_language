@@ -155,12 +155,17 @@ def _pending_block(pdf, pending) -> None:
         pdf.ln(5)
 
 
-def doc_pdf(title: str, md_text: str, signatures: list | None = None,
-            pending: list | None = None) -> bytes:
+def _new_pdf() -> FPDF:
     pdf = FPDF(format="letter")
     pdf.set_margins(20, 18, 20)
     pdf.set_auto_page_break(True, margin=18)
-    pdf.add_page()
+    return pdf
+
+
+def _render_into(pdf: FPDF, title: str, md_text: str,
+                 signatures: list | None, pending: list | None) -> None:
+    """One document onto the current page of an open PDF — the single
+    renderer behind a standalone PDF and a binder page alike."""
     pdf.set_text_color(*INK)
     pdf.set_draw_color(*LINE)
 
@@ -243,4 +248,22 @@ def doc_pdf(title: str, md_text: str, signatures: list | None = None,
     if pending:
         _pending_block(pdf, pending)
 
+
+def doc_pdf(title: str, md_text: str, signatures: list | None = None,
+            pending: list | None = None) -> bytes:
+    pdf = _new_pdf()
+    pdf.add_page()
+    _render_into(pdf, title, md_text, signatures, pending)
+    return bytes(pdf.output())
+
+
+def binder_pdf(sections: list) -> bytes:
+    """All the paperwork as one book: each section — a document with its
+    signatures and its blanks-to-sign — starts on a fresh page, in the
+    order the process runs. sections: [{title, body, signatures, pending}]"""
+    pdf = _new_pdf()
+    for sec in sections:
+        pdf.add_page()
+        _render_into(pdf, sec["title"], sec["body"],
+                     sec.get("signatures"), sec.get("pending"))
     return bytes(pdf.output())
