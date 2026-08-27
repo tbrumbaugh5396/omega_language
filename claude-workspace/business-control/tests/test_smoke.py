@@ -3971,8 +3971,12 @@ ok('class="flab"' in _pv6 and "fcheck" in _pv6,
    "each box wears its own label, and the tick boxes are boxes")
 
 # --- an answer is still a field --------------------------------------------
+from storefront.backend.documents import GLOBAL_TOKENS as _GT
+_local = next(t for t in c.get(
+    f"/api/store/admin/engagements/{_eid}/docs/{_g6['doc_id']}/blanks",
+    headers=A).json()["placeholders"] if t.strip() not in _GT)
 c.post(f"/api/store/admin/documents/{_g6['doc_id']}/edit", headers=A,
-       json={"fills": {"CLIENT": "Boxed Co"}, "regions": {}})
+       json={"fills": {_local: "Boxed Co"}, "regions": {}})
 _pvf = c.get(f"/api/store/admin/documents/{_g6['doc_id']}/preview",
              headers=A).text
 ok("fbox-set" in _pvf and "Boxed Co" in _pvf,
@@ -3980,17 +3984,13 @@ ok("fbox-set" in _pvf and "Boxed Co" in _pvf,
    "was set and that it can be set again")
 _bodyf = _db.connect().execute("SELECT body FROM documents WHERE id=?",
                                (_g6["doc_id"],)).fetchone()["body"]
-ok("[CLIENT=Boxed Co]" in _bodyf,
+ok(f"[{_local}=Boxed Co]" in _bodyf,
    "because filling keeps the name beside the answer instead of erasing it")
 _edf = c.get(f"/api/store/admin/documents/{_g6['doc_id']}/editable",
              headers=A).text
 ok('value="Boxed Co"' in _edf,
    "so the editor opens on the answer, and changing it is changing a field "
    "rather than retyping a sentence")
-ok("Boxed Co" in c.get(f"/api/store/admin/documents/{_g6['doc_id']}/pdf",
-                       headers=A).content.decode("latin-1", "replace")
-   or True,
-   "and the printed page shows the answer, not the bookkeeping")
 c.post(f"/api/store/admin/documents/{_g6['doc_id']}/edit", headers=A,
        json={"regions": {"0": "One sentence a stranger would understand."},
              "fills": {}})
@@ -4219,6 +4219,27 @@ ok(all("Old Name Co" not in t for t in _rt)
    "renaming the client renames every document filed under them — a "
    "binder full of papers still saying the old name is a binder that "
    "disagrees with its own cover")
+# The same edit, from one page of the binder rather than the binder: a
+# record field is the client's, so which door you came through must not
+# decide whether the client's name changes.
+_one = [d for d in c.get(f"/api/store/admin/engagements/{_ren['id']}",
+        headers=A).json()["docs"] if d["title"].startswith("Proposal")][0]
+_oe = c.post(f"/api/store/admin/documents/{_one['id']}/edit", headers=A,
+             json={"fills": {"CLIENT NAME": "Third Name Co"},
+                   "regions": {}}).json()
+ok("name" in (_oe.get("record") or []),
+   "typing the client's name on one document writes the client's name — "
+   "the record is where it lives, whichever editor you opened")
+_rt2 = c.get(f"/api/store/admin/engagements/{_ren['id']}", headers=A).json()
+ok(_rt2["engagement"]["name"] == "Third Name Co"
+   and all("New Name Co" not in d["title"] for d in _rt2["docs"]),
+   "and every title follows from there, not just the one you were on")
+_body1 = _db.connect().execute("SELECT body FROM documents WHERE id=?",
+                               (_one["id"],)).fetchone()["body"]
+ok("[CLIENT NAME=" not in _body1,
+   "the token stays a token — baking it here is exactly how one document "
+   "starts disagreeing with the next")
+
 _bed2 = c.get(f"/api/store/admin/engagements/{_ren['id']}/binder/editable",
               headers=A).text
 ok('class="bd-title"' in _bed2,
@@ -4237,11 +4258,12 @@ ok('data-global=' in Path("src/storefront/backend/documents.py").read_text()
    and 'input[data-global="${inp.dataset.global}"]' in _ops,
    "a record field moves every one of its twins in the whole book — the "
    "client does not change from one form to the next")
-ok('if (i.dataset.global) return;' in _ops
-   and 'FIELD = { client: "name"' in _ops,
+ok("def apply_globals" in _engsrc and "GLOBAL_COLUMN" in _engsrc
+   and "eng.apply_globals(" in Path(
+       "src/storefront/backend/documents.py").read_text(),
    "and it saves to the client record rather than being baked into one "
-   "document's text, which is what keeps the next form agreeing with this "
-   "one")
+   "document's text — decided in one place on the server, so which editor "
+   "you opened cannot change the answer")
 
 ok("button.btn[hidden]" in _css3 or "btn[hidden]" in c.get(
     "/ops/styles.css").text,

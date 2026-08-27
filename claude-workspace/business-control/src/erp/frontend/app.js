@@ -5119,9 +5119,12 @@ async function fillInDoc(did, title, after, anchor) {
           : "everything is filled in";
       };
       toks.forEach((inp) => inp.addEventListener("input", () => {
+        // a record field moves all of its twins, here as in the binder
         toks.forEach((o) => {
-          if (o !== inp && o.dataset.tok === inp.dataset.tok)
-            o.value = inp.value;
+          const same = inp.dataset.global
+            ? o.dataset.global === inp.dataset.global
+            : (!o.dataset.global && o.dataset.tok === inp.dataset.tok);
+          if (o !== inp && same) o.value = inp.value;
         });
         paint();
       }));
@@ -5153,10 +5156,12 @@ async function fillInDoc(did, title, after, anchor) {
       try {
         const out = await saveEdits();
         closeModal();
-        toast(out.unfilled.length
+        const rec = (out.record || []).length
+          ? " · client record updated everywhere" : "";
+        toast((out.unfilled.length
           ? `Saved — ${out.unfilled.length} bracket${
               out.unfilled.length === 1 ? "" : "s"} left`
-          : "Saved — no brackets left");
+          : "Saved — no brackets left") + rec);
         if (after) after();
       } catch (err) { toast(err.message); }
     };
@@ -5255,27 +5260,12 @@ async function binderEditMode(engId, e, anchor) {
         ".binder-doc[data-doc], .binder-doc[data-tpl]")];
       let saved = 0, generated = 0, failed = 0, recordChanged = false;
 
-      /* The record fields first, and to the record — not baked into one
-         document's text, or the next form would disagree with this one. */
-      const FIELD = { client: "name", client_poc: "approver_name",
-        internal_poc: "internal_poc", originator: "originator" };
-      const rec = {};
-      doc.querySelectorAll("input[data-global]").forEach((i) => {
-        const col = FIELD[i.dataset.global];
-        if (col && i.value.trim() && i.value !== initialToks.get(i))
-          rec[col] = i.value.trim();
-      });
-      if (Object.keys(rec).length) {
-        try {
-          await api(`/api/store/admin/engagements/${engId}`,
-            { method: "PATCH", body: rec });
-          recordChanged = true;
-        } catch (err) { toast("client record: " + err.message); }
-      }
+      /* Record fields ride along in the ordinary fills — the server knows
+         they belong to the client and writes them there instead of baking
+         them into whichever page you happened to type on. */
       for (const card of cards) {
         const fills = {}, regions = {};
         card.querySelectorAll("input.ph[data-tok]").forEach((i) => {
-          if (i.dataset.global) return;      // lives on the record
           if (i.value.trim() && i.value !== initialToks.get(i))
             fills[i.dataset.tok] = i.value.trim();
         });
@@ -5299,9 +5289,12 @@ async function binderEditMode(engId, e, anchor) {
             if (titleChanged)
               await api(`/api/store/admin/documents/${card.dataset.doc}`,
                 { method: "PATCH", body: { title: tIn.value.trim() } });
-            if (Object.keys(fills).length || Object.keys(regions).length)
-              await api(`/api/store/admin/documents/${card.dataset.doc}/edit`,
+            if (Object.keys(fills).length || Object.keys(regions).length) {
+              const out = await api(
+                `/api/store/admin/documents/${card.dataset.doc}/edit`,
                 { body: { fills, regions } });
+              if ((out.record || []).length) recordChanged = true;
+            }
             saved += 1;
           } else if (touched) {
             /* a blank form someone wrote on becomes a real document — the

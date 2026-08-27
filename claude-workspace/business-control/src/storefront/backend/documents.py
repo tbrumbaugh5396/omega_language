@@ -1057,8 +1057,30 @@ def vault_edit(did: int, body: EditBody, u=Depends(admin_user),
     the end backwards), then token fills by name — the same functions the
     scanner and the renderer use."""
     d = _editable_doc_or_refuse(con, did)
+
+    # A record field is the client's, not this document's. Whichever editor
+    # you came through — the binder or one page of it — typing the client's
+    # name writes the client's name, once, where every document reads it.
+    fills, gvals = {}, {}
+    for tok, val in (body.fills or {}).items():
+        key = GLOBAL_TOKENS.get(tok.strip())
+        if key:
+            gvals[key] = val
+        else:
+            fills[tok] = val
+    changed = []
+    row = con.execute("SELECT engagement_id FROM engagement_docs"
+                      " WHERE doc_id=?", (did,)).fetchone()
+    if gvals and row:
+        from . import engagements as eng
+        changed = eng.apply_globals(con, row["engagement_id"], gvals,
+                                    u["name"])
+    elif gvals:
+        fills.update({t: v for t, v in (body.fills or {}).items()
+                      if GLOBAL_TOKENS.get(t.strip())})   # no record to hold it
+
     text = apply_regions(d["body"], body.regions or {})
-    text = fill(text, body.fills or {})
+    text = fill(text, fills)
     remaining = placeholders(text)
     con.execute("UPDATE documents SET body=?, status=? WHERE id=?",
                 (text, "draft" if remaining else "active", did))
@@ -1080,7 +1102,7 @@ def vault_edit(did: int, body: EditBody, u=Depends(admin_user),
     if row and (row["approver_name"] or row["approver_email"]):
         party = {"name": row["approver_name"] or party["name"],
                  "email": row["approver_email"] or party["email"]}
-    return {"unfilled": remaining, "party": party}
+    return {"unfilled": remaining, "party": party, "record": changed}
 
 
 @router.patch("/api/store/admin/documents/{did}")

@@ -559,6 +559,57 @@ def list_engagements(u=Depends(admin_user), con=Depends(get_con)):
     return {"engagements": out, "kit_available": KIT.is_dir()}
 
 
+# Which record column each global token lives in. Date and brand are not
+# columns — they are read from the clock and the config — so they are not
+# writable and simply never appear here.
+GLOBAL_COLUMN = {"client": "name", "client_poc": "approver_name",
+                 "internal_poc": "internal_poc", "originator": "originator"}
+
+
+def rename_client(con, eid: int, old: str, new: str) -> None:
+    """A client's name is on their documents' titles too, and a binder full
+    of papers still saying the old name is a binder that disagrees with its
+    own cover."""
+    for note, stem in (("binder cover", "Project binder"),
+                       ("binder intro", "Introduction")):
+        con.execute(
+            "UPDATE documents SET title=?, party_name=?"
+            " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
+            "   WHERE ed.engagement_id=?) AND notes=?",
+            (f"{stem} — {new}"[:200], new[:120], eid, note))
+    if old and old != new:
+        con.execute(
+            "UPDATE documents SET title=REPLACE(title,?,?), party_name=?"
+            " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
+            "   WHERE ed.engagement_id=?)", (old, new, new[:120], eid))
+
+
+def apply_globals(con, eid: int, gvals: dict, actor: str) -> list:
+    """Write the record-backed fields and return what changed. Called from
+    wherever a global field is edited — the binder, one document, anywhere
+    — because the whole point of a record field is that it does not depend
+    on which door you came through."""
+    e = con.execute("SELECT * FROM engagements WHERE id=?", (eid,)).fetchone()
+    if e is None:
+        return []
+    fields, changed = {}, []
+    for key, val in (gvals or {}).items():
+        col = GLOBAL_COLUMN.get(key)
+        v = str(val).strip()[:120]
+        if col and v and v != (e[col] or ""):
+            fields[col] = v
+            changed.append(col)
+    if not fields:
+        return []
+    sets = ", ".join(f"{k}=?" for k in fields)
+    con.execute(f"UPDATE engagements SET {sets}, updated_at=? WHERE id=?",
+                (*fields.values(), time.time(), eid))
+    if "name" in fields:
+        rename_client(con, eid, e["name"], fields["name"])
+    log(con, eid, actor, "client record updated: " + ", ".join(changed))
+    return changed
+
+
 def _resolve_poc(con, name: str, u) -> tuple:
     """(name, user_id, status). Naming yourself is accepted on the spot;
     naming a colleague makes it PENDING and tells them — being someone's
@@ -665,24 +716,7 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
         # from the record already; titles are plain strings, so they are
         # rewritten here.
         if "name" in fields:
-            old_name, new_name = e["name"], fields["name"]
-            for note, stem in (("binder cover", "Project binder"),
-                               ("binder intro", "Introduction")):
-                con.execute(
-                    "UPDATE documents SET title=?, party_name=?"
-                    " WHERE id IN (SELECT ed.doc_id FROM engagement_docs ed"
-                    "   WHERE ed.engagement_id=?) AND notes=?",
-                    (f"{stem} — {new_name}"[:200], new_name[:120],
-                     eid, note))
-            # "Proposal — Lingua" must stop saying Lingua too. Titles are
-            # plain strings, so the old name is swapped for the new one
-            # wherever it stands in a document filed under this client.
-            if old_name and old_name != new_name:
-                con.execute(
-                    "UPDATE documents SET title=REPLACE(title,?,?),"
-                    " party_name=? WHERE id IN (SELECT ed.doc_id FROM"
-                    " engagement_docs ed WHERE ed.engagement_id=?)",
-                    (old_name, new_name, new_name[:120], eid))
+            rename_client(con, eid, e["name"], fields["name"])
         log(con, eid, u["name"], "updated: " + ", ".join(fields))
         con.commit()
     return {"ok": True}
@@ -768,7 +802,14 @@ def generate_doc(eid: int, body: GenerateBody, u=Depends(admin_user),
     if side not in ("to_client", "internal"):
         raise HTTPException(400, "side is to_client or internal")
 
-    filled = fill(text, {**suggested_fills(e), **(body.fills or {})})
+    # Record fields are not baked in: they read from the record, so a
+    # document generated today still says the right thing tomorrow.
+    from .documents import GLOBAL_TOKENS
+    given = {k: v for k, v in (body.fills or {}).items()
+             if k.strip() not in GLOBAL_TOKENS}
+    sugg = {k: v for k, v in suggested_fills(e).items()
+            if k.strip() not in GLOBAL_TOKENS}
+    filled = fill(text, {**sugg, **given})
     remaining = placeholders(filled)
     title = body.title.strip()
     if not title:
