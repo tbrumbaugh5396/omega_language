@@ -5020,6 +5020,27 @@ function wireAutoGrow(doc) {
   return () => all.forEach(grow);
 }
 
+/* A title made of parts still has to be one string when it is saved, and
+   each part has to be as wide as what is in it. */
+function sizeTitle(el) {
+  if (!el.classList || !el.classList.contains("bd-title")) return;
+  el.size = Math.max((el.value || "").length + 1, el.dataset.part ? 2 : 6);
+}
+// the tokens that live on the client record, mirrored from the server
+const GLOBAL_TOKS = new Set(["CLIENT", "CLIENT NAME", "PROJECT",
+  "PROJECT NAME", "CLIENT POC", "APPROVER", "INTERNAL POC", "ORIGINATOR",
+  "DATE", "BRAND", "PACKAGE", "VALUE"]);
+
+function composeTitle(scope) {
+  const part = (sel) => scope.querySelector(sel);
+  const pre = part('input.bd-title[data-part="pre"]');
+  const cl = part("input.bd-title-cl");
+  const post = part('input.bd-title[data-part="post"]');
+  if (!cl) return (pre ? pre.value : "").trim();
+  return ((pre ? pre.value : "") + cl.value
+          + (post ? post.value : "")).trim();
+}
+
 function wirePageCount(frame, label) {
   /* The count is also the way in: the number is a field, so a hundred-page
      binder is one keystroke from any page in it rather than a scrollbar to
@@ -5118,6 +5139,11 @@ async function fillInDoc(did, title, after, anchor) {
           ? `${left} field${left === 1 ? "" : "s"} still empty`
           : "everything is filled in";
       };
+      doc.querySelectorAll("input.bd-title").forEach((i) => sizeTitle(i));
+      doc.addEventListener("input", (e) => {
+        if (e.target.classList && e.target.classList.contains("bd-title"))
+          sizeTitle(e.target);
+      });
       toks.forEach((inp) => inp.addEventListener("input", () => {
         // a record field moves all of its twins, here as in the binder
         toks.forEach((o) => {
@@ -5137,11 +5163,10 @@ async function fillInDoc(did, title, after, anchor) {
     };
     const saveEdits = async () => {
       const doc = frame.contentDocument;
-      // the title is a field on the page, saved with it
-      const tIn = doc.querySelector("input.bd-title");
-      if (tIn && tIn.value.trim() && tIn.value !== tIn.defaultValue)
+      const tIn = doc.querySelector('input.bd-title[data-part="pre"]');
+      if (tIn && tIn.value !== tIn.defaultValue)
         await api(`/api/store/admin/documents/${did}`,
-          { method: "PATCH", body: { title: tIn.value.trim() } });
+          { method: "PATCH", body: { title: composeTitle(doc) } });
       const fills = {}, regions = {};
       doc.querySelectorAll("input.ph[data-tok]").forEach((i) => {
         if (i.value.trim()) fills[i.dataset.tok] = i.value.trim();
@@ -5216,8 +5241,10 @@ async function binderEditMode(engId, e, anchor) {
          existence on the strength of its own suggestions */
       doc.querySelectorAll("input.ph[data-tok]").forEach((i) =>
         initialToks.set(i, i.value));
-      doc.querySelectorAll("input.bd-title").forEach((i) =>
-        initialTitles.set(i, i.value));
+      doc.querySelectorAll("input.bd-title").forEach((i) => {
+        initialTitles.set(i, i.value);
+        sizeTitle(i);
+      });
       const paint = (scope) => {
         scope.querySelectorAll("input.ph[data-tok]").forEach((i) => {
           i.classList.toggle("filled", !!i.value.trim());
@@ -5236,10 +5263,12 @@ async function binderEditMode(engId, e, anchor) {
          stays local to its own page. */
       doc.addEventListener("input", (ev) => {
         const inp = ev.target;
+        if (inp.classList && inp.classList.contains("bd-title"))
+          sizeTitle(inp);
         if (!inp.dataset || !inp.dataset.global) return;
         doc.querySelectorAll(
           `input[data-global="${inp.dataset.global}"]`).forEach((o) => {
-            if (o !== inp) o.value = inp.value;
+            if (o !== inp) { o.value = inp.value; sizeTitle(o); }
           });
         doc.querySelectorAll(".binder-doc").forEach(paint);
       });
@@ -5282,18 +5311,22 @@ async function binderEditMode(engId, e, anchor) {
           if (c.checked !== initialChecks.get(c))
             regions[c.dataset.region] = c.checked ? "true" : "false";
         });
-        // the title is a field on the card, saved with the page it names
-        const tIn = card.querySelector("input.bd-title");
-        const titleChanged = tIn && tIn.value.trim()
-          && tIn.value !== initialTitles.get(tIn);
-        const touched = Object.keys(fills).length
-          || Object.keys(regions).length || titleChanged;
+        // the title is fields on the card: what it is called, and who
+        // for — the second being the record's own client field
+        const tIn = card.querySelector('input.bd-title[data-part="pre"]');
+        const titleChanged = tIn && tIn.value !== initialTitles.get(tIn);
+        // A record field is the client's, not this page's: changing the
+        // client must not conjure twenty blank forms into existence just
+        // because their copy of the client's name moved with it.
+        const own = Object.keys(fills).filter((k) => !GLOBAL_TOKS.has(k));
+        const touched = own.length || Object.keys(regions).length
+          || titleChanged;
         try {
           if (card.dataset.doc) {
             if (!touched) continue;
             if (titleChanged)
               await api(`/api/store/admin/documents/${card.dataset.doc}`,
-                { method: "PATCH", body: { title: tIn.value.trim() } });
+                { method: "PATCH", body: { title: composeTitle(card) } });
             if (Object.keys(fills).length || Object.keys(regions).length) {
               const out = await api(
                 `/api/store/admin/documents/${card.dataset.doc}/edit`,

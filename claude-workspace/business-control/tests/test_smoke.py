@@ -4260,6 +4260,15 @@ _sed2 = c.get(f"/api/store/admin/documents/{_one['id']}/editable",
 ok('class="bd-title"' in _sed2,
    "and a document's title is a field in its own editor too, not only in "
    "the binder — the name in the heading is the one people read first")
+ok('class="bd-title-row"' in _sed2
+   and 'class="bd-title bd-title-cl ph ph-global"' in _sed2
+   and 'data-global="client"' in _sed2,
+   "a heading that names the client IS the client's field — typing in the "
+   "heading moves the client, and moving the client moves the heading")
+ok("GLOBAL_TOKS" in _ops
+   and "!GLOBAL_TOKS.has(k)" in _ops,
+   "and changing the client does not conjure every blank form into "
+   "existence just because their copy of the name moved with it")
 ok('class="bd-title"' in _bed2,
    "and a title is a field in the editor, because the one thing you could "
    "not change was the line you read first")

@@ -885,6 +885,33 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
     return marked_inner(title, body, field)
 
 
+def title_fields_html(doc_id: int, title: str, client: str) -> str:
+    """A heading that names the client should be the client's name, not a
+    copy of it. Where the title carries it, the title is split into what
+    the document is called and who it is for — and the second half is the
+    same record field as everywhere else, so typing in the heading moves
+    the client, and moving the client moves the heading."""
+    esc = sect.esc
+    if client and client in title:
+        i = title.index(client)
+        pre, post = title[:i], title[i + len(client):]
+        return (
+            f'<span class="bd-title-row">'
+            f'<input class="bd-title" data-title="{doc_id}" data-part="pre"'
+            f' value="{esc(pre)}" size="{max(len(pre) + 1, 4)}"'
+            f' aria-label="what this document is called">'
+            f'<input class="bd-title bd-title-cl ph ph-global"'
+            f' data-tok="CLIENT" data-global="client" value="{esc(client)}"'
+            f' size="{max(len(client) + 1, 6)}"'
+            f' aria-label="who it is for">'
+            f'<input class="bd-title" data-title="{doc_id}" data-part="post"'
+            f' value="{esc(post)}" size="{max(len(post) + 1, 2)}"'
+            f'{" hidden" if not post.strip() else ""}'
+            f' aria-label="rest of the title"></span>')
+    return (f'<input class="bd-title" data-title="{doc_id}" data-part="pre"'
+            f' value="{esc(title)}" aria-label="document title">')
+
+
 def form_inner(title: str, body: str, gvals: dict | None = None) -> str:
     """Every blank as a box you write on. Reading a document should show
     where the answers go — print it and fill it in with a pen — instead of
@@ -978,13 +1005,20 @@ FIELD_CSS = (
     "input.ph-cell{padding:0 4px}"
     "input.ph-global{border-style:solid;border-color:#8a6ff0;"
     "background:#f4f0ff}"
-    "input.bd-title{display:block;width:100%;font-family:'Fraunces',"
-    "Georgia,serif;font-size:1.7em;font-weight:600;color:#1b181f;"
-    "border:1px dashed transparent;border-radius:8px;padding:2px 6px;"
-    "margin:0 0 6px -6px;background:transparent}"
+    ".bd-title-row{display:flex;align-items:baseline;flex-wrap:wrap;"
+    "margin:0 0 6px -6px}"
+    "input.bd-title{font-family:'Fraunces',Georgia,serif;font-size:1.7em;"
+    "font-weight:600;color:#1b181f;border:1px dashed transparent;"
+    "border-radius:8px;padding:2px 6px;background:transparent;"
+    "min-width:2ch}"
+    "input.bd-title:not(.bd-title-cl){flex:0 1 auto}"
+    "input.bd-title[data-title]:only-child{display:block;width:100%;"
+    "margin:0 0 6px -6px}"
     "input.bd-title:hover{border-color:#d5cec2}"
     "input.bd-title:focus{outline:2px solid #8a6ff0;border-color:#8a6ff0;"
     "background:#fff}"
+    "input.bd-title-cl{border-style:solid;border-color:#8a6ff0;"
+    "background:#f4f0ff}"
     "input.ph:focus,textarea.ph:focus{outline:2px solid #8a6ff0;"
     "border-style:solid}"
     "input.ph.filled,textarea.ph.filled{border:1px solid #3fbd82;"
@@ -996,7 +1030,7 @@ FIELD_CSS = (
 EDITABLE_CSS = DOC_BASE_CSS + FIELD_CSS
 
 
-def render_editable(d, suggestions: dict) -> str:
+def render_editable(d, suggestions: dict, client_name: str = "") -> str:
     """The document as its own form: every blank rendered as a live field
     where it sits in the text. Tokens become inputs that fill by name;
     write-in lines become text boxes — a whole line gets a paragraph box, an
@@ -1011,8 +1045,7 @@ def render_editable(d, suggestions: dict) -> str:
         f" initial-scale=1\"><title>{sect.esc(d['title'])}</title>"
         f"{FONT_LINK}<style>{EDITABLE_CSS}html{{background:#fff}}"
         f"{PAGE_RULE_CSS}</style></head><body>"
-        f'<input class="bd-title" data-title="{d["id"]}"'
-        f' value="{sect.esc(d["title"])}" aria-label="document title">'
+        f"{title_fields_html(d['id'], d['title'], client_name)}"
         f"{editable_inner('', d['body'], suggestions)}"
         f"</body></html>")
 
@@ -1038,13 +1071,15 @@ def vault_editable(did: int, u=Depends(admin_user), con=Depends(get_con)):
     sug = {}
     row = con.execute("SELECT engagement_id FROM engagement_docs"
                       " WHERE doc_id=?", (did,)).fetchone()
+    client = ""
     if row:
         from . import engagements as eng
         e = con.execute("SELECT * FROM engagements WHERE id=?",
                         (row["engagement_id"],)).fetchone()
         if e:
             sug = eng.suggested_fills(e)
-    return HTMLResponse(render_editable(d, sug))
+            client = e["name"]
+    return HTMLResponse(render_editable(d, sug, client))
 
 
 class EditBody(BaseModel):

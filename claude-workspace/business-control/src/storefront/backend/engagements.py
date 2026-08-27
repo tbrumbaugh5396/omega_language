@@ -585,11 +585,18 @@ def rename_client(con, eid: int, old: str, new: str) -> None:
             (old, new, eid))
     for note, stem in (("binder cover", "Project binder"),
                        ("binder intro", "Introduction")):
-        con.execute(
-            "UPDATE documents SET title=? WHERE id IN"
-            " (SELECT ed.doc_id FROM engagement_docs ed"
-            "   WHERE ed.engagement_id=?) AND notes=?",
-            (f"{stem} — {new}"[:200], eid, note))
+        row = con.execute(
+            "SELECT d.id, d.title FROM engagement_docs ed"
+            " JOIN documents d ON d.id=ed.doc_id"
+            " WHERE ed.engagement_id=? AND d.notes=?", (eid, note)).fetchone()
+        if row is None:
+            continue
+        # keep what the document is called; only who it is for changes
+        cur = row["title"]
+        title = (cur[:cur.index(old)] + new) if old and old in cur \
+            else f"{stem} — {new}"
+        con.execute("UPDATE documents SET title=? WHERE id=?",
+                    (title[:200], row["id"]))
     con.execute(
         "UPDATE documents SET party_name=? WHERE id IN"
         " (SELECT ed.doc_id FROM engagement_docs ed"
@@ -1593,9 +1600,7 @@ def binder_editable(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         elif sec.get("doc_id"):
             parts.append(
                 f'<div class="binder-doc" data-doc="{sec["doc_id"]}">'
-                f'<input class="bd-title" data-title="{sec["doc_id"]}"'
-                f' value="{sect.esc(sec["title"])}"'
-                f' aria-label="document title">'
+                f'{vault.title_fields_html(sec["doc_id"], sec["title"], e["name"])}'
                 f'{vault.editable_inner("", sec.get("raw", sec["body"]), sug)}'
                 f'</div>')
         elif sec.get("tpl"):
