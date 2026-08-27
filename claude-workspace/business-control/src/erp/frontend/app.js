@@ -4931,6 +4931,74 @@ function engDatesForm(id, dates) {
   };
 }
 
+async function engFillInDoc(engId, did, title) {
+  /* The document as the form. Same-token fields type together, because the
+     backend fills every occurrence of a token with one value — the editor
+     shows that truth live instead of surprising anyone at save. */
+  try {
+    const r = await fetch(
+      `/api/store/admin/engagements/${engId}/docs/${did}/editable`,
+      { headers: { Authorization: "Bearer " + S.user.token } });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    const url = URL.createObjectURL(
+      new Blob([await r.text()], { type: "text/html" }));
+    modal(`<h3>Fill in the document — ${esc(title)}</h3>
+      <p class="dim">Type straight into the highlighted fields, where they
+        sit in the text. Fields with the same name fill together — one value
+        per blank, everywhere it appears. Amber is still empty; green is
+        filled.</p>
+      <iframe class="doc-viewer" src="${url}" id="fid-frame"
+        title="fill in the document"></iframe>
+      <div class="modal-foot">
+        <span class="dim" id="fid-count" style="margin-right:auto"></span>
+        <button class="btn" id="fid-save">Save the fills</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`, "wide");
+    const frame = $("#fid-frame");
+    frame.onload = () => {
+      const doc = frame.contentDocument;
+      const all = [...doc.querySelectorAll("input.ph")];
+      const paint = () => {
+        all.forEach((i) => {
+          i.classList.toggle("filled", !!i.value.trim());
+          i.size = Math.max((i.value || i.placeholder).length + 2, 10);
+        });
+        const left = new Set(all.filter((i) => !i.value.trim())
+          .map((i) => i.dataset.tok)).size;
+        $("#fid-count").textContent = left
+          ? `${left} blank${left === 1 ? "" : "s"} left`
+          : "every blank is filled";
+      };
+      all.forEach((inp) => inp.addEventListener("input", () => {
+        all.forEach((o) => {
+          if (o !== inp && o.dataset.tok === inp.dataset.tok)
+            o.value = inp.value;
+        });
+        paint();
+      }));
+      paint();
+    };
+    $("#fid-save").onclick = async () => {
+      const doc = frame.contentDocument;
+      const fills = {};
+      [...doc.querySelectorAll("input.ph")].forEach((i) => {
+        if (i.value.trim()) fills[i.dataset.tok] = i.value.trim();
+      });
+      try {
+        const out = await api(
+          `/api/store/admin/engagements/${engId}/docs/${did}/fill`,
+          { body: { fills } });
+        closeModal();
+        toast(out.unfilled.length
+          ? `Saved — ${out.unfilled.length} blank${
+              out.unfilled.length === 1 ? "" : "s"} left`
+          : "Saved — complete, no brackets left");
+        renderEngagement(engId);
+      } catch (err) { toast(err.message); }
+    };
+  } catch (err) { toast(err.message); }
+}
+
 async function renderClients() {
   if (S.engId) return renderEngagement(S.engId);
   const data = await api("/api/store/admin/engagements");
@@ -5551,7 +5619,14 @@ async function renderEngagement(id) {
           The document goes active on its own when the last bracket is
           gone.</p>
         ${t.placeholders.map(field).join("")}
-        <div class="modal-foot"><button class="btn" id="fb-go">Fill</button></div>`);
+        <div class="modal-foot">
+          <button class="btn alt" id="fb-indoc" style="margin-right:auto"
+            title="type into the fields where they sit in the text">Fill in
+            the document instead</button>
+          <button class="btn" id="fb-go">Fill</button>
+        </div>`);
+      $("#fb-indoc").onclick = () => { closeModal();
+        engFillInDoc(id, did, t.title); };
       $("#fb-go").onclick = async () => {
         const fills = {};
         document.querySelectorAll("[data-fill]").forEach((i) => {

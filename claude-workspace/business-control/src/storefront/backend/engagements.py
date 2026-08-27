@@ -633,6 +633,78 @@ def doc_blanks(eid: int, did: int, u=Depends(admin_user),
             "suggested": {t: sug[t] for t in toks if t in sug}}
 
 
+@router.get("/api/store/admin/engagements/{eid}/docs/{did}/editable")
+def doc_editable(eid: int, did: int, u=Depends(admin_user),
+                 con=Depends(get_con)):
+    """The document itself as the form: every unfilled bracket rendered as
+    an inline field exactly where it sits in the text, so you fill it in
+    context instead of in an abstract list. One value per distinct token —
+    the same rule the fill endpoint enforces — so the client wires same-token
+    fields to type together.
+
+    Placeholders ride through the markdown renderer as control-character
+    sentinels: html.escape leaves them alone, the block parser doesn't care,
+    and they can't collide with anything a human can type."""
+    e = _eng_or_404(con, eid)
+    r = con.execute(
+        "SELECT d.body, d.title, d.id FROM engagement_docs ed"
+        " JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.doc_id=?", (eid, did)).fetchone()
+    if r is None or not (r["body"] or "").strip():
+        raise HTTPException(404, "no authored document there")
+    signed = con.execute(
+        "SELECT COUNT(*) n FROM document_signatures WHERE document_id=?"
+        " AND status='signed'", (did,)).fetchone()["n"]
+    if signed:
+        raise HTTPException(400, "this document has been signed — its text "
+                                 "is what was attested to")
+
+    body, tokens, out, last = r["body"], [], [], 0
+    for m in _matches(body):
+        out.append(body[last:m.start()])
+        out.append(f"\x00{len(tokens)}\x01")
+        tokens.append(m.group(1))
+        last = m.end()
+    out.append(body[last:])
+
+    from . import documents as vault
+    html = vault.md_html("".join(out))
+    sug = suggested_fills(e)
+    for i, tok in enumerate(tokens):
+        val = sect.esc(str(sug.get(tok, "")))
+        html = html.replace(
+            f"\x00{i}\x01",
+            f'<input class="ph{" filled" if val else ""}"'
+            f' data-tok="{sect.esc(tok)}" value="{val}"'
+            f' placeholder="{sect.esc(tok)}"'
+            f' size="{max(len(tok) + 2, 10)}">')
+
+    from .api import FONT_LINK
+    page = (
+        f"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<meta name=\"viewport\" content=\"width=device-width,"
+        f" initial-scale=1\"><title>{sect.esc(r['title'])}</title>"
+        f"{FONT_LINK}<style>"
+        f"body{{font-family:'Inter',system-ui,sans-serif;color:#1b181f;"
+        f"line-height:1.7;max-width:760px;margin:0 auto;padding:32px 24px}}"
+        f"h1,h2,h3,h4{{font-family:'Fraunces',Georgia,serif}}"
+        f"table{{border-collapse:collapse;width:100%}}"
+        f"td,th{{border-top:1px solid #e9e4dc;padding:6px 10px 6px 0;"
+        f"text-align:left}}"
+        f"blockquote{{border-left:3px solid #e9e4dc;padding-left:14px;"
+        f"color:#5d5768;margin:10px 0}}"
+        f"input.ph{{font:inherit;font-size:.92em;padding:1px 7px;margin:0 1px;"
+        f"border:1.5px dashed #d08a00;border-radius:7px;background:#fff8ec;"
+        f"color:#1b181f;min-width:44px;vertical-align:baseline}}"
+        f"input.ph:focus{{outline:2px solid #8a6ff0;border-style:solid}}"
+        f"input.ph.filled{{border:1.5px solid #3fbd82;background:#effaf4}}"
+        f"</style></head><body>"
+        f"<h1>{sect.esc(r['title'])}</h1>"
+        f"{html}</body></html>")
+    from fastapi.responses import HTMLResponse as _HR
+    return _HR(page)
+
+
 class FillBody(BaseModel):
     fills: dict = {}
 

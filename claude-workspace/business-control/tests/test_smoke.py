@@ -3921,6 +3921,31 @@ ok(".doc-line" in _css2 and ".dl-acts" in _css2
    "documents get one aligned line each, and the activity log's actors "
    "share a column")
 
+# --- the document as the form ----------------------------------------------
+_g5 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "06-requirements/requirements-template.md"}).json()
+_ed = c.get(f"/api/store/admin/engagements/{_eid}/docs/{_g5['doc_id']}"
+            "/editable", headers=A)
+ok(_ed.status_code == 200, "a document with blanks opens as its own form")
+_toks = re.findall(r'<input class="ph[^"]*" data-tok="([^"]+)"', _ed.text)
+_bl5 = c.get(f"/api/store/admin/engagements/{_eid}/docs/{_g5['doc_id']}"
+             "/blanks", headers=A).json()["placeholders"]
+ok(len(set(_toks)) == len(_bl5) and len(_toks) >= len(_bl5),
+   "every bracket renders as an inline field where it sits in the text — "
+   "and a token used twice renders twice, to be filled once")
+ok("\x00" not in _ed.text and "<table>" in _ed.text,
+   "the sentinel pass leaks nothing and the document's structure survives")
+ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
+         "/editable", headers=A).status_code == 400,
+   "a signed document refuses the in-place editor for the same reason it "
+   "refuses the form — its text is what was attested to")
+ok("engFillInDoc" in _ops and "fb-indoc" in _ops
+   and "dataset.tok === inp.dataset.tok" in _ops,
+   "the form offers the in-document road, and same-token fields type "
+   "together — the editor shows the one-value rule live instead of "
+   "surprising anyone at save")
+c.delete(f"/api/store/admin/documents/{_g5['doc_id']}", headers=A)
+
 # View opens an in-app viewer, never window.open after an await: the popup
 # blocker eats a window opened outside the user-gesture call stack, and the
 # button reads as broken to exactly the person clicking it.
