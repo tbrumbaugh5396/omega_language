@@ -1189,6 +1189,56 @@ class SendDocBody(BaseModel):
     message: str = ""
 
 
+def _ensure_portal(con, e, u) -> str:
+    """The client's link, made if it isn't there yet. Sending something to a
+    client who has no link should make the link, not fail on a technicality
+    they never knew about."""
+    if e["portal_token"]:
+        return e["portal_token"]
+    token = secrets.token_urlsafe(24)
+    con.execute("UPDATE engagements SET portal_token=?, updated_at=?"
+                " WHERE id=?", (token, time.time(), e["id"]))
+    log(con, e["id"], u["name"], "portal link created to send to the client")
+    return token
+
+
+def _mail_client(con, e, u, to: str, subject: str, lead: str, link: str,
+                 note: str) -> str:
+    """One composer for everything that goes to a client, so the voice and
+    the honesty are the same wherever it is sent from."""
+    from erp.backend import mailer
+    from erp.backend.main import CFG
+    who = (e["approver_name"] or "").strip()
+    try:
+        return mailer.send(
+            CFG, to, subject,
+            (f"Hi {who.split()[0]}," if who else "Hi,") + "\n\n"
+            + (note + "\n\n" if note else "")
+            + f"{lead}\n\n{link}\n\n"
+            + "The link stays current — open it any time to see where "
+              "things stand.\n\n"
+            + f"— {u['name']}")
+    except Exception as err:          # a mail outage must not lose the act
+        return f"error: {err}"[:200]
+
+
+def _sent_note(status: str) -> str:
+    """What actually happened, in the words the log will carry. 'dry' means
+    the pipeline ran with no SMTP configured and nothing left the machine;
+    reporting that as sent is the one outcome worth being loud about."""
+    return ("" if status == "sent"
+            else " — nothing left the machine: no SMTP configured"
+            if status == "dry" else f" — {status}")
+
+
+def _valid_email(to: str) -> str:
+    to = (to or "").strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", to):
+        raise HTTPException(400, "a valid client email is required — set the "
+                                 "client POC's email, or type one here")
+    return to
+
+
 @router.post("/api/store/admin/engagements/{eid}/docs/{did}/send")
 def send_doc(eid: int, did: int, body: SendDocBody, request: Request,
              u=Depends(admin_user), con=Depends(get_con)):
@@ -1211,50 +1261,48 @@ def send_doc(eid: int, did: int, body: SendDocBody, request: Request,
         (eid, did)).fetchone()
     if d is None:
         raise HTTPException(404, "no such document on the client's side")
-    to = (body.to or e["approver_email"] or "").strip()
-    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", to):
-        raise HTTPException(400, "a valid client email is required — set the "
-                                 "client POC's email, or type one here")
-
-    token = e["portal_token"]
-    if not token:
-        token = secrets.token_urlsafe(24)
-        con.execute("UPDATE engagements SET portal_token=?, updated_at=?"
-                    " WHERE id=?", (token, time.time(), eid))
-        log(con, eid, u["name"], "portal link created to send a document")
+    to = _valid_email(body.to or e["approver_email"])
+    token = _ensure_portal(con, e, u)
     base = str(request.base_url).rstrip("/")
     link = f"{base}/engage/{token}/doc/{did}"
-
-    from erp.backend import mailer
-    from erp.backend.main import CFG
-    who = (e["approver_name"] or "").strip()
-    note = (body.message or "").strip()
-    status = "error: not attempted"
-    try:
-        status = mailer.send(
-            CFG, to, f"{d['title']}",
-            (f"Hi {who.split()[0]}," if who else "Hi,") + "\n\n"
-            + (note + "\n\n" if note else "")
-            + f"{d['title']} is ready for you here:\n\n{link}\n\n"
-            + "The link stays current — open it any time to see where "
-              "things stand.\n\n"
-            + f"— {u['name']}")
-    except Exception as err:          # a mail outage must not lose the act
-        status = f"error: {err}"[:200]
-
-    # Logged either way, and honestly: "dry" means the pipeline ran with no
-    # SMTP configured and nothing left the machine. A send recorded as done
-    # when nothing was sent is the one outcome worth being loud about.
+    status = _mail_client(con, e, u, to, d["title"],
+                          f"{d['title']} is ready for you here:", link,
+                          (body.message or "").strip())
     from . import documents as vault
-    vault.log(con, did, u["name"], "sent to the client",
-              f"{to} ({status})")
+    vault.log(con, did, u["name"], "sent to the client", f"{to} ({status})")
     log(con, eid, u["name"],
-        f"sent '{d['title']}' to {to}"
-        + ("" if status == "sent"
-           else " — nothing left the machine: no SMTP configured"
-           if status == "dry" else f" — {status}"))
+        f"sent '{d['title']}' to {to}" + _sent_note(status))
     con.commit()
     return {"status": status, "to": to, "link": link, "title": d["title"]}
+
+
+@router.post("/api/store/admin/engagements/{eid}/bundle/send")
+def send_bundle(eid: int, body: SendDocBody, request: Request,
+                u=Depends(admin_user), con=Depends(get_con)):
+    """Send the client bundle — as the place it lives, not as an attachment.
+
+    A zip in an inbox is a snapshot that starts going stale the moment
+    anything is signed, and it is the copy the client will still be reading
+    from in March. The link lands on their roadmap, where the same bundle
+    is one click away and built fresh from the current papers every time.
+    """
+    e = _eng_or_404(con, eid)
+    n = sum(1 for _ in _export_entries(con, eid, "to_client"))
+    if not n:
+        raise HTTPException(404, "nothing to bundle yet")
+    to = _valid_email(body.to or e["approver_email"])
+    token = _ensure_portal(con, e, u)
+    base = str(request.base_url).rstrip("/")
+    link = f"{base}/engage/{token}"
+    status = _mail_client(
+        con, e, u, to, f"{e['name']} — everything so far",
+        f"Everything we have sent you on {e['name']} is on your roadmap "
+        f"page — {n} files, and a single download for the lot:", link,
+        (body.message or "").strip())
+    log(con, eid, u["name"],
+        f"sent the client bundle ({n} files) to {to}" + _sent_note(status))
+    con.commit()
+    return {"status": status, "to": to, "link": link, "files": n}
 
 
 @router.get("/api/store/admin/engagements/{eid}/docs/{did}/blanks")
@@ -2263,7 +2311,14 @@ def portal_page(token: str, con=Depends(get_con), _rl=Depends(rate_limit)):
     docs_html = ""
     if other_docs:
         docs_html = ("<h2>Your documents</h2><div class=\"card\">"
-                     + "".join(doc_row(d) for d in other_docs) + "</div>")
+                     + "".join(doc_row(d) for d in other_docs)
+                     + f'<p style="margin-top:14px"><a class="btn"'
+                       f' href="/engage/{token}/bundle.zip">Download'
+                       f' everything</a></p>'
+                       f'<p class="fine">One zip, built when you click it —'
+                       f' so it is always what is above, not what was above'
+                       f' the day someone emailed you.</p>'
+                     + "</div>")
 
     brand_html = ""
     if brand_docs:
@@ -2381,6 +2436,33 @@ def portal_doc_pdf(token: str, did: int, con=Depends(get_con),
                                sigs=vault.signed_rows(con, row["id"]),
                                pending=vault.pending_rows(con, row["id"]),
                                gvals=global_values(e))
+
+
+@router.get("/engage/{token}/bundle.zip")
+def portal_bundle(token: str, con=Depends(get_con), _rl=Depends(rate_limit)):
+    """Everything on the client's side, in one file, built when they ask.
+
+    The same entries the studio's own bundle button writes, from the same
+    query with the same side='to_client' clause — so there is no second
+    idea of what the client is allowed to have, and nothing to keep in
+    step. Built on request rather than stored, which is also why the link
+    in an email never goes stale.
+    """
+    e = _portal_or_404(con, token)
+    buf = io.BytesIO()
+    n = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, data in _export_entries(con, e["id"], "to_client"):
+            z.writestr(f"{e['slug']}/{rel}", data)
+            n += 1
+    if not n:
+        raise HTTPException(404, "nothing here yet")
+    log(con, e["id"], e["name"], f"the client downloaded the bundle "
+                                f"({n} files)")
+    con.commit()
+    return Response(buf.getvalue(), media_type="application/zip", headers={
+        "Content-Disposition":
+            f'attachment; filename="{e["slug"]}-everything.zip"'})
 
 
 @router.post("/engage/{token}/direction")

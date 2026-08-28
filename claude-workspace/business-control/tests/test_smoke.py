@@ -4137,6 +4137,38 @@ ok(c.post(f"/api/store/admin/engagements/{_eid}/docs/{_intdoc['id']}/send",
 ok(c.post(f"/api/store/admin/engagements/{_eid}/docs/{_rep['doc_id']}/send",
           headers=A, json={"to": "not-an-email"}).status_code == 400,
    "and a malformed address is refused rather than swallowed")
+# --- and the whole bundle, the same way ------------------------------------
+_bsend = c.post(f"/api/store/admin/engagements/{_eid}/bundle/send",
+                headers=A, json={"to": "poc@client.test"}).json()
+ok(_bsend["status"] == "dry" and _bsend["files"] >= 2
+   and _bsend["link"].endswith(_bsend["link"].split("/engage/")[1]),
+   "the bundle sends as a link to the roadmap, and says how many files are "
+   "behind it")
+_btok = _bsend["link"].split("/engage/")[1]
+_bz = c.get(f"/engage/{_btok}/bundle.zip")
+ok(_bz.status_code == 200 and _bz.content[:2] == b"PK",
+   "which the client can download without a login — built when they click "
+   "it, so the link in an email never goes stale")
+import zipfile as _zf, io as _io3
+_names = _zf.ZipFile(_io3.BytesIO(_bz.content)).namelist()
+ok(_names and all("/internal/" not in n for n in _names)
+   and any("/to-client/" in n for n in _names),
+   "and it is the client's side only — the same query with the same clause "
+   "the studio's own bundle uses, so there is no second idea of what they "
+   "are allowed to have")
+ok(">Download everything<" in c.get(f"/engage/{_btok}").text,
+   "the roadmap page offers it, so the link they were sent lands somewhere "
+   "that explains itself")
+ok(any("client bundle" in l["what"] and "poc@client.test" in l["what"]
+       for l in c.get(f"/api/store/admin/engagements/{_eid}",
+                      headers=A).json()["log"]),
+   "and the send is on the record like any other")
+ok('id="eng-bundle-send"' in _opsjs
+   and "const sendToClient = (path, hint)" in _opsjs
+   and _opsjs.count("sendToClient(") == 2,
+   "one send modal serves both — what is being sent changes, the care "
+   "taken over sending it does not")
+
 ok('data-send="' in _opsjs and 'id="sd-to"' in _opsjs
    and 'out.status === "dry"' in _opsjs,
    "the button asks who it is going to before it goes, and reads back what "

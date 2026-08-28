@@ -6006,6 +6006,9 @@ async function renderEngagement(id) {
           its signatures">Binder PDF</button>
         <button class="btn sm" id="eng-bundle" title="zip of the to-client
           side only — the internal wall holds">Client bundle</button>
+        <button class="btn alt sm" id="eng-bundle-send" title="email the
+          client a link to their roadmap, where the same bundle downloads
+          fresh">Send bundle</button>
       </div>
     </div>
     ${e.internal_poc_status === "pending" && S.user
@@ -6224,13 +6227,12 @@ async function renderEngagement(id) {
      the way any other document opens — the point is that it is a paper in
      the vault, not a screen you can only look at here. */
   /* Sending is outward-facing and cannot be taken back, so the recipient is
-     on screen before the click that sends, not in a toast afterwards. */
-  view().querySelectorAll("[data-send]").forEach((b) => b.onclick = () => {
-    const did = +b.dataset.send;
+     on screen before the click that sends, not in a toast afterwards. One
+     modal for everything that goes to a client: what is being sent changes,
+     the care taken over sending it does not. */
+  const sendToClient = (path, hint) => {
     modal(`<h3>Send to the client</h3>
-      <p class="dim">They get a link to their own portal copy — the live
-        document, which still says the truth next week. The page they land
-        on offers the PDF.</p>
+      <p class="dim">${hint}</p>
       <label>To <span class="req">required</span></label>
       <input id="sd-to" type="email" value="${esc(e.approver_email || "")}">
       <label>A line with it <span class="opt">optional</span></label>
@@ -6241,8 +6243,7 @@ async function renderEngagement(id) {
       </div>`);
     $("#sd-go").onclick = async () => {
       try {
-        const out = await api(
-          `/api/store/admin/engagements/${id}/docs/${did}/send`,
+        const out = await api(path,
           { body: { to: $("#sd-to").value.trim(),
                     message: $("#sd-msg").value.trim() } });
         closeModal();
@@ -6258,7 +6259,18 @@ async function renderEngagement(id) {
         renderEngagement(id);
       } catch (err) { toast(err.message); }
     };
-  });
+  };
+  view().querySelectorAll("[data-send]").forEach((b) => b.onclick = () =>
+    sendToClient(
+      `/api/store/admin/engagements/${id}/docs/${b.dataset.send}/send`,
+      `They get a link to their own portal copy — the live document, which
+       still says the truth next week. The page they land on offers the
+       PDF.`));
+  $("#eng-bundle-send").onclick = () =>
+    sendToClient(`/api/store/admin/engagements/${id}/bundle/send`,
+      `They get a link to their roadmap, where everything on their side of
+       the wall downloads as one zip — built when they click it, so it is
+       never the version that was true the day you sent it.`);
   view().querySelectorAll("[data-report]").forEach((b) => b.onclick = async () => {
     try {
       const out = await api(
