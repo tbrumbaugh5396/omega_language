@@ -1334,6 +1334,37 @@ def quote_bench(u=Depends(admin_user)):
     return HTMLResponse(BENCH.read_text())
 
 
+class VerifyBody(BaseModel):
+    password: str = ""
+
+
+@router.post("/api/store/admin/verify")
+def verify_identity(body: VerifyBody, u=Depends(admin_user),
+                    con=Depends(get_con)):
+    """Re-prove who is holding the screen, without minting anything.
+
+    Exists for the moments a client is looking at the display — the quote
+    bench's client view in a meeting is the canonical one — and a mode
+    switch would reveal costs and margins. The bearer token proves the
+    session; this proves the person is still the one the session belongs
+    to. An account with a password answers with it; one without answers
+    with the admin key, since that is what signed it in as admin."""
+    import hmac as _hmac
+    from erp.backend import auth
+    from erp.backend.main import CFG
+    pw = body.password or ""
+    row = con.execute("SELECT password_hash FROM users WHERE id=?",
+                      (u["id"],)).fetchone()
+    if row and row["password_hash"]:
+        if auth.verify_password(row["password_hash"], pw):
+            return {"ok": True}
+    elif CFG.get("admin_key") and _hmac.compare_digest(
+            pw, str(CFG["admin_key"])):
+        return {"ok": True}
+    raise HTTPException(403, "that isn't it — the account's password, or "
+                             "the admin key if the account has none")
+
+
 class QuoteBody(BaseModel):
     title: str = ""
     markdown: str

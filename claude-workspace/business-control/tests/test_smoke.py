@@ -4314,6 +4314,43 @@ ok('data-quote="1"' in _opsjs
    "one click away inside, not instead")
 ok("if(d.view==='client') S.client=true;" in _qb.text,
    "and the bench lets the embedder choose which face opens")
+ok('$("#eng-quote").onclick = () => openBench({ view: "client" });' in _opsjs,
+   "both doors open on the client face — a quote is as likely to be opened "
+   "with the client in the room as not, and the safe face shows first")
+
+# --- the studio face is behind a second proof of identity ------------------
+# The bearer token proves the session; this proves the person still holding
+# the screen — which matters exactly when that screen is turned toward a
+# client and one click would show costs and margins.
+ok(c.post(f"/api/store/admin/verify",
+          json={"password": "x"}).status_code in (401, 403),
+   "no token, no verify")
+ok(c.post("/api/store/admin/verify", headers=A,
+          json={"password": "not-the-key"}).status_code == 403,
+   "a wrong answer is a 403, not a shrug")
+ok(c.post("/api/store/admin/verify", headers=A,
+          json={"password": CFG["admin_key"]}).json()["ok"],
+   "an account with no password answers with the admin key — the thing "
+   "that signed it in as admin in the first place")
+from erp.backend import auth as _auth
+_vcon = _db.connect()
+_vuid = c.get("/api/me", headers=A).json()["id"]
+_vcon.execute("UPDATE users SET password_hash=? WHERE id=?",
+              (_auth.hash_password("open-sesame"), _vuid))
+_vcon.commit()
+ok(c.post("/api/store/admin/verify", headers=A,
+          json={"password": "open-sesame"}).json()["ok"]
+   and c.post("/api/store/admin/verify", headers=A,
+              json={"password": CFG["admin_key"]}).status_code == 403,
+   "once the account has a password, only the password answers — the "
+   "admin key stops being a skeleton key the moment a real one exists")
+_vcon.execute("UPDATE users SET password_hash='' WHERE id=?", (_vuid,))
+_vcon.commit(); _vcon.close()
+ok("w.bcVerify = (pw) =>" in _opsjs
+   and "gateStudio" in _qb.text and "studioUnlocked" in _qb.text
+   and "if(S.client) gateStudio(flipView);" in _qb.text,
+   "and the bench's client→studio flip asks for that proof — going to the "
+   "client view stays free, because hiding things needs no permission")
 _qbjs = _qb.text
 ok("quoteMarkdown" in _qbjs and "Part 2 — support" in _qbjs
    and "[SIGN HERE]" in _qbjs,
@@ -4351,6 +4388,42 @@ ok("bands:{light:20,std:30,heavy:50}, corePrice:50" in _qb.text
    and "tierPrice:{starter:199,pro:349,scale:699}" in _qb.text
    and "{n:'Essential — $150',p:150" in _qb.text,
    "and the bench runs on the same numbers — bands, core, tiers, care")
+
+# The deck too: its three data models each carried their own copies of the
+# prices, which is how the drift happened the first time. Held to the same
+# parsed book table via a name→id map (structure, not prices).
+_deck = Path("docs/product/ecommerce-stack-deck.html").read_text()
+_D_ID = {"Sourcing": "src", "Inventory": "inv", "Production": "prd",
+         "Warehouse": "wh", "Distribution": "log", "Learning": "lrn",
+         "Voice & translation": "lng", "Selling": "sell",
+         "Subscriptions & boxes": "box", "Fundraising": "fund",
+         "Marketing": "mkt", "CRM & Support": "crm", "Events": "evt",
+         "Affiliates": "aff", "Payments": "pay", "Accounting": "acc",
+         "Finance": "fin", "Treasury & investments": "tre",
+         "Workforce": "work", "Onboarding": "onb", "Payroll": "pyr",
+         "Intelligence": "intel", "Automation": "auto", "Comms": "com",
+         "InfoSec": "sec", "API & data platform": "api", "Legal": "leg"}
+_doff = [f"{n} ${p}" for n, p in _caps
+         if not re.search(r'id:"' + _D_ID[n] + r'",\s*nm:"[^"]*",price:'
+                          + p + ",", _deck)]
+ok(not _doff,
+   f"every capability carries the book's band price in the deck's price "
+   f"book too (off: {_doff})")
+ok('nm:"Platform Core",price:50,' in _deck
+   and _deck.count("price:199,") >= 1 and "price:349," in _deck
+   and "price:699," in _deck and "mrr:199" in _deck and "mrr:349" in _deck
+   and "mrr:699" in _deck
+   and '"starter","Starter",199,' in _deck
+   and '"pro","Pro",349,' in _deck and '"scale","Scale",699,' in _deck,
+   "core and the tier prices agree across all three of the deck's models — "
+   "quote builder, cluster planner and tier cards")
+ok("price:49," not in _deck and "price:149," not in _deck
+   and "price:399," not in _deck and "npPrice(49)" not in _deck,
+   "no v1 tier price survives anywhere in the deck")
+_dbundles = _deck.split("const BUNDLES=")[1][:600]
+ok('"lngB"' not in _dbundles,
+   "the graph bundles match the book's §13 derivation — course and lingua "
+   "carry no Voice & translation, which the priced side never had")
 ok("the platform — $50/mo" in _menu,
    "the menu's platform line is the book's $50 Core")
 

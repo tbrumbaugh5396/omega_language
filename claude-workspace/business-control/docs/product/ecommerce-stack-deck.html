@@ -69,7 +69,8 @@ a{color:var(--ac2)}
  <b>Interactive throughout:</b> assemble from capability boxes, pick roles, swap stack components, explore the
  tier packages, then build a real quote — pick a tier, tune volumes,
  price overages, and compare usage scenarios to find the best plan.</p>
- <p class="dim">Sources: <i>ecommerce-architecture-decision.md</i> ·
+ <p class="dim">Prices: <i>price-book.md v2</i> — the source; this deck
+ carries copies. Sources: <i>ecommerce-architecture-decision.md</i> ·
  <i>private-subscription-app.md</i> · <i>saas-scaling.md</i> ·
  the business-control codebase (147 passing checks).</p>
 </section>
@@ -161,7 +162,7 @@ a{color:var(--ac2)}
  software should be predictable — no % of GMV; the payment % already goes to
  Shopify/Stripe). Add-ons: +$29/mo per extra location, email/SMS volume at
  cost+margin. Annual = 2 months free. 14-day trial, card up front. Gross
- margin at Pro ≈ 90% once a VPS carries ~10 tenants.
+ margin at Pro ≈ 97% once a VPS carries ~10 tenants.
  <b>Support ladder:</b> email (Starter) · priority chat (Pro) · dedicated +
  onboarding call (Scale). <b>Services revenue:</b> paid setup & data migration
  $499 one-time (waived on annual) + custom integrations billed — services run
@@ -216,7 +217,7 @@ a{color:var(--ac2)}
    <th style="background:#f0a020;color:#282828">business-control Pro</th>
    <th>Shopify + app stack</th><th>Odoo</th><th>NetSuite</th></tr>
   <tr><td><b>Monthly, ~10 staff</b></td>
-   <td style="background:#f0a020;color:#282828"><b>$149 flat</b></td>
+   <td style="background:#f0a020;color:#282828"><b>$349 flat</b></td>
    <td>≈ $300–500 — plan + Recharge + Intercom + route app <i>(verify)</i></td>
    <td>≈ $250+ per-user + hosting <i>(verify)</i></td>
    <td>≈ $1,000–2,500 + $10k+ setup <i>(verify)</i></td></tr>
@@ -771,8 +772,8 @@ a{color:var(--ac2)}
   document.getElementById("qb-total").closest(".slide").scrollIntoView({behavior:"smooth"});}
  const BUNDLES={
   food:  {nm:"🍜 Food brand",         mm:"profit",   boxes:["sellB","payB","invB","whB","logB","boxB","workB","evtB","comB","crmB","mktB","intB"]},
-  course:{nm:"🎓 Course business",    mm:"profit",   boxes:["sellB","payB","lrnB","lngB","workB","comB","crmB","mktB","intB"]},
-  lingua:{nm:"🗣 Language nonprofit", mm:"nonprofit",boxes:["lrnB","lngB","fndB","payB","workB","evtB","comB","crmB","intB"]},
+  course:{nm:"🎓 Course business",    mm:"profit",   boxes:["sellB","payB","lrnB","workB","comB","crmB","mktB","intB"]},
+  lingua:{nm:"🗣 Language nonprofit", mm:"nonprofit",boxes:["lrnB","fndB","payB","workB","evtB","comB","crmB","intB"]},
   bank:  {nm:"🥫 Food bank",          mm:"nonprofit",boxes:["invB","whB","logB","fndB","payB","workB","evtB","comB","crmB","intB"]}};
  const bSel={};BOXES.forEach(b=>bSel[b.id]=!!b.always);
  let curBundle=null,curMM="profit";
@@ -1056,11 +1057,11 @@ a{color:var(--ac2)}
  <h2>Feature costs — pick a tier, tune the volumes, read the quote</h2>
  <div class="presets" style="margin-bottom:6px">
   <button class="btn" id="qtb-starter" style="background:#fff;color:#282828;border:2px solid #f0a020"
-   onclick="qbTierSet('starter')">Starter $49</button>
+   onclick="qbTierSet('starter')">Starter $199</button>
   <button class="btn" id="qtb-pro" style="background:#fff;color:#282828;border:2px solid #e01878"
-   onclick="qbTierSet('pro')">★ Pro $149</button>
+   onclick="qbTierSet('pro')">★ Pro $349</button>
   <button class="btn" id="qtb-scale" style="background:#fff;color:#282828;border:2px solid #9888c0"
-   onclick="qbTierSet('scale')">Scale $399</button>
+   onclick="qbTierSet('scale')">Scale $699</button>
   <span class="dim" style="font-size:13px">— presets toggle each tier's
   feature set (same idea as the component swap board)</span>
  </div>
@@ -1155,9 +1156,9 @@ a{color:var(--ac2)}
   all:"#282828","add-on":"#a09888"};
  const TIER_ORD={all:0,starter:1,pro:2,scale:3,"add-on":4};
  QF.sort((a,b)=>TIER_ORD[QMETA[a.id][0]]-TIER_ORD[QMETA[b.id][0]]);
- const QTIERS={starter:{price:49,feats:["node","chat","email","bak"]},
-  pro:{price:149,feats:["node","chat","turn","bot","email","bak"]},
-  scale:{price:399,feats:["node","chat","turn","sfu","bot","voice","trx","email","sms","bak"]}};
+ const QTIERS={starter:{price:199,feats:["node","chat","email","bak"]},
+  pro:{price:349,feats:["node","chat","turn","bot","email","bak"]},
+  scale:{price:699,feats:["node","chat","turn","sfu","bot","voice","trx","email","sms","bak"]}};
  // Metered features: included quota per tier + customer overage price (≈3× cost)
  const METER={
   sfu:{u:v=>v.pmin,unit:"pmin",inc:{starter:0,pro:0,scale:50000},ov:0.0025},
@@ -1271,9 +1272,9 @@ a{color:var(--ac2)}
   const rows=[["Current volumes (builder above)",qSnap()],...qScenarios.map(s=>[s.name,s.snap])];
   cmpHost.innerHTML=editors+
    `<table><tr><th>scenario${qNp?' <span style="font-weight:400;font-size:10px">(nonprofit −30%)</span>':""}</th>
-    <th style="background:#f0a020;color:#282828">Starter $${npPrice(49)}</th>
-    <th style="background:#e01878;color:#ffffff">Pro $${npPrice(149)}</th>
-    <th style="background:#9888c0;color:#ffffff">Scale $${npPrice(399)}</th>
+    <th style="background:#f0a020;color:#282828">Starter $${npPrice(QTIERS.starter.price)}</th>
+    <th style="background:#e01878;color:#ffffff">Pro $${npPrice(QTIERS.pro.price)}</th>
+    <th style="background:#9888c0;color:#ffffff">Scale $${npPrice(QTIERS.scale.price)}</th>
     <th>best plan</th></tr>`+
    rows.map(([nm,snap])=>{
     const c={starter:planCost("starter",snap),pro:planCost("pro",snap),
@@ -1326,8 +1327,8 @@ a{color:var(--ac2)}
  <div class="grid3" style="margin-top:16px">
   <div class="card" style="border-color:#f0a020"><b>≈ $8–12/mo</b>
    <p class="dim" style="font-size:13px">to serve a realistic Pro tenant
-   ($149) — chatbot + node share + TURN + email + backups →
-   <b style="color:#a86a08">~92% gross margin</b></p></div>
+   ($349) — chatbot + node share + TURN + email + backups →
+   <b style="color:#a86a08">~97% gross margin</b></p></div>
   <div class="card" style="border-color:#e01878"><b>The pricing rule</b>
    <p class="dim" style="font-size:13px">Anything a vendor prices
    <b>per-minute or per-message</b> becomes a <b>metered add-on</b>
@@ -1403,9 +1404,9 @@ a{color:var(--ac2)}
  <script>
  // Weighted capacity: not all tenants cost the same to serve.
  const CL_CLASSES=[
-  {id:"micro",nm:"Micro",units:1,note:"1 location · ≤5 seats",mrr:49,def:40},
-  {id:"small",nm:"Growing",units:4,note:"≤3 locations · ≤20 seats",mrr:149,def:20},
-  {id:"large",nm:"Large",units:16,note:"≤10 locations · ≤75 seats",mrr:399,def:5},
+  {id:"micro",nm:"Micro",units:1,note:"1 location · ≤5 seats",mrr:199,def:40},
+  {id:"small",nm:"Growing",units:4,note:"≤3 locations · ≤20 seats",mrr:349,def:20},
+  {id:"large",nm:"Large",units:16,note:"≤10 locations · ≤75 seats",mrr:699,def:5},
   {id:"ent",nm:"Enterprise",units:0,note:"dedicated node each",mrr:1200,def:1},
  ];
  const CL_PROVIDERS={hetzner:{nm:"Hetzner",mult:0.45},do:{nm:"DigitalOcean",mult:1.0},
@@ -1551,27 +1552,38 @@ a{color:var(--ac2)}
  <script>
  // Customer-facing price book. Software lines cost us ~nothing to serve;
  // metered lines carry a real vendor cost, which is why they're metered.
- const XQ_CORE={id:"core",nm:"Platform Core",price:49,cost:2,req:1,
+ const XQ_CORE={id:"core",nm:"Platform Core",price:50,cost:2,req:1,
   desc:"accounts · roles · PWA · push · backups · support desk"};
  const XQ_BOXES=[
-  {id:"sell",nm:"Selling",price:29,cost:0,desc:"catalog · variants · cart · checkout · media"},
-  {id:"pay", nm:"Payments & finance ops",price:15,cost:0,desc:"Stripe/Shopify rails · refunds · receipts"},
-  {id:"inv", nm:"Inventory",price:19,cost:0,desc:"stock · par levels · counts"},
-  {id:"wh",  nm:"Warehouse",price:15,cost:0,desc:"bins · pick lists · load QR"},
-  {id:"log", nm:"Distribution",price:29,cost:0,desc:"routes · fleet · truck QR · ETAs"},
-  {id:"src", nm:"Sourcing ⧖",price:15,cost:0,desc:"suppliers · POs (roadmap)"},
-  {id:"prd", nm:"Production ⧖",price:25,cost:0,desc:"batches · lots · expiry (roadmap)"},
-  {id:"work",nm:"Workforce",price:19,cost:0,desc:"time clock · jobs · kiosk · 1099"},
-  {id:"evt", nm:"Events",price:9,cost:0,desc:"event clock-ins · promo landings"},
-  {id:"com", nm:"Comms",price:19,cost:1.5,desc:"chat · voice · video (TURN relay)"},
-  {id:"crm", nm:"CRM & Support",price:19,cost:0,desc:"outreach pipeline · support desk"},
-  {id:"mkt", nm:"Marketing",price:25,cost:0,desc:"email playbooks · A/B · pixels"},
-  {id:"intel",nm:"Intelligence",price:29,cost:0,desc:"funnel · P&L · HQ view"},
-  {id:"box", nm:"Subscriptions & boxes",price:25,cost:0,desc:"cycles · cutoffs · dunning · portal"},
-  {id:"aff", nm:"Affiliates",price:15,cost:0,desc:"links · landing pages · attribution"},
-  {id:"fund",nm:"Fundraising",price:19,cost:0,desc:"recurring giving · receipts · grants"},
-  {id:"lrn", nm:"Learning ⧖",price:35,cost:0,desc:"lessons · curriculum · progress (roadmap)"},
-  {id:"api", nm:"API & data platform",price:25,cost:0,desc:"public API · scoped keys · webhooks · exports"},
+  // price-book.md v2: three bands — light $20 · standard $30 · heavy $50
+  {id:"sell",nm:"Selling",price:50,cost:0,desc:"catalog · variants · cart · checkout · media"},
+  {id:"pay", nm:"Payments & finance ops",price:20,cost:0,desc:"Stripe/Shopify rails · refunds · receipts"},
+  {id:"inv", nm:"Inventory",price:30,cost:0,desc:"stock · par levels · counts"},
+  {id:"wh",  nm:"Warehouse",price:20,cost:0,desc:"bins · pick lists · load QR"},
+  {id:"log", nm:"Distribution",price:50,cost:0,desc:"routes · fleet · truck QR · ETAs"},
+  {id:"src", nm:"Sourcing ⧖",price:20,cost:0,desc:"suppliers · POs (roadmap)"},
+  {id:"prd", nm:"Production ⧖",price:30,cost:0,desc:"batches · lots · expiry (roadmap)"},
+  {id:"work",nm:"Workforce",price:30,cost:0,desc:"time clock · jobs · kiosk · 1099"},
+  {id:"evt", nm:"Events",price:20,cost:0,desc:"event clock-ins · promo landings"},
+  {id:"com", nm:"Comms",price:20,cost:1.5,desc:"chat · voice · video (TURN relay)"},
+  {id:"crm", nm:"CRM & Support",price:30,cost:0,desc:"outreach pipeline · support desk"},
+  {id:"mkt", nm:"Marketing",price:30,cost:0,desc:"email playbooks · A/B · pixels"},
+  {id:"intel",nm:"Intelligence",price:50,cost:0,desc:"funnel · P&L · HQ view"},
+  {id:"box", nm:"Subscriptions & boxes",price:30,cost:0,desc:"cycles · cutoffs · dunning · portal"},
+  {id:"aff", nm:"Affiliates",price:20,cost:0,desc:"links · landing pages · attribution"},
+  {id:"fund",nm:"Fundraising",price:30,cost:0,desc:"recurring giving · receipts · grants"},
+  {id:"lrn", nm:"Learning ⧖",price:50,cost:0,desc:"lessons · curriculum · progress (roadmap)"},
+  {id:"api", nm:"API & data platform",price:30,cost:0,desc:"public API · scoped keys · webhooks · exports"},
+  // the nine v1 left unpriced, banded by price-book v2 §3
+  {id:"lng", nm:"Voice & translation ⧖",price:30,cost:0,desc:"recording · STT · translation (roadmap)"},
+  {id:"acc", nm:"Accounting ⧖",price:30,cost:0,desc:"ledger · categories · exports (roadmap)"},
+  {id:"fin", nm:"Finance ⧖",price:30,cost:0,desc:"cash view · budgets · forecasts (roadmap)"},
+  {id:"tre", nm:"Treasury & investments ⧖",price:30,cost:0,desc:"cash · assets · positions (roadmap)"},
+  {id:"onb", nm:"Onboarding ⧖",price:20,cost:0,desc:"hiring docs · certs · checklists (roadmap)"},
+  {id:"pyr", nm:"Payroll ⧖",price:30,cost:0,desc:"timesheets → pay · 1099 (roadmap)"},
+  {id:"sec", nm:"InfoSec ⧖",price:30,cost:0,desc:"SSO · audit logs · access reviews (roadmap)"},
+  {id:"auto",nm:"Automation ⧖",price:30,cost:0,desc:"triggers · rules · schedules (roadmap)"},
+  {id:"leg", nm:"Legal ⧖",price:20,cost:0,desc:"contracts · policies · docs (roadmap)"},
  ];
  // Metered add-ons: included allowance, then price per unit (≈3× our cost).
  const XQ_METERS=[
@@ -1594,9 +1606,9 @@ a{color:var(--ac2)}
  const XQ_SCALE={loc:{nm:"Locations",incl:1,per:29,def:1},
   seat:{nm:"Staff seats",incl:5,per:7,def:5}};
  const XQ_TIERS=[
-  {id:"starter",nm:"Starter",price:49,loc:1,seat:5},
-  {id:"pro",nm:"Pro",price:149,loc:3,seat:20},
-  {id:"scale",nm:"Scale",price:399,loc:10,seat:75}];
+  {id:"starter",nm:"Starter",price:199,loc:1,seat:5},
+  {id:"pro",nm:"Pro",price:349,loc:3,seat:20},
+  {id:"scale",nm:"Scale",price:699,loc:10,seat:75}];
  // Services: a one-time build, plus creative as a monthly subscription.
  const XQ_BUILD=[
   {id:"none",nm:"No build — self-serve",once:0,note:"they configure it themselves"},
@@ -1845,8 +1857,8 @@ a{color:var(--ac2)}
   <rect x="566" y="60" width="220" height="96" rx="12" fill="#fff"
    stroke="#6c00bf" stroke-width="2"/>
   <text x="676" y="88" text-anchor="middle" font-size="13" font-weight="700" fill="#282828">3-year value</text>
-  <text x="676" y="112" text-anchor="middle" font-size="21" font-weight="700" fill="#6c00bf">$14,364</text>
-  <text x="676" y="134" text-anchor="middle" font-size="10.5" fill="#686058">$399/mo × 36 months</text>
+  <text x="676" y="112" text-anchor="middle" font-size="21" font-weight="700" fill="#6c00bf">$25,164</text>
+  <text x="676" y="134" text-anchor="middle" font-size="10.5" fill="#686058">$699/mo × 36 months</text>
   <line x1="786" y1="108" x2="838" y2="108" stroke="#8a8278" stroke-width="1.6" marker-end="url(#gtm)"/>
   <rect x="842" y="46" width="284" height="124" rx="12" fill="#f0ebfa"
    stroke="#6c00bf" stroke-width="2.5"/>
@@ -2828,11 +2840,11 @@ const SUITES=[
  ["Intelligence","SCALE","#9888c0",["Funnel · drop-off detection","P&L · regional analytics","HQ game view · playbook","Achievements · staffing"]],
 ];
 const TIERS_UI=[
- ["starter","Starter",49,"#f0a020","own","1 location · 5 staff seats",
+ ["starter","Starter",199,"#f0a020","own","1 location · 5 staff seats",
   "Commerce Core + Workforce: shop, orders, promos/QR, time clock & kiosk, jobs, timesheets. The corner-store tier. Includes 1 location and 5 staff seats; +$29/location, +$7/seat beyond."],
- ["pro","Pro",149,"#e01878","warn","3 locations · 20 seats",
+ ["pro","Pro",349,"#e01878","warn","3 locations · 20 seats",
   "Everything in Starter + Operations & CRM: inventory, pick lists, routes & fleet, box cycles, outreach pipeline, live chat/video support, push. The growing-brand tier. Includes 3 locations and 20 staff seats."],
- ["scale","Scale",399,"#9888c0","rent","10 locations · 75 seats · API",
+ ["scale","Scale",699,"#9888c0","rent","10 locations · 75 seats · API",
   "Everything in Pro + Growth & Intelligence: email playbooks, A/B, pixels, affiliates, funnel/P&L/HQ, 1099 contractors, webhooks/API, white-label. Includes 10 locations and 75 staff seats."]];
 // Seats/locations are the expansion levers: included allowances per tier,
 // then overage — which is what makes upgrading cheaper than growing in place.

@@ -6288,6 +6288,13 @@ async function renderEngagement(id) {
             renderEngagement(id);
           } catch (err) { toast(err.message); }
         };
+        /* Re-prove the person before the studio face shows costs and
+           margins — the bench asks, this answers. The token proves the
+           session; the password proves the one holding the screen is
+           still ours, which matters exactly when a client is watching. */
+        w.bcVerify = (pw) =>
+          api("/api/store/admin/verify", { body: { password: pw } })
+            .then(() => true).catch(() => false);
         if (w.bcInit) w.bcInit({ client: e.name, state: saved.state || "",
                                  view: opts.view });
       };
@@ -6300,7 +6307,10 @@ async function renderEngagement(id) {
       };
     } catch (err) { toast(err.message); }
   };
-  $("#eng-quote").onclick = () => openBench({ view: "studio" });
+  /* Client view on both doors: a quote is as likely to be opened with
+     the client in the room as not, and the safe face is the one that
+     shows first. The studio face is a toggle away, behind a password. */
+  $("#eng-quote").onclick = () => openBench({ view: "client" });
   view().querySelectorAll("[data-gen]").forEach((b) => b.onclick = () =>
     engGenerate(id, b.dataset.gen));
   /* The stage, written up for the client. Composed on the server from the

@@ -1658,12 +1658,61 @@ document.getElementById('linkBtn').addEventListener('click',copyLink);
 document.getElementById('pdfBtn').addEventListener('click',exportPDF);
 
 const vt=document.getElementById('viewToggle');
-vt.addEventListener('click',()=>{
+function flipView(){
   S.client=!S.client;
   document.body.classList.toggle('client',S.client);
   vt.textContent=S.client?'← Back to studio view':'Client view →';
   window.scrollTo({top:0,behavior:'smooth'});
   render();
+}
+
+/* Going TO the client view is always free — it hides things. Coming BACK
+   to the studio view shows costs and margins, and the screen may be in
+   front of the client at that exact moment, so where an embedder provides
+   a verifier (window.bcVerify) the flip asks for it. Once per opening. */
+let studioUnlocked=false;
+function gateStudio(proceed){
+  if(studioUnlocked||!window.bcVerify){ proceed(); return; }
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;z-index:60;display:flex;'+
+    'align-items:center;justify-content:center;background:rgba(10,14,13,.82)';
+  ov.innerHTML='<div style="background:var(--bench-2);border:1px solid '+
+    'var(--edge);border-radius:3px;padding:22px 24px;width:min(360px,90vw)">'+
+    '<div style="font-size:11px;letter-spacing:.14em;text-transform:'+
+    'uppercase;color:var(--dim);margin-bottom:10px">Studio view — '+
+    'prove it\u2019s you</div>'+
+    '<p style="margin:0 0 12px;color:var(--cost);font-size:12.5px">The '+
+    'studio face shows costs and margins. Your password — or the admin '+
+    'key, if the account has none.</p>'+
+    '<input id="gs-pw" type="password" autocomplete="current-password" '+
+    'style="width:100%;background:var(--bench-3);border:1px solid '+
+    'var(--edge);border-radius:2px;color:var(--pale);font:inherit;'+
+    'padding:8px 10px">'+
+    '<div id="gs-err" style="color:var(--warn);font-size:12px;'+
+    'min-height:16px;margin:6px 0 8px"></div>'+
+    '<div style="display:flex;gap:8px;justify-content:flex-end">'+
+    '<button id="gs-cancel" class="act">Cancel</button>'+
+    '<button id="gs-go" class="act pdf">Unlock</button></div></div>';
+  document.body.appendChild(ov);
+  const pw=ov.querySelector('#gs-pw');
+  pw.focus();
+  const done=()=>ov.remove();
+  ov.querySelector('#gs-cancel').addEventListener('click',done);
+  const attempt=async()=>{
+    const ok=await window.bcVerify(pw.value);
+    if(ok){ studioUnlocked=true; done(); proceed(); }
+    else{ ov.querySelector('#gs-err').textContent=
+      'That isn\u2019t it. The account\u2019s password, or the admin key.';
+      pw.value=''; pw.focus(); }
+  };
+  ov.querySelector('#gs-go').addEventListener('click',attempt);
+  pw.addEventListener('keydown',e=>{ if(e.key==='Enter')attempt();
+    if(e.key==='Escape')done(); });
+}
+
+vt.addEventListener('click',()=>{
+  if(S.client) gateStudio(flipView);   // client → studio: prove it
+  else flipView();                     // studio → client: always free
 });
 
 document.getElementById('resetMeters').addEventListener('click',()=>{resetMeters();render();});
