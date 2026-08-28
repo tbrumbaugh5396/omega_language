@@ -366,6 +366,10 @@ def connect() -> sqlite3.Connection:
 
 # Columns added after first release; applied to pre-existing databases.
 MIGRATIONS = (
+    # Who an email actually went to. The log joined users for the address,
+    # which is fine for a customer and useless for a client's point of
+    # contact — they are not a user of this system and never will be.
+    "ALTER TABLE email_log ADD COLUMN to_addr TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN email_verified_at REAL DEFAULT 0",
     "ALTER TABLE shifts ADD COLUMN event_id INTEGER",
     "ALTER TABLE trucks ADD COLUMN driver_user_id INTEGER",

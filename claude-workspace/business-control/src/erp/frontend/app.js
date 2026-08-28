@@ -4600,7 +4600,8 @@ async function renderAdmin() {
         shortfalls after curation lock. <code>/api/cycles/current</code> →
         <code>changes_open</code> is the flag the subscriber portal must obey.</div>
     </div></details>
-    <details class="sect"><summary>Email marketing</summary><div class="inner">
+    <details class="sect"><summary>Email — SMTP, and everything sent</summary>
+      <div class="inner">
       <form class="inline" id="email-form">
         <label class="f">SMTP host <input id="em-host"
           value="${esc(emailCfg.host)}" placeholder="smtp.gmail.com"></label>
@@ -4625,7 +4626,16 @@ async function renderAdmin() {
         <button class="btn alt">Send test email</button>
         <span id="em-test-out" class="dim"></span>
       </form>
-      <div class="dim" style="margin-top:6px">No SMTP host = dry mode: the
+      <div class="dim" style="margin-top:6px">These credentials carry
+        <b>everything</b> the system sends — signature requests, signing
+        receipts, progress updates and client bundles as well as the
+        marketing playbooks — and every one of them lands in the log
+        below, whichever screen it was sent from. For Gmail: host
+        <code>smtp.gmail.com</code>, port <code>587</code>, your address as
+        the username, and an <b>app password</b> rather than your own
+        (Google Account → Security → 2-Step Verification → App passwords).
+        Then send yourself a test before it matters.
+        No SMTP host = dry mode: the
         playbooks run and log below, but nothing sends. Abandoned-cart emails
         go to signed-in customers with an email who added to cart 1–48h ago
         and didn't buy (once/week max). Win-back targets customers quiet for

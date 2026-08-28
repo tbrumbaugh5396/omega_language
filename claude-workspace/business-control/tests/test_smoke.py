@@ -4159,6 +4159,24 @@ ok(_names and all("/internal/" not in n for n in _names)
 ok(">Download everything<" in c.get(f"/engage/{_btok}").text,
    "the roadmap page offers it, so the link they were sent lands somewhere "
    "that explains itself")
+# Every outbound mail lands in one panel, whichever screen sent it: an
+# operator asking "did that go?" should not have to know which part of the
+# app wrote it.
+_elog = c.get("/api/admin/email/log", headers=A).json()
+_mine = [l for l in _elog if l["email"] == "poc@client.test"]
+ok(len(_mine) >= 2 and {l["kind"] for l in _mine} == {"client"}
+   and all(l["status"] == "dry" for l in _mine),
+   "the document send and the bundle send both show in the ERP's email log, "
+   "against the address they went to — a client POC is not a user of this "
+   "system, so the recorded address wins over any join")
+ok(any(l["kind"] == "signature" for l in _elog),
+   "and so do signature requests, which were sending without ever "
+   "appearing there")
+ok("Email — SMTP, and everything sent" in _opsjs
+   and "app password" in _opsjs and "smtp.gmail.com" in _opsjs,
+   "the settings panel says what those credentials actually carry, and how "
+   "to get one for Gmail without handing over a real password")
+
 ok(any("client bundle" in l["what"] and "poc@client.test" in l["what"]
        for l in c.get(f"/api/store/admin/engagements/{_eid}",
                       headers=A).json()["log"]),

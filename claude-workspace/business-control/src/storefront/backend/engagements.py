@@ -1210,14 +1210,14 @@ def _mail_client(con, e, u, to: str, subject: str, lead: str, link: str,
     from erp.backend.main import CFG
     who = (e["approver_name"] or "").strip()
     try:
-        return mailer.send(
-            CFG, to, subject,
+        return mailer.send_logged(
+            con, CFG, to, subject,
             (f"Hi {who.split()[0]}," if who else "Hi,") + "\n\n"
             + (note + "\n\n" if note else "")
             + f"{lead}\n\n{link}\n\n"
             + "The link stays current — open it any time to see where "
               "things stand.\n\n"
-            + f"— {u['name']}")
+            + f"— {u['name']}", "client")
     except Exception as err:          # a mail outage must not lose the act
         return f"error: {err}"[:200]
 

@@ -3425,9 +3425,13 @@ def set_email_config(body: EmailConfigBody, user=Depends(admin_user)):
 
 @app.get("/api/admin/email/log")
 def email_log(user=Depends(admin_user), con=Depends(get_con)):
+    # A client's point of contact is not a user of this system, so the
+    # address recorded on the send wins over the one a join could find.
     rows = con.execute(
-        "SELECT l.*, u.name, u.email FROM email_log l LEFT JOIN users u"
-        " ON u.id=l.user_id ORDER BY l.id DESC LIMIT 50").fetchall()
+        "SELECT l.*, u.name, COALESCE(NULLIF(l.to_addr,''), u.email, '')"
+        "   AS email"
+        " FROM email_log l LEFT JOIN users u ON u.id=l.user_id"
+        " ORDER BY l.id DESC LIMIT 50").fetchall()
     return [dict(r) for r in rows]
 
 

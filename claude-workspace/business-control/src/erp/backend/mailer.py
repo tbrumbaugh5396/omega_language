@@ -36,6 +36,31 @@ def send(cfg: dict, to: str, subject: str, text: str) -> str:
         return f"error: {e}"[:200]
 
 
+def send_logged(con, cfg, to: str, subject: str, text: str,
+                kind: str) -> str:
+    """Send once, and put it where the ERP's email panel can see it.
+
+    Everything that leaves this building should be visible in one place —
+    a campaign, a signature request and a progress update are all "did we
+    email the client, and did it actually go?". They differ in who wrote
+    them, not in what an operator needs to know afterwards.
+
+    Unlike log_and_send there is no dedup key: these are deliberate, one
+    at a time, and sending the same document twice on purpose is a normal
+    thing to do.
+    """
+    status = send(cfg, to, subject, text)
+    try:
+        con.execute(
+            "INSERT INTO email_log(user_id,kind,dedup_key,subject,status,"
+            " to_addr,created_at) VALUES(?,?,?,?,?,?,?)",
+            (None, kind, None, subject[:200], status, to[:200], db.now()))
+        con.commit()
+    except Exception:
+        pass          # the log is a record of the send, not a gate on it
+    return status
+
+
 def log_and_send(con, cfg, user_id: int, email: str, kind: str,
                  subject: str, text: str, dedup: str) -> bool:
     """Send at most once per dedup key; previously *errored* (or crashed

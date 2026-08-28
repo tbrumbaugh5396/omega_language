@@ -1324,13 +1324,13 @@ def request_signature(did: int, body: SignRequestBody, request: Request,
                 "provider": "builtin", "in_person": True}
     try:
         from erp.backend.main import CFG
-        mailer.send(
-            CFG, email, f"Please sign: {d['title']}",
+        mailer.send_logged(
+            con, CFG, email, f"Please sign: {d['title']}",
             f"Hi {body.signer_name},\n\n"
             f"{body.message.strip() or 'Please review and sign the document below.'}\n\n"
             f"{link}\n\n"
             f"This link is unique to you — please don't forward it.\n\n"
-            f"— {u['name']}")
+            f"— {u['name']}", "signature")
     except Exception:
         pass          # a mail outage must not lose the request
     return {"ok": True, "link": link, "id": cur.lastrowid,
@@ -1671,13 +1671,13 @@ def do_sign(token: str, body: SignBody, request: Request,
 
     try:
         from erp.backend.main import CFG
-        mailer.send(
-            CFG, s["signer_email"], f"Signed: {d['title']}",
+        mailer.send_logged(
+            con, CFG, s["signer_email"], f"Signed: {d['title']}",
             f"Thank you — you signed '{d['title']}' on "
             f"{time.strftime('%d %B %Y at %H:%M UTC', time.gmtime(now))}.\n\n"
             f"Your signing certificate: "
             f"{str(request.base_url).rstrip('/')}/sign/{token}/certificate\n\n"
-            f"Document fingerprint (SHA-256): {digest}")
+            f"Document fingerprint (SHA-256): {digest}", "receipt")
     except Exception:
         pass
     from .api import fire_webhooks
