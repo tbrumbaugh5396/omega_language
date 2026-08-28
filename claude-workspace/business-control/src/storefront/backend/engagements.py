@@ -267,6 +267,195 @@ def earlier_open(gates: list, key: str) -> list:
     return out
 
 
+def stage_label(client_stage: str) -> str:
+    """"03-agreement" as a person says it: "Stage 03 · agreement"."""
+    n, _, rest = client_stage.partition("-")
+    return f"Stage {n} · {rest.replace('-', ' ')}"
+
+
+def _day(ts) -> str:
+    return time.strftime("%d %B %Y", time.localtime(ts)).lstrip("0") if ts else ""
+
+
+def stage_report_md(con, e, client_stage: str) -> str:
+    """A progress update for the client, written from the record.
+
+    Nothing here is typed twice: the stages come from the same resolver the
+    board reads, the papers from the same table the portal serves, the
+    dates from the same rows the roadmap draws. A status report that is
+    composed by hand is a status report that disagrees with the system it
+    describes, usually in the client's favour, usually on the week it
+    matters.
+
+    The internal wall holds here as it holds everywhere: side='to_client'
+    is a clause in the query, not a rule someone has to remember while
+    writing.
+    """
+    gates = [g for g in resolve_gates(con, e["id"]) if g["active"]]
+    now_stage = current_stage(gates)
+    order = list(dict.fromkeys(KIT_TO_CLIENT_STAGE.values()))
+    here = order.index(client_stage) if client_stage in order else 0
+    at = order.index(now_stage) if now_stage in order else 0
+
+    # One client stage can be fed by two kit folders (the enquiry scripts
+    # file under consultation), exactly as the board and the export merge
+    # them — so the report shows what the client's own folder shows.
+    kits = [k for k, v in KIT_TO_CLIENT_STAGE.items()
+            if v == client_stage] or [client_stage]
+    docs = con.execute(
+        "SELECT d.id, d.title, d.ext, d.filename, d.created_at, d.notes,"
+        "  (SELECT COUNT(*) FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed') AS signed,"
+        "  (SELECT signer_name FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed'"
+        "    ORDER BY s.signed_at DESC LIMIT 1) AS signer,"
+        "  (SELECT signed_at FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed'"
+        "    ORDER BY s.signed_at DESC LIMIT 1) AS signed_at,"
+        "  (SELECT COUNT(*) FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status IN ('sent','viewed'))"
+        "    AS awaiting"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.side='to_client'"
+        f"   AND ed.stage IN ({','.join('?' * len(kits))})"
+        " ORDER BY d.created_at",
+        (e["id"], *kits)).fetchall()
+    # A progress update does not list itself among the things you have:
+    # it is the covering note, not one of the papers it covers.
+    papers = [d for d in docs if not d["ext"]
+              and not (d["notes"] or "").startswith("Progress update:")]
+    files = [d for d in docs if d["ext"]]
+
+    dates = con.execute(
+        "SELECT label, planned, actual, moved_because FROM engagement_dates"
+        " WHERE engagement_id=? ORDER BY planned", (e["id"],)).fetchall()
+
+    # No heading of its own: every renderer already draws the title above
+    # the body, and a document that says its own name twice reads like a
+    # form someone filled in wrong.
+    L = []
+    who = (e["internal_poc"] or e["originator"] or "").strip()
+    L.append(f"Prepared {_day(time.time())}"
+             + (f" by {who}" if who else "") + ".")
+    L.append("")
+    L.append("## Where the project stands")
+    L.append("")
+    state = ("This stage is closed." if here < at
+             else "This is where the work is now." if here == at
+             else "This stage is still ahead.")
+    # Counted in stages, not in gates: now that both lists are called
+    # stages, "2 of 9 closed" beside "3 of 10" is a contradiction a client
+    # has to stop and resolve.
+    L.append(f"{stage_label(client_stage)} — {here + 1} of {len(order)}. "
+             f"{state} {at} of {len(order)} closed so far.")
+    if e["content_pct"] is not None:
+        L.append("")
+        L.append(f"Content received from you: **{int(e['content_pct'])}%**.")
+    if (e["week_note"] or "").strip():
+        L.append("")
+        L.append(f"> {e['week_note'].strip()}")
+    L.append("")
+    L.append("| Stage | Where it stands |")
+    L.append("|---|---|")
+    for i, st in enumerate(order):
+        mark = ("closed" if i < at else "in progress" if i == at
+                else "to come")
+        if i == here:
+            L.append(f"| **{stage_label(st)}** | **{mark}** |")
+        else:
+            L.append(f"| {stage_label(st)} | {mark} |")
+    L.append("")
+
+    L.append("## What closes this stage")
+    L.append("")
+    mine = [g for g in gates if g["stage"] == client_stage]
+    if not mine:
+        L.append("Nothing to sign at this stage — it closes when the work "
+                 "in it is done.")
+    for g in mine:
+        if g["passed_at"]:
+            by = g["signed_by"] or g["actor"] or ""
+            L.append(f"- **{g['label']}** — done{f' by {by}' if by else ''}"
+                     f" on {_day(g['passed_at'])}.")
+        elif g["doc_id"]:
+            L.append(f"- **{g['label']}** — waiting on your signature"
+                     + (f" ({g['doc_title']})." if g["doc_title"] else "."))
+        else:
+            L.append(f"- **{g['label']}** — open.")
+    L.append("")
+
+    L.append("## What you have from us")
+    L.append("")
+    if papers:
+        L.append("| Document | Where it stands |")
+        L.append("|---|---|")
+        for d in papers:
+            if d["signed"]:
+                st = "signed" + (f" by {d['signer']}" if d["signer"] else "")
+                st += f", {_day(d['signed_at'])}" if d["signed_at"] else ""
+            elif d["awaiting"]:
+                st = "with you for signature"
+            else:
+                st = "sent"
+            L.append(f"| {d['title']} | {st} |")
+    else:
+        L.append("Nothing filed at this stage yet.")
+    L.append("")
+
+    if files:
+        L.append("## Artifacts filed at this stage")
+        L.append("")
+        L.append("| File | Filed |")
+        L.append("|---|---|")
+        for d in files:
+            L.append(f"| {d['filename'] or d['title']} "
+                     f"| {_day(d['created_at'])} |")
+        L.append("")
+
+    if dates:
+        L.append("## The dates that matter")
+        L.append("")
+        L.append("| Milestone | Planned | Actual | Moved because |")
+        L.append("|---|---|---|---|")
+        for r in dates:
+            L.append(f"| {r['label']} | {r['planned'] or '—'} "
+                     f"| {r['actual'] or '—'} | {r['moved_because'] or ''} |")
+        L.append("")
+
+    waiting = [g["label"] for g in gates
+               if not g["passed_at"] and g["doc_id"]]
+    blockers = [b.strip() for b in (e["blockers"] or "").splitlines()
+                if b.strip()]
+    L.append("## What we need from you")
+    L.append("")
+    if waiting or blockers:
+        for w in waiting:
+            L.append(f"- A signature to close **{w}**.")
+        for b in blockers:
+            L.append(f"- {b}")
+    else:
+        L.append("Nothing right now — the next move is ours.")
+    L.append("")
+
+    L.append("## What happens next")
+    L.append("")
+    nxt = order[at + 1] if at + 1 < len(order) else ""
+    open_now = next((g for g in gates if not g["passed_at"]), None)
+    if open_now:
+        L.append(f"We are working towards **{open_now['label']}**, which "
+                 f"closes {stage_label(open_now['stage'])}."
+                 + (f" After that: {stage_label(nxt)}." if nxt else ""))
+    else:
+        L.append("Every stage has closed. From here it is aftercare — "
+                 "keeping the thing running, and improving it when you want "
+                 "it improved.")
+    L.append("")
+    contact = (e["internal_poc"] or "").strip()
+    L.append(f"Questions on any of this go to {contact or 'us'} — "
+             f"the answer is in this document or it is a phone call.")
+    return "\n".join(L)
+
+
 # ---------- the template registry: the kit folder, read live ----------
 
 def side_of(text: str) -> str:
@@ -939,6 +1128,62 @@ def generate_doc(eid: int, body: GenerateBody, u=Depends(admin_user),
     return {"doc_id": doc_id, "unfilled": remaining, "side": side}
 
 
+@router.post("/api/store/admin/engagements/{eid}/stages/{stage}/report")
+def stage_report(eid: int, stage: str, u=Depends(admin_user),
+                 con=Depends(get_con)):
+    """The stage, written up for the client, and filed like any other paper.
+
+    It goes into the vault as a to-client document rather than being
+    rendered on demand, because everything already built then applies to it
+    for free: it previews, prints, exports, travels in the binder and shows
+    on the portal. A report that lives outside the filing system is a report
+    nobody can find in six months.
+
+    Refreshing replaces the last one for this stage while it is unsigned. A
+    signed report is evidence of what was said on the day, so that one is
+    left alone and a new one is written beside it.
+    """
+    e = _eng_or_404(con, eid)
+    if stage not in set(KIT_TO_CLIENT_STAGE.values()):
+        raise HTTPException(400, "no such stage")
+    body = stage_report_md(con, e, stage)
+    title = f"Progress update — {e['name']} — {stage_label(stage)}"
+    note = f"Progress update: {stage}"
+    kits = [k for k, v in KIT_TO_CLIENT_STAGE.items() if v == stage]
+    filed_under = kits[-1] if kits else stage
+
+    prev = con.execute(
+        "SELECT d.id,"
+        "  (SELECT COUNT(*) FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND d.notes=? AND d.status!='archived'"
+        " ORDER BY d.created_at DESC LIMIT 1", (eid, note)).fetchone()
+    if prev and not prev["signed"]:
+        con.execute("UPDATE documents SET title=?, body=? WHERE id=?",
+                    (title[:200], body, prev["id"]))
+        log(con, eid, u["name"], f"refreshed the progress update for "
+                                 f"{stage_label(stage)}")
+        con.commit()
+        return {"doc_id": prev["id"], "refreshed": True}
+
+    cur = con.execute(
+        "INSERT INTO documents(title,category,party_kind,party_name,"
+        " party_email,body,notes,status,confidential,uploaded_by,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (title[:200], "other", "partner", e["name"][:120],
+         e["approver_email"], body, note, "active", 1, u["id"], time.time()))
+    doc_id = cur.lastrowid
+    con.execute(
+        "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (eid, doc_id, filed_under, "to_client", time.time()))
+    log(con, eid, u["name"],
+        f"wrote a progress update for {stage_label(stage)}")
+    con.commit()
+    return {"doc_id": doc_id, "refreshed": False}
+
+
 @router.get("/api/store/admin/engagements/{eid}/docs/{did}/blanks")
 def doc_blanks(eid: int, did: int, u=Depends(admin_user),
                con=Depends(get_con)):
@@ -1463,11 +1708,11 @@ def _binder_sections(con, eid: int) -> tuple:
         if g["passed_at"]:
             who = g["signed_by"] or g["actor"] or ""
             how = "signed" if g["via"] == "signature" else "confirmed"
-            return (f"**Gate: {g['label']}** — {how}"
+            return (f"**Stage: {g['label']}** — {how}"
                     + (f" by {who}" if who else ""))
         if g["doc_id"]:
-            return f"**Gate: {g['label']}** — awaiting signature"
-        return f"**Gate: {g['label']}** — open"
+            return f"**Stage: {g['label']}** — awaiting signature"
+        return f"**Stage: {g['label']}** — open"
 
     # Tokens that name the client read from the record at render time —
     # here and in the PDF — so a blank form never shows "[CLIENT]" to
@@ -1998,10 +2243,10 @@ def portal_page(token: str, con=Depends(get_con), _rl=Depends(rate_limit)):
     <div class="bar"><i style="width:{int(e["content_pct"])}%"></i></div>
     <p class="fine" style="margin-top:4px">{int(e["content_pct"])}%</p>
   </div>
-  <h2>The gates</h2>
+  <h2>The stages</h2>
   <div class="card">
-    <p class="fine">Each phase ends at a gate you approve. {passed} of
-      {len(gates)} passed. This is read live from the signed documents —
+    <p class="fine">Each stage ends with something you approve. {passed} of
+      {len(gates)} closed. This is read live from the signed documents —
       it cannot say one thing while the paperwork says another.</p>
     <div style="margin-top:8px">{"".join(gate_rows)}</div>
   </div>

@@ -5521,7 +5521,7 @@ async function renderClients() {
     ev.stopPropagation();
     const n = +b.dataset.docs, sg = +b.dataset.signed;
     modal(`<h3>Delete ${esc(b.dataset.name)}?</h3>
-      <p class="dim">This removes the client, their gates, dates, activity
+      <p class="dim">This removes the client, their stages, dates, activity
         and exported folder${n ? `, and the ${n} document${n === 1 ? "" : "s"}
         filed under them` : ""}.</p>
       ${sg ? `<p class="dim"><b>${sg} signed document${sg === 1 ? " is" :
@@ -5829,7 +5829,7 @@ async function renderEngagement(id) {
       </div>`;
     }).join("");
     modal(`<h3>What can run in parallel</h3>
-      <p class="dim">The gates are a chain — each waits on the one before.
+      <p class="dim">The stages are a chain — each waits on the one before.
         The work between them is not: bars on different rows that overlap
         horizontally can be in flight at the same time.</p>
       <div class="gt">
@@ -5849,7 +5849,7 @@ async function renderEngagement(id) {
 
   function nextStep() {
     const g = d.gates.find((x) => x.active && !x.passed_at);
-    if (!g) return { text: "Every gate has passed — aftercare from here.",
+    if (!g) return { text: "Every stage has closed — aftercare from here.",
                      actions: [] };
     const actions = [];
     if (g.kind === "money") {
@@ -5857,7 +5857,7 @@ async function renderEngagement(id) {
         : "Payment link", act: g.has_payment_link ? "paycheck" : "paylink",
         gate: g.gate });
       actions.push({ label: "Confirm by hand", act: "pass", gate: g.gate });
-      return { text: `${g.label} is the gate. Send the link with the `
+      return { text: `${g.label} is the open stage. Send the link with the `
         + "invoice, or confirm when the money arrives.", actions };
     }
     if (g.doc_id) {
@@ -5882,10 +5882,11 @@ async function renderEngagement(id) {
     const stageDocs = (byStage[stage] || []);
     if (stageDocs.length)
       return { text: `${g.label}: a document is filed under this stage — `
-        + "link the one whose signature passes the gate.",
+        + "link the one whose signature closes the stage.",
         actions: [{ label: "Link doc", act: "link", gate: g.gate }] };
     const tpls = (st && st.templates) || [];
-    return { text: `${g.label} is the gate, and nothing is drafted yet — `
+    return { text: `${g.label} is the open stage, and nothing is drafted `
+      + `yet — `
       + `generate it for ${esc(e.name)}.`,
       actions: tpls.slice(0, 4).map((t) => (
         { label: `Generate: ${t.name}`, act: "gen", path: t.path })) };
@@ -5910,7 +5911,7 @@ async function renderEngagement(id) {
       g.passed_at ? esc(by) : ""].filter(Boolean).join(" · ");
     /* Three fixed slots, right to left: [payment] [link] [pass]. A row that
        lacks a button keeps its empty slot, so Link doc sits under Link doc
-       and Confirm under Mark passed all the way down. */
+       and Confirm under Mark closed all the way down. */
     const slot = (h) => `<span class="ga-slot">${h || ""}</span>`;
     const pay = g.kind === "money" && !g.passed_at
       ? (g.has_payment_link
@@ -5928,12 +5929,12 @@ async function renderEngagement(id) {
             doc</button>`)
         + slot(`<button class="btn alt sm" data-gate-pass="${g.gate}"
             data-kind="${g.kind}">${g.kind === "money"
-              ? "Confirm" : "Mark passed"}</button>`);
+              ? "Confirm" : "Mark closed"}</button>`);
     return `<div class="gate-line">
       <b title="${esc(g.label)}">${esc(g.label)}</b>
       <span class="gl-state">${state}</span>
       <span class="gl-doc dim" title="${docBit}">${docBit}</span>
-      <span class="gl-closes dim">closes ${esc(stageName(g.stage))}</span>
+      <span class="gl-closes dim">stage ${esc(stageName(g.stage))}</span>
       <span class="gl-acts">${acts}</span>
     </div>`;
   };
@@ -5941,13 +5942,16 @@ async function renderEngagement(id) {
   const stageCard = (st) => {
     const docs = st.kit.flatMap((k) => byStage[k] || []);
     if (!docs.length && !st.templates.length) return "";
-    const label = esc(st.client_stage
+    const label = "Stage " + esc(st.client_stage
       .replace(/^\d\d-/, (m) => m.slice(0, 2) + " · ").replace(/-/g, " "));
     const sum = [docs.length ? `${docs.length} document${
         docs.length === 1 ? "" : "s"}` : "",
       st.templates.length ? `${st.templates.length} to generate` : ""]
       .filter(Boolean).join(" · ");
-    return foldable(`stage:${st.client_stage}`, label, "",
+    return foldable(`stage:${st.client_stage}`, label,
+      `<button class="btn alt sm" data-report="${esc(st.client_stage)}"
+        title="write this stage up for the client — where it stands, what
+        they have, what is waiting on them">Progress update</button>`,
       `${docs.length ? `<div class="sig-rows">${docs.map(docRowE).join("")}</div>` : ""}
       ${st.templates.length ? `<div class="tpl-list">
         <span class="tpl-head">Generate for ${esc(e.name)}</span>
@@ -6019,15 +6023,16 @@ async function renderEngagement(id) {
         `<button class="btn ${i ? "alt " : ""}sm" data-next="${i}">${a.label}</button>`)
         .join("")}</div>` : ""}
     </div>`; })()}
-    ${foldable("gates", "Gates",
+    ${foldable("gates", "Stages",
       `<button class="btn alt sm" id="eng-gantt">Gantt chart</button>`,
-      `<p class="dim">The stage is the first gate that hasn't passed — a
-         signature gate reads its state from the linked document, live.</p>
+      `<p class="dim">Where the project is, is the first stage that hasn't
+         closed — a stage that closes on a signature reads its state from
+         the linked document, live.</p>
        ${trackHtml()}
        <div class="sig-rows">${d.gates.map(gateRow).join("")}</div>`,
       (() => { const live = d.gates.filter((g) => g.active);
         const done = live.filter((g) => g.passed_at).length;
-        return `${done} of ${live.length} passed`; })())}
+        return `${done} of ${live.length} closed`; })())}
     ${merged.some((st) => st.kit.some((k) => byStage[k]) || st.templates.length)
       ? `<div class="fold-all"><span class="dim">Stages</span>
           <button class="btn alt sm" id="fold-all">Fold all</button></div>` : ""}
@@ -6105,7 +6110,7 @@ async function renderEngagement(id) {
         new Blob([html], { type: "text/html" }));
       modal(`<h3>${esc(e.name)} — the binder</h3>
         <p class="dim" id="bd-hint">Cover, contents mirroring the stages and
-          their gates, every generated paper, and a blank form for
+          their stages, every generated paper, and a blank form for
           everything not yet generated — printable and fillable with a
           pen.</p>
         <iframe class="doc-viewer" src="${url}" id="bd-frame"
@@ -6209,6 +6214,22 @@ async function renderEngagement(id) {
   };
   view().querySelectorAll("[data-gen]").forEach((b) => b.onclick = () =>
     engGenerate(id, b.dataset.gen));
+  /* The stage, written up for the client. Composed on the server from the
+     same rows the board reads, filed as a to-client document, and opened
+     the way any other document opens — the point is that it is a paper in
+     the vault, not a screen you can only look at here. */
+  view().querySelectorAll("[data-report]").forEach((b) => b.onclick = async () => {
+    try {
+      const out = await api(
+        `/api/store/admin/engagements/${id}/stages/${b.dataset.report}/report`,
+        { method: "POST" });
+      toast(out.refreshed
+        ? "Progress update refreshed — same document, current facts"
+        : "Progress update written — filed on the client's side");
+      await renderEngagement(id);
+      view().querySelector(`[data-engview="${out.doc_id}"]`)?.click();
+    } catch (err) { toast(err.message); }
+  });
   view().querySelectorAll("[data-engsign]").forEach((b) => b.onclick = () =>
     engSignForm(+b.dataset.engsign,
       { name: e.approver_name, email: e.approver_email },
@@ -6362,7 +6383,7 @@ async function renderEngagement(id) {
       ? "Confirm — note (e.g. the wire reference), optional:"
       : "Passing without a linked document — where is the evidence filed?");
     if (note === null) return;
-    if (!money && !note.trim()) { toast("a signature gate needs the note"); return; }
+    if (!money && !note.trim()) { toast("a signature stage needs the note"); return; }
     try { gateDone(await api(
       `/api/store/admin/engagements/${id}/gates/${b.dataset.gatePass}`,
       { body: { note: note.trim() } })); }
@@ -6371,7 +6392,7 @@ async function renderEngagement(id) {
   view().querySelectorAll("[data-gate-link]").forEach((b) => b.onclick = () => {
     if (!d.docs.length) { toast("no documents filed yet — generate one first"); return; }
     modal(`<h3>Link a document</h3>
-      <p class="dim">The gate passes when this document is signed — read
+      <p class="dim">The stage closes when this document is signed — read
         from the vault, never copied.</p>
       <label>Document</label>
       <select id="gl-doc">${d.docs.map((x) =>
@@ -6405,13 +6426,13 @@ async function renderEngagement(id) {
     try {
       const out = await api(`/api/store/admin/engagements/${id}/gates/${
         b.dataset.gatePaycheck}/payment-check`, { method: "POST" });
-      toast(out.paid ? "Paid — gate passed, verified by Stripe"
+      toast(out.paid ? "Paid — stage closed, verified by Stripe"
                      : out.detail);
       renderEngagement(id);
     } catch (err) { toast(err.message); }
   });
   view().querySelectorAll("[data-gate-reopen]").forEach((b) => b.onclick = async () => {
-    if (!confirm("Reopen this gate? The signed document, if any, stays in the vault.")) return;
+    if (!confirm("Reopen this stage? The signed document, if any, stays in the vault.")) return;
     try {
       await api(`/api/store/admin/engagements/${id}/gates/${b.dataset.gateReopen}`,
         { method: "DELETE" });

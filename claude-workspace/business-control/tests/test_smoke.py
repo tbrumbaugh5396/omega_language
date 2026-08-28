@@ -4049,15 +4049,95 @@ ok('g.passed_at ? esc(by) : ""' in _opsjs,
    "and who signed it and when travel with the document they attest to, "
    "which is the sentence they finish")
 
+# --- one vocabulary: everything the client and the studio read is a stage --
+ok('foldable("gates", "Stages"' in _opsjs
+   and '"Stage " + esc(st.client_stage' in _opsjs,
+   "the board says stage for both lists — the ten that close and the "
+   "eleven they close — because two words for one shape is a thing to "
+   "learn before you can read the page")
+# Only what a person reads: comments and data-gate-* attributes keep the
+# mechanical name, where it is precise and nobody has to meet it.
+_visible = re.findall(r">([^<>{}`]{4,120})<", _opsjs)
+_leftover = sorted({t.strip() for t in _visible if "gate" in t.lower()})
+ok(not _leftover, f"and nothing a person reads still says gate: {_leftover}")
+ok("Mark closed" in _opsjs and "Mark passed" not in _opsjs
+   and "Reopen this stage?" in _opsjs,
+   "the buttons and the confirmations moved with it — a stage closes, and "
+   "reopening reopens a stage")
+ok(">The stages<" in c.get("/engage/" + c.post(
+       f"/api/store/admin/engagements/{_eid}/portal",
+       headers=A).json()["url"].split("/engage/")[1]).text,
+   "and the client's own page says stages too — they were never going to "
+   "learn our word for it")
+
+# --- the stage, written up for the client ---------------------------------
+# A status report composed by hand is a status report that disagrees with
+# the system it describes — usually in the studio's favour, usually on the
+# week that matters. This one is composed from the same rows the board
+# reads, and filed as a paper rather than rendered as a screen.
+_rep = c.post(f"/api/store/admin/engagements/{_eid}/stages/03-agreement/report",
+              headers=A).json()
+ok(_rep.get("doc_id") and _rep.get("refreshed") is False,
+   "a stage writes itself up for the client on request")
+_rmd = c.get(f"/api/store/admin/documents/{_rep['doc_id']}/markdown",
+             headers=A).text
+ok("Stage 03 · agreement" in _rmd and not _rmd.startswith("#"),
+   "it reports on a named stage, and does not repeat its own title — every "
+   "renderer already draws that above the body")
+ok(any(d["id"] == _rep["doc_id"] and d["title"].startswith("Progress update")
+       for d in c.get("/api/store/admin/documents", headers=A,
+                      params={"q": "Progress update"}).json()["documents"]),
+   "titled as what it is")
+for _head in ("Where the project stands", "What closes this stage",
+              "What you have from us", "What we need from you",
+              "What happens next"):
+    ok(f"## {_head}" in _rmd, f"and it answers '{_head.lower()}'")
+ok(_rmd.count("| Stage ") >= 1 and "in progress" in _rmd,
+   "with the whole run in one table, so the client can see where this "
+   "stage sits rather than being told")
+_ratecard = next((d for d in c.get(
+    f"/api/store/admin/engagements/{_eid}", headers=A).json()["docs"]
+    if d["side"] == "internal"), None)
+ok(_ratecard and _ratecard["title"] not in _rmd,
+   "the internal wall holds inside the report too — side='to_client' is a "
+   "clause in its query, not a rule someone has to remember while writing")
+ok("Progress update" not in _rmd.split("## What you have from us")[1]
+   .split("##")[0],
+   "and it does not list itself among the papers — it is the covering "
+   "note, not one of the things it covers")
+_again = c.post(f"/api/store/admin/engagements/{_eid}/stages/03-agreement/report",
+                headers=A).json()
+ok(_again["doc_id"] == _rep["doc_id"] and _again["refreshed"],
+   "asking again refreshes the same paper rather than breeding copies")
+_rdocs = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()["docs"]
+_filed = next(d for d in _rdocs if d["id"] == _rep["doc_id"])
+ok(_filed["side"] == "to_client" and _filed["stage"] == "04-agreement",
+   "filed on the client's side, under the stage it reports on — so it "
+   "travels in the binder, the export and the portal with everything else")
+ok(c.get(f"/api/store/admin/documents/{_rep['doc_id']}/pdf",
+         headers=A).status_code == 200,
+   "and prints like any other paper")
+_ptok3 = c.post(f"/api/store/admin/engagements/{_eid}/portal",
+                headers=A).json()["url"].split("/engage/")[1]
+ok(c.get(f"/engage/{_ptok3}/doc/{_rep['doc_id']}").status_code == 200,
+   "the client can open it from their own link, which is the point of "
+   "writing it")
+ok('data-report="' in _opsjs and "/stages/${b.dataset.report}/report" in _opsjs,
+   "every stage on the board offers it")
+c.request("DELETE",
+          f"/api/store/admin/engagements/{_eid}/docs/{_rep['doc_id']}",
+          headers=A)
+c.delete(f"/api/store/admin/documents/{_rep['doc_id']}", headers=A)
+
 # --- a document you just asked for opens ----------------------------------
 ok('view().querySelector(`[data-engview="${out.doc_id}"]`)?.click()'
    in _opsjs,
    "generating a document opens it: asking for a document is asking to see "
    "it, and clicking its own row's View button means the viewer is told "
    "what the row knows rather than a second guess at the same facts")
-ok('${done} of ${live.length} passed' in _opsjs
+ok('${done} of ${live.length} closed' in _opsjs
    and 'to generate' in _opsjs and 'entr${' in _opsjs,
-   "a folded section still says what it holds — gates passed, documents "
+   "a folded section still says what it holds — stages closed, documents "
    "waiting, entries logged — so folding costs no information")
 ok('if (ev.target.closest("button, a, input, select")) return;' in _opsjs,
    "clicking the Gantt button in a fold head does not also fold the card")
@@ -4418,10 +4498,11 @@ ok("blank form, print and fill" in _bh.text
    "every client-side paper is in the binder even before it's generated — "
    "the roadmap included — so the printed binder is the complete packet, "
    "fillable with a pen")
-ok("Gate: Proposal accepted" in _bh.text
+ok("Stage: Proposal accepted" in _bh.text
    and _bh.text.count("<h2") >= 8,
    "and the contents mirror the client's own screen: the stages as "
-   "sections, each with its gates and their state, every paper beneath")
+   "sections, each with what closes it and where that stands, every "
+   "paper beneath")
 _scan2 = c.post("/api/store/admin/documents", headers=A, json={
     "title": "site-photos.jpg", "category": "other",
     "party_kind": "partner", "party_name": "Title Probe"}).json()
