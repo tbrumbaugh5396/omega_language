@@ -14,16 +14,23 @@ This page prices the **software you run on, monthly**. The
 different things, and you need both — a system nobody set up is a login, not a
 business.
 
+**Your monthly bill has two parts.** Part one is the platform: the
+capabilities you pick below. Part two is support and maintenance: the care
+plan that keeps it patched, monitored and answered. They are priced
+separately because they are different things — one is software, the other is
+people.
+
 ---
 
 ## Start here — four ways in
 
 Most businesses are one of these four shapes. Each is a set of capabilities
-that work together, priced below the sum of its parts.
+that work together, priced below the sum of its parts. The figure is part
+one of the bill; pick a care plan further down.
 
 | | **🍜 Food brand** | **🎓 Course business** | **🗣 Language nonprofit** | **🥫 Food bank** |
 |---|---|---|---|---|
-| **Monthly** | **$238** | **$210.50** | **$131.88** | **$135.10** |
+| **Monthly — platform** | **$335.00** | **$288.00** | **$183.75** | **$192.50** |
 | Sell things | ✓ | ✓ | — | — |
 | Take payments | ✓ | ✓ | ✓ | ✓ |
 | Subscriptions & boxes | ✓ | — | — | — |
@@ -50,73 +57,84 @@ that work together, priced below the sum of its parts.
 
 ## Or build your own
 
-Pick what you need. Some capabilities only make sense on top of another one —
-where that is true, the **Comes with** column says so, and the one it needs is
-added for you rather than quietly assumed.
+Three prices cover everything: **$20** for a supporting capability, **$30**
+for a full working area of the business, **$50** for the ones that are a
+product in their own right. Some capabilities only make sense on top of
+another — where that is true, the **Comes with** column says so, and the one
+it needs is added for you rather than quietly assumed.
 
-**Everything includes the platform — $49/mo:** accounts, roles, permissions,
-the phone app, notifications, nightly backups and the support desk. It is not
-optional and it is not sold separately.
+**Everything includes the platform — $50/mo:** accounts, roles, permissions,
+sign-in, the audit log, nightly backups and restore, the document vault, and
+the support route. It is not optional and it is not sold separately.
+
+**And at no charge, on every install:** all three surfaces install to a phone
+or desktop home screen as an app — no app store, no download, no review
+queue. Push notifications with no per-message fee. Camera for QR and barcode
+scanning. Microphone for voice notes and calls. Offline tolerance with sync
+on reconnect. The quote you are comparing this against usually includes a
+native app build and two store submissions per release.
 
 ### Selling and money
 
 | | Comes with | Monthly | Pick |
 |---|---|---|---|
-| **Selling** — products, variants, carts, orders, promos, media | — | $29 | ☐ |
-| **Payments** — Stripe/Shopify rails, cash on delivery, terms, refunds, receipts | — | $15 | ☐ |
-| **Subscriptions & boxes** — cycles, cutoffs, failed-payment chasing, customer portal | Selling + Payments | $25 | ☐ |
-| **Fundraising** — recurring giving, receipts, grants | Payments | $19 | ☐ |
-| **Affiliates** — links, landing pages, attribution | — | $15 | ☐ |
-| **Accounting** — ledger, categories, exports | — | $[X] | ☐ |
-| **Finance** — cash view, budgets, forecasts | Payments + Accounting | $[X] | ☐ |
-| **Treasury & investments** — cash, assets, positions | Finance | $[X] | ☐ |
+| **Selling** — products, variants, carts, orders, promos, media | — | $50 | ☐ |
+| **Payments** — Stripe/Shopify rails, cash on delivery, terms, refunds, receipts | — | $20 | ☐ |
+| **Subscriptions & boxes** — cycles, cutoffs, failed-payment chasing, customer portal | Selling + Payments | $30 | ☐ |
+| **Fundraising** — recurring giving, receipts, grants | Payments | $30 | ☐ |
+| **Affiliates** — links, landing pages, attribution | — | $20 | ☐ |
+| **Accounting** — ledger, categories, exports | — | $30 | ☐ |
+| **Finance** — cash view, budgets, forecasts | Payments + Accounting | $30 | ☐ |
+| **Treasury & investments** — cash, assets, positions | Finance | $30 | ☐ |
 
 ### Stock, making and moving
 
 | | Comes with | Monthly | Pick |
 |---|---|---|---|
-| **Inventory** — stock, par levels, counts | — | $19 | ☐ |
-| **Warehouse** — bins, pick lists, load QR | Inventory | $15 | ☐ |
-| **Distribution** — routes, fleet, truck QR, ETAs | Inventory | $29 | ☐ |
-| **Sourcing** — suppliers, purchase orders, ingredients | — | $15 | ☐ |
-| **Production** — batches, lots, expiry | Inventory | $25 | ☐ |
+| **Inventory** — stock, par levels, counts | — | $30 | ☐ |
+| **Warehouse** — bins, pick lists, load QR | Inventory | $20 | ☐ |
+| **Distribution** — routes, fleet, truck QR, ETAs | Inventory | $50 | ☐ |
+| **Sourcing** — suppliers, purchase orders, ingredients | — | $20 | ☐ |
+| **Production** — batches, lots, expiry | Inventory | $30 | ☐ |
 
 ### People
 
 | | Comes with | Monthly | Pick |
 |---|---|---|---|
-| **Workforce** — time clock, jobs, shifts, kiosk, contractors | — | $19 | ☐ |
-| **Events** — event clock-ins, promo landing pages | Workforce | $9 | ☐ |
-| **Onboarding** — hiring documents, certifications, checklists | Workforce | $[X] | ☐ |
-| **Payroll** — timesheets to pay, 1099s | Workforce | $[X] | ☐ |
+| **Workforce** — time clock, jobs, shifts, kiosk, contractors | — | $30 | ☐ |
+| **Events** — event clock-ins, promo landing pages | Workforce | $20 | ☐ |
+| **Onboarding** — hiring documents, certifications, checklists | Workforce | $20 | ☐ |
+| **Payroll** — timesheets to pay, 1099s | Workforce | $30 | ☐ |
 
 ### Customers and growth
 
 | | Comes with | Monthly | Pick |
 |---|---|---|---|
-| **Comms** — chat, voice and video calls | — | $19 | ☐ |
-| **CRM & Support** — outreach pipeline, support desk, AI first responder | Comms | $19 | ☐ |
-| **Marketing** — email playbooks, A/B tests, ad pixels | — | $25 | ☐ |
-| **Intelligence** — funnel, P&L, the owner's view | — | $29 | ☐ |
+| **Comms** — chat, voice and video calls | — | $20 | ☐ |
+| **CRM & Support** — outreach pipeline, support desk, AI first responder | Comms | $30 | ☐ |
+| **Marketing** — email playbooks, A/B tests, ad pixels | — | $30 | ☐ |
+| **Intelligence** — funnel, P&L, the owner's view | — | $50 | ☐ |
 
 ### Teaching
 
 | | Comes with | Monthly | Pick |
 |---|---|---|---|
-| **Learning** — lessons, curriculum, spaced repetition, progress | — | $35 | ☐ |
-| **Voice & translation** — recording, speech to text, translation | Learning | $[X] | ☐ |
+| **Learning** — lessons, curriculum, spaced repetition, progress | — | $50 | ☐ |
+| **Voice & translation** — recording, speech to text, translation | Learning | $30 | ☐ |
 
 ### The technical shelf
 
 | | Comes with | Monthly | Pick |
 |---|---|---|---|
-| **API & data platform** — public API, scoped keys, webhooks, exports | — | $25 | ☐ |
-| **Automation** — triggers, rules, schedules, approvals | — | $[X] | ☐ |
-| **InfoSec** — single sign-on, audit logs, access reviews | — | $[X] | ☐ |
-| **Legal** — contracts, policies, document vault | — | $[X] | ☐ |
+| **API & data platform** — public API, scoped keys, webhooks, exports | — | $30 | ☐ |
+| **Automation** — triggers, rules, schedules, approvals | — | $30 | ☐ |
+| **InfoSec** — single sign-on, audit logs, access reviews | — | $30 | ☐ |
+| **Legal** — contracts, policies, document vault | — | $20 | ☐ |
 
-**Three or more capabilities take 8% off. Six or more, 15%. Ten or more, 25%.**
-That is why a bundle costs less than the same boxes chosen one at a time.
+**Three to five capabilities take 8% off. Six to nine, 15%. Ten or more,
+25%.** That is why a bundle costs less than the same boxes chosen one at a
+time. The discount applies to capability lines only — never to the platform,
+never to support, never to services.
 
 ---
 
@@ -143,30 +161,81 @@ rather than bundled. Included first, then per unit:
 | SMS | — | $0.02 each |
 | Translation | — | $0.06 per 1,000 characters |
 
+Any of these can instead run on **your own vendor account** — you hold the
+keys, the vendor bills you directly, and none of it touches our invoice.
+
 > Chat, notifications and one-to-one calls are not on this list. They are built
 > in and unmetered — the only support tools most businesses ever need, at no
 > per-seat charge.
 
 ---
 
+## Make it yours — white-labelling
+
+Optional, at any level. It is a licence, not a fork: same code, same upgrades,
+same day — only the marks, domains and addresses change. Stop any time and the
+branding reverts; nothing else does.
+
+| Level | Monthly | Setup | What it gets |
+|---|---|---|---|
+| **None** | $0 | — | Our mark stays in the footer and sign-in |
+| **Unbranded** | $49 | — | Our name removed; your logo and colours throughout; email from your address |
+| **Branded install** | $99 | $500 | + your own domain on all three surfaces; your icon on the installed app; authenticated sending domain; branded documents and portal |
+| **Full white-label** | $199 | $1,500 | + no reference to us anywhere reachable; support answered under your name; suitable for reselling onward |
+
+---
+
 ## Or don't pick anything — take a plan
 
 If a configuration is more thought than you want to give it, three flat plans
-cover most of it:
+cover the commerce shapes. A plan is priced above the equivalent menu at one
+location on purpose — it buys headroom to grow into, not a discount.
 
-| | **Starter** | **Pro** ★ | **Scale** |
+| | **Starter** | **Pro** | **Scale** |
 |---|---|---|---|
-| **Monthly** | **$49** | **$149** | **$399** |
+| **Monthly — platform** | **$199** | **$349** | **$699** |
 | Locations | 1 | 3 | 10 |
 | Staff seats | 5 | 20 | 75 |
-| Roughly | shop, orders, promos, time clock | + stock, pick lists, routes, box cycles, outreach, chat & video support | + email playbooks, A/B, pixels, affiliates, funnel, P&L, contractors, API |
+| Capabilities | Selling, Payments, Workforce, Comms | + Inventory, Warehouse, CRM & Support, Marketing, Subscriptions & boxes | + Distribution, Production, Sourcing, Events, Affiliates, Intelligence, Automation, API |
 | AI chatbot | — | 5,000 turns | 20,000 turns |
 | Email included | 10,000 | 50,000 | 200,000 |
 | Group video | — | — | 50,000 participant-min |
-| Voice · translation · SMS | — | — | included allowances |
-| Support | email | priority chat | dedicated, with an onboarding call |
+| Voice | — | — | 3,000 min |
+
+**Learning, Fundraising, Accounting, Finance, Treasury, Onboarding, Payroll,
+InfoSec, Legal and Voice & translation sit outside every plan.** If you need
+any of those, build from the menu above — that is the honest answer, not a
+gap: a commerce plan that quietly included a learning platform would be a
+plan nobody could price.
 
 **Selected plan:** ☐ Starter ☐ Pro ☐ Scale ☐ None — I'll pick capabilities
+
+---
+
+## Part two — keeping it running
+
+Software is not finished at launch; it is maintained or it decays. The care
+plan is the second part of the monthly bill, and no discounts apply to it —
+it is people, not software.
+
+| | **Essential** | **Standard** | **Priority** |
+|---|---|---|---|
+| **Monthly** | **$150** | **$350** | **$750** |
+| First response | 3 working days | 1 working day | Same day |
+| Updates applied | Monthly | Fortnightly | Weekly |
+| Critical security patches | 24h, any day | 24h, any day | 24h, any day |
+| Key journeys watched | — | Every 15 min | Every 15 min |
+| Out-of-hours response | — | — | ✓ |
+| Content changes included | — | 1 hour | 4 hours |
+| Discount on new work | — | 10% | 15% |
+
+**Selected plan:** ☐ Essential ☐ Standard ☐ Priority ☐ None — defects billed
+hourly, no response targets
+
+The full plan and its three schedules — what counts as a bug and how fast,
+what is watched and who gets called, patching and compliance scope — travel
+with the agreement. Nothing in the table above means more than what those
+pages say it means.
 
 ---
 
@@ -179,6 +248,10 @@ cover most of it:
 | **Launch build** | $5,000 | Theme, brand tokens, sections, migration · [2] weeks |
 | **Custom build** | $18,000 | Bespoke sections, motion, integrations · [6] weeks |
 | **Flagship** | $40,000 | Brand and build together, motion system included · [10] weeks |
+
+A build can be split by surface — customer storefront, store admin, back
+office, integrations — so what each part costs is on paper before work
+starts.
 
 | Studio — creative, ongoing | Monthly | What you get |
 |---|---|---|
@@ -194,13 +267,22 @@ studio ☐ none ☐ lite ☐ studio ☐ flagship
 
 ## How the number is put together
 
+**Part one — platform:**
+
 1. Add up the capabilities you picked
 2. Take off the volume discount — 8%, 15% or 25%
-3. Add the platform, $49
-4. Add any usage beyond the included allowances, and any extra seats or locations
-5. Nonprofits take **30%** off the total
+3. Add the platform, $50
+4. Add any usage beyond the included allowances, extra seats or locations,
+   and white-labelling if you chose it
+5. Nonprofits take **30%** off the subtotal
 6. Pay annually and **two months are free**
-7. A Studio retainer is added after that; a build fee is separate and due once
+
+**Part two — support:** the care plan, plus any content-change overflow. No
+discounts — it is people.
+
+The Studio retainer and the growth retainer, where taken, are separate
+agreements billed and cancelled on their own terms. A build fee is one-time,
+due at signing.
 
 **No percentage of your revenue, ever.** Ops software that takes a cut of sales
 punishes you for growing, and it makes your software bill unpredictable in

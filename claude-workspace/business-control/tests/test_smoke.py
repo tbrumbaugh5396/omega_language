@@ -4254,6 +4254,12 @@ _qd = next(d for d in c.get(f"/api/store/admin/engagements/{_eid}",
 ok(_qd["side"] == "to_client" and _qd["stage"] == "03-proposal",
    "filed on the client's side under the proposal stage — it travels in "
    "the binder, the bundle and the portal with everything else")
+ok(_qd["quote"] is True and all(
+       d["quote"] is False for d in c.get(
+           f"/api/store/admin/engagements/{_eid}", headers=A).json()["docs"]
+       if d["id"] != _qr["doc_id"]),
+   "the row knows it is a quote, so the UI can open the bench's own view "
+   "of it rather than the plain paper")
 _qs = c.get(f"/api/store/admin/engagements/{_eid}/quote", headers=A).json()
 ok(_qs["doc_id"] == _qr["doc_id"] and _qs["state"] == _qstate,
    "and the bench state rides in the paper, so the next Quote click opens "
@@ -4277,12 +4283,20 @@ _qsig = c.post(f"/api/store/admin/documents/{_qr['doc_id']}/request-signature",
                                 "role": "signer", "in_person": True}).json()
 c.post("/sign/" + _qsig["link"].split("/sign/")[1],
        json={"typed_name": "Quote Signer"})
+_qstate2 = _b64q.b64encode(b'{"on":["core","selling","inventory"]}').decode()
 _qr3 = c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A,
               json={"title": "Quote — Probe v3", "markdown": _qmd,
-                    "state": _qstate}).json()
+                    "state": _qstate2}).json()
 ok(_qr3["doc_id"] != _qr["doc_id"],
    "but a signed quote is the offer the client accepted — it is left alone "
    "and the new quote is filed beside it")
+ok(c.get(f"/api/store/admin/engagements/{_eid}/quote", headers=A)
+   .json()["state"] == _qstate2
+   and c.get(f"/api/store/admin/engagements/{_eid}/quote",
+             headers=A, params={"did": _qr["doc_id"]}).json()["state"]
+   == _qstate,
+   "each paper keeps its own bench state — viewing the signed old quote "
+   "must not show the new quote's numbers")
 ok(c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A,
           json={"title": "x", "markdown": "  ", "state": ""}).status_code
    == 400, "an empty quote is refused")
@@ -4292,11 +4306,53 @@ ok('id="eng-quote"' in _opsjs and "w.bcFile = async (d)" in _opsjs
    "the client page opens the bench in a frame and hands it a function to "
    "answer with — two direct calls on a same-origin frame, no window "
    "listener, which this app forbids for cause")
+ok('data-quote="1"' in _opsjs
+   and 'openBench({ view: "client", doc:' in _opsjs
+   and 'id="qb-paper"' in _opsjs,
+   "a quote's View opens the bench's client view on that paper's state — "
+   "the tape, the parts, the running total — with the flat printable paper "
+   "one click away inside, not instead")
+ok("if(d.view==='client') S.client=true;" in _qb.text,
+   "and the bench lets the embedder choose which face opens")
 _qbjs = _qb.text
 ok("quoteMarkdown" in _qbjs and "Part 2 — support" in _qbjs
    and "[SIGN HERE]" in _qbjs,
    "the bench renders the client-view tape as markdown — parts, totals, "
    "acceptance line — and the cost, margin and infra lines never leave it")
+
+# --- the bench, the menu and the price book say the same numbers -----------
+# price-book.md v2 is the source; the bench and the client-facing menu carry
+# copies. This parses the book's own capability table and holds the other
+# two to it, so a price changed in one place fails here instead of drifting.
+_book = Path("docs/product/price-book.md").read_text()
+_menu = Path("docs/business-control-b2b-client/templates/02-consultation/"
+             "capability-menu.md").read_text()
+_caps = re.findall(r"^\| ([A-Z][^|*]+?)(?: \*)? \| (?:Light|Standard|Heavy)"
+                   r" \| \*\*\$(\d+)\*\* \|", _book, re.M)
+ok(len(_caps) == 27,
+   f"the book's capability table parses whole ({len(_caps)} of 27)")
+_off = [f"{n} ${p}" for n, p in _caps
+        if not re.search(r"\*\*" + re.escape(n) + r"\*\*[^|]*\| [^|]*\|"
+                         r" \$" + p + r" \|", _menu)]
+ok(not _off,
+   f"every capability carries the book's band price in the client menu "
+   f"(off: {_off})")
+for _fig in ("$335.00", "$288.00", "$183.75", "$192.50"):
+    ok(_fig in _book and _fig in _menu,
+       f"the {_fig} bundle figure agrees between book and menu")
+ok("$[X]" not in _menu,
+   "nothing in the menu is left unpriced — the bands priced the nine that "
+   "v1 could not sell")
+for _pair in ("**$199**", "**$349**", "**$699**", "**$150**", "**$350**",
+              "**$750**"):
+    ok(_pair in _book and _pair in _menu,
+       f"tier and care figures agree between book and menu ({_pair})")
+ok("bands:{light:20,std:30,heavy:50}, corePrice:50" in _qb.text
+   and "tierPrice:{starter:199,pro:349,scale:699}" in _qb.text
+   and "{n:'Essential — $150',p:150" in _qb.text,
+   "and the bench runs on the same numbers — bands, core, tiers, care")
+ok("the platform — $50/mo" in _menu,
+   "the menu's platform line is the book's $50 Core")
 
 # tidy: unfile and remove the quote papers
 for _qid in {_qr["doc_id"], _qr3["doc_id"]}:

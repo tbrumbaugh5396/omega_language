@@ -5714,8 +5714,10 @@ async function renderEngagement(id) {
           : ""}</span>
         <button class="btn alt sm" data-engview="${x.id}"
           data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
-          data-signed="${x.signed || 0}"
-          title="opens the document — signatures shown on it">View</button>
+          data-signed="${x.signed || 0}"${x.quote ? ' data-quote="1"' : ""}
+          title="${x.quote
+            ? "opens the quote as the bench presents it"
+            : "opens the document — signatures shown on it"}">View</button>
         <button class="btn alt sm" data-engdl="${x.id}"
           data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
           data-name="${esc(x.filename || x.title)}">PDF</button>
@@ -6238,27 +6240,40 @@ async function renderEngagement(id) {
      it seeds the bench with the client and the last quote's saved state,
      and files what comes back as a to-client paper under the proposal
      stage, where it previews, prints, signs and sends like the rest. */
-  $("#eng-quote").onclick = async () => {
+  /* The bench, in a frame. One opener, two doors: the Quote button opens
+     the studio view on the latest state to work a price; a quote row's
+     View opens the client view on THAT paper's state, because the quote's
+     own presentation — the tape, the parts, the running total — is the
+     thing worth showing, and the flat paper is one click away inside.
+     The frame is a same-origin blob, so the wiring is two function calls,
+     not a broadcast: bcInit seeds it, bcFile is how it answers. No window
+     listener — this app has a rule about those, and it has teeth. */
+  const openBench = async (opts) => {
     try {
-      const saved = await api(`/api/store/admin/engagements/${id}/quote`);
+      const saved = await api(`/api/store/admin/engagements/${id}/quote`
+        + (opts.doc ? `?did=${opts.doc}` : ""));
       const html = await (await fetch("/api/store/admin/quote-bench",
         { headers: { Authorization: "Bearer " + S.user.token } })).text();
       const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-      modal(`<h3>Quote — ${esc(e.name)}${saved.doc_id
-          ? ' <span class="pill ok">continuing the filed quote</span>'
-          : ""}</h3>
-        <iframe class="doc-viewer" src="${url}" id="qb-frame"
+      modal(`<h3>Quote — ${esc(e.name)}${saved.signed
+          ? ' <span class="pill ok">signed</span>'
+          : saved.doc_id
+            ? ' <span class="pill ok">continuing the filed quote</span>'
+            : ""}</h3>
+        <iframe class="doc-viewer qb-tall" src="${url}" id="qb-frame"
           title="quote bench"></iframe>
         <div class="modal-foot">
-          <span class="dim" style="margin-right:auto">File to client, up in
-            the bench's own toolbar, saves it as a paper on this client.</span>
+          <span class="dim" style="margin-right:auto">${opts.doc
+            ? "The bench's own presentation of the filed quote — edits here "
+              + "refile it when you File to client."
+            : "File to client, up in the bench's own toolbar, saves it as "
+              + "a paper on this client."}</span>
+          ${opts.doc ? `<button class="btn alt" id="qb-paper" title="the
+            printable, signable paper this quote filed as">The
+            paper</button>` : ""}
           <button class="btn alt" data-close>Close</button>
         </div>`, "wide");
       const frame = $("#qb-frame");
-      /* The frame is a same-origin blob, so the wiring is two function
-         calls, not a broadcast: bcInit seeds it, bcFile is how it answers.
-         No window listener — this app has a rule about those, and it has
-         teeth (see the map leak above the test that enforces it). */
       frame.onload = () => {
         const w = frame.contentWindow;
         w.bcFile = async (d) => {
@@ -6270,14 +6285,22 @@ async function renderEngagement(id) {
             toast(out.refreshed
               ? "Quote refreshed — same paper, new numbers"
               : "Quote filed under the proposal stage");
-            await renderEngagement(id);
-            view().querySelector(`[data-engview="${out.doc_id}"]`)?.click();
+            renderEngagement(id);
           } catch (err) { toast(err.message); }
         };
-        if (w.bcInit) w.bcInit({ client: e.name, state: saved.state || "" });
+        if (w.bcInit) w.bcInit({ client: e.name, state: saved.state || "",
+                                 view: opts.view });
+      };
+      const paper = $("#qb-paper");
+      if (paper) paper.onclick = () => {
+        closeModal();
+        docViewer(opts.doc, "body", "", opts.name || `Quote — ${e.name}`,
+          saved.signed, () => renderEngagement(id),
+          { name: e.approver_name, email: e.approver_email });
       };
     } catch (err) { toast(err.message); }
   };
+  $("#eng-quote").onclick = () => openBench({ view: "studio" });
   view().querySelectorAll("[data-gen]").forEach((b) => b.onclick = () =>
     engGenerate(id, b.dataset.gen));
   /* The stage, written up for the client. Composed on the server from the
@@ -6362,6 +6385,8 @@ async function renderEngagement(id) {
        user-gesture call stack and blockers silently eat it. */
     const name = (b.closest(".doc-line, .sig-row")?.querySelector("b")
       ?.textContent || "document").trim();
+    if (b.dataset.quote)
+      return openBench({ view: "client", doc: +b.dataset.engview, name });
     docViewer(+b.dataset.engview, b.dataset.kind, b.dataset.ext, name,
               b.dataset.signed, () => renderEngagement(id),
               { name: e.approver_name, email: e.approver_email });

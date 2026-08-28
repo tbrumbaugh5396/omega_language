@@ -1020,7 +1020,7 @@ def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     docs = []
     for r in con.execute(
             "SELECT ed.stage, ed.side, d.id, d.title, d.category, d.status,"
-            " d.ext, d.filename, d.body,"
+            " d.ext, d.filename, d.body, d.notes,"
             " (SELECT COUNT(*) FROM document_signatures s"
             "   WHERE s.document_id=d.id AND s.status='signed') AS signed,"
             " (SELECT COUNT(*) FROM document_signatures s"
@@ -1031,6 +1031,9 @@ def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
             (eid,)).fetchall():
         d = dict(r)
         body = d.pop("body") or ""
+        # A quote is a paper the bench produced; the row knows it, so the
+        # UI can open the bench's own view of it instead of the plain paper.
+        d["quote"] = (d.pop("notes") or "").startswith(QUOTE_NOTE)
         d["has_body"] = bool(body.strip())
         # How much of the template is still a bracket. Shown on the row, so
         # "finished" is a number going to zero, not a feeling.
@@ -1338,19 +1341,24 @@ class QuoteBody(BaseModel):
 
 
 @router.get("/api/store/admin/engagements/{eid}/quote")
-def quote_state(eid: int, u=Depends(admin_user), con=Depends(get_con)):
-    """The latest filed quote and the bench state that produced it, so the
-    bench reopens where the conversation left off instead of from zero."""
+def quote_state(eid: int, did: int = 0, u=Depends(admin_user),
+                con=Depends(get_con)):
+    """A filed quote's bench state — the latest by default, or one paper by
+    id, because a signed old quote and the live new one are different
+    states and viewing the old one must not show the new one's numbers."""
     _eng_or_404(con, eid)
-    r = con.execute(
-        "SELECT d.id, d.title, d.notes,"
-        "  (SELECT COUNT(*) FROM document_signatures s"
-        "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
-        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
-        " WHERE ed.engagement_id=? AND d.notes LIKE ?"
-        "   AND d.status!='archived'"
-        " ORDER BY d.created_at DESC LIMIT 1",
-        (eid, QUOTE_NOTE + "%")).fetchone()
+    q = ("SELECT d.id, d.title, d.notes,"
+         "  (SELECT COUNT(*) FROM document_signatures s"
+         "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
+         " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+         " WHERE ed.engagement_id=? AND d.notes LIKE ?"
+         "   AND d.status!='archived'")
+    args = [eid, QUOTE_NOTE + "%"]
+    if did:
+        q += " AND d.id=?"
+        args.append(did)
+    r = con.execute(q + " ORDER BY d.created_at DESC LIMIT 1",
+                    args).fetchone()
     if r is None:
         return {"doc_id": 0, "state": "", "signed": 0}
     return {"doc_id": r["id"], "title": r["title"], "signed": r["signed"],

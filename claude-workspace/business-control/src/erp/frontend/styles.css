@@ -451,6 +451,9 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .sig-row b { flex: 0 0 auto; }
 .sig-row .dim { flex: 1; min-width: 120px; }
 
+/* the bench needs headroom the paper viewer does not */
+.doc-viewer.qb-tall { height: 74vh; }
+
 /* Modal */
 #ops-modal { position: fixed; inset: 0; z-index: 90; display: flex;
   align-items: center; justify-content: center; padding: 20px;

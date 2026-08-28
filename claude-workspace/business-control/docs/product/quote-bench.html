@@ -1695,6 +1695,12 @@ window.bcInit=function(d){
     catch(err){}
   }else if(typeof d.np==='boolean'){ S.np=d.np; }
   if(d.client){ S.meta.client=d.client; setVal('who',d.client); }
+  /* the embedder chooses which face opens: 'client' for reading a filed
+     quote as the client would see it, 'studio' for working the price —
+     applied after deserialize, which restores whatever face was saved */
+  if(d.view==='client') S.client=true;
+  else if(d.view==='studio') S.client=false;
+  document.body.classList.toggle('client',S.client);
   render();
 };
 
