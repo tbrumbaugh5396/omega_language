@@ -545,6 +545,13 @@ button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
 .fold-sum { margin-left: auto; font-size: 12px; white-space: nowrap; }
 .foldable:not(.folded) > .fold-head .fold-sum { display: none; }
 .doc-line:not(.folded) .dm-blanks { visibility: hidden; }
+/* An open row already shows the count on its Fill button, so below the
+   width where the title starts losing letters to it, the empty slot gives
+   its track back. Folded rows keep all three either way — they are the
+   ones being read down a column. */
+@media (max-width: 1240px) {
+  .doc-line:not(.folded) .dl-meta { grid-template-columns: 104px 70px; }
+}
 /* direct child, so folding a stage does not also claim to fold the
    documents inside it — each fold answers for its own body */
 .foldable.folded > .fold-body { display: none; }

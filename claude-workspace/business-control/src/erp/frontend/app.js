@@ -5948,10 +5948,15 @@ async function renderEngagement(id) {
         docs.length === 1 ? "" : "s"}` : "",
       st.templates.length ? `${st.templates.length} to generate` : ""]
       .filter(Boolean).join(" · ");
+    const report = docs.find((x) => x.title.startsWith("Progress update"));
     return foldable(`stage:${st.client_stage}`, label,
       `<button class="btn alt sm" data-report="${esc(st.client_stage)}"
         title="write this stage up for the client — where it stands, what
-        they have, what is waiting on them">Progress update</button>`,
+        they have, what is waiting on them">${report
+          ? "Refresh update" : "Progress update"}</button>`
+      + (report ? `<button class="btn alt sm" data-send="${report.id}"
+          title="email it to the client as a link to their own portal — the
+          live document, not a PDF that stops being true">Send</button>` : ""),
       `${docs.length ? `<div class="sig-rows">${docs.map(docRowE).join("")}</div>` : ""}
       ${st.templates.length ? `<div class="tpl-list">
         <span class="tpl-head">Generate for ${esc(e.name)}</span>
@@ -6218,6 +6223,42 @@ async function renderEngagement(id) {
      same rows the board reads, filed as a to-client document, and opened
      the way any other document opens — the point is that it is a paper in
      the vault, not a screen you can only look at here. */
+  /* Sending is outward-facing and cannot be taken back, so the recipient is
+     on screen before the click that sends, not in a toast afterwards. */
+  view().querySelectorAll("[data-send]").forEach((b) => b.onclick = () => {
+    const did = +b.dataset.send;
+    modal(`<h3>Send to the client</h3>
+      <p class="dim">They get a link to their own portal copy — the live
+        document, which still says the truth next week. The page they land
+        on offers the PDF.</p>
+      <label>To <span class="req">required</span></label>
+      <input id="sd-to" type="email" value="${esc(e.approver_email || "")}">
+      <label>A line with it <span class="opt">optional</span></label>
+      <textarea id="sd-msg" rows="2"></textarea>
+      <div class="modal-foot">
+        <button class="btn" id="sd-go">Send</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`);
+    $("#sd-go").onclick = async () => {
+      try {
+        const out = await api(
+          `/api/store/admin/engagements/${id}/docs/${did}/send`,
+          { body: { to: $("#sd-to").value.trim(),
+                    message: $("#sd-msg").value.trim() } });
+        closeModal();
+        /* "dry" is the honest word for a pipeline that ran with no SMTP
+           configured. Reporting it as sent is the one outcome that would
+           cost someone a client. */
+        if (out.status === "sent") toast(`Sent to ${out.to}`);
+        else if (out.status === "dry") {
+          try { await navigator.clipboard.writeText(out.link); } catch {}
+          toast("No mail is configured, so nothing was sent — the link is "
+            + "copied, send it yourself");
+        } else toast(`Not sent — ${out.status}`);
+        renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    };
+  });
   view().querySelectorAll("[data-report]").forEach((b) => b.onclick = async () => {
     try {
       const out = await api(

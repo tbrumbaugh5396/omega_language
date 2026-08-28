@@ -4032,9 +4032,12 @@ ok(".dl-meta { display: grid; grid-template-columns: 104px 70px 84px;"
    "in fixed slots, because the alignment is the information — pills that "
    "start wherever each title happens to end cannot be scanned down a "
    "stage, only read across a row")
-ok(".doc-line:not(.folded) .dm-blanks { visibility: hidden; }" in _opscss,
-   "and the blanks slot holds its width when the row opens: a column that "
-   "appears and disappears is a column that jumps")
+ok(".doc-line:not(.folded) .dm-blanks { visibility: hidden; }" in _opscss
+   and ".doc-line:not(.folded) .dl-meta { grid-template-columns: 104px 70px; }"
+   in _opscss,
+   "the blanks slot holds its width when a row opens — a column that "
+   "appears and disappears is a column that jumps — and gives the track "
+   "back below the width where the title starts losing letters to it")
 ok('${x.signed} of ${' in _opsjs,
    "half-signed is its own state — one party done, one still out — and a "
    "slot that showed only the newer of the two would read as unsigned")
@@ -4105,6 +4108,43 @@ ok("Progress update" not in _rmd.split("## What you have from us")[1]
    .split("##")[0],
    "and it does not list itself among the papers — it is the covering "
    "note, not one of the things it covers")
+# --- and sent, as a link to the live document ------------------------------
+_send = c.post(
+    f"/api/store/admin/engagements/{_eid}/docs/{_rep['doc_id']}/send",
+    headers=A, json={"to": "poc@client.test", "message": "Week 3, as promised."})
+ok(_send.status_code == 200 and _send.json()["status"] == "dry",
+   "with no SMTP configured the whole pipeline runs and reports 'dry' — "
+   "nothing left the machine, and it says so rather than claiming a send")
+_sj = _send.json()
+ok("/engage/" in _sj["link"] and f"/doc/{_rep['doc_id']}" in _sj["link"],
+   "what goes out is a link to their own portal copy, not an attachment: "
+   "the document they open next week is next week's truth")
+ok(c.get(_sj["link"].split("8000")[-1].split("testserver")[-1]).status_code
+   == 200, "and the link opens without a login, which is the point of it")
+_llog = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()["log"]
+ok(any("sent" in l["what"] and "poc@client.test" in l["what"]
+       and "nothing left the machine" in l["what"] for l in _llog),
+   "the log records the send and, when nothing was sent, says so in the "
+   "same line — a send recorded as done when it wasn't is the one outcome "
+   "worth being loud about")
+_intdoc = next(d for d in c.get(f"/api/store/admin/engagements/{_eid}",
+                                headers=A).json()["docs"]
+               if d["side"] == "internal")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/docs/{_intdoc['id']}/send",
+          headers=A, json={"to": "poc@client.test"}).status_code == 404,
+   "an internal paper cannot be sent from here at all — not 'should not', "
+   "cannot: the wall is the query")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/docs/{_rep['doc_id']}/send",
+          headers=A, json={"to": "not-an-email"}).status_code == 400,
+   "and a malformed address is refused rather than swallowed")
+ok('data-send="' in _opsjs and 'id="sd-to"' in _opsjs
+   and 'out.status === "dry"' in _opsjs,
+   "the button asks who it is going to before it goes, and reads back what "
+   "actually happened — an outward-facing act is not a fire-and-forget one")
+ok('"Refresh update" : "Progress update"' in _opsjs,
+   "and the same button says which it will do, because a stage that already "
+   "has an update is the common case after the first week")
+
 _again = c.post(f"/api/store/admin/engagements/{_eid}/stages/03-agreement/report",
                 headers=A).json()
 ok(_again["doc_id"] == _rep["doc_id"] and _again["refreshed"],

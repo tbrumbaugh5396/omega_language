@@ -1184,6 +1184,79 @@ def stage_report(eid: int, stage: str, u=Depends(admin_user),
     return {"doc_id": doc_id, "refreshed": False}
 
 
+class SendDocBody(BaseModel):
+    to: str = ""
+    message: str = ""
+
+
+@router.post("/api/store/admin/engagements/{eid}/docs/{did}/send")
+def send_doc(eid: int, did: int, body: SendDocBody, request: Request,
+             u=Depends(admin_user), con=Depends(get_con)):
+    """Send a client-side paper to the client, as a link to their own portal.
+
+    A link rather than an attachment, and the client's existing portal link
+    rather than a new one: what they open is the live document, so a
+    progress update read next week is next week's truth rather than a PDF
+    that stopped being true the moment something moved. If they want the
+    file, the page they land on offers it.
+
+    The wall is the query. A document not filed on the client's side cannot
+    be sent from here at all — not "should not", cannot.
+    """
+    e = _eng_or_404(con, eid)
+    d = con.execute(
+        "SELECT d.id, d.title FROM engagement_docs ed"
+        " JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.doc_id=? AND ed.side='to_client'",
+        (eid, did)).fetchone()
+    if d is None:
+        raise HTTPException(404, "no such document on the client's side")
+    to = (body.to or e["approver_email"] or "").strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", to):
+        raise HTTPException(400, "a valid client email is required — set the "
+                                 "client POC's email, or type one here")
+
+    token = e["portal_token"]
+    if not token:
+        token = secrets.token_urlsafe(24)
+        con.execute("UPDATE engagements SET portal_token=?, updated_at=?"
+                    " WHERE id=?", (token, time.time(), eid))
+        log(con, eid, u["name"], "portal link created to send a document")
+    base = str(request.base_url).rstrip("/")
+    link = f"{base}/engage/{token}/doc/{did}"
+
+    from erp.backend import mailer
+    from erp.backend.main import CFG
+    who = (e["approver_name"] or "").strip()
+    note = (body.message or "").strip()
+    status = "error: not attempted"
+    try:
+        status = mailer.send(
+            CFG, to, f"{d['title']}",
+            (f"Hi {who.split()[0]}," if who else "Hi,") + "\n\n"
+            + (note + "\n\n" if note else "")
+            + f"{d['title']} is ready for you here:\n\n{link}\n\n"
+            + "The link stays current — open it any time to see where "
+              "things stand.\n\n"
+            + f"— {u['name']}")
+    except Exception as err:          # a mail outage must not lose the act
+        status = f"error: {err}"[:200]
+
+    # Logged either way, and honestly: "dry" means the pipeline ran with no
+    # SMTP configured and nothing left the machine. A send recorded as done
+    # when nothing was sent is the one outcome worth being loud about.
+    from . import documents as vault
+    vault.log(con, did, u["name"], "sent to the client",
+              f"{to} ({status})")
+    log(con, eid, u["name"],
+        f"sent '{d['title']}' to {to}"
+        + ("" if status == "sent"
+           else " — nothing left the machine: no SMTP configured"
+           if status == "dry" else f" — {status}"))
+    con.commit()
+    return {"status": status, "to": to, "link": link, "title": d["title"]}
+
+
 @router.get("/api/store/admin/engagements/{eid}/docs/{did}/blanks")
 def doc_blanks(eid: int, did: int, u=Depends(admin_user),
                con=Depends(get_con)):
