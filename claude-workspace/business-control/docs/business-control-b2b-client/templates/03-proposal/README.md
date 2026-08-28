@@ -9,6 +9,12 @@ Always three options, middle one recommended. They get a proposal, not a menu â€
 the rate card stays internal because a price list invites line-item haggling
 over work you already priced as a whole.
 
+That rule is about **this** stage. The [capability
+menu](../02-consultation/capability-menu.md) at stage 02 prices the software
+they run on, monthly, and it is a scoping aid: it helps them tell you which
+parts they need before you price anything. What must never go out is the rate
+card â€” the sheet that prices *your work* by the line.
+
 **Valid 14 days.** Put the date on it. An open-ended price is an invitation to
 come back in six months expecting the same number.
 

@@ -35,6 +35,16 @@ several carry prices that move.
 | [private-subscription-app.md](private-subscription-app.md) | Build subscription billing or rent Recharge/Loop. Decision: **prototype the private-app route first**, rent only if our dunning measurably underperforms at real volume |
 | [saas-scaling.md](saas-scaling.md) | What it takes to sell this as SaaS — tenant-per-database, per-feature hosting costs, and what those do to margins |
 
+## Price it
+
+| Document | What it answers |
+|---|---|
+| [price-book.md](price-book.md) | Every capability, what it depends on, what it costs us and what we quote — with the bundles, tiers, meters and services, and a list of every place the sources contradict each other |
+
+> The price book was lifted out of the deck, which held three separate data
+> models that had already drifted apart. Until §8 of it is settled, **the deck
+> and the price book will drift too** — the deck still carries its own copies.
+
 > **Don't silently update a decision document.** It records what was decided,
 > by whom, and on what evidence — which is the whole reason to keep one. When
 > the decision changes, write the new one and mark the old superseded. A

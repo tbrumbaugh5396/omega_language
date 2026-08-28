@@ -30,7 +30,7 @@ back, and what opens the next gate.
 | Stage | What's happening | Send them | Gate |
 |-------|---|---|---|
 | [01 · Potential customer](templates/01-potential-customer/) | An enquiry arrived | [First reply](templates/01-potential-customer/email-scripts.md) | They book a call |
-| [02 · Consultation](templates/02-consultation/) | Finding out what they need | [Packages & process](templates/02-consultation/packages-and-process.md) | Discovery brief written |
+| [02 · Consultation](templates/02-consultation/) | Finding out what they need | [Packages & process](templates/02-consultation/packages-and-process.md) · [capability menu](templates/02-consultation/capability-menu.md) | Discovery brief written |
 | [03 · Proposal](templates/03-proposal/) | Pricing it | [Proposal](templates/03-proposal/proposal-template.md), [deck](templates/03-proposal/sales-deck.html), and  [rates](templates/03-proposal/rate-card.md) | They pick an option in writing |
 | [04 · Agreement](templates/04-agreement/) | Making it real | [Contract](templates/04-agreement/contracts/) | **Signed + deposit cleared** |
 | [05 · Kickoff](templates/05-kickoff/) | Gathering inputs | [Welcome guide](templates/05-kickoff/welcome-guide.md) + 4 questionnaires | Questionnaires returned, content deadline agreed |
