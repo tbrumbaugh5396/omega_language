@@ -40,6 +40,7 @@ several carry prices that move.
 | Document | What it answers |
 |---|---|
 | [price-book.md](price-book.md) | Every capability, what it depends on, what it costs us and what we quote — with the bundles, tiers, meters and services, and a list of every place the sources contradict each other |
+| [quote-bench.html](quote-bench.html) | The working quoter: pick capabilities, dependencies wire themselves, and the bill assembles live — studio view with costs and margins, client view without. Served inside the ERP behind admin auth (a client's page → Quote), where "File to client" saves the quote as a paper on that client |
 
 > The price book was lifted out of the deck, which held three separate data
 > models that had already drifted apart. Until §8 of it is settled, **the deck

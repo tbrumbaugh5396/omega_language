@@ -4219,6 +4219,91 @@ c.request("DELETE",
           headers=A)
 c.delete(f"/api/store/admin/documents/{_rep['doc_id']}", headers=A)
 
+# --- the quote bench, wired into the client's paperwork --------------------
+# The bench owns the arithmetic; the server files what it produced. A quote
+# that lives outside the filing system is a quote nobody can find in six
+# months — filed, it previews, prints, signs, sends and travels in the
+# binder through machinery that already exists.
+ok(c.get("/api/store/admin/quote-bench").status_code in (401, 403),
+   "the bench embeds our costs and margins, so it is never served without "
+   "the admin wall")
+_qb = c.get("/api/store/admin/quote-bench", headers=A)
+ok(_qb.status_code == 200 and "const CAPS=" in _qb.text
+   and "quoteMarkdown" in _qb.text and "window.bcInit" in _qb.text,
+   "behind it, the whole bench — capabilities, bands, and the embedded-mode "
+   "seams the ERP drives")
+
+ok(c.get(f"/api/store/admin/engagements/{_eid}/quote", headers=A).json()
+   == {"doc_id": 0, "state": "", "signed": 0},
+   "a client with no quote says so, rather than erroring")
+
+import base64 as _b64q
+_qstate = _b64q.b64encode(b'{"on":["core","selling"],"locs":1}').decode()
+_qmd = ("**An estimate, not an invoice.**\n\n## Part 1 — your platform\n\n"
+        "| | Monthly |\n|---|---|\n| Selling | $50.00 |\n"
+        "| **Part 1 — platform** | **$100.00** |\n\n"
+        "Accepted for Probe: [SIGN HERE]\n")
+_qr = c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A,
+             json={"title": "Quote — Probe", "markdown": _qmd,
+                   "state": _qstate}).json()
+ok(_qr["doc_id"] and _qr["refreshed"] is False,
+   "filing a quote creates a paper on the client")
+_qd = next(d for d in c.get(f"/api/store/admin/engagements/{_eid}",
+                            headers=A).json()["docs"]
+           if d["id"] == _qr["doc_id"])
+ok(_qd["side"] == "to_client" and _qd["stage"] == "03-proposal",
+   "filed on the client's side under the proposal stage — it travels in "
+   "the binder, the bundle and the portal with everything else")
+_qs = c.get(f"/api/store/admin/engagements/{_eid}/quote", headers=A).json()
+ok(_qs["doc_id"] == _qr["doc_id"] and _qs["state"] == _qstate,
+   "and the bench state rides in the paper, so the next Quote click opens "
+   "where the conversation left off — the document is the storage")
+ok(c.get(f"/api/store/admin/documents/{_qr['doc_id']}/pdf",
+         headers=A).status_code == 200
+   and "Sign here:" in c.get(
+       f"/api/store/admin/documents/{_qr['doc_id']}/preview", headers=A).text,
+   "the filed quote prints, and carries a signature line — accepting a "
+   "quote is the signature that passes the proposal gate")
+
+_qr2 = c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A,
+              json={"title": "Quote — Probe v2", "markdown": _qmd,
+                    "state": _qstate}).json()
+ok(_qr2["doc_id"] == _qr["doc_id"] and _qr2["refreshed"],
+   "re-filing replaces the unsigned quote rather than breeding copies")
+
+_qsig = c.post(f"/api/store/admin/documents/{_qr['doc_id']}/request-signature",
+               headers=A, json={"signer_name": "Quote Signer",
+                                "signer_email": "q@s.test",
+                                "role": "signer", "in_person": True}).json()
+c.post("/sign/" + _qsig["link"].split("/sign/")[1],
+       json={"typed_name": "Quote Signer"})
+_qr3 = c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A,
+              json={"title": "Quote — Probe v3", "markdown": _qmd,
+                    "state": _qstate}).json()
+ok(_qr3["doc_id"] != _qr["doc_id"],
+   "but a signed quote is the offer the client accepted — it is left alone "
+   "and the new quote is filed beside it")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A,
+          json={"title": "x", "markdown": "  ", "state": ""}).status_code
+   == 400, "an empty quote is refused")
+
+ok('id="eng-quote"' in _opsjs and "w.bcFile = async (d)" in _opsjs
+   and "bc-init" not in _opsjs,
+   "the client page opens the bench in a frame and hands it a function to "
+   "answer with — two direct calls on a same-origin frame, no window "
+   "listener, which this app forbids for cause")
+_qbjs = _qb.text
+ok("quoteMarkdown" in _qbjs and "Part 2 — support" in _qbjs
+   and "[SIGN HERE]" in _qbjs,
+   "the bench renders the client-view tape as markdown — parts, totals, "
+   "acceptance line — and the cost, margin and infra lines never leave it")
+
+# tidy: unfile and remove the quote papers
+for _qid in {_qr["doc_id"], _qr3["doc_id"]}:
+    c.request("DELETE",
+              f"/api/store/admin/engagements/{_eid}/docs/{_qid}", headers=A)
+    c.delete(f"/api/store/admin/documents/{_qid}", headers=A)
+
 # --- a document you just asked for opens ----------------------------------
 ok('view().querySelector(`[data-engview="${out.doc_id}"]`)?.click()'
    in _opsjs,

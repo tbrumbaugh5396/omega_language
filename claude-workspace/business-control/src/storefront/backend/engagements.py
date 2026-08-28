@@ -1305,6 +1305,113 @@ def send_bundle(eid: int, body: SendDocBody, request: Request,
     return {"status": status, "to": to, "link": link, "files": n}
 
 
+# ---------- the quote bench, wired into the client's paperwork ----------
+# The bench (docs/product/quote-bench.html) is the pricing engine: bands,
+# dependencies, discounts, care plans, the lot. It stays the single place
+# that arithmetic lives — the server never recomputes a quote, it files what
+# the bench produced. Priced in the bench, filed in the vault, signed and
+# sent like any other paper.
+
+BENCH = Path(__file__).resolve().parents[3] / "docs" / "product" \
+    / "quote-bench.html"
+QUOTE_NOTE = "Quote bench state: "
+
+
+@router.get("/api/store/admin/quote-bench")
+def quote_bench(u=Depends(admin_user)):
+    """The bench itself, behind the admin wall.
+
+    It embeds our costs, margins and infra rates alongside the list prices —
+    the studio view is the whole point of it — so unlike the storefront's
+    static files it is never served to an unauthenticated path.
+    """
+    if not BENCH.is_file():
+        raise HTTPException(404, "the quote bench ships with the working "
+                                 "tree — docs/product/quote-bench.html")
+    return HTMLResponse(BENCH.read_text())
+
+
+class QuoteBody(BaseModel):
+    title: str = ""
+    markdown: str
+    state: str = ""          # the bench's serialized state, opaque to us
+
+
+@router.get("/api/store/admin/engagements/{eid}/quote")
+def quote_state(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """The latest filed quote and the bench state that produced it, so the
+    bench reopens where the conversation left off instead of from zero."""
+    _eng_or_404(con, eid)
+    r = con.execute(
+        "SELECT d.id, d.title, d.notes,"
+        "  (SELECT COUNT(*) FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND d.notes LIKE ?"
+        "   AND d.status!='archived'"
+        " ORDER BY d.created_at DESC LIMIT 1",
+        (eid, QUOTE_NOTE + "%")).fetchone()
+    if r is None:
+        return {"doc_id": 0, "state": "", "signed": 0}
+    return {"doc_id": r["id"], "title": r["title"], "signed": r["signed"],
+            "state": r["notes"][len(QUOTE_NOTE):]}
+
+
+@router.post("/api/store/admin/engagements/{eid}/quote")
+def file_quote(eid: int, body: QuoteBody, u=Depends(admin_user),
+               con=Depends(get_con)):
+    """File the bench's quote as a client document.
+
+    Into the vault rather than rendered on demand, because everything built
+    for papers then applies for free: it previews, prints, signs, travels in
+    the binder, shows on the portal, and the Send button already knows how
+    to deliver it. The bench state rides in the notes, so the quote can be
+    reopened and adjusted — the document is the storage.
+
+    Re-filing replaces the latest quote while it is unsigned. A signed quote
+    is the offer the client accepted, so that one is left alone and the new
+    quote is filed beside it.
+    """
+    e = _eng_or_404(con, eid)
+    if not (body.markdown or "").strip():
+        raise HTTPException(400, "an empty quote is not a quote")
+    title = (body.title or "").strip() or f"Quote — {e['name']}"
+    notes = QUOTE_NOTE + (body.state or "")
+
+    prev = con.execute(
+        "SELECT d.id,"
+        "  (SELECT COUNT(*) FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND d.notes LIKE ?"
+        "   AND d.status!='archived'"
+        " ORDER BY d.created_at DESC LIMIT 1",
+        (eid, QUOTE_NOTE + "%")).fetchone()
+    if prev and not prev["signed"]:
+        con.execute("UPDATE documents SET title=?, body=?, notes=?"
+                    " WHERE id=?",
+                    (title[:200], body.markdown, notes, prev["id"]))
+        log(con, eid, u["name"], f"refreshed the quote '{title}'")
+        con.commit()
+        return {"doc_id": prev["id"], "refreshed": True}
+
+    cur = con.execute(
+        "INSERT INTO documents(title,category,party_kind,party_name,"
+        " party_email,body,notes,status,confidential,uploaded_by,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (title[:200], "proposal", "partner", e["name"][:120],
+         e["approver_email"], body.markdown, notes, "active", 1,
+         u["id"], time.time()))
+    doc_id = cur.lastrowid
+    con.execute(
+        "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (eid, doc_id, "03-proposal", "to_client", time.time()))
+    log(con, eid, u["name"], f"filed the quote '{title}' from the bench")
+    con.commit()
+    return {"doc_id": doc_id, "refreshed": False}
+
+
 @router.get("/api/store/admin/engagements/{eid}/docs/{did}/blanks")
 def doc_blanks(eid: int, did: int, u=Depends(admin_user),
                con=Depends(get_con)):

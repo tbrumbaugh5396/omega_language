@@ -1,0 +1,1818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quote bench — Business Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wdth,wght@0,75..125,400..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bench:#141A18; --bench-2:#1C2422; --bench-3:#252F2C; --edge:#33403C;
+  --pale:#DCE3DF; --dim:#8A9A94; --cost:#9AA8A3;
+  --paper:#F6F5F0; --paper-ink:#14201C; --paper-rule:#C9C6BB;
+  --recur:#3FA383; --recur-deep:#1F6B52;
+  --once:#C99A3E; --once-deep:#8A5B14;
+  --thru:#6F8FB0; --thru-deep:#3E6285;
+  --warn:#E0714D;
+  --seg-once:#8A5B14; --seg-plat:#1B5C46; --seg-supp:#7FC3A6; --seg-other:#B9DFCC;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bench);color:var(--pale);font-family:'Archivo',system-ui,sans-serif;
+  font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.num{font-family:'IBM Plex Mono',ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.wrap{max-width:1420px;margin:0 auto;padding:28px 22px 80px}
+header{border-bottom:1px solid var(--edge);padding-bottom:18px;margin-bottom:22px}
+h1{font-size:clamp(26px,3.4vw,42px);margin:0 0 6px;font-variation-settings:'wdth' 118,'wght' 800;
+  letter-spacing:-.02em;line-height:1}
+h1 em{font-style:normal;color:var(--recur)}
+.sub{color:var(--dim);max-width:64ch;margin:0}
+.sub code{font-family:'IBM Plex Mono',monospace;font-size:.9em;color:var(--pale)}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 372px;gap:26px;align-items:start}
+@media(max-width:1060px){.cols{grid-template-columns:1fr}}
+
+.panel{background:var(--bench-2);border:1px solid var(--edge);border-radius:3px;margin-bottom:16px}
+.panel>h2{margin:0;padding:11px 15px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  font-variation-settings:'wdth' 112,'wght' 700;color:var(--dim);border-bottom:1px solid var(--edge);
+  display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.panel>h2 span{letter-spacing:0;text-transform:none;font-size:11px;color:var(--cost);font-variation-settings:'wght' 400}
+.panel>h2 button{background:none;border:1px solid var(--edge);color:var(--cost);font:inherit;font-size:10.5px;
+  letter-spacing:.06em;padding:2px 8px;border-radius:2px;cursor:pointer;text-transform:none}
+.panel>h2 button:hover{border-color:var(--recur);color:var(--recur)}
+.body{padding:14px 15px}
+.scroll{overflow-x:auto}
+
+.presets{display:flex;flex-direction:column;gap:6px}
+.preset{background:var(--bench-3);border:1px solid var(--edge);color:var(--pale);padding:9px 12px;
+  border-radius:2px;cursor:pointer;font:inherit;font-size:12.5px;width:100%;text-align:left;
+  display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.preset:hover{border-color:var(--recur);color:#fff}
+.preset:focus-visible{outline:2px solid var(--recur);outline-offset:2px}
+.preset.wide{border-color:var(--once-deep)}
+.preset .pp{flex:none;color:var(--dim);font-family:'IBM Plex Mono',monospace;font-size:11.5px}
+.preset:hover .pp{color:var(--recur)}
+
+.groups{display:block}
+.grp{border-top:1px solid #222B28}
+.grp:first-of-type{border-top:0}
+.grp>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:9px;
+  padding:11px 0 8px;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--cost);font-variation-settings:'wght' 700}
+.grp>summary::-webkit-details-marker{display:none}
+.grp>summary::before{content:'▾';font-size:9px;color:var(--dim);transition:transform .15s ease;flex:none}
+.grp:not([open])>summary::before{transform:rotate(-90deg)}
+.grp>summary:hover{color:var(--pale)}
+.grp>summary:focus-visible{outline:2px solid var(--recur);outline-offset:2px}
+.grp>summary .cnt{margin-left:auto;letter-spacing:0;text-transform:none;
+  font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--dim);font-variation-settings:'wght' 400}
+.capgrid{display:block;padding:0 0 10px}
+.capgrid .cap{width:100%}
+.cap{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:2px;cursor:pointer;border:1px solid transparent}
+.cap:hover{background:var(--bench-3)}
+.cap input[type=checkbox]{accent-color:var(--recur);width:14px;height:14px;margin:0;flex:none;cursor:pointer}
+.cap .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cap .pr{color:var(--dim);font-size:12.5px}
+.cap.on{background:#1E2C27}
+.cap.on .nm{color:#fff}
+.cap.dragged{border-color:var(--once-deep)}
+.cap.dragged .nm::after{content:' ⤴';color:var(--once)}
+.cap.noprice .pr{color:var(--warn)}
+.cap input.fill{width:52px;height:20px;background:var(--bench);border:1px solid var(--warn);color:var(--warn);
+  border-radius:2px;padding:0 4px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;text-align:right}
+.cap input.fill.set{border-color:var(--recur);color:var(--recur)}
+
+.row{display:flex;align-items:center;gap:10px;padding:5px 0;flex-wrap:wrap}
+.row label.k{flex:1;min-width:120px}
+.hint{flex-basis:100%;color:var(--cost);font-size:11.5px;margin:2px 0 4px}
+input[type=number],select{background:var(--bench);border:1px solid var(--edge);color:var(--pale);
+  border-radius:2px;padding:5px 7px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;width:104px;text-align:right}
+select{width:auto;min-width:180px;text-align:left;font-family:'Archivo',sans-serif}
+input:focus,select:focus{outline:none;border-color:var(--recur)}
+.seg{display:inline-flex;border:1px solid var(--edge);border-radius:2px;overflow:hidden}
+.seg button{background:var(--bench);border:0;border-right:1px solid var(--edge);color:var(--dim);
+  padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed=true]{background:var(--recur-deep);color:#fff}
+.toggle{display:flex;align-items:center;gap:8px;cursor:pointer;padding:4px 0}
+.toggle input{accent-color:var(--recur);width:15px;height:15px;margin:0}
+
+table.grid{width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px}
+table.grid th{text-align:right;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--cost);
+  padding:0 0 6px 8px;font-variation-settings:'wght' 700;white-space:nowrap}
+table.grid th:first-child{text-align:left;padding-left:0}
+table.grid td{padding:4px 0 4px 8px;border-top:1px solid #222B28;text-align:right}
+table.grid td:first-child{text-align:left;padding-left:0}
+table.grid input{width:78px;padding:3px 6px}
+table.grid input.tiny{width:64px}
+.unit{color:var(--cost);font-size:11px;display:block}
+.out{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+.out.rev{color:var(--recur)}
+.out.zero{color:#4B5854}
+.out.thru{color:var(--thru)}
+tr.pass td:first-child .nm2{color:var(--thru)}
+tr.pass input{opacity:.45}
+.modebtn{background:var(--bench);border:1px solid var(--edge);color:var(--dim);font:inherit;font-size:11px;
+  padding:3px 8px;border-radius:2px;cursor:pointer;white-space:nowrap;min-width:96px}
+.modebtn[data-mode=resell]{border-color:var(--recur-deep);color:var(--recur)}
+.modebtn[data-mode=pass]{border-color:var(--thru-deep);color:var(--thru)}
+tfoot td{border-top:1px solid var(--edge);padding-top:7px;font-variation-settings:'wght' 700}
+
+.flag{border-left:2px solid var(--warn);background:#241C19;padding:8px 11px;margin:9px 0 0;
+  font-size:12.5px;color:#EBD7CE;border-radius:0 2px 2px 0}
+.flag b{color:var(--warn)}
+.flag.good{border-color:var(--recur);background:#17251F;color:#CFE5DA}
+.flag.good b{color:var(--recur)}
+.flag.info{border-color:var(--thru);background:#181F26;color:#CFDCE7}
+.flag.info b{color:var(--thru)}
+.flag+.flag{margin-top:6px}
+
+.tapewrap{position:sticky;top:20px}
+.tape{background:var(--paper);color:var(--paper-ink);border-radius:2px;
+  box-shadow:0 18px 44px rgba(0,0,0,.55);position:relative;
+  max-height:calc(100vh - 40px);display:flex;flex-direction:column}
+.tape::before,.tape::after{content:'';position:absolute;left:0;right:0;height:9px;pointer-events:none;
+  background:radial-gradient(circle at 5px -1px,transparent 5px,var(--paper) 5.5px);background-size:10px 9px}
+.tape::before{top:-8px;transform:scaleY(-1)}
+.tape::after{bottom:-8px}
+.tapehead{flex:none;padding:24px 20px 0}
+.tapebody{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 20px;scrollbar-width:thin}
+.tapebody::-webkit-scrollbar{width:6px}
+.tapebody::-webkit-scrollbar-thumb{background:#D3D0C4;border-radius:3px}
+.tapefoot{flex:none;padding:0 20px 22px;background:var(--paper);position:relative;z-index:1}
+.tapefoot::before{content:'';position:absolute;top:-14px;left:0;right:0;height:14px;pointer-events:none;
+  background:linear-gradient(to bottom,rgba(246,245,240,0),var(--paper))}
+.tape h2{margin:0 0 2px;font-size:11px;letter-spacing:.16em;text-transform:uppercase;font-variation-settings:'wght' 700}
+.tape .stamp{font-size:11px;color:#6E6A5E;margin:0 0 12px;font-family:'IBM Plex Mono',monospace}
+.li{display:flex;justify-content:space-between;gap:10px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;
+  padding:2.5px 0;line-height:1.45}
+.li .l{color:#3E4A45;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.li .v{flex:none}
+.li.neg .v{color:var(--recur-deep)}
+.li.sub{border-top:1px solid var(--paper-rule);margin-top:6px;padding-top:6px}
+.li.sub .l,.li.sub .v{font-weight:600;color:var(--paper-ink)}
+.li.mut .l,.li.mut .v{color:#8C877A}
+.li.thru .l,.li.thru .v{color:var(--thru-deep)}
+.li.head{margin-top:14px}
+.li.head .l{font-family:'Archivo',sans-serif;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:#8C877A;font-variation-settings:'wght' 700}
+.li.head.t .l{color:var(--thru-deep)}
+.total{border-top:2px solid var(--paper-ink);margin-top:10px;padding-top:12px}
+.big{font-family:'Archivo',sans-serif;font-variation-settings:'wdth' 120,'wght' 800;font-size:38px;
+  line-height:.95;letter-spacing:-.025em;display:block}
+.big.recur{color:var(--recur-deep)}
+.big.once{color:var(--once-deep)}
+.cap2{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#6E6A5E;font-variation-settings:'wght' 700}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.horizon{margin-top:18px;border-top:1px solid var(--paper-rule);padding-top:12px}
+.bar{height:11px;display:flex;border-radius:1px;overflow:hidden;margin:8px 0 10px;background:#DEDBD0}
+.bar i{display:block;min-width:0}
+.legend2{display:flex;flex-direction:column;gap:5px}
+.lg{display:flex;align-items:center;gap:8px;font-size:11.5px;color:#3E4A45}
+.lg .sw{width:9px;height:9px;border-radius:1px;flex:none}
+.lg .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg .mo{flex:none;color:#6E6A5E;font-family:'IBM Plex Mono',monospace}
+.lg .tt{flex:none;min-width:66px;text-align:right;font-family:'IBM Plex Mono',monospace;
+  font-weight:600;color:var(--paper-ink)}
+.lg.sum{border-top:1px solid var(--paper-rule);margin-top:3px;padding-top:6px}
+.lg.sum .nm{font-variation-settings:'wght' 700;color:var(--paper-ink)}
+.verdict{margin-top:16px;border-top:1px solid var(--paper-rule);padding-top:12px;font-size:12.5px;color:#3E4A45}
+.verdict b{color:var(--paper-ink)}
+.pill{display:inline-block;background:var(--recur-deep);color:#fff;padding:1px 7px;border-radius:2px;
+  font-size:11px;font-family:'IBM Plex Mono',monospace}
+.pill.alt{background:var(--once-deep)}
+.incl{margin:10px 0 0;padding:11px 13px;background:var(--bench);border:1px solid var(--edge);border-radius:2px}
+.incl h4{margin:0 0 7px;font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--cost);
+  font-variation-settings:'wght' 700}
+.incl h4 span{float:right;letter-spacing:0;text-transform:none;color:var(--dim);
+  font-family:'IBM Plex Mono',monospace;font-variation-settings:'wght' 400}
+.incl ul{margin:0;padding:0;list-style:none}
+.incl li{display:flex;gap:9px;padding:3px 0;font-size:12.5px;line-height:1.4;color:var(--pale)}
+.incl li::before{content:'✓';color:var(--recur);flex:none;font-size:11px;line-height:1.55}
+.incl li.no{color:var(--dim)}
+.incl li.no::before{content:'✕';color:var(--warn)}
+.incl .resp{margin:0;font-size:11.5px;color:var(--recur);font-family:'IBM Plex Mono',monospace}
+.grid td .toggle{align-items:flex-start;gap:9px;padding:0}
+.grid td .toggle input{margin-top:3px}
+.grid td:first-child{min-width:210px}
+.grid td .toggle .unit{margin-top:1px}
+.incl .sch{margin-top:10px;padding-top:9px;border-top:1px solid var(--edge);font-size:11.5px;color:var(--cost);line-height:1.5}
+.incl .sch b{color:var(--dim)}
+
+footer{margin-top:26px;border-top:1px solid var(--edge);padding-top:14px;color:var(--cost);font-size:12px;max-width:80ch}
+footer b{color:var(--dim)}
+
+/* ---- view switching ---- */
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:12px;
+  height:42px;margin-bottom:10px;flex-wrap:nowrap}
+.topbar .grow{flex:1;min-width:0;display:flex;align-items:center;gap:10px}
+.topbar input.who{background:var(--bench-2);border:1px solid var(--edge);color:var(--pale);
+  border-radius:2px;padding:7px 10px;font:inherit;font-size:12.5px;width:210px;text-align:left}
+.topbar input.who:focus{outline:none;border-color:var(--recur)}
+.act{background:var(--bench-3);border:1px solid var(--edge);color:var(--dim);font:inherit;
+  font-size:12px;padding:8px 11px;border-radius:2px;cursor:pointer;white-space:nowrap;flex:none}
+.act:hover{border-color:var(--recur);color:var(--recur)}
+.act.pdf:hover{border-color:var(--once);color:var(--once)}
+.saved{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.saved button{background:var(--bench-3);border:1px solid var(--edge);color:var(--pale);font:inherit;
+  font-size:12px;padding:6px 10px;border-radius:2px;cursor:pointer}
+.saved button:hover{border-color:var(--recur)}
+.saved button .x{color:var(--warn);margin-left:8px}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--recur-deep);
+  color:#fff;padding:9px 16px;border-radius:2px;font-size:13px;z-index:99;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.viewlabel{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--cost);
+  font-variation-settings:'wght' 700}
+.viewlabel.vc{color:var(--recur)}
+.viewbtn{background:var(--bench-3);border:1px solid var(--once-deep);color:var(--once);font:inherit;
+  font-size:12.5px;padding:9px 15px;border-radius:2px;cursor:pointer;white-space:nowrap;flex:none;
+  min-width:186px;text-align:center}
+.viewbtn:hover{background:var(--once-deep);color:#fff}
+.viewbtn:focus-visible{outline:2px solid var(--once);outline-offset:2px}
+body.client .viewbtn{border-color:var(--recur-deep);color:var(--recur)}
+body.client .viewbtn:hover{background:var(--recur-deep);color:#fff}
+body.client [data-internal]{display:none !important}
+body:not(.client) [data-client]{display:none !important}
+.clientnote{border-left:2px solid var(--recur-deep);background:#17251F;padding:9px 12px;
+  margin:14px 0 0;font-size:12.5px;color:#CFE5DA;border-radius:0 2px 2px 0}
+.clientnote b{color:var(--recur)}
+body.client .modebtn{cursor:default;opacity:.8}
+
+#printSheet{display:none}
+@media print{
+  @page{margin:14mm}
+  body{background:#fff;color:#111;font-size:11pt}
+  .wrap>*{display:none !important}
+  #printSheet{display:block !important;max-width:none}
+  #printSheet .ps-head{border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:16px}
+  #printSheet h1{font-size:20pt;margin:0 0 4px;color:#111;font-variation-settings:'wdth' 115,'wght' 800}
+  #printSheet .ps-meta{font-family:'IBM Plex Mono',monospace;font-size:9pt;color:#555}
+  #printSheet .li{color:#111;page-break-inside:avoid}
+  #printSheet .li .l{color:#333}
+  #printSheet .li.head .l{color:#666}
+  #printSheet .li.mut .l,#printSheet .li.mut .v{color:#888}
+  #printSheet .total{border-top:2px solid #111}
+  #printSheet .big{font-size:26pt}
+  #printSheet .incl{background:#fff;border:1px solid #bbb;color:#111;page-break-inside:avoid;margin:14px 0 0}
+  #printSheet .incl li{color:#111}
+  #printSheet .incl li.no{color:#666}
+  #printSheet .incl h4{color:#555}
+  #printSheet .incl .sch{color:#555}
+  #printSheet .lg{color:#333}
+  #printSheet .ps-foot{margin-top:18px;padding-top:10px;border-top:1px solid #bbb;
+    font-size:9pt;color:#666;page-break-inside:avoid}
+  #printSheet .ps-sec{page-break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="topbar">
+  <div class="grow">
+    <span class="viewlabel" data-internal>Studio view</span>
+    <span class="viewlabel vc" data-client>Client view</span>
+    <input class="who" id="who" placeholder="Quote for…" autocomplete="off">
+  </div>
+  <button class="act" id="saveBtn">Save</button>
+  <button class="act" id="linkBtn">Copy link</button>
+  <button class="act pdf" id="pdfBtn">Export PDF</button>
+  <button class="act pdf" id="fileBtn" hidden>File to client</button>
+  <button class="viewbtn" id="viewToggle">Client view →</button>
+</div>
+<div class="saved" id="savedList"></div>
+
+<div id="printSheet"></div>
+
+<header>
+  <h1 data-internal>Quote bench <em>/</em> what the account is actually worth</h1>
+  <h1 data-client>Your plan <em>/</em> what you're paying for</h1>
+  <p class="sub" data-internal>Every default comes from <code>price-book.md</code>; every rate on this page is editable. Assembly follows §7 exactly. The four bundles in §3 reconcile to the cent, so if a preset disagrees with the doc, the doc changed.</p>
+  <p class="sub" data-client>Every capability on your plan, what it does, and how the total is reached. Change anything on the left and the bill on the right updates as you watch.</p>
+</header>
+
+<div class="cols">
+<div>
+
+  <div class="panel">
+    <h2>Start from
+      <span data-internal>the bundles in §3, or the client from the conversation</span>
+      <span data-client>a shape close to your business, then adjust anything</span>
+    </h2>
+    <div class="body"><div class="presets" id="presets"></div></div>
+  </div>
+
+  <div class="panel" data-internal>
+    <h2>Price bands <span>three numbers instead of nineteen</span></h2>
+    <div class="body">
+      <div class="row">
+        <label class="k">Light · Standard · Heavy</label>
+        <input type="number" id="bLight" value="20" class="tiny">
+        <input type="number" id="bStd" value="30" class="tiny">
+        <input type="number" id="bHeavy" value="50" class="tiny">
+      </div>
+      <div class="row"><label class="k" for="corePrice">Platform Core</label><input type="number" id="corePrice" value="50"></div>
+      <div class="row">
+        <label class="k">Volume discount — 3+ · 6+ · 10+</label>
+        <input type="number" id="v3" value="8" class="tiny">
+        <input type="number" id="v6" value="15" class="tiny">
+        <input type="number" id="v10" value="25" class="tiny">
+      </div>
+      <p class="hint">The 10+ tier is left at the documented 25%, which inverts: past nine boxes another capability lowers the bill. Set it to 20% and the ladder climbs all the way. Changing it is a pricing decision, so the bench won't make it for you.</p>
+    </div>
+  </div>
+
+  <div class="panel" data-internal>
+    <h2>Packaged tiers <span>the upgrade, not the escape hatch</span></h2>
+    <div class="body">
+      <div class="row">
+        <label class="k">Starter · Pro · Scale</label>
+        <input type="number" id="tStarter" value="199" class="tiny">
+        <input type="number" id="tPro" value="349" class="tiny">
+        <input type="number" id="tScale" value="699" class="tiny">
+      </div>
+      <p class="hint">A tier is only offered when it covers every selected capability. Starter carries Selling, Payments, Workforce and Comms; Pro adds Inventory, Warehouse, CRM, Marketing and Subscriptions; Scale adds Distribution, Production, Sourcing, Events, Affiliates, Intelligence, Automation and API. Learning, Fundraising and the Finance stack sit outside all three, so those clients buy boxes — which is the honest answer, not a gap.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>
+      <span style="color:var(--dim);letter-spacing:.14em;text-transform:uppercase;font-variation-settings:'wght' 700">Scale metric</span>
+      <span data-internal>optional — off unless you switch it on</span>
+    </h2>
+    <div class="body">
+      <label class="toggle"><input type="checkbox" id="scaleOn"> Bill by scale as well as capability</label>
+      <div id="scaleRows"></div>
+      <p class="hint" data-internal>Off by default and it stays off — nothing else in the bench depends on it. When it's on, the band is added to the subtotal, so nonprofit and annual discounts apply to it like any other software line. Active subscribers is the natural metric because the bill run already counts contracts; orders or GMV bands work the same way if you'd rather.</p>
+      <p class="hint" data-client>Your plan is sized to how much you're running through it. Growth inside a band costs nothing extra — you only move when you cross into the next one, and you'll see it coming.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Included with every install <span>no extra charge, no extra build</span></h2>
+    <div class="body">
+      <div class="incl" style="margin-top:0">
+        <h4>Installable app — all three surfaces<span>PWA</span></h4>
+        <ul>
+          <li>Customers add the shop to their home screen and open it like an app — no App Store, no download, no review queue</li>
+          <li>Staff do the same with the ops app; it keeps working through a dropped signal and syncs when the connection returns</li>
+          <li>Push notifications to phones and desktops — order alerts, low stock, incidents — with no per-message fee</li>
+          <li>Camera access for QR and barcode scanning: shelf labels, truck check-in, promo codes, event tickets</li>
+          <li>Microphone access for voice notes and calls, and one-tap sign-in from a QR code</li>
+          <li>One codebase, one deployment — iOS, Android and desktop from the same install</li>
+        </ul>
+        <p class="sch"><b>This is why HTTPS on a real domain matters.</b> Camera, microphone, push and home-screen install all unlock the moment the site is served over TLS on its own domain — which the deployment does automatically. A native app for the same reach is a separate build, two store submissions, and a review cycle on every update.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>
+      <span style="color:var(--dim);letter-spacing:.14em;text-transform:uppercase;font-variation-settings:'wght' 700">White-labelling</span>
+      <span data-internal>a software entitlement, so it sits in Part 1</span>
+    </h2>
+    <div class="body">
+      <div class="row"><label class="k" for="wlTier">Level</label><select id="wlTier"></select></div>
+      <div class="row">
+        <label class="k" for="wlFee">Monthly</label><input type="number" id="wlFee" value="0">
+        <label class="k" style="flex:none;min-width:0;color:var(--cost)">setup</label><input type="number" id="wlSetup" value="0" class="tiny">
+      </div>
+      <div id="wlDetail"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Capabilities <span id="boxcount"></span></h2>
+    <div class="body">
+      <div class="groups" id="caps"></div>
+      <div id="capflags"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Scale <span>billable seats are people who run the business — shoppers and students are free</span></h2>
+    <div class="body">
+      <div class="row"><label class="k" for="locs">Locations</label><input type="number" id="locs" min="1" value="1">
+        <label class="k" for="locRate" style="flex:none;min-width:0;color:var(--cost)">at</label><input type="number" id="locRate" value="29" class="tiny"></div>
+      <div class="row"><label class="k" for="seats">Staff seats</label><input type="number" id="seats" min="1" value="5">
+        <label class="k" for="seatRate" style="flex:none;min-width:0;color:var(--cost)">at</label><input type="number" id="seatRate" value="7" class="tiny"></div>
+      <p class="hint" data-internal>À la carte has no stated allowance in the price book. This bench assumes Starter's (1 location, 5 seats) and bills the overage rates above — an assumption, not a quote.</p>
+      <p class="hint" data-client>Your plan includes 1 location and 5 staff seats. Customers, students, donors and affiliates are always free — you're only counted for people who sign in to run the business.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>
+      <span style="color:var(--dim);letter-spacing:.14em;text-transform:uppercase;font-variation-settings:'wght' 700">Metered add-ons</span>
+      <button id="resetMeters">reset to price book</button>
+    </h2>
+    <div class="body">
+      <div class="scroll">
+        <table class="grid" id="meters">
+          <thead><tr>
+            <th>Add-on</th><th>Usage / mo</th><th>Included</th><th data-internal>Your cost</th>
+            <th><span data-internal>You charge</span><span data-client>Rate</span></th><th>Billing</th><th>Overage</th>
+          </tr></thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+      <p class="hint" data-internal><b style="color:var(--recur)">Resell</b> — you hold the vendor account, bill the overage, and eat the included allowance. <b style="color:var(--thru)">Pass-through</b> — the client brings their own key. No revenue, no cost, no margin effect; the estimate moves below the rule on the tape so you can still tell them what to expect.</p>
+      <p class="hint" data-client><b style="color:var(--recur)">On your plan</b> — included up to the allowance, then charged at the rate shown. <b style="color:var(--thru)">Your own account</b> — you hold the key and pay the vendor directly; nothing for it appears on our invoice.</p>
+      <div class="row" data-internal><label class="k" for="tpc">Turns per conversation</label><input type="number" id="tpc" min="0.5" step="0.5" value="4"></div>
+      <p class="hint" data-internal>§8 #1: the deck meters the bot per <em>turn</em> ($0.009), the price book per <em>conversation</em> ($0.036). They agree only at 4. Move this and the tier allowances re-price.</p>
+    </div>
+  </div>
+
+  <div class="panel" data-internal>
+    <h2>
+      <span style="color:var(--dim);letter-spacing:.14em;text-transform:uppercase;font-variation-settings:'wght' 700">Infrastructure — what hosting one install costs</span>
+      <button id="resetInfra">reset to price book</button>
+    </h2>
+    <div class="body">
+      <div class="row">
+        <label class="k" for="provider">Provider multiplier</label>
+        <select id="provider">
+          <option value="0.45">Hetzner ×0.45</option>
+          <option value="1" selected>DigitalOcean ×1.0</option>
+          <option value="1.9">AWS / GCP ×1.9</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="k" for="tenants">Installs on the platform</label><input type="number" id="tenants" min="1" value="25">
+        <label class="k" style="flex:none;min-width:0;color:var(--cost)">per node</label><input type="number" id="density" min="1" value="25" class="tiny">
+      </div>
+      <label class="toggle"><input type="checkbox" id="dedicated"> This install is on a dedicated node</label>
+      <div class="scroll" style="margin-top:10px">
+        <table class="grid" id="infra">
+          <thead><tr><th>Line</th><th>Rate</th><th>Qty</th><th>Shared over</th><th>Per install / mo</th></tr></thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+      <p class="hint">§8 #2 carries four node prices ($20 · $24 · $15–24 · $6–24) and §5 a separate cluster rate card. Both are here: change the node rate, the density, or the provider and every downstream figure moves. "25 installs per node" is modelled, not measured — it is the single most load-bearing guess in the pricing.</p>
+      <div class="row" style="margin-top:8px">
+        <label class="k">Platform line on the tape</label>
+        <div class="seg" id="basis">
+          <button data-b="flat" aria-pressed="false">Price-book flat ($3.50)</button>
+          <button data-b="infra" aria-pressed="true">Itemised above</button>
+        </div>
+      </div>
+      <p class="hint">§8 #13 is not a contradiction: $3.50 is the platform line alone, $8–12 is that line plus real metered usage. Both appear as separate rows on the tape so neither hides the other. In itemised mode the TURN line replaces the flat $1.50 Comms relay rather than stacking on it.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>
+      <span style="color:var(--dim);letter-spacing:.14em;text-transform:uppercase;font-variation-settings:'wght' 700">Care plan &amp; growth retainer</span>
+      <span data-internal>stage 10 — sold at handover, and at the first review</span>
+    </h2>
+    <div class="body">
+      <div class="row"><label class="k" for="careTier">Care plan</label><select id="careTier"></select></div>
+      <div class="row">
+        <label class="k" for="careFee">Monthly fee</label><input type="number" id="careFee" value="0">
+        <label class="k" style="flex:none;min-width:0;color:var(--cost)">incl. hours</label><input type="number" id="careInc" value="0" class="tiny">
+      </div>
+      <div class="row">
+        <label class="k" for="careReq">Change hours they'll ask for</label><input type="number" id="careReq" value="0">
+        <label class="k" style="flex:none;min-width:0;color:var(--cost)">overflow $/h</label><input type="number" id="careOverRate" value="95" class="tiny">
+      </div>
+      <p class="hint" data-internal>§8 #10: the agreement says $150 / $350 / $750; the rate card says $150–300 / $300–600 / $600–1,500. The agreement's figures are loaded — type the rate card's if you'd rather quote those. Hours don't roll over: they reserve capacity, which is the thing being sold.</p>
+      <p class="hint" data-client>Included change hours cover text edits, image swaps, posts and small layout tweaks. They don't roll over — they reserve time in the schedule, which is what makes a fast response possible. Anything beyond is billed at the hourly rate.</p>
+      <div id="careDetail"></div>
+
+      <div class="row" style="margin-top:12px"><label class="k" for="growthTier">Growth retainer</label><select id="growthTier"></select></div>
+      <div class="row">
+        <label class="k" for="growthFee">Monthly fee</label><input type="number" id="growthFee" value="0">
+        <label class="k" style="flex:none;min-width:0;color:var(--cost)">ad spend</label><input type="number" id="adSpend" value="0" class="tiny">
+      </div>
+      <p class="hint">Ad spend is never the fee. Media is paid by the client directly to the platform, on their card, never marked up and never held — so it sits below the rule with the other pass-throughs.</p>
+      <div id="growthDetail"></div>
+
+      <div class="row" data-internal style="margin-top:12px">
+        <label class="k" for="svcRate">Your cost per hour</label><input type="number" id="svcRate" value="45">
+      </div>
+      <div class="row" data-internal>
+        <label class="k">Delivery hours / mo</label>
+        <input type="number" id="hCare" value="2" class="tiny" title="care plan">
+        <input type="number" id="hGrowth" value="0" class="tiny" title="growth retainer">
+        <input type="number" id="hStudio" value="0" class="tiny" title="Studio">
+      </div>
+      <p class="hint" data-internal>Care · growth · Studio, in that order. Services run at 30–50% margin and scale with people, unlike the software — so these three fields are the only place in the bench where selling more can make you poorer.</p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Discounts, term &amp; services</h2>
+    <div class="body">
+      <label class="toggle"><input type="checkbox" id="np"> Nonprofit — 30% off the subtotal</label>
+      <label class="toggle"><input type="checkbox" id="annual"> Annual — two months free (2/12 off what remains)</label>
+      <div class="row" style="margin-top:8px">
+        <label class="k">Build pricing</label>
+        <div class="seg" id="buildMode">
+          <button data-m="single" aria-pressed="true">One figure</button>
+          <button data-m="surface" aria-pressed="false">By surface</button>
+        </div>
+      </div>
+      <div class="row" id="buildSingle"><label class="k" for="build">Build (one-time)</label><select id="build"></select></div>
+      <div id="buildSurfaces"></div>
+      <div class="row"><label class="k" for="studio">Studio (monthly)</label><select id="studio"></select></div>
+      <div class="row"><label class="k" for="months">Horizon (months)</label><input type="number" id="months" min="1" max="120" value="36"></div>
+      <label class="toggle"><input type="checkbox" id="shopify"> Client is on the Shopify rail ($39/mo pass-through)</label>
+      <p class="hint" data-internal>§8 #12: the deck's annual figure multiplies billed monthly by 12 and drops Studio. This bench keeps Studio outside both discounts and charges it all twelve months, which is what §7 says. §8 #17: pass-throughs are neither your cost nor your revenue and never touch the margin.</p>
+      <p class="hint" data-client>Paying annually gives you two months free. Anything on your own vendor accounts is billed to you by that vendor, never by us.</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="tapewrap">
+  <div class="tape">
+    <div class="tapehead">
+      <h2>Quote</h2>
+      <p class="stamp" id="stamp"></p>
+    </div>
+    <div class="tapebody"><div id="lines"></div></div>
+    <div class="tapefoot">
+      <div class="total">
+        <div class="split">
+          <div><span class="cap2">Due today</span><span class="big once num" id="tOnce">$0</span></div>
+          <div><span class="cap2">Monthly</span><span class="big recur num" id="tMonthly">$0</span></div>
+        </div>
+      </div>
+      <div class="horizon">
+        <span class="cap2" id="horizonLabel">Over 36 months</span>
+        <div class="bar" id="bar"></div>
+        <div class="legend2" id="legend"></div>
+      </div>
+      <div class="verdict" id="verdict"></div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<footer data-internal>
+  <b>Nothing here is measured.</b> Every default is modelled, several are marked <em>(verify)</em> at source, and the density figure is an engineering estimate. This is the shape of the pricing, not the pricing. Capabilities are priced by band; the nine that §8 #5 left blank now carry a banded price, marked in ochre and editable. Type over any of them and the quote follows your number, not the band.
+</footer>
+<footer data-client>
+  <b>An estimate, not an invoice.</b> Metered lines depend on how much you actually use, so the monthly figure moves with real usage. Anything on your own vendor accounts is billed to you directly at whatever that vendor charges.
+</footer>
+
+</div>
+
+<script>
+"use strict";
+
+/* ---------------- data ---------------- */
+const CAPS=[
+ {id:'core',n:'Platform Core',g:'Always on',band:'core',deps:[],always:true},
+ {id:'sourcing',n:'Sourcing',g:'Operations',band:'light',deps:['core']},
+ {id:'inventory',n:'Inventory',g:'Operations',band:'std',deps:['core']},
+ {id:'production',n:'Production',g:'Operations',band:'std',deps:['inventory']},
+ {id:'warehouse',n:'Warehouse',g:'Operations',band:'light',deps:['inventory']},
+ {id:'distribution',n:'Distribution',g:'Operations',band:'heavy',deps:['inventory']},
+ {id:'learning',n:'Learning',g:'Operations',band:'heavy',deps:['core']},
+ {id:'voice',n:'Voice & translation',g:'Operations',band:'std',deps:['learning'],newly:true},
+ {id:'selling',n:'Selling',g:'Revenue ops',band:'heavy',deps:['core']},
+ {id:'subs',n:'Subscriptions & boxes',g:'Revenue ops',band:'std',deps:['selling','payments']},
+ {id:'fundraising',n:'Fundraising',g:'Revenue ops',band:'std',deps:['payments']},
+ {id:'marketing',n:'Marketing',g:'Revenue ops',band:'std',deps:['core']},
+ {id:'crm',n:'CRM & Support',g:'Revenue ops',band:'std',deps:['comms']},
+ {id:'events',n:'Events',g:'Revenue ops',band:'light',deps:['workforce']},
+ {id:'affiliates',n:'Affiliates',g:'Revenue ops',band:'light',deps:['core'],note:'\u00a78 #6 \u2014 absent from the capability graph. Dependency on Core assumed here.'},
+ {id:'payments',n:'Payments',g:'Finance',band:'light',deps:['core']},
+ {id:'accounting',n:'Accounting',g:'Finance',band:'std',deps:['core'],newly:true},
+ {id:'finance',n:'Finance',g:'Finance',band:'std',deps:['payments','accounting'],newly:true},
+ {id:'treasury',n:'Treasury & investments',g:'Finance',band:'std',deps:['finance'],newly:true},
+ {id:'workforce',n:'Workforce',g:'People & mgmt',band:'std',deps:['core']},
+ {id:'onboarding',n:'Onboarding',g:'People & mgmt',band:'light',deps:['workforce'],newly:true},
+ {id:'payroll',n:'Payroll',g:'People & mgmt',band:'std',deps:['workforce'],newly:true},
+ {id:'intelligence',n:'Intelligence',g:'People & mgmt',band:'heavy',deps:['core']},
+ {id:'automation',n:'Automation',g:'People & mgmt',band:'std',deps:['core'],newly:true},
+ {id:'comms',n:'Comms',g:'IT & legal',band:'light',deps:['core']},
+ {id:'infosec',n:'InfoSec',g:'IT & legal',band:'std',deps:['core'],newly:true},
+ {id:'api',n:'API & data platform',g:'IT & legal',band:'std',deps:['core']},
+ {id:'legal',n:'Legal',g:'IT & legal',band:'light',deps:['core'],newly:true}
+];
+const BY=Object.fromEntries(CAPS.map(c=>[c.id,c]));
+const GROUPS=['Always on','Operations','Revenue ops','Finance','People & mgmt','IT & legal'];
+
+const METER_DEFAULTS=[
+ {id:'bot',   n:'AI support chatbot',unit:'conversations',  inc:200,  cost:0.012,  list:0.036,  tierKey:'botTurns',vendor:'Claude Haiku 4.5'},
+ {id:'video', n:'Group video (SFU)', unit:'participant-min',inc:0,    cost:0.00075,list:0.0025, tierKey:'video',   vendor:'LiveKit / Daily'},
+ {id:'voicem',n:'Voice interface',   unit:'minutes',        inc:0,    cost:0.03,   list:0.09,   tierKey:'voice',   vendor:'STT + TTS blended'},
+ {id:'email', n:'Email sends',       unit:'emails',         inc:10000,cost:0.0001, list:0.0003, tierKey:'email',   vendor:'SES'},
+ {id:'sms',   n:'SMS',               unit:'messages',       inc:0,    cost:0.008,  list:0.02,   tierKey:'sms',     vendor:'Twilio'},
+ {id:'trans', n:'Translation',       unit:'× 1k chars',     inc:0,    cost:0.02,   list:0.06,   tierKey:'trans',   vendor:'—'}
+];
+
+const INFRA_DEFAULTS=[
+ {id:'node',    n:'Node (VPS)',           rate:20,   unit:'$/mo',   qty:1, qtyLabel:'node',  share:'density', note:'§8 #2 · $20 · $24 · $15–24 · $6–24'},
+ {id:'lb',      n:'Load balancer',        rate:12,   unit:'$ per 8 nodes', qty:1, qtyLabel:'—', share:'lb',   note:'one per 8 nodes'},
+ {id:'control', n:'Control plane',        rate:12,   unit:'$/mo',   qty:1, qtyLabel:'—',     share:'tenants', note:'installs, plans, billing'},
+ {id:'staging', n:'Staging',              rate:12,   unit:'$/mo',   qty:1, qtyLabel:'—',     share:'tenants', note:'one environment, all installs'},
+ {id:'monitor', n:'Managed monitoring',   rate:30,   unit:'$/mo',   qty:1, qtyLabel:'—',     share:'tenants', note:'optional'},
+ {id:'storage', n:'Storage',              rate:0.006,unit:'$/GB',   qty:2, qtyLabel:'GB',    share:'none',    note:'install DB + uploads'},
+ {id:'backup',  n:'Offsite backups',      rate:0.006,unit:'$/GB',   qty:2, qtyLabel:'GB',    share:'none',    note:'Backblaze B2 · nightly rotation'},
+ {id:'cdn',     n:'CDN egress',           rate:0.01, unit:'$/GB',   qty:5, qtyLabel:'GB',    share:'none',    note:'storefront assets'},
+ {id:'turn',    n:'TURN relay',           rate:0.05, unit:'$/GB',   qty:3, qtyLabel:'GB',    share:'none',    note:'P2P fails on 10–20% of networks'}
+];
+
+const TIERS=[
+ {id:'starter',n:'Starter',locs:1, seats:5, botTurns:0,    video:0,    voice:0,   email:10000, sms:0,   trans:0,
+  covers:['selling','payments','workforce','comms']},
+ {id:'pro',    n:'Pro',    locs:3, seats:20,botTurns:5000, video:0,    voice:0,   email:50000, sms:0,   trans:0,
+  covers:['selling','payments','workforce','comms','inventory','warehouse','crm','marketing','subs']},
+ {id:'scale',  n:'Scale',  locs:10,seats:75,botTurns:20000,video:50000,voice:3000,email:200000,sms:3000,trans:500,
+  covers:['selling','payments','workforce','comms','inventory','warehouse','crm','marketing','subs',
+          'distribution','production','sourcing','events','affiliates','intelligence','automation','api']}
+];
+const CARE=[
+ {n:'No care plan',p:0,inc:0,resp:'no targets — billed hourly',groups:[],no:[]},
+ {n:'Essential — $150',p:150,inc:0,resp:'first response 3 working days · P3 targets',
+  groups:[
+   {h:'Kept running',items:[
+    'Hosting managed on our infrastructure · SSL issued and renewed automatically',
+    'Nightly backups, 30-day retention, stored off-site and encrypted',
+    'Restore tested once a year, dated and filed — an untested backup is a belief',
+    'Platform and dependency updates applied monthly, always after a backup',
+    'Critical security patches within 24 hours of a fix existing, any day of the week',
+    'Weekly dependency vulnerability scanning · daily malware and file-integrity checks',
+    'Uptime checked every minute from three locations',
+    'Domain and certificate expiry watched — 45 and 21 days out',
+    'Quarterly broken-link check']},
+   {h:'Technical support',items:[
+    'One tracked route, with a reference number on every request',
+    'First response within 3 working days, in business hours',
+    'Defects fixed to P3 targets — 5 working days',
+    'Platform version upgrades applied and checked against your key journeys',
+    'User and role administration — adding staff, changing permissions',
+    'Leavers removed within 1 working day of you telling us',
+    'Restore from backup on request']},
+   {h:'What you get in writing',items:[
+    'Monthly: uptime figure, incidents with causes, updates applied',
+    'Annual performance review']}],
+  no:['No included content-change hours',
+      'No key-journey, error or performance monitoring',
+      'No phone or out-of-hours route — emergencies billed hourly',
+      'Integration changes quoted separately']},
+ {n:'Standard — $350',p:350,inc:1,resp:'first response 1 working day · P2 targets',
+  groups:[
+   {h:'Kept running',items:[
+    'Everything in Essential, plus:',
+    'Updates fortnightly · restore tested quarterly',
+    'Key journeys run for real every 15 minutes — contact form, checkout, login',
+    'Server error rate watched continuously, alerting above 1% over five minutes',
+    'Page load performance tracked daily on your key pages',
+    'Monthly broken-link checks',
+    'Annual compliance review — accessibility, privacy, cookie consent']},
+   {h:'Technical support',items:[
+    'Email and a shared channel',
+    'First response within 1 working day · defects to P2 targets, fixed within 1 working day',
+    '1 hour of changes each month',
+    'Integrations watched — payments, storefront sync, document filing, webhooks',
+    'Bill runs and failed-payment retries checked every cycle',
+    'Upgrades staged and checked on a copy before your install moves',
+    'One training refresher a year, for new staff']},
+   {h:'What you get in writing',items:[
+    'Monthly report adds a performance trend',
+    'Quarterly traffic and journey-completion figures',
+    'Biannual review call']},
+   {h:'Commercial',items:[
+    'Emergency support at 50% of the hourly rate',
+    '10% off any new work']}],
+  no:['No out-of-hours incident response',
+      'No named engineer']},
+ {n:'Priority — $750',p:750,inc:4,resp:'same-day first response · P1 targets, 24/7 for outages',
+  groups:[
+   {h:'Kept running',items:[
+    'Everything in Standard, plus:',
+    'Updates weekly',
+    'Out-of-hours incident response — P1 answered 24/7',
+    'Escalation to a second responder if a P1 is not cleared inside 60 minutes',
+    'Updates at least hourly while a P1 is open, even when the update is "nothing new"']},
+   {h:'Technical support',items:[
+    'Email, a shared channel, and phone',
+    'Same-day first response · defects to P1 targets — 4 hours, work continues until resolved',
+    '4 hours of changes each month',
+    'A named engineer who knows your install',
+    'Quarterly review of roles, access and the audit log',
+    'Upgrade dry-run on a copy of your data before your install moves',
+    'Integration changes and small API work inside your included hours']},
+   {h:'What you get in writing',items:[
+    'Monthly analytics report',
+    'Quarterly performance review and review call',
+    'Post-incident write-up within 3 working days — cause, fix, and what changes']},
+   {h:'Commercial',items:[
+    'Emergency support included',
+    '15% off any new work']}],
+  no:[]}
+];
+const CARE_NEVER=['Content writing and photography',
+ 'SEO campaigns and advertising — that is the growth retainer',
+ 'Penetration testing, audits and certifications',
+ 'Problems caused by your own edits — diagnosed and fixed, then billed hourly',
+ 'Third-party costs: domain, premium plugins, stock, email',
+ 'Migration to another host or platform'];
+const CARE_SCHEDULES='<b>Three schedules travel with this plan and are part of it:</b> support &amp; defects (what counts as a bug, and how fast), monitoring &amp; incidents (what is watched, who gets called), security &amp; compliance (patching, access, scope). Alerts go to us first, never to you. Nothing above means more than what those pages say it means.';
+
+const GROWTH=[
+ {n:'No growth retainer',p:0,groups:[],no:[]},
+ {n:'Foundation — $600',p:600,
+  groups:[
+   {h:'Search',items:[
+    'Technical SEO quarterly — crawl, speed, schema, and the fixes that follow',
+    'Keyword and competitor research at the start, then annually',
+    'On-page optimisation — 2 pages a month',
+    'Local SEO — business profile, citations, reviews']},
+   {h:'Measurement',items:[
+    'Analytics installed and goals defined',
+    'Conversion tracking that agrees with your own sales records',
+    'Baseline recorded in month one — traffic, rankings, conversion rate, cost per enquiry',
+    'Quarterly report: what was done, what moved, what it cost, what happens next']}],
+  no:['No content production','No paid search or paid social','No A/B testing','Landing pages quoted separately']},
+ {n:'Momentum — $1,500',p:1500,
+  groups:[
+   {h:'Search',items:[
+    'Technical SEO monthly · keyword and competitor research quarterly',
+    'On-page optimisation — 6 pages a month',
+    'Local SEO maintained']},
+   {h:'Content',items:[
+    '1 content brief a month, written by us']},
+   {h:'Paid',items:[
+    'Paid search — 1 channel, built and managed',
+    '1 campaign landing page a quarter']},
+   {h:'Measurement',items:[
+    '1 A/B test a quarter',
+    'Monthly report — sessions, enquiries, cost per enquiry, revenue where trackable']}],
+  no:['Content writing quoted separately','Paid social quoted separately','No digital PR or link acquisition']},
+ {n:'Campaign — $3,000',p:3000,
+  groups:[
+   {h:'Search',items:[
+    'Technical SEO and keyword research monthly',
+    'On-page optimisation — 12 pages a month',
+    'Digital PR and link acquisition',
+    'Local SEO maintained']},
+   {h:'Content',items:[
+    '4 content briefs a month',
+    '2 pieces written by us each month']},
+   {h:'Paid',items:[
+    'Paid search — 3 channels, built and managed',
+    'Paid social built and managed',
+    '1 campaign landing page a month']},
+   {h:'Measurement',items:[
+    '2 A/B tests a month',
+    'Monthly report plus a review call']}],
+  no:[]}
+];
+const GROWTH_NEVER=['Ad spend — paid by you, to the platform, never marked up, never held by us',
+ 'Any promise of a ranking position',
+ 'Credit for a rise that came from a season or a price change',
+ 'Reporting without a baseline — month one is set-up, and is not optional'];
+const GROWTH_SCHEDULES='<b>You own every account</b> — ads, analytics, search console, business profile — and we work inside them with named access. When this ends we come out and everything stays where it is. Minimum 3 months, because below that there is nothing to measure, then month to month on 30 days\u2019 notice; pausing for a season is fine on 14 days\u2019 notice and is not billed. Expect 3\u20136 months before organic work compounds; paid can move in a week. Where a campaign is not working we say so and propose stopping \u2014 including when that means a smaller retainer.';
+
+const WL=[
+ {n:'None — our mark stays',p:0,setup:0,items:[]},
+ {n:'Unbranded — $49',p:49,setup:0,
+  items:['Our name and mark removed from the storefront footer, the sign-in screens and the admin chrome',
+         'Your logo and colours throughout all three surfaces',
+         'Transactional emails sent from your address, not ours']},
+ {n:'Branded install — $99',p:99,setup:500,
+  items:['Everything in Unbranded, plus:',
+         'Your own domain across the shop, the admin and the ops app',
+         'Your icon and splash screen on the installed app — it is your app on the home screen',
+         'Email sending domain authenticated under your name (SPF, DKIM, DMARC)',
+         'Generated documents, invoices and the client portal carry your brand only',
+         'Push notifications appear under your name on the lock screen']},
+ {n:'Full white-label — $199',p:199,setup:1500,
+  items:['Everything in Branded install, plus:',
+         'No reference to us anywhere a customer or your staff can reach — including source comments, page titles and error pages',
+         'Support routed through your address; we answer as your team where you want that',
+         'Your terms, privacy policy and cookie banner rather than ours',
+         'Documentation and training material rebadged for your staff',
+         'Suitable for reselling the platform onward under your own name']}
+];
+const WL_NOTE='White-labelling is a licence, not a build — nothing is forked. You are on the same code and get the same upgrades on the same day; only the marks, domains and addresses differ. If you later stop, the branding reverts and nothing else changes.';
+
+const BUILDS=[{v:0,n:'No build — self-serve'},{v:499,n:'Guided setup — $499'},{v:5000,n:'Launch build — $5,000'},{v:18000,n:'Custom build — $18,000'},{v:40000,n:'Flagship — $40,000'}];
+const STUDIOS=[{v:0,n:'No Studio'},{v:750,n:'Studio Lite — $750'},{v:2500,n:'Studio — $2,500'}];
+const PRESETS=[
+ {n:'🍜 Food brand',check:'$335.00',ids:['selling','payments','inventory','warehouse','distribution','workforce','events','comms','crm','marketing','intelligence','subs']},
+ {n:'🎓 Course business',check:'$288.00',ids:['selling','payments','learning','workforce','comms','crm','marketing','intelligence']},
+ {n:'🗣 Language nonprofit',check:'$183.75',np:true,ids:['learning','fundraising','payments','workforce','events','comms','crm','intelligence']},
+ {n:'🥫 Food bank',check:'$192.50',np:true,ids:['inventory','warehouse','distribution','fundraising','payments','workforce','events','comms','crm','intelligence']},
+ {n:'⟶ Commerce + course (the $5k client)',clientName:'🛒 Commerce + courses',wide:true,build:5000,ids:['selling','payments','learning','inventory','workforce','comms','crm','marketing','intelligence','subs']}
+];
+
+/* ---------------- state ---------------- */
+const S={
+  on:new Set(['core']), fills:{},
+  locs:1, seats:5, locRate:29, seatRate:7,
+  meters:{}, tpc:4,
+  infra:{}, provider:1, tenants:25, density:25, dedicated:false, dedicatedRate:96,
+  basis:'infra',
+  bands:{light:20,std:30,heavy:50}, corePrice:50,
+  vol:{t3:8,t6:15,t10:25},
+  tierPrice:{starter:199,pro:349,scale:699},
+  scaleM:{on:false,label:'Active subscribers',count:0,
+          bands:[{to:250,add:0},{to:1000,add:50},{to:2500,add:120},{to:0,add:250}]},
+  np:false, annual:false, build:0, studio:0, months:36, shopify:false,
+  buildMode:'single', surfaces:{front:2000,admin:1000,erp:1500,integ:500},
+  wl:{tier:0,fee:0,setup:0},
+  care:{tier:0,fee:0,inc:0,req:0,overRate:95},
+  growth:{tier:0,fee:0,adSpend:0},
+  svc:{rate:45,care:2,growth:0,studio:0},
+  meta:{client:'',date:'',ref:''},
+  client:false, groupsOpen:{}
+};
+function resetMeters(){ S.meters={}; METER_DEFAULTS.forEach(m=>{S.meters[m.id]={used:0,inc:m.inc,cost:m.cost,list:m.list,mode:'resell'};}); }
+function resetInfra(){ S.infra={}; INFRA_DEFAULTS.forEach(l=>{S.infra[l.id]={rate:l.rate,qty:l.qty,on:true};}); }
+resetMeters(); resetInfra();
+
+const money=(v,d=2)=>'$'+v.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+const m0=v=>'$'+Math.round(v).toLocaleString('en-US');
+const cents=v=>'$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+function priceOf(c){
+  const f=S.fills[c.id];
+  if(f!==undefined&&f!=='') return Number(f);
+  if(c.band==='core') return Number(S.corePrice)||0;
+  return Number(S.bands[c.band])||0;
+}
+const volumeRate=k=> k>=10?(Number(S.vol.t10)||0)/100
+                   : k>=6?(Number(S.vol.t6)||0)/100
+                   : k>=3?(Number(S.vol.t3)||0)/100 : 0;
+
+function enable(id,dragged){
+  if(S.on.has(id))return; S.on.add(id);
+  BY[id].deps.forEach(d=>{ if(!S.on.has(d)){dragged.add(d);enable(d,dragged);} });
+}
+function disable(id,dropped){
+  if(id==='core'||!S.on.has(id))return; S.on.delete(id);
+  CAPS.forEach(c=>{ if(S.on.has(c.id)&&c.deps.includes(id)){dropped.add(c.id);disable(c.id,dropped);} });
+}
+
+/* ---------------- compute ---------------- */
+function infraLines(){
+  const P=S.provider, dens=Math.max(1,S.density), ten=Math.max(1,S.tenants);
+  const nodes=Math.ceil(ten/dens);
+  return INFRA_DEFAULTS.map(def=>{
+    const st=S.infra[def.id];
+    let per=0, sharedOver='—';
+    if(!st.on) return {...def,per:0,sharedOver:'off',off:true,rate:st.rate,qty:st.qty};
+    if(def.id==='node'){
+      if(S.dedicated){ per=S.dedicatedRate; sharedOver='dedicated'; }
+      else { per=st.rate/dens; sharedOver='1 / '+dens; }
+    } else if(def.share==='lb'){
+      per=st.rate/(8*dens); sharedOver='1 / '+(8*dens);
+    } else if(def.share==='tenants'){
+      per=st.rate/ten; sharedOver='1 / '+ten;
+    } else {
+      per=st.rate*st.qty; sharedOver='per install';
+    }
+    return {...def,rate:st.rate,qty:st.qty,per:per*P,sharedOver,nodes};
+  });
+}
+
+function compute(){
+  const picked=CAPS.filter(c=>!c.always&&S.on.has(c.id));
+  const priced=picked;
+  const unpriced=[];
+  const boxSum=priced.reduce((a,c)=>a+priceOf(c),0);
+  const k=priced.length, rate=volumeRate(k), afterVol=boxSum*(1-rate);
+
+  const locOver=Math.max(0,S.locs-1)*S.locRate;
+  const seatOver=Math.max(0,S.seats-5)*S.seatRate;
+
+  const meterLines=METER_DEFAULTS.map(def=>{
+    const st=S.meters[def.id];
+    const used=Number(st.used)||0, inc=Number(st.inc)||0;
+    const over=Math.max(0,used-inc), pass=st.mode==='pass';
+    return {...def,...st,used,inc,over,
+      revenue:pass?0:over*Number(st.list),
+      cost:pass?0:used*Number(st.cost),
+      clientCost:pass?used*Number(st.cost):0,
+      pass};
+  });
+  const meterRev=meterLines.reduce((a,l)=>a+l.revenue,0);
+  const meterCost=meterLines.reduce((a,l)=>a+l.cost,0);
+  const includedCost=meterLines.reduce((a,l)=>a+(l.pass?0:Math.min(l.used,l.inc)*Number(l.cost)),0);
+  const passThru=meterLines.filter(l=>l.pass&&l.used>0);
+  const passTotal=passThru.reduce((a,l)=>a+l.clientCost,0)+(S.shopify?39:0);
+
+  /* optional scale metric — off by default, and never load-bearing */
+  let scaleAdd=0, scaleBand=null;
+  if(S.scaleM.on){
+    const n=Number(S.scaleM.count)||0;
+    for(const b of S.scaleM.bands){
+      if(!Number(b.to)||n<=Number(b.to)){ scaleAdd=Number(b.add)||0; scaleBand=b; break; }
+    }
+    if(!scaleBand){ const last=S.scaleM.bands[S.scaleM.bands.length-1];
+      scaleAdd=Number(last.add)||0; scaleBand=last; }
+  }
+
+  const wlFee=Number(S.wl.fee)||0, wlSetup=Number(S.wl.setup)||0;
+  const subtotal=afterVol+(Number(S.corePrice)||0)+locOver+seatOver+meterRev+scaleAdd+wlFee;
+  const npCut=S.np?subtotal*0.30:0;
+  const afterNp=subtotal-npCut;
+  const annCut=S.annual?afterNp*(2/12):0;
+  const billed=afterNp-annCut;
+
+  /* services sit outside both discounts, per §7 */
+  const careFee=Number(S.care.fee)||0;
+  const careOverH=Math.max(0,(Number(S.care.req)||0)-(Number(S.care.inc)||0));
+  const careOverRev=careOverH*(Number(S.care.overRate)||0);
+  const growthFee=Number(S.growth.fee)||0;
+  const adSpend=Number(S.growth.adSpend)||0;
+  const svcRev=S.studio+careFee+careOverRev+growthFee;
+  const svcHours=(Number(S.svc.care)||0)+(Number(S.svc.growth)||0)+(Number(S.svc.studio)||0)+careOverH;
+  const svcCost=svcHours*(Number(S.svc.rate)||0);
+  const svcMargin=svcRev>0?(svcRev-svcCost)/svcRev:0;
+
+  /* the monthly bill is two parts: platform, then support & maintenance */
+  const partPlatform=billed;
+  const partSupport=careFee+careOverRev;
+  const partOther=S.studio+growthFee;
+  const monthly=partPlatform+partSupport+partOther;
+  const buildTotal = S.buildMode==='surface'
+    ? Object.values(S.surfaces).reduce((a,v)=>a+(Number(v)||0),0)
+    : (Number(S.build)||0);
+  const oneTimeTotal=buildTotal+wlSetup;
+
+  const selIds=picked.map(c=>c.id);
+  const tiers=TIERS.map(t=>{
+    const covers=selIds.every(id=>t.covers.includes(id));
+    const missing=selIds.filter(id=>!t.covers.includes(id)).map(id=>BY[id].n);
+    const lo=Math.max(0,S.locs-t.locs)*S.locRate, se=Math.max(0,S.seats-t.seats)*S.seatRate;
+    let ov=0;
+    meterLines.forEach(l=>{
+      if(l.pass) return;
+      let allow=t[l.tierKey]||0;
+      if(l.id==='bot') allow=(t.botTurns||0)/Math.max(0.5,S.tpc);
+      ov+=Math.max(0,l.used-allow)*Number(l.list);
+    });
+    let sub=(Number(S.tierPrice[t.id])||0)+lo+se+ov+scaleAdd;
+    if(S.np) sub*=0.70;
+    if(S.annual) sub*=(10/12);
+    return {...t,price:Number(S.tierPrice[t.id])||0,covers,missing,monthly:sub+svcRev};
+  });
+  const eligible=tiers.filter(t=>t.covers);
+
+  const iLines=infraLines();
+  const infraTotal=iLines.reduce((a,l)=>a+l.per,0);
+  const platform = S.basis==='flat' ? 2+(S.on.has('comms')?1.5:0) : infraTotal;
+  const serveCost=platform+meterCost;
+  const margin=billed>0?(billed-serveCost)/billed:0;
+
+  const recurring=monthly*S.months, oneTime=oneTimeTotal, lifetime=recurring+oneTime;
+
+  const cliffs=[];
+  if(k>0) CAPS.forEach(c=>{
+    if(S.on.has(c.id)||c.always) return;
+    if(!c.deps.every(d=>S.on.has(d))) return;
+    const p=priceOf(c);
+    const next=(boxSum+p)*(1-volumeRate(k+1));
+    if(next<afterVol-0.001) cliffs.push({n:c.n,p,save:afterVol-next});
+  });
+  cliffs.sort((a,b)=>b.save-a.save);
+
+  return {priced,unpriced,boxSum,k,rate,afterVol,locOver,seatOver,meterLines,meterRev,meterCost,
+          includedCost,passThru,passTotal:passTotal+adSpend,subtotal,npCut,annCut,billed,monthly,tiers,
+          iLines,infraTotal,platform,serveCost,margin,recurring,oneTime,lifetime,cliffs,eligible,scaleAdd,scaleBand,
+          partPlatform,partSupport,partOther,buildTotal,wlFee,wlSetup,
+          careFee,careOverH,careOverRev,growthFee,adSpend,svcRev,svcHours,svcCost,svcMargin};
+}
+
+/* ---------------- render ---------------- */
+function renderPresets(){
+  const ph=document.getElementById('presets'); ph.innerHTML='';
+  PRESETS.forEach(p=>{
+    const b=document.createElement('button');
+    b.className='preset'+(p.wide&&!S.client?' wide':'');
+    const nm=document.createElement('span');
+    nm.textContent = S.client ? (p.clientName||p.n) : p.n;
+    b.appendChild(nm);
+    if(p.check){
+      const pp=document.createElement('span'); pp.className='pp';
+      pp.textContent = S.client ? 'from '+p.check+'/mo' : p.check;
+      b.appendChild(pp);
+    }
+    b.addEventListener('click',()=>{
+      S.on=new Set(['core']); p.ids.forEach(id=>enable(id,new Set()));
+      S.np=!!p.np; document.getElementById('np').checked=S.np;
+      S.annual=false; document.getElementById('annual').checked=false;
+      S.build=p.build||0; document.getElementById('build').value=String(S.build);
+      if(S.build){const r0=S.build/5000;
+        S.surfaces={front:Math.round(2000*r0),admin:Math.round(1000*r0),
+                    erp:Math.round(1500*r0),integ:Math.round(500*r0)};}
+      S.locs=1; S.seats=5;
+      document.getElementById('locs').value=1; document.getElementById('seats').value=5;
+      render();
+    });
+    ph.appendChild(b);
+  });
+}
+
+let dragSet=new Set();
+function renderCaps(){
+  const host=document.getElementById('caps'); host.innerHTML='';
+  GROUPS.forEach(g=>{
+    const list=CAPS.filter(c=>c.g===g); if(!list.length)return;
+    if(S.groupsOpen[g]===undefined) S.groupsOpen[g]=true;
+
+    const d=document.createElement('details');
+    d.className='grp'; d.open=S.groupsOpen[g];
+    d.addEventListener('toggle',()=>{S.groupsOpen[g]=d.open;});
+
+    const chosen=list.filter(c=>S.on.has(c.id)&&!c.always).length;
+    const sel=list.filter(c=>S.on.has(c.id));
+    const money_=sel.reduce((a,c)=>a+priceOf(c),0);
+    const sm=document.createElement('summary');
+    sm.innerHTML='<span>'+g+'</span><span class="cnt">'+
+      (chosen?chosen+' on · $'+money_:'—')+'</span>';
+    d.appendChild(sm);
+
+    const grid=document.createElement('div'); grid.className='capgrid';
+    list.forEach(c=>{
+      const on=S.on.has(c.id),p=priceOf(c),noprice=!!c.newly;
+      const el=document.createElement('label');
+      el.className='cap'+(on?' on':'')+(noprice?' noprice':'')+(dragSet.has(c.id)?' dragged':'');
+      el.title=c.note||(c.deps.length?('Requires '+c.deps.map(x=>BY[x].n).join(' + ')):'Hangs straight off Core');
+      const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=on; cb.disabled=!!c.always;
+      cb.addEventListener('change',()=>{
+        const s=new Set();
+        cb.checked?enable(c.id,s):disable(c.id,s);
+        dragSet=s; setTimeout(()=>{dragSet=new Set();render();},2200);
+        render();
+      });
+      const nm=document.createElement('span'); nm.className='nm'; nm.textContent=c.n;
+      el.append(cb,nm);
+      if(noprice){
+        const f=document.createElement('input');
+        f.type='number'; f.className='fill'+(p!==null?' set':''); f.placeholder='—'; f.min='0';
+        f.value=S.fills[c.id]??''; f.placeholder='$'+p; f.dataset.fk='f-'+c.id;
+        f.addEventListener('click',e=>e.preventDefault());
+        f.addEventListener('input',()=>{S.fills[c.id]=f.value;render();});
+        el.appendChild(f);
+      }else{
+        const pr=document.createElement('span'); pr.className='pr'; pr.textContent='$'+p; el.appendChild(pr);
+      }
+      grid.appendChild(el);
+    });
+    d.appendChild(grid);
+    host.appendChild(d);
+  });
+}
+
+const SURFACES=[
+ ['front','Customer storefront','the shop itself — catalogue, cart, checkout, accounts, tracking'],
+ ['admin','Store admin & theme','merchandising, media, pages, discounts, the section builder'],
+ ['erp','ERP & CRM ops','the team\u2019s app — orders, routes, time clock, chat, analytics'],
+ ['integ','Integrations & data migration','payments, shipping, filing, webhooks, and moving what you already have']
+];
+function renderBuild(){
+  const single=document.getElementById('buildSingle');
+  const host=document.getElementById('buildSurfaces');
+  const bySurface=S.buildMode==='surface';
+  single.style.display=bySurface?'none':'';
+  if(!bySurface){ host.innerHTML=''; return; }
+  let h='';
+  SURFACES.forEach(([k,n,d])=>{
+    h+='<div class="row"><label class="k" for="sf-'+k+'">'+n+
+       '<span class="unit">'+d+'</span></label>'+
+       '<input type="number" id="sf-'+k+'" data-sf="'+k+'" data-fk="sf-'+k+'" min="0" value="'+
+       (Number(S.surfaces[k])||0)+'"></div>';
+  });
+  const tot=Object.values(S.surfaces).reduce((a,v)=>a+(Number(v)||0),0);
+  h+='<div class="row" style="border-top:1px solid var(--edge);margin-top:6px;padding-top:8px">'+
+     '<label class="k">Build total</label><span class="out rev" style="min-width:104px;text-align:right">'+
+     m0(tot)+'</span></div>';
+  host.innerHTML=h;
+  host.querySelectorAll('[data-sf]').forEach(el=>{
+    el.addEventListener('input',()=>{S.surfaces[el.dataset.sf]=Number(el.value)||0;render();});
+  });
+}
+
+function renderWL(){
+  const t=WL[S.wl.tier], host=document.getElementById('wlDetail');
+  if(!t.items.length){ host.innerHTML=''; return; }
+  let h='<div class="incl"><h4>'+t.n.split(' —')[0]+'<span>'+money(Number(S.wl.fee)||0,0)+'/mo'+
+    ((Number(S.wl.setup)||0)?' · '+m0(Number(S.wl.setup))+' setup':'')+'</span></h4><ul>';
+  t.items.forEach(x=>{h+='<li>'+x+'</li>';});
+  h+='</ul><p class="sch">'+WL_NOTE+'</p></div>';
+  host.innerHTML=h;
+}
+
+function renderScale(r){
+  const host=document.getElementById('scaleRows');
+  if(!S.scaleM.on){ host.innerHTML=''; return; }
+  let h='<div class="row" style="margin-top:8px">'+
+    '<label class="k" for="scaleCount">'+S.scaleM.label+' today</label>'+
+    '<input type="number" id="scaleCount" min="0" value="'+(Number(S.scaleM.count)||0)+'" data-fk="sc-count"></div>'+
+    '<div class="scroll"><table class="grid"><thead><tr><th>Band — up to</th><th>Adds</th><th></th></tr></thead><tbody>';
+  S.scaleM.bands.forEach((b,i)=>{
+    const active=(r.scaleBand===b);
+    h+='<tr><td>'+(Number(b.to)?'':'above')+
+       '<input type="number" value="'+(Number(b.to)||'')+'" data-sb="'+i+'-to" data-fk="sb-'+i+'-to" class="tiny" '+
+       (Number(b.to)?'':'disabled')+'></td>'+
+       '<td><input type="number" value="'+b.add+'" data-sb="'+i+'-add" data-fk="sb-'+i+'-add" class="tiny"></td>'+
+       '<td class="out '+(active?'rev':'zero')+'">'+(active?'← this client':'')+'</td></tr>';
+  });
+  h+='</tbody></table></div>';
+  host.innerHTML=h;
+  const cc=document.getElementById('scaleCount');
+  cc.addEventListener('input',()=>{S.scaleM.count=Number(cc.value)||0;render();});
+  host.querySelectorAll('[data-sb]').forEach(el=>{
+    el.addEventListener('input',()=>{
+      const [i,key]=el.dataset.sb.split('-');
+      S.scaleM.bands[Number(i)][key]=Number(el.value)||0;
+      render();
+    });
+  });
+}
+
+function planBlock(tier,never,note,fee,extra){
+  if(!tier.groups||!tier.groups.length) return '';
+  let h='<div class="incl"><h4>'+tier.n.split(' —')[0]+
+    '<span>'+money(fee,0)+'/mo'+(extra?' · '+extra:'')+'</span></h4>';
+  if(tier.resp) h+='<p class="resp">'+tier.resp+'</p>';
+  tier.groups.forEach((g,i)=>{
+    h+='<h4'+(i?' style="margin-top:12px"':' style="margin-top:10px"')+'>'+g.h+'</h4><ul>';
+    g.items.forEach(x=>{h+='<li>'+x+'</li>';});
+    h+='</ul>';
+  });
+  h+='<h4 style="margin-top:12px">Not included</h4><ul>';
+  tier.no.forEach(x=>{h+='<li class="no">'+x+'</li>';});
+  never.forEach(x=>{h+='<li class="no">'+x+'</li>';});
+  h+='</ul><p class="sch">'+note+'</p></div>';
+  return h;
+}
+function renderPlanDetail(r){
+  const c=CARE[S.care.tier], g=GROWTH[S.growth.tier];
+  document.getElementById('careDetail').innerHTML=
+    planBlock(c,CARE_NEVER,CARE_SCHEDULES,r.careFee,
+      Number(S.care.inc)>0?S.care.inc+'h changes':'no included hours');
+  document.getElementById('growthDetail').innerHTML=
+    planBlock(g,GROWTH_NEVER,GROWTH_SCHEDULES,r.growthFee,
+      r.adSpend?money(r.adSpend,0)+' ad spend':'');
+}
+
+/* ---------------- save, share, print ---------------- */
+function serialize(){
+  const o=JSON.parse(JSON.stringify(S));
+  o.on=[...S.on];
+  delete o.groupsOpen;
+  return o;
+}
+function deserialize(o){
+  if(!o) return;
+  const on=o.on||['core'];
+  Object.keys(o).forEach(k=>{ if(k!=='on') S[k]=o[k]; });
+  S.on=new Set(on);
+  if(!S.groupsOpen) S.groupsOpen={};
+  syncInputs();
+}
+function setVal(id,v){ const el=document.getElementById(id); if(el) el.value=v; }
+function setChk(id,v){ const el=document.getElementById(id); if(el) el.checked=!!v; }
+function syncInputs(){
+  setVal('bLight',S.bands.light); setVal('bStd',S.bands.std); setVal('bHeavy',S.bands.heavy);
+  setVal('corePrice',S.corePrice);
+  setVal('v3',S.vol.t3); setVal('v6',S.vol.t6); setVal('v10',S.vol.t10);
+  setVal('tStarter',S.tierPrice.starter); setVal('tPro',S.tierPrice.pro); setVal('tScale',S.tierPrice.scale);
+  setVal('locs',S.locs); setVal('seats',S.seats); setVal('locRate',S.locRate); setVal('seatRate',S.seatRate);
+  setVal('tpc',S.tpc); setVal('months',S.months);
+  setVal('tenants',S.tenants); setVal('density',S.density); setVal('provider',S.provider);
+  setChk('dedicated',S.dedicated); setChk('np',S.np); setChk('annual',S.annual);
+  setChk('shopify',S.shopify); setChk('scaleOn',S.scaleM.on);
+  setVal('build',S.build); setVal('studio',S.studio);
+  setVal('careTier',S.care.tier); setVal('careFee',S.care.fee); setVal('careInc',S.care.inc);
+  setVal('careReq',S.care.req); setVal('careOverRate',S.care.overRate);
+  setVal('growthTier',S.growth.tier); setVal('growthFee',S.growth.fee); setVal('adSpend',S.growth.adSpend);
+  setVal('wlTier',S.wl.tier); setVal('wlFee',S.wl.fee); setVal('wlSetup',S.wl.setup);
+  setVal('svcRate',S.svc.rate); setVal('hCare',S.svc.care); setVal('hGrowth',S.svc.growth); setVal('hStudio',S.svc.studio);
+  setVal('who',S.meta.client||'');
+  document.querySelectorAll('#basis button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.b===S.basis)));
+  document.querySelectorAll('#buildMode button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.m===S.buildMode)));
+  document.body.classList.toggle('client',S.client);
+  document.getElementById('who').addEventListener('input',e=>{S.meta.client=e.target.value;});
+document.getElementById('saveBtn').addEventListener('click',saveQuote);
+document.getElementById('linkBtn').addEventListener('click',copyLink);
+document.getElementById('pdfBtn').addEventListener('click',exportPDF);
+
+const vt=document.getElementById('viewToggle');
+  if(vt) vt.textContent=S.client?'← Back to studio view':'Client view →';
+}
+
+function toast(msg){
+  const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),2600);
+}
+
+const store={
+  ok(){ return typeof window!=='undefined' && window.storage && window.storage.set; },
+  async save(key,val){ if(this.ok()) return window.storage.set(key,JSON.stringify(val),false);
+    (this.mem=this.mem||{})[key]=val; return true; },
+  async get(key){ if(this.ok()){ const r=await window.storage.get(key,false); return r?JSON.parse(r.value):null; }
+    return (this.mem||{})[key]||null; },
+  async list(prefix){ if(this.ok()){ const r=await window.storage.list(prefix,false); return (r&&r.keys)||[]; }
+    return Object.keys(this.mem||{}).filter(k=>k.startsWith(prefix)); },
+  async del(key){ if(this.ok()) return window.storage.delete(key,false);
+    delete (this.mem||{})[key]; return true; }
+};
+
+async function saveQuote(){
+  const name=(document.getElementById('who').value||'').trim();
+  if(!name){ document.getElementById('who').focus(); toast('Name the quote first'); return; }
+  S.meta.client=name;
+  S.meta.date=new Date().toISOString().slice(0,10);
+  if(!S.meta.ref) S.meta.ref='Q-'+Date.now().toString(36).toUpperCase().slice(-6);
+  const key='quotes:'+S.meta.ref;
+  try{ await store.save(key,{meta:S.meta,state:serialize()}); toast('Saved — '+S.meta.ref); }
+  catch(e){ toast('Could not save'); }
+  refreshSaved();
+}
+async function refreshSaved(){
+  const host=document.getElementById('savedList'); if(!host) return;
+  let keys=[];
+  try{ keys=await store.list('quotes:'); }catch(e){}
+  if(!keys.length){ host.innerHTML=''; return; }
+  const rows=[];
+  for(const k of keys){
+    try{ const q=await store.get(k); if(q) rows.push({k,q}); }catch(e){}
+  }
+  rows.sort((a,b)=>(b.q.meta.date||'').localeCompare(a.q.meta.date||''));
+  host.innerHTML='';
+  rows.forEach(({k,q})=>{
+    const b=document.createElement('button');
+    b.innerHTML='<span>'+q.meta.client+'</span> <span style="color:var(--cost)">'+
+      (q.meta.date||'')+' · '+q.meta.ref+'</span><span class="x">✕</span>';
+    b.addEventListener('click',ev=>{
+      if(ev.target.classList.contains('x')){ store.del(k).then(refreshSaved); return; }
+      deserialize(q.state); S.meta=q.meta; setVal('who',q.meta.client); render();
+      toast('Loaded '+q.meta.ref);
+    });
+    host.appendChild(b);
+  });
+}
+
+function copyLink(){
+  try{
+    const payload=btoa(unescape(encodeURIComponent(JSON.stringify(serialize()))));
+    const url=location.origin+location.pathname+'#q='+payload;
+    if(navigator.clipboard) navigator.clipboard.writeText(url);
+    toast('Link copied — '+url.length+' characters');
+  }catch(e){ toast('Could not build a link'); }
+}
+function loadFromHash(){
+  if(!location.hash.startsWith('#q=')) return false;
+  try{
+    const o=JSON.parse(decodeURIComponent(escape(atob(location.hash.slice(3)))));
+    deserialize(o); return true;
+  }catch(e){ return false; }
+}
+
+function buildPrintSheet(r){
+  const name=S.meta.client||'Draft quote';
+  const date=new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+  let h='<div class="ps-head"><h1>'+name+'</h1>'+
+    '<div class="ps-meta">'+date+(S.meta.ref?' · '+S.meta.ref:'')+' · '+
+    (r.k?r.k+' capabilities':'no capabilities')+' · '+(S.annual?'billed annually':'billed monthly')+
+    '</div></div>';
+  h+='<div class="ps-sec">'+document.getElementById('lines').innerHTML+'</div>';
+  h+='<div class="ps-sec">'+document.querySelector('.tapefoot').innerHTML+'</div>';
+  const extra=[document.getElementById('careDetail'),document.getElementById('growthDetail'),
+               document.getElementById('wlDetail')];
+  extra.forEach(el=>{ if(el&&el.innerHTML.trim()) h+='<div class="ps-sec">'+el.innerHTML+'</div>'; });
+  h+='<div class="ps-foot"><b>An estimate, not an invoice.</b> Metered lines depend on real usage, '+
+     'so the monthly figure moves with it. Anything on your own vendor accounts is billed to you directly '+
+     'by that vendor. Prices held for 30 days from the date above.</div>';
+  document.getElementById('printSheet').innerHTML=h;
+}
+function exportPDF(){
+  const wasClient=S.client;
+  if(!wasClient){ S.client=true; document.body.classList.add('client'); render(); }
+  buildPrintSheet(compute());
+  window.print();
+  if(!wasClient){ S.client=false; document.body.classList.remove('client'); render(); }
+}
+
+function numCell(val,onInput,cls,fk){
+  const td=document.createElement('td');
+  const i=document.createElement('input');
+  i.type='number'; i.min='0'; i.step='any'; i.value=val; if(cls)i.className=cls;
+  if(fk) i.dataset.fk=fk;
+  i.addEventListener('input',()=>onInput(i.value));
+  td.appendChild(i); return td;
+}
+
+/* the panels rebuild on every keystroke, so hold the caret across the rebuild */
+function captureFocus(){
+  const el=document.activeElement;
+  if(!el||!el.dataset||!el.dataset.fk) return null;
+  let start=null,end=null;
+  try{start=el.selectionStart;end=el.selectionEnd;}catch(e){}
+  return {fk:el.dataset.fk,start,end};
+}
+function restoreFocus(f){
+  if(!f) return;
+  const el=document.querySelector('[data-fk="'+f.fk+'"]');
+  if(!el) return;
+  el.focus();
+  if(f.start!==null){ try{el.setSelectionRange(f.start,f.end);}catch(e){} }
+}
+
+function renderMeters(r){
+  const tb=document.querySelector('#meters tbody'); tb.innerHTML='';
+  r.meterLines.forEach(l=>{
+    const st=S.meters[l.id];
+    const tr=document.createElement('tr'); if(l.pass) tr.className='pass';
+    const td0=document.createElement('td');
+    td0.innerHTML='<span class="nm2">'+l.n+'</span><span class="unit">'+l.unit+' · '+l.vendor+'</span>';
+    tr.appendChild(td0);
+    tr.appendChild(numCell(st.used,v=>{st.used=v;render();},'','m-'+l.id+'-used'));
+    tr.appendChild(numCell(st.inc,v=>{st.inc=v;render();},'','m-'+l.id+'-inc'));
+    const tdc=numCell(st.cost,v=>{st.cost=v;render();},'tiny','m-'+l.id+'-cost');
+    tdc.setAttribute('data-internal',''); tr.appendChild(tdc);
+    tr.appendChild(numCell(st.list,v=>{st.list=v;render();},'tiny','m-'+l.id+'-list'));
+    const tdm=document.createElement('td');
+    const b=document.createElement('button');
+    b.className='modebtn'; b.dataset.mode=st.mode==='pass'?'pass':'resell';
+    b.textContent= S.client ? (st.mode==='pass'?'Your account':'On your plan')
+                            : (st.mode==='pass'?'Pass-through':'Resell');
+    if(!S.client) b.addEventListener('click',()=>{st.mode=st.mode==='pass'?'resell':'pass';render();});
+    tdm.appendChild(b); tr.appendChild(tdm);
+    const tdo=document.createElement('td');
+    tdo.className='out '+(l.pass?'thru':(l.revenue?'rev':'zero'));
+    tdo.textContent=l.pass?(l.used?cents(l.clientCost)+' theirs':'—'):(l.revenue?cents(l.revenue):'—');
+    tr.appendChild(tdo);
+    tb.appendChild(tr);
+  });
+  const tf=document.querySelector('#meters tfoot'); tf.innerHTML='';
+  const tr=document.createElement('tr');
+  tr.innerHTML= S.client
+    ? '<td>Metered</td><td colspan="3" style="text-align:left;color:var(--cost)">'+
+      'usage inside your allowance is included at no charge</td>'+
+      '<td style="color:var(--cost)">this month</td><td class="out rev">'+cents(r.meterRev)+'</td>'
+    : '<td>Metered</td><td colspan="3" class="out" style="text-align:left;color:var(--cost)">'+
+      'included allowance costs you '+cents(r.includedCost)+' and earns nothing</td>'+
+      '<td colspan="2" style="color:var(--cost)">your revenue</td>'+
+      '<td class="out rev">'+cents(r.meterRev)+'</td>';
+  tf.appendChild(tr);
+}
+
+function renderInfra(r){
+  const tb=document.querySelector('#infra tbody'); tb.innerHTML='';
+  r.iLines.forEach(l=>{
+    const st=S.infra[l.id];
+    const tr=document.createElement('tr'); if(l.off) tr.className='pass';
+    const td0=document.createElement('td');
+    td0.innerHTML='<label class="toggle" style="padding:0"><input type="checkbox" '+(st.on?'checked':'')+
+      '><span><span class="nm2">'+l.n+'</span><span class="unit">'+l.note+'</span></span></label>';
+    td0.querySelector('input').addEventListener('change',e=>{st.on=e.target.checked;render();});
+    tr.appendChild(td0);
+    tr.appendChild(numCell(st.rate,v=>{st.rate=v;render();},'tiny','i-'+l.id+'-rate'));
+    if(l.share==='none'){
+      tr.appendChild(numCell(st.qty,v=>{st.qty=v;render();},'tiny','i-'+l.id+'-qty'));
+    }else{
+      const td=document.createElement('td'); td.style.color='var(--cost)'; td.textContent=l.unit; tr.appendChild(td);
+    }
+    const tds=document.createElement('td'); tds.style.color='var(--cost)'; tds.textContent=l.sharedOver; tr.appendChild(tds);
+    const tdp=document.createElement('td'); tdp.className='out'+(l.per?'':' zero');
+    tdp.textContent=l.per?cents(l.per):'—'; tr.appendChild(tdp);
+    tb.appendChild(tr);
+  });
+  const tf=document.querySelector('#infra tfoot'); tf.innerHTML=
+    '<tr><td>Hosting, per install</td><td colspan="3" style="color:var(--cost);text-align:left">'+
+    Math.ceil(Math.max(1,S.tenants)/Math.max(1,S.density))+' node(s) for '+S.tenants+' installs · ×'+S.provider+' provider</td>'+
+    '<td class="out">'+cents(r.infraTotal)+'</td></tr>';
+}
+
+function line(l,v,cls){return '<div class="li '+(cls||'')+'"><span class="l">'+l+'</span><span class="v">'+v+'</span></div>';}
+
+function render(){
+  const r=compute();
+  const _f=captureFocus();
+  renderCaps(); renderPresets(); renderMeters(r); renderInfra(r); renderPlanDetail(r); renderScale(r); renderBuild(); renderWL();
+  restoreFocus(_f);
+
+  document.getElementById('boxcount').textContent=
+    r.k+' '+(r.k===1?'box':'boxes')+' · $'+r.boxSum+
+    (r.rate?' · −'+(r.rate*100)+'% volume':' · no volume discount');
+
+  const cf=document.getElementById('capflags'); cf.innerHTML='';
+  if(S.client && r.passThru.length) cf.innerHTML+='<div class="flag info"><b>On your own accounts.</b> '+
+    r.passThru.map(l=>l.n).join(', ')+' — you hold the keys and pay those vendors directly. Nothing for them reaches our invoice.</div>';
+  if(!S.client){
+  const newlyOn=r.priced.filter(c=>c.newly);
+  if(newlyOn.length) cf.innerHTML+='<div class="flag good"><b>'+newlyOn.length+
+    ' newly banded '+(newlyOn.length===1?'capability':'capabilities')+' on this quote.</b> '+
+    newlyOn.map(c=>c.n+' $'+priceOf(c)).join(' · ')+
+    '. These are the ones §8 #5 left without a price; the band gave them one. Type over any of them to disagree.</div>';
+  if(r.cliffs.length){const c=r.cliffs[0];
+    cf.innerHTML+='<div class="flag"><b>Discount cliff.</b> Adding <b>'+c.n+' ($'+c.p+')</b> makes the bill <b>'+
+    money(c.save)+' cheaper</b>, not dearer — box '+(r.k+1)+' crosses a threshold. At this count anything under '+
+    money(r.boxSum/7.5,0)+' per box pays for itself and then some.</div>';}
+  const both=['subs','finance'].filter(id=>S.on.has(id));
+  if(both.length) cf.innerHTML+='<div class="flag good"><b>Two-parent picks satisfied.</b> '+
+    both.map(id=>BY[id].n+' has '+BY[id].deps.map(d=>BY[d].n).join(' and ')).join('; ')+'. Nothing dragged in unasked.</div>';
+  if(r.passThru.length) cf.innerHTML+='<div class="flag info"><b>'+r.passThru.length+' add-on'+
+    (r.passThru.length===1?'':'s')+' on the client\u2019s own account.</b> '+r.passThru.map(l=>l.n).join(', ')+
+    ' — you forgo '+cents(r.passThru.reduce((a,l)=>a+Math.max(0,l.used-l.inc)*Number(l.list),0))+
+    '/mo of resale margin and shed '+cents(r.passThru.reduce((a,l)=>a+l.used*Number(l.cost),0))+'/mo of cost and vendor risk.</div>';
+  if(r.svcRev>0&&r.svcMargin<0.30) cf.innerHTML+='<div class="flag"><b>Services margin is '+
+    (r.svcMargin*100).toFixed(0)+'%.</b> '+r.svcHours+'h at $'+S.svc.rate+' against '+money(r.svcRev,0)+
+    ' of fees. The price book puts services at 30–50%; below that you are buying the work. Raise the fee, cut the included hours, or plan fewer delivery hours.</div>';
+  if(r.careFee>0) cf.innerHTML+='<div class="flag good"><b>Ten care plans at '+money(r.careFee,0)+
+    ' is '+m0(r.careFee*10*12)+' a year</b> arriving whether or not you sold anything. Pitch it at handover, while goodwill is highest — roughly a third say yes.</div>';
+  if(r.growthFee>0&&r.buildTotal>0) cf.innerHTML+='<div class="flag"><b>Not at handover.</b> The growth retainer is sold at the first review after launch, with a baseline in hand. Stacking two retainers on the day you hand over gets you neither.</div>';
+  }
+
+  const C=S.client;
+  let h='';
+  h+=line(C?'PART 1 — YOUR PLATFORM':'PART 1 · PLATFORM','','head');
+  if(r.k){
+    if(C) r.priced.forEach(c=>{h+=line(c.n,'+'+money(priceOf(c)));});
+    else h+=line(r.k+' × capability box','+'+money(r.boxSum));
+    if(r.rate) h+=line(C?(r.k+' capabilities — '+(r.rate*100)+'% off'):('volume −'+(r.rate*100)+'%'),
+      '−'+money(r.boxSum*r.rate),'neg');
+  } else h+=line(C?'nothing selected yet':'no boxes selected','—','mut');
+  h+=line(C?'Platform (accounts, backups, support)':'Platform Core (never discounted)','+'+money(Number(S.corePrice)||0));
+  h+=line('  installable app · push · camera & QR','included','mut');
+  if(r.locOver) h+=line((S.locs-1)+' × location','+'+money(r.locOver));
+  if(r.seatOver) h+=line((S.seats-5)+' × staff seat','+'+money(r.seatOver));
+  if(r.meterRev) h+=line(C?'usage beyond your allowance':'metered overage','+'+money(r.meterRev));
+  if(r.wlFee) h+=line(C?'white-labelling — '+WL[S.wl.tier].n.split(' —')[0].toLowerCase():'white-label licence','+'+money(r.wlFee));
+  if(S.scaleM.on) h+=line(S.scaleM.label.toLowerCase()+' — '+(Number(S.scaleM.count)||0).toLocaleString()+' band',
+    r.scaleAdd?'+'+money(r.scaleAdd):'included');
+  h+=line('subtotal',money(r.subtotal),'sub');
+  if(r.npCut) h+=line('nonprofit −30%','−'+money(r.npCut),'neg');
+  if(r.annCut) h+=line('annual — two months free','−'+money(r.annCut),'neg');
+  h+=line(C?'Part 1 — platform':'PART 1 · platform',money(r.partPlatform),'sub');
+
+  h+=line(C?'PART 2 — SUPPORT & MAINTENANCE':'PART 2 · SUPPORT & MAINTENANCE','','head');
+  if(r.careFee){
+    h+=line(CARE[S.care.tier].n.split(' —')[0]+' plan','+'+money(r.careFee));
+    if(Number(S.care.inc)>0) h+=line('  '+S.care.inc+'h of changes included','—','mut');
+    if(r.careOverH) h+=line('  overflow '+r.careOverH+'h × $'+S.care.overRate,'+'+money(r.careOverRev));
+    h+=line('  '+CARE[S.care.tier].resp,'','mut');
+  } else h+=line('no plan — defects billed hourly, no response targets','—','mut');
+  h+=line(C?'Part 2 — support':'PART 2 · support',money(r.partSupport),'sub');
+
+  h+=line(C?'MONTHLY TOTAL':'MONTHLY TOTAL','','head');
+  h+=line('part 1 + part 2',money(r.partPlatform+r.partSupport),'sub');
+
+  if(r.partOther){
+    h+=line(C?'SEPARATE AGREEMENTS':'SEPARATE AGREEMENTS','','head');
+    if(S.studio) h+=line('Studio — design retainer','+'+money(S.studio));
+    if(r.growthFee) h+=line(GROWTH[S.growth.tier].n.split(' —')[0]+' — SEO & ads','+'+money(r.growthFee));
+    h+=line('billed and cancelled on their own terms',money(r.partOther),'sub');
+  }
+
+  h+=line(C?'ONE-TIME':'BUILD','','head');
+  if(S.buildMode==='surface'){
+    const SF=[['front','Customer storefront'],['admin','Store admin & theme'],
+              ['erp','ERP & CRM ops'],['integ','Integrations & data migration']];
+    SF.forEach(([k,n])=>{const v=Number(S.surfaces[k])||0; if(v) h+=line(n,'+'+m0(v));});
+    if(r.wlSetup) h+=line('white-label setup','+'+m0(r.wlSetup));
+    h+=line('build — due at signing',m0(r.buildTotal+r.wlSetup),'sub');
+  } else {
+    if(r.buildTotal) h+=line(C?'build — due at signing':'build fee — one-time','+'+m0(r.buildTotal));
+    if(r.wlSetup) h+=line('white-label setup','+'+m0(r.wlSetup));
+    if(!r.buildTotal&&!r.wlSetup) h+=line('no build','—','mut');
+  }
+
+  if(!C){
+    h+=line('WHAT IT COSTS YOU','','head');
+    if(S.basis==='infra'){
+      r.iLines.filter(l=>l.per>0).forEach(l=>{h+=line(l.n.toLowerCase(),'−'+cents(l.per),'mut');});
+      h+=line('hosting, per install','−'+cents(r.infraTotal),'sub');
+    }else h+=line('platform flat ($2 + $1.50 relay)','−'+money(r.platform),'mut');
+    h+=line('metered usage at cost','−'+cents(r.meterCost),'mut');
+    h+=line('  of which included allowance','−'+cents(r.includedCost),'mut');
+    h+=line('software margin',(r.margin*100).toFixed(1)+'%','sub');
+    if(r.svcRev>0){
+      h+=line('service delivery '+r.svcHours+'h × $'+S.svc.rate,'−'+money(r.svcCost),'mut');
+      h+=line('services margin',(r.svcMargin*100).toFixed(1)+'%','sub');
+      const tot=r.billed+r.svcRev, cst=r.serveCost+r.svcCost;
+      h+=line('blended margin',(tot>0?((tot-cst)/tot*100).toFixed(1):'0')+'%','sub');
+    }
+  }
+
+  if(r.passThru.length||S.shopify||r.adSpend){
+    h+=line(C?'BILLED TO YOU BY OTHERS':'PASS-THROUGH — NOT YOURS','','head t');
+    r.passThru.forEach(l=>{h+=line(l.n.toLowerCase()+(C?' (your account)':' (their key)'),cents(l.clientCost),'thru');});
+    if(r.adSpend) h+=line('ad spend — paid to the platform',money(r.adSpend),'thru');
+    if(S.shopify){h+=line('Shopify plan','$39.00','thru');h+=line('processing 2.9% + 30¢','per order','thru');}
+    h+=line(C?'paid direct to vendors':'client pays vendors direct','≈'+cents(r.passTotal),'thru');
+  }
+  document.getElementById('lines').innerHTML=h;
+
+  document.getElementById('tMonthly').textContent=money(r.monthly,0);
+  document.getElementById('tOnce').textContent=m0(r.oneTime);
+  document.getElementById('stamp').textContent= C
+    ? (r.k?r.k+' capabilities':'—')+' · '+(S.np?'nonprofit rate · ':'')+(S.annual?'billed annually':'billed monthly')
+    : (r.k?r.k+' boxes':'—')+' · '+(S.np?'nonprofit · ':'')+(S.annual?'annual':'monthly')+
+      ' · '+(S.basis==='infra'?'itemised hosting':'flat hosting');
+
+  const pr=r.lifetime?r.recurring/r.lifetime:0;
+  document.getElementById('horizonLabel').textContent='Over '+S.months+' months';
+
+  const segs=[
+    {n:'Build — at signing',        c:'var(--seg-once)',  mo:0,              tot:r.oneTime},
+    {n:'Platform — capabilities',   c:'var(--seg-plat)',  mo:r.partPlatform, tot:r.partPlatform*S.months},
+    {n:'Support & maintenance',     c:'var(--seg-supp)',  mo:r.partSupport,  tot:r.partSupport*S.months},
+    {n:'Separate agreements',       c:'var(--seg-other)', mo:r.partOther,    tot:r.partOther*S.months}
+  ].filter(x=>x.tot>0.005);
+
+  document.getElementById('bar').innerHTML = r.lifetime
+    ? segs.map(x=>'<i style="width:'+(x.tot/r.lifetime*100)+'%;background:'+x.c+'"></i>').join('')
+    : '';
+
+  document.getElementById('legend').innerHTML =
+    segs.map(x=>'<div class="lg"><span class="sw" style="background:'+x.c+'"></span>'+
+      '<span class="nm">'+x.n+'</span>'+
+      '<span class="mo">'+(x.mo?money(x.mo,0)+'/mo':'one-time')+'</span>'+
+      '<span class="tt">'+m0(x.tot)+'</span></div>').join('')+
+    '<div class="lg sum"><span class="sw" style="background:transparent"></span>'+
+    '<span class="nm">Total over '+S.months+' months</span>'+
+    '<span class="mo">'+money(r.monthly,0)+'/mo</span>'+
+    '<span class="tt">'+m0(r.lifetime)+'</span></div>';
+
+  const cheapest=r.eligible.length?r.eligible.reduce((a,b)=>b.monthly<a.monthly?b:a):null;
+  let v='';
+  if(C){
+    v='Over '+S.months+' months this comes to <b>'+m0(r.lifetime)+'</b> — '+m0(r.oneTime)+' at signing and '+
+      money(r.monthly,0)+' a month thereafter.';
+    if(S.annual&&r.annCut) v+=' Paying annually is already applied, saving you '+m0(r.annCut*12)+' a year.';
+    if(!S.annual) v+=' Paying annually would take two months off, saving '+m0((r.billed*(2/12))*12)+' a year.';
+    if(r.rate) v+=' Your '+r.k+' capabilities earn a '+(r.rate*100)+'% discount on the capability lines.';
+    document.getElementById('verdict').innerHTML=v;
+    return;
+  }
+  if(r.k){
+    if(!cheapest){
+      const short=r.tiers[2].missing.slice(0,3).join(', ');
+      v+='<b>No tier covers this selection</b> — '+short+
+         (r.tiers[2].missing.length>3?' and '+(r.tiers[2].missing.length-3)+' more':'')+
+         ' sit outside every tier. <span class="pill">quote the boxes</span>';
+    } else v+= cheapest.monthly<r.monthly-0.5
+      ? '<b>'+cheapest.n+' at '+money(cheapest.monthly,0)+' beats these boxes at '+money(r.monthly,0)+'.</b> <span class="pill alt">quote the tier</span>'
+      : '<b>À la carte wins</b> at '+money(r.monthly,0)+' — cheapest covering tier is '+cheapest.n+' at '+money(cheapest.monthly,0)+'. <span class="pill">quote the boxes</span>';
+    v+='<br><br>';
+  }
+  const anchor=5000+100*S.months;
+  v+='Against a flat <b>$5,000 + $100/mo</b> over '+S.months+' months ('+m0(anchor)+'), this configuration is <b>'+m0(r.lifetime)+'</b> — '+
+     (r.lifetime>=anchor?m0(r.lifetime-anchor)+' more, and '+Math.round(pr*100)+'% of it recurs.':m0(anchor-r.lifetime)+' less.');
+  v+='<br><br>Serving it costs <b>'+cents(r.serveCost)+'/mo</b> — hosting '+cents(S.basis==='infra'?r.infraTotal:r.platform)+
+     ', usage '+cents(r.meterCost)+'. Break-even at <b>'+(r.billed>0?(r.serveCost/r.billed*100).toFixed(1):'0')+'%</b> of the subscription.';
+  document.getElementById('verdict').innerHTML=v;
+}
+
+/* ---------------- wiring ---------------- */
+function bindNum(id,key){const el=document.getElementById(id);
+  el.addEventListener('input',()=>{S[key]=Number(el.value)||0;render();});}
+['locs','seats','locRate','seatRate','tpc','months','tenants','density'].forEach(id=>bindNum(id,id));
+
+document.getElementById('np').addEventListener('change',e=>{S.np=e.target.checked;render();});
+document.getElementById('annual').addEventListener('change',e=>{S.annual=e.target.checked;render();});
+document.getElementById('shopify').addEventListener('change',e=>{S.shopify=e.target.checked;render();});
+document.getElementById('dedicated').addEventListener('change',e=>{S.dedicated=e.target.checked;render();});
+document.getElementById('provider').addEventListener('change',e=>{S.provider=Number(e.target.value);render();});
+
+const bs=document.getElementById('build');
+BUILDS.forEach(b=>{const o=document.createElement('option');o.value=b.v;o.textContent=b.n;bs.appendChild(o);});
+bs.addEventListener('change',()=>{S.build=Number(bs.value);render();});
+const ss=document.getElementById('studio');
+STUDIOS.forEach(b=>{const o=document.createElement('option');o.value=b.v;o.textContent=b.n;ss.appendChild(o);});
+ss.addEventListener('change',()=>{S.studio=Number(ss.value);render();});
+
+document.querySelectorAll('#basis button').forEach(b=>{
+  b.addEventListener('click',()=>{S.basis=b.dataset.b;
+    document.querySelectorAll('#basis button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));render();});
+});
+[['bLight','bands','light'],['bStd','bands','std'],['bHeavy','bands','heavy'],
+ ['v3','vol','t3'],['v6','vol','t6'],['v10','vol','t10']
+].forEach(([id,grp,key])=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input',()=>{S[grp][key]=Number(el.value)||0;render();});
+});
+document.getElementById('corePrice').addEventListener('input',e=>{
+  S.corePrice=Number(e.target.value)||0; render();
+});
+
+[['tStarter','tierPrice','starter'],['tPro','tierPrice','pro'],['tScale','tierPrice','scale']
+].forEach(([id,grp,key])=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input',()=>{S[grp][key]=Number(el.value)||0;render();});
+});
+document.getElementById('scaleOn').addEventListener('change',e=>{S.scaleM.on=e.target.checked;render();});
+document.querySelectorAll('#buildMode button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    S.buildMode=b.dataset.m;
+    document.querySelectorAll('#buildMode button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+    render();
+  });
+});
+
+const wt=document.getElementById('wlTier');
+WL.forEach((w,i)=>{const o=document.createElement('option');o.value=i;o.textContent=w.n;wt.appendChild(o);});
+wt.addEventListener('change',()=>{
+  const i=Number(wt.value); S.wl.tier=i; S.wl.fee=WL[i].p; S.wl.setup=WL[i].setup;
+  document.getElementById('wlFee').value=S.wl.fee;
+  document.getElementById('wlSetup').value=S.wl.setup;
+  render();
+});
+[['wlFee','wl','fee'],['wlSetup','wl','setup']].forEach(([id,grp,key])=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input',()=>{S[grp][key]=Number(el.value)||0;render();});
+});
+
+const ct=document.getElementById('careTier');
+CARE.forEach((c,i)=>{const o=document.createElement('option');o.value=i;o.textContent=c.n;ct.appendChild(o);});
+ct.addEventListener('change',()=>{
+  const i=Number(ct.value); S.care.tier=i;
+  S.care.fee=CARE[i].p; S.care.inc=CARE[i].inc;
+  document.getElementById('careFee').value=S.care.fee;
+  document.getElementById('careInc').value=S.care.inc;
+  render();
+});
+const gt=document.getElementById('growthTier');
+GROWTH.forEach((g,i)=>{const o=document.createElement('option');o.value=i;o.textContent=g.n;gt.appendChild(o);});
+gt.addEventListener('change',()=>{
+  const i=Number(gt.value); S.growth.tier=i; S.growth.fee=GROWTH[i].p;
+  document.getElementById('growthFee').value=S.growth.fee;
+  render();
+});
+[['careFee','care','fee'],['careInc','care','inc'],['careReq','care','req'],
+ ['careOverRate','care','overRate'],['growthFee','growth','fee'],['adSpend','growth','adSpend'],
+ ['svcRate','svc','rate'],['hCare','svc','care'],['hGrowth','svc','growth'],['hStudio','svc','studio']
+].forEach(([id,grp,key])=>{
+  const el=document.getElementById(id);
+  el.addEventListener('input',()=>{S[grp][key]=Number(el.value)||0;render();});
+});
+
+document.getElementById('who').addEventListener('input',e=>{S.meta.client=e.target.value;});
+document.getElementById('saveBtn').addEventListener('click',saveQuote);
+document.getElementById('linkBtn').addEventListener('click',copyLink);
+document.getElementById('pdfBtn').addEventListener('click',exportPDF);
+
+const vt=document.getElementById('viewToggle');
+vt.addEventListener('click',()=>{
+  S.client=!S.client;
+  document.body.classList.toggle('client',S.client);
+  vt.textContent=S.client?'← Back to studio view':'Client view →';
+  window.scrollTo({top:0,behavior:'smooth'});
+  render();
+});
+
+document.getElementById('resetMeters').addEventListener('click',()=>{resetMeters();render();});
+document.getElementById('resetInfra').addEventListener('click',()=>{resetInfra();
+  S.provider=1;S.tenants=25;S.density=25;S.dedicated=false;
+  document.getElementById('provider').value='1';
+  document.getElementById('tenants').value=25;
+  document.getElementById('density').value=25;
+  document.getElementById('dedicated').checked=false;render();});
+
+
+if(!loadFromHash()) syncInputs();
+render();
+refreshSaved();
+
+/* ---------------- embedded in the ERP ----------------
+   The bench stays the only place quote arithmetic lives. When the ERP's
+   client page opens it in a frame, the ERP sends bc-init (client name,
+   nonprofit flag, and the saved state from the last filed quote); "File to
+   client" answers with bc-quote — a client-view markdown rendering plus the
+   serialized state — and the ERP files it in the vault, where it previews,
+   prints, signs and sends like any other paper. */
+const embedded = window.parent !== window;
+if(embedded) document.getElementById('fileBtn').hidden=false;
+window.bcInit=function(d){
+  d=d||{};
+  if(d.state){
+    try{ deserialize(JSON.parse(decodeURIComponent(escape(atob(d.state))))); }
+    catch(err){}
+  }else if(typeof d.np==='boolean'){ S.np=d.np; }
+  if(d.client){ S.meta.client=d.client; setVal('who',d.client); }
+  render();
+};
+
+function quoteMarkdown(r){
+  /* The client-view tape, as markdown. Only what the client sees — the
+     cost, margin and infra lines never leave the bench. */
+  const L=[];
+  const row=(n,v)=>L.push('| '+n+' | '+v+' |');
+  const table=()=>{ L.push('| | Monthly |'); L.push('|---|---|'); };
+  L.push('**An estimate, not an invoice.** Metered lines depend on real '+
+    'usage, so the monthly figure moves with it. Anything on your own '+
+    'vendor accounts is billed to you directly by that vendor. '+
+    '**Prices held for 30 days.**');
+  L.push('');
+  L.push('## Part 1 — your platform');
+  L.push('');
+  table();
+  if(r.k){
+    r.priced.forEach(c=>row(c.n,money(priceOf(c))));
+    if(r.rate) row(r.k+' capabilities — '+(r.rate*100)+'% off',
+      '−'+money(r.boxSum*r.rate));
+  }
+  row('Platform — accounts, backups, support, installable app, push',
+    money(Number(S.corePrice)||0));
+  if(r.locOver) row((S.locs-1)+' × location',money(r.locOver));
+  if(r.seatOver) row((S.seats-5)+' × staff seat',money(r.seatOver));
+  if(r.meterRev) row('Usage beyond your allowance',money(r.meterRev));
+  if(r.wlFee) row('White-labelling — '+WL[S.wl.tier].n.split(' —')[0],
+    money(r.wlFee));
+  if(S.scaleM.on) row(S.scaleM.label+' — '+
+    (Number(S.scaleM.count)||0).toLocaleString(),
+    r.scaleAdd?money(r.scaleAdd):'included');
+  if(r.npCut) row('Nonprofit −30%','−'+money(r.npCut));
+  if(r.annCut) row('Annual — two months free','−'+money(r.annCut));
+  row('**Part 1 — platform**','**'+money(r.partPlatform)+'**');
+  L.push('');
+  L.push('## Part 2 — support & maintenance');
+  L.push('');
+  table();
+  if(r.careFee){
+    row(CARE[S.care.tier].n.split(' —')[0]+' care plan — '+
+      CARE[S.care.tier].resp,money(r.careFee));
+    if(r.careOverH) row('Overflow '+r.careOverH+'h × $'+S.care.overRate,
+      money(r.careOverRev));
+  }else row('No care plan — defects billed hourly, no response targets','—');
+  row('**Part 2 — support**','**'+money(r.partSupport)+'**');
+  L.push('');
+  L.push('## Monthly total — '+money(r.partPlatform+r.partSupport));
+  L.push('');
+  L.push(S.annual?'Billed annually — the two-months-free discount above '+
+    'is already applied.':'Billed monthly.');
+  if(r.partOther){
+    L.push('');
+    L.push('## Separate agreements');
+    L.push('');
+    L.push('Billed and cancelled on their own terms, outside the plan above.');
+    L.push('');
+    table();
+    if(S.studio) row('Studio — design retainer',money(S.studio));
+    if(r.growthFee) row(GROWTH[S.growth.tier].n.split(' —')[0]+
+      ' — SEO & advertising',money(r.growthFee));
+  }
+  L.push('');
+  L.push('## One-time, due at signing');
+  L.push('');
+  L.push('| | Once |');
+  L.push('|---|---|');
+  if(S.buildMode==='surface'&&r.buildTotal){
+    [['front','Customer storefront'],['admin','Store admin & theme'],
+     ['erp','ERP & CRM ops'],['integ','Integrations & data migration']]
+      .forEach(([k,n])=>{const v=Number(S.surfaces[k])||0;
+        if(v) row(n,m0(v));});
+  }else if(r.buildTotal) row('Build',m0(r.buildTotal));
+  if(r.wlSetup) row('White-label setup',m0(r.wlSetup));
+  if(!r.buildTotal&&!r.wlSetup) row('No build — self-serve','—');
+  if(r.passThru.length||S.shopify||r.adSpend){
+    L.push('');
+    L.push('## Billed to you by others');
+    L.push('');
+    L.push('On your own accounts — you hold the keys, and nothing for '+
+      'these reaches our invoice.');
+    L.push('');
+    L.push('| | Approx. |');
+    L.push('|---|---|');
+    r.passThru.forEach(l=>row(l.n,cents(l.clientCost)));
+    if(r.adSpend) row('Ad spend — paid to the platform',money(r.adSpend));
+    if(S.shopify){ row('Shopify plan','$39.00');
+      row('Processing 2.9% + 30¢','per order'); }
+  }
+  L.push('');
+  L.push('---');
+  L.push('');
+  L.push('## Acceptance');
+  L.push('');
+  L.push('Signing accepts this quote and its monthly total as the basis '+
+    'of the agreement that follows. The one-time build is due at '+
+    'signing; the subscription starts at launch.');
+  L.push('');
+  L.push('Accepted for '+(S.meta.client||'the client')+': [SIGN HERE]');
+  L.push('');
+  return L.join('\n');
+}
+
+document.getElementById('fileBtn').addEventListener('click',()=>{
+  const name=(document.getElementById('who').value||'').trim();
+  if(!name){ document.getElementById('who').focus();
+    toast('Name the quote first'); return; }
+  S.meta.client=name;
+  const r=compute();
+  const state=btoa(unescape(encodeURIComponent(JSON.stringify(serialize()))));
+  const payload={type:'bc-quote',
+    title:'Quote — '+name,
+    markdown:quoteMarkdown(r),
+    state};
+  if(window.bcFile) window.bcFile(payload);
+  else if(embedded) window.parent.postMessage(payload,'*');
+  else toast('Open this bench from a client\u2019s page to file the quote');
+});
+</script>
+</body>
+</html>

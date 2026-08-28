@@ -6019,6 +6019,9 @@ async function renderEngagement(id) {
         <button class="btn alt sm" id="eng-bundle-send" title="email the
           client a link to their roadmap, where the same bundle downloads
           fresh">Send bundle</button>
+        <button class="btn alt sm" id="eng-quote" title="price this client on
+          the bench, then file the quote as a paper — it opens where the last
+          quote left off">Quote</button>
       </div>
     </div>
     ${e.internal_poc_status === "pending" && S.user
@@ -6228,6 +6231,51 @@ async function renderEngagement(id) {
       a.download = `${e.slug}-client-bundle.zip`;
       a.click();
       URL.revokeObjectURL(a.href);
+    } catch (err) { toast(err.message); }
+  };
+  /* The quote bench, embedded. The bench owns the arithmetic — bands,
+     dependencies, discounts, care plans — and this page owns the filing:
+     it seeds the bench with the client and the last quote's saved state,
+     and files what comes back as a to-client paper under the proposal
+     stage, where it previews, prints, signs and sends like the rest. */
+  $("#eng-quote").onclick = async () => {
+    try {
+      const saved = await api(`/api/store/admin/engagements/${id}/quote`);
+      const html = await (await fetch("/api/store/admin/quote-bench",
+        { headers: { Authorization: "Bearer " + S.user.token } })).text();
+      const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+      modal(`<h3>Quote — ${esc(e.name)}${saved.doc_id
+          ? ' <span class="pill ok">continuing the filed quote</span>'
+          : ""}</h3>
+        <iframe class="doc-viewer" src="${url}" id="qb-frame"
+          title="quote bench"></iframe>
+        <div class="modal-foot">
+          <span class="dim" style="margin-right:auto">File to client, up in
+            the bench's own toolbar, saves it as a paper on this client.</span>
+          <button class="btn alt" data-close>Close</button>
+        </div>`, "wide");
+      const frame = $("#qb-frame");
+      /* The frame is a same-origin blob, so the wiring is two function
+         calls, not a broadcast: bcInit seeds it, bcFile is how it answers.
+         No window listener — this app has a rule about those, and it has
+         teeth (see the map leak above the test that enforces it). */
+      frame.onload = () => {
+        const w = frame.contentWindow;
+        w.bcFile = async (d) => {
+          try {
+            const out = await api(`/api/store/admin/engagements/${id}/quote`,
+              { body: { title: d.title, markdown: d.markdown,
+                        state: d.state } });
+            closeModal();
+            toast(out.refreshed
+              ? "Quote refreshed — same paper, new numbers"
+              : "Quote filed under the proposal stage");
+            await renderEngagement(id);
+            view().querySelector(`[data-engview="${out.doc_id}"]`)?.click();
+          } catch (err) { toast(err.message); }
+        };
+        if (w.bcInit) w.bcInit({ client: e.name, state: saved.state || "" });
+      };
     } catch (err) { toast(err.message); }
   };
   view().querySelectorAll("[data-gen]").forEach((b) => b.onclick = () =>
