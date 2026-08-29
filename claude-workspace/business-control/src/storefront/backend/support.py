@@ -77,6 +77,13 @@ def init_tables(con):
     con.executescript(TABLES)
 
 
+def brand_of(con) -> str:
+    """The storefront's brand for outbound support mail — the signature is
+    the tenant's, never the platform's."""
+    from .api import get_theme
+    return (get_theme(con).get("brand") or "our").strip().title()
+
+
 def contact(con) -> dict:
     row = con.execute(
         "SELECT v FROM store_meta WHERE k='support_contact'").fetchone()
@@ -192,7 +199,8 @@ def create_ticket(body: TicketBody, request: Request, con=Depends(get_con),
                 CFG, email, f"We've got your message ({ref})",
                 f"Hi {name},\n\nThanks for writing in — your reference is "
                 f"{ref} and a human will reply {c['reply_target']}.\n\n"
-                f"What you sent us:\n{text}\n\n— Zenjoy support")
+                f"What you sent us:\n{text}\n\n"
+                f"— {brand_of(con)} support")
         except Exception:
             pass          # a mail outage must not lose the ticket
     from .api import fire_webhooks
@@ -266,7 +274,8 @@ def admin_reply(tid: int, body: ReplyBody, u=Depends(admin_user),
                 from erp.backend.main import CFG
                 mailer.send(
                     CFG, t["email"], f"Re: your message ({t['ref']})",
-                    f"{body.body.strip()}\n\n— {u['name']}, Zenjoy support")
+                    f"{body.body.strip()}\n\n"
+                    f"— {u['name']}, {brand_of(con)} support")
             except Exception:
                 pass
     status = body.status if body.status in ("open", "waiting", "closed") \

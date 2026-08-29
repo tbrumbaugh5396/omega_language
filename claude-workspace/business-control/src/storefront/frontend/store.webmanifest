@@ -1,7 +1,7 @@
 {
-  "name": "Zenjoy",
-  "short_name": "Zenjoy",
-  "description": "Feel good, naturally — shop the collection.",
+  "name": "Storefront",
+  "short_name": "Storefront",
+  "description": "Shop the collection.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

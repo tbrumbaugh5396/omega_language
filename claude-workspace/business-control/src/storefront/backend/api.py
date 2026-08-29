@@ -49,7 +49,7 @@ def render_liquid(src: str, con) -> str:
     cols = [dict(r) for r in con.execute(
         "SELECT * FROM collections ORDER BY position, name").fetchall()]
     ctx = {"products": prods, "collections": cols,
-           "shop": {"name": "Zenjoy", "url": "/",
+           "shop": {"name": get_theme(con)["brand"].title(), "url": "/",
                     "currency": "USD"}}
     try:
         return _liquid.Template(src).render(**ctx)
@@ -305,20 +305,21 @@ def media_json(rows) -> list[dict]:
     return out
 
 
+# Neutral on purpose: the default is what a FRESH tenant sees before any
+# branding, and the brand belongs to the tenant's store_meta.theme, not to
+# the codebase. (ZenJoy's values live in its own tenant's saved theme.)
 THEME_DEFAULT = {
-    "brand": "zenjoy", "dot": ".",
-    "title": "Zenjoy — Feel Good, Naturally",
-    "description": "Functional beverages that help you unwind. "
-                   "Shop the collection.",
+    "brand": "your brand", "dot": ".",
+    "title": "Your Brand — online store",
+    "description": "Shop the collection.",
     "purple": "#6c00bf", "lavender": "#8a77e1", "orange": "#ff6900",
     "ink": "#1b181f", "bg": "#fbf9f6",
     # Two faces, two jobs: `font` is the interface (buttons, prices, nav),
     # `display_font` is the brand voice (headlines only). Setting one face for
     # both is what made the old storefront read as cute.
     "font": "Inter", "display_font": "Fraunces",
-    "announce": ["Free shipping over $40",
-                 "200mg L-theanine in every can"],
-    "footer": "© 2026 Zenjoy · powered by business-control",
+    "announce": ["Free shipping over $40"],
+    "footer": "powered by business-control",
 }
 
 
@@ -360,7 +361,7 @@ def icon_sprite() -> str:
 
 
 def can_svg(pid: int, name: str, colour: str, key: str = "",
-            mini: bool = False) -> str:
+            mini: bool = False, brand: str = "") -> str:
     """Server-side twin of canSVG() in store.js — the drawn can that stands in
     until real photography exists. Both draw the brand's ring grammar, so the
     product page and the grid show the same thing."""
@@ -389,7 +390,7 @@ def can_svg(pid: int, name: str, colour: str, key: str = "",
  <ellipse cx="100" cy="24" rx="52" ry="7" fill="#eceaef"/>
  {"" if mini else f'''<text x="100" y="92" text-anchor="middle" fill="#fff"
  font-size="21" font-family="Quicksand, sans-serif" font-weight="700"
- letter-spacing="-.5" aria-hidden="true">zenjoy<tspan fill="#ffd9b8">.</tspan></text>
+ letter-spacing="-.5" aria-hidden="true">{_html.escape(brand or "")}<tspan fill="#ffd9b8">.</tspan></text>
  <text x="100" y="266" text-anchor="middle" fill="#fff" font-size="13"
  font-family="Inter, sans-serif" font-weight="600" opacity=".95"
  aria-hidden="true">{label}</text>'''}
@@ -1123,7 +1124,8 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
         raise HTTPException(404, "product not found")
     base = str(request.base_url).rstrip("/")
     name = _html.escape(p["name"])
-    desc = _html.escape(p["description"] or f"{p['name']} from Zenjoy.")
+    desc = _html.escape(p["description"]
+                        or f"{p['name']} from {get_theme(con)['brand'].title()}.")
     canonical = f"{base}/product/{pid}-{slugify(p['name'])}"
     meta = product_meta(con, pid)
     colour = meta.get("colour") or "#6c00bf"
@@ -1200,7 +1202,8 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
         art = (f'<div class="pp-stage"><img src="/media/product/{pid}"'
                f' alt="{name}"></div>')
     else:
-        art = f'<div class="pp-stage">{can_svg(pid, p["name"], colour)}</div>'
+        art = (f'<div class="pp-stage">'
+               f'{can_svg(pid, p["name"], colour, brand=get_theme(con)["brand"])}</div>')
     var_html = ""
     if variants:
         opts = "".join(
@@ -1439,7 +1442,8 @@ const bf=document.getElementById('buy-fab');
 if(bf)bf.onclick=addToCart;
 </script>"""
     return HTMLResponse(render_shell(
-        con, body, title=f"{name} — Zenjoy", description=desc[:155],
+        con, body, title=f"{name} — {get_theme(con)['brand'].title()}",
+        description=desc[:155],
         head_extra=(f'<link rel="canonical" href="{canonical}">'
                     f'<meta property="og:type" content="product">'
                     + (f'<meta property="og:image" content="{img}">' if img else "")

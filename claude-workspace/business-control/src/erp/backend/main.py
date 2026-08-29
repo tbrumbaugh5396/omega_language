@@ -3725,6 +3725,29 @@ def store_worker():
     return _worker_response(config.STOREFRONT_DIR / "sf-sw.js")
 
 
+@app.get("/store.webmanifest")
+def store_manifest(con=Depends(get_con)):
+    """The installed app is named for the tenant's brand, not the demo's.
+
+    A static manifest would put one brand's name on every tenant's home
+    screen; this one reads the theme. The static file remains on disk as
+    the shape reference only — this route shadows it (routes are matched
+    before the catch-all static mount).
+    """
+    t = store_api.get_theme(con)
+    return JSONResponse({
+        "name": t["brand"].title(), "short_name": t["brand"].title(),
+        "description": t.get("description", ""),
+        "start_url": "/", "scope": "/", "display": "standalone",
+        "background_color": t.get("bg", "#fdfdfd"),
+        "theme_color": t.get("purple", "#6c00bf"),
+        "icons": [{"src": "/ops/icons/icon-192.png", "sizes": "192x192",
+                   "type": "image/png"},
+                  {"src": "/ops/icons/icon-512.png", "sizes": "512x512",
+                   "type": "image/png"}],
+    }, media_type="application/manifest+json")
+
+
 app.mount("/ops", StaticFiles(directory=config.FRONTEND_DIR, html=True),
           name="ops")
 

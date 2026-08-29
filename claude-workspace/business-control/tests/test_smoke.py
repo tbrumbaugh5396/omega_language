@@ -5124,4 +5124,136 @@ con_cleanup.execute("DELETE FROM engagements WHERE id=?", (_eid,))
 con_cleanup.commit(); con_cleanup.close()
 _sh.rmtree(_exp["root"], ignore_errors=True)
 
+# ===========================================================================
+# Multi-tenancy: one process, tenant-per-database, host header as the key.
+# Runs LAST on purpose — turning tenancy on ends legacy mode for this data
+# dir, and everything above is the proof that legacy mode was untouched.
+# ===========================================================================
+import shutil as _shm
+import sqlite3
+import subprocess as _spm
+from erp.backend import tenancy as _tn
+from erp.backend import chat as _chat
+
+# --- the split script, against a copy of this very suite's data -----------
+_split_dir = Path(tempfile.mkdtemp(prefix="bc_split_"))
+for _f in ("business_control.db", "config.json"):
+    _srcf = Path(os.environ["BUSINESS_CONTROL_DATA"]) / _f
+    if _srcf.exists():
+        _shm.copy2(_srcf, _split_dir / _f)
+_sp = _spm.run([sys.executable, str(ROOT / "scripts" / "split_tenants.py")],
+               capture_output=True, text=True,
+               env={**os.environ, "BUSINESS_CONTROL_DATA": str(_split_dir)})
+ok(_sp.returncode == 0, f"the split runs clean ({_sp.stderr[-300:]})")
+_zdb = sqlite3.connect(_split_dir / "tenants" / "zenjoy"
+                       / "business_control.db")
+_sdb = sqlite3.connect(_split_dir / "tenants" / "studio"
+                       / "business_control.db")
+ok(_zdb.execute("SELECT COUNT(*) FROM products").fetchone()[0] > 0
+   and _zdb.execute("SELECT COUNT(*) FROM engagements").fetchone()[0] == 0,
+   "zenjoy keeps the shop and loses the pipeline — a client's install must "
+   "not contain the studio's quotes about that client")
+ok(_sdb.execute("SELECT COUNT(*) FROM users WHERE is_admin=1")
+   .fetchone()[0] > 0,
+   "the studio inherits the operators, tokens intact")
+import json as _jn
+_zth = _jn.loads(_zdb.execute(
+    "SELECT v FROM store_meta WHERE k='theme'").fetchone()[0])
+ok(_zth["brand"] == "zenjoy" and "L-theanine" in " ".join(_zth["announce"]),
+   "and zenjoy's theme is written into its own store_meta, so neutralising "
+   "the code default changed nothing its storefront can see")
+_reg = _jn.loads((_split_dir / "tenants.json").read_text())
+ok(_reg["default"] == "studio"
+   and (_split_dir / "business_control.pre-split.db").exists(),
+   "bare localhost is the studio cockpit, and the un-split database stays "
+   "behind as the escape hatch")
+ok(_spm.run([sys.executable, str(ROOT / "scripts" / "split_tenants.py")],
+            capture_output=True, text=True,
+            env={**os.environ,
+                 "BUSINESS_CONTROL_DATA": str(_split_dir)}).returncode == 1,
+   "and it refuses to run twice")
+_zdb.close(); _sdb.close()
+
+# --- the router itself, live in this process ------------------------------
+_tn.create("alpha", hosts=["alpha.test"], default=True)
+_tn.create("beta", hosts=["beta.test"])
+HA = {"host": "alpha.test"}
+HB = {"host": "beta.test"}
+ok((Path(os.environ["BUSINESS_CONTROL_DATA"]) / "tenants" / "alpha"
+    / "business_control.db").exists(),
+   "a tenant minted at runtime has schema immediately")
+
+_acfg = _jn.loads((_tn.tenant_dir("alpha") / "config.json").read_text())
+_bcfg = _jn.loads((_tn.tenant_dir("beta") / "config.json").read_text())
+ok(_acfg["admin_key"] != _bcfg["admin_key"],
+   "each tenant mints its own admin key — one leaked secret is one tenant")
+
+_aad = c.post("/api/login", headers=HA,
+              json={"name": "Alpha Boss",
+                    "admin_key": _acfg["admin_key"]}).json()
+AA = {"Authorization": f"Bearer {_aad['token']}", **HA}
+ok(_aad["is_admin"], "alpha's key signs in on alpha")
+ok(not c.post("/api/login", headers=HB,
+              json={"name": "Crosser",
+                    "admin_key": _acfg["admin_key"]}).json()["is_admin"],
+   "and does not grant admin on beta")
+
+_ap = c.post("/api/admin/products", headers=AA,
+             json={"name": "Alpha Widget", "price_cents": 500,
+                   "sku": "AW-1", "case_price_cents": 5000}).json()
+_bnames = [p["name"] for p in c.get("/api/products", headers=HB).json()]
+ok("Alpha Widget" not in _bnames,
+   "a product created under one tenant does not exist under another — "
+   "isolation is the file, not a WHERE clause")
+ok(c.get("/api/me", headers={**HB, "Authorization":
+                             AA["Authorization"]}).status_code == 401,
+   "a bearer token minted on alpha is 401 on beta — a token is only "
+   "meaningful given the right database")
+
+ok(c.get("/api/products",
+         headers={"host": "ghost.test"}).status_code == 404,
+   "an unclaimed hostname is a 404, never a silent fall-through to the "
+   "default tenant")
+
+# chat hub: same user id, different tenants, zero cross-talk
+_t1 = _tn.CURRENT.set("alpha")
+_chat.register(3, object())
+ok(_chat.online_ids() == [3], "user 3 is online on alpha")
+_tn.CURRENT.reset(_t1)
+_t2 = _tn.CURRENT.set("beta")
+ok(_chat.online_ids() == [],
+   "and invisible on beta — the hub key carries the tenant, so two "
+   "businesses each with a user 3 cannot receive each other's calls")
+_tn.CURRENT.reset(_t2)
+_t1 = _tn.CURRENT.set("alpha")
+_chat.HUB.clear()
+_tn.CURRENT.reset(_t1)
+
+# each tenant gets its own push identity
+_ak = c.get("/api/push/pubkey", headers=AA).json()["key"]
+_bad2 = c.post("/api/login", headers=HB,
+               json={"name": "Beta Boss",
+                     "admin_key": _bcfg["admin_key"]}).json()
+_bk = c.get("/api/push/pubkey",
+            headers={**HB, "Authorization":
+                     f"Bearer {_bad2['token']}"}).json()["key"]
+ok(_ak != _bk and (_tn.tenant_dir("alpha") / "vapid_private.pem").exists()
+   and (_tn.tenant_dir("beta") / "vapid_private.pem").exists(),
+   "each tenant has its own VAPID pair — browsers bind subscriptions to "
+   "the server key, so a shared key is one business to the push service")
+
+# a settings write on alpha stays on alpha
+c.post("/api/admin/email/config", headers=AA,
+       json={"host": "smtp.alpha.test", "port": 587, "username": "",
+             "password": "", "starttls": True, "email_from": "",
+             "abandoned_cart": True, "winback": True})
+_acfg2 = _jn.loads((_tn.tenant_dir("alpha") / "config.json").read_text())
+_bcfg2 = _jn.loads((_tn.tenant_dir("beta") / "config.json").read_text())
+ok(_acfg2.get("smtp", {}).get("host") == "smtp.alpha.test"
+   and _bcfg2.get("smtp", {}).get("host", "") != "smtp.alpha.test",
+   "a settings write through CFG lands in that tenant's config.json and "
+   "nowhere else — the proxy is per-tenant, not a shared snapshot")
+
+_shm.rmtree(_split_dir, ignore_errors=True)
+
 print(f"\nall {checks} checks passed")

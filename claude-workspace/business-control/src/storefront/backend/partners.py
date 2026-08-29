@@ -3,12 +3,12 @@
 Six audiences arrive at a beverage brand's site who are not shoppers, and
 each one is worth more than a single order:
 
-  work          — an office wants Zenjoy in the kitchen
-  stock-zen     — a shop wants to carry Zenjoy
+  work          — an office wants the product in the kitchen
+  stock-zen     — a shop wants to carry the brand
   reorder       — a shop that already carries it wants more
-  distribute    — someone wants to distribute Zenjoy
-  brand         — a brand wants Zenjoy's distribution arm to carry them
-  partner-brand — a shop wants a Zenjoy-distributed brand on its shelf
+  distribute    — someone wants to distribute the brand
+  brand         — a maker wants the distribution arm to carry them
+  partner-brand — a shop wants a distributed partner brand on its shelf
 
 They share one shape: a page that explains the path and a short form. So
 there's one renderer driven by PATHS rather than six hand-built pages.
@@ -108,8 +108,8 @@ PATHS = {
         "cta": "Ask about workplace supply",
     },
     "stock-zen": {
-        "nav": "Stock Zenjoy",
-        "title": "Get Zenjoy into your store",
+        "nav": "Stock {brand}",
+        "title": "Get {brand} into your store",
         "kicker": "For retailers",
         "lede": "Cases of the five-flavour range, wholesale pricing, and a "
                 "rep who actually answers. We start most shops on a mixed "
@@ -134,7 +134,7 @@ PATHS = {
         "nav": "Reorder for my store",
         "title": "Reorder for your store",
         "kicker": "For existing stockists",
-        "lede": "Already carrying Zenjoy? Tell us what you're low on and "
+        "lede": "Already carrying {brand}? Tell us what you're low on and "
                 "we'll put it on the next run. If you have an account with "
                 "us, sign in and your last order is one click away.",
         "points": [
@@ -154,8 +154,8 @@ PATHS = {
         "cta": "Send reorder request",
     },
     "distribute": {
-        "nav": "Distribute Zenjoy",
-        "title": "Distribute Zenjoy",
+        "nav": "Distribute {brand}",
+        "title": "Distribute {brand}",
         "kicker": "For distributors",
         "lede": "We're adding distribution partners region by region. If you "
                 "run routes and know the accounts in your patch, there's "
@@ -203,12 +203,12 @@ PATHS = {
         "nav": "Stock a partner brand",
         "title": "Stock a brand we distribute",
         "kicker": "For retailers",
-        "lede": "Zenjoy isn't the only thing on our trucks. If you already "
+        "lede": "{brand} isn't the only thing on our trucks. If you already "
                 "take a delivery from us — or want to — you can add any of "
                 "the brands we carry to the same order and the same invoice.",
         "points": [
             ("box", "One delivery, one invoice",
-             "Add partner brands to your existing Zenjoy order rather than "
+             "Add partner brands to your existing {brand} order rather than "
              "opening another account with another distributor."),
             ("search", "Tell us the gap on your shelf",
              "Say what's missing and we'll tell you honestly whether "
@@ -235,7 +235,7 @@ def init_tables(con):
              "Chicago IL", "Midwest", now + 3 * day,
              "Try all five flavours. We'll be pouring 4–7pm, no ticket "
              "needed."),
-            ("Zenjoy x Sunset Provisions pop-up", "popup",
+            ("Sunset Provisions pop-up", "popup",
              "Sunset Provisions", "Los Angeles CA", "West", now + 9 * day,
              "A weekend pop-up with the full range plus the Full Ripple "
              "pack at launch pricing."),
@@ -284,7 +284,8 @@ def create_enquiry(body: EnquiryBody, con=Depends(get_con),
         "INSERT INTO outreach(name,region,city,stage,next_action,"
         " next_action_date,updated_at) VALUES(?,?,?,'lead',?,?,?)",
         (label, body.region.strip(), body.city.strip(),
-         f"Follow up: {PATHS[body.kind]['nav']}",
+         f"Follow up: "
+         f"{_branded(PATHS[body.kind]['nav'], brand_name(con))}",
          time.time() + 86400, time.time()))
     oid = cur.lastrowid
     ecur = con.execute(
@@ -487,6 +488,26 @@ def _shell(con, body, title, desc):
     return HTMLResponse(render_shell(con, body, title=title, description=desc))
 
 
+def brand_name(con) -> str:
+    """The storefront's brand, as prose. The pages below carry {brand}
+    placeholders instead of a hardcoded name — the copy is the product's,
+    the name is the tenant's."""
+    from .api import get_theme
+    return (get_theme(con).get("brand") or "our brand").strip().title()
+
+
+def _branded(obj, brand):
+    if isinstance(obj, str):
+        return obj.replace("{brand}", brand)
+    if isinstance(obj, tuple):
+        return tuple(_branded(x, brand) for x in obj)
+    if isinstance(obj, list):
+        return [_branded(x, brand) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _branded(v, brand) for k, v in obj.items()}
+    return obj
+
+
 def _form(kind: str, spec: dict, regions) -> str:
     opts = "".join(f'<option value="{sect.esc(r)}">{sect.esc(r)}</option>'
                    for r in regions)
@@ -521,6 +542,8 @@ def partner_page(kind: str, request: Request, con=Depends(get_con)):
     spec = PATHS.get(kind)
     if spec is None:
         raise HTTPException(404, "no such page")
+    _brand = brand_name(con)
+    spec = _branded(spec, _brand)
     from erp.backend.main import CFG
     regions = CFG.get("regions") or []
     points = "".join(
@@ -528,7 +551,8 @@ def partner_page(kind: str, request: Request, con=Depends(get_con)):
         f'{sect.icon(i, "ico ico-lg")}</span><b>{sect.esc(t)}</b>'
         f'<p>{sect.esc(b)}</p></div>' for i, t, b in spec["points"])
     others = "".join(
-        f'<a class="side-item" href="/partners/{k}">{sect.esc(v["nav"])}</a>'
+        f'<a class="side-item" href="/partners/{k}">'
+        f'{sect.esc(_branded(v["nav"], _brand))}</a>'
         for k, v in PATHS.items() if k != kind)
     body = f"""
 <section class="section partner-head">
@@ -551,7 +575,8 @@ def partner_page(kind: str, request: Request, con=Depends(get_con)):
  <span class="eyebrow">Other ways to work with us</span>
  <div class="menu-cols" style="margin-top:12px">{others}</div>
 </section>"""
-    return _shell(con, body, f"{spec['title']} — Zenjoy", spec["lede"][:155])
+    return _shell(con, body, f"{spec['title']} — {_brand}",
+                  spec["lede"][:155])
 
 
 @router.get("/events")
@@ -568,16 +593,18 @@ def events_page(request: Request, con=Depends(get_con)):
    role="group" aria-label="Filter events by region"></div>
  <div class="event-list" id="event-list"></div>
 </section>"""
-    return _shell(con, body, "Events — Zenjoy",
-                  "Zenjoy tastings, pop-ups and markets near you.")
+    _brand = brand_name(con)
+    return _shell(con, body, f"Events — {_brand}",
+                  f"{_brand} tastings, pop-ups and markets near you.")
 
 
 @router.get("/find")
 def locator_page(request: Request, con=Depends(get_con)):
-    body = """
+    _brand = brand_name(con)
+    body = f"""
 <section class="section partner-head">
  <span class="eyebrow">Store locator</span>
- <h1>Find Zenjoy near you</h1>
+ <h1>Find {sect.esc(_brand)} near you</h1>
  <p class="lede">Shops that carry the range. Stock varies by store — if
   you're after a specific flavour it's worth a call first.</p>
 </section>
@@ -600,5 +627,5 @@ def locator_page(request: Request, con=Depends(get_con)):
   adding accounts every week. <a class="text-link"
   href="/partners/stock-zen">Ask your local shop to stock us.</a></p>
 </section>"""
-    return _shell(con, body, "Find Zenjoy near you",
-                  "Store locator — shops that carry Zenjoy.")
+    return _shell(con, body, f"Find {_brand} near you",
+                  f"Store locator — shops that carry {_brand}.")

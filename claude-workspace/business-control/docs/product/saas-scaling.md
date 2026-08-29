@@ -29,7 +29,8 @@ Why tenant-per-SQLite-file beats one big Postgres at this stage:
 - **Ops scale-out is file copy** — tenants pin to nodes; moving one is rsync + DNS. One 4 GB VPS comfortably carries dozens of food-brand-sized tenants (each DB is megabytes).
 - Revisit Postgres-with-tenant-id only past ~1k tenants or if a single tenant outgrows SQLite's single-writer ceiling (a busy brand won't).
 
-Work items (≈ the real multi-tenant build, in order):
+Work items (≈ the real multi-tenant build, in order) — **items 1, 2 and 5
+shipped August 2026; see [multi-tenant.md](multi-tenant.md)**:
 1. Control-plane DB + tenant router middleware (host header → tenant id).
 2. Per-tenant `connect()`/config; namespace the chat HUB, push subs, and the notification sweep loop (iterate tenants).
 3. Caddy **on-demand TLS** for custom domains; wildcard for `*.bizcontrol.app`.

@@ -1,4 +1,4 @@
-/* Zenjoy storefront — talks to the brain only through /api/store/* and the
+/* Storefront — talks to the brain only through /api/store/* and the
    shared funnel/order rails. */
 "use strict";
 
@@ -10,6 +10,15 @@ const $ = (s) => document.querySelector(s);
 const on = (sel, fn) => { const el = $(sel); if (el) el.onclick = fn; return el; };
 
 // ---------- currency + locale ----------
+/* The brand, read from the shell the server already branded — the nav
+   carries the theme's wordmark text, so there is no second source. */
+function BRAND() {
+  const el = document.querySelector(".topbar .brand, .brand");
+  const t = (el ? el.textContent : "").replace(/\.$/, "").trim();
+  return t || "our brand";
+}
+const BRAND_T = () => BRAND().replace(/\b\w/g, (c) => c.toUpperCase());
+
 const I18N = window.STORE_I18N || { currencies: [], locales: ["en"],
   ui: {}, strings: {} };
 let CUR = I18N.currencies.find(
@@ -235,7 +244,7 @@ function canSVG(p, opts = {}) {
    <ellipse cx="100" cy="24" rx="52" ry="7" fill="#eceaef"/>
    ${opts.mini ? "" : `<text x="100" y="92" text-anchor="middle" fill="#fff"
      font-size="21" font-family="Quicksand, sans-serif" font-weight="700"
-     letter-spacing="-.5" aria-hidden="true">zenjoy<tspan fill="#ffd9b8">.</tspan></text>`}
+     letter-spacing="-.5" aria-hidden="true">${BRAND()}<tspan fill="#ffd9b8">.</tspan></text>`}
    ${label && !opts.mini ? `<text x="100" y="266" text-anchor="middle" fill="#fff"
      font-size="13" font-family="Inter, sans-serif" font-weight="600"
      opacity=".95" aria-hidden="true">${label}</text>` : ""}
@@ -993,9 +1002,9 @@ function toast(txt) {
    rather than server-rendered so the menu is identical on every page,
    including the ones the section engine doesn't render. */
 const PARTNER_LINKS = [
-  ["stock-zen", "box", "Stock Zenjoy", "Get the range into your store"],
+  ["stock-zen", "box", "Stock the range", "Get the range into your store"],
   ["reorder", "repeat", "Reorder for my store", "Already carrying us"],
-  ["distribute", "truck", "Distribute Zenjoy", "Run routes in your region"],
+  ["distribute", "truck", "Distribute the brand", "Run routes in your region"],
   ["brand", "sparkle", "We'll distribute your brand", "Get onto our trucks"],
   ["partner-brand", "shield", "Stock a partner brand",
     "Other brands we carry, same invoice"],
@@ -1466,7 +1475,7 @@ async function startSupportChat() {
   const hist = await (await fetch(
     `/api/chat/convs/${SUPPORT.conv}/messages`, { headers: H })).json();
   SUPPORT.lastId = 0; draw(hist);
-  if (!hist.length) draw([{ id: 0.5, user_id: -1, name: "Zenjoy",
+  if (!hist.length) draw([{ id: 0.5, user_id: -1, name: BRAND_T(),
     body: "Hey — how can we help?" }]);
   // realtime: the same /ws the team uses, shared with call signaling
   SUPPORT.onMessage = (d) => {
@@ -1737,7 +1746,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
         <title>You are here</title></g>`;
     })() : "";
     host.innerHTML = `<svg viewBox="0 0 ${MAP_W} ${MAP_H}" class="loc-map"
-      role="img" aria-label="Map of stores carrying Zenjoy">
+      role="img" aria-label="Map of stores carrying the brand">
       <path class="us" d="${US_PATH}"/>${me}${pins}</svg>`;
     host.querySelectorAll("[data-pin]").forEach((g) => {
       const pick = () => {

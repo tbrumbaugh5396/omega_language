@@ -54,9 +54,9 @@ SECTION_TYPES = {
                 "keyboard and swipe all move it.",
         "fields": [
             {"k": "video_src", "t": "text", "label": "Video file",
-             "default": "/hero/zenjoy-hero.mp4"},
+             "default": "/hero/hero.mp4"},
             {"k": "video_poster", "t": "text", "label": "Video poster",
-             "default": "/hero/zenjoy-hero.jpg"},
+             "default": "/hero/hero.jpg"},
             {"k": "video_caption", "t": "text", "label": "Video caption",
              "default": "4 flavors, 1 calm"},
             {"k": "cta_text", "t": "text", "label": "Button under the caption",
@@ -215,16 +215,16 @@ SECTION_TYPES = {
                  {"k": "icon", "t": "text", "label": "Icon name",
                   "default": "instagram"},
                  {"k": "handle", "t": "text", "label": "Handle",
-                  "default": "@zenjoy"},
+                  "default": "@yourbrand"},
                  {"k": "network", "t": "text", "label": "Network",
                   "default": "Instagram"},
                  {"k": "link", "t": "text", "label": "Link", "default": "#"}],
              "default": [
-                 {"icon": "instagram", "handle": "@zenjoy",
+                 {"icon": "instagram", "handle": "@yourbrand",
                   "network": "Instagram", "link": "#"},
-                 {"icon": "music", "handle": "@zenjoy", "network": "TikTok",
+                 {"icon": "music", "handle": "@yourbrand", "network": "TikTok",
                   "link": "#"},
-                 {"icon": "play", "handle": "Zenjoy", "network": "YouTube",
+                 {"icon": "play", "handle": "Your Brand", "network": "YouTube",
                   "link": "#"}]},
         ]},
     "latest_posts": {
@@ -439,7 +439,7 @@ def _showcase(con, s) -> str:
         for i in range(len(slides)))
     return (
         f'<section class="showcase" id="showcase" aria-roledescription="carousel"'
-        f' aria-label="Zenjoy film and products">'
+        f' aria-label="Brand film and products">'
         f'<ul class="show-rail" id="show-rail">{"".join(slides)}</ul>'
         f'<button class="show-arrow prev" id="show-prev" type="button"'
         f' aria-label="Previous slide">{icon("arrow")}</button>'
