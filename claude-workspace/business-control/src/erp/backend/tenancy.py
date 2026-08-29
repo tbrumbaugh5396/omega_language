@@ -54,6 +54,38 @@ def active() -> bool:
     return registry() is not None
 
 
+def provider():
+    """The tenant whose pipeline manages the others — the studio. Set in
+    the registry ("provider": "<id>"); None when tenancy is off or nobody
+    is declared. Deliberately explicit rather than inferred from
+    "default": which hostname answers by default and who operates the
+    platform are different questions."""
+    reg = registry()
+    if not reg:
+        return None
+    tid = reg.get("provider")
+    return tid if tid in reg.get("tenants", {}) else None
+
+
+class run_as:
+    """Act as another tenant for a narrow, explicit scope.
+
+    Exists for the one legitimate cross-tenant read: a client tenant
+    looking at ITS OWN paperwork in the provider's pipeline. Anything
+    wider than a `with` block should not be using this."""
+
+    def __init__(self, tid):
+        self.tid = tid
+
+    def __enter__(self):
+        self._tok = CURRENT.set(self.tid)
+        return self
+
+    def __exit__(self, *exc):
+        CURRENT.reset(self._tok)
+        return False
+
+
 def all_tenants() -> list:
     reg = registry()
     return list((reg or {}).get("tenants", {}).keys())

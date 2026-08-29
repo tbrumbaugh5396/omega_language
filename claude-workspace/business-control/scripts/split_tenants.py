@@ -171,6 +171,7 @@ def main() -> int:
     # ---- the registry: who answers to which name ------------------------
     tenancy.REGISTRY_PATH.write_text(json.dumps({
         "default": "studio",
+        "provider": "studio",
         "tenants": {
             "studio": {"hosts": ["localhost", "127.0.0.1"],
                        "created": time.time()},

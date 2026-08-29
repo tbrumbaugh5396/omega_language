@@ -134,6 +134,9 @@ MIGRATIONS = (
     "ALTER TABLE engagements ADD COLUMN internal_poc_user_id INTEGER DEFAULT 0",
     "ALTER TABLE engagements ADD COLUMN internal_poc_status TEXT"
     " DEFAULT 'accepted'",
+    # The client's own tenant on this platform, when they run on it. Empty
+    # = fall back to matching the slug against the registry.
+    "ALTER TABLE engagements ADD COLUMN tenant_id TEXT DEFAULT ''",
 )
 
 
@@ -699,6 +702,7 @@ class EngBody(BaseModel):
     live_url: str = ""
     notes: str = ""
     status: str = ""
+    tenant_id: str = ""
     originator: str = ""
     internal_poc: str = ""
     content_pct: int = -1          # -1 = not sent; 0 is a real value
@@ -891,6 +895,7 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
     e = _eng_or_404(con, eid)
     fields = {}
     for k in ("name", "package", "approver_name", "approver_email",
+              "tenant_id",
               "launch_target", "staging_url", "live_url", "notes", "status"):
         v = getattr(body, k).strip()
         if v and v != e[k]:
@@ -2276,6 +2281,173 @@ def export_zip(eid: int, side: str = "to_client", u=Depends(admin_user),
     return Response(buf.getvalue(), media_type="application/zip", headers={
         "Content-Disposition":
             f'attachment; filename="{e["slug"]}-{kind}.zip"'})
+
+
+# ---------- the client's window into the provider's pipeline ----------
+# When a client RUNS ON this platform (zenjoy is a tenant here, and also a
+# client of the studio's), their own ops app should show the paperwork the
+# studio filed for them — without a second login, and without ever crossing
+# to the internal side. The read runs under tenancy.run_as(provider) for
+# exactly the width of these handlers, and every query carries the same
+# side='to_client' clause the portal lives by: an internal document is not
+# withheld from the client tenant, it is unreachable.
+
+def _provider_engagement(con, tid):
+    """The provider's engagement for tenant tid: the explicit tenant_id
+    link first, else the slug — which is how zenjoy finds zenjoy with no
+    configuration at all."""
+    return con.execute(
+        "SELECT * FROM engagements WHERE status != 'archived'"
+        " AND (tenant_id = ? OR (tenant_id = '' AND slug = ?))"
+        " ORDER BY tenant_id = ? DESC LIMIT 1", (tid, tid, tid)).fetchone()
+
+
+@router.get("/api/store/admin/studio")
+def studio_view(request: Request, u=Depends(admin_user),
+                con=Depends(get_con)):
+    """What the studio holds for THIS tenant, read across the wall.
+
+    Requires admin of the client tenant (that is the con this route got);
+    the provider's database is then opened read-only for the lookup."""
+    from erp.backend import tenancy
+    tid = tenancy.CURRENT.get()
+    prov = tenancy.provider()
+    if not prov or not tid:
+        return {"connected": False}
+    if prov == tid:
+        return {"connected": False, "provider": True}
+    from erp.backend import db
+    with tenancy.run_as(prov):
+        pcon = db.connect()
+        try:
+            e = _provider_engagement(pcon, tid)
+            if e is None:
+                return {"connected": False}
+            gates = [g for g in resolve_gates(pcon, e["id"]) if g["active"]]
+            docs = [dict(r) for r in pcon.execute(
+                "SELECT ed.stage, d.id, d.title, d.ext, d.created_at,"
+                "  (SELECT COUNT(*) FROM document_signatures s"
+                "    WHERE s.document_id=d.id AND s.status='signed')"
+                "    AS signed,"
+                "  (SELECT COUNT(*) FROM document_signatures s"
+                "    WHERE s.document_id=d.id"
+                "    AND s.status IN ('sent','viewed')) AS awaiting"
+                " FROM engagement_docs ed"
+                " JOIN documents d ON d.id=ed.doc_id"
+                " WHERE ed.engagement_id=? AND ed.side='to_client'"
+                " ORDER BY ed.stage, d.created_at", (e["id"],))]
+            # the roadmap link, on the provider's own hostname
+            portal = ""
+            if e["portal_token"]:
+                reg = tenancy.registry() or {}
+                hosts = reg.get("tenants", {}).get(prov, {}).get("hosts", [])
+                if hosts:
+                    # the port the caller actually used, so the link works
+                    # on a laptop (:8860) and in production (none) alike
+                    hh = request.headers.get("host", "")
+                    port = (hh.split(":", 1)[1] if ":" in hh
+                            else request.url.port)
+                    portal = (f"{request.url.scheme}://{hosts[0]}"
+                              + (f":{port}" if port else "")
+                              + f"/engage/{e['portal_token']}")
+            return {"connected": True,
+                    "studio": CFG_BRAND(pcon),
+                    "client": e["name"],
+                    "stage": current_stage(gates),
+                    "gates_closed": sum(1 for g in gates if g["passed_at"]),
+                    "gates_total": len(gates),
+                    "portal_url": portal,
+                    "docs": docs}
+        finally:
+            pcon.close()
+
+
+def CFG_BRAND(_=None) -> str:
+    """The provider's brand — called inside run_as(provider), where the
+    CFG proxy answers with the provider's own config."""
+    from erp.backend.main import CFG
+    return CFG.get("brand_name", "the studio")
+
+
+def _studio_doc(tid, did):
+    """One of this tenant's own documents in the provider's vault, or 404.
+    The wall is the JOIN: not this engagement's, or not on the client's
+    side — then as far as this route knows, it does not exist."""
+    from erp.backend import tenancy
+    prov = tenancy.provider()
+    if not prov or prov == tid:
+        raise HTTPException(404, "not connected to a studio")
+    from erp.backend import db
+    with tenancy.run_as(prov):
+        pcon = db.connect()
+        try:
+            e = _provider_engagement(pcon, tid)
+            if e is None:
+                raise HTTPException(404, "not a client of the studio")
+            row = pcon.execute(
+                "SELECT d.* FROM engagement_docs ed"
+                " JOIN documents d ON d.id=ed.doc_id"
+                " WHERE ed.engagement_id=? AND ed.doc_id=?"
+                " AND ed.side='to_client'", (e["id"], did)).fetchone()
+            if row is None:
+                raise HTTPException(404, "no such document")
+            from . import documents as vault
+            sigs = vault.signed_rows(pcon, row["id"])
+            gv = global_values(e)
+            return row, sigs, gv, pcon
+        except Exception:
+            pcon.close()
+            raise
+
+
+@router.get("/api/store/admin/studio/doc/{did}")
+def studio_doc(did: int, u=Depends(admin_user), con=Depends(get_con)):
+    from erp.backend import tenancy
+    from . import documents as vault
+    from .api import FONT_LINK
+    tid = tenancy.CURRENT.get()
+    row, sigs, gv, pcon = _studio_doc(tid, did)
+    try:
+        if row["ext"]:
+            with tenancy.run_as(tenancy.provider()):
+                p = vault.doc_path(row)
+                if not p.exists():
+                    raise HTTPException(404, "file missing from storage")
+                return Response(p.read_bytes(),
+                                media_type=vault.ALLOWED_EXT.get(
+                                    row["ext"], "application/octet-stream"))
+        return HTMLResponse(
+            f"<!doctype html><html lang=\"en\"><head>"
+            f"<meta charset=\"utf-8\"><meta name=\"viewport\""
+            f" content=\"width=device-width, initial-scale=1\">"
+            f"<title>{sect.esc(row['title'])}</title>{FONT_LINK}"
+            f"<style>{vault.DOC_BASE_CSS}html{{background:#fff}}"
+            f"{vault.PAGE_RULE_CSS}</style></head><body>"
+            f"{vault.form_inner(row['title'], row['body'], gv)}"
+            f"{vault.signatures_html(sigs)}</body></html>")
+    finally:
+        pcon.close()
+
+
+@router.get("/api/store/admin/studio/doc/{did}/pdf")
+def studio_doc_pdf(did: int, u=Depends(admin_user), con=Depends(get_con)):
+    from erp.backend import tenancy
+    from . import documents as vault
+    from . import pdfgen
+    tid = tenancy.CURRENT.get()
+    row, sigs, gv, pcon = _studio_doc(tid, did)
+    try:
+        if not (row["body"] or "").strip():
+            raise HTTPException(400, "this document is a file — open it "
+                                     "instead")
+        blob = pdfgen.doc_pdf(vault.substitute_globals(row["title"], gv),
+                              vault.substitute_globals(row["body"], gv),
+                              signatures=sigs)
+        stem = re.sub(r"[^\w.-]+", "-", row["title"]).strip("-")[:80]
+        return Response(blob, media_type="application/pdf", headers={
+            "Content-Disposition": f'inline; filename="{stem}.pdf"'})
+    finally:
+        pcon.close()
 
 
 # ---------- public: the client portal ----------

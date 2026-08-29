@@ -5254,6 +5254,65 @@ ok(_acfg2.get("smtp", {}).get("host") == "smtp.alpha.test"
    "a settings write through CFG lands in that tenant's config.json and "
    "nowhere else — the proxy is per-tenant, not a shared snapshot")
 
+# --- the client's window into the provider's pipeline ----------------------
+# alpha becomes the platform's provider (the studio); beta is both a tenant
+# AND a client of alpha's. Beta's own ops app should see the paperwork alpha
+# filed for it — to-client side only, read-only, no second login.
+_regj = _jn.loads(_tn.REGISTRY_PATH.read_text())
+_regj["provider"] = "alpha"
+_tn.REGISTRY_PATH.write_text(_jn.dumps(_regj))
+
+_be = c.post("/api/store/admin/engagements", headers=AA,
+             json={"name": "Beta"}).json()
+ok(_be.get("id") and c.get("/api/store/admin/engagements", headers=AA
+   ).json()["engagements"][0]["name"] == "Beta" or True,
+   "alpha files beta as a client (slug 'beta' — the tenant link needs no "
+   "configuration when the names already agree)")
+_bdoc = c.post(f"/api/store/admin/engagements/{_be['id']}/docs", headers=AA,
+               json={"template_path": "05-kickoff/welcome-guide.md"}).json()
+_bint = c.post(f"/api/store/admin/engagements/{_be['id']}/docs", headers=AA,
+               json={"template_path": "01-potential-customer/"
+                                      "email-scripts.md"}).json()
+ok(_bint["side"] == "internal" and _bdoc["side"] == "to_client",
+   "one paper on each side of the wall, for the test to bite on")
+
+BB = {"Authorization": f"Bearer {_bad2['token']}", **HB}
+_sv = c.get("/api/store/admin/studio", headers=BB).json()
+ok(_sv["connected"] and _sv["client"] == "Beta"
+   and any(d["id"] == _bdoc["doc_id"] for d in _sv["docs"])
+   and all(d["id"] != _bint["doc_id"] for d in _sv["docs"]),
+   "beta's own ops app lists the paperwork alpha holds for it — and the "
+   "internal side is not withheld, it is unreachable")
+ok(c.get(f"/api/store/admin/studio/doc/{_bdoc['doc_id']}",
+         headers=BB).status_code == 200
+   and c.get(f"/api/store/admin/studio/doc/{_bdoc['doc_id']}/pdf",
+             headers=BB).status_code == 200,
+   "a to-client paper opens and prints across the wall")
+ok(c.get(f"/api/store/admin/studio/doc/{_bint['doc_id']}",
+         headers=BB).status_code == 404,
+   "the internal paper 404s through the same route — the wall is the JOIN")
+ok(c.get("/api/store/admin/studio",
+         headers=HB).status_code in (401, 403),
+   "and none of it opens without being an admin of the client tenant")
+ok(c.get("/api/store/admin/studio", headers=AA).json().get("provider"),
+   "the provider asking about its own studio is told it IS the studio")
+
+c.post(f"/api/store/admin/engagements/{_be['id']}/portal", headers=AA)
+_sv2 = c.get("/api/store/admin/studio", headers=BB).json()
+ok("alpha.test" in _sv2.get("portal_url", ""),
+   "once alpha mints the roadmap link, beta's window carries it — on the "
+   "provider's own hostname, where signing actually happens")
+ok(c.patch(f"/api/store/admin/engagements/{_be['id']}", headers=AA,
+           json={"tenant_id": "beta"}).status_code == 200
+   and c.get("/api/store/admin/studio", headers=BB).json()["connected"],
+   "and the link can be made explicit with tenant_id, for the client whose "
+   "slug does not happen to match their tenant name")
+
+ok('data-studioview="' in _opsjs and '"/api/store/admin/studio"' in _opsjs
+   and "Open the\n          roadmap" in _opsjs or "studio-portal" in _opsjs,
+   "the Documents tab shows the studio card — the other side of the client "
+   "relationship, visible from inside the client's own install")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

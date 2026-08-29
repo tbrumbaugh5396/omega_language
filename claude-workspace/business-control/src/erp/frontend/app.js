@@ -6692,6 +6692,15 @@ async function renderDocs() {
   DOCS = await api("/api/store/admin/documents?party_kind="
     + encodeURIComponent(kind) + "&q=" + encodeURIComponent(q)
     + (S.docArchived ? "&archived=1" : ""));
+  /* The paperwork our studio holds for US — the other side of the client
+     relationship. A business that runs on this platform is usually also a
+     client of the studio that built it; its contracts, quotes and progress
+     updates live in the studio's pipeline, and this reads them across the
+     wall (to-client side only, read-only, no second login). */
+  if (S.studioDocs === undefined) {
+    try { S.studioDocs = await api("/api/store/admin/studio"); }
+    catch { S.studioDocs = { connected: false }; }
+  }
 
   const expiring = DOCS.expiring.filter((d) => !d.expired);
   const expired = DOCS.expiring.filter((d) => d.expired);
@@ -6718,6 +6727,36 @@ async function renderDocs() {
       <button class="btn" id="doc-new">${opsIcon("file","btn-ic")} New document</button>
     </div>
     ${alert}
+    ${S.studioDocs && S.studioDocs.connected ? `
+    <div class="card studio-docs">
+      <div class="card-head"><b>From ${esc(S.studioDocs.studio)}</b>
+        <span class="dim">stage ${esc(S.studioDocs.stage || "")} ·
+          ${S.studioDocs.gates_closed} of ${S.studioDocs.gates_total}
+          stages closed</span>
+        ${S.studioDocs.portal_url ? `<button class="btn alt sm"
+          id="studio-portal" data-url="${esc(S.studioDocs.portal_url)}"
+          title="the live roadmap the studio keeps for you">Open the
+          roadmap</button>` : ""}</div>
+      <p class="dim">Your paperwork with the studio that runs this
+        platform — read straight from their pipeline, so it is always
+        current. Signing and questions happen on the roadmap.</p>
+      <div class="sig-rows">${S.studioDocs.docs.map((d) => `
+        <div class="doc-line">
+          <span class="dl-title"><b title="${esc(d.title)}">${esc(d.title)}</b>
+            ${d.signed ? `<span class="pill ok">${d.signed} signed</span>` : ""}
+            ${d.awaiting ? `<span class="pill warn">${d.awaiting} awaiting
+              your signature</span>` : ""}</span>
+          <span class="dl-acts" style="grid-template-columns: 56px 50px">
+            <button class="btn alt sm" data-studioview="${d.id}"
+              data-title="${esc(d.title)}"
+              data-ext="${d.ext || ""}">View</button>
+            ${d.ext ? "" : `<button class="btn alt sm"
+              data-studiopdf="${d.id}"
+              data-title="${esc(d.title)}">PDF</button>`}
+          </span>
+        </div>`).join("")}
+      </div>
+    </div>` : ""}
     <div class="filters">
       <input id="doc-q" placeholder="Search titles, parties, notes" value="${esc(q)}">
       <div class="chips"><button class="chip ${kind ? "" : "on"}" data-kind="">All</button>${kinds}
@@ -6875,6 +6914,39 @@ async function docViewer(did, kind, ext, name, signedN, after, preset) {
 
 function wireDocRows() {
   wireRows({}, renderDocs);
+  const sp = $("#studio-portal");
+  if (sp) sp.onclick = () => window.open(sp.dataset.url, "_blank");
+  view().querySelectorAll("[data-studioview]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        const r = await fetch(`/api/store/admin/studio/doc/${b.dataset.studioview}`,
+          { headers: { Authorization: "Bearer " + S.user.token } });
+        if (!r.ok) throw new Error((await r.json()).detail || r.status);
+        const url = URL.createObjectURL(await r.blob());
+        modal(`<h3>${esc(b.dataset.title)} <span class="pill ok">from the
+            studio</span></h3>
+          <iframe class="doc-viewer" src="${url}"
+            title="${esc(b.dataset.title)}"></iframe>
+          <div class="modal-foot">
+            <span class="dim" style="margin-right:auto">Read-only — this is
+              the studio's copy. Signing happens on your roadmap.</span>
+            <button class="btn alt" data-close>Close</button>
+          </div>`, "wide");
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-studiopdf]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        const r = await fetch(
+          `/api/store/admin/studio/doc/${b.dataset.studiopdf}/pdf`,
+          { headers: { Authorization: "Bearer " + S.user.token } });
+        if (!r.ok) throw new Error((await r.json()).detail || r.status);
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(await r.blob());
+        a.download = b.dataset.title + ".pdf";
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-docview]").forEach((b) => b.onclick = () =>
     docViewer(+b.dataset.docview, b.dataset.kind, b.dataset.ext,
               b.dataset.name, b.dataset.signed, renderDocs));

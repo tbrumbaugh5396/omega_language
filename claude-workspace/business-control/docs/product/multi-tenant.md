@@ -76,6 +76,27 @@ the server key — a shared pair would make every tenant one business to the
 push service). Consequence: **devices subscribed before the split must
 re-subscribe** from the bell panel. One-time cost, said out loud here.
 
+## The client's window — both sides see their documents
+
+The registry can declare one tenant the **provider** (`"provider":
+"studio"`): the business whose pipeline manages the others. That closes the
+loop in both directions:
+
+- **The studio sees every client** — the Clients board, engagements,
+  documents, quotes and portals, exactly as before.
+- **A client tenant sees its own paperwork** — its Documents tab carries a
+  "From <studio>" card reading straight from the provider's pipeline: the
+  stage, gates closed, every to-client document (view + PDF), and the
+  roadmap link. No second login; read-only; signing stays on the roadmap,
+  where the audit trail lives.
+
+The link is the engagement's `tenant_id`, falling back to the slug — which
+is how zenjoy finds zenjoy with no configuration. The wall holds by
+construction: the cross-tenant read runs inside `tenancy.run_as(provider)`
+for exactly the width of the handler, and every query carries the same
+`side='to_client'` clause the portal lives by. An internal document is not
+withheld from the client tenant — it is unreachable.
+
 ## Public deployment
 
 Caddy, with a host per tenant — automatic TLS per name:
