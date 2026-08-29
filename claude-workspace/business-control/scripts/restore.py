@@ -29,10 +29,13 @@ def main() -> int:
     if not archive.exists():
         print(f"No such file: {archive}")
         return 1
-    # Safety net: keep the current state aside before overwriting.
+    # Safety net: keep the current state aside before overwriting — the
+    # legacy triple, plus the whole tenants tree and its registry when the
+    # install is multi-tenant.
     aside = config.DATA_DIR / f"pre-restore-{time.strftime('%Y%m%d-%H%M%S')}"
     aside.mkdir(parents=True, exist_ok=True)
-    for name in ("business_control.db", "config.json", "vapid_private.pem"):
+    for name in ("business_control.db", "config.json", "vapid_private.pem",
+                 "tenants.json", "tenants"):
         p = config.DATA_DIR / name
         if p.exists():
             p.rename(aside / name)

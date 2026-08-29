@@ -1716,7 +1716,7 @@ for _t_off, _act in (
         " VALUES('retention-test',?,'',200,?)",
         (_act, _now_r - _t_off * 86400))
 _con_r.commit()
-_aud._last_prune = 0
+_aud._last_prune.clear()
 _removed = _aud.prune(_con_r, _now_r)
 _left = [r["action"] for r in _con_r.execute(
     "SELECT action FROM audit_log WHERE actor='retention-test'").fetchall()]
@@ -1737,7 +1737,7 @@ ok(_aud.prune(_con_r, _now_r) == 0,
 ok(_aud.prune(_con_r, _now_r + _aud.PRUNE_EVERY + 1) == 0,
    "with nothing left to remove, the next run is still a no-op")
 _con_r.close()
-_aud._last_prune = 0
+_aud._last_prune.clear()
 _ret = c.get("/api/admin/audit", headers=A).json()
 ok(_ret["retention"]["days"] == _aud.KEEP_DAYS
    and _ret["retention"]["sensitive_days"] > _aud.KEEP_DAYS,

@@ -74,7 +74,7 @@ MAX_ROWS = 200_000
 
 # Pruning is bookkeeping, not something to do on every request.
 PRUNE_EVERY = 3600
-_last_prune = 0.0
+_last_prune: dict = {}    # per tenant — one busy tenant must not starve another's prune
 
 # Requests that change nothing worth recording. Clocking in is already its own
 # durable record in `shifts`, and the read-tracking endpoints would bury the
@@ -152,11 +152,12 @@ def prune(con, now: float | None = None) -> int:
     SQLite has no REGEXP built in, and one pattern applied in one place
     beats a WHERE clause listing paths that will drift from the pattern.
     """
-    global _last_prune
+    from . import tenancy
+    tid = tenancy.CURRENT.get()
     now = now or time.time()
-    if now - _last_prune < PRUNE_EVERY:
+    if now - _last_prune.get(tid, 0) < PRUNE_EVERY:
         return 0
-    _last_prune = now
+    _last_prune[tid] = now
     removed = 0
 
     # Ordinary entries past the short window.

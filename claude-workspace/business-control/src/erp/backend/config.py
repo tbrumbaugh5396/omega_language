@@ -2,6 +2,7 @@
 import json
 import os
 import secrets
+import threading
 from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parents[3]
@@ -87,26 +88,92 @@ DEFAULTS = {
 }
 
 
-def load() -> dict:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+def _config_path() -> Path:
+    """The current tenant's config file — the bare data dir until tenancy
+    is switched on."""
+    from . import tenancy
+    return tenancy.data_dir() / "config.json"
+
+
+def load(path: Path | None = None) -> dict:
+    path = path or _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     cfg = dict(DEFAULTS)
-    if CONFIG_PATH.exists():
+    if path.exists():
         try:
-            cfg.update(json.loads(CONFIG_PATH.read_text()))
+            cfg.update(json.loads(path.read_text()))
         except Exception:
             pass
     if not cfg.get("admin_key"):
         cfg["admin_key"] = secrets.token_urlsafe(24)
-        save(cfg)
+        _write(path, cfg)
     # The pepper for time-clock PINs. It lives here rather than in the
     # database on purpose: that separation is the whole point — a stolen
     # copy of the database has to be useless on its own.
     if not cfg.get("pin_pepper"):
         cfg["pin_pepper"] = secrets.token_urlsafe(32)
-        save(cfg)
+        _write(path, cfg)
     return cfg
 
 
-def save(cfg: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+class TenantConfig:
+    """CFG, made tenant-aware without touching its fifty call sites.
+
+    The app treats CFG as a dict: reads it, mutates it from settings
+    handlers, hands it to the mailer and Stripe helpers. All of that keeps
+    working — this object just answers every operation against the dict
+    belonging to whichever tenant the current request resolved to, loaded
+    on first touch and cached per tenant. Legacy mode is the tenant None,
+    which is the bare data dir, which is exactly what CFG always was.
+    """
+
+    def __init__(self):
+        self._cache: dict = {}
+        self._lock = threading.Lock()
+
+    def _data(self) -> dict:
+        from . import tenancy
+        tid = tenancy.CURRENT.get()
+        with self._lock:
+            if tid not in self._cache:
+                self._cache[tid] = load(
+                    tenancy.tenant_dir(tid) / "config.json")
+            return self._cache[tid]
+
+    def invalidate(self, tid=None) -> None:
+        with self._lock:
+            self._cache.pop(tid, None)
+
+    def __getitem__(self, k): return self._data()[k]
+    def __setitem__(self, k, v): self._data()[k] = v
+    def __delitem__(self, k): del self._data()[k]
+    def __contains__(self, k): return k in self._data()
+    def __iter__(self): return iter(self._data())
+    def __len__(self): return len(self._data())
+    def get(self, k, default=None): return self._data().get(k, default)
+    def update(self, *a, **kw): self._data().update(*a, **kw)
+    def keys(self): return self._data().keys()
+    def items(self): return self._data().items()
+    def values(self): return self._data().values()
+
+
+_PROXY = None
+
+
+def proxy() -> TenantConfig:
+    global _PROXY
+    if _PROXY is None:
+        _PROXY = TenantConfig()
+    return _PROXY
+
+
+def _write(path: Path, cfg: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cfg, indent=2))
+
+
+def save(cfg) -> None:
+    """Write the current tenant's config. Accepts the proxy (the normal
+    case — handlers mutate CFG then save it) or a plain dict (scripts)."""
+    data = cfg._data() if isinstance(cfg, TenantConfig) else cfg
+    _write(_config_path(), data)

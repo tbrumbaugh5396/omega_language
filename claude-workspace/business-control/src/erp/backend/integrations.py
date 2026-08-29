@@ -710,7 +710,9 @@ def emit(event: str, payload: dict) -> None:
             pass
         finally:
             con.close()
-    threading.Thread(target=run, daemon=True).start()
+    from . import tenancy
+    threading.Thread(target=tenancy.with_tenant(
+        tenancy.CURRENT.get(), run), daemon=True).start()
 
 
 def _line(event: str, d: dict) -> str:
@@ -752,8 +754,8 @@ def _document_bytes(con, doc_id) -> tuple:
                           (doc_id,)).fetchone()
         if row is None or not row["ext"]:
             return None, ""
-        from storefront.backend import config as sconfig
-        f = sconfig.DATA_DIR / "uploads" / "documents" / \
+        from . import tenancy
+        f = tenancy.data_dir() / "uploads" / "documents" / \
             f"{doc_id}.{row['ext']}"
         return (f.read_bytes(), row["ext"]) if f.exists() else (None, "")
     except Exception:

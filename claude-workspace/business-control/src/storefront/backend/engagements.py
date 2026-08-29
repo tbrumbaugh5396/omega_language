@@ -47,7 +47,9 @@ router = APIRouter()
 KIT = Path(__file__).resolve().parents[3] \
     / "docs" / "business-control-b2b-client" / "templates"
 
-EXPORT_ROOT = config.DATA_DIR / "exports" / "clients"
+def EXPORT_ROOT():
+    from erp.backend import tenancy
+    return tenancy.data_dir() / "exports" / "clients"
 
 # Page maps, keyed on the content they describe — so a binder opened twice,
 # or previewed and then downloaded, renders once.
@@ -1004,7 +1006,7 @@ def delete_engagement(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         con.execute(f"DELETE FROM {t} WHERE engagement_id=?", (eid,))
     con.execute("DELETE FROM engagements WHERE id=?", (eid,))
     con.commit()
-    shutil.rmtree(EXPORT_ROOT / e["slug"], ignore_errors=True)
+    shutil.rmtree(EXPORT_ROOT() / e["slug"], ignore_errors=True)
     _PAGE_MAP.clear()
     return {"ok": True, "name": e["name"], "removed": removed, "kept": kept}
 
@@ -1863,7 +1865,7 @@ def export_folder(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     file from a previous export can't linger as if current."""
     e = _eng_or_404(con, eid)
     docs = engagement_detail(eid, u, con)["docs"]
-    root = EXPORT_ROOT / e["slug"]
+    root = EXPORT_ROOT() / e["slug"]
     if root.exists():
         shutil.rmtree(root)
     files = []
@@ -1911,7 +1913,9 @@ def export_folder(eid: int, u=Depends(admin_user), con=Depends(get_con)):
             con2.close()
 
     import threading
-    threading.Thread(target=file_to_dropbox, daemon=True).start()
+    from erp.backend import tenancy as _ten
+    threading.Thread(target=_ten.with_tenant(
+        _ten.CURRENT.get(), file_to_dropbox), daemon=True).start()
     return {"root": str(root), "files": sorted(files),
             "dropbox": "filing in the background"
             if _dropbox_connected(con) else "not connected"}

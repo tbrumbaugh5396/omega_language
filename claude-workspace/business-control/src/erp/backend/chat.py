@@ -152,25 +152,35 @@ def add_message(con, conv_id: int, user, body: str) -> dict:
 
 # ---------- live socket hub ----------
 
+def _key(user_id: int):
+    """(tenant, user id). Bare ids collide across tenants — two businesses
+    each with a user 3 must not receive each other's messages or calls."""
+    from . import tenancy
+    return (tenancy.CURRENT.get(), user_id)
+
+
 def register(user_id: int, ws) -> None:
-    HUB.setdefault(user_id, set()).add(ws)
+    HUB.setdefault(_key(user_id), set()).add(ws)
 
 
 def unregister(user_id: int, ws) -> None:
-    HUB.get(user_id, set()).discard(ws)
-    if not HUB.get(user_id):
-        HUB.pop(user_id, None)
+    k = _key(user_id)
+    HUB.get(k, set()).discard(ws)
+    if not HUB.get(k):
+        HUB.pop(k, None)
 
 
 def online_ids() -> list[int]:
-    return list(HUB.keys())
+    from . import tenancy
+    tid = tenancy.CURRENT.get()
+    return [uid for (t, uid) in HUB.keys() if t == tid]
 
 
 async def send_to(user_ids: list[int], payload: dict) -> None:
     data = json.dumps(payload)
     dead = []
     for uid in user_ids:
-        for ws in list(HUB.get(uid, ())):
+        for ws in list(HUB.get(_key(uid), ())):
             try:
                 await ws.send_text(data)
             except Exception:

@@ -51,7 +51,9 @@ from .api import admin_user, get_con, rate_limit
 
 router = APIRouter()
 
-DOC_DIR = config.DATA_DIR / "uploads" / "documents"
+def DOC_DIR():
+    from erp.backend import tenancy
+    return tenancy.data_dir() / "uploads" / "documents"
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -491,7 +493,7 @@ def md_html(text: str) -> str:
 
 def init_tables(con):
     con.executescript(TABLES)
-    DOC_DIR.mkdir(parents=True, exist_ok=True)
+    DOC_DIR().mkdir(parents=True, exist_ok=True)
 
 
 def log(con, doc_id: int, actor: str, action: str, detail: str = "") -> None:
@@ -502,7 +504,7 @@ def log(con, doc_id: int, actor: str, action: str, detail: str = "") -> None:
 
 
 def doc_path(d) -> Path:
-    return DOC_DIR / f"{d['id']}.{d['ext']}"
+    return DOC_DIR() / f"{d['id']}.{d['ext']}"
 
 
 def file_sha256(p: Path) -> str:
@@ -630,8 +632,8 @@ async def upload_file(did: int, file: UploadFile, u=Depends(admin_user),
     raw = await file.read()
     if len(raw) > MAX_BYTES:
         raise HTTPException(400, f"file is over {MAX_BYTES // 1024 // 1024}MB")
-    DOC_DIR.mkdir(parents=True, exist_ok=True)
-    dest = DOC_DIR / f"{did}.{ext}"
+    DOC_DIR().mkdir(parents=True, exist_ok=True)
+    dest = DOC_DIR() / f"{did}.{ext}"
     dest.write_bytes(raw)
     digest = hashlib.sha256(raw).hexdigest()
     con.execute(

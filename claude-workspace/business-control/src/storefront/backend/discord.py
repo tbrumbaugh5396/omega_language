@@ -361,7 +361,9 @@ def emit(event: str, data: dict) -> None:
             pass
         finally:
             con.close()
-    threading.Thread(target=run, daemon=True).start()
+    from erp.backend import tenancy
+    threading.Thread(target=tenancy.with_tenant(
+        tenancy.CURRENT.get(), run), daemon=True).start()
 
 
 # ---------- admin ----------

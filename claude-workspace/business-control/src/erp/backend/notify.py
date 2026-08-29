@@ -9,7 +9,10 @@ from . import analytics, config, db
 from . import push as webpush
 
 WEEK = 7 * 86400
-_CFG = config.load()
+# The tenant-aware proxy, not a snapshot: a snapshot taken at import time
+# would push every tenant's notifications with the first tenant's VAPID
+# subject.
+_CFG = config.proxy()
 
 
 def push(con, title: str, body: str = "", kind: str = "info",

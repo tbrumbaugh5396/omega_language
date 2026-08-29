@@ -10,6 +10,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+# --tenant <id> aims every connect at that tenant's database;
+# without it the script behaves exactly as before (legacy dir).
+if "--tenant" in sys.argv:
+    _ti = sys.argv.index("--tenant")
+    from erp.backend import tenancy as _tenancy
+    _tenancy.CURRENT.set(sys.argv[_ti + 1])
+    del sys.argv[_ti:_ti + 2]
+
 from erp.backend import abtest, config, db  # noqa: E402
 
 DAY = 86400

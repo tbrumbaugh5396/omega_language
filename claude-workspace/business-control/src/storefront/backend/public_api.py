@@ -63,7 +63,8 @@ def api_key(request: Request, authorization: str = Header(default=""),
                       (hash_key(raw),)).fetchone()
     if row is None:
         raise HTTPException(401, "invalid or revoked API key")
-    dq = _CALLS[row["id"]]
+    from erp.backend import tenancy
+    dq = _CALLS[(tenancy.CURRENT.get(), row["id"])]
     now = time.monotonic()
     while dq and now - dq[0] > 60:
         dq.popleft()

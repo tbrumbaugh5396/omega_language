@@ -357,7 +357,11 @@ CREATE TABLE IF NOT EXISTS outreach_log (
 def connect() -> sqlite3.Connection:
     # check_same_thread=False: FastAPI enters/exits sync dependencies on
     # different threadpool threads; each request still gets its own connection.
-    con = sqlite3.connect(config.DB_PATH, timeout=10, check_same_thread=False)
+    # Resolved per call, not at import: the path is the tenant. In legacy
+    # single-tenant mode tenancy.db_path() is exactly the old DB_PATH.
+    from . import tenancy
+    con = sqlite3.connect(tenancy.db_path(), timeout=10,
+                          check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")
@@ -399,7 +403,8 @@ MIGRATIONS = (
 
 
 def init() -> None:
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    from . import tenancy
+    tenancy.data_dir().mkdir(parents=True, exist_ok=True)
     con = connect()
     try:
         con.executescript(SCHEMA)

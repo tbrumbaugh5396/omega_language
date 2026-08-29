@@ -10,19 +10,25 @@ import threading
 
 from . import config, db
 
-VAPID_PEM = config.DATA_DIR / "vapid_private.pem"
+def VAPID_PEM():
+    # Per tenant: browsers bind a subscription to the server key, so
+    # two businesses sharing one key would be one business to the
+    # push service.
+    from . import tenancy
+    return tenancy.data_dir() / "vapid_private.pem"
 
 
 def public_key() -> str:
     """Create-if-missing and return the applicationServerKey (urlsafe b64)."""
     from py_vapid import Vapid
     from cryptography.hazmat.primitives import serialization
-    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not VAPID_PEM.exists():
+    from . import tenancy
+    tenancy.data_dir().mkdir(parents=True, exist_ok=True)
+    if not VAPID_PEM().exists():
         v = Vapid()
         v.generate_keys()
-        v.save_key(str(VAPID_PEM))
-    v = Vapid.from_file(str(VAPID_PEM))
+        v.save_key(str(VAPID_PEM()))
+    v = Vapid.from_file(str(VAPID_PEM()))
     raw = v.public_key.public_bytes(serialization.Encoding.X962,
                                     serialization.PublicFormat.UncompressedPoint)
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
@@ -59,9 +65,12 @@ def send(cfg: dict, title: str, body: str = "",
     finally:
         con.close()
     payloads = list({s["sub"] for s in subs})   # dedup a user in both groups
-    if not payloads or not VAPID_PEM.exists():
+    if not payloads or not VAPID_PEM().exists():
         return
-    threading.Thread(target=_deliver, daemon=True,
+    from . import tenancy
+    threading.Thread(
+        target=tenancy.with_tenant(tenancy.CURRENT.get(), _deliver),
+        daemon=True,
                      args=(cfg, payloads, title, body)).start()
 
 
@@ -72,7 +81,7 @@ def _deliver(cfg, payloads, title, body):
     for raw in payloads:
         sub = json.loads(raw)
         try:
-            webpush(sub, data, vapid_private_key=str(VAPID_PEM),
+            webpush(sub, data, vapid_private_key=str(VAPID_PEM()),
                     vapid_claims={"sub": cfg.get("vapid_subject",
                                                  "mailto:owner@localhost")},
                     timeout=8)

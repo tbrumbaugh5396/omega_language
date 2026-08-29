@@ -15,19 +15,30 @@ from pydantic import BaseModel
 
 from . import (abtest, achieve, analytics, audit, auth, chat, config, cycles,
                db, dbview, integrations, logistics, mailer, notify,
-               payments, push, shopify_sub, social, supply)
+               payments, push, shopify_sub, social, supply, tenancy)
 
 app = FastAPI(title="Business Control")
-CFG = config.load()
-db.init()
-audit.init_tables()
-_boot = db.connect()
-# Any PIN still in plaintext from before hashing gets converted here.
-auth.migrate_pins(_boot, CFG["pin_pepper"])
-supply.init_tables(_boot)
-integrations.init_tables(_boot)
-_boot.commit()
-_boot.close()
+# The tenant-aware view of config: every read and every settings-page write
+# lands on whichever tenant the current request resolved to. In legacy mode
+# there is one tenant (None) and this is the same dict it always was.
+CFG = config.proxy()
+
+
+def _init_core(tid=None):
+    """Schema and one-time conversions for one tenant's database."""
+    tok = tenancy.CURRENT.set(tid)
+    try:
+        db.init()
+        audit.init_tables()
+        con = db.connect()
+        # Any PIN still in plaintext from before hashing gets converted here.
+        auth.migrate_pins(con, CFG["pin_pepper"])
+        supply.init_tables(con)
+        integrations.init_tables(con)
+        con.commit()
+        con.close()
+    finally:
+        tenancy.CURRENT.reset(tok)
 
 
 @app.middleware("http")
@@ -77,6 +88,27 @@ async def audit_edits(request: Request, call_next):
     finally:
         con.close()
     return response
+
+@app.middleware("http")
+async def resolve_tenant(request: Request, call_next):
+    """Host header -> tenant, before anything touches a database.
+
+    Added AFTER the audit middleware on purpose: Starlette runs the
+    last-added middleware outermost, and audit opens its own connection
+    after call_next — that write must still land in the tenant's database,
+    so the tenant context has to outlive the whole audit wrapper.
+    """
+    try:
+        tid = tenancy.resolve(request.headers.get("host", ""))
+    except tenancy.UnknownHost as e:
+        return JSONResponse({"detail": f"no tenant answers to '{e}' — "
+                             "check data/tenants.json"}, status_code=404)
+    tok = tenancy.CURRENT.set(tid)
+    try:
+        return await call_next(request)
+    finally:
+        tenancy.CURRENT.reset(tok)
+
 
 JOBS = ["general", "driver", "dsd", "warehouse", "sales_rep", "ambassador",
         "event_staff"]
@@ -205,7 +237,9 @@ def set_branding(body: BrandingBody, user=Depends(admin_user)):
     return {"ok": True}
 
 
-UPLOADS = config.DATA_DIR / "uploads"
+def UPLOADS():
+    # A function, not a constant: the path is the tenant's.
+    return tenancy.data_dir() / "uploads"
 IMAGE_MAGIC = {b"\xff\xd8": "image/jpeg", b"\x89P": "image/png",
                b"RI": "image/webp", b"GI": "image/gif"}
 
@@ -230,8 +264,8 @@ def set_product_image(pid: int, body: ImageBody, user=Depends(admin_user),
         raise HTTPException(400, "image too large (2 MB max)")
     if raw[:2] not in IMAGE_MAGIC:
         raise HTTPException(400, "not a recognized image")
-    UPLOADS.mkdir(parents=True, exist_ok=True)
-    (UPLOADS / f"product_{pid}").write_bytes(raw)
+    UPLOADS().mkdir(parents=True, exist_ok=True)
+    (UPLOADS() / f"product_{pid}").write_bytes(raw)
     con.execute("UPDATE products SET image=1 WHERE id=?", (pid,))
     con.commit()
     return {"ok": True}
@@ -239,7 +273,7 @@ def set_product_image(pid: int, body: ImageBody, user=Depends(admin_user),
 
 @app.get("/media/product/{pid}")
 def product_image(pid: int, con=Depends(get_con)):
-    f = UPLOADS / f"product_{pid}"
+    f = UPLOADS() / f"product_{pid}"
     if not f.exists():
         # Newer uploads live in the storefront media pipeline.
         from storefront.backend import api as store_api
@@ -3337,6 +3371,14 @@ def chat_staff(user=Depends(current_user), con=Depends(get_con)):
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket, token: str = ""):
+    # HTTP middleware does not wrap websockets, so the tenant is resolved
+    # here from the handshake's own Host header — before any connect().
+    try:
+        _wtid = tenancy.resolve(websocket.headers.get("host", ""))
+    except tenancy.UnknownHost:
+        await websocket.close(code=4404)
+        return
+    _wtok = tenancy.CURRENT.set(_wtid)
     con = db.connect()
     user = auth.user_for_token(con, token)
     if user is None:
@@ -3380,6 +3422,7 @@ async def ws_endpoint(websocket: WebSocket, token: str = ""):
     finally:
         chat.unregister(user["id"], websocket)
         con.close()
+        tenancy.CURRENT.reset(_wtok)
 
 
 # ---------- email marketing ----------
@@ -3578,7 +3621,22 @@ from storefront.backend import support as store_support  # noqa: E402
 from storefront.backend import promos as store_promos  # noqa: E402
 from storefront.backend import public_api as store_v1  # noqa: E402
 
-store_api.init_tables()
+def init_tenant(tid=None):
+    """Everything a tenant's database needs, in one call — the ERP core and
+    the storefront's fourteen-module fan-out. Runs per tenant at boot, and
+    for a tenant minted at runtime via tenancy.create()."""
+    _init_core(tid)
+    tok = tenancy.CURRENT.set(tid)
+    try:
+        store_api.init_tables()
+    finally:
+        tenancy.CURRENT.reset(tok)
+
+
+tenancy.INIT = init_tenant
+for _tid in (tenancy.all_tenants() or [None]):
+    init_tenant(_tid)
+
 app.include_router(store_api.router)
 app.include_router(store_promos.router)
 app.include_router(store_content.router)

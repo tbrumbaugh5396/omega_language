@@ -287,7 +287,9 @@ def send_campaign(cid: int, body: SendBody, u=Depends(admin_user),
             c2.commit()
         finally:
             c2.close()
-    threading.Thread(target=run, daemon=True).start()
+    from erp.backend import tenancy
+    threading.Thread(target=tenancy.with_tenant(
+        tenancy.CURRENT.get(), run), daemon=True).start()
     return {"ok": True, "send_id": send_id, "recipients": len(people)}
 
 

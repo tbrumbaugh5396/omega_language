@@ -202,7 +202,9 @@ def slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:60] or "item"
 
 
-MEDIA_DIR = config.DATA_DIR / "uploads" / "media"
+def MEDIA_DIR():
+    from erp.backend import tenancy
+    return tenancy.data_dir() / "uploads" / "media"
 IMAGE_MAGIC = {b"\xff\xd8": ("jpg", "image/jpeg"),
                b"\x89P": ("png", "image/png"),
                b"RI": ("webp", "image/webp"),
@@ -247,7 +249,7 @@ def make_derivatives(mid: int, ext: str) -> None:
         from PIL import Image
     except ImportError:
         return
-    src = MEDIA_DIR / f"{mid}.{ext}"
+    src = MEDIA_DIR() / f"{mid}.{ext}"
     for suffix, edge, quality in DERIVS:
         try:
             with Image.open(src) as im:
@@ -265,10 +267,10 @@ def make_derivatives(mid: int, ext: str) -> None:
                         im = im.crop(bbox)
                 im.thumbnail((edge, edge), Image.LANCZOS)
                 if keep:
-                    im.save(MEDIA_DIR / f"{mid}_{suffix}.png", "PNG",
+                    im.save(MEDIA_DIR() / f"{mid}_{suffix}.png", "PNG",
                             optimize=True)
                 else:
-                    im.save(MEDIA_DIR / f"{mid}_{suffix}.jpg", "JPEG",
+                    im.save(MEDIA_DIR() / f"{mid}_{suffix}.jpg", "JPEG",
                             quality=quality, optimize=True)
         except Exception:
             pass
@@ -277,11 +279,11 @@ def make_derivatives(mid: int, ext: str) -> None:
 # Derivatives are looked up in this order everywhere, so one helper decides
 # it rather than three routes each guessing.
 def derivative(mid: int, suffix: str, ext: str = ""):
-    for cand in (MEDIA_DIR / f"{mid}_{suffix}.png",
-                 MEDIA_DIR / f"{mid}_{suffix}.jpg"):
+    for cand in (MEDIA_DIR() / f"{mid}_{suffix}.png",
+                 MEDIA_DIR() / f"{mid}_{suffix}.jpg"):
         if cand.exists():
             return cand
-    orig = MEDIA_DIR / f"{mid}.{ext}" if ext else None
+    orig = MEDIA_DIR() / f"{mid}.{ext}" if ext else None
     return orig if orig and orig.exists() else None
 
 
@@ -651,7 +653,10 @@ _HITS: dict[str, deque] = defaultdict(deque)
 
 
 def rate_limit(request: Request):
-    key = f"{request.client.host if request.client else '?'}:{request.url.path}"
+    from erp.backend import tenancy
+    key = (f"{tenancy.CURRENT.get()}:"
+           f"{request.client.host if request.client else '?'}:"
+           f"{request.url.path}")
     now = time.monotonic()
     dq = _HITS[key]
     while dq and now - dq[0] > 60:
@@ -712,7 +717,10 @@ def _fan_integrations(event: str, payload: dict) -> None:
         except Exception:
             pass
     for h in hooks:
-        threading.Thread(target=send, args=(h["url"],), daemon=True).start()
+        from erp.backend import tenancy
+        threading.Thread(target=tenancy.with_tenant(
+            tenancy.CURRENT.get(), send), args=(h["url"],),
+            daemon=True).start()
 
 
 # ---------- public: catalog, promos, discounts ----------
@@ -771,7 +779,7 @@ def media_file(mid: int, con=Depends(get_con)):
     if m is None:
         raise HTTPException(404, "no such media")
     if m["kind"] == "video":
-        f = MEDIA_DIR / f"{mid}.{m['ext']}"
+        f = MEDIA_DIR() / f"{mid}.{m['ext']}"
         if not f.exists():
             raise HTTPException(404, "video is an external embed")
         return FileResponse(f, media_type=VIDEO_MIME.get(m["ext"], "video/mp4"))
@@ -791,7 +799,7 @@ def media_thumb(mid: int, con=Depends(get_con)):
     if th is not None:
         return FileResponse(th, media_type=MIME.get(th.suffix, "image/jpeg"),
                             headers={"Cache-Control": "public, max-age=31536000"})
-    orig = MEDIA_DIR / f"{mid}.{m['ext']}"
+    orig = MEDIA_DIR() / f"{mid}.{m['ext']}"
     if m["kind"] == "image" and orig.exists():
         return FileResponse(orig,
                             headers={"Cache-Control": "public, max-age=31536000"})
@@ -1800,8 +1808,8 @@ def add_media(body: MediaBody, u=Depends(admin_user), con=Depends(get_con)):
          body.alt.strip()[:200], nxt, db.now()))
     mid = cur.lastrowid
     if raw is not None:
-        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-        (MEDIA_DIR / f"{mid}.{ext}").write_bytes(raw)
+        MEDIA_DIR().mkdir(parents=True, exist_ok=True)
+        (MEDIA_DIR() / f"{mid}.{ext}").write_bytes(raw)
         if kind == "image":
             make_derivatives(mid, ext)
     # Keep the ERP's legacy art flag in step with the primary image.
@@ -1856,8 +1864,8 @@ def delete_media(mid: int, u=Depends(admin_user), con=Depends(get_con)):
     m = con.execute("SELECT * FROM product_media WHERE id=?", (mid,)).fetchone()
     if m is None:
         raise HTTPException(404, "no such media")
-    for f in (MEDIA_DIR / f"{mid}.{m['ext']}", MEDIA_DIR / f"{mid}_lg.jpg",
-              MEDIA_DIR / f"{mid}_th.jpg"):
+    for f in (MEDIA_DIR() / f"{mid}.{m['ext']}", MEDIA_DIR() / f"{mid}_lg.jpg",
+              MEDIA_DIR() / f"{mid}_th.jpg"):
         try:
             f.unlink(missing_ok=True)
         except OSError:
