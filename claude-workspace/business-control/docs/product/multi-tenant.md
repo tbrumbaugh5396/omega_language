@@ -182,9 +182,15 @@ business-control tenants on :8860) and **lingua-portal**, which is its own
 codebase — stdlib Python, its own auth, its own working per-tenant control
 plane — running on :8800 (portal) and :8700 (marketing site).
 
-**Lingua is managed as a client of the studio tenant today** (the
-engagement, quotes, documents and portal machinery), with the port into
-business-control as the stated goal: making the priced-but-unbuilt
+**Lingua now runs as its own tenant** — `lingua.localhost`, on the local
+node at 4 units, with its own database, config, secrets and uploads,
+stood up through Platform → Stand up a client rather than by hand. The
+studio's engagement for it carries `tenant_id = 'lingua'`, so Lingua's own
+Documents tab reads the studio's paperwork for Lingua across the wall.
+
+The lingua-portal codebase is still separate and still runs on :8800 and
+:8700 — the tenant is its business side (ops, CRM, storefront), not a port
+of the product. That port is still the stated goal: making the priced-but-unbuilt
 Learning capability real. When that build starts, the cheapest integration
 seam on the lingua side is `services/tenants.py:record_subscription` (the
 payment-adapter hook) and `services/license.py:set_license` (the

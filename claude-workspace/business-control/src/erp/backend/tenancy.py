@@ -213,7 +213,44 @@ def create(tid: str, hosts: list | None = None, default: bool = False,
     bust_cache()
     if INIT:
         INIT(tid)
+        _name_the_shop(tid, brand or tid.title())
     return d
+
+
+def _name_the_shop(tid: str, brand: str) -> None:
+    """Put the business's name on its storefront, not just its ops app.
+
+    Standing a client up used to brand the back office and leave the shop
+    saying "your brand" — the first thing their own customers would see,
+    and the first thing the client would ask about. Only the name is set;
+    colours, typefaces and copy stay the neutral default, because those are
+    a decision and this is a fact.
+    """
+    from . import db
+    tok = CURRENT.set(tid)
+    try:
+        con = db.connect()
+        try:
+            row = con.execute("SELECT v FROM store_meta WHERE k='theme'"
+                              ).fetchone()
+            theme = json.loads(row["v"]) if row else {}
+            if theme.get("brand"):
+                return                       # already named; leave it alone
+            low = brand.lower()
+            theme.update({
+                "brand": low,
+                "title": f"{brand} — online store",
+                "footer": f"© {brand} · powered by business-control"})
+            con.execute("INSERT OR REPLACE INTO store_meta(k,v)"
+                        " VALUES('theme',?)", (json.dumps(theme),))
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass          # a shop with a default name is not worth a failed
+                      # stand-up; the operator can set it in the editor
+    finally:
+        CURRENT.reset(tok)
 
 
 def set_status(tid: str, status: str) -> None:

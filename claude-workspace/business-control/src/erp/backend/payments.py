@@ -112,3 +112,87 @@ def session_paid(cfg: dict, session_id: str) -> bool:
     if r.status_code != 200:
         return False
     return r.json().get("payment_status") == "paid"
+
+
+# ---------- recurring: a plan that bills every month ----------
+# One-time checkout above sells a thing. This sells a commitment, and the
+# difference that matters is not the Stripe mode — it is that a price the
+# customer agreed to on a Tuesday has to still be the price in March. The
+# amount is sent per subscription rather than pinned to a Stripe Price
+# object, so raising the list price never silently raises anybody's bill.
+
+def create_subscription_checkout(cfg: dict, label: str, amount_cents: int,
+                                 ref: str, return_url: str,
+                                 interval: str = "month",
+                                 email: str = "") -> dict | None:
+    """Hosted checkout in subscription mode. Returns {id, url}, or None when
+    Stripe is not configured — the caller then falls back to invoicing,
+    which is a real answer and not an error."""
+    if not enabled(cfg) or amount_cents <= 0:
+        return None
+    if interval not in ("day", "week", "month", "year"):
+        raise ValueError(f"unsupported billing interval: {interval}")
+    sep = "&" if "?" in return_url else "?"
+    data = {
+        "mode": "subscription",
+        "success_url": f"{return_url}{sep}sid=" "{CHECKOUT_SESSION_ID}",
+        "cancel_url": f"{return_url}{sep}cancelled=1",
+        "client_reference_id": ref,
+        "line_items[0][quantity]": "1",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]": str(amount_cents),
+        "line_items[0][price_data][recurring][interval]": interval,
+        "line_items[0][price_data][product_data][name]": label[:120],
+    }
+    if email:
+        data["customer_email"] = email[:200]
+    r = httpx.post(f"{API}/checkout/sessions", data=data,
+                   auth=(cfg["stripe_secret_key"], ""), timeout=20)
+    r.raise_for_status()
+    d = r.json()
+    return {"id": d["id"], "url": d["url"]}
+
+
+def session_subscription(cfg: dict, session_id: str) -> dict | None:
+    """What a returning subscriber's session actually became. Read from
+    Stripe rather than trusted from the redirect — the return URL is a thing
+    anybody can type."""
+    if not enabled(cfg) or not session_id:
+        return None
+    r = httpx.get(f"{API}/checkout/sessions/{session_id}",
+                  auth=(cfg["stripe_secret_key"], ""), timeout=20)
+    if r.status_code != 200:
+        return None
+    d = r.json()
+    sub = d.get("subscription")
+    if not sub:
+        return None
+    return {"subscription": sub,
+            "paid": d.get("payment_status") in ("paid", "no_payment_required"),
+            "customer": d.get("customer") or ""}
+
+
+def cancel_subscription(cfg: dict, sub_id: str,
+                        at_period_end: bool = True) -> bool:
+    """Stop the billing. At period end by default: they paid for this month,
+    so they keep this month."""
+    if not enabled(cfg) or not sub_id:
+        return False
+    if at_period_end:
+        r = httpx.post(f"{API}/subscriptions/{sub_id}",
+                       data={"cancel_at_period_end": "true"},
+                       auth=(cfg["stripe_secret_key"], ""), timeout=20)
+    else:
+        r = httpx.delete(f"{API}/subscriptions/{sub_id}",
+                         auth=(cfg["stripe_secret_key"], ""), timeout=20)
+    return r.status_code == 200
+
+
+def resume_subscription(cfg: dict, sub_id: str) -> bool:
+    """Undo a cancel-at-period-end, while the period is still running."""
+    if not enabled(cfg) or not sub_id:
+        return False
+    r = httpx.post(f"{API}/subscriptions/{sub_id}",
+                   data={"cancel_at_period_end": "false"},
+                   auth=(cfg["stripe_secret_key"], ""), timeout=20)
+    return r.status_code == 200

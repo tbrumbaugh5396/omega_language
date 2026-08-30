@@ -5418,6 +5418,148 @@ ok("family=Quicksand" in c.get("/", headers=HB).text,
    "while a tenant that never chose one still gets the shipped wordmark "
    "face, so nobody's header changed because this became configurable")
 
+
+# --- plans: the subscriptions that bill money rather than ship a box ------
+# store_subscriptions carries two kinds. A box is curated and shipped on a
+# cycle and its verbs are skip and unskip; a plan is money on a clock. They
+# share a table because they share an owner, a product and a place to be
+# managed — `interval` is what tells them apart, and every place the
+# difference matters has to ask.
+from erp.backend import payments as _pay
+
+_cust = c.post("/api/login", headers=HA,
+               json={"name": "Plan Buyer", "role": "customer",
+                     "email": "buyer@plan.test"}).json()
+CU = {"Authorization": f"Bearer {_cust['token']}", **HA}
+_pcat = {p["name"]: p for p in
+         c.get("/api/store/catalog", headers=HA).json()["products"]}
+ok(_pcat["Pro plan"]["billing"] == "month"
+   and _pcat["Guided setup"]["billing"] == "",
+   "the catalog says which products bill every month, so the card can show "
+   "a period and a different button instead of 'Add'")
+
+_st = c.post("/api/store/plans/subscribe", headers=CU,
+             json={"product_id": _pcat["Pro plan"]["id"]}).json()
+ok(_st["ok"] and _st.get("invoiced"),
+   "with no card rail configured a plan still starts, and says plainly "
+   "that it is invoiced — that is how most of these are sold, not an "
+   "error state")
+_mine = c.get("/api/store/account/subscriptions", headers=CU).json()
+_row = _mine["subscriptions"][0]
+ok(_row["plan"] and _row["price_cents"] == 34900,
+   "the price is LOCKED on the row at signup — the price book says "
+   "grandfather existing clients, and a column is the only way that "
+   "survives a repricing")
+ok(c.post("/api/store/plans/subscribe", headers=CU,
+          json={"product_id": _pcat["Pro plan"]["id"]}).status_code == 409,
+   "and you cannot start the same plan twice")
+ok(c.post("/api/store/plans/subscribe", headers=CU,
+          json={"product_id": _pcat["Guided setup"]["id"]}).status_code
+   == 400,
+   "nor subscribe to something sold once")
+ok(c.post("/api/store/plans/subscribe",
+          json={"product_id": _pcat["Pro plan"]["id"]},
+          headers=HA).status_code == 401,
+   "a plan is billed to somebody, so it needs a signed-in somebody")
+
+_sid = _row["id"]
+ok(c.post(f"/api/store/account/subscriptions/{_sid}/action", headers=CU,
+          json={"action": "skip"}).status_code == 400,
+   "skip is a box verb — a plan has no shipment to move, and offering it "
+   "would let someone think they had skipped a month they are still being "
+   "billed for")
+ok(c.post(f"/api/store/account/subscriptions/{_sid}/action", headers=CU,
+          json={"action": "pause"}).json()["status"] == "paused",
+   "pause and resume are the plan's verbs")
+
+_ord = c.post("/api/orders", headers=CU, json={
+    "items": [{"product_id": _pcat["Pro plan"]["id"], "qty": 1}],
+    "ship_name": "A", "address": "B", "city": "C", "postal": "1",
+    "phone": "2"})
+ok(_ord.status_code == 400 and "every month" in _ord.json()["detail"],
+   "and the one-off cart refuses a plan outright — charging a monthly "
+   "commitment once is the kind of wrong that reaches a bank statement")
+ok(c.post("/api/orders", headers=CU, json={
+    "items": [{"product_id": _pcat["Guided setup"]["id"], "qty": 1}],
+    "ship_name": "A", "address": "B", "city": "C", "postal": "1",
+    "phone": "2"}).status_code == 200,
+   "while what is sold once still goes through it")
+
+# the Stripe request itself — the part no local run would ever exercise
+_calls = []
+
+
+class _FakeResp:
+    status_code = 200
+
+    def json(self):
+        return {"id": "cs_test_1", "url": "https://stripe.test/pay",
+                "subscription": "sub_test_1", "payment_status": "paid"}
+
+    def raise_for_status(self):
+        pass
+
+
+def _fake_post(url, data=None, auth=None, timeout=None):
+    _calls.append((url, dict(data or {})))
+    return _FakeResp()
+
+
+_realpost, _realget = _pay.httpx.post, _pay.httpx.get
+_pay.httpx.post = _fake_post
+_pay.httpx.get = lambda url, auth=None, timeout=None: _FakeResp()
+try:
+    _sess = _pay.create_subscription_checkout(
+        {"stripe_secret_key": "sk_test"}, "Pro plan", 34900, "sub:1",
+        "https://x.test/?subscribed=1")
+    _url, _d = _calls[-1]
+    ok(_d["mode"] == "subscription"
+       and _d["line_items[0][price_data][recurring][interval]"] == "month"
+       and _d["line_items[0][price_data][unit_amount]"] == "34900",
+       "the hosted checkout is opened in SUBSCRIPTION mode with a recurring "
+       "monthly price — one-time mode would take a month's money and then "
+       "never ask again")
+    ok("{CHECKOUT_SESSION_ID}" in _d["success_url"]
+       and "?subscribed=1&sid=" in _d["success_url"],
+       "and the return carries the session, because the subscription id is "
+       "read back FROM Stripe — a return URL is a thing anybody can type")
+    ok(_pay.session_subscription({"stripe_secret_key": "sk"}, "cs_1")
+       == {"subscription": "sub_test_1", "paid": True, "customer": ""},
+       "reading a finished session gives the subscription to record")
+    ok(_pay.cancel_subscription({"stripe_secret_key": "sk"}, "sub_1")
+       and _calls[-1][1] == {"cancel_at_period_end": "true"},
+       "and cancelling cancels AT PERIOD END — they paid for this month, so "
+       "they keep this month")
+    _bad = None
+    try:
+        _pay.create_subscription_checkout({"stripe_secret_key": "sk"}, "x",
+                                          100, "r", "u", interval="fortnight")
+    except ValueError as e:
+        _bad = str(e)
+    ok(_bad and "fortnight" in _bad,
+       "an interval Stripe does not have fails here rather than at their "
+       "API with a stranger's error message")
+finally:
+    _pay.httpx.post, _pay.httpx.get = _realpost, _realget
+
+ok(_pay.create_subscription_checkout({}, "x", 100, "r", "u") is None
+   and _pay.cancel_subscription({}, "sub_1") is False,
+   "with no key configured the card rail is simply absent — the invoice "
+   "path is the fallback, and nothing pretends otherwise")
+
+_ap = c.get("/api/store/admin/plans", headers=AA).json()
+ok(_ap["plans"] and _ap["plans"][0]["plan"] == "Pro plan"
+   and _ap["active"] == 0 and not _ap["card_enabled"],
+   "the seller can see who is on what — paused counts as not active, and "
+   "the card rail's absence is stated rather than implied")
+ok(c.get("/api/store/admin/plans").status_code in (401, 403),
+   "and who is paying what is not public")
+ok('data-plan="' in _storejs and "startPlan" in _storejs
+   and 'class="per"' in _storejs
+   and "confirmPlanReturn()" in _storejs,
+   "and on the shop itself a plan shows its period on the price, starts "
+   "instead of adding, and confirms on the way back from checkout")
+
 # --- the fleet: nodes, placement, and the empty-node reap -----------------
 # Capacity is units, not tenants. The two rules that keep the bill honest:
 # a client goes onto a node with room, and a node nobody is left on is
@@ -5448,6 +5590,10 @@ ok((_tn.tenant_dir("gamma") / "business_control.db").exists()
    and c.get("/api/products",
              headers={"host": "gamma.localhost"}).status_code == 200,
    "with its own database, answering on its own hostname, immediately")
+ok("Gamma" in c.get("/", headers={"host": "gamma.localhost"}).text,
+   "and their NAME on both faces — standing a client up used to brand the "
+   "back office and leave the shop saying 'your brand', which is the first "
+   "thing their own customers would have seen")
 
 _fb = c.get("/api/store/admin/fleet", headers=AA).json()
 _na = next(n for n in _fb["nodes"] if n["id"] == "node-a")

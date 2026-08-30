@@ -362,6 +362,7 @@ def products() -> list:
         lead = ("Everything in the plan below, plus " if t["adds"] else "")
         out.append({
             "sku": f"PLAN-{t['name'].upper()}", "name": f"{t['name']} plan",
+            "billing": "month",
             "category": "Plans", "price_cents": t["price"] * 100,
             "colour": TIER_COLOUR[t["name"]],
             "description":
@@ -373,6 +374,7 @@ def products() -> list:
     for c in pb.care_plans():
         out.append({
             "sku": f"CARE-{c['name'].upper()}", "name": f"{c['name']} care",
+            "billing": "month",
             "category": "Care", "price_cents": c["price"] * 100,
             "colour": CARE_COLOUR[c["name"]],
             "description":
@@ -563,6 +565,12 @@ def seed(con, force: bool) -> dict:
         con.execute("INSERT OR REPLACE INTO store_product_meta"
                     "(product_id,k,v) VALUES(?,'featured',?)",
                     (pid, "1" if p["sku"] == "PLAN-PRO" else "0"))
+        # Plans and care bill every month; guided setup is bought once.
+        # The flag is what makes the card say "Start" instead of "Add",
+        # keeps it out of the one-off cart, and picks the checkout mode.
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,'billing',?)",
+                    (pid, p.get("billing", "")))
         n["products"] += 1
 
     for slug, secs in (("home", home_sections()),

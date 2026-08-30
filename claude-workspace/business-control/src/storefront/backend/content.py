@@ -71,6 +71,9 @@ UI_KEYS = {
     # The first-visit offer's headline. It was "Take 10% off your first
     # calm." — in the shell, for every tenant.
     "offer_title": "Take 10% off your first order.",
+    # A plan's button. "Add" is wrong for something that bills every month.
+    "start_plan": "Start", "plans_heading": "Your plans",
+    "no_plans": "Nothing running yet.",
 }
 
 CURRENCY_DEFAULT = [

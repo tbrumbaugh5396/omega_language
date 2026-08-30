@@ -4675,11 +4675,11 @@ const ROLES = ["customer", "distributor", "influencer", "employee", "owner"];
 
 async function renderAdmin() {
   const [products, stores, employees, users, emailCfg, emailLog, cyclesList,
-         pay] = await Promise.all([
+         pay, plans] = await Promise.all([
       api("/api/products"), api("/api/stores"), api("/api/admin/employees"),
       api("/api/admin/users"), api("/api/admin/email/config"),
       api("/api/admin/email/log"), api("/api/cycles"),
-      api("/api/admin/payments")]);
+      api("/api/admin/payments"), api("/api/store/admin/plans")]);
   view().innerHTML = `
     <h2>Admin</h2>
 
@@ -4835,6 +4835,37 @@ async function renderAdmin() {
       </div>
     </div>
     </div></details>
+    <details class="sect" ${plans.plans.length ? "open" : ""}>
+    <summary>Plans — who is on what
+      ${plans.active ? `<span class="pill ok">${plans.active} active ·
+        ${money(plans.mrr_cents)}/mo</span>` : ""}
+      ${plans.invoiced ? `<span class="pill warn">${plans.invoiced}
+        invoiced by hand</span>` : ""}</summary><div class="inner">
+      ${plans.plans.length ? `<div class="tablewrap"><table class="tbl">
+        <thead><tr><th>Customer</th><th>Plan</th><th>Price</th>
+          <th>Status</th><th>Billing</th><th>Started</th></tr></thead>
+        <tbody>${plans.plans.map((r) => `<tr>
+          <td>${esc(r.who)}<div class="dim">${esc(r.email || "")}</div></td>
+          <td>${esc(r.plan)}</td>
+          <td>${money(r.price_cents * r.qty)}/${esc(r.interval)}</td>
+          <td>${r.status === "active" ? '<span class="pill ok">active</span>'
+            : `<span class="pill">${esc(r.status)}</span>`}</td>
+          <td>${r.payment_ref ? '<span class="pill ok">card</span>'
+            : '<span class="pill warn">invoice</span>'}</td>
+          <td>${new Date(r.created_at * 1000).toLocaleDateString()}</td>
+        </tr>`).join("")}</tbody></table></div>` : `<div class="dim">Nobody is
+          on a plan yet. A product becomes one by setting its
+          <code>billing</code> to <code>month</code> in the store admin.</div>`}
+      <div class="dim" style="font-size:12px;margin-top:6px">The monthly
+        figure is what each subscriber <b>agreed to</b>, not today's list
+        price — the two part company the moment anyone is grandfathered, and
+        this is the one that will actually arrive.
+        ${plans.card_enabled ? "Cancelling here stops the charge at the "
+          + "processor too." : "Card payments are off, so these are billed "
+          + "by hand — turn Stripe on above and new plans check out on a "
+          + "hosted page."}</div>
+    </div></details>
+
     <details class="sect" ${cyclesList.length ? "open" : ""}>
     <summary>Box cycles (cutoff orchestration)</summary><div class="inner">
       <form class="inline" id="cyc-form">

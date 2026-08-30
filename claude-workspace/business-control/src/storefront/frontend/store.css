@@ -111,6 +111,11 @@ svg.can { display: block; width: 100%; height: auto; }
   font-size: clamp(17px, 4.6vw, 25px); white-space: nowrap;
   color: var(--purple); letter-spacing: -0.03em; }
 .brand-dot { color: var(--orange); }
+/* "$199/mo" — the period belongs to the price, quietly. Without it a plan
+   reads as a one-off, which is the single most expensive misreading a
+   storefront can invite. */
+.price .per { font-size: .68em; font-weight: 500; opacity: .62;
+  margin-left: 1px; }
 .top-links { display: flex; gap: 24px; font-weight: 500; font-size: 14.5px;
   margin-left: 14px; }
 .top-links a { padding: 4px 0; border-bottom: 1.5px solid transparent; }

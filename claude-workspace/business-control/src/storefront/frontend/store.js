@@ -399,9 +399,12 @@ function drawGrid() {
           <b>${pname(feature)}</b></a>
         <span class="note">${feature.note || pdesc(feature)}</span>
         <div class="price-row">
-          <span class="price">${money(feature.price_cents)}</span>
-          <button class="add-btn" data-add="${feature.id}">
-            ${t("add_to_cart", "Add")}</button>
+          <span class="price">${priceOf(feature)}</span>
+          ${isPlan(feature)
+            ? `<button class="add-btn" data-plan="${feature.id}">
+                 ${t("start_plan", "Start")}</button>`
+            : `<button class="add-btn" data-add="${feature.id}">
+                 ${t("add_to_cart", "Add")}</button>`}
         </div>
       </div>
     </div>`;
@@ -430,9 +433,12 @@ function drawGrid() {
             ${v.name} — ${money(v.price_cents)}${v.stock <= 0 ? " · sold out" : ""}
           </option>`).join("")}</select>` : ""}
         <div class="price-row">
-          <span class="price" data-price-for="${p.id}">
-            ${money(p.variants.length ? p.variants[0].price_cents : p.price_cents)}</span>
-          <button class="add-btn" data-add="${p.id}">${t("add_to_cart", "Add")}</button>
+          <span class="price" data-price-for="${p.id}">${priceOf(p)}</span>
+          ${isPlan(p)
+            ? `<button class="add-btn" data-plan="${p.id}">
+                 ${t("start_plan", "Start")}</button>`
+            : `<button class="add-btn" data-add="${p.id}">
+                 ${t("add_to_cart", "Add")}</button>`}
         </div>
       </div>
     </div>`).join("") || (featureHtml ? "" :
@@ -448,6 +454,8 @@ function drawGrid() {
         `[data-varsel="${b.dataset.add}"]`);
       addToCart(+b.dataset.add, sel ? +sel.value : 0);
     });
+  document.querySelectorAll("[data-plan]").forEach((b) =>
+    b.onclick = () => startPlan(+b.dataset.plan));
   document.querySelectorAll("[data-rev]").forEach((b) =>
     b.onclick = () => openReviews(+b.dataset.rev));
 }
@@ -1160,24 +1168,39 @@ async function drawAccount() {
       every order.</span>
       <a class="btn-pill ghost sm" href="/affiliates">Join the program</a>
     </div>`;
-  const cutoffNote = subs.changes_open ? "" :
+  const rows = subs.subscriptions || [];
+  const boxes = rows.filter((s) => !s.plan);
+  const plans = rows.filter((s) => s.plan);
+  // Skip is a box verb. A plan has no shipment to move, so it is not
+  // offered one — and the cutoff note only applies where a cycle exists.
+  const cutoffNote = (subs.changes_open || !boxes.length) ? "" :
     `<p class="dim">⏳ Box changes are closed for this cycle (curation is
      locked) — skip reopens after shipping.</p>`;
-  openModal(`<h3>My account</h3>
-    <h3 style="font-size:15px;margin-top:6px">Monthly boxes</h3>
-    ${cutoffNote}
-    ${(subs.subscriptions || []).map((s) => `
-      <div class="ship-opt"><b>${s.name} × ${s.qty}</b>
+  const subRow = (s, verbs) => `
+      <div class="ship-opt"><b>${s.name}${s.qty > 1 ? ` × ${s.qty}` : ""}</b>
        <span class="dim">${money(s.price_cents * s.qty)}/mo · ${s.status}</span>
-       ${s.status === "active" ? `
-         <button class="btn-pill ghost sm" data-sub="${s.id}:skip">skip next</button>
-         <button class="btn-pill ghost sm" data-sub="${s.id}:pause">pause</button>`
-       : s.status === "skipped_next" ? `
-         <button class="btn-pill ghost sm" data-sub="${s.id}:unskip">unskip</button>`
-       : `<button class="btn-pill ghost sm" data-sub="${s.id}:resume">resume</button>`}
+       ${verbs}
        <button class="btn-pill ghost sm" data-sub="${s.id}:cancel">cancel</button>
-      </div>`).join("") ||
-      '<p class="dim">No boxes yet — choose a monthly box at checkout.</p>'}
+      </div>`;
+  openModal(`<h3>My account</h3>
+    ${plans.length ? `
+      <h3 style="font-size:15px;margin-top:6px">${t("plans_heading")}</h3>
+      ${plans.map((s) => subRow(s, s.status === "active"
+        ? `<button class="btn-pill ghost sm" data-sub="${s.id}:pause">pause</button>`
+        : `<button class="btn-pill ghost sm" data-sub="${s.id}:resume">resume</button>`
+      )).join("")}` : ""}
+    ${boxes.length || !plans.length ? `
+      <h3 style="font-size:15px;margin-top:${plans.length ? 14 : 6}px">Monthly
+        boxes</h3>
+      ${cutoffNote}
+      ${boxes.map((s) => subRow(s, s.status === "active"
+        ? `<button class="btn-pill ghost sm" data-sub="${s.id}:skip">skip next</button>
+           <button class="btn-pill ghost sm" data-sub="${s.id}:pause">pause</button>`
+        : s.status === "skipped_next"
+        ? `<button class="btn-pill ghost sm" data-sub="${s.id}:unskip">unskip</button>`
+        : `<button class="btn-pill ghost sm" data-sub="${s.id}:resume">resume</button>`
+      )).join("") ||
+        `<p class="dim">${t("no_plans")}</p>`}` : ""}
     <h3 style="font-size:15px;margin-top:14px">Orders</h3>
     ${(orders || []).map((o) => `
       <div class="ship-opt"><b>#${o.id}</b>
@@ -1205,6 +1228,51 @@ async function drawAccount() {
 }
 
 $("#account-btn").onclick = openAccount;
+
+/* ---------- plans: the products that bill every month ----------
+   A plan is not a thing you add to a cart. It shows its price with the
+   period attached, its button starts a subscription, and it needs a signed-in
+   customer because somebody has to be the one being billed. */
+const isPlan = (p) => !!p.billing;
+const planPrice = (p) => `${money(p.price_cents)}<small
+  class="per">/${p.billing === "month" ? "mo" : p.billing}</small>`;
+const priceOf = (p) => isPlan(p) ? planPrice(p)
+  : money(p.variants.length ? p.variants[0].price_cents : p.price_cents);
+
+async function startPlan(pid) {
+  const p = CATALOG.products.find((x) => x.id === pid);
+  signIn(`Starting ${p ? pname(p) : "a plan"} — a plan is billed to
+    somebody, so we need to know who.`, async () => {
+    const r = await fetch("/api/store/plans/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json",
+                 Authorization: "Bearer " + acctToken() },
+      body: JSON.stringify({ product_id: pid }) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(out.detail || "couldn't start that plan"); return; }
+    if (out.checkout_url) { location.href = out.checkout_url; return; }
+    closeModal();
+    toast(out.message || "Your plan is set up.");
+  });
+}
+
+/* Back from the hosted checkout. The subscription id comes from Stripe when
+   the server asks it, never from this query string — which is why the only
+   thing carried here is which row to go and check. */
+async function confirmPlanReturn() {
+  const q = new URLSearchParams(location.search);
+  const sid = q.get("subscribed");
+  if (!sid || !acctToken()) return;
+  const r = await fetch(`/api/store/plans/${+sid}/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json",
+               Authorization: "Bearer " + acctToken() },
+    body: JSON.stringify({ session_id: q.get("sid") || "" }) });
+  const out = await r.json().catch(() => ({}));
+  toast(out.ok ? "You're on. The plan starts today."
+    : (out.detail || "The payment did not complete."));
+  history.replaceState({}, "", location.pathname);
+}
 
 // ---------- live support chat (rides the ERP Comms module) ----------
 let SUPPORT = { token: "", conv: null, ws: null, lastId: 0, me: null };
@@ -2484,5 +2552,6 @@ saveCart();
 loadCatalog().then(() => {
   loadPromos();
   confirmPaidReturn();
+  confirmPlanReturn();
   if (qs.get("cart")) { drawCart(); openCart(); }  // back from product page
 });

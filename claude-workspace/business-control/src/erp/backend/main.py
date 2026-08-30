@@ -637,6 +637,7 @@ def place_order(body: OrderBody, authorization: str = Header(default=""),
     # confirmation link for an order that can never be placed wastes their
     # time and hides the real problem behind a click.
     _check_order_shape(order_kind(user, as_guest), body)
+    _refuse_plans(con, body)
     cod = (body.pay_method or "").lower() != "card"
     if cod and user["role"] != "distributor" and not user["email_verified_at"]:
         # Nothing is charged and nothing is proven at this point, so there
@@ -655,6 +656,25 @@ def place_order(body: OrderBody, authorization: str = Header(default=""),
                                (user["id"],)).fetchone()
         return hold_for_confirmation(con, user, body)
     return _place(con, user, body, as_guest)
+
+
+def _refuse_plans(con, body) -> None:
+    """A plan is a commitment on a clock; this route charges once.
+
+    The check sits ahead of the confirm/place fork so both paths cross it —
+    letting one through would take a month's money and then never again, or
+    a year's as a single payment. Both are the kind of wrong that reaches a
+    bank statement.
+    """
+    for it in body.items:
+        row = con.execute(
+            "SELECT p.name FROM products p JOIN store_product_meta m"
+            " ON m.product_id=p.id AND m.k='billing' AND m.v!=''"
+            " WHERE p.id=?", (it.product_id,)).fetchone()
+        if row:
+            raise HTTPException(
+                400, f"{row['name']} bills every month — it is started from "
+                     f"its own page, not bought in the cart")
 
 
 CONFIRM_TTL = 3 * 86400

@@ -38,6 +38,41 @@ table.
 Without `--force` it refuses once the shop has products, so it cannot
 overwrite copy an operator has edited by hand.
 
+## Plans bill every month
+
+`store_subscriptions` now carries two kinds of row, and `interval` is what
+tells them apart:
+
+- **A box** (`interval = ''`) is a physical thing, curated and shipped on a
+  cycle. Its verbs are skip and unskip, and they race the curation cutoff.
+- **A plan** (`interval = 'month'`) is money on a clock. No cycle, no
+  shipping; pause, resume and cancel.
+
+A product becomes a plan by setting `store_product_meta.billing` to
+`month`. Everything else follows from that one flag: the card shows
+`$349/mo` and a **Start** button instead of Add, the one-off cart refuses
+it outright, and checkout opens in Stripe's **subscription** mode with a
+recurring price.
+
+Three things worth stating plainly, because each is a way this rail can go
+quietly wrong:
+
+- **The price is locked on the row at signup.** The price book says
+  grandfather existing clients; a column is the only way that survives a
+  repricing. The account panel and the MRR figure both read the agreed
+  price, never today's list price.
+- **Cancelling cancels at the processor.** A status column saying
+  "cancelled" while Stripe keeps charging is the worst bug this rail can
+  have, so if Stripe refuses, nothing changes here either and the two still
+  agree. Cancellation is at period end — they paid for this month.
+- **The subscription id is read back from Stripe**, never taken from the
+  return URL, which is a thing anybody can type.
+
+**With no Stripe key configured the plan still starts**, marked `invoice`,
+and says so. That is how most of these are actually sold and it is not an
+error state. Ops → Admin → *Plans — who is on what* lists everyone, the
+MRR, and how many are being billed by hand.
+
 ## What left the codebase to get here
 
 The studio storefront looked like a drinks brand because a drinks brand's

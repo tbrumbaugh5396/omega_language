@@ -195,6 +195,16 @@ CREATE TABLE IF NOT EXISTS store_subscriptions (
 STORE_MIGRATIONS = (
     "ALTER TABLE product_reviews ADD COLUMN email TEXT DEFAULT ''",
     "ALTER TABLE product_reviews ADD COLUMN verified INTEGER DEFAULT 0",
+    # A subscription that bills money rather than shipping a box needs to
+    # remember four things a box never did. `price_cents` is the important
+    # one: it is what this subscriber agreed to, not what the product costs
+    # today — the price book says grandfather existing clients, and a
+    # column is the only way that survives a repricing.
+    "ALTER TABLE store_subscriptions ADD COLUMN interval TEXT DEFAULT ''",
+    "ALTER TABLE store_subscriptions ADD COLUMN price_cents INTEGER DEFAULT 0",
+    "ALTER TABLE store_subscriptions ADD COLUMN payment_ref TEXT DEFAULT ''",
+    "ALTER TABLE store_subscriptions ADD COLUMN payment_status TEXT"
+    " DEFAULT ''",
 )
 
 
@@ -856,6 +866,10 @@ def catalog(con=Depends(get_con)):
         # whatever happens to sort first, which for a shop selling plans
         # was the cheapest support plan in grey.
         p["featured"] = md.get("featured", "") == "1"
+        # '' = sold once, like a thing in a box. 'month' = a commitment,
+        # which is a different button, a different price line, and a
+        # different checkout.
+        p["billing"] = md.get("billing", "")
         p["note"] = md.get("note", "")
         p["ingredients"] = md.get("ingredients", "")
         p["badge"] = md.get("badge", "")
@@ -1132,6 +1146,110 @@ def account_orders(user=Depends(current_customer), con=Depends(get_con)):
     return orders
 
 
+# ---------- recurring plans: the second kind of subscription --------------
+# The rows above are a monthly BOX: a physical thing, curated and shipped on
+# a cycle, whose customer-facing verbs are skip and unskip. A plan is the
+# other kind — money on a clock, no cycle, no shipping — and the two share a
+# table because they share almost everything: one owner, one product, one
+# status, one place a customer manages them. `interval` is what tells them
+# apart, and every place the difference matters asks.
+
+class PlanStartBody(BaseModel):
+    product_id: int
+
+
+def _plan_price(con, pid: int) -> int:
+    row = con.execute("SELECT price_cents FROM products WHERE id=?",
+                      (pid,)).fetchone()
+    return row["price_cents"] if row else 0
+
+
+@router.post("/api/store/plans/subscribe")
+def plan_subscribe(body: PlanStartBody, request: Request,
+                   user=Depends(current_customer),
+                   con=Depends(get_con)):
+    """Start a recurring plan. Returns a hosted-checkout URL when card
+    payment is configured, and otherwise says plainly that it will be
+    invoiced — which is how most of these are actually sold, and not an
+    error state."""
+    from erp.backend import payments
+    from erp.backend.main import CFG, base_url
+    p = con.execute("SELECT * FROM products WHERE id=? AND active=1",
+                    (body.product_id,)).fetchone()
+    if p is None:
+        raise HTTPException(404, "no such product")
+    meta = product_meta(con, p["id"])
+    interval = meta.get("billing", "")
+    if interval != "month":
+        raise HTTPException(400, "this product is not sold as a plan")
+    if con.execute(
+            "SELECT 1 FROM store_subscriptions WHERE user_id=? AND"
+            " product_id=? AND status NOT IN ('cancelled','failed')",
+            (user["id"], p["id"])).fetchone():
+        raise HTTPException(409, f"you are already on {p['name']}")
+    price = p["price_cents"]
+    cur = con.execute(
+        "INSERT INTO store_subscriptions(user_id, product_id, qty, status,"
+        " interval, price_cents, payment_status, created_at)"
+        " VALUES(?,?,1,?,?,?,?,?)",
+        (user["id"], p["id"], "pending", interval, price,
+         "card" if payments.enabled(CFG) else "invoice", db.now()))
+    sid = cur.lastrowid
+    con.commit()
+    if not payments.enabled(CFG):
+        # No card rail configured: the plan stands, and somebody bills it.
+        con.execute("UPDATE store_subscriptions SET status='active'"
+                    " WHERE id=?", (sid,))
+        con.commit()
+        return {"ok": True, "id": sid, "invoiced": True,
+                "message": f"{p['name']} is set up — we invoice this one "
+                           f"monthly, and the first invoice comes by email."}
+    try:
+        sess = payments.create_subscription_checkout(
+            CFG, p["name"], price, f"sub:{sid}",
+            f"{base_url()}/?subscribed={sid}", interval,
+            email=(user["email"] or ""))
+    except Exception as e:                                   # noqa: BLE001
+        con.execute("UPDATE store_subscriptions SET status='failed'"
+                    " WHERE id=?", (sid,))
+        con.commit()
+        raise HTTPException(502, f"the card processor refused: {str(e)[:120]}")
+    con.execute("UPDATE store_subscriptions SET payment_ref=? WHERE id=?",
+                (sess["id"], sid))
+    con.commit()
+    return {"ok": True, "id": sid, "checkout_url": sess["url"]}
+
+
+class PlanConfirmBody(BaseModel):
+    session_id: str = ""
+
+
+@router.post("/api/store/plans/{sid}/confirm")
+def plan_confirm(sid: int, body: PlanConfirmBody,
+                      user=Depends(current_customer), con=Depends(get_con)):
+    """Called on the way back from checkout. The subscription id is read
+    FROM STRIPE, not from the redirect — the return URL is a thing anybody
+    can type, and a plan marked active because a query string said so is a
+    plan nobody is paying for."""
+    from erp.backend import payments
+    from erp.backend.main import CFG
+    row = con.execute("SELECT * FROM store_subscriptions WHERE id=? AND"
+                      " user_id=?", (sid, user["id"])).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such subscription")
+    if row["status"] == "active":
+        return {"ok": True, "status": "active"}
+    out = payments.session_subscription(CFG, body.session_id.strip())
+    if not out or not out["paid"]:
+        return {"ok": False, "status": row["status"],
+                "detail": "the payment has not completed"}
+    con.execute("UPDATE store_subscriptions SET status='active',"
+                " payment_ref=?, payment_status='paid' WHERE id=?",
+                (out["subscription"], sid))
+    con.commit()
+    return {"ok": True, "status": "active"}
+
+
 class SubItemsBody(BaseModel):
     items: list[dict]                      # [{product_id, variant_id, qty}]
 
@@ -1139,11 +1257,18 @@ class SubItemsBody(BaseModel):
 @router.get("/api/store/account/subscriptions")
 def account_subs(user=Depends(current_customer), con=Depends(get_con)):
     subs = [dict(s) for s in con.execute(
-        "SELECT s.*, p.name, p.price_cents FROM store_subscriptions s"
+        "SELECT s.*, p.name, p.price_cents,"
+        " s.price_cents AS price_cents_1 FROM store_subscriptions s"
         " JOIN products p ON p.id=s.product_id WHERE s.user_id=?"
         " AND s.status != 'cancelled' ORDER BY s.id DESC",
         (user["id"],)).fetchall()]
     for s in subs:
+        s["plan"] = (s["interval"] or "") != ""
+        if s["plan"] and s["price_cents_1"]:
+            # What they agreed to, not what it lists for today. A customer
+            # who signed up at $199 should not open this panel after a
+            # repricing and read $249 next to their own plan.
+            s["price_cents"] = s["price_cents_1"]
         if s["variant_id"]:
             v = con.execute("SELECT name, price_cents FROM product_variants"
                             " WHERE id=?", (s["variant_id"],)).fetchone()
@@ -1192,10 +1317,30 @@ def sub_action(sid: int, body: SubActionBody, user=Depends(current_customer),
                    "cancel": "cancelled"}
     if body.action not in transitions:
         raise HTTPException(400, "unknown action")
-    # Skip/unskip race the curation cutoff; pause/resume/cancel are always OK.
-    if body.action in ("skip", "unskip") and not changes_open:
+    plan = (s["interval"] or "") != ""
+    # Skip and unskip are box verbs — they move a shipment, and a plan has
+    # no shipment to move. Offering them on a plan would let someone think
+    # they had skipped a month they are still being billed for.
+    if plan and body.action in ("skip", "unskip"):
+        raise HTTPException(400, "a plan bills every month — pause or "
+                                 "cancel it, there is nothing to skip")
+    if not plan and body.action in ("skip", "unskip") and not changes_open:
         raise HTTPException(409, "changes are closed for this box cycle —"
                             " the next window opens after shipping")
+    # A plan that stops has to stop AT THE PROCESSOR. A status column
+    # saying "cancelled" while Stripe keeps charging is the single worst
+    # bug this rail can have.
+    if plan and s["payment_ref"] and body.action in ("cancel", "pause",
+                                                     "resume"):
+        from erp.backend import payments
+        from erp.backend.main import CFG
+        ok_at_stripe = (payments.resume_subscription(CFG, s["payment_ref"])
+                        if body.action == "resume" else
+                        payments.cancel_subscription(CFG, s["payment_ref"]))
+        if payments.enabled(CFG) and not ok_at_stripe:
+            raise HTTPException(
+                502, "the card processor did not accept that — nothing was "
+                     "changed here either, so the two still agree")
     con.execute("UPDATE store_subscriptions SET status=? WHERE id=?",
                 (transitions[body.action], sid))
     con.commit()
@@ -1819,6 +1964,37 @@ def theme_editor_page():
 class KeyBody(BaseModel):
     name: str
     scopes: list[str] = []
+
+
+@router.get("/api/store/admin/plans")
+def admin_plans(u=Depends(admin_user), con=Depends(get_con)):
+    """Who is on what, and what that is worth a month.
+
+    MRR counts the price each subscriber AGREED TO, not the current list
+    price — the two diverge the moment anybody is grandfathered, and the
+    number that matters is the one that will actually arrive.
+    """
+    rows = [dict(r) for r in con.execute(
+        "SELECT s.id, s.status, s.price_cents, s.qty, s.interval,"
+        " s.payment_status, s.payment_ref, s.created_at,"
+        " p.name AS plan, u.name AS who, u.email"
+        " FROM store_subscriptions s"
+        " JOIN products p ON p.id=s.product_id"
+        " JOIN users u ON u.id=s.user_id"
+        " WHERE s.interval != '' ORDER BY s.id DESC").fetchall()]
+    live = [r for r in rows if r["status"] == "active"]
+    return {"plans": rows,
+            "active": len(live),
+            "mrr_cents": sum(r["price_cents"] * r["qty"] for r in live),
+            "invoiced": sum(1 for r in live
+                            if r["payment_status"] == "invoice"),
+            "card_enabled": _card_on()}
+
+
+def _card_on() -> bool:
+    from erp.backend import payments
+    from erp.backend.main import CFG
+    return payments.enabled(CFG)
 
 
 @router.get("/api/store/admin/keys")
