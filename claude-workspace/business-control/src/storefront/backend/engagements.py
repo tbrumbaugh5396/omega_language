@@ -2283,6 +2283,203 @@ def export_zip(eid: int, side: str = "to_client", u=Depends(admin_user),
             f'attachment; filename="{e["slug"]}-{kind}.zip"'})
 
 
+# ---------- the fleet: nodes, and the tenants living on them ----------
+# Only the provider gets these. A client tenant asking about the fleet is
+# asking about other people's businesses, so the gate is the first line of
+# every handler rather than a rule written down somewhere.
+
+def _provider_only(request=None):
+    from erp.backend import tenancy
+    tid = tenancy.CURRENT.get()
+    prov = tenancy.provider()
+    if not prov:
+        raise HTTPException(400, "no provider tenant is declared — set "
+                                 "\"provider\" in data/tenants.json")
+    if tid != prov:
+        raise HTTPException(404, "not found")
+    return tid
+
+
+class NodeBody(BaseModel):
+    id: str = ""
+    size: str = "4gb"
+    region: str = ""
+    provider: str = ""
+    units: int = 25
+
+
+class TenantBody(BaseModel):
+    id: str = ""
+    brand: str = ""
+    hosts: list = []
+    node: str = ""             # "" = pick · "new" = spin one up
+    new_node: str = ""         # id for the node being spun up
+    node_size: str = "4gb"
+    node_region: str = ""
+    klass: str = "growing"
+    engagement_id: int = 0     # link the client record, if there is one
+
+
+class StatusBody(BaseModel):
+    status: str = "active"
+
+
+class MoveBody(BaseModel):
+    node: str = ""
+    klass: str = ""
+
+
+@router.get("/api/store/admin/fleet")
+def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
+    """The whole board: nodes, capacity, who lives where, recent history."""
+    _provider_only()
+    from erp.backend import fleet
+    clients = {}
+    for r in con.execute(
+            "SELECT id, name, slug, tenant_id, status FROM engagements"):
+        key = r["tenant_id"] or r["slug"]
+        clients[key] = {"engagement_id": r["id"], "name": r["name"],
+                        "status": r["status"]}
+    board = fleet.fleet()
+    for n in board:
+        for t in n["tenants"]:
+            t["client"] = clients.get(t["id"])
+    return {"nodes": board, "classes": fleet.CLASSES,
+            "events": fleet.events(20),
+            "unplaced": [dict(v, slug=k) for k, v in clients.items()
+                         if not any(t["id"] == k for n in board
+                                    for t in n["tenants"])
+                         and v["status"] != "archived"]}
+
+
+@router.post("/api/store/admin/fleet/nodes")
+def fleet_node_add(body: NodeBody, u=Depends(admin_user),
+                   con=Depends(get_con)):
+    _provider_only()
+    from erp.backend import fleet
+    try:
+        n = fleet.provision(body.id, size=body.size, region=body.region,
+                            provider=body.provider,
+                            units=body.units or fleet.DEFAULT_UNITS,
+                            actor=u["name"])
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "node": {**n, "id": body.id}}
+
+
+@router.delete("/api/store/admin/fleet/nodes/{node_id}")
+def fleet_node_destroy(node_id: str, u=Depends(admin_user),
+                       con=Depends(get_con)):
+    _provider_only()
+    from erp.backend import fleet
+    try:
+        fleet.destroy(node_id, actor=u["name"])
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@router.post("/api/store/admin/fleet/tenants")
+def fleet_tenant_add(body: TenantBody, request: Request,
+                     u=Depends(admin_user), con=Depends(get_con)):
+    """Stand a client up: a node to live on (existing or new), a tenant
+    with its own database and secrets, and the hostname it answers to."""
+    _provider_only()
+    from erp.backend import fleet, tenancy
+    tid = (body.id or "").strip().lower()
+    if not tid:
+        raise HTTPException(400, "a tenant id is required")
+    if tid in (tenancy.registry() or {}).get("tenants", {}):
+        raise HTTPException(400, f"'{tid}' already exists")
+    # A hostname needs a name in front of the dot. ".localhost" is a typo:
+    # dropped, not repaired — stripping the dot would hand this tenant
+    # "localhost" itself, which is somebody else's front door.
+    hosts = [h for h in (h.strip().lower() for h in body.hosts)
+             if h and h.split(".")[0]]
+    taken = {h.lower(): t for t, cfg in
+             (tenancy.registry() or {}).get("tenants", {}).items()
+             for h in cfg.get("hosts", [])}
+    for h in hosts:
+        if taken.get(h, tid) != tid:
+            raise HTTPException(400, f"'{h}' already answers for "
+                                     f"{taken[h]} — one name, one business")
+    klass = body.klass if body.klass in fleet.CLASSES else "growing"
+    units = fleet.units_of({"class": klass})
+    try:
+        if body.node == "new":
+            nid = (body.new_node or f"node-{tid}").strip()
+            fleet.provision(nid, size=body.node_size,
+                            region=body.node_region, actor=u["name"])
+        else:
+            nid = fleet.pick_node(units, prefer=body.node)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    tenancy.create(tid, hosts=hosts or [f"{tid}.localhost"], node=nid,
+                   klass=klass, brand=body.brand or tid.title())
+    fleet.log("tenant created", f"{tid} on {nid} ({klass})", u["name"])
+    if body.engagement_id:
+        con.execute("UPDATE engagements SET tenant_id=? WHERE id=?",
+                    (tid, body.engagement_id))
+        log(con, body.engagement_id, u["name"],
+            f"stood up as tenant '{tid}' on node {nid}")
+        con.commit()
+    return {"ok": True, "tenant": tid, "node": nid}
+
+
+@router.post("/api/store/admin/fleet/tenants/{tid}/status")
+def fleet_tenant_status(tid: str, body: StatusBody, u=Depends(admin_user),
+                        con=Depends(get_con)):
+    """Shut a client down without losing a byte, or wake it back up."""
+    _provider_only()
+    from erp.backend import fleet, tenancy
+    if tid == tenancy.provider():
+        raise HTTPException(400, "the provider cannot suspend itself")
+    try:
+        tenancy.set_status(tid, body.status)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    fleet.log(f"tenant {body.status}", tid, u["name"])
+    return {"ok": True, "status": body.status}
+
+
+@router.post("/api/store/admin/fleet/tenants/{tid}/move")
+def fleet_tenant_move(tid: str, body: MoveBody, u=Depends(admin_user),
+                      con=Depends(get_con)):
+    """Move a tenant to another node — and reap whatever it left empty."""
+    _provider_only()
+    from erp.backend import fleet, tenancy
+    reg = tenancy.registry() or {}
+    t = (reg.get("tenants") or {}).get(tid)
+    if t is None:
+        raise HTTPException(404, "no such tenant")
+    klass = body.klass or t.get("class") or "growing"
+    units = fleet.units_of({"class": klass})
+    try:
+        nid = (fleet.pick_node(units, prefer=body.node) if body.node != "new"
+               else fleet.provision(f"node-{tid}", actor=u["name"]) and
+               f"node-{tid}")
+        fleet.place(tid, nid, klass=klass, actor=u["name"])
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "node": nid}
+
+
+@router.delete("/api/store/admin/fleet/tenants/{tid}")
+def fleet_tenant_remove(tid: str, keep_data: int = 1,
+                        u=Depends(admin_user), con=Depends(get_con)):
+    """Remove a client from the fleet. Their directory is retired rather
+    than deleted unless asked otherwise, and any node they were the last
+    one on is destroyed with them."""
+    _provider_only()
+    from erp.backend import tenancy
+    try:
+        out = tenancy.destroy(tid, keep_data=bool(keep_data),
+                              actor=u["name"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, **out}
+
+
 # ---------- the client's window into the provider's pipeline ----------
 # When a client RUNS ON this platform (zenjoy is a tenant here, and also a
 # client of the studio's), their own ops app should show the paperwork the

@@ -50,6 +50,13 @@ def registry() -> dict | None:
         return _reg_cache["data"]
 
 
+def bust_cache() -> None:
+    """Force the next registry() to re-read. Writers call this because a
+    same-second write can land inside one mtime tick."""
+    with _reg_lock:
+        _reg_cache["mtime"] = None
+
+
 def active() -> bool:
     return registry() is not None
 
@@ -99,6 +106,12 @@ class UnknownHost(Exception):
     """
 
 
+class Suspended(Exception):
+    """The hostname is claimed, but the tenant is shut down. A different
+    answer from UnknownHost on purpose: their data is still here, and
+    saying "no such site" to a paused customer is a lie."""
+
+
 def resolve(host: str):
     """Host header -> tenant id, or None when tenancy is off.
 
@@ -111,14 +124,20 @@ def resolve(host: str):
     if reg is None:
         return None
     name = (host or "").split(":", 1)[0].lower().strip()
+
+    def _live(tid):
+        if (reg["tenants"][tid].get("status") or "active") == "suspended":
+            raise Suspended(tid)
+        return tid
+
     for tid, t in reg.get("tenants", {}).items():
         if name in [h.lower() for h in t.get("hosts", [])]:
-            return tid
+            return _live(tid)
     for suffix in (".localhost", ".local"):
         if name.endswith(suffix):
             tid = name[: -len(suffix)]
             if tid in reg.get("tenants", {}):
-                return tid
+                return _live(tid)
             raise UnknownHost(name)
     default = reg.get("default")
     if default in reg.get("tenants", {}):
@@ -126,7 +145,7 @@ def resolve(host: str):
         # machine's own address is the default tenant's front door.
         if (name in ("localhost", "testserver", "") or
                 name.replace(".", "").isdigit()):
-            return default
+            return _live(default)
     raise UnknownHost(name)
 
 
@@ -164,9 +183,10 @@ def with_tenant(tid, fn):
 INIT = None
 
 
-def create(tid: str, hosts: list | None = None, default: bool = False):
+def create(tid: str, hosts: list | None = None, default: bool = False,
+           node: str = "", klass: str = "growing", brand: str = ""):
     """Mint a tenant: directory, config with its own secrets, registry row,
-    schema. Idempotent on the directory, loud on a registry clash."""
+    a node to live on, schema. Idempotent on the directory."""
     if not tid.replace("-", "").replace("_", "").isalnum():
         raise ValueError("tenant id: letters, digits, - and _ only")
     reg = registry() or {"default": tid if default else None, "tenants": {}}
@@ -177,16 +197,65 @@ def create(tid: str, hosts: list | None = None, default: bool = False):
         have = set(reg["tenants"][tid].get("hosts", []))
         reg["tenants"][tid]["hosts"] = sorted(have | set(hosts))
     reg["tenants"][tid].setdefault("created", time.time())
+    reg["tenants"][tid].setdefault("status", "active")
+    reg["tenants"][tid]["class"] = klass
+    if node:
+        reg["tenants"][tid]["node"] = node
     d = tenant_dir(tid)
     d.mkdir(parents=True, exist_ok=True)
     cfg_path = d / "config.json"
     if not cfg_path.exists():
         cfg_path.write_text(json.dumps(
             {"admin_key": secrets.token_urlsafe(24),
-             "pin_pepper": secrets.token_urlsafe(32)}, indent=2))
+             "pin_pepper": secrets.token_urlsafe(32),
+             "brand_name": brand or tid.title()}, indent=2))
     REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
-    with _reg_lock:
-        _reg_cache["mtime"] = None
+    bust_cache()
     if INIT:
         INIT(tid)
     return d
+
+
+def set_status(tid: str, status: str) -> None:
+    """Shut a tenant down, or wake it up. Suspended keeps every byte and
+    stops answering — the reversible half of 'remove this client'."""
+    if status not in ("active", "suspended"):
+        raise ValueError("status is active or suspended")
+    reg = registry() or {}
+    t = (reg.get("tenants") or {}).get(tid)
+    if t is None:
+        raise ValueError(f"no tenant '{tid}'")
+    t["status"] = status
+    REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    bust_cache()
+
+
+def destroy(tid: str, keep_data: bool = True, actor: str = ""):
+    """Remove a tenant from the fleet.
+
+    keep_data moves the directory to data/retired/<tid>-<stamp> rather than
+    deleting it: a business that leaves still owns its records, and the
+    week after a cancellation is exactly when someone asks for an export.
+    """
+    reg = registry() or {}
+    if tid not in (reg.get("tenants") or {}):
+        raise ValueError(f"no tenant '{tid}'")
+    if tid == reg.get("provider"):
+        raise ValueError("the provider runs the platform — it cannot be "
+                         "removed from inside itself")
+    d = tenant_dir(tid)
+    kept = ""
+    if d.exists():
+        if keep_data:
+            import shutil
+            dest = (config.DATA_DIR / "retired"
+                    / f"{tid}-{time.strftime('%Y%m%d-%H%M%S')}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(d), str(dest))
+            kept = str(dest)
+        else:
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+    from . import fleet
+    reaped = fleet.release(tid, actor)
+    return {"kept": kept, "nodes_destroyed": reaped}

@@ -97,6 +97,60 @@ for exactly the width of the handler, and every query carries the same
 `side='to_client'` clause the portal lives by. An internal document is not
 withheld from the client tenant — it is unreachable.
 
+## The fleet: nodes, and who lives on which one
+
+`Platform` in the studio's ops app (provider tenants only — the tab does
+not exist elsewhere, and neither does its API). A **node** is a machine
+running this codebase; a **tenant** is a business whose data lives on
+exactly one node.
+
+Capacity is counted in **units**, not tenants — a corner shop and a
+fifty-location distributor are not the same load:
+
+| Class | Units | Fits |
+|---|---|---|
+| micro | 1 | 1 location · ≤5 seats |
+| growing | 4 | ≤3 locations · ≤20 seats |
+| large | 16 | ≤10 locations · ≤75 seats |
+| dedicated | the node | a node to itself |
+
+A 4 GB node carries **25 units**. Standing a client up asks where they go:
+an existing node with room, or a new node spun up in the same act. Left to
+choose, placement takes the *fullest* node that still fits — bin-packing,
+because the bill is per node, not per unit.
+
+**A node nobody is left on is destroyed.** Automatically, on the tenant's
+way out (removal or a move), and reported in the toast that confirms it.
+Paying for an empty VPS is the most common way a fleet's margin leaks, and
+the minute it empties is the only minute anyone would think to look. Two
+nodes are never auto-destroyed: `local` (this machine cannot be handed back
+from inside itself) and any node still carrying a tenant.
+
+Leaving has two settings. **Suspend** is reversible: the hostname answers
+**503**, not 404 — the site exists and is paused, and telling a paused
+customer "no such site" is a lie — and not one byte of their data is
+touched. **Remove** takes them off the fleet; their directory moves to
+`data/retired/<id>-<stamp>` unless the operator unticks it, because a
+business that leaves still owns its records and the week after a
+cancellation is exactly when someone asks for an export.
+
+Provisioning is a driver, configured per provider tenant:
+
+```json
+"fleet": {"provider": "hetzner",
+          "provision_cmd": "hcloud server create --name {node} --type {size} --location {region} --image docker-ce",
+          "destroy_cmd": "hcloud server delete {node}"}
+```
+
+Unset, a node is a booking in the registry — honest bookkeeping for a fleet
+provisioned by hand, and the button still works. Set, the button really
+makes a server, and a command that fails fails the request: a node the
+operator believes exists, that doesn't, is worse than an error.
+
+Every provision, placement, move, suspension and reap is written to
+`fleet_events` in the **provider's own** database and shown as Fleet
+history, so "when did that node go, and who took it" has an answer.
+
 ## Public deployment
 
 Caddy, with a host per tenant — automatic TLS per name:

@@ -846,6 +846,8 @@ const TABS = [
     roles: "*" },
   { id: "chat", label: "Chat", icon: "chat", group: "Company", roles: "*" },
   { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
+  { id: "fleet", label: "Platform", icon: "shield2", group: "Company",
+    roles: ["admin"], provider: true },
   { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
 ];
 const NAV_GROUPS = ["Sell", "Operate", "Grow", "Company"];
@@ -863,6 +865,9 @@ function allowedTabs() {
   if (!S.user) return TABS.filter((t) => ["shop", "clock", "scan"].includes(t.id));
   const perms = (S.user.permissions || "").split(",").map((p) => p.trim());
   return TABS.filter((t) => {
+    // The fleet belongs to whoever runs the platform. On a client's own
+    // install the tab does not exist, rather than existing and refusing.
+    if (t.provider && !(S.meta && S.meta.is_provider)) return false;
     if (t.roles === "*") return true;
     if (S.user.is_admin) return true;
     // A tab can also be opened by an explicit grant, so a screen doesn't
@@ -1046,7 +1051,8 @@ async function render() {
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
     integrations: renderIntegrations, slack: renderSlack,
     trello: renderTrello, dropbox: renderDropbox,
-    hq: renderHQ, admin: renderAdmin, login: renderLogin,
+    hq: renderHQ, fleet: renderFleet, admin: renderAdmin,
+    login: renderLogin,
   }[S.tab] || renderShop;
   try { await fn(); } catch (e) { view().innerHTML =
     `<div class="card">Error: ${esc(e.message)}</div>`; }
@@ -3956,6 +3962,275 @@ function pnlTable(p) {
          Give a product a recipe under Sourcing and its real cost is used
          instead.`}
     Wage and per-km cost are assumptions — edit them in data/config.json.</div>`;
+}
+
+/* ---------- the fleet: nodes, and who lives on them ----------
+   The platform operator's own screen. Capacity is units, not tenants —
+   the deck's weights, made clickable — and the two rules that keep the
+   bill honest are enforced here as well as on the server: a node with
+   room takes the next client, and a node nobody is left on goes away. */
+async function renderFleet() {
+  const f = await api("/api/store/admin/fleet");
+  const bar = (n) => {
+    const pct = n.capacity ? Math.round((n.used / n.capacity) * 100) : 0;
+    return `<div class="cap-bar" title="${n.used} of ${n.capacity} units">
+      <i style="width:${Math.min(100, pct)}%"></i></div>`;
+  };
+  const nodeCard = (n) => `
+    <div class="card node-card">
+      <div class="card-head">
+        <b>${opsIcon("shield2", "inline-ic")} ${esc(n.id)}</b>
+        <span class="dim">${esc(n.size || "")}${n.region
+          ? " · " + esc(n.region) : ""} · ${esc(n.provider || "")}</span>
+        <span class="dim">${n.used} / ${n.capacity} units${n.free
+          ? "" : " · full"}</span>
+        ${n.id === "local" ? `<span class="pill">this machine</span>`
+          : `<button class="btn alt sm" data-nodekill="${esc(n.id)}"
+               ${n.tenants.length ? "disabled title='move or shut down its "
+               + "tenants first'" : ""}>Destroy</button>`}
+      </div>
+      ${bar(n)}
+      <div class="sig-rows">${n.tenants.length ? n.tenants.map((t) => `
+        <div class="doc-line${t.status === "suspended" ? " dl-awaiting" : ""}">
+          <span class="dl-title">
+            <b>${esc(t.client ? t.client.name : t.id)}</b>
+            <span class="dim">${esc(t.id)}</span>
+            ${t.provider ? `<span class="pill ok">runs the platform</span>`
+              : ""}
+            <span class="pill">${esc(t.class)} · ${t.units}u</span>
+            ${t.status === "suspended"
+              ? `<span class="pill warn">suspended</span>` : ""}
+            <span class="dim">${(t.hosts || []).map(esc).join(" · ")}</span>
+          </span>
+          <span class="dl-acts" style="grid-template-columns:74px 74px 70px">
+            ${t.provider ? "<span></span><span></span><span></span>" : `
+            <button class="btn alt sm" data-tmove="${esc(t.id)}"
+              title="move this client to another node">Move</button>
+            <button class="btn alt sm" data-tstatus="${esc(t.id)}"
+              data-to="${t.status === "suspended" ? "active" : "suspended"}"
+              title="${t.status === "suspended"
+                ? "start answering again" : "stop answering, keep every byte"}"
+              >${t.status === "suspended" ? "Resume" : "Suspend"}</button>
+            <button class="btn alt sm" data-tkill="${esc(t.id)}"
+              data-name="${esc(t.client ? t.client.name : t.id)}"
+              title="remove from the fleet — data retired, not deleted"
+              >Remove</button>`}
+          </span>
+        </div>`).join("") : `<p class="dim">Empty — this node will be
+          destroyed the moment anything else releases it, or destroy it
+          now.</p>`}
+      </div>
+    </div>`;
+
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Platform</h2>
+        <p class="dim">Nodes, and the businesses living on them. Capacity is
+          measured in units — a corner shop and a fifty-location
+          distributor are not the same load. A node nobody is left on is
+          destroyed automatically.</p></div>
+      <span class="chips">
+        <button class="btn alt" id="node-new">${opsIcon("shield2","btn-ic")}
+          New node</button>
+        <button class="btn" id="tenant-new">${opsIcon("users","btn-ic")}
+          Stand up a client</button></span>
+    </div>
+    ${f.unplaced.length ? `<div class="card alert">
+      <b>${f.unplaced.length} client${f.unplaced.length === 1 ? "" : "s"}
+        with no install</b>
+      <p class="dim">On the books, but not running on the platform —
+        either they host elsewhere, or they are waiting to be stood up.</p>
+      <div class="chips">${f.unplaced.map((c) => `
+        <button class="chip" data-standup="${esc(c.slug)}"
+          data-eid="${c.engagement_id}" data-name="${esc(c.name)}"
+          >${esc(c.name)} — stand up</button>`).join("")}</div>
+    </div>` : ""}
+    ${f.nodes.map(nodeCard).join("")}
+    ${f.events.length ? `<div class="card"><b>Fleet history</b>
+      <div class="log-lines">${f.events.map((e) => `
+        <div class="log-line"><span class="dim">${fmtDate(e.at)}</span>
+          <b>${esc(e.actor)}</b>
+          <span class="dim">${esc(e.what)}${e.detail
+            ? " — " + esc(e.detail) : ""}</span></div>`).join("")}
+      </div></div>` : ""}`;
+
+  const nodeOptions = (extra) => f.nodes.map((n) =>
+    `<option value="${esc(n.id)}">${esc(n.id)} — ${n.free} of ${n.capacity}
+      units free</option>`).join("") + (extra || "");
+
+  const standUp = (slug, eid, name) => {
+    modal(`<h3>Stand up ${esc(name || slug)}</h3>
+      <p class="dim">A tenant of their own: database, config, secrets,
+        hostname. Nothing is shared with anyone else's install.</p>
+      <div class="row2">
+        <div><label>Tenant id <span class="req">required</span></label>
+          <input id="t-id" value="${esc(slug || "")}"></div>
+        <div><label>Brand</label><input id="t-brand"
+          value="${esc(name || "")}"></div>
+      </div>
+      <label>Hostname</label>
+      <input id="t-host" placeholder="acme.localhost"
+        value="${slug ? esc(slug) + ".localhost" : ""}">
+      <div class="row2">
+        <div><label>Size</label><select id="t-class">${
+          Object.entries(f.classes).map(([k, v]) =>
+            `<option value="${k}"${k === "growing" ? " selected" : ""}>${k}
+              — ${v.units || "whole node"} unit${v.units === 1 ? "" : "s"}
+              · ${esc(v.note)}</option>`).join("")}</select></div>
+        <div><label>Where</label><select id="t-node">${nodeOptions(
+          `<option value="new">+ a new node, just for them</option>`)}</select>
+        </div>
+      </div>
+      <div id="t-newnode" hidden>
+        <div class="row2">
+          <div><label>New node id</label>
+            <input id="t-nid" placeholder="node-2"
+              value="${slug ? "node-" + esc(slug) : ""}"></div>
+          <div><label>Size</label><input id="t-nsize" value="4gb"></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="t-go">Stand it up</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`);
+    const sel = $("#t-node");
+    sel.onchange = () => { $("#t-newnode").hidden = sel.value !== "new"; };
+    // The hostname and the new node's name follow the id while nobody has
+    // touched them. Opened blank, the old prefill produced ".localhost" —
+    // a hostname with no name in front of it, which is not one.
+    const follow = (el, make) => {
+      if (el.value !== make(slug || "")) el.dataset.touched = "1";
+      el.oninput = () => { el.dataset.touched = "1"; };
+      return () => { if (!el.dataset.touched) el.value = make($("#t-id").value.trim()); };
+    };
+    const host = follow($("#t-host"), (v) => v ? `${v}.localhost` : "");
+    const nid = follow($("#t-nid"), (v) => v ? `node-${v}` : "");
+    $("#t-id").oninput = () => { host(); nid(); };
+    $("#t-go").onclick = async () => {
+      try {
+        const out = await api("/api/store/admin/fleet/tenants", {
+          body: { id: $("#t-id").value.trim(),
+                  brand: $("#t-brand").value.trim(),
+                  hosts: [$("#t-host").value.trim()],
+                  node: sel.value,
+                  new_node: ($("#t-nid") || {}).value || "",
+                  node_size: ($("#t-nsize") || {}).value || "4gb",
+                  klass: $("#t-class").value,
+                  engagement_id: eid || 0 } });
+        closeModal();
+        toast(`${out.tenant} is live on ${out.node}`);
+        renderFleet();
+      } catch (err) { toast(err.message); }
+    };
+  };
+
+  const nn = $("#node-new");
+  if (nn) nn.onclick = () => {
+    modal(`<h3>New node</h3>
+      <p class="dim">Runs the provisioning command from Admin → fleet when
+        one is configured; otherwise it books the node here and you build
+        it by hand.</p>
+      <div class="row2">
+        <div><label>Id</label><input id="n-id" placeholder="node-2"></div>
+        <div><label>Size</label><input id="n-size" value="4gb"></div>
+      </div>
+      <div class="row2">
+        <div><label>Region</label><input id="n-region"
+          placeholder="ash / fsn1"></div>
+        <div><label>Capacity (units)</label>
+          <input id="n-units" type="number" value="25"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="n-go">Provision</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`);
+    $("#n-go").onclick = async () => {
+      try {
+        await api("/api/store/admin/fleet/nodes", {
+          body: { id: $("#n-id").value.trim(), size: $("#n-size").value,
+                  region: $("#n-region").value,
+                  units: +$("#n-units").value || 25 } });
+        closeModal(); toast("node provisioned"); renderFleet();
+      } catch (err) { toast(err.message); }
+    };
+  };
+  const tn = $("#tenant-new");
+  if (tn) tn.onclick = () => standUp("", 0, "");
+  view().querySelectorAll("[data-standup]").forEach((b) => b.onclick = () =>
+    standUp(b.dataset.standup, +b.dataset.eid, b.dataset.name));
+
+  view().querySelectorAll("[data-nodekill]").forEach((b) => b.onclick =
+    async () => {
+      if (!confirm(`Destroy ${b.dataset.nodekill}? It carries nothing, so `
+        + `nothing is lost — but if it is a real server it is handed back.`))
+        return;
+      try {
+        await api(`/api/store/admin/fleet/nodes/${b.dataset.nodekill}`,
+          { method: "DELETE" });
+        toast("node destroyed"); renderFleet();
+      } catch (err) { toast(err.message); }
+    });
+
+  view().querySelectorAll("[data-tstatus]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        await api(`/api/store/admin/fleet/tenants/${b.dataset.tstatus}/status`,
+          { body: { status: b.dataset.to } });
+        toast(b.dataset.to === "suspended"
+          ? "suspended — the data is untouched, the hostname says so"
+          : "resumed");
+        renderFleet();
+      } catch (err) { toast(err.message); }
+    });
+
+  view().querySelectorAll("[data-tmove]").forEach((b) => b.onclick = () => {
+    modal(`<h3>Move ${esc(b.dataset.tmove)}</h3>
+      <p class="dim">Whichever node it leaves behind empty is destroyed.</p>
+      <label>To</label>
+      <select id="mv-node">${nodeOptions(
+        `<option value="new">+ a new node of its own</option>`)}</select>
+      <div class="modal-foot">
+        <button class="btn" id="mv-go">Move</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`);
+    $("#mv-go").onclick = async () => {
+      try {
+        const out = await api(
+          `/api/store/admin/fleet/tenants/${b.dataset.tmove}/move`,
+          { body: { node: $("#mv-node").value } });
+        closeModal(); toast(`moved to ${out.node}`); renderFleet();
+      } catch (err) { toast(err.message); }
+    };
+  });
+
+  view().querySelectorAll("[data-tkill]").forEach((b) => b.onclick = () => {
+    modal(`<h3>Remove ${esc(b.dataset.name)}</h3>
+      <p class="dim">Their hostname stops answering and they leave the
+        fleet. If they were the last tenant on their node, that node is
+        destroyed too.</p>
+      <label><input type="checkbox" id="k-keep" checked> Retire their data
+        to <code>data/retired/</code> rather than deleting it — a business
+        that leaves still owns its records, and the week after a
+        cancellation is exactly when someone asks for an export.</label>
+      <div class="modal-foot">
+        <button class="btn" id="k-go">Remove from the fleet</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`);
+    $("#k-go").onclick = async () => {
+      try {
+        const keep = $("#k-keep").checked ? 1 : 0;
+        const out = await api(
+          `/api/store/admin/fleet/tenants/${b.dataset.tkill}?keep_data=${keep}`,
+          { method: "DELETE" });
+        closeModal();
+        toast(`${b.dataset.name} removed`
+          + (out.nodes_destroyed.length
+             ? ` — ${out.nodes_destroyed.join(", ")} destroyed with it` : "")
+          + (out.kept ? " · data retired" : ""));
+        renderFleet();
+      } catch (err) { toast(err.message); }
+    };
+  });
 }
 
 async function renderHQ() {

@@ -454,6 +454,14 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 /* the bench needs headroom the paper viewer does not */
 .doc-viewer.qb-tall { height: 74vh; }
 
+/* the fleet: a node's capacity as a bar you can read at a glance */
+.node-card { border-left: 3px solid var(--line); }
+.cap-bar { height: 6px; border-radius: 999px; background: var(--panel2);
+  overflow: hidden; margin: 10px 0 4px; }
+.cap-bar i { display: block; height: 100%; border-radius: 999px;
+  background: var(--accent, #7b5cff); transition: width .2s ease; }
+.node-card .sig-rows { margin-top: 10px; }
+
 /* Modal */
 #ops-modal { position: fixed; inset: 0; z-index: 90; display: flex;
   align-items: center; justify-content: center; padding: 20px;

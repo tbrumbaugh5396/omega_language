@@ -103,6 +103,13 @@ async def resolve_tenant(request: Request, call_next):
     except tenancy.UnknownHost as e:
         return JSONResponse({"detail": f"no tenant answers to '{e}' — "
                              "check data/tenants.json"}, status_code=404)
+    except tenancy.Suspended as e:
+        # 503, not 404: the site exists and is paused. Saying "no such
+        # site" to a customer whose account is merely suspended is a lie,
+        # and it is the lie their customers would see too.
+        return JSONResponse(
+            {"detail": f"'{e}' is suspended — the data is intact; ask the "
+                       f"platform operator to resume it"}, status_code=503)
     tok = tenancy.CURRENT.set(tid)
     try:
         return await call_next(request)
@@ -207,6 +214,11 @@ def login(body: LoginBody, con=Depends(get_con)):
 @app.get("/api/meta")
 def meta(con=Depends(get_con)):
     return {"brand": CFG["brand_name"],
+            # Whether this install runs the platform, so the ops app knows
+            # to offer the fleet at all. False for every client tenant and
+            # for a plain single-shop install.
+            "is_provider": tenancy.provider() is not None
+                           and tenancy.provider() == tenancy.CURRENT.get(),
             "tagline": CFG.get("brand_tagline", ""),
             "accent": CFG.get("brand_accent", ""),
             "regions": CFG["regions"], "jobs": JOBS,
@@ -3375,7 +3387,7 @@ async def ws_endpoint(websocket: WebSocket, token: str = ""):
     # here from the handshake's own Host header — before any connect().
     try:
         _wtid = tenancy.resolve(websocket.headers.get("host", ""))
-    except tenancy.UnknownHost:
+    except (tenancy.UnknownHost, tenancy.Suspended):
         await websocket.close(code=4404)
         return
     _wtok = tenancy.CURRENT.set(_wtid)

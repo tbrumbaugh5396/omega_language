@@ -5313,6 +5313,138 @@ ok('data-studioview="' in _opsjs and '"/api/store/admin/studio"' in _opsjs
    "the Documents tab shows the studio card — the other side of the client "
    "relationship, visible from inside the client's own install")
 
+# --- the fleet: nodes, placement, and the empty-node reap -----------------
+# Capacity is units, not tenants. The two rules that keep the bill honest:
+# a client goes onto a node with room, and a node nobody is left on is
+# destroyed the moment it empties.
+from erp.backend import fleet as _fl
+
+ok(c.get("/api/store/admin/fleet", headers=BB).status_code == 404,
+   "a client tenant asking about the fleet is asking about other people's "
+   "businesses — the tab does not exist for them, and neither does the API")
+_fb = c.get("/api/store/admin/fleet", headers=AA).json()
+ok(any(n["id"] == "local" for n in _fb["nodes"])
+   and any(t["provider"] for n in _fb["nodes"] for t in n["tenants"]),
+   "the board always has the local node, and knows which tenant runs the "
+   "platform")
+
+ok(c.post("/api/store/admin/fleet/nodes", headers=AA,
+          json={"id": "node-a", "size": "4gb", "units": 8}).status_code
+   == 200, "a node can be spun up")
+ok(c.post("/api/store/admin/fleet/nodes", headers=AA,
+          json={"id": "node-a"}).status_code == 400,
+   "and not twice under one name")
+
+ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
+          json={"id": "gamma", "brand": "Gamma", "node": "node-a",
+                "klass": "growing"}).json()["node"] == "node-a",
+   "a client is stood up onto the node you chose")
+ok((_tn.tenant_dir("gamma") / "business_control.db").exists()
+   and c.get("/api/products",
+             headers={"host": "gamma.localhost"}).status_code == 200,
+   "with its own database, answering on its own hostname, immediately")
+
+_fb = c.get("/api/store/admin/fleet", headers=AA).json()
+_na = next(n for n in _fb["nodes"] if n["id"] == "node-a")
+ok(_na["used"] == 4 and _na["free"] == 4,
+   "capacity is counted in units — a 'growing' client is 4 of node-a's 8")
+ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
+          json={"id": "delta", "node": "node-a", "klass": "large"})
+   .status_code == 400,
+   "and a client that does not fit is refused rather than overcommitted")
+
+ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
+          json={"id": "delta", "node": "new", "new_node": "node-b",
+                "klass": "micro"}).json()["node"] == "node-b",
+   "or you spin up a node for them in the same act")
+
+ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
+          json={"id": "epsilon", "hosts": [".localhost"], "klass": "micro"})
+   .status_code == 200
+   and _tn.registry()["tenants"]["epsilon"]["hosts"] == ["epsilon.localhost"],
+   "a hostname with nothing in front of the dot is not a hostname — the "
+   "form left blank falls back to the id rather than registering "
+   "'.localhost' forever")
+c.request("DELETE", "/api/store/admin/fleet/tenants/epsilon?keep_data=0",
+          headers=AA)
+ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
+          json={"id": "zeta", "hosts": ["beta.test"], "node": "new",
+                "new_node": "node-z"}).status_code == 400
+   and all(n["id"] != "node-z" for n in
+           c.get("/api/store/admin/fleet", headers=AA).json()["nodes"]),
+   "a hostname another business already answers to is refused — and "
+   "refused before a node is spun up for it, so a rejected form leaves no "
+   "server running behind it")
+
+# suspend: the reversible half of "remove this client"
+c.post("/api/store/admin/fleet/tenants/gamma/status", headers=AA,
+       json={"status": "suspended"})
+_sus = c.get("/api/products", headers={"host": "gamma.localhost"})
+ok(_sus.status_code == 503 and "suspended" in _sus.json()["detail"],
+   "a suspended tenant answers 503, not 404 — the site exists and is "
+   "paused, and telling a paused customer 'no such site' is a lie")
+ok((_tn.tenant_dir("gamma") / "business_control.db").exists(),
+   "and not one byte of theirs was touched")
+c.post("/api/store/admin/fleet/tenants/gamma/status", headers=AA,
+       json={"status": "active"})
+ok(c.get("/api/products",
+         headers={"host": "gamma.localhost"}).status_code == 200,
+   "resuming puts it straight back")
+ok(c.post("/api/store/admin/fleet/tenants/alpha/status", headers=AA,
+          json={"status": "suspended"}).status_code == 400,
+   "the provider cannot suspend itself out of its own cockpit")
+
+# the reap: the rule that keeps a fleet's margin from leaking
+_rm = c.request("DELETE", "/api/store/admin/fleet/tenants/delta?keep_data=1",
+                headers=AA).json()
+ok("node-b" in _rm["nodes_destroyed"],
+   "shutting down the LAST client on a node destroys the node with it — an "
+   "empty VPS is pure cost, and the minute it empties is the only minute "
+   "anyone would think to look")
+ok(_rm["kept"] and Path(_rm["kept"]).exists(),
+   "their data is retired, not deleted — a business that leaves still owns "
+   "its records")
+ok(all(n["id"] != "node-b" for n in
+       c.get("/api/store/admin/fleet", headers=AA).json()["nodes"]),
+   "and the node is off the board")
+
+_fb = c.get("/api/store/admin/fleet", headers=AA).json()
+ok(any(n["id"] == "node-a" for n in _fb["nodes"]),
+   "node-a survives, because gamma still lives on it")
+ok(c.request("DELETE", "/api/store/admin/fleet/nodes/node-a",
+             headers=AA).status_code == 400,
+   "and it cannot be destroyed under a tenant's feet")
+ok(c.request("DELETE", "/api/store/admin/fleet/nodes/local",
+             headers=AA).status_code == 400,
+   "nor can the machine this process is running on be handed back from "
+   "inside itself")
+
+# moving, and the reap that follows it
+c.post("/api/store/admin/fleet/nodes", headers=AA, json={"id": "node-c"})
+ok(c.post("/api/store/admin/fleet/tenants/gamma/move", headers=AA,
+          json={"node": "node-c"}).json()["node"] == "node-c",
+   "a client can be moved to another node")
+ok(all(n["id"] != "node-a" for n in
+       c.get("/api/store/admin/fleet", headers=AA).json()["nodes"]),
+   "and the node it left, now empty, went with the move")
+ok(c.request("DELETE", "/api/store/admin/fleet/tenants/gamma?keep_data=0",
+             headers=AA).status_code == 200
+   and not _tn.tenant_dir("gamma").exists(),
+   "keep_data=0 really deletes, for the client who asked to be forgotten")
+
+ok(any(e["what"] == "node destroyed (empty)" for e in
+       c.get("/api/store/admin/fleet", headers=AA).json()["events"]),
+   "every provisioning, move and reap is on the fleet's own record — an "
+   "operator asking 'when did that node go, and who took it' has an answer")
+ok(c.get("/api/meta", headers=AA).json()["is_provider"]
+   and not c.get("/api/meta", headers=HB).json()["is_provider"],
+   "and the ops app is told which install runs the platform, so the tab "
+   "exists in exactly one of them")
+ok('id: "fleet"' in _opsjs and "provider: true" in _opsjs
+   and "renderFleet" in _opsjs and "data-nodekill" in _opsjs,
+   "the Platform tab is in the frontend, provider-gated, with the node and "
+   "tenant controls on it")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")
