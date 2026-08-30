@@ -251,6 +251,38 @@ function canSVG(p, opts = {}) {
   </svg>`;
 }
 
+/* The neutral stand-in — a panel with the ring mark, for a tenant selling
+   something that does not come in a can. Twin of card_svg() in api.py. */
+// A wordmark is as long as the business's name — fit it to the panel.
+const MARK_SIZE = (name) =>
+  Math.min(14, Math.max(8, Math.floor(150 / Math.max(name.length, 1) * 1.35)));
+
+function cardSVG(p, opts = {}) {
+  const c = flavourOf(p);
+  const id = "pk" + p.id + (opts.k || "");
+  return `<svg class="can card-art" viewBox="0 0 200 320" role="img"
+    aria-label="${(pname(p) || "").replace(/"/g, "&quot;")}">
+   <defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
+     <stop offset="0" stop-color="${c}" stop-opacity=".95"/>
+     <stop offset="1" stop-color="${c}" stop-opacity=".70"/></linearGradient></defs>
+   <ellipse cx="100" cy="296" rx="62" ry="6" fill="rgba(27,24,31,.10)"/>
+   <rect x="22" y="40" width="156" height="240" rx="18" fill="url(#${id})"/>
+   <g fill="none" stroke="#fff" opacity=".85">
+     <circle cx="100" cy="152" r="12" stroke-width="7"/>
+     <circle cx="100" cy="152" r="30" stroke-width="5" opacity=".72"/>
+     <circle cx="100" cy="152" r="50" stroke-width="3.4" opacity=".46"/>
+   </g>
+   <rect x="22" y="40" width="156" height="240" rx="18" fill="none"
+     stroke="rgba(27,24,31,.10)"/>
+   ${opts.mini ? "" : `<text x="100" y="78" text-anchor="middle" fill="#fff"
+     font-size="${MARK_SIZE(BRAND())}" font-weight="700" letter-spacing=".8"
+     opacity=".85" aria-hidden="true">${BRAND().toUpperCase()}</text>`}
+  </svg>`;
+}
+
+/* Which stand-in this shop draws, from the theme the server sent. */
+const ART = () => ((window.STORE_I18N || {}).art === "can" ? canSVG : cardSVG);
+
 // The concentric-ring mark on its own — flavour chips and pickers.
 function ringSVG(colour, cls = "ring") {
   return `<svg class="${cls}" viewBox="0 0 120 120" aria-hidden="true">
@@ -277,7 +309,7 @@ function art(p, cls = "art", badge = true, mini = false) {
   }
   if (p.image) return `<div class="${cls}"${style}>
     <img src="/media/product/${p.id}" alt="${p.name}" loading="lazy"></div>`;
-  return `<div class="${cls}"${style}>${canSVG(p, { k: cls, mini })}</div>`;
+  return `<div class="${cls}"${style}>${ART()(p, { k: cls, mini })}</div>`;
 }
 
 function drawTabs() {
@@ -442,7 +474,7 @@ function drawSideMenu() {
   const host = $("#side-collections");
   // Browse first: the shopper picks a lane, then sees the faces. Putting the
   // tiles above the filters made people scroll past the filters entirely.
-  let html = '<div class="menu-headline">Shop your Zen</div>' +
+  let html = `<div class="menu-headline">${t("shop_cta")}</div>` +
     '<div class="side-group">Browse</div><div class="menu-cols">' +
     `<a class="side-item" href="/#shop" data-close>${ico("bag", "ico ico-sm")}
       All products</a>`;
@@ -479,12 +511,15 @@ function drawSideMenu() {
     a.addEventListener("click", closeMenus));
 }
 
-/* The hero sells the product, so the product has to be in it. Picks the first
-   single flavour and shows its photo if one exists, else the drawn can. */
+/* The hero sells the product, so the product has to be in it. Takes the one
+   the merchant flagged; failing that the first single flavour, and failing
+   that whatever sorts first. Shows its photo if one exists, else the drawn
+   stand-in. */
 function hydrateHero() {
   const stage = $("#hero-stage");
   if (!stage) return;
-  const p = CATALOG.products.find((x) => x.flavour && x.flavour !== "pack")
+  const p = CATALOG.products.find((x) => x.featured)
+    || CATALOG.products.find((x) => x.flavour && x.flavour !== "pack")
     || CATALOG.products[0];
   if (!p) return;
   const shot = (p.media || [])[0];
@@ -500,7 +535,7 @@ function hydrateHero() {
     aria-label="${pname(p)}">${shot
       ? `<img src="${shot.thumb}" alt="${(shot.alt || pname(p))
           .replace(/"/g, "&quot;")}" style="border-radius:var(--r-lg)">`
-      : canSVG(p, { k: "hero" })}</a>`;
+      : ART()(p, { k: "hero" })}</a>`;
 }
 
 /* The buy button that never scrolls away. With items it opens the cart;
@@ -640,7 +675,7 @@ function drawCart() {
   host.innerHTML = lines || `<div class="cart-empty">
     ${ico("bag", "ico")}<p>Your cart is empty.</p>
     <button class="btn-pill ghost sm" id="cart-empty-shop"
-      style="margin-top:14px">Shop your Zen</button></div>`;
+      style="margin-top:14px">${t("shop_cta")}</button></div>`;
   drawCodes();
   const shopBtn = $("#cart-empty-shop");
   if (shopBtn) shopBtn.onclick = () => {
@@ -795,7 +830,7 @@ async function drawUpsell() {
         style="--flavour:${flavourOf(r)}">
       ${r.media && r.media[0]
         ? `<img src="${r.media[0].thumb}" alt="">`
-        : `<span class="upsell-emoji">${canSVG(r, { k: "up", mini: true })}</span>`}
+        : `<span class="upsell-emoji">${ART()(r, { k: "up", mini: true })}</span>`}
       <div><b>${pname(r)}</b><span class="dim">${money(r.price_cents)}</span></div>
       <button class="btn-pill ghost sm" data-up="${r.id}">Add</button>
     </div>`).join("")}</div>` : "";

@@ -277,6 +277,12 @@ const THEME_FIELDS = [
     options: ["Inter", "Quicksand", "Fraunces"] },
   { k: "display_font", t: "select", label: "Display font (headlines only)",
     options: ["Fraunces", "Inter", "Quicksand"] },
+  { k: "wordmark_font", t: "select", label: "Wordmark font (your name)",
+    options: ["Quicksand", "Inter", "Fraunces"] },
+  // What stands in for a product with no photograph. A shop selling plans
+  // or services should not have to explain a drinks can.
+  { k: "art", t: "select", label: "Stand-in product art",
+    options: ["card", "can"] },
   { k: "footer", t: "text", label: "Footer note" },
 ];
 

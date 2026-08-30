@@ -15,6 +15,30 @@ def esc(v) -> str:
     return _html.escape(str(v or ""))
 
 
+# The tags a "richtext" field may actually use. The field has always been
+# labelled richtext and helped as "simple formatting allowed", and the
+# renderer escaped every one of them — so a merchant typing <b> got <b> on
+# the page. Everything outside this list is still escaped, and the escape
+# hatch for real markup is the custom-code section, which is where an admin
+# who wants a <script> should have to go on purpose.
+RICH_TAGS = ("b", "strong", "i", "em", "u", "br", "p", "ul", "ol", "li",
+             "h3", "small")
+_RICH_RE = re.compile(
+    r"&lt;(/?)(" + "|".join(RICH_TAGS) + r")\s*/?&gt;", re.I)
+_RICH_LINK = re.compile(
+    r"&lt;a href=(?:&quot;|\")(/[^\"&<>]*|https?://[^\"&<>]+)(?:&quot;|\")"
+    r"&gt;", re.I)
+
+
+def rich(text: str) -> str:
+    """Escape, then let a short list of formatting tags back through."""
+    out = esc(text)
+    out = _RICH_RE.sub(lambda m: f"<{m.group(1)}{m.group(2).lower()}>", out)
+    out = _RICH_LINK.sub(lambda m: f'<a href="{m.group(1)}">', out)
+    out = out.replace("&lt;/a&gt;", "</a>")
+    return out
+
+
 # t: text | textarea | richtext | select | number | checkbox | media | color | list
 SECTION_TYPES = {
     "hero": {
@@ -22,12 +46,12 @@ SECTION_TYPES = {
         "help": "Opener with headline, one button and the product beside it.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
-             "default": "Some days come\nat you in waves."},
+             "default": "A headline that says\nwhat you sell."},
             {"k": "sub", "t": "textarea", "label": "Sub-heading",
-             "default": "Sparkling tea with 200mg L-theanine — calm that "
-                        "doesn't cloud. And then it doesn't."},
+             "default": "One sentence under it: who it is for, and why "
+                        "they should care. Replace this."},
             {"k": "cta_text", "t": "text", "label": "Primary button",
-             "default": "Shop your Zen"},
+             "default": "Shop now"},
             {"k": "cta_link", "t": "text", "label": "Primary link",
              "default": "/#shop"},
             {"k": "cta2_text", "t": "text", "label": "Secondary button",
@@ -39,11 +63,11 @@ SECTION_TYPES = {
             {"k": "show_product", "t": "checkbox",
              "label": "Show product beside the copy", "default": True},
             {"k": "stat1", "t": "text", "label": "Stat 1",
-             "default": "200mg|L-theanine per can"},
+             "default": "|"},
             {"k": "stat2", "t": "text", "label": "Stat 2",
-             "default": "15|calories"},
+             "default": "|"},
             {"k": "stat3", "t": "text", "label": "Stat 3",
-             "default": "4|flavors to find yours"},
+             "default": "|"},
             {"k": "bg", "t": "select", "label": "Background",
              "options": ["shader", "gradient", "image"], "default": "gradient"},
             {"k": "media_id", "t": "media", "label": "Background image"},
@@ -58,9 +82,9 @@ SECTION_TYPES = {
             {"k": "video_poster", "t": "text", "label": "Video poster",
              "default": "/hero/hero.jpg"},
             {"k": "video_caption", "t": "text", "label": "Video caption",
-             "default": "4 flavors, 1 calm"},
+             "default": ""},
             {"k": "cta_text", "t": "text", "label": "Button under the caption",
-             "default": "Find your zen"},
+             "default": "See the range"},
             {"k": "cta_link", "t": "text", "label": "Button link",
              "default": "/#shop"},
             {"k": "collection_id", "t": "text", "label": "Collection id",
@@ -73,11 +97,11 @@ SECTION_TYPES = {
         "help": "One line of proof, directly under the opener.",
         "fields": [
             {"k": "figure", "t": "text", "label": "Figure",
-             "default": "100,000+"},
+             "default": ""},
             {"k": "label", "t": "text", "label": "Label",
-             "default": "Zen customers"},
+             "default": "customers"},
             {"k": "sub", "t": "text", "label": "Sub-line",
-             "default": "and counting, one calm can at a time"},
+             "default": ""},
         ]},
     "benefits": {
         "label": "Benefit strip", "icon": "check",
@@ -89,11 +113,9 @@ SECTION_TYPES = {
                       {"k": "value", "t": "text", "label": "Value"},
                       {"k": "label", "t": "text", "label": "Label"}],
              "default": [
-                 {"icon": "leaf", "value": "200mg", "label": "L-theanine"},
-                 {"icon": "sparkle", "value": "150mg", "label": "ashwagandha"},
-                 {"icon": "drop", "value": "150mg", "label": "lemon balm"},
-                 {"icon": "shield", "value": "70", "label": "calories"},
-                 {"icon": "truck", "value": "Free", "label": "shipping over $40"},
+                 {"icon": "check", "value": "", "label": "what you promise"},
+                 {"icon": "shield", "value": "", "label": "what backs it"},
+                 {"icon": "truck", "value": "", "label": "how it arrives"},
              ]},
         ]},
     "product_grid": {
@@ -133,18 +155,18 @@ SECTION_TYPES = {
                  {"k": "icon", "t": "text", "label": "Icon name",
                   "default": "leaf"},
                  {"k": "title", "t": "text", "label": "Title",
-                  "default": "Clean ingredients"},
+                  "default": "A reason to buy"},
                  {"k": "text", "t": "textarea", "label": "Text",
-                  "default": "Nothing artificial. Everything pronounceable."}],
+                  "default": "A sentence or two that earns it."}],
              "default": [
-                 {"icon": "leaf", "title": "Clean ingredients",
-                  "text": "Nothing artificial. Everything pronounceable."},
-                 {"icon": "drop", "title": "Calm, not sleepy",
-                  "text": "L-theanine takes the edge off without taking you "
-                          "out. No crash, because there's nothing to crash "
-                          "from."},
-                 {"icon": "truck", "title": "Fresh to your door",
-                  "text": "Small batches, shipped fast, tracked all the way."}]},
+                 {"icon": "check", "title": "A reason to buy",
+                  "text": "A sentence or two that earns it."},
+                 {"icon": "shield", "title": "A second one",
+                  "text": "Different from the first — three that say the "
+                          "same thing read as one."},
+                 {"icon": "truck", "title": "A third",
+                  "text": "Then stop. Four columns is a list, not an "
+                          "argument."}]},
         ]},
     "image_banner": {
         "label": "Image banner", "icon": "image",
@@ -171,7 +193,7 @@ SECTION_TYPES = {
         "help": "Approved customer reviews.",
         "fields": [
             {"k": "heading", "t": "text", "label": "Heading",
-             "default": "Loved out loud"},
+             "default": "What customers say"},
             {"k": "limit", "t": "number", "label": "How many", "default": 6},
         ]},
     "faq": {
@@ -185,12 +207,11 @@ SECTION_TYPES = {
                  {"k": "q", "t": "text", "label": "Question", "default": ""},
                  {"k": "a", "t": "textarea", "label": "Answer", "default": ""}],
              "default": [
-                 {"q": "How fast is shipping?",
-                  "a": "Orders ship within 2 business days; free over $40."},
+                 {"q": "How fast is delivery?", "a": ""},
                  {"q": "Can I use a discount code?",
                   "a": "Yes — add it in the cart."},
-                 {"q": "What if I don't love it?",
-                  "a": "Tell support — we make it right, every time."}]},
+                 {"q": "What if something is wrong with my order?",
+                  "a": ""}]},
         ]},
     "newsletter": {
         "label": "Email signup", "icon": "mail",
@@ -199,8 +220,8 @@ SECTION_TYPES = {
             {"k": "heading", "t": "text", "label": "Heading",
              "default": "Join the club"},
             {"k": "body", "t": "textarea", "label": "Body",
-             "default": "10% off your first order, early access to drops, "
-                        "and rewards on every sip."},
+             "default": "What someone gets for handing over an email "
+                        "address. If the answer is nothing, cut this."},
             {"k": "cta_text", "t": "text", "label": "Button",
              "default": "Become a member"},
         ]},
@@ -480,7 +501,7 @@ def _product_grid(con, s) -> str:
 
 def _rich_text(con, s) -> str:
     align = "center" if s.get("align") == "center" else "left"
-    body = esc(s["body"]).replace("\n\n", "</p><p>").replace("\n", "<br>")
+    body = rich(s["body"]).replace("\n\n", "</p><p>").replace("\n", "<br>")
     return (f'<section class="section" style="text-align:{align}">'
             f'<h2>{esc(s["heading"])}</h2><p class="big">{body}</p></section>')
 

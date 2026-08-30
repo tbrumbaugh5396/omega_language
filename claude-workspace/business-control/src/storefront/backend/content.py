@@ -65,6 +65,12 @@ UI_KEYS = {
     "support": "Support", "empty_cart": "Your cart is empty",
     "discount_code": "Discount code", "apply": "Apply", "total": "Total",
     "free_shipping_at": "free shipping at $40", "sold_out": "Sold out",
+    # The shop's own invitation. It was "Shop your Zen", in the shared
+    # storefront script, on every tenant's side menu and empty cart.
+    "shop_cta": "Shop the range",
+    # The first-visit offer's headline. It was "Take 10% off your first
+    # calm." — in the shell, for every tenant.
+    "offer_title": "Take 10% off your first order.",
 }
 
 CURRENCY_DEFAULT = [
@@ -130,13 +136,35 @@ def translations_for(con, locale: str) -> dict:
         (locale,)).fetchall()}
 
 
+def ui_strings(con) -> dict:
+    """The interface's own words, with this tenant's overrides on top.
+
+    UI_KEYS is the shipped English. A merchant who calls it something else —
+    or ships free over a different number — writes those keys to store_meta
+    under 'ui_strings' rather than asking for a code change.
+    """
+    row = con.execute("SELECT v FROM store_meta WHERE k='ui_strings'"
+                      ).fetchone()
+    if not row:
+        return UI_KEYS
+    try:
+        own = json.loads(row["v"])
+    except ValueError:
+        return UI_KEYS
+    return {**UI_KEYS, **{k: v for k, v in own.items() if isinstance(v, str)}}
+
+
 def i18n_payload(con) -> str:
     """Injected into every storefront page so the client can localise
     prices and UI strings without a second round trip."""
     from erp.backend.main import CFG
     from . import affiliates as aff
+    from .api import get_theme
     data = {"currencies": currencies(con), "locales": locales(con),
-            "ui": UI_KEYS,
+            "ui": ui_strings(con),
+            # Which stand-in art this shop draws — the client twin of
+            # product_art(), reading the one switch rather than guessing.
+            "art": get_theme(con).get("art") or "card",
             "regions": CFG.get("regions") or [],
             "affiliate_window_days": aff.window_days(CFG),
             "strings": {loc: translations_for(con, loc)

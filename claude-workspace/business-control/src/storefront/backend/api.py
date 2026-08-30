@@ -317,9 +317,16 @@ THEME_DEFAULT = {
     # Two faces, two jobs: `font` is the interface (buttons, prices, nav),
     # `display_font` is the brand voice (headlines only). Setting one face for
     # both is what made the old storefront read as cute.
-    "font": "Inter", "display_font": "Fraunces",
+    # A third face, and the one most often wrong: the wordmark. Quicksand
+    # is round and soft — right for a drinks brand, wrong for most things.
+    "font": "Inter", "display_font": "Fraunces", "wordmark_font": "Quicksand",
     "announce": ["Free shipping over $40"],
     "footer": "powered by business-control",
+    # What stands in for a product with no photograph yet. "can" draws the
+    # drinks can this storefront was born selling; "card" draws a neutral
+    # panel. The default is neutral, because a business selling software or
+    # services should not have to explain a soda can on its own shop.
+    "art": "card",
 }
 
 
@@ -338,10 +345,33 @@ def theme_css(t: dict) -> str:
     """Emit tokens only. store.css owns the rules — the theme just rebinds the
     variables, so a colour change can't fight the stylesheet's cascade."""
     disp = t.get("display_font") or THEME_DEFAULT["display_font"]
+    mark = t.get("wordmark_font") or THEME_DEFAULT["wordmark_font"]
     return (f":root{{--purple:{t['purple']};--lavender:{t['lavender']};"
             f"--orange:{t['orange']};--ink:{t['ink']};--bg:{t['bg']};"
             f"--ui:'{t['font']}',system-ui,sans-serif;"
-            f"--display:'{disp}',Georgia,serif;}}")
+            f"--display:'{disp}',Georgia,serif;"
+            f"--wordmark:'{mark}',var(--ui);}}")
+
+
+def font_link(t: dict) -> str:
+    """Load the two faces the theme actually asks for.
+
+    The shell used to hard-code three families, so a tenant could set a
+    typeface and get a fallback — the theme changed and the page did not.
+    """
+    fams, seen = [], set()
+    for face in (t.get("font"), t.get("display_font"),
+                 t.get("wordmark_font")):
+        name = re.sub(r"[^A-Za-z0-9 ]", "", (face or "")).strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            fams.append(f"family={name.replace(' ', '+')}:wght@400;500;600;700")
+    if not fams:
+        return FONT_LINK
+    return ('<link rel="preconnect" href="https://fonts.gstatic.com" '
+            'crossorigin><link rel="stylesheet" '
+            'href="https://fonts.googleapis.com/css2?'
+            + "&".join(fams) + '&display=swap">')
 
 
 FONT_LINK = (
@@ -358,6 +388,50 @@ def icon_sprite() -> str:
         return (config.STOREFRONT_DIR / "icons.svg").read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def card_svg(pid: int, name: str, colour: str, key: str = "",
+             mini: bool = False, brand: str = "") -> str:
+    """The neutral stand-in: a panel carrying the brand's ring mark and the
+    product's name. What a plan, a licence or a service looks like before
+    anybody has photographed it — which is to say, before it looks like
+    anything at all."""
+    c = colour or "#6c00bf"
+    gid = f"pk{pid}{key}"
+    # A wordmark is as long as the business's name. Fitting it to the panel
+    # beats picking one size and letting "BUSINESS CONTROL" run off both
+    # edges of it.
+    mark = (brand or "").upper()
+    size = min(14, max(8, int(150 / max(len(mark), 1) * 1.35)))
+    cap = "" if mini else (
+        f'<text x="100" y="78" text-anchor="middle" fill="#fff"'
+        f' font-size="{size}" font-weight="700" letter-spacing=".8"'
+        f' opacity=".85" aria-hidden="true">{_html.escape(mark)}</text>')
+    return (
+        f'<svg class="can card-art" viewBox="0 0 200 320" role="img"'
+        f' aria-label="{_html.escape(name or "")}">'
+        f'<defs><linearGradient id="{gid}" x1="0" y1="0" x2="1" y2="1">'
+        f'<stop offset="0" stop-color="{c}" stop-opacity=".95"/>'
+        f'<stop offset="1" stop-color="{c}" stop-opacity=".70"/>'
+        f'</linearGradient></defs>'
+        f'<ellipse cx="100" cy="296" rx="62" ry="6" fill="rgba(27,24,31,.10)"/>'
+        f'<rect x="22" y="40" width="156" height="240" rx="18"'
+        f' fill="url(#{gid})"/>'
+        f'<g fill="none" stroke="#fff" opacity=".85">'
+        f'<circle cx="100" cy="152" r="12" stroke-width="7"/>'
+        f'<circle cx="100" cy="152" r="30" stroke-width="5" opacity=".72"/>'
+        f'<circle cx="100" cy="152" r="50" stroke-width="3.4" opacity=".46"/>'
+        f'</g>'
+        f'<rect x="22" y="40" width="156" height="240" rx="18" fill="none"'
+        f' stroke="rgba(27,24,31,.10)"/>{cap}</svg>')
+
+
+def product_art(theme: dict, pid: int, name: str, colour: str, key: str = "",
+                mini: bool = False, brand: str = "") -> str:
+    """Which stand-in this tenant draws — one switch, read from the theme,
+    so the storefront grid and the server-rendered product page agree."""
+    fn = can_svg if (theme or {}).get("art") == "can" else card_svg
+    return fn(pid, name, colour, key, mini, brand)
 
 
 def can_svg(pid: int, name: str, colour: str, key: str = "",
@@ -471,6 +545,9 @@ def render_shell(con, body_html: str, *, title=None, description=None,
         "<!--TITLE-->": sect.esc(title or t["title"]),
         "<!--DESCRIPTION-->": sect.esc(description or t["description"]),
         "<!--FOOTER-->": sect.esc(t["footer"]),
+        "<!--FONTS-->": font_link(t),
+        "<!--OFFER-TITLE-->": sect.esc(
+            content_mod.ui_strings(con).get("offer_title", "")),
         "<!--HEAD-EXTRA-->": head_extra,
     }
     for k, v in repl.items():
@@ -554,17 +631,25 @@ def init_tables():
                     " position) VALUES('home',?,?,?)",
                     (stype, json.dumps(sect.defaults_for(stype)), pos))
         # A store seeded before the showcase existed keeps its own layout —
-        # HOME_DEFAULT only ever runs on an empty page. Put the carousel on
-        # top once; if a merchant then moves or deletes it, that sticks,
-        # because this only fires when the type is absent entirely.
+        # HOME_DEFAULT only ever runs on an empty page. Sections added to
+        # the design later have to be placed on the page that already
+        # exists, and each lands EXACTLY ONCE: the applied list is written
+        # to store_meta, because "is the type absent?" is not the same
+        # question as "has this ever run?" — a merchant who deleted the
+        # carousel on purpose used to find it back on the next restart,
+        # forever.
         else:
-            # Sections added after a store was seeded have to be placed on
-            # the page that already exists — HOME_DEFAULT only ever runs on
-            # an empty one. Each lands once, directly below the section it
-            # belongs under; a merchant who then moves or deletes it keeps
-            # that, because this only fires when the type is absent.
+            row = con.execute("SELECT v FROM store_meta WHERE"
+                              " k='home_backfill'").fetchone()
+            try:
+                done = set(json.loads(row["v"])) if row else set()
+            except ValueError:
+                done = set()
             for stype, under in (("showcase", None), ("social_proof",
                                                       "showcase")):
+                if stype in done:
+                    continue
+                done.add(stype)
                 if con.execute("SELECT 1 FROM page_sections WHERE"
                                " page_slug='home' AND type=?",
                                (stype,)).fetchone():
@@ -572,16 +657,19 @@ def init_tables():
                 if under is None:
                     pos = 0
                 else:
-                    row = con.execute(
+                    r2 = con.execute(
                         "SELECT position FROM page_sections WHERE"
                         " page_slug='home' AND type=?", (under,)).fetchone()
-                    pos = (row["position"] + 1) if row else 0
+                    pos = (r2["position"] + 1) if r2 else 0
                 con.execute("UPDATE page_sections SET position=position+1"
                             " WHERE page_slug='home' AND position>=?", (pos,))
                 con.execute(
                     "INSERT INTO page_sections(page_slug,type,settings,"
                     " position) VALUES('home',?,?,?)",
                     (stype, json.dumps(sect.defaults_for(stype)), pos))
+            con.execute("INSERT OR REPLACE INTO store_meta(k,v)"
+                        " VALUES('home_backfill',?)",
+                        (json.dumps(sorted(done)),))
         if not con.execute("SELECT 1 FROM store_shipping_methods").fetchone():
             con.execute(
                 "INSERT INTO store_shipping_methods(name,price_cents,eta,"
@@ -764,6 +852,10 @@ def catalog(con=Depends(get_con)):
         md = meta.get(p["id"], {})
         p["flavour"] = md.get("flavour", "")
         p["colour"] = md.get("colour", "")
+        # The one the hero puts on stage. Without it the hero shows
+        # whatever happens to sort first, which for a shop selling plans
+        # was the cheapest support plan in grey.
+        p["featured"] = md.get("featured", "") == "1"
         p["note"] = md.get("note", "")
         p["ingredients"] = md.get("ingredients", "")
         p["badge"] = md.get("badge", "")
@@ -1123,9 +1215,10 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
     if p is None:
         raise HTTPException(404, "product not found")
     base = str(request.base_url).rstrip("/")
+    _t = get_theme(con)
     name = _html.escape(p["name"])
     desc = _html.escape(p["description"]
-                        or f"{p['name']} from {get_theme(con)['brand'].title()}.")
+                        or f"{p['name']} from {_t['brand'].title()}.")
     canonical = f"{base}/product/{pid}-{slugify(p['name'])}"
     meta = product_meta(con, pid)
     colour = meta.get("colour") or "#6c00bf"
@@ -1203,7 +1296,8 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
                f' alt="{name}"></div>')
     else:
         art = (f'<div class="pp-stage">'
-               f'{can_svg(pid, p["name"], colour, brand=get_theme(con)["brand"])}</div>')
+               f'{product_art(_t, pid, p["name"], colour, brand=_t["brand"])}'
+               f'</div>')
     var_html = ""
     if variants:
         opts = "".join(
@@ -1285,7 +1379,7 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
             + (f'<div class="art"><img src="{r["media"][0]["thumb"]}"'
                f' alt="" loading="lazy"></div>' if r.get("media")
                else f'<div class="art">'
-                    f'{can_svg(r["id"], r["name"], product_meta(con, r["id"]).get("colour") or "", "rec")}'
+                    f'{product_art(_t, r["id"], r["name"], product_meta(con, r["id"]).get("colour") or "", "rec")}'
                     f'</div>')
             + '</a>'
             + f'<div class="body">'
@@ -1346,7 +1440,7 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
 <div class="sticky-buy" id="sticky-buy" style="--flavour:{colour}">
  <div class="sticky-inner">
   {(f'<span class="sticky-shot"><img src="/media/product/{pid}" alt=""></span>')
-   if p["image"] else can_svg(pid, p["name"], colour, "sticky", mini=True)}
+   if p["image"] else product_art(_t, pid, p["name"], colour, "sticky", mini=True)}
   <span class="who"><b>{name}</b><span class="dim" id="sticky-price">${min(prices) / 100:.2f}</span></span>
   <button class="btn-pill primary" id="sticky-add"{"" if in_stock else " disabled"}>
    {"Add to cart" if in_stock else "Sold out"}</button>

@@ -2958,8 +2958,17 @@ ok("video.muted = true; paintSound();" in _storejs
 ok("social_proof" in _sect.SECTION_TYPES
    and _sect.HOME_DEFAULT[1] == "social_proof",
    "the customer count sits directly under the carousel")
-ok("100,000+" in _sect.defaults_for("social_proof")["figure"],
-   "and it says 100,000+")
+ok(not _sect.defaults_for("social_proof")["figure"],
+   "and it ships EMPTY — a shared default that invents a customer count "
+   "puts a number on a shop that has not sold anything yet, in the "
+   "merchant's name")
+_defaults = json.dumps({k: _sect.defaults_for(k) for k in _sect.SECTION_TYPES})
+_voice = [w for w in ("zenjoy", "theanine", "ashwagandha", "lemon balm",
+                      "flavors", "your zen", "100,000")
+          if w in _defaults.lower()]
+ok(not _voice,
+   f"and no section default speaks in one particular business's voice — "
+   f"these are what a FRESH tenant of any kind opens on (found: {_voice})")
 
 ok("const isCase" in _storejs and 'category || "") === "multipacks"' in _storejs,
    "the case is recognised by category, so a rename cannot lose it")
@@ -3124,8 +3133,10 @@ ok("innerHeight * 0.6" in _storejs or "scrollY >" in _storejs,
 ok("out.code ||" in _storejs,
    "the discount code comes from the server, not invented on the client")
 
-ok("Shop your Zen" in _storejs and '"default": "Shop your Zen"' in _sectsrc,
-   "'Shop the range' is now 'Shop your Zen'")
+ok('${t("shop_cta")}' in _storejs and "Shop your Zen" not in _storejs
+   and "Shop your Zen" not in _sectsrc,
+   "the shop's own invitation is a string the tenant owns, not one "
+   "business's slogan compiled into the storefront everyone shares")
 ok("f'Flavor</span>'" in _apisrc and "f'Flavour</span>'" not in _apisrc,
    "the product page's switcher is labelled Flavor")
 ok("all four flavors" in _storejs, "and the menu says flavors")
@@ -5312,6 +5323,100 @@ ok('data-studioview="' in _opsjs and '"/api/store/admin/studio"' in _opsjs
    and "Open the\n          roadmap" in _opsjs or "studio-portal" in _opsjs,
    "the Documents tab shows the studio card — the other side of the client "
    "relationship, visible from inside the client's own install")
+
+
+# --- the studio's own storefront ------------------------------------------
+# The split gave ZenJoy the shop; the studio was left showing the section
+# engine's factory defaults, which were a drinks brand's. This is the
+# storefront that sells the product, seeded from the price book so it cannot
+# quote a figure the book does not.
+from storefront.backend import pricebook as _pb
+
+_caps_pb = _pb.capabilities()
+ok(len(_caps_pb) == 27 and {c["price"] for c in _caps_pb} == {20, 30, 50},
+   "the price book parses into code — 27 capabilities on three bands, one "
+   "table read rather than a fourth copy typed out")
+ok(_pb.core_price() == 50
+   and [t["price"] for t in _pb.tiers()] == [199, 349, 699]
+   and [c["price"] for c in _pb.care_plans()] == [150, 350, 750],
+   "core, tiers and care plans come out of the same document the bench and "
+   "the deck are held to")
+_bk = {b["name"]: b["price"] for b in _pb.builds()}
+ok(_bk["Guided setup"] == 499 and _bk["Flagship"] == 40000,
+   "and the build ladder, so the shop cannot quietly reprice a build")
+
+_seed = _spm.run([sys.executable, str(ROOT / "scripts" / "seed_studio.py"),
+                  "--tenant", "alpha", "--force"], capture_output=True,
+                 text=True, env={**os.environ,
+                                 "BUSINESS_CONTROL_DATA":
+                                     os.environ["BUSINESS_CONTROL_DATA"]})
+ok(_seed.returncode == 0, f"the studio storefront seeds ({_seed.stderr[-200:]})")
+_tn.bust_cache()
+_shop = c.get("/", headers=HA).text
+ok('class="band band-light"' in _shop
+   and _shop.count("class=\"band band-") == 27,
+   "the home page carries the whole capability menu — all 27, banded — "
+   "because a buyer who can see the menu and add it up does not have to "
+   "ask for a call first")
+for _fig in ("$50", "$199", "$150"):
+    ok(_fig in _shop, f"and the book's figures reach the shop ({_fig})")
+_leak = [w for w in ("L-theanine", "Zen", "flavors", "calm")
+         if w in _shop]
+ok(not _leak,
+   f"and not one word of the drinks brand it was cloned from "
+   f"(found: {_leak})")
+
+_cat = c.get("/api/store/catalog", headers=HA).json()["products"]
+_names = {p["name"]: p for p in _cat}
+ok(_names["Starter plan"]["price_cents"] == 19900
+   and _names["Priority care"]["price_cents"] == 75000,
+   "the plans are buyable at the book's prices")
+ok(sum(1 for p in _cat if p["featured"]) == 1
+   and _names["Pro plan"]["featured"],
+   "exactly one product stands in the hero, and it is the one chosen — the "
+   "hero used to show whatever sorted first, which was a grey support plan")
+ok(c.get("/p/pricing", headers=HA).status_code == 200
+   and "Food brand" in c.get("/p/pricing", headers=HA).text,
+   "pricing carries the book's worked examples — a price nobody can "
+   "reproduce is a price nobody trusts")
+ok("Aftercare" in c.get("/p/how-it-works", headers=HA).text,
+   "and the six stages of a build are a page, not a promise on a call")
+_rt = _sect.rich('<p>a <b>b</b> <script>alert(1)</script>'
+                 '<a href="/p/x">l</a><a href="javascript:x">n</a></p>')
+ok("<b>b</b>" in _rt and '<a href="/p/x">' in _rt
+   and "<script>" not in _rt and "javascript:" not in _rt.split("</a>")[0]
+   and '<p class="big">Two parts' in c.get("/p/pricing", headers=HA).text,
+   "a field called richtext, helped as 'simple formatting allowed', now "
+   "allows simple formatting — it escaped every tag it invited, so a "
+   "merchant typing <b> got <b> printed on the page")
+
+ok(c.get("/partners/build", headers=HA).status_code == 200
+   and c.get("/partners/work", headers=HA).status_code == 404,
+   "the ways-to-work-with-us pages are this tenant's, not the drinks "
+   "brand's — they are data now, and the shipped set is only a default")
+ok(c.post("/api/store/enquiry", headers=HA,
+          json={"kind": "build", "name": "A Business",
+                "email": "a@b.test"}).status_code == 200,
+   "and an enquiry on one still opens a lead on the sales board")
+ok(c.post("/api/store/enquiry", headers=HA,
+          json={"kind": "work", "name": "X"}).status_code == 400,
+   "while a kind this tenant does not publish is refused")
+
+# the theme's reach: what used to be compiled in
+_th = _jn.loads(c.get("/api/store/admin/theme", headers=AA).text)
+ok(_th["art"] == "card",
+   "a shop selling plans draws a neutral stand-in, not a drinks can")
+ok('"art": "card"' in _shop and "<svg class=\"can card-art\"" in
+   c.get(f"/product/{_names['Pro plan']['id']}-pro-plan", headers=HA).text,
+   "and the grid and the server-rendered product page draw the same one, "
+   "because they read one switch instead of each having an opinion")
+ok("family=Inter" in _shop and "Quicksand" not in _shop,
+   "the shell loads the faces the theme asks for and no others — it used "
+   "to hard-code three, so a tenant could set a typeface and get a "
+   "fallback")
+ok("family=Quicksand" in c.get("/", headers=HB).text,
+   "while a tenant that never chose one still gets the shipped wordmark "
+   "face, so nobody's header changed because this became configurable")
 
 # --- the fleet: nodes, placement, and the empty-node reap -----------------
 # Capacity is units, not tenants. The two rules that keep the bill honest:

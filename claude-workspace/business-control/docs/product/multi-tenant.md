@@ -32,6 +32,13 @@ What is never shared: databases, config (each tenant mints its own
 `admin_key` and `pin_pepper`), uploads and documents, VAPID push keys, the
 chat hub (keyed by tenant + user), and the rate limiters.
 
+**Nor is the voice.** The theme (colours, all three typefaces, the stand-in
+product art), the interface's own words (`store_meta.ui_strings`) and the
+"ways to work with us" landing pages (`store_meta.partner_pages`) are each
+the tenant's data, with the shipped value as a neutral default. See
+[studio-storefront.md](studio-storefront.md) for what moved out of the
+codebase and why.
+
 ## The registry
 
 ```json

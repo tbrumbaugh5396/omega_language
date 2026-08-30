@@ -18,6 +18,7 @@ Kept current with the code. If one of these is wrong, it's a bug.
 |---|---|
 | [DEPLOY.md](DEPLOY.md) | Getting an install onto the internet: VPS, Caddy with automatic TLS, systemd, config hardening, backups on a schedule |
 | [USERS.md](USERS.md) | Who can sign in, what each role sees, the tab access matrix, and the security model to read **before** going multi-user |
+| [studio-storefront.md](studio-storefront.md) | Business Control's own shop — seeded from the price book, and the branding that had to leave the codebase for it to exist |
 | [multi-tenant.md](multi-tenant.md) | Running several businesses from one process — the host-header router, the tenant registry, what is shared vs owned, and the split that separated the studio from ZenJoy, and the fleet of nodes clients are placed on |
 
 > `DEPLOY.md` is the technical runbook the studio's [delivery

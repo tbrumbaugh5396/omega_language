@@ -225,6 +225,32 @@ PATHS = {
 }
 
 
+def paths(con) -> dict:
+    """This tenant's "ways to work with us" pages.
+
+    PATHS above is the shipped set. A tenant that sells something else
+    replaces it wholesale by writing its own dict to store_meta under
+    'partner_pages' — same shape, same renderer, same enquiry rail into the
+    sales board. The alternative was five landing pages of one business's
+    copy living in the codebase and appearing on everybody's site.
+    """
+    row = con.execute("SELECT v FROM store_meta WHERE k='partner_pages'"
+                      ).fetchone()
+    if not row:
+        return PATHS
+    try:
+        own = json.loads(row["v"])
+    except ValueError:
+        return PATHS
+    if not isinstance(own, dict) or not own:
+        return PATHS
+    # points arrive as [icon, title, body] lists from JSON; the renderer
+    # unpacks triples.
+    for spec in own.values():
+        spec["points"] = [tuple(p) for p in spec.get("points", [])]
+    return own
+
+
 def init_tables(con):
     con.executescript(TABLES)
     if not con.execute("SELECT 1 FROM store_events").fetchone():
@@ -271,7 +297,7 @@ class EnquiryBody(BaseModel):
 @router.post("/api/store/enquiry")
 def create_enquiry(body: EnquiryBody, con=Depends(get_con),
                    _rl=Depends(rate_limit)):
-    if body.kind not in PATHS:
+    if body.kind not in paths(con):
         raise HTTPException(400, "unknown enquiry kind")
     name = body.name.strip()
     if not name:
@@ -285,7 +311,7 @@ def create_enquiry(body: EnquiryBody, con=Depends(get_con),
         " next_action_date,updated_at) VALUES(?,?,?,'lead',?,?,?)",
         (label, body.region.strip(), body.city.strip(),
          f"Follow up: "
-         f"{_branded(PATHS[body.kind]['nav'], brand_name(con))}",
+         f"{_branded(paths(con)[body.kind]['nav'], brand_name(con))}",
          time.time() + 86400, time.time()))
     oid = cur.lastrowid
     ecur = con.execute(
@@ -476,7 +502,7 @@ def admin_enquiries(limit: int = 100, u=Depends(admin_user),
     out = []
     for r in rows:
         d = dict(r)
-        d["nav"] = PATHS.get(r["kind"], {}).get("nav", r["kind"])
+        d["nav"] = paths(con).get(r["kind"], {}).get("nav", r["kind"])
         d["links"] = links.get(r["id"], [])
         out.append(d)
     return out
@@ -539,7 +565,8 @@ def _form(kind: str, spec: dict, regions) -> str:
 
 @router.get("/partners/{kind}")
 def partner_page(kind: str, request: Request, con=Depends(get_con)):
-    spec = PATHS.get(kind)
+    _paths = paths(con)
+    spec = _paths.get(kind)
     if spec is None:
         raise HTTPException(404, "no such page")
     _brand = brand_name(con)
@@ -553,7 +580,7 @@ def partner_page(kind: str, request: Request, con=Depends(get_con)):
     others = "".join(
         f'<a class="side-item" href="/partners/{k}">'
         f'{sect.esc(_branded(v["nav"], _brand))}</a>'
-        for k, v in PATHS.items() if k != kind)
+        for k, v in _paths.items() if k != kind)
     body = f"""
 <section class="section partner-head">
  <span class="eyebrow">{sect.esc(spec['kicker'])}</span>

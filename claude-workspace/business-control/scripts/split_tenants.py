@@ -52,6 +52,9 @@ ZENJOY_THEME = {
     "announce": ["Free shipping over $40",
                  "200mg L-theanine in every can"],
     "footer": "© 2026 Zenjoy · powered by business-control",
+    # ZenJoy sells a canned drink; the drawn can is its stand-in art. The
+    # code default is the neutral card, because most tenants do not.
+    "art": "can",
 }
 
 
@@ -107,6 +110,13 @@ def main() -> int:
     # the theme the neutral default no longer provides
     zcon.execute("INSERT OR REPLACE INTO store_meta(k,v) VALUES('theme',?)",
                  (json.dumps(ZENJOY_THEME),))
+    # ...and the one line of interface copy that was ZenJoy's voice living
+    # in the shared storefront script.
+    zcon.execute("INSERT OR REPLACE INTO store_meta(k,v)"
+                 " VALUES('ui_strings',?)",
+                 (json.dumps({"shop_cta": "Shop your Zen",
+                              "offer_title":
+                                  "Take 10% off your first calm."}),))
     # zenjoy's ops app is ZenJoy's, not the studio's
     zcfg = json.loads((zdir / "config.json").read_text())
     zcfg["brand_name"] = "Zenjoy"
