@@ -1175,11 +1175,15 @@ async function renderCapLocked(tab) {
         <span class="dim">· ${esc(info.band)} band, from the published
         price book${info.requires ? ` · requires ${esc(info.requires)}`
         : ""}</span></p>` : ""}
+      ${S.user && S.user.is_admin ? `
       <div class="chips" style="margin-top:10px">
         <button class="btn" id="cap-ask">${opsIcon("handshake","btn-ic")}
           Ask us to turn this on</button>
       </div>
-      <p class="dim" id="cap-ask-msg" style="margin-top:8px"></p>
+      <p class="dim" id="cap-ask-msg" style="margin-top:8px"></p>`
+      : `<p class="dim" style="margin-top:10px">Your administrator can ask
+        for this from the same screen — the request goes straight to the
+        platform's sales board.</p>`}
     </div>`;
   const b = $("#cap-ask");
   if (b) b.onclick = async () => {
@@ -6055,6 +6059,10 @@ async function renderClients() {
               e.content_pct}% · ${e.docs} document${e.docs === 1 ? "" : "s"}, ${
               e.signed} signed${e.portal_seen_at
                 ? " · client looked " + fmtDate(e.portal_seen_at) : ""}</span></div>
+          ${e.tenant_id ? `<span class="pill ok" title="this client runs
+            on the platform — their install answers at
+            ${esc(e.tenant_id)}.localhost">${opsIcon("shield2","btn-ic")}
+            ${esc(e.tenant_id)}</span>` : ""}
           ${(e.warnings || []).map((w) =>
             `<span class="pill warn">${esc(w)}</span>`).join("")}
           ${e.status === "closed" ? '<span class="pill">closed</span>' : ""}

@@ -5846,6 +5846,16 @@ ok(c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
    "and removing the install clears the engagement's pointer — a "
    "dangling tenant_id left the client page offering Launch for nothing "
    "while hiding the Stand up that could fix it")
+_appjs4 = Path("src/erp/frontend/app.js").read_text()
+ok("e.tenant_id ?" in _appjs4.replace("${e.tenant_id ? `", "e.tenant_id ?")
+   or 'e.tenant_id ? `<span class="pill ok"' in _appjs4,
+   "the clients list shows which clients RUN on the platform — the "
+   "engagement and its install joined visibly, not two lists to "
+   "cross-reference")
+ok("Your administrator can ask" in _appjs4
+   and "S.user.is_admin ? `" in _appjs4.replace("S.user && S.user.is_admin ? `", "S.user.is_admin ? `"),
+   "a non-admin on a locked tab is told who can ask, instead of a button "
+   "that fails with 'admin only' after the click")
 ok(not c.post(f"/api/store/admin/engagements/{_qeid}/gates/deposit_cleared",
               headers=AA, json={"note": "wire ref 123"}).json()
    .get("stand_up"),
