@@ -202,6 +202,25 @@ tenant exists. From one signature, the click-path is: contract signed →
 stand-up offered at the sold size → tenant live on its hostname, named on
 its storefront, hosting schedule filed in the binder.
 
+**A tenant with no quote gets the honest placeholder.** The factory
+default's showcase used to open with a shared film asset — another
+business's movie on every fresh install. The showcase now ships with no
+film (a brand film is a brand asset), renders nothing when it has neither
+film nor products, and a stand-up with no quote applies a placeholder
+home: "<brand> is setting up shop", what happens next, and a signup — a
+page that says it is temporary instead of pretending to be someone else.
+
+**And the grant is editable after the sale.** Platform → tenant →
+**Capabilities** opens the 27-checkbox editor (the button that fulfils a
+capability ask): save replaces the grant, pushes it to the tenant's node,
+logs it on the fleet and the engagement — and, opt-out, **grows the
+storefront additively** for newly granted capabilities: the add-on
+sections they earn (checked absent by type + heading, so re-saving never
+piles them up), the shape's missing pages, nav links for pages created
+here only. Nothing an operator built is rewritten; growth for tenants
+living on worker nodes is grant-only for now. Clear-grant is its own
+deliberate button, returning to "no grant recorded — everything on."
+
 **And the quote becomes the entitlement.** The capability ids are written
 to the tenant's registry row (`caps`) at stand-up — the same list that
 sizes the node and shapes the pages now also records what was sold.

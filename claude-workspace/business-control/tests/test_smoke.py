@@ -2901,6 +2901,17 @@ ok("showcase" in _sect.SECTION_TYPES and "showcase" in _sect.RENDERERS,
    "the showcase is a real section type, editable like the rest")
 ok(_sect.HOME_DEFAULT[0] == "showcase",
    "and a fresh store gets it at the top of the home page")
+ok(_sect.defaults_for("showcase")["video_src"] == "",
+   "with NO default film — a brand film is a brand asset, and the one "
+   "that used to sit here put another business's movie on every fresh "
+   "install's front page")
+# a merchant who has a film sets it — and then it is server-rendered
+_shsec = next(x for x in c.get("/api/store/admin/sections/home",
+                               headers=A).json() if x["type"] == "showcase")
+c.post(f"/api/store/admin/sections/{_shsec['id']}", headers=A,
+       json={"settings": {**_shsec["settings"],
+                          "video_src": "/hero/hero.mp4",
+                          "video_poster": "/hero/hero.jpg"}})
 _home = c.get("/").text
 ok('id="show-rail"' in _home and 'data-kind="video"' in _home,
    "the film is on the page as markup, not fetched in later")
@@ -5967,12 +5978,26 @@ c.request("DELETE", "/api/store/admin/fleet/tenants/schoolco?keep_data=0",
           headers=AA)
 
 ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
-          json={"id": "noquote", "klass": "micro"}).json()["layout"] == ""
-   and "showcase" in [r[0] for r in sqlite3.connect(
-       _tn.tenant_dir("noquote") / "business_control.db").execute(
-       "SELECT type FROM page_sections WHERE page_slug='home'")],
-   "with no engagement there is nothing to derive from — the shipped "
-   "default stays, and nothing pretends otherwise")
+          json={"id": "noquote", "klass": "micro"}).json()["layout"]
+   == "placeholder",
+   "with no quote there is no shape to derive — so the stand-up applies "
+   "the PLACEHOLDER, never the factory default that used to put another "
+   "business's film on a fresh install's front door")
+_nqcon = sqlite3.connect(_tn.tenant_dir("noquote") / "business_control.db")
+_nqtypes = [r[0] for r in _nqcon.execute(
+    "SELECT type FROM page_sections WHERE page_slug='home'"
+    " ORDER BY position")]
+_nqhero = _nqcon.execute(
+    "SELECT settings FROM page_sections WHERE page_slug='home'"
+    " AND type='hero'").fetchone()[0]
+_nqcon.close()
+ok("showcase" not in _nqtypes and "setting up shop" in _nqhero
+   and "Noquote" in _nqhero,
+   "the placeholder says what is true — the install is live, the site is "
+   "not designed yet, under the business's own name")
+ok("hero.mp4" not in _jn.dumps([
+       dict(_sect.defaults_for(t)) for t in _sect.SECTION_TYPES]),
+   "and no section default anywhere references the old film asset")
 c.request("DELETE", "/api/store/admin/fleet/tenants/noquote?keep_data=0",
           headers=AA)
 
@@ -6857,6 +6882,85 @@ ok(_esc and not (Path(os.environ["BUSINESS_CONTROL_DATA"]) / "tenants"
                  / "escape.txt").exists(),
    "a shipment that tries to write outside the tenant's directory is an "
    "attack, not a shipment — refused before a byte lands")
+
+
+# --- the grant editor: capabilities bought AFTER stand-up -----------------
+# The button that fulfils a capability ask — and the moment the site grows
+# the piece that sells the new capability. Additive only: nothing an
+# operator built is rewritten.
+_ge = c.post("/api/store/admin/engagements", headers=AA,
+             json={"name": "Grow Co"}).json()["id"]
+c.post(f"/api/store/admin/engagements/{_ge}/quote", headers=AA,
+       json={"markdown": "# Quote",
+             "state": _bench_state(locs=1, seats=4,
+                                   on=["core", "selling", "payments"])})
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "growco", "brand": "Grow Co", "klass": "micro",
+             "engagement_id": _ge})
+_gcon = sqlite3.connect(_tn.tenant_dir("growco") / "business_control.db")
+_gcon.row_factory = sqlite3.Row
+_gcon.execute("UPDATE page_sections SET settings=json_set(settings,"
+              "'$.heading','Operator wrote this') WHERE page_slug='home'"
+              " AND type='hero'")
+_gcon.commit()
+
+ok("cap_catalog" in c.get("/api/store/admin/fleet", headers=AA).json()
+   and len(c.get("/api/store/admin/fleet", headers=AA).json()
+           ["cap_catalog"]) == 27,
+   "the board carries the full catalog, so the grant editor lists what "
+   "can actually be sold")
+_gr = c.post("/api/store/admin/fleet/tenants/growco/caps", headers=AA,
+             json={"caps": ["selling", "payments", "subs",
+                            "events"]}).json()
+ok(_gr["added"] == ["events", "subs"]
+   and _tn.registry()["tenants"]["growco"]["caps"]
+   == ["events", "payments", "selling", "subs"],
+   "granting records the new entitlement and names exactly what was "
+   "added")
+_gcon2 = sqlite3.connect(_tn.tenant_dir("growco") / "business_control.db")
+_gcon2.row_factory = sqlite3.Row
+_gsettings = [r["settings"] for r in _gcon2.execute(
+    "SELECT settings FROM page_sections WHERE page_slug='home'")]
+ok(any("There's a subscription" in x for x in _gsettings)
+   and any("Come find us" in x for x in _gsettings),
+   "the site GREW the pieces the new capabilities earn — the subscription "
+   "explainer and the events pointer appeared on the home page")
+ok(any("Operator wrote this" in x for x in _gsettings),
+   "while the operator's edited hero was not touched — growth is "
+   "additive, never a rewrite")
+_before_n = _gcon2.execute("SELECT COUNT(*) FROM page_sections WHERE"
+                           " page_slug='home'").fetchone()[0]
+c.post("/api/store/admin/fleet/tenants/growco/caps", headers=AA,
+       json={"caps": ["selling", "payments", "subs", "events"]})
+_gcon3 = sqlite3.connect(_tn.tenant_dir("growco") / "business_control.db")
+ok(_gcon3.execute("SELECT COUNT(*) FROM page_sections WHERE"
+                  " page_slug='home'").fetchone()[0] == _before_n,
+   "re-saving the same grant grows nothing — presence is checked, so the "
+   "explainer cannot pile up")
+ok(c.post("/api/store/admin/fleet/tenants/growco/caps", headers=AA,
+          json={"caps": []}).status_code == 400,
+   "an empty grant is refused as ambiguous — clearing is its own act")
+ok(c.post("/api/store/admin/fleet/tenants/growco/caps", headers=AA,
+          json={"clear": True}).json()["caps"] is None
+   and "caps" not in _tn.registry()["tenants"]["growco"],
+   "and clearing returns to 'no grant recorded' — everything on, the "
+   "unambiguous meaning missing caps has always had")
+ok(c.post("/api/store/admin/fleet/tenants/growco/caps", headers=BB,
+          json={"caps": ["selling"]}).status_code == 404,
+   "a client tenant cannot grant itself anything")
+c.request("DELETE", "/api/store/admin/fleet/tenants/growco?keep_data=0",
+          headers=AA)
+
+# the placeholder + the honest empty showcase
+ok("placeholder" in _jn.dumps(_lay.placeholder_home("X Co"))
+   or "setting up shop" in _jn.dumps(_lay.placeholder_home("X Co")),
+   "the placeholder layout exists as data like every other layout")
+_appjs3 = Path("src/erp/frontend/app.js").read_text()
+ok("data-tcaps" in _appjs3 and "cg-extend" in _appjs3
+   and "cg-clear" in _appjs3,
+   "the Platform tab carries the editor — per-tenant Capabilities button, "
+   "the grow-the-site checkbox, and clear-grant as its own deliberate "
+   "button")
 
 _shm.rmtree(_split_dir, ignore_errors=True)
 

@@ -4247,6 +4247,10 @@ async function renderFleet() {
           </span>
           <span class="dl-acts" style="grid-template-columns:74px 74px 70px">
             ${t.provider ? "<span></span><span></span><span></span>" : `
+            <button class="btn alt sm" data-tcaps="${esc(t.id)}"
+              title="what they're entitled to — grants fulfil capability
+              asks, and the site grows the pieces new capabilities earn"
+              >Capabilities</button>
             <button class="btn alt sm" data-tmove="${esc(t.id)}"
               title="move this client to another node">Move</button>
             <button class="btn alt sm" data-tstatus="${esc(t.id)}"
@@ -4373,6 +4377,57 @@ async function renderFleet() {
       } catch (err) { toast(err.message); }
     });
 
+  view().querySelectorAll("[data-tcaps]").forEach((b) => b.onclick = () => {
+    const tid = b.dataset.tcaps;
+    const ten = f.nodes.flatMap((n) => n.tenants)
+      .find((t) => t.id === tid);
+    const cur = new Set(ten.cap_ids || []);
+    const all = !cur.size;
+    modal(`<h3>Capabilities — ${esc(tid)}</h3>
+      <p class="dim">${all
+        ? "No grant recorded — <b>everything is on</b>. Ticking boxes "
+          + "replaces that with an explicit grant."
+        : "What the quote sold, editable — this is the button that "
+          + "fulfils a capability ask."}</p>
+      <div class="cap-grid">${f.cap_catalog.map((cc) => `
+        <label><input type="checkbox" value="${cc.id}" data-cg
+          ${all || cur.has(cc.id) ? "checked" : ""}> ${esc(cc.name)}
+        </label>`).join("")}</div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+        <input type="checkbox" id="cg-extend" checked style="width:auto">
+        Grow their storefront for newly granted capabilities (additive —
+        never rewrites their pages)</label>
+      <div class="modal-foot">
+        <button class="btn" id="cg-go">Save grant</button>
+        <button class="btn alt sm" id="cg-clear" title="back to no grant
+          recorded — everything on">Clear grant</button>
+        <button class="btn alt" data-close>Cancel</button>
+      </div>`);
+    $("#cg-go").onclick = async () => {
+      const caps = [...document.querySelectorAll("[data-cg]:checked")]
+        .map((x) => x.value);
+      try {
+        const out = await api(
+          `/api/store/admin/fleet/tenants/${tid}/caps`,
+          { body: { caps, extend_site: $("#cg-extend").checked } });
+        closeModal();
+        const g = out.grown || {};
+        const grew = [...(g.sections || []), ...(g.pages || [])];
+        toast(`${tid}: ${out.caps.length} capabilities`
+          + (out.added && out.added.length
+             ? ` (+${out.added.join(", ")})` : "")
+          + (grew.length ? ` — site grew: ${grew.join(", ")}` : ""));
+        renderFleet();
+      } catch (err) { toast(err.message); }
+    };
+    $("#cg-clear").onclick = async () => {
+      try {
+        await api(`/api/store/admin/fleet/tenants/${tid}/caps`,
+          { body: { clear: true } });
+        closeModal(); toast(`${tid}: everything on`); renderFleet();
+      } catch (err) { toast(err.message); }
+    };
+  });
   view().querySelectorAll("[data-tmove]").forEach((b) => b.onclick = () => {
     modal(`<h3>Move ${esc(b.dataset.tmove)}</h3>
       <p class="dim">Whichever node it leaves behind empty is destroyed.</p>

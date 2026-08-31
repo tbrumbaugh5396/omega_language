@@ -1016,3 +1016,11 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
 #tabs button.cap-locked .cap-lock-ic svg,
 #bottomnav button.cap-locked .cap-lock-ic svg {
   width: 12px; height: 12px; margin-left: auto; opacity: .8; }
+
+/* the grant editor: 27 capabilities, scannable */
+.cap-grid { display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 4px 14px; margin-top: 8px; }
+.cap-grid label { display: flex; gap: 7px; align-items: center;
+  font-size: 13px; }
+.cap-grid input { width: auto; }
+@media (max-width: 640px) { .cap-grid { grid-template-columns: 1fr 1fr; } }

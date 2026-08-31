@@ -2634,6 +2634,8 @@ def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
             t["billing"] = billing.get(t["id"])
     return {"nodes": board, "classes": fleet.CLASSES,
             "backup": _backup_health(),
+            "cap_catalog": [{"id": k, "name": v}
+                            for k, v in sorted(CAP_NAMES.items())],
             "public_suffix": (fleet_cfg() or {}).get("public_suffix", ""),
             "events": fleet.events(20),
             "unplaced": [dict(v, slug=k) for k, v in clients.items()
@@ -2755,6 +2757,22 @@ def fleet_tenant_add(body: TenantBody, request: Request,
                           u["name"])
             except Exception:
                 layout = ""
+    if not layout:
+        # No quote, no capabilities, no shape to derive — the honest page,
+        # not the factory default that used to put another business's film
+        # on a fresh install's front door.
+        try:
+            with tenancy.run_as(tid):
+                from erp.backend import db as _db2
+                from .layouts import apply_placeholder
+                pcon = _db2.connect()
+                try:
+                    apply_placeholder(pcon, body.brand or tid.title())
+                finally:
+                    pcon.close()
+            layout = "placeholder"
+        except Exception:
+            pass
     if body.engagement_id:
         con.execute("UPDATE engagements SET tenant_id=? WHERE id=?",
                     (tid, body.engagement_id))
@@ -2923,6 +2941,69 @@ def launch_site(eid: int, body: LaunchBody, u=Depends(admin_user),
     fleet.log("site launched", f"{tid} → {url}"
               + (f" · {len(caps)} caps" if caps else ""), u["name"])
     return {"ok": True, "url": url, "hosts": hosts, "caps": caps}
+
+
+class GrantBody(BaseModel):
+    caps: list[str] = []
+    clear: bool = False              # back to "no grant recorded" = all on
+    extend_site: bool = True
+
+
+@router.post("/api/store/admin/fleet/tenants/{tid}/caps")
+def set_tenant_caps(tid: str, body: GrantBody, u=Depends(admin_user),
+                    con=Depends(get_con)):
+    """Change what a tenant is entitled to — the button that FULFILS a
+    capability ask, and the moment the site should grow the piece that
+    sells the new capability.
+
+    Growth is additive only: newly granted capabilities earn their add-on
+    sections and the shape's missing pages, and nothing an operator built
+    is rewritten. The tenant's node hears about it, and their ops app's
+    locked tabs open on the next load."""
+    _provider_only()
+    from erp.backend import db as _db, fleet, tenancy
+    if tid not in tenancy.all_tenants():
+        raise HTTPException(404, f"no tenant '{tid}'")
+    if body.clear:
+        reg = tenancy.registry() or {}
+        (reg.get("tenants") or {}).get(tid, {}).pop("caps", None)
+        tenancy.REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+        tenancy.bust_cache()
+        fleet.push_entry(tid)
+        fleet.log("grant cleared", f"{tid}: everything on", u["name"])
+        return {"ok": True, "caps": None, "grown": {}}
+    caps = sorted({c for c in body.caps if c in CAP_NAMES})
+    if not caps:
+        raise HTTPException(400, "an empty grant is ambiguous — pick "
+                                 "capabilities, or clear the grant to "
+                                 "mean everything")
+    before = set(tenancy.caps_of(tid) or [])
+    tenancy.set_caps(tid, caps)
+    fleet.push_entry(tid)
+    added = sorted(set(caps) - before) if before else []
+    grown = {}
+    if body.extend_site and added and not fleet.node_addr(
+            tenancy.node_of(tid)):
+        from .layouts import extend_for_caps
+        try:
+            with tenancy.run_as(tid):
+                tcon = _db.connect()
+                try:
+                    grown = extend_for_caps(tcon, added, caps)
+                finally:
+                    tcon.close()
+        except Exception:
+            grown = {}
+    fleet.log("grant changed",
+              f"{tid}: {len(caps)} capabilities"
+              + (f" (+{', '.join(added)})" if added else ""), u["name"])
+    e = con.execute("SELECT id FROM engagements WHERE tenant_id=? AND"
+                    " status != 'archived' LIMIT 1", (tid,)).fetchone()
+    if e:
+        log(con, e["id"], u["name"],
+            f"capability grant now: {', '.join(caps)}")
+        con.commit()
+    return {"ok": True, "caps": caps, "added": added, "grown": grown}
 
 
 # ---------- the design library: design once, place everywhere ----------
@@ -3136,6 +3217,26 @@ def push_design(did: int, body: PushBody, u=Depends(admin_user),
 
 # ---------- entitlements: what a tenant asks about, and how it asks ----------
 
+# The bench's ids and the book's names differ; the bench ids are what
+# the entitlement carries, so one map — used by the locked-tab panel, the
+# grant editor's catalog, and the fulfilment route.
+CAP_NAMES = {
+    "sourcing": "Sourcing", "inventory": "Inventory",
+    "production": "Production", "warehouse": "Warehouse",
+    "distribution": "Distribution", "learning": "Learning",
+    "voice": "Voice & translation", "selling": "Selling",
+    "subs": "Subscriptions & boxes", "fundraising": "Fundraising",
+    "marketing": "Marketing", "crm": "CRM & Support", "events": "Events",
+    "affiliates": "Affiliates", "payments": "Payments",
+    "accounting": "Accounting", "finance": "Finance",
+    "treasury": "Treasury & investments", "workforce": "Workforce",
+    "onboarding": "Onboarding", "payroll": "Payroll",
+    "intelligence": "Intelligence", "automation": "Automation",
+    "comms": "Comms", "infosec": "InfoSec",
+    "api": "API & data platform", "legal": "Legal",
+}
+
+
 @router.get("/api/capability-info/{cap_id}")
 def capability_info(cap_id: str, con=Depends(get_con)):
     """One capability, priced from the book — for the locked tab's panel.
@@ -3143,24 +3244,7 @@ def capability_info(cap_id: str, con=Depends(get_con)):
     Served to any tenant: the price shown next to "ask us to turn this on"
     must be the published one, not a number the frontend remembered."""
     from .pricebook import capabilities
-    # The bench's ids and the book's names differ; the bench ids are what
-    # the entitlement carries, so map through the same table the deck uses.
-    names = {
-        "sourcing": "Sourcing", "inventory": "Inventory",
-        "production": "Production", "warehouse": "Warehouse",
-        "distribution": "Distribution", "learning": "Learning",
-        "voice": "Voice & translation", "selling": "Selling",
-        "subs": "Subscriptions & boxes", "fundraising": "Fundraising",
-        "marketing": "Marketing", "crm": "CRM & Support", "events": "Events",
-        "affiliates": "Affiliates", "payments": "Payments",
-        "accounting": "Accounting", "finance": "Finance",
-        "treasury": "Treasury & investments", "workforce": "Workforce",
-        "onboarding": "Onboarding", "payroll": "Payroll",
-        "intelligence": "Intelligence", "automation": "Automation",
-        "comms": "Comms", "infosec": "InfoSec",
-        "api": "API & data platform", "legal": "Legal",
-    }
-    name = names.get(cap_id)
+    name = CAP_NAMES.get(cap_id)
     if not name:
         raise HTTPException(404, "no such capability")
     try:

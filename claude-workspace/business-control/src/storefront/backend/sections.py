@@ -89,10 +89,13 @@ SECTION_TYPES = {
         "help": "The film, then one slide per product. Arrows, dots, "
                 "keyboard and swipe all move it.",
         "fields": [
+            # No default film: a brand film is a brand ASSET, and the one
+            # that used to sit here was ZenJoy's — which put another
+            # business's movie on every fresh install's front page.
             {"k": "video_src", "t": "text", "label": "Video file",
-             "default": "/hero/hero.mp4"},
+             "default": ""},
             {"k": "video_poster", "t": "text", "label": "Video poster",
-             "default": "/hero/hero.jpg"},
+             "default": ""},
             {"k": "video_caption", "t": "text", "label": "Video caption",
              "default": ""},
             {"k": "cta_text", "t": "text", "label": "Button under the caption",
@@ -411,6 +414,10 @@ def _showcase(con, s) -> str:
     rows = con.execute(q + " ORDER BY p.category DESC, p.id", args).fetchall()
 
     slides = []
+    if not s.get("video_src") and not rows:
+        # nothing to show: no film chosen, no products yet. Nothing beats
+        # an empty carousel pretending to be content.
+        return ""
     if s.get("video_src"):
         auto = " autoplay" if s.get("autoplay", True) else ""
         cta = ""

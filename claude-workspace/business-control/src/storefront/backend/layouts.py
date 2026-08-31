@@ -434,3 +434,120 @@ def apply(con, caps, brand: str = "") -> str:
                 (json.dumps(["showcase", "social_proof"]),))
     con.commit()
     return shape
+
+
+# ------------------------------------------------------ the placeholder --
+# What a tenant stood up WITHOUT a quote opens on. No shape can be derived
+# from nothing, and the old answer — the section engine's factory default,
+# drinks film and all — put another business's brand on the new one's
+# front page. The placeholder says exactly what is true: the install is
+# live, the site is not designed yet, and here is where designing happens.
+
+def placeholder_home(brand: str = "") -> list:
+    b = brand or "This business"
+    return [
+        _s("hero",
+           heading=f"{b}\nis setting up shop.",
+           sub="The install is live — the storefront just hasn't been "
+               "designed yet. Everything on this page is a placeholder "
+               "waiting for the real thing.",
+           cta_text="", cta_link="", cta2_text="",
+           show_product=False, bg="gradient",
+           stat1="|", stat2="|", stat3="|"),
+        _s("rich_text",
+           heading="What happens next",
+           body="The design happens in the theme editor — click any "
+                "section on the page and type over it, drop images "
+                "straight onto it, add and reorder sections in place. Or "
+                "file a quote for this client and re-run the stand-up: "
+                "the capabilities they buy will shape this page "
+                "automatically.\n\nReplace this page; it knows it is "
+                "temporary.", align="center"),
+        _s("newsletter",
+           heading="Opening soon",
+           body="Leave an address and hear about it first.",
+           cta_text="Keep me posted"),
+    ]
+
+
+def apply_placeholder(con, brand: str = "") -> None:
+    """Replace the factory-default home with the honest placeholder. Only
+    ever called at stand-up, onto a page nobody has touched."""
+    import json
+    con.execute("DELETE FROM page_sections WHERE page_slug='home'")
+    for i, (stype, settings) in enumerate(placeholder_home(brand)):
+        con.execute(
+            "INSERT INTO page_sections(page_slug,type,settings,position,"
+            " enabled) VALUES('home',?,?,?,1)",
+            (stype, json.dumps(settings), i))
+    con.execute("INSERT OR REPLACE INTO store_meta(k,v)"
+                " VALUES('home_backfill',?)",
+                (json.dumps(["showcase", "social_proof"]),))
+    con.commit()
+
+
+# ------------------------------------------------- the grant, growing --
+# When a capability is bought AFTER stand-up, the site should grow the
+# piece that sells it — additively. The operator's edits are theirs: this
+# never rewrites the home page or the nav wholesale, it only ADDS what a
+# newly granted capability earns and is verifiably absent.
+
+def extend_for_caps(con, added, all_caps, brand: str = "") -> dict:
+    """Additive site growth for newly granted capabilities.
+
+    Adds: the add-on sections the new caps earn (detected absent by
+    type + heading, the same pair the add-ons are defined by), the shape's
+    secondary pages where the slug is free, and nav links for pages
+    created HERE only — an operator's nav stays their nav. Returns what
+    was done, so the caller can say it out loud."""
+    import json
+    shape = shape_of(all_caps)
+    done = {"sections": [], "pages": [], "nav": []}
+
+    have = {(r[0], (json.loads(r[1] or "{}")).get("heading", ""))
+            for r in con.execute(
+                "SELECT type, settings FROM page_sections"
+                " WHERE page_slug='home'")}
+    # The shape-skips in _addons are stand-up reasoning ("the commerce
+    # skeleton already sells, so no subs explainer") — reasoning that does
+    # not hold for a page built BEFORE the capability existed. A later
+    # purchase earns its section unconditionally; "services" is the shape
+    # with no skips.
+    for _where, (stype, settings) in _addons("services", added):
+        key = (stype, settings.get("heading", ""))
+        if key in have:
+            continue
+        nxt = con.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM page_sections"
+            " WHERE page_slug='home'").fetchone()[0]
+        con.execute(
+            "INSERT INTO page_sections(page_slug,type,settings,position,"
+            " enabled) VALUES('home',?,?,?,1)",
+            (stype, json.dumps(settings), nxt))
+        done["sections"].append(settings.get("heading") or stype)
+
+    import time
+    for slug, title, psecs in secondary_pages(shape, brand):
+        cur = con.execute(
+            "INSERT OR IGNORE INTO store_pages(slug,title,published,"
+            " created_at) VALUES(?,?,1,?)", (slug, title, time.time()))
+        if not cur.rowcount:
+            continue
+        for i, (stype, settings) in enumerate(psecs):
+            con.execute(
+                "INSERT INTO page_sections(page_slug,type,settings,"
+                " position,enabled) VALUES(?,?,?,?,1)",
+                (slug, stype, json.dumps(settings), i))
+        done["pages"].append(slug)
+        if not con.execute("SELECT 1 FROM store_menus WHERE url=?",
+                           (f"/p/{slug}",)).fetchone():
+            for loc in ("header", "footer"):
+                nxt = con.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM"
+                    " store_menus WHERE location=?", (loc,)).fetchone()[0]
+                con.execute(
+                    "INSERT INTO store_menus(location,label,url,position)"
+                    " VALUES(?,?,?,?)", (loc, title, f"/p/{slug}", nxt))
+            done["nav"].append(title)
+    con.commit()
+    return done
