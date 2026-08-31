@@ -45,15 +45,134 @@ function refresh(soon = 350) {
   saveTimer = setTimeout(() => {
     const f = $("#preview");
     f.src = (SLUG === "home" ? "/" : `/p/${SLUG}`) + "?t=" + Date.now();
-    $("#saved").classList.remove("hidden");
-    setTimeout(() => $("#saved").classList.add("hidden"), 1400);
+    savedTick();
   }, soon);
 }
+function savedTick() {
+  $("#saved").classList.remove("hidden");
+  setTimeout(() => $("#saved").classList.add("hidden"), 1400);
+}
+$("#preview").onload = () => wirePreview();
 $("#vp-desktop").onclick = () => { $("#frame-wrap").classList.remove("mobile");
   $("#vp-desktop").classList.add("on"); $("#vp-mobile").classList.remove("on"); };
 $("#vp-mobile").onclick = () => { $("#frame-wrap").classList.add("mobile");
   $("#vp-mobile").classList.add("on"); $("#vp-desktop").classList.remove("on"); };
 $("#vp-reload").onclick = () => refresh(0);
+
+// ---------- the live loop: the preview is the editor ----------
+/* The iframe is same-origin, so the editor works on its DOM directly:
+   click a section on the page to select it, type into the marked text
+   fields, and saves swap just that section's element. The page never
+   reloads under the merchant's cursor — a reload is for structure
+   (add / move / delete), not for words. */
+
+const EDIT_CSS = `
+  [data-sid] { position: relative; }
+  [data-sid]:hover { outline: 2px dashed rgba(108,0,191,.45);
+    outline-offset: -2px; cursor: pointer; }
+  [data-sid].sfe-sel { outline: 2px solid #6c00bf; outline-offset: -2px;
+    cursor: auto; }
+  [data-sid].sfe-sel::after, [data-sid]:hover::after {
+    content: attr(data-slabel); position: absolute; top: 0; left: 0;
+    background: #6c00bf; color: #fff; font: 600 11px/1 Inter, sans-serif;
+    padding: 4px 8px; border-bottom-right-radius: 8px; z-index: 60;
+    pointer-events: none; }
+  .sfe-sel [data-sf] { cursor: text; }
+  .sfe-sel [data-sf]:hover { background: rgba(108,0,191,.07);
+    border-radius: 4px; }
+  .sfe-sel [data-sf]:focus { outline: 1.5px solid rgba(108,0,191,.5);
+    outline-offset: 2px; border-radius: 4px; background: #fff3; }`;
+
+const pdoc = () => $("#preview").contentDocument;
+
+function wirePreview() {
+  const doc = pdoc();
+  if (!doc || doc.getElementById("sfe-css")) return;
+  const st = doc.createElement("style");
+  st.id = "sfe-css";
+  st.textContent = EDIT_CSS;
+  doc.head.appendChild(st);
+  // One capture-phase listener owns every click: links must not navigate
+  // the page being edited out from under the editor, and any click lands
+  // on the section it happened in.
+  doc.addEventListener("click", (e) => {
+    const sec = e.target.closest("[data-sid]");
+    if (e.target.closest("a") || e.target.closest("button")) {
+      // Inert, not interactive: a link would navigate the page being
+      // edited out from under the editor, and a live Add-to-cart in a
+      // preview quietly builds a real cart.
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!sec) return;
+    if (+sec.dataset.sid !== SEL) {
+      e.preventDefault();
+      SEL = +sec.dataset.sid;
+      drawSections(); drawForm();
+      highlightPreview(SEL, false);
+    }
+  }, true);
+  highlightPreview(SEL, false);
+}
+
+function highlightPreview(sid, scroll = true) {
+  const doc = pdoc();
+  if (!doc) return;
+  doc.querySelectorAll("[data-sid].sfe-sel").forEach((el) => {
+    el.classList.remove("sfe-sel");
+    el.querySelectorAll("[data-sf]").forEach((t) =>
+      t.removeAttribute("contenteditable"));
+  });
+  const el = doc.querySelector(`[data-sid="${sid}"]`);
+  if (!el) return;
+  el.classList.add("sfe-sel");
+  if (scroll) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  armInline(el);
+}
+
+/* Typing into the page IS editing the field. data-sf names the settings
+   key the element renders; plaintext-only keeps paste from smuggling
+   markup into a field the server would escape anyway. */
+function armInline(secEl) {
+  const s = SECTIONS.find((x) => x.id === SEL);
+  if (!s) return;
+  secEl.querySelectorAll("[data-sf]").forEach((el) => {
+    try { el.contentEditable = "plaintext-only"; }
+    catch { el.contentEditable = "true"; }
+    el.oninput = () => {
+      // <br> is how the renderer writes \n; innerText hands it back.
+      const v = el.innerText.replace(/\n+$/, "");
+      setPath(s.settings, el.dataset.sf, v);
+      mirrorToPanel(el.dataset.sf, v);
+      clearTimeout(settingsTimer);
+      settingsTimer = setTimeout(() => pushSettings(s, { swap: false }), 400);
+    };
+  });
+}
+
+function mirrorToPanel(path, v) {
+  const f = document.querySelector(`#sec-form [data-k="${CSS.escape(path)}"]`);
+  if (f && f.type !== "checkbox") f.value = v;
+}
+
+/* Swap one section's element for its fresh server render — the save path
+   for panel edits. Inline edits skip the swap: the DOM already shows the
+   typed text, and replacing the node would eat the caret mid-word. */
+async function swapSection(sid) {
+  const doc = pdoc();
+  const el = doc && doc.querySelector(`[data-sid="${sid}"]`);
+  if (!el) { refresh(0); return; }
+  const out = await api(`/api/store/admin/sections/${sid}/html`);
+  const tpl = doc.createElement("template");
+  tpl.innerHTML = out.html;
+  const fresh = tpl.content.firstElementChild;
+  if (!fresh) { refresh(0); return; }
+  el.replaceWith(fresh);
+  if (SEL === sid) {
+    fresh.classList.add("sfe-sel");
+    armInline(fresh);
+  }
+}
 
 // ---------- pages ----------
 async function loadPages() {
@@ -114,6 +233,7 @@ function drawSections() {
     el.onclick = (e) => {
       if (e.target.closest(".sec-acts")) return;
       SEL = +el.dataset.sec; drawSections(); drawForm();
+      highlightPreview(SEL);
     });
   $("#sec-list").querySelectorAll("[data-mv]").forEach((b) => b.onclick =
     async () => { const [id, move] = b.dataset.mv.split(":");
@@ -257,10 +377,20 @@ function saveSection(path, el) {
   settingsTimer = setTimeout(() => pushSettings(s), 260);
 }
 
-async function pushSettings(s) {
+/* Sections whose content is wired up by the storefront's own script after
+   load — a swapped-in copy would arrive inert (an empty product grid, a
+   carousel with dead arrows). Those take the full reload; everything else
+   swaps in place. */
+const NEEDS_RELOAD = new Set(["custom_html", "product_grid", "showcase",
+                             "video"]);
+
+async function pushSettings(s, { swap = true } = {}) {
   await api(`/api/store/admin/sections/${s.id}`, { method: "POST",
     body: JSON.stringify({ settings: s.settings }) });
-  refresh();
+  savedTick();
+  if (!swap) return;
+  if (NEEDS_RELOAD.has(s.type)) refresh();
+  else swapSection(s.id);
 }
 
 // ---------- theme ----------

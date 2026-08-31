@@ -15,6 +15,18 @@ def esc(v) -> str:
     return _html.escape(str(v or ""))
 
 
+def sf(key: str) -> str:
+    """Mark an element as the rendered face of one settings field.
+
+    The live editor reads these to let a merchant type straight into the
+    page: an element carrying data-sf="heading" IS the heading, so editing
+    its text and saving that string back are the same gesture. Only plain-
+    text fields are marked — a field whose value carries markup cannot
+    round-trip through innerText without losing it.
+    """
+    return f' data-sf="{key}"'
+
+
 # The tags a "richtext" field may actually use. The field has always been
 # labelled richtext and helped as "simple formatting allowed", and the
 # renderer escaped every one of them — so a merchant typing <b> got <b> on
@@ -345,11 +357,11 @@ def _hero(con, s) -> str:
     btns = ""
     if s.get("cta_text"):
         btns += (f'<a class="btn-pill primary" href="{esc(s["cta_link"])}">'
-                 f'{esc(s["cta_text"])}'
+                 f'<span{sf("cta_text")}>{esc(s["cta_text"])}</span>'
                  f'{icon("arrow", "ico ico-sm")}</a>')
     if s.get("cta2_text"):
         btns += (f'<a class="btn-pill ghost" href="{esc(s["cta2_link"])}">'
-                 f'{esc(s["cta2_text"])}</a>')
+                 f'<span{sf("cta2_text")}>{esc(s["cta2_text"])}</span></a>')
     stats = "".join(_stat(s.get(k, "")) for k in ("stat1", "stat2", "stat3"))
     stats = f'<div class="hero-note">{stats}</div>' if stats else ""
     # The stage is filled client-side with the first product's can (or its
@@ -359,7 +371,8 @@ def _hero(con, s) -> str:
     cls = "hero centred" if centred else "hero"
     return (f'<section class="{cls}"{style}>{canvas}'
             f'<div class="hero-grid"><div class="hero-inner">'
-            f'<h1>{head}</h1><p>{esc(s["sub"])}</p>'
+            f'<h1{sf("heading")}>{head}</h1>'
+            f'<p{sf("sub")}>{esc(s["sub"])}</p>'
             f'<div class="hero-cta">{btns}</div>{stats}</div>'
             f'{stage}</div></section>')
 
@@ -470,16 +483,19 @@ def _showcase(con, s) -> str:
 
 
 def _social_proof(con, s) -> str:
-    sub = (f'<p class="proof-sub">{esc(s["sub"])}</p>' if s.get("sub") else "")
+    sub = (f'<p class="proof-sub"{sf("sub")}>{esc(s["sub"])}</p>'
+           if s.get("sub") else "")
     return (f'<section class="proof"><p class="proof-line">'
-            f'<b>{esc(s["figure"])}</b> {esc(s["label"])}</p>{sub}</section>')
+            f'<b{sf("figure")}>{esc(s["figure"])}</b>'
+            f' <span{sf("label")}>{esc(s["label"])}</span></p>{sub}</section>')
 
 
 def _benefits(con, s) -> str:
     cells = "".join(
         f'<div class="benefit">{icon(i.get("icon"))}'
-        f'<b>{esc(i.get("value"))}</b><span>{esc(i.get("label"))}</span></div>'
-        for i in (s.get("items") or []))
+        f'<b{sf(f"items.{n}.value")}>{esc(i.get("value"))}</b>'
+        f'<span{sf(f"items.{n}.label")}>{esc(i.get("label"))}</span></div>'
+        for n, i in enumerate(s.get("items") or []))
     return (f'<section class="benefits"><div class="benefits-row">{cells}'
             f'</div></section>')
 
@@ -493,7 +509,8 @@ def _product_grid(con, s) -> str:
             ' role="group" aria-label="Filter products"></div>'
             if s.get("show_tabs") else "")
     return (f'<section class="section" id="shop">'
-            f'<div class="shop-head"><h2>{esc(s["heading"])}</h2>{search}</div>'
+            f'<div class="shop-head"><h2{sf("heading")}>{esc(s["heading"])}'
+            f'</h2>{search}</div>'
             f'{tabs}<div class="grid" id="product-grid"'
             f' data-collection="{esc(s.get("collection_id") or "")}"'
             f' data-limit="{int(s.get("limit") or 0)}"></div></section>')
@@ -503,16 +520,19 @@ def _rich_text(con, s) -> str:
     align = "center" if s.get("align") == "center" else "left"
     body = rich(s["body"]).replace("\n\n", "</p><p>").replace("\n", "<br>")
     return (f'<section class="section" style="text-align:{align}">'
-            f'<h2>{esc(s["heading"])}</h2><p class="big">{body}</p></section>')
+            f'<h2{sf("heading")}>{esc(s["heading"])}</h2>'
+            f'<p class="big">{body}</p></section>')
 
 
 def _feature_columns(con, s) -> str:
     cards = "".join(
         f'<div class="story-card"><span class="ico-wrap">'
         f'{icon(i.get("icon"), "ico ico-lg")}</span>'
-        f'<b>{esc(i.get("title"))}</b><p>{esc(i.get("text"))}</p></div>'
-        for i in (s.get("items") or []))
-    return (f'<section class="section story"><h2>{esc(s["heading"])}</h2>'
+        f'<b{sf(f"items.{n}.title")}>{esc(i.get("title"))}</b>'
+        f'<p{sf(f"items.{n}.text")}>{esc(i.get("text"))}</p></div>'
+        for n, i in enumerate(s.get("items") or []))
+    return (f'<section class="section story">'
+            f'<h2{sf("heading")}>{esc(s["heading"])}</h2>'
             f'<div class="story-grid">{cards}</div></section>')
 
 
@@ -522,8 +542,9 @@ def _image_banner(con, s) -> str:
         s.get("height", "medium"), "360px")
     inner = ""
     if s.get("heading") or s.get("text"):
-        inner = (f'<div class="banner-copy"><h2>{esc(s["heading"])}</h2>'
-                 f'<p>{esc(s["text"])}</p></div>')
+        inner = (f'<div class="banner-copy">'
+                 f'<h2{sf("heading")}>{esc(s["heading"])}</h2>'
+                 f'<p{sf("text")}>{esc(s["text"])}</p></div>')
     body = (f'<div class="image-banner" style="height:{h};'
             f'background-image:linear-gradient(rgba(40,0,70,.28),'
             f'rgba(40,0,70,.28)),url({img});">{inner}</div>'
@@ -578,7 +599,8 @@ def _reviews(con, s) -> str:
     # asks which product first — this section is the whole range, so it
     # cannot know on its own.
     return (f'<section class="section" id="reviews">'
-            f'<div class="pp-rev-head"><h2>{esc(s["heading"])}</h2>'
+            f'<div class="pp-rev-head"><h2{sf("heading")}>'
+            f'{esc(s["heading"])}</h2>'
             f'<button class="btn-pill ghost sm" id="write-review">'
             f'{icon("star", "ico ico-sm")} Write a review</button></div>'
             f'<div class="grid">{cards}</div></section>')
@@ -586,22 +608,23 @@ def _reviews(con, s) -> str:
 
 def _faq(con, s) -> str:
     items = "".join(
-        f'<details><summary>{esc(i.get("q"))}</summary>'
-        f'<p>{esc(i.get("a"))}</p></details>'
-        for i in (s.get("items") or []))
-    return (f'<section class="section" id="faq"><h2>{esc(s["heading"])}</h2>'
-            f'{items}</section>')
+        f'<details><summary{sf(f"items.{n}.q")}>{esc(i.get("q"))}</summary>'
+        f'<p{sf(f"items.{n}.a")}>{esc(i.get("a"))}</p></details>'
+        for n, i in enumerate(s.get("items") or []))
+    return (f'<section class="section" id="faq">'
+            f'<h2{sf("heading")}>{esc(s["heading"])}</h2>{items}</section>')
 
 
 def _newsletter(con, s) -> str:
     return (f'<section class="section rewards" id="rewards">'
-            f'<div class="rewards-card"><h2>{esc(s["heading"])}</h2>'
-            f'<p>{esc(s["body"])}</p>'
+            f'<div class="rewards-card">'
+            f'<h2{sf("heading")}>{esc(s["heading"])}</h2>'
+            f'<p{sf("body")}>{esc(s["body"])}</p>'
             f'<form id="subscribe-form">'
             f'<input type="email" id="subscribe-email"'
             f' placeholder="you@example.com" required>'
-            f'<button class="btn-pill primary" type="submit">'
-            f'{esc(s["cta_text"])}</button></form>'
+            f'<button class="btn-pill primary" type="submit"'
+            f'{sf("cta_text")}>{esc(s["cta_text"])}</button></form>'
             f'<p class="dim" id="subscribe-msg"></p></div></section>')
 
 
@@ -665,25 +688,36 @@ RENDERERS = {
 }
 
 
+def render_one(con, row, liquid_renderer=None) -> str:
+    """One section, rendered and addressed.
+
+    The root element carries data-sid (the row) and data-slabel (what to
+    call it) so the live editor can point at a spot on the page and know
+    which record it is — and so a save can swap exactly this element
+    instead of reloading the world. One bad section renders an inline
+    notice rather than taking down the page.
+    """
+    s = _settings(row)
+    try:
+        if row["type"] == "custom_html":
+            html = _custom_html(con, s, liquid_renderer)
+        else:
+            fn = RENDERERS.get(row["type"])
+            html = fn(con, s) if fn else ""
+    except Exception as e:
+        html = (f'<section class="section"><p class="dim">'
+                f'Section “{esc(row["type"])}” could not render: '
+                f'{esc(e)}</p></section>')
+    label = SECTION_TYPES.get(row["type"], {}).get("label", row["type"])
+    return re.sub(r"^(\s*<[a-zA-Z][a-zA-Z0-9-]*)",
+                  rf'\1 data-sid="{row["id"]}" data-slabel="{esc(label)}"',
+                  html, count=1)
+
+
 def render_page(con, rows, liquid_renderer=None) -> str:
-    """Render enabled sections in order. One bad section renders an inline
-    notice rather than taking down the whole page."""
-    out = []
-    for row in rows:
-        if not row["enabled"]:
-            continue
-        s = _settings(row)
-        try:
-            if row["type"] == "custom_html":
-                out.append(_custom_html(con, s, liquid_renderer))
-            else:
-                fn = RENDERERS.get(row["type"])
-                out.append(fn(con, s) if fn else "")
-        except Exception as e:
-            out.append(f'<section class="section"><p class="dim">'
-                       f'Section “{esc(row["type"])}” could not render: '
-                       f'{esc(e)}</p></section>')
-    return "\n".join(out)
+    """Render enabled sections in order."""
+    return "\n".join(render_one(con, row, liquid_renderer)
+                     for row in rows if row["enabled"])
 
 
 # The storefront home page as shipped — seeded once so merchants start from

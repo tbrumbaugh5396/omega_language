@@ -119,6 +119,37 @@ ZenJoy's install carries its own values for all of these, written by
   that was the cheapest support plan, in grey. A product can now be flagged
   `featured`, and the hero takes it.
 
+## The live section editor
+
+The theme editor (`/admin/theme`) had a sidebar list and a preview iframe,
+connected one way and coarsely: every keystroke reloaded the whole page,
+and nothing mapped a spot on the page to the form that edits it. The loop
+is closed now, on three mechanisms:
+
+- **The page is addressed.** Every rendered section carries `data-sid`
+  (its row) and `data-slabel` (what to call it) — `render_one()` injects
+  them in one place. Click a section in the preview and the editor knows
+  which record it is; select in the sidebar and the preview scrolls to it.
+- **Text fields name themselves.** Elements that render a plain-text
+  setting carry `data-sf="<key>"` (`heading`, `sub`, `items.0.q`, …).
+  Selecting a section makes them `contenteditable`; typing into the page
+  IS editing the field — saved debounced, mirrored into the panel, the
+  newline in a hero heading round-tripping intact. Fields whose value
+  carries markup (richtext bodies) stay panel-edited, because innerText
+  would eat the merchant's own tags.
+- **Saves swap one element.** `GET /api/store/admin/sections/{id}/html`
+  renders a single section; a panel edit replaces exactly that node in
+  the iframe. Inline edits skip even that — the DOM already shows the
+  typed text, and swapping would eat the caret mid-word. The full reload
+  survives only where it is honest: structure changes, and the section
+  types whose content the storefront's own script wires up after load
+  (product grid, showcase, video, custom code) — a swapped-in copy would
+  arrive inert.
+
+The preview is inert while editing: links do not navigate the page out
+from under the editor, and Add-to-cart does not quietly build a real
+cart.
+
 ## The one it did not fix
 
 At 357 px the top bar overflowed once the wordmark was two words. The

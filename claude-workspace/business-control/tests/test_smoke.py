@@ -5926,6 +5926,70 @@ c.request("DELETE", "/api/store/admin/fleet/tenants/noquote?keep_data=0",
           headers=AA)
 
 
+
+# --- the live section editor: the preview IS the editor -------------------
+# Three mechanisms, each tested where it lives: the rendered page is
+# addressed (every section knows its row), the marked text fields name the
+# settings key they render, and one section can be re-rendered alone so a
+# save swaps an element instead of reloading the page.
+_ed_home = c.get("/", headers=HA).text
+ok('data-sid="' in _ed_home and 'data-slabel="Hero banner"' in _ed_home,
+   "every rendered section carries its row id and a human label — the "
+   "editor can point at a spot on the page and know which record it is")
+ok('data-sf="heading"' in _ed_home and 'data-sf="sub"' in _ed_home,
+   "and the text an element renders names its settings key, so typing "
+   "into the page and editing the field are the same gesture")
+
+_ed_secs = c.get("/api/store/admin/sections/home", headers=AA).json()
+_ed_faq = next(x for x in _ed_secs if x["type"] == "faq")
+ok(f'data-sf="items.0.q"' in _ed_home,
+   "list fields are addressed per item — the first FAQ question is "
+   "items.0.q, editable in place like any heading")
+
+_ed_hero = next(x for x in _ed_secs if x["type"] == "hero")
+_eh = c.get(f"/api/store/admin/sections/{_ed_hero['id']}/html",
+            headers=AA).json()
+ok(f'data-sid="{_ed_hero["id"]}"' in _eh["html"]
+   and "<section" in _eh["html"],
+   "one section renders alone, addressed the same way — the save path "
+   "swaps exactly this element instead of reloading the storefront out "
+   "from under the merchant")
+c.post(f"/api/store/admin/sections/{_ed_hero['id']}", headers=AA,
+       json={"settings": {**_ed_hero["settings"],
+                          "heading": "Edited from the page"}})
+ok("Edited from the page" in c.get(
+       f"/api/store/admin/sections/{_ed_hero['id']}/html",
+       headers=AA).json()["html"],
+   "and it re-renders from the saved settings, not a cache")
+c.post(f"/api/store/admin/sections/{_ed_hero['id']}", headers=AA,
+       json={"settings": _ed_hero["settings"]})
+ok(c.get(f"/api/store/admin/sections/{_ed_hero['id']}/html")
+   .status_code in (401, 403),
+   "rendering a section by id is admin-gated like the rest of the editor")
+
+_thjs = Path("src/storefront/frontend/theme.js").read_text()
+ok("contentEditable" in _thjs and 'plaintext-only' in _thjs
+   and "swap: false" in _thjs,
+   "typing into the page saves WITHOUT swapping the node — replacing the "
+   "element mid-word would eat the merchant's caret")
+ok("swapSection" in _thjs and "replaceWith(fresh)" in _thjs
+   and "NEEDS_RELOAD" in _thjs,
+   "panel edits swap the one section, except the types whose content is "
+   "wired by the storefront's own script — a swapped-in product grid "
+   "would arrive empty, so those take the honest full reload")
+ok("e.preventDefault();" in _thjs and "e.stopPropagation();" in _thjs
+   and "closest(\"a\")" in _thjs.replace("'", '"'),
+   "the preview is inert — a link would navigate the page being edited "
+   "away, and a live Add-to-cart would quietly build a real cart")
+ok("highlightPreview(SEL)" in _thjs,
+   "selecting in the sidebar scrolls the preview to the section, so the "
+   "list and the page can never be pointing at different things")
+_rich_html = _sect.render_one(
+    None, {"id": 9, "type": "spacer", "settings": "{}", "enabled": 1})
+ok('data-sid="9"' in _rich_html,
+   "even a section with no text is addressed — selection and reordering "
+   "work on every type, not just the wordy ones")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

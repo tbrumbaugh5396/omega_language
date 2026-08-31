@@ -1971,6 +1971,19 @@ def patch_section(sid: int, body: SectionPatchBody, u=Depends(admin_user),
     return {"ok": True}
 
 
+@router.get("/api/store/admin/sections/{sid}/html")
+def section_html(sid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """One section, rendered exactly as the page would — the live editor
+    swaps this into the preview after a save, so editing text never
+    reloads the whole storefront out from under the merchant."""
+    row = con.execute("SELECT * FROM page_sections WHERE id=?",
+                      (sid,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such section")
+    return {"id": sid, "enabled": bool(row["enabled"]),
+            "html": sect.render_one(con, row, render_liquid)}
+
+
 @router.delete("/api/store/admin/sections/{sid}")
 def delete_section(sid: int, u=Depends(admin_user), con=Depends(get_con)):
     con.execute("DELETE FROM page_sections WHERE id=?", (sid,))
