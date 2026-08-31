@@ -476,17 +476,27 @@
       <h3>Support</h3>
       <p class="dim">Messages left when nobody was on the chat. Replying here
         emails the customer and moves the ticket to <b>waiting</b>.</p>
+      <p class="dim">The number and address here are the business's — they
+        show in the support hub and the storefront footer, and feed the
+        contact markup search engines read. Point the number at a VoIP
+        service and change it here when it changes; every place it appears
+        follows.</p>
       <div class="adm-row">
         <div><label>Phone number</label>
           <input id="sc-phone" placeholder="+1 555 010 2030"></div>
         <div><label>Phone hours</label>
           <input id="sc-hours" placeholder="Mon–Fri, 9am–5pm ET"></div>
+        <div><label>Support email</label>
+          <input id="sc-email" placeholder="help@yourbrand.com"></div>
         <div><label>Reply target</label>
           <input id="sc-target" placeholder="within one working day"></div>
       </div>
       <label style="display:flex;gap:8px;align-items:center">
         <input type="checkbox" id="sc-calls" style="width:auto">
         Offer voice and video calls while staff are online</label>
+      <label style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="sc-footer" style="width:auto" checked>
+        Show the phone and email in the storefront footer</label>
       <div class="modal-actions">
         <span class="dim" id="sc-msg" style="margin-right:auto"></span>
         <button class="btn-pill primary sm" id="sc-save">Save contact details</button>

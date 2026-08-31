@@ -56,10 +56,13 @@ CREATE TABLE IF NOT EXISTS store_ticket_replies (
 );
 """
 
+# The shipped topic labels. Neutral, because they are what EVERY tenant's
+# customers read — a tenant that sells drinks (or anything else) renames
+# them in its own saved contact under "topics", same keys.
 TOPICS = {
     "order": "An order I've placed",
     "delivery": "Delivery or tracking",
-    "product": "A question about the drinks",
+    "product": "A question about a product",
     "wholesale": "Wholesale or stocking",
     "other": "Something else",
 }
@@ -70,6 +73,10 @@ DEFAULT_CONTACT = {
     "email": "",
     "reply_target": "within one working day",
     "calls_enabled": True,
+    # "" = derive from the brand's initials. A tenant can pin one instead —
+    # zenjoy pins "ZJ" so its customers' existing reference style survives.
+    "ref_prefix": "",
+    "show_in_footer": True,
 }
 
 
@@ -96,14 +103,38 @@ def contact(con) -> dict:
     return {**DEFAULT_CONTACT, **saved}
 
 
+def topics(con) -> dict:
+    """The shipped labels with this tenant's renames on top. Keys are
+    fixed — they are what the admin board filters by."""
+    own = contact(con).get("topics") or {}
+    return {k: str(own.get(k) or v) for k, v in TOPICS.items()}
+
+
+def ref_prefix(con) -> str:
+    """The two letters on every ticket reference. A tenant's brand gives
+    them ("Business Control" -> BC) unless the tenant pinned its own —
+    they used to be hard-coded ZJ, one business's initials on everybody's
+    tickets."""
+    pinned = re.sub(r"[^A-Za-z]", "", contact(con).get("ref_prefix") or "")
+    if pinned:
+        return pinned[:2].upper()
+    words = re.findall(r"[A-Za-z]+", brand_of(con))
+    if len(words) >= 2:
+        return (words[0][0] + words[1][0]).upper()
+    if words:
+        return words[0][:2].upper()
+    return "TK"
+
+
 def new_ref(con) -> str:
     import secrets
+    pre = ref_prefix(con)
     for _ in range(20):
-        ref = "ZJ-" + secrets.token_hex(2).upper()
+        ref = f"{pre}-" + secrets.token_hex(2).upper()
         if not con.execute("SELECT 1 FROM store_tickets WHERE ref=?",
                            (ref,)).fetchone():
             return ref
-    return "ZJ-" + str(int(time.time()))[-6:]
+    return f"{pre}-" + str(int(time.time()))[-6:]
 
 
 # ---------- public ----------
@@ -129,7 +160,7 @@ def support_config(con=Depends(get_con)):
     return {"phone": c["phone"], "phone_hours": c["phone_hours"],
             "email": c["email"], "reply_target": c["reply_target"],
             "calls_enabled": bool(c["calls_enabled"]) and bool(online),
-            "staff_online": len(online), "topics": TOPICS}
+            "staff_online": len(online), "topics": topics(con)}
 
 
 class TicketBody(BaseModel):
@@ -186,7 +217,7 @@ def create_ticket(body: TicketBody, request: Request, con=Depends(get_con),
             chat.add_message(
                 con, conv_id, user,
                 f"[ticket {ref}] "
-                f"{body.subject.strip() or TOPICS[body.topic]}\n{text}")
+                f"{body.subject.strip() or topics(con)[body.topic]}\n{text}")
         except Exception:
             pass
     con.commit()
@@ -292,6 +323,7 @@ class ContactBody(BaseModel):
     email: str = ""
     reply_target: str = ""
     calls_enabled: bool = True
+    show_in_footer: bool = True
 
 
 @router.get("/api/store/admin/support-contact")
@@ -310,7 +342,14 @@ def save_contact(body: ContactBody, u=Depends(admin_user),
         "reply_target": re.sub(r"[<>]", "", body.reply_target)[:80]
         or DEFAULT_CONTACT["reply_target"],
         "calls_enabled": bool(body.calls_enabled),
+        "show_in_footer": bool(body.show_in_footer),
     }
+    # Keep what the form does not carry — a pinned ref_prefix or renamed
+    # topics set by hand must survive a phone-number edit.
+    kept = contact(con)
+    for k in ("ref_prefix", "topics"):
+        if k in kept and kept[k]:
+            cfg[k] = kept[k]
     con.execute(
         "INSERT INTO store_meta(k,v) VALUES('support_contact',?)"
         " ON CONFLICT(k) DO UPDATE SET v=excluded.v", (json.dumps(cfg),))

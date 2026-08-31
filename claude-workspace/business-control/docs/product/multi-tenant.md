@@ -158,6 +158,18 @@ Every provision, placement, move, suspension and reap is written to
 `fleet_events` in the **provider's own** database and shown as Fleet
 history, so "when did that node go, and who took it" has an answer.
 
+**And the act writes its own paper.** Standing a client up under their
+engagement files the **hosting & infrastructure schedule**
+(`04-agreement/contracts/hosting-and-infrastructure.md`) into their binder,
+pre-filled with the tenant id, hostnames and size class that were actually
+stood up — the grant to provision and operate, data ownership and export,
+what suspension means (503, reversible, data untouched), and the exit terms
+(90-day retention, then confirmed deletion). The other contracts assume the
+client owns their hosting; this schedule is for the opposite arrangement,
+and it exists so the authority to run a business on the platform is a
+signed page, not an understanding. A re-stand-up after a move does not file
+it twice.
+
 ## Public deployment
 
 Caddy, with a host per tenant — automatic TLS per name:

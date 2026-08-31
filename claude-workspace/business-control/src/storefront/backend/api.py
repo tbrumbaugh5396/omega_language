@@ -537,6 +537,7 @@ def render_shell(con, body_html: str, *, title=None, description=None,
     announce = "".join(f"<span>{sect.esc(a)}</span>"
                        for a in (t.get("announce") or []) * 2)
     nav = content_mod.menus(con)
+    _ui = content_mod.ui_strings(con)
     repl = {
         "<!--NAV-->": "".join(
             f'<a href="{sect.esc(m["url"])}">{sect.esc(m["label"])}</a>'
@@ -556,13 +557,43 @@ def render_shell(con, body_html: str, *, title=None, description=None,
         "<!--DESCRIPTION-->": sect.esc(description or t["description"]),
         "<!--FOOTER-->": sect.esc(t["footer"]),
         "<!--FONTS-->": font_link(t),
-        "<!--OFFER-TITLE-->": sect.esc(
-            content_mod.ui_strings(con).get("offer_title", "")),
+        "<!--OFFER-TITLE-->": sect.esc(_ui.get("offer_title", "")),
+        "<!--CART-TAG-->": sect.esc(_ui.get("cart_tag", "")),
+        "<!--CONTACT-->": _footer_contact(con),
         "<!--HEAD-EXTRA-->": head_extra,
     }
     for k, v in repl.items():
         shell = shell.replace(k, v)
     return shell
+
+
+def _footer_contact(con) -> str:
+    """The business's phone and email in the footer, plus Organization
+    markup for search engines — all read from the ONE saved contact, so
+    switching to a VoIP number is one edit in the store admin and every
+    place the number appears changes with it."""
+    from .support import contact
+    c = contact(con)
+    if not c.get("show_in_footer", True):
+        return ""
+    t = get_theme(con)
+    bits = []
+    if c["phone"]:
+        tel = re.sub(r"[^+\d]", "", c["phone"])
+        bits.append(f'<a href="tel:{tel}">{sect.esc(c["phone"])}</a>')
+    if c["email"]:
+        bits.append(f'<a href="mailto:{sect.esc(c["email"])}">'
+                    f'{sect.esc(c["email"])}</a>')
+    if not bits:
+        return ""
+    org = {"@context": "https://schema.org", "@type": "Organization",
+           "name": t["brand"].title()}
+    if c["phone"]:
+        org["telephone"] = c["phone"]
+    if c["email"]:
+        org["email"] = c["email"]
+    return (f'<p class="dim foot-contact">{" · ".join(bits)}</p>'
+            f'<script type="application/ld+json">{json.dumps(org)}</script>')
 
 
 def page_rows(con, slug: str):

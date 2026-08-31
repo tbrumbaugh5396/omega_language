@@ -74,6 +74,9 @@ UI_KEYS = {
     # A plan's button. "Add" is wrong for something that bills every month.
     "start_plan": "Start", "plans_heading": "Your plans",
     "no_plans": "Nothing running yet.",
+    # The line over the cart. It was "breathe in, check out." — one brand's
+    # breathing exercise in everyone's drawer.
+    "cart_tag": "",
 }
 
 CURRENCY_DEFAULT = [

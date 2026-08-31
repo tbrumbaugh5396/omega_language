@@ -116,7 +116,15 @@ def main() -> int:
                  " VALUES('ui_strings',?)",
                  (json.dumps({"shop_cta": "Shop your Zen",
                               "offer_title":
-                                  "Take 10% off your first calm."}),))
+                                  "Take 10% off your first calm.",
+                              "cart_tag": "breathe in, check out."}),))
+    # ...and its ticket references and topic wording, which were also the
+    # codebase's until they became tenant data.
+    zcon.execute("INSERT OR REPLACE INTO store_meta(k,v)"
+                 " VALUES('support_contact',?)",
+                 (json.dumps({"ref_prefix": "ZJ",
+                              "topics": {"product":
+                                         "A question about the drinks"}}),))
     # zenjoy's ops app is ZenJoy's, not the studio's
     zcfg = json.loads((zdir / "config.json").read_text())
     zcfg["brand_name"] = "Zenjoy"

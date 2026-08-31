@@ -812,8 +812,10 @@ async function drawTickets() {
     api("/api/store/admin/support-contact")]);
   $("#sc-phone").value = contact.phone || "";
   $("#sc-hours").value = contact.phone_hours || "";
+  $("#sc-email").value = contact.email || "";
   $("#sc-target").value = contact.reply_target || "";
   $("#sc-calls").checked = !!contact.calls_enabled;
+  $("#sc-footer").checked = contact.show_in_footer !== false;
   $("#tk-list").innerHTML = rows.map((t) => `
     <div class="adm-item" style="flex-wrap:wrap;gap:8px;
       ${t.status === "closed" ? "opacity:.55" : ""}">
@@ -835,10 +837,15 @@ async function drawTickets() {
 }
 
 $("#sc-save").onclick = async () => {
+  // Every field the server keeps, every save — the form used to omit the
+  // email, and since the server writes the whole record, saving a phone
+  // number quietly erased it.
   await api("/api/store/admin/support-contact", { method: "POST",
     body: JSON.stringify({ phone: $("#sc-phone").value,
-      phone_hours: $("#sc-hours").value, reply_target: $("#sc-target").value,
-      calls_enabled: $("#sc-calls").checked }) });
+      phone_hours: $("#sc-hours").value, email: $("#sc-email").value,
+      reply_target: $("#sc-target").value,
+      calls_enabled: $("#sc-calls").checked,
+      show_in_footer: $("#sc-footer").checked }) });
   $("#sc-msg").textContent = "Saved.";
 };
 

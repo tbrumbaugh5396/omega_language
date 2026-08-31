@@ -4118,7 +4118,10 @@ async function renderFleet() {
                   klass: $("#t-class").value,
                   engagement_id: eid || 0 } });
         closeModal();
-        toast(`${out.tenant} is live on ${out.node}`);
+        toast(out.hosting_doc
+          ? `${out.tenant} is live on ${out.node} — hosting schedule filed `
+            + `in their binder, ready to sign`
+          : `${out.tenant} is live on ${out.node}`);
         renderFleet();
       } catch (err) { toast(err.message); }
     };

@@ -1086,55 +1086,74 @@ class GenerateBody(BaseModel):
     side: str = ""
 
 
-@router.post("/api/store/admin/engagements/{eid}/docs")
-def generate_doc(eid: int, body: GenerateBody, u=Depends(admin_user),
-                 con=Depends(get_con)):
-    e = _eng_or_404(con, eid)
-    p = template_path(body.template_path)
+def file_kit_doc(con, e, rel_path: str, fills: dict | None = None,
+                 title: str = "", side: str = "", actor: str = "system",
+                 actor_id: int = 0):
+    """Turn a kit template into a filed engagement document.
+
+    The one path a template takes into the paperwork, whether an operator
+    clicked Generate or the platform filed it as the record of something it
+    just did — standing up an install being the first such act. Returns
+    (doc_id, remaining_placeholders, side).
+    """
+    p = template_path(rel_path)
     text = p.read_text()
-    stage = body.template_path.split("/", 1)[0]
+    stage = rel_path.split("/", 1)[0]
     if stage not in KIT_TO_CLIENT_STAGE:
-        raise HTTPException(400, "template is not in a stage folder")
-    side = body.side or side_of(text)
+        raise ValueError("template is not in a stage folder")
+    side = side or side_of(text)
     if side not in ("to_client", "internal"):
-        raise HTTPException(400, "side is to_client or internal")
+        raise ValueError("side is to_client or internal")
 
     # Record fields are not baked in: they read from the record, so a
     # document generated today still says the right thing tomorrow.
     from .documents import GLOBAL_TOKENS
-    given = {k: v for k, v in (body.fills or {}).items()
+    given = {k: v for k, v in (fills or {}).items()
              if k.strip() not in GLOBAL_TOKENS}
     sugg = {k: v for k, v in suggested_fills(e).items()
             if k.strip() not in GLOBAL_TOKENS}
     filled = fill(text, {**sugg, **given})
     remaining = placeholders(filled)
-    title = body.title.strip()
+    title = (title or "").strip()
     if not title:
         # From the FILLED text, so "Proposal — [CLIENT NAME]" becomes
         # "Proposal — Acme"; any bracket that survived is stripped rather
         # than shipped in a title, and the client name is appended only when
         # the fill didn't already put it there.
         t = re.sub(r"\s*[—–-]?\s*\[[^\]]*\]", "",
-                   template_title(filled, body.template_path)).strip(" —–-")
+                   template_title(filled, rel_path)).strip(" —–-")
         title = t if e["name"].lower() in t.lower() else f"{t} — {e['name']}"
 
     cur = con.execute(
         "INSERT INTO documents(title,category,party_kind,party_name,"
         " party_email,body,notes,status,confidential,uploaded_by,created_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-        (title[:200], category_of(body.template_path), "partner",
+        (title[:200], category_of(rel_path), "partner",
          e["name"][:120], e["approver_email"], filled,
-         f"Generated from the kit: {body.template_path}",
-         "draft" if remaining else "active", 1, u["id"], time.time()))
+         f"Generated from the kit: {rel_path}",
+         "draft" if remaining else "active", 1, actor_id, time.time()))
     doc_id = cur.lastrowid
     con.execute(
         "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
         " created_at) VALUES(?,?,?,?,?)",
-        (eid, doc_id, stage, side, time.time()))
-    log(con, eid, u["name"],
-        f"generated '{title}' from {body.template_path}"
+        (e["id"], doc_id, stage, side, time.time()))
+    log(con, e["id"], actor,
+        f"generated '{title}' from {rel_path}"
         + (f" ({len(remaining)} blanks left)" if remaining else ""))
     con.commit()
+    return doc_id, remaining, side
+
+
+@router.post("/api/store/admin/engagements/{eid}/docs")
+def generate_doc(eid: int, body: GenerateBody, u=Depends(admin_user),
+                 con=Depends(get_con)):
+    e = _eng_or_404(con, eid)
+    try:
+        doc_id, remaining, side = file_kit_doc(
+            con, e, body.template_path, body.fills, body.title, body.side,
+            actor=u["name"], actor_id=u["id"])
+    except ValueError as err:
+        raise HTTPException(400, str(err))
     return {"doc_id": doc_id, "unfilled": remaining, "side": side}
 
 
@@ -2417,13 +2436,42 @@ def fleet_tenant_add(body: TenantBody, request: Request,
     tenancy.create(tid, hosts=hosts or [f"{tid}.localhost"], node=nid,
                    klass=klass, brand=body.brand or tid.title())
     fleet.log("tenant created", f"{tid} on {nid} ({klass})", u["name"])
+    hosting_doc = 0
     if body.engagement_id:
         con.execute("UPDATE engagements SET tenant_id=? WHERE id=?",
                     (tid, body.engagement_id))
         log(con, body.engagement_id, u["name"],
             f"stood up as tenant '{tid}' on node {nid}")
         con.commit()
-    return {"ok": True, "tenant": tid, "node": nid}
+        # The act writes its own paper. Standing infrastructure up under a
+        # client's engagement files the hosting & infrastructure schedule
+        # into it, pre-filled with what was actually stood up — so the
+        # authority to run their business on our platform is a signed page
+        # in their binder, not an understanding. If the schedule was
+        # already filed (a re-stand-up after a move), it is not duplicated.
+        e = con.execute("SELECT * FROM engagements WHERE id=?",
+                        (body.engagement_id,)).fetchone()
+        rel = "04-agreement/contracts/hosting-and-infrastructure.md"
+        already = con.execute(
+            "SELECT 1 FROM engagement_docs ed JOIN documents d"
+            " ON d.id=ed.doc_id WHERE ed.engagement_id=? AND d.notes LIKE ?",
+            (body.engagement_id, f"%{rel}%")).fetchone()
+        if e is not None and not already:
+            try:
+                hosting_doc, _, _ = file_kit_doc(
+                    con, e, rel,
+                    fills={"TENANT ID": tid,
+                           "HOSTNAMES": ", ".join(hosts
+                                                  or [f"{tid}.localhost"]),
+                           "NODE CLASS": klass,
+                           "CLIENT LEGAL NAME": e["name"]},
+                    actor=u["name"], actor_id=u["id"])
+            except Exception:
+                # a stand-up must not fail for want of its paperwork —
+                # the operator can still generate the schedule by hand
+                hosting_doc = 0
+    return {"ok": True, "tenant": tid, "node": nid,
+            "hosting_doc": hosting_doc}
 
 
 @router.post("/api/store/admin/fleet/tenants/{tid}/status")

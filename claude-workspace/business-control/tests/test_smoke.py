@@ -807,8 +807,9 @@ ok("topics" in _sc and "reply_target" in _sc, "support config is public")
 r = c.post("/api/store/support/ticket", json={
     "name": "Ada", "email": "ada@example.com", "topic": "delivery",
     "body": "My box hasn't arrived."})
-ok(r.status_code == 200 and r.json()["ref"].startswith("ZJ-"),
-   "ticket accepted with a reference")
+ok(r.status_code == 200 and re.match(r"[A-Z]{2}-", r.json()["ref"]),
+   "ticket accepted with a reference whose prefix is the BRAND's initials "
+   "— it was hard-coded ZJ, one business's monogram on everybody's tickets")
 _ref = r.json()["ref"]
 ok(c.post("/api/store/support/ticket",
           json={"name": "", "body": "x"}).status_code == 400,
@@ -832,9 +833,33 @@ ok(c.post(f"/api/store/admin/tickets/{_tid}", headers=A,
 ok(c.get(f"/api/store/support/ticket/{_ref}").json()["replies"],
    "the reply is visible to the customer")
 c.post("/api/store/admin/support-contact", headers=A,
-       json={"phone": "+1 555 010 2030", "calls_enabled": True})
+       json={"phone": "+1 555 010 2030", "email": "help@brand.test",
+             "calls_enabled": True})
 ok(c.get("/api/store/support/config").json()["phone"] == "+1 555 010 2030",
    "merchant phone number reaches the storefront")
+_home = c.get("/").text
+ok('tel:+15550102030' in _home and "+1 555 010 2030" in _home
+   and '"telephone": "+1 555 010 2030"' in _home
+   and "help@brand.test" in _home,
+   "the business number is ONE saved value — footer link, visible text and "
+   "the Organization markup search engines read all follow it, so pointing "
+   "it at a VoIP service is one edit in the store admin")
+c.post("/api/store/admin/support-contact", headers=A,
+       json={"phone": "+1 555 010 2030", "email": "help@brand.test",
+             "calls_enabled": True, "show_in_footer": False})
+ok("tel:+15550102030" not in c.get("/").text,
+   "and a merchant who wants it only in the support hub can say so")
+c.post("/api/store/admin/support-contact", headers=A,
+       json={"phone": "+1 555 010 2030", "email": "help@brand.test",
+             "calls_enabled": True})
+ok(c.get("/api/store/admin/support-contact", headers=A).json()["email"]
+   == "help@brand.test",
+   "saving the phone keeps the email — the form used to omit it, and since "
+   "the server writes the whole record, a phone edit silently erased it")
+ok('$("#sc-email")' in Path("src/storefront/frontend/admin.js").read_text()
+   and 'id="sc-email"'
+   in Path("src/storefront/frontend/admin.html").read_text(),
+   "and the admin form actually carries the field")
 
 # --- campaigns ---
 r = c.post("/api/store/admin/campaigns", headers=A, json={
@@ -5594,6 +5619,34 @@ ok("Gamma" in c.get("/", headers={"host": "gamma.localhost"}).text,
    "and their NAME on both faces — standing a client up used to brand the "
    "back office and leave the shop saying 'your brand', which is the first "
    "thing their own customers would have seen")
+
+# infrastructure in the contract: standing up under an engagement writes
+# its own paper
+_heid = c.post("/api/store/admin/engagements", headers=AA,
+               json={"name": "Hosted Co"}).json()["id"]
+_hup = c.post("/api/store/admin/fleet/tenants", headers=AA,
+              json={"id": "hostedco", "brand": "Hosted Co",
+                    "klass": "micro", "engagement_id": _heid}).json()
+ok(_hup["hosting_doc"],
+   "standing infrastructure up under a client's engagement FILES the "
+   "hosting & infrastructure schedule into it — the authority to run "
+   "their business on our platform is a page in their binder, not an "
+   "understanding")
+_hcon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_hcon.row_factory = sqlite3.Row
+_hbody = _hcon.execute("SELECT body FROM documents WHERE id=?",
+                       (_hup["hosting_doc"],)).fetchone()["body"]
+_hcon.close()
+ok("hostedco" in _hbody and "hostedco.localhost" in _hbody
+   and "micro" in _hbody,
+   "pre-filled with what was actually stood up — tenant, hostname, class")
+ok("[90]" in _hbody and "503" in _hbody,
+   "and it says out loud what suspension and exit mean, because those are "
+   "the clauses a leaving client actually reads")
+_hup2 = c.request("DELETE",
+                  "/api/store/admin/fleet/tenants/hostedco?keep_data=0",
+                  headers=AA)
+ok(_hup2.status_code == 200, "cleanup: the paperwork test tenant leaves")
 
 _fb = c.get("/api/store/admin/fleet", headers=AA).json()
 _na = next(n for n in _fb["nodes"] if n["id"] == "node-a")

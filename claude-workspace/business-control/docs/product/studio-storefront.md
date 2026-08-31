@@ -89,6 +89,17 @@ data, with the shipped value as the default:
 | Three font families hard-coded in the shell | `font_link(theme)` — the faces the theme asks for, and no others |
 | The wordmark face, fixed at Quicksand | `theme.wordmark_font` |
 | A drawn drinks can as every product's stand-in art | `theme.art`: `can` or `card`, read by both the grid and the server-rendered product page from one switch |
+| `ZJ-` on every ticket reference | Brand initials, or `support_contact.ref_prefix` — zenjoy pins `ZJ` |
+| "A question about the drinks" ticket topic | Neutral label; `support_contact.topics` renames per tenant |
+| "breathe in, check out." over the cart | `ui_strings.cart_tag`, per tenant |
+
+**The business phone is one saved value.** Store admin → Support holds the
+number (point it at a VoIP service and edit it there when it changes), the
+hours, and the support email; the support hub, the storefront footer and
+the Organization markup search engines read all follow it. A footer toggle
+exists for merchants who want it only in the hub. Saving the phone used to
+silently erase the email — the form omitted a field the server writes
+whole; fixed and pinned by a test.
 
 ZenJoy's install carries its own values for all of these, written by
 `scripts/split_tenants.py`, so nothing its storefront can see changed.
