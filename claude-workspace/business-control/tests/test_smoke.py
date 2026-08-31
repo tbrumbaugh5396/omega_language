@@ -7079,6 +7079,84 @@ ok(_tabs_src.index('"clients"') < _tabs_src.index('"fleet"')
    "burying the fleet at the bottom of Company meant the operator never "
    "saw it")
 
+
+# --- revocation has consequences ------------------------------------------
+# Granting grew the site and unlocked tabs; revoking now runs the mirror:
+# the public pages behind a capability stop answering, the nav stops
+# pointing at them, and the untouched scaffolding is trimmed — while
+# anything the operator edited stays theirs.
+_re = c.post("/api/store/admin/engagements", headers=AA,
+             json={"name": "Revoke Co"}).json()["id"]
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "revokeco", "brand": "Revoke Co", "klass": "micro",
+             "engagement_id": _re})
+_RH = {"host": "revokeco.localhost"}
+ok(c.get("/find", headers=_RH).status_code == 200
+   and c.get("/events", headers=_RH).status_code == 200,
+   "no grant recorded = everything on — the public pages answer, same "
+   "null rule as everywhere")
+c.post("/api/store/admin/fleet/tenants/revokeco/caps", headers=AA,
+       json={"caps": ["selling", "payments", "subs"]})
+c.post("/api/store/admin/fleet/tenants/revokeco/caps", headers=AA,
+       json={"caps": ["selling", "payments", "subs", "events"]})
+ok(c.get("/find", headers=_RH).status_code == 404
+   and c.get("/blog", headers=_RH).status_code == 404
+   and c.get("/affiliates", headers=_RH).status_code == 404,
+   "a capability outside the grant takes its PUBLIC pages with it — the "
+   "locator, the journal, the affiliate signup all 404 for a tenant that "
+   "did not buy them")
+ok(c.get("/events", headers=_RH).status_code == 200,
+   "while the pages of granted capabilities answer")
+_rhome = c.get("/", headers=_RH).text
+ok(">Blog</a>" not in _rhome,
+   "and the nav stops pointing at pages the plan does not include — a "
+   "menu link to a 404 is worse than no link")
+
+# the trim: untouched scaffolding leaves with its capability;
+# an edited section stays
+_rcon = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+_rcon.row_factory = sqlite3.Row
+_revents = _rcon.execute(
+    "SELECT COUNT(*) FROM page_sections WHERE page_slug='home' AND"
+    " settings LIKE '%Come find us%'").fetchone()[0]
+ok(_revents == 1, "setup: the events add-on landed at grant time")
+_out_r = c.post("/api/store/admin/fleet/tenants/revokeco/caps", headers=AA,
+                json={"caps": ["selling", "payments", "subs"]}).json()
+ok(_out_r["removed"] == ["events"]
+   and "Come find us" in _out_r["trimmed"],
+   "revoking takes back the UNTOUCHED scaffolding and says so")
+_rcon2 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+ok(_rcon2.execute(
+       "SELECT COUNT(*) FROM page_sections WHERE page_slug='home' AND"
+       " settings LIKE '%Come find us%'").fetchone()[0] == 0
+   and c.get("/events", headers=_RH).status_code == 404,
+   "the section is gone and the page stopped answering — revocation is "
+   "real on both surfaces")
+
+c.post("/api/store/admin/fleet/tenants/revokeco/caps", headers=AA,
+       json={"caps": ["selling", "payments", "subs", "events"]})
+_rcon3 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+_rcon3.execute("UPDATE page_sections SET settings=json_set(settings,"
+               "'$.body','The operator rewrote this') WHERE"
+               " page_slug='home' AND settings LIKE '%Come find us%'")
+_rcon3.commit()
+_out_r2 = c.post("/api/store/admin/fleet/tenants/revokeco/caps",
+                 headers=AA,
+                 json={"caps": ["selling", "payments", "subs"]}).json()
+_rcon4 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+ok(not _out_r2["trimmed"] and _rcon4.execute(
+       "SELECT COUNT(*) FROM page_sections WHERE page_slug='home' AND"
+       " settings LIKE '%operator rewrote%'").fetchone()[0] == 1,
+   "but an EDITED section survives its capability's revocation — the "
+   "moment they touched it, it became their page, and revoking a "
+   "capability is not licence to delete their work")
+c.request("DELETE", "/api/store/admin/fleet/tenants/revokeco?keep_data=0",
+          headers=AA)
+ok("something specific" in c.get("/find", headers=HA).text
+   and "flavour" not in c.get("/find", headers=HA).text,
+   "and the locator lost its last drinks-brand word — 'flavour' was "
+   "ZenJoy's voice in every tenant's store finder")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

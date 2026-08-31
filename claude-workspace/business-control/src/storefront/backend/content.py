@@ -199,6 +199,8 @@ def list_posts(limit: int = 20, con=Depends(get_con)):
 
 @router.get("/blog")
 def blog_index(request: Request, con=Depends(get_con)):
+    from .partners import _require_cap
+    _require_cap("marketing")
     posts = con.execute(
         "SELECT * FROM blog_posts WHERE published=1"
         " ORDER BY published_at DESC LIMIT 50").fetchall()
@@ -223,6 +225,8 @@ def blog_index(request: Request, con=Depends(get_con)):
 
 @router.get("/blog/{slug}")
 def blog_post(slug: str, request: Request, con=Depends(get_con)):
+    from .partners import _require_cap
+    _require_cap("marketing")
     p = con.execute("SELECT * FROM blog_posts WHERE slug=? AND published=1",
                     (slug,)).fetchone()
     if p is None:

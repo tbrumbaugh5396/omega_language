@@ -1188,8 +1188,10 @@ async function capsEditor(tid, opts = {}) {
     <p class="dim" id="cg-quote" style="font-size:12.5px"></p>
     <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
       <input type="checkbox" id="cg-extend" checked style="width:auto">
-      Grow their storefront for newly granted capabilities (additive —
-      never rewrites their pages)</label>
+      Keep their storefront in step — adds what new capabilities earn,
+      and trims a revoked capability's sections only where still
+      untouched scaffolding (an edited section is theirs and stays)
+      </label>
     <div class="modal-foot">
       <button class="btn" id="cg-go">Save grant</button>
       <button class="btn alt sm" id="cg-clear" title="back to no grant
@@ -1230,7 +1232,11 @@ async function capsEditor(tid, opts = {}) {
       toast(`${tid}: ${out.caps.length} capabilities`
         + (out.added && out.added.length
            ? ` (+${out.added.join(", ")})` : "")
-        + (grew.length ? ` — site grew: ${grew.join(", ")}` : ""));
+        + (out.removed && out.removed.length
+           ? ` (−${out.removed.join(", ")})` : "")
+        + (grew.length ? ` — site grew: ${grew.join(", ")}` : "")
+        + (out.trimmed && out.trimmed.length
+           ? ` — site trimmed: ${out.trimmed.join(", ")}` : ""));
       done();
     } catch (err) { toast(err.message); }
   };

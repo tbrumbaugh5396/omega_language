@@ -558,6 +558,18 @@ def render_shell(con, body_html: str, *, title=None, description=None,
             '<div class="announce" id="announce">',
             '<div class="announce" id="announce" hidden>')
     nav = content_mod.menus(con)
+    # a nav link to a page the plan doesn't include is a link to a 404 —
+    # the menu follows the grant, same null-means-everything rule
+    from .partners import cap_on
+    _CAP_PATHS = {"/find": "distribution", "/events": "events",
+                  "/blog": "marketing", "/affiliates": "affiliates"}
+    def _nav_ok(m):
+        for path, cap in _CAP_PATHS.items():
+            if (m.get("url") or "").startswith(path) and not cap_on(cap):
+                return False
+        return True
+    nav = {loc: [m for m in items if _nav_ok(m)]
+           for loc, items in nav.items()}
     _ui = content_mod.ui_strings(con)
     repl = {
         "<!--NAV-->": "".join(

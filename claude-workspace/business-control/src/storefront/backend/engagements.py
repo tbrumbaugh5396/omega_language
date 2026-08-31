@@ -2987,19 +2987,25 @@ def set_tenant_caps(tid: str, body: GrantBody, u=Depends(admin_user),
     tenancy.set_caps(tid, caps)
     fleet.push_entry(tid)
     added = sorted(set(caps) - before) if before else []
-    grown = {}
-    if body.extend_site and added and not fleet.node_addr(
+    removed = sorted(before - set(caps)) if before else []
+    grown, trimmed = {}, []
+    if body.extend_site and (added or removed) and not fleet.node_addr(
             tenancy.node_of(tid)):
-        from .layouts import extend_for_caps
+        from .layouts import extend_for_caps, trim_for_caps
         try:
             with tenancy.run_as(tid):
                 tcon = _db.connect()
                 try:
-                    grown = extend_for_caps(tcon, added, caps)
+                    if added:
+                        grown = extend_for_caps(tcon, added, caps)
+                    if removed:
+                        # growth's mirror: revoked capabilities take back
+                        # their scaffolding — but never an edited section
+                        trimmed = trim_for_caps(tcon, removed)
                 finally:
                     tcon.close()
         except Exception:
-            grown = {}
+            grown, trimmed = {}, []
     fleet.log("grant changed",
               f"{tid}: {len(caps)} capabilities"
               + (f" (+{', '.join(added)})" if added else ""), u["name"])
@@ -3009,7 +3015,8 @@ def set_tenant_caps(tid: str, body: GrantBody, u=Depends(admin_user),
         log(con, e["id"], u["name"],
             f"capability grant now: {', '.join(caps)}")
         con.commit()
-    return {"ok": True, "caps": caps, "added": added, "grown": grown}
+    return {"ok": True, "caps": caps, "added": added, "removed": removed,
+            "grown": grown, "trimmed": trimmed}
 
 
 @router.post("/api/store/admin/fleet/tenants/{tid}/act-as")

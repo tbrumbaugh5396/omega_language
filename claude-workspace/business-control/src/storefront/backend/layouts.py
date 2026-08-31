@@ -551,3 +551,30 @@ def extend_for_caps(con, added, all_caps, brand: str = "") -> dict:
             done["nav"].append(title)
     con.commit()
     return done
+
+
+def trim_for_caps(con, removed) -> list:
+    """The reverse of growth, under a stricter rule: a revoked capability
+    takes back its add-on sections ONLY where the section is still
+    exactly the scaffolding growth placed — byte-for-byte untouched. The
+    moment an operator edited one, it became their page, and revocation
+    of a capability is not licence to delete their work; an edited
+    remnant merely stops being reachable through the gated routes.
+    Returns what was removed, so the caller can say it."""
+    import json
+    trimmed = []
+    for _where, (stype, settings) in _addons("services", removed):
+        for r in con.execute(
+                "SELECT id, settings FROM page_sections WHERE"
+                " page_slug='home' AND type=?", (stype,)).fetchall():
+            try:
+                if json.loads(r[1]) == settings:
+                    con.execute("DELETE FROM page_sections WHERE id=?",
+                                (r[0],))
+                    trimmed.append(settings.get("heading") or stype)
+                    break
+            except ValueError:
+                continue
+    if trimmed:
+        con.commit()
+    return trimmed

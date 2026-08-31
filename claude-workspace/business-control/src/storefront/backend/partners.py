@@ -606,8 +606,27 @@ def partner_page(kind: str, request: Request, con=Depends(get_con)):
                   spec["lede"][:155])
 
 
+def cap_on(cap: str) -> bool:
+    """Is this tenant entitled to the capability behind a public surface?
+
+    None (no grant recorded) = everything on — same rule as everywhere.
+    This is the storefront half of revocation: a capability taken out of
+    the grant takes its public pages with it, rather than a locked ops
+    tab presiding over a still-working storefront feature."""
+    from erp.backend import tenancy
+    caps = tenancy.caps_of(tenancy.CURRENT.get())
+    return caps is None or cap in caps
+
+
+def _require_cap(cap: str) -> None:
+    if not cap_on(cap):
+        raise HTTPException(404, "this page is not part of this "
+                                 "business's plan")
+
+
 @router.get("/events")
 def events_page(request: Request, con=Depends(get_con)):
+    _require_cap("events")
     body = """
 <section class="section partner-head">
  <span class="eyebrow">Come say hello</span>
@@ -627,13 +646,14 @@ def events_page(request: Request, con=Depends(get_con)):
 
 @router.get("/find")
 def locator_page(request: Request, con=Depends(get_con)):
+    _require_cap("distribution")
     _brand = brand_name(con)
     body = f"""
 <section class="section partner-head">
  <span class="eyebrow">Store locator</span>
  <h1>Find {sect.esc(_brand)} near you</h1>
  <p class="lede">Shops that carry the range. Stock varies by store — if
-  you're after a specific flavour it's worth a call first.</p>
+  you're after something specific it's worth a call first.</p>
 </section>
 <section class="section">
  <div class="locator-bar">

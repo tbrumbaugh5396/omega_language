@@ -132,6 +132,8 @@ def landing_page(code: str, con=Depends(get_con)):
 
 @router.get("/affiliates")
 def affiliate_pitch(con=Depends(get_con)):
+    from .partners import _require_cap
+    _require_cap("affiliates")
     theme = get_theme(con)
     rate = 10
     row = con.execute("SELECT rate_bps FROM affiliates ORDER BY id LIMIT 1"
