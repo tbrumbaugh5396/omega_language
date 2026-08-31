@@ -7,6 +7,13 @@
       "runtimeArgs": ["scripts/launch.py", "--port", "8860"],
       "port": 8860,
       "autoPort": false
+    },
+    {
+      "name": "business-control-verify",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["scripts/launch.py", "--port", "8861"],
+      "port": 8861,
+      "autoPort": false
     }
   ]
 }
