@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS class_sessions (
   scheduled_minutes INTEGER,
   closed_by INTEGER,
   lesson_id INTEGER,                       -- the lesson this class taught
+  room TEXT,                               -- video room id when class meets online
   note TEXT DEFAULT ''
 );
 
@@ -77,8 +78,21 @@ CREATE TABLE IF NOT EXISTS payroll_overlay (
 """
 
 
+# Columns added after the tables first shipped. CREATE TABLE IF NOT EXISTS
+# leaves an existing table exactly as it was, so installs from before these
+# existed need them added explicitly.
+MIGRATIONS = (
+    "ALTER TABLE class_sessions ADD COLUMN room TEXT",
+)
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    for stmt in MIGRATIONS:
+        try:
+            con.execute(stmt)
+        except Exception:
+            pass            # already there
     con.commit()
 
 
@@ -155,13 +169,15 @@ def start_class(con, *, course_id: int, teacher_id: int,
             open_sessions=[_session_from_row(r) for r in existing])
     except A.DomainError as e:
         raise _err(e)
+    import secrets
     cur = con.execute(
         "INSERT INTO class_sessions(course_id,teacher_id,started_at,ended_at,"
-        " status,late_after_min,scheduled_minutes,lesson_id)"
-        " VALUES(?,?,?,?,?,?,?,?)",
+        " status,late_after_min,scheduled_minutes,lesson_id,room)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
         (row["course_id"], row["teacher_id"], row["started_at"], None,
          row["status"], row["late_after_min"], row["scheduled_minutes"],
-         int(lesson_id) if lesson_id is not None else None))
+         int(lesson_id) if lesson_id is not None else None,
+         "rm-" + secrets.token_hex(4)))    # every class carries a video room
     sid = cur.lastrowid
     # every enrolled student gets the word: class is on, check-in is live
     for uid, _name in enrolled(con, course_id):
@@ -246,11 +262,13 @@ def roster(con, session_id: int) -> dict:
         "SELECT l.id, l.title FROM class_sessions se"
         " JOIN lessons l ON l.id=se.lesson_id WHERE se.id=?",
         (session_id,)).fetchone()
+    room = con.execute("SELECT room FROM class_sessions WHERE id=?",
+                       (session_id,)).fetchone()["room"]
     return {
         "session": {"id": s.id, "course_id": s.course_id,
                     "teacher_id": s.teacher_id, "started_at": s.started_at,
                     "ended_at": s.ended_at, "status": s.status,
-                    "late_after_min": s.late_after_min,
+                    "late_after_min": s.late_after_min, "room": room,
                     "minutes": s.duration_minutes(now=int(time.time()))},
         "course": dict(course) if course else None,
         "lesson": dict(lesson) if lesson else None,

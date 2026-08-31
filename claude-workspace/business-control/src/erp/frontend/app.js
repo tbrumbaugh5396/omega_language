@@ -8121,9 +8121,10 @@ function eventForm(e) {
    live server-side in one pure module — this screen only displays them. */
 
 async function renderLearning() {
-  const [courses, queue, regs] = await Promise.all([
+  const [courses, queue, regs, conduct] = await Promise.all([
     api("/api/learning/courses"), api("/api/learning/grading"),
     S.user.is_admin ? api("/api/learning/registrations") : Promise.resolve([]),
+    S.user.is_admin ? api("/api/learning/conduct") : Promise.resolve([]),
   ]);
   const card = (c) => `
     <div class="card ${c.active ? "" : "dim-card"}" data-course="${c.id}"
@@ -8165,6 +8166,18 @@ async function renderLearning() {
         </div>
         ${r.goals ? `<p class="dim" style="margin-top:8px">${esc(r.goals)}</p>` : ""}
       </div>`).join("")}` : ""}
+    ${conduct.length ? `<h3>Conduct reports (${conduct.length})</h3>
+      ${conduct.map((r) => `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main"><b>${esc(r.reporter_name)} reported
+            ${esc(r.subject_name)}</b>
+            <span class="dim">${esc(r.reason)}</span></div>
+          <button class="btn sm" data-conres="${r.id}">Resolve</button>
+        </div>
+        ${r.body_snapshot ? `<p class="dim" style="margin-top:8px">The
+          message, as it read when reported:
+          <i>${esc(r.body_snapshot)}</i></p>` : ""}
+      </div>`).join("")}` : ""}
     ${queue.length ? `<h3>Needs a human mark (${queue.length})</h3>
       ${queue.map((a) => `<div class="card">
         <div class="doc-top">
@@ -8197,6 +8210,12 @@ async function renderLearning() {
   view().querySelectorAll("[data-regno]").forEach((b) => b.onclick = async () => {
     const note = prompt("Why? (kept on the record)") || "";
     await api(`/api/learning/registrations/${b.dataset.regno}/decline`,
+      { body: { note } });
+    renderLearning();
+  });
+  view().querySelectorAll("[data-conres]").forEach((b) => b.onclick = async () => {
+    const note = prompt("Outcome note (kept on the record)") || "";
+    await api(`/api/learning/conduct/${b.dataset.conres}/resolve`,
       { body: { note } });
     renderLearning();
   });
@@ -8522,12 +8541,16 @@ async function sessionRoster(sid, cid) {
           (${Math.round(sum.rate * 100)}%)</p></div>
       <div style="display:flex;gap:8px">
         <button class="btn alt" id="sr-back">Course</button>
+        ${open && d.session.room
+          ? '<button class="btn alt" id="sr-video">Join video</button>' : ""}
         ${open ? '<button class="btn" id="sr-close">End class</button>' : ""}
       </div>
     </div>
     ${d.roster.map(row).join("")
       || '<div class="card empty"><b>Nobody is enrolled</b></div>'}`;
   $("#sr-back").onclick = () => learningCourse(cid);
+  if ($("#sr-video")) $("#sr-video").onclick = () =>
+    classCall(d.session.room, d.course.name);
   if ($("#sr-close")) $("#sr-close").onclick = async () => {
     if (!confirm("End the class? Students who never checked in are recorded "
       + "absent.")) return;
@@ -8542,6 +8565,96 @@ async function sessionRoster(sid, cid) {
       sessionRoster(sid, cid);
     } catch (err) { toast(err.message); }
   });
+}
+
+/* The teacher's side of the class video call. One mesh client for the whole
+   product: /rtc-mesh.js is the storefront's ported lingua mesh, loaded here
+   on demand — the ops app and the learner page must never drift apart on
+   how a call negotiates. The signaling endpoints are the /learn ones; any
+   signed-in community member's token opens them, and a teacher is one. */
+let RTC_CALL = null;
+
+function loadMesh() {
+  return new Promise((resolve, reject) => {
+    if (window.LinguaMesh) return resolve();
+    const s = document.createElement("script");
+    s.src = "/rtc-mesh.js";
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("the call module didn't load"));
+    document.head.appendChild(s);
+  });
+}
+
+async function classCall(room, title) {
+  if (RTC_CALL) return toast("You're already in a call — leave it first.");
+  try { await loadMesh(); } catch (e) { return toast(e.message); }
+  let cfg = { ice_servers: [] };
+  try { cfg = await api("/api/learn/rtc/config"); } catch (e) {}
+  const ov = document.createElement("div");
+  ov.id = "ops-call";
+  ov.innerHTML = `<div class="ops-call-head">
+      <b>${esc(title || "Class video")}</b>
+      <span class="dim" id="opsc-state">connecting…</span>
+      <span style="flex:1"></span>
+      <button class="btn alt sm" id="opsc-mic">Mute</button>
+      <button class="btn alt sm" id="opsc-cam">Camera off</button>
+      <button class="btn sm" id="opsc-leave">Leave</button>
+    </div>
+    <div class="ops-call-grid" id="opsc-grid"></div>`;
+  document.body.appendChild(ov);
+  const grid = $("#opsc-grid");
+  const tile = (id) => {
+    let v = grid.querySelector(`[data-peer="${id}"]`);
+    if (!v) {
+      v = document.createElement("video");
+      v.dataset.peer = id;
+      v.autoplay = true;
+      v.playsInline = true;
+      if (id === "me") v.muted = true;
+      grid.appendChild(v);
+    }
+    return v;
+  };
+  const meshApi = async (path, body) => {
+    const r = await fetch(path, {
+      method: body !== undefined ? "POST" : "GET",
+      headers: { "Content-Type": "application/json",
+                 Authorization: "Bearer " + S.user.token },
+      body: body !== undefined ? JSON.stringify(body) : undefined });
+    if (!r.ok) {
+      let m = r.statusText;
+      try { m = (await r.json()).detail || m; } catch (e) {}
+      throw new Error(m);
+    }
+    return r.json();
+  };
+  RTC_CALL = window.LinguaMesh.createMesh({
+    room, api: meshApi, iceServers: cfg.ice_servers,
+    onLocal: (s) => { tile("me").srcObject = s; },
+    onRemote: (id, s) => { tile(id).srcObject = s; },
+    onLeave: (id) => {
+      const v = grid.querySelector(`[data-peer="${id}"]`);
+      if (v) v.remove();
+    },
+    onState: (m) => { const el = $("#opsc-state"); if (el) el.textContent = m; },
+    onMedia: (got) => { if (got.detail) toast(got.detail); },
+    onError: () => {},
+  });
+  const close = () => {
+    if (RTC_CALL) RTC_CALL.leave();
+    RTC_CALL = null;
+    ov.remove();
+  };
+  $("#opsc-leave").onclick = close;
+  $("#opsc-mic").onclick = (e) => {
+    const on = RTC_CALL && RTC_CALL.toggle("audio");
+    e.target.textContent = on ? "Mute" : "Unmute";
+  };
+  $("#opsc-cam").onclick = (e) => {
+    const on = RTC_CALL && RTC_CALL.toggle("video");
+    e.target.textContent = on ? "Camera off" : "Camera on";
+  };
+  try { await RTC_CALL.join(); } catch (e) { toast(e.message); close(); }
 }
 
 async function lessonForm(cid, lid) {

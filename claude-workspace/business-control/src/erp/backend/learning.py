@@ -599,6 +599,7 @@ ACHIEVEMENT_DEFS = {
     "checkins_50":   ("Fixture", "checked in fifty times"),
     "quiz_pass":     ("Quiz passer", "passed your first quiz"),
     "quiz_perfect":  ("Perfectionist", "scored 100% on a quiz"),
+    "first_friend":  ("Connected", "made your first friend here"),
 }
 
 
@@ -612,6 +613,9 @@ def _earned_codes(con, uid: int) -> set:
         out.add("checkins_10")
     if n >= 50:
         out.add("checkins_50")
+    if con.execute("SELECT 1 FROM contacts WHERE (a_id=? OR b_id=?)"
+                   " AND state='accepted' LIMIT 1", (uid, uid)).fetchone():
+        out.add("first_friend")
     return out
 
 

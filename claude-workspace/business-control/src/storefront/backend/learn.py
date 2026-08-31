@@ -26,6 +26,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from erp.backend import classroom as CR
+from erp.backend import community as CM
 from erp.backend import learning as L
 from . import sections as sect
 from .api import current_customer, get_con, rate_limit, render_shell
@@ -143,8 +144,11 @@ def course_view(cid: int, user=Depends(current_customer),
         mine = con.execute(
             "SELECT status FROM checkins WHERE session_id=? AND student_id=?",
             (open_s.id, user["id"])).fetchone()
+        room = con.execute("SELECT room FROM class_sessions WHERE id=?",
+                           (open_s.id,)).fetchone()["room"]
         session = {"id": open_s.id, "started_at": open_s.started_at,
-                   "my_status": mine["status"] if mine else None}
+                   "my_status": mine["status"] if mine else None,
+                   "room": room}
     return {"course": {k: c[k] for k in ("id", "name", "language", "level",
                                          "blurb")},
             "lessons": lessons, "quizzes": quizzes,
@@ -244,6 +248,166 @@ def session_checkin(sid: int, user=Depends(current_customer),
     return {"status": c.status, "at": c.at, "new_achievements": fresh}
 
 
+# ── the community: people, messages, safety ──────────────────────────────────
+# The social layer, scoped to the school. Every endpoint requires membership:
+# enrolled, teaching, or administering — a shopper who only ever bought
+# sparkling water has no place in a student directory.
+
+def _member(con, user):
+    if not CM.in_community(con, user["id"]):
+        raise HTTPException(403, "the community opens when you join a course")
+    return user
+
+
+@router.get("/api/learn/people/search")
+def people_search(q: str = "", user=Depends(current_customer),
+                  con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    return CM.search(con, user, q)
+
+
+@router.get("/api/learn/people")
+def people_home(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    out = CM.contacts(con, user)
+    out["prefs"] = CM.prefs_of(con, user["id"])
+    return out
+
+
+class PersonActBody(BaseModel):
+    accept: bool = True
+    reason: str = ""
+    message_id: int | None = None
+
+
+@router.post("/api/learn/people/{pid}/{act}")
+def people_act(pid: int, act: str, body: PersonActBody,
+               user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    if act == "request":
+        out = CM.request(con, user, pid)
+    elif act == "respond":
+        out = CM.respond(con, user, pid, body.accept)
+    elif act == "remove":
+        out = CM.remove(con, user, pid)
+    elif act == "block":
+        out = CM.block(con, user, pid)
+    elif act == "unblock":
+        out = CM.unblock(con, user, pid)
+    elif act == "ghost":
+        out = CM.ghost(con, user, pid)
+    elif act == "unghost":
+        out = CM.unghost(con, user, pid)
+    elif act == "report":
+        out = CM.report(con, user, pid, body.reason,
+                        message_id=body.message_id)
+    else:
+        raise HTTPException(404, "unknown action")
+    con.commit()
+    return out
+
+
+@router.get("/api/learn/thread/{pid}")
+def thread_read(pid: int, since: float = 0, user=Depends(current_customer),
+                con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    msgs = CM.thread(con, user, pid, since=since)
+    con.commit()                            # the read receipts
+    return {"messages": msgs, "me": user["id"]}
+
+
+class SendBody(BaseModel):
+    body: str = ""
+    kind: str = "text"
+    room: str = ""
+
+
+@router.post("/api/learn/thread/{pid}")
+def thread_send(pid: int, body: SendBody, user=Depends(current_customer),
+                con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    out = CM.send(con, user, pid, body.body, kind=body.kind, room=body.room)
+    con.commit()
+    return out
+
+
+class PrefsBody(BaseModel):
+    privacy_name: str | None = None
+    invisible: int | None = None
+    open_dm: int | None = None
+
+
+@router.post("/api/learn/prefs")
+def prefs_set(body: PrefsBody, user=Depends(current_customer),
+              con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    out = CM.set_prefs(con, user["id"], privacy_name=body.privacy_name,
+                       invisible=body.invisible, open_dm=body.open_dm)
+    con.commit()
+    return out
+
+
+# ── live video: the signaling mailboxes ──────────────────────────────────────
+# The server never touches media — it relays SDP/ICE between browsers and
+# answers "who is in the room". Room ids are unguessable and rooms are keyed
+# by tenant. Teachers reach these same doors from the ops roster screen:
+# one signaling path, not two.
+
+@router.get("/api/learn/rtc/config")
+def rtc_config(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    from erp.backend.main import CFG
+    return CM.rtc_config(CFG)
+
+
+class RtcBody(BaseModel):
+    peer: str = ""
+    to: str = ""
+    payload: dict | None = None
+
+
+@router.post("/api/learn/rtc/{room}/join")
+def rtc_join(room: str, body: RtcBody, user=Depends(current_customer),
+             con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    out = CM._rtc_join(room, body.peer or None)
+    out["actor"] = {"id": user["id"], "name": user["name"]}
+    return out
+
+
+@router.post("/api/learn/rtc/{room}/signal")
+def rtc_signal(room: str, body: RtcBody, user=Depends(current_customer),
+               con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    CM._rtc_signal(room, body.to, body.peer, body.payload)
+    return {"ok": True}
+
+
+@router.get("/api/learn/rtc/{room}/poll")
+def rtc_poll(room: str, peer: str = "", user=Depends(current_customer),
+             con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    return CM._rtc_poll(room, peer)
+
+
+@router.post("/api/learn/rtc/{room}/leave")
+def rtc_leave(room: str, body: RtcBody, user=Depends(current_customer),
+              con=Depends(get_con)):
+    _require_cap("learning")
+    CM._rtc_leave(room, body.peer)
+    return {"ok": True}
+
+
 # ── the public door: programmes + registration ───────────────────────────────
 # No sign-in required. Submitting grants nothing — an administrator approves
 # the application in ops, and THAT creates the account and the seat.
@@ -284,8 +448,10 @@ def register(body: RegisterBody, request: Request, con=Depends(get_con)):
 @router.get("/learn")
 def learn_page(con=Depends(get_con)):
     _require_cap("learning")
+    from .api import asset_version
     _brand = brand_name(con)
-    body = """
+    v = asset_version()
+    body = f"""
 <section class="section partner-head">
  <span class="eyebrow">Learning</span>
  <h1>Your courses</h1>
@@ -297,242 +463,46 @@ def learn_page(con=Depends(get_con)):
  <p class="dim">Loading…</p>
 </div></section>
 <style>
- .lrn-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
- .lrn-card{border:1px solid rgba(127,127,127,.25);border-radius:12px;padding:16px;cursor:pointer}
- .lrn-card h3{margin:0 0 6px}
- .lrn-bar{height:6px;border-radius:3px;background:rgba(127,127,127,.2);margin-top:10px;overflow:hidden}
- .lrn-bar i{display:block;height:100%;background:currentColor}
- .lrn-list{list-style:none;padding:0;margin:12px 0}
- .lrn-list li{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid rgba(127,127,127,.15)}
- .lrn-done{opacity:.6;text-decoration:line-through}
- .lrn-q{border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:14px;margin:10px 0}
- .lrn-q label{display:block;margin:6px 0;cursor:pointer}
- .lrn-back{margin-bottom:14px;display:inline-block;cursor:pointer;text-decoration:underline}
- .lrn-btn{padding:8px 16px;border-radius:8px;border:1px solid currentColor;background:none;color:inherit;cursor:pointer}
- .lrn-btn.primary{font-weight:700}
- .lrn-meta{opacity:.7;font-size:.9em}
- .lrn-lesson h2,.lrn-lesson h3,.lrn-lesson h4{margin-top:1.2em}
- .lrn-lesson pre{background:rgba(127,127,127,.12);padding:12px;border-radius:8px;overflow-x:auto}
- .lrn-live{border:1px solid currentColor;border-radius:10px;padding:12px 16px;margin:12px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
- .lrn-badges{display:flex;gap:8px;flex-wrap:wrap}
- .lrn-badge{border:1px solid rgba(127,127,127,.4);border-radius:999px;padding:4px 12px;font-size:.9em}
+ .lrn-grid{{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}}
+ .lrn-card{{border:1px solid rgba(127,127,127,.25);border-radius:12px;padding:16px;cursor:pointer}}
+ .lrn-card h3{{margin:0 0 6px}}
+ .lrn-bar{{height:6px;border-radius:3px;background:rgba(127,127,127,.2);margin-top:10px;overflow:hidden}}
+ .lrn-bar i{{display:block;height:100%;background:currentColor}}
+ .lrn-list{{list-style:none;padding:0;margin:12px 0}}
+ .lrn-list li{{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid rgba(127,127,127,.15)}}
+ .lrn-done{{opacity:.6;text-decoration:line-through}}
+ .lrn-q{{border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:14px;margin:10px 0}}
+ .lrn-q label{{display:block;margin:6px 0;cursor:pointer}}
+ .lrn-back{{margin-bottom:14px;display:inline-block;cursor:pointer;text-decoration:underline}}
+ .lrn-btn{{padding:8px 16px;border-radius:8px;border:1px solid currentColor;background:none;color:inherit;cursor:pointer}}
+ .lrn-btn.primary{{font-weight:700}}
+ .lrn-btn.sm{{padding:4px 10px;font-size:.85em}}
+ .lrn-meta{{opacity:.7;font-size:.9em}}
+ .lrn-lesson h2,.lrn-lesson h3,.lrn-lesson h4{{margin-top:1.2em}}
+ .lrn-lesson pre{{background:rgba(127,127,127,.12);padding:12px;border-radius:8px;overflow-x:auto}}
+ .lrn-live{{border:1px solid currentColor;border-radius:10px;padding:12px 16px;margin:12px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}}
+ .lrn-badges{{display:flex;gap:8px;flex-wrap:wrap}}
+ .lrn-badge{{border:1px solid rgba(127,127,127,.4);border-radius:999px;padding:4px 12px;font-size:.9em}}
+ .lrn-tabs{{display:flex;gap:4px;margin-bottom:18px;border-bottom:1px solid rgba(127,127,127,.25)}}
+ .lrn-tab{{padding:8px 18px;cursor:pointer;border-radius:8px 8px 0 0}}
+ .lrn-tab.on{{font-weight:700;border:1px solid rgba(127,127,127,.25);border-bottom-color:transparent}}
+ .lrn-search input{{width:100%;max-width:420px;padding:10px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:none;color:inherit}}
+ .lrn-person{{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid rgba(127,127,127,.15)}}
+ .lrn-person-acts{{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}}
+ .lrn-unread{{background:currentColor;color:var(--bg,#fff);border-radius:999px;padding:0 8px;font-size:.8em}}
+ .lrn-prefs{{display:grid;gap:10px;max-width:480px}}
+ .lrn-thread{{max-height:50vh;overflow-y:auto;border:1px solid rgba(127,127,127,.25);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px}}
+ .lrn-msg{{max-width:75%;padding:8px 12px;border-radius:10px;background:rgba(127,127,127,.15);position:relative}}
+ .lrn-msg.mine{{align-self:flex-end;background:rgba(127,127,127,.3)}}
+ .lrn-msg-report{{position:absolute;top:2px;right:-18px;cursor:pointer;opacity:.4}}
+ .lrn-msg-report:hover{{opacity:1}}
+ #lrn-call{{position:fixed;inset:auto 12px 12px 12px;max-height:70vh;background:var(--bg,#111);color:inherit;border:1px solid rgba(127,127,127,.4);border-radius:14px;z-index:200;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.4)}}
+ .lrn-call-head{{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(127,127,127,.25)}}
+ .lrn-call-grid{{display:grid;gap:8px;padding:12px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));overflow-y:auto}}
+ .lrn-call-grid video{{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3;object-fit:cover}}
 </style>
-<script>
-(() => {
-  const root = document.getElementById("learn-root");
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
-    (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-  const token = () => {
-    try { return JSON.parse(localStorage.getItem("sf_support")||"{}").token; }
-    catch { return null; }
-  };
-  async function api(path, body) {
-    const r = await fetch(path, {
-      method: body ? "POST" : "GET",
-      headers: { "Content-Type": "application/json",
-                 Authorization: "Bearer " + token() },
-      body: body ? JSON.stringify(body) : undefined });
-    if (!r.ok) {
-      let m = r.statusText;
-      try { m = (await r.json()).detail || m; } catch {}
-      throw new Error(m);
-    }
-    return r.json();
-  }
-  async function needSignIn() {
-    let programs = [];
-    try { programs = await api("/api/learn/programs"); } catch {}
-    root.innerHTML = `<p>Already a student? Sign in with the
-      <b>account</b> door on <a href="/">the shop</a> (the same sign-in you
-      order with), then come back here.</p>
-      <h2 style="margin-top:28px">Apply to join</h2>
-      <p class="lrn-meta">Applying doesn't create an account — we review
-        every application, and approval is what opens your seat.</p>
-      <form id="lrn-apply" style="max-width:480px;display:grid;gap:10px">
-        <label>Your name<br><input name="name" required style="width:100%"></label>
-        <label>Email<br><input name="email" type="email" required style="width:100%"></label>
-        <label>Phone <span class="lrn-meta">(optional)</span><br>
-          <input name="phone" style="width:100%"></label>
-        <label>What do you want to learn?<br>
-          <input name="language" required style="width:100%"
-            placeholder="Spanish, French, …"></label>
-        ${programs.length ? `<label>Course<br>
-          <select name="course_id" style="width:100%">
-            <option value="">Let us suggest one</option>
-            ${programs.map((p) => `<option value="${p.id}">${esc(p.name)}${
-              p.language ? " — " + esc(p.language) : ""}${
-              p.level ? " (" + esc(p.level) + ")" : ""}</option>`).join("")}
-          </select></label>` : ""}
-        <label>Your goals <span class="lrn-meta">(optional)</span><br>
-          <textarea name="goals" rows="3" style="width:100%"></textarea></label>
-        <button class="lrn-btn primary" type="submit">Apply</button>
-      </form>`;
-    document.getElementById("lrn-apply").onsubmit = async (e) => {
-      e.preventDefault();
-      const f = e.target;
-      try {
-        await api("/api/learn/register", {
-          name: f.name.value, email: f.email.value, phone: f.phone.value,
-          language: f.language.value, goals: f.goals.value,
-          course_id: f.course_id && f.course_id.value
-            ? +f.course_id.value : null });
-        root.innerHTML = `<h2>Application received</h2>
-          <p>Thank you — we read every application. Once it's approved
-          you'll have an account and a seat, and this page becomes your
-          classroom.</p>`;
-      } catch (err) {
-        alert(err.message);
-      }
-    };
-  }
-  async function home() {
-    const d = await api("/api/learn/courses");
-    const card = (c) => `<div class="lrn-card" data-c="${c.id}">
-      <h3>${esc(c.name)}</h3>
-      <p class="lrn-meta">${esc([c.language, c.level].filter(Boolean).join(" · "))}${
-        c.teacher ? " · " + esc(c.teacher) : ""}</p>
-      ${c.progress ? `<div class="lrn-bar"><i style="width:${c.progress.percent}%"></i></div>
-        <p class="lrn-meta">${c.progress.lessons_done}/${c.progress.lessons_total} lessons ·
-         ${c.progress.quizzes_passed}/${c.progress.quizzes_total} quizzes · ${c.progress.percent}%</p>` : ""}
-      </div>`;
-    const offer = (c) => `<div class="lrn-card" style="cursor:default">
-      <h3>${esc(c.name)}</h3>
-      <p class="lrn-meta">${esc([c.language, c.level].filter(Boolean).join(" · "))}</p>
-      ${c.blurb ? `<p>${esc(c.blurb)}</p>` : ""}
-      ${c.product ? `<a class="lrn-btn" href="/product/${c.product.id}">Get this course —
-        $${(c.product.price_cents/100).toFixed(2)}</a>`
-        : '<p class="lrn-meta">Ask us about joining this course.</p>'}</div>`;
-    root.innerHTML = (d.enrolled.length
-        ? `<div class="lrn-grid">${d.enrolled.map(card).join("")}</div>`
-        : "<p>You aren't enrolled in a course yet.</p>")
-      + (d.achievements && d.achievements.length
-        ? `<h2 style="margin-top:28px">Achievements</h2>
-           <div class="lrn-badges">${d.achievements.map((a) =>
-             `<span class="lrn-badge" title="you ${esc(a.what)}">${
-               esc(a.name)}</span>`).join("")}</div>` : "")
-      + (d.available.length
-        ? `<h2 style="margin-top:28px">More courses</h2>
-           <div class="lrn-grid">${d.available.map(offer).join("")}</div>` : "");
-    root.querySelectorAll("[data-c]").forEach((el) =>
-      el.onclick = () => course(+el.dataset.c));
-  }
-  async function course(cid) {
-    const d = await api("/api/learn/courses/" + cid);
-    const att = d.attendance || {};
-    root.innerHTML = `<span class="lrn-back" id="lrn-back">&larr; My courses</span>
-      <h2>${esc(d.course.name)}</h2>
-      ${d.session ? `<div class="lrn-live">
-        <b>Class is in session.</b>
-        ${d.session.my_status
-          ? ` You're checked in — ${esc(d.session.my_status)}.`
-          : ` <button class="lrn-btn primary" id="lrn-here">I'm here</button>`}
-        </div>` : ""}
-      <div class="lrn-bar"><i style="width:${d.progress.percent}%"></i></div>
-      <p class="lrn-meta">${d.progress.lessons_done}/${d.progress.lessons_total} lessons done ·
-        ${d.progress.quizzes_passed}/${d.progress.quizzes_total} quizzes passed${
-        att.classes_held ? ` · attended ${att.attended}/${att.classes_held} classes` : ""}</p>
-      <h3>Lessons</h3>
-      <ul class="lrn-list">${d.lessons.map((l) =>
-        `<li><a href="#" data-l="${l.id}" class="${l.done ? "lrn-done" : ""}">${
-          esc(l.title)}</a>${l.done ? " ✓" : ""}</li>`).join("")
-        || "<li class='lrn-meta'>No lessons published yet.</li>"}</ul>
-      ${d.quizzes.length ? `<h3>Quizzes</h3>
-        <ul class="lrn-list">${d.quizzes.map((q) =>
-        `<li><a href="#" data-q="${q.id}">${esc(q.title)}</a>
-          <span class="lrn-meta">${q.attempt ? q.attempt.state : ""}</span></li>`).join("")}</ul>` : ""}`;
-    document.getElementById("lrn-back").onclick = home;
-    const here = document.getElementById("lrn-here");
-    if (here) here.onclick = async () => {
-      try {
-        const r = await api(`/api/learn/sessions/${d.session.id}/checkin`, {});
-        alert("Checked in — " + r.status
-          + (r.new_achievements.length
-            ? ". Achievement: " + r.new_achievements[0].name : ""));
-        course(cid);
-      } catch (err) { alert(err.message); }
-    };
-    root.querySelectorAll("[data-l]").forEach((el) => el.onclick = (e) => {
-      e.preventDefault(); lesson(+el.dataset.l, cid); });
-    root.querySelectorAll("[data-q]").forEach((el) => el.onclick = (e) => {
-      e.preventDefault(); quiz(+el.dataset.q, cid); });
-  }
-  async function lesson(lid, cid) {
-    const d = await api("/api/learn/lessons/" + lid);
-    root.innerHTML = `<span class="lrn-back" id="lrn-back">&larr; Course</span>
-      <div class="lrn-lesson"><h2>${esc(d.title)}</h2>${d.html}</div>
-      ${d.done ? '<p class="lrn-meta">Done ✓</p>'
-        : '<button class="lrn-btn primary" id="lrn-done">Mark as done</button>'}`;
-    document.getElementById("lrn-back").onclick = () => course(cid);
-    const b = document.getElementById("lrn-done");
-    if (b) b.onclick = async () => {
-      await api("/api/learn/lessons/" + lid + "/done", {});
-      course(cid);
-    };
-  }
-  async function quiz(qid, cid) {
-    const d = await api("/api/learn/quizzes/" + qid + "/start", {});
-    if (d.attempt.state !== "open") { return result(d.attempt.id, cid); }
-    const qs = d.quiz.questions;
-    root.innerHTML = `<span class="lrn-back" id="lrn-back">&larr; Course</span>
-      <h2>${esc(d.quiz.title)}</h2>
-      ${d.quiz.intro ? `<p>${esc(d.quiz.intro)}</p>` : ""}
-      ${qs.map((q, i) => `<div class="lrn-q" data-qq="${q.id}">
-        <b>${i + 1}. ${esc(q.prompt)}</b>
-        <span class="lrn-meta"> (${q.points} pt${q.points === 1 ? "" : "s"})</span>
-        ${q.kind === "choice" ? q.choices.map((c, j) =>
-          `<label><input type="radio" name="q${q.id}" value="${j}"> ${esc(c)}</label>`).join("")
-        : q.kind === "multi" ? q.choices.map((c, j) =>
-          `<label><input type="checkbox" name="q${q.id}" value="${j}"> ${esc(c)}</label>`).join("")
-        : `<textarea rows="2" style="width:100%" name="q${q.id}"></textarea>`}
-      </div>`).join("")}
-      <button class="lrn-btn primary" id="lrn-submit">Submit answers</button>`;
-    document.getElementById("lrn-back").onclick = () => course(cid);
-    const saved = d.answered || {};
-    qs.forEach((q) => {
-      const box = root.querySelector(`[data-qq="${q.id}"]`);
-      const prev = saved[q.id];
-      if (prev) {
-        box.querySelectorAll("input").forEach((el) => {
-          el.checked = (prev.chosen || []).includes(+el.value); });
-        const t = box.querySelector("textarea");
-        if (t) t.value = prev.text || "";
-      }
-    });
-    document.getElementById("lrn-submit").onclick = async () => {
-      for (const q of qs) {
-        const box = root.querySelector(`[data-qq="${q.id}"]`);
-        const chosen = [...box.querySelectorAll("input:checked")]
-          .map((el) => +el.value);
-        const t = box.querySelector("textarea");
-        await api(`/api/learn/attempts/${d.attempt.id}/answer`,
-          { question_id: q.id, chosen, text: t ? t.value : "" });
-      }
-      const res = await api(`/api/learn/attempts/${d.attempt.id}/submit`, {});
-      showResult(res, cid);
-    };
-  }
-  async function result(aid, cid) {
-    showResult(await api("/api/learn/attempts/" + aid), cid);
-  }
-  function showResult(res, cid) {
-    const g = res.grade;
-    root.innerHTML = `<span class="lrn-back" id="lrn-back">&larr; Course</span>
-      <h2>${esc(res.quiz.title)}</h2>
-      ${g.is_final
-        ? `<p><b>${g.percent}%</b> — ${g.earned}/${g.total} points ·
-            ${g.passed ? "passed" : "not passed (pass mark " + g.pass_mark + "%)"}</p>`
-        : `<p>${esc(g.message)}</p>
-           <p class="lrn-meta">Your score appears once a teacher has marked
-            every answer — we never show a provisional number.</p>`}`;
-    document.getElementById("lrn-back").onclick = () => course(cid);
-  }
-  if (!token()) return needSignIn();
-  home().catch((e) => {
-    if (String(e.message).includes("sign in")) needSignIn();
-    else root.innerHTML = `<p class="dim">${esc(e.message)}</p>`;
-  });
-})();
-</script>"""
+<script src="/rtc-mesh.js?v={v}"></script>
+<script src="/learn.js?v={v}"></script>"""
     return HTMLResponse(render_shell(
         con, body, title=f"Learning — {_brand}",
         description=f"{_brand} courses: lessons, quizzes and your progress."))

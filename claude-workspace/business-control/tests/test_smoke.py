@@ -7635,6 +7635,193 @@ ok({"first_checkin", "quiz_pass", "quiz_perfect"} <=
    "the learner's badges accumulated from what actually happened: a "
    "check-in, a pass, a perfect score")
 
+# --- the community: finding people, connecting, talking ---------------------
+# lingua's social layer, with its three load-bearing rules: messaging
+# requires a mutual contact (enforced on SEND); visibility is the person's
+# own choice, applied in ONE place; message bodies never reach staff except
+# by a party's own report.
+_shopper = c.post("/api/login", headers=HA, json={
+    "name": "Sally Shopper", "role": "customer"}).json()
+SH = {"Authorization": f"Bearer {_shopper['token']}", **HA}
+ok(c.get("/api/learn/people", headers=SH).status_code == 403,
+   "the community is the school, not the shop — a customer who never "
+   "joined a course has no place in a student directory")
+ok(not any(p["name"] == "Sally Shopper" for p in
+           c.get("/api/learn/people/search?q=Sally",
+                 headers=LN).json()),
+   "…and cannot be found in it either")
+_found = c.get("/api/learn/people/search?q=Nina", headers=LN).json()
+ok(any(p["id"] == _nina["id"] and p["contact"] == "none" for p in _found),
+   "a classmate is findable by name, with the relationship attached")
+ok(c.get("/api/learn/people/search?q=N", headers=LN).json() == [],
+   "one letter is not a search — names only, and only real queries")
+
+# privacy is the person's own dial, applied server-side in one place
+c.post("/api/learn/prefs", headers=NN, json={"privacy_name": "initial"})
+ok(any(p["name"] == "Nina N." for p in
+       c.get("/api/learn/people/search?q=Nina", headers=LN).json()),
+   "at 'initial' a stranger sees 'Nina N.' — first name whole, the rest "
+   "one letter")
+ok(any(p["name"] == "Nina New" for p in
+       c.get("/api/learn/people/search?q=Nina", headers=TT).json()),
+   "staff and teachers always get the full record — a roster cannot run "
+   "on initials")
+c.post("/api/learn/prefs", headers=NN, json={"privacy_name": "nobody"})
+ok(not any(p["id"] == _nina["id"] for p in
+           c.get("/api/learn/people/search?q=Nina", headers=LN).json()),
+   "at 'nobody' she is indistinguishable from not existing")
+c.post("/api/learn/prefs", headers=NN, json={"privacy_name": "everyone"})
+
+# the accept gate, enforced on SEND — not by hiding a compose box
+ok(c.post(f"/api/learn/thread/{_nina['id']}", headers=LN,
+          json={"body": "hola!"}).status_code == 403,
+   "nobody can message somebody who has not said yes")
+c.post("/api/learn/prefs", headers=NN, json={"open_dm": 1})
+ok(c.post(f"/api/learn/thread/{_nina['id']}", headers=LN,
+          json={"body": "hola desde el open DM"}).status_code == 200,
+   "…except through the one keyhole: the recipient's OWN choice to open "
+   "their DMs, off by default")
+c.post("/api/learn/prefs", headers=NN, json={"open_dm": 0})
+_req_out = c.post(f"/api/learn/people/{_nina['id']}/request",
+                  headers=LN, json={}).json()
+ok(_req_out["state"] == "pending"
+   and c.post(f"/api/learn/people/{_nina['id']}/respond", headers=LN,
+              json={"accept": True}).status_code == 409,
+   "asking leaves a pending request, and the asker cannot accept it for "
+   "them — that would make the accept step theatre")
+ok(c.post(f"/api/learn/people/{_lrn['id']}/request", headers=NN,
+          json={}).json()["state"] == "accepted",
+   "but if BOTH people reach out, the second ask IS the acceptance — no "
+   "deadlock on who clicks a second button")
+ok({"first_friend"} <= {a["code"] for a in
+                        c.get("/api/learn/courses", headers=LN)
+                        .json()["achievements"]},
+   "and the first friendship is a badge moment for both")
+c.post(f"/api/learn/thread/{_nina['id']}", headers=LN,
+       json={"body": "ahora somos amigos"})
+_th = c.get(f"/api/learn/thread/{_lrn['id']}", headers=NN).json()
+ok(any(m["body"] == "ahora somos amigos" for m in _th["messages"]),
+   "connected people talk")
+_ppl = c.get("/api/learn/people", headers=NN).json()
+ok(any(p["id"] == _lrn["id"] and p["unread"] == 0
+       for p in _ppl["accepted"]),
+   "and reading the thread WAS the receipt — unread is already zero")
+
+# ghost mode: one-directional invisibility, messaging paused both ways
+c.post(f"/api/learn/people/{_lrn['id']}/ghost", headers=NN, json={})
+ok(not any(p["id"] == _nina["id"] for p in
+           c.get("/api/learn/people/search?q=Nina", headers=LN).json()),
+   "a ghost vanishes from their target's sight — even as an accepted "
+   "contact")
+ok(c.post(f"/api/learn/thread/{_nina['id']}", headers=LN,
+          json={"body": "?"}).status_code == 409
+   and c.post(f"/api/learn/thread/{_lrn['id']}", headers=NN,
+              json={"body": "!"}).status_code == 409,
+   "and messaging pauses in BOTH directions — a ghost who could still "
+   "message would be invisible-but-present, the thing the mode exists to "
+   "prevent")
+c.post(f"/api/learn/people/{_lrn['id']}/unghost", headers=NN, json={})
+ok(c.post(f"/api/learn/thread/{_nina['id']}", headers=LN,
+          json={"body": "de vuelta"}).status_code == 200,
+   "unghosting resumes the friendship exactly where it was")
+
+# a block severs the edge and shuts the door in both directions
+_blk_msg = [m for m in c.get(f"/api/learn/thread/{_lrn['id']}",
+                             headers=NN).json()["messages"]
+            if m["from_id"] == _lrn["id"]][-1]
+c.post(f"/api/learn/people/{_lrn['id']}/block", headers=NN, json={})
+ok(not c.get("/api/learn/people", headers=NN).json()["accepted"]
+   and c.post(f"/api/learn/thread/{_nina['id']}", headers=LN,
+              json={"body": "?"}).status_code in (403, 404)
+   and c.post(f"/api/learn/thread/{_lrn['id']}", headers=NN,
+              json={"body": "?"}).status_code == 403,
+   "a block removes the contact edge at the same moment — one that left a "
+   "live edge behind would let messages keep flowing through it")
+c.post(f"/api/learn/people/{_lrn['id']}/unblock", headers=NN, json={})
+
+# the release valve: staff never read threads, but a party can hand one
+# message to the office — snapshotted, so the evidence outlives everything
+ok(c.post(f"/api/learn/people/{_lrn['id']}/report", headers=SH,
+          json={"reason": "x", "message_id": _blk_msg["id"]}
+          ).status_code == 403,
+   "an outsider cannot report into the community at all")
+c.post(f"/api/learn/people/{_lrn['id']}/report", headers=NN,
+       json={"reason": "unwanted messages",
+             "message_id": _blk_msg["id"]})
+_cq = c.get("/api/learning/conduct", headers=AA).json()
+_crep = [r for r in _cq if r["subject_id"] == _lrn["id"]][0]
+ok("de vuelta" in (_crep["body_snapshot"] or ""),
+   "the reported message's body is snapshotted into the report — staff "
+   "read exactly the message that was handed over, and nothing else")
+ok(c.get("/api/learning/conduct", headers=TT).status_code == 403,
+   "the conduct queue is the office's, not every teacher's")
+c.post(f"/api/learning/conduct/{_crep['id']}/resolve", headers=AA,
+       json={"note": "spoke to both"})
+ok(c.post(f"/api/learning/conduct/{_crep['id']}/resolve", headers=AA,
+          json={}).status_code == 404,
+   "resolving is once — a resolved report stays resolved")
+
+# --- live video: the signaling mailboxes -----------------------------------
+_j1 = c.post("/api/learn/rtc/rm-test1/join", headers=LN, json={}).json()
+_j2 = c.post("/api/learn/rtc/rm-test1/join", headers=NN, json={}).json()
+ok(_j1["peers"] == [] and _j2["peers"] == [_j1["peer"]],
+   "the first peer finds an empty room; the second is told who is there")
+c.post("/api/learn/rtc/rm-test1/signal", headers=NN, json={
+    "to": _j1["peer"], "peer": _j2["peer"],
+    "payload": {"description": {"type": "offer", "sdp": "x"}}})
+_poll = c.get(f"/api/learn/rtc/rm-test1/poll?peer={_j1['peer']}",
+              headers=LN).json()
+ok(len(_poll["messages"]) == 1
+   and _poll["messages"][0]["from"] == _j2["peer"]
+   and c.get(f"/api/learn/rtc/rm-test1/poll?peer={_j1['peer']}",
+             headers=LN).json()["messages"] == [],
+   "a signal lands in exactly one mailbox and polling drains it — the "
+   "server relays SDP and never touches media")
+ok(c.get("/api/learn/rtc/rm-test1/poll?peer=x").status_code == 401,
+   "signaling is authenticated — poll is the request the mesh makes on a "
+   "loop, and it must be the one that tells a dead session to stop")
+c.post("/api/learn/rtc/rm-test1/leave", headers=NN,
+       json={"peer": _j2["peer"]})
+ok(c.get(f"/api/learn/rtc/rm-test1/poll?peer={_j1['peer']}",
+         headers=LN).json()["peers"] == [],
+   "leaving empties your seat, and the next poll tells the survivors")
+from erp.backend import community as _cm  # noqa: E402
+from erp.backend import tenancy as _tnc  # noqa: E402
+_tok_a = _tnc.CURRENT.set("alpha")
+_cm._rtc_join("rm-shared", "peer-a")
+_tnc.CURRENT.reset(_tok_a)
+_tok_b = _tnc.CURRENT.set("beta")
+_iso = _cm._rtc_join("rm-shared", "peer-b")
+_tnc.CURRENT.reset(_tok_b)
+ok(_iso["peers"] == [],
+   "rooms are keyed by tenant — two schools sharing a process never share "
+   "a mailbox, even for the same room name")
+_ros_room = c.get(f"/api/learning/courses/{_crs}", headers=TT).json()
+_cls2 = c.post("/api/learning/sessions", headers=TT,
+               json={"course_id": _crs}).json()
+ok(_cls2["session"]["room"] and _cls2["session"]["room"].startswith("rm-"),
+   "every class carries a video room from the moment it opens")
+ok(c.get(f"/api/learn/courses/{_crs}", headers=LN).json()
+   ["session"]["room"] == _cls2["session"]["room"],
+   "and the learner's course page hands them the same room the teacher's "
+   "roster has — one class, one call")
+c.post(f"/api/learning/sessions/{_cls2['session']['id']}/close", headers=TT)
+_ljs = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
+        ).read_text(encoding="utf-8")
+_mjs = (Path(__file__).parent.parent / "src/storefront/frontend/rtc-mesh.js"
+        ).read_text(encoding="utf-8")
+_opsjs2 = (Path(__file__).parent.parent / "src/erp/frontend/app.js"
+           ).read_text(encoding="utf-8")
+ok("LinguaMesh" in _mjs and "polite" in _mjs and "ignoreOffer" in _mjs
+   and "meshBitrateFor" in _mjs,
+   "the mesh client carries lingua's perfect-negotiation pattern and the "
+   "shrinking per-peer bitrate cap")
+ok("LinguaMesh" in _ljs and "/rtc-mesh.js" in c.get("/learn").text
+   and "/learn.js" in c.get("/learn").text,
+   "the learner page loads the app and the mesh as versioned assets")
+ok("classCall" in _opsjs2 and "/rtc-mesh.js" in _opsjs2,
+   "the ops roster joins the same mesh — one client, not two")
+
 # the capability wall: /learn is part of the Learning grant, not the core
 c.post("/api/store/admin/fleet/tenants", headers=AA,
        json={"id": "learnco", "brand": "Learn Co", "klass": "micro"})

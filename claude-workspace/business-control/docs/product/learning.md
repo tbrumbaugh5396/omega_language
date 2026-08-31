@@ -58,11 +58,52 @@ student is anyone **enrolled** — enrolment, not role, is what opens
 published lessons and check-in. Board/donor visibility rules wait for a
 governance need that hasn't arrived here.
 
+## The community (ported)
+
+The learner-to-learner social layer lives in `erp/backend/community.py` and
+the People tab on `/learn`, with the source's three load-bearing rules
+intact:
+
+- **Messaging requires a mutual contact, enforced on SEND** — anyone can
+  find people and ask; nobody talks until the other side says yes. The one
+  keyhole is per-person open DMs, off by default. Blocks sever the contact
+  edge at the same moment; ghost mode is one-directional invisibility with
+  messaging paused both ways, and the friendship resumes intact on unghost.
+- **Privacy is the person's own dial, applied in one place** —
+  everyone / first-name-and-initial / my-classes-only / contacts / nobody.
+  Staff and teachers always get full records (a roster cannot run on
+  initials); everyone else gets the person's choice, and "hidden" is
+  indistinguishable from "does not exist".
+- **Message bodies never reach staff** — not even traffic is audit-logged.
+  The release valve is the conduct report: a party to a conversation can
+  hand ONE message to the office, snapshotted at that moment so the
+  evidence outlives the sender. The queue and resolution live on the ops
+  Learning tab.
+
+Adapted in the move: the community is scoped to the school (enrolled,
+teaching, or administering — never the shop's whole customer file), and the
+source's people-photos and QR identity cards have no counterpart here yet.
+
+## Live video (ported)
+
+Every class session carries a video room from the moment it opens; the
+learner's "Class is in session" banner and the teacher's roster join the
+same call. DMs can carry calls too. The client is the source's
+peer-to-peer mesh (`storefront/frontend/rtc-mesh.js`, used by BOTH the
+/learn page and the ops roster — one client, not two): perfect-negotiation
+glare handling, a per-peer bitrate cap that shrinks as the room grows, and
+the graceful-media ladder — no camera means you join to watch and listen,
+told honestly, never refused. Signaling is HTTP-polled mailboxes
+(`/api/learn/rtc/*`), keyed by tenant so two schools sharing a process
+never share a room; the server relays SDP/ICE and never touches media.
+TURN for symmetric-NAT deployments configures via `turn_url` /
+`turn_user` / `turn_pass`. The source's SFU transport (WHIP/WHEP) is not
+ported — it needs a media server nobody here runs yet; the mesh carries a
+class of up to 12.
+
 ## Still waiting from the source
 
-- Student-to-student **social** (contacts, DMs, blocks, ghosts, reports)
-  and the **video tutoring** WebRTC rooms — the platform has staff chat and
-  calls, but the learner-facing versions are unported.
 - **Library loans** (and the bookworm badge), speaking/video quiz answers
   (the grading engine already understands them; recording UI is what's
-  missing — they refuse at authoring rather than sit unmarkable).
+  missing — they refuse at authoring rather than sit unmarkable), and the
+  SFU video transport for classes too large for a mesh.

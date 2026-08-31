@@ -1031,3 +1031,15 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
 .cap-grid label { justify-content: flex-start; }
 .cap-price { margin-left: auto; font-size: 11.5px; opacity: .62;
   white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ── the class video call (Learning) ── */
+#ops-call { position: fixed; inset: auto 12px 12px 12px; max-height: 70vh;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; z-index: 300; display: flex; flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .45); }
+.ops-call-head { display: flex; gap: 10px; align-items: center;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.ops-call-grid { display: grid; gap: 8px; padding: 12px; overflow-y: auto;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.ops-call-grid video { width: 100%; border-radius: 10px; background: #000;
+  aspect-ratio: 4 / 3; object-fit: cover; }
