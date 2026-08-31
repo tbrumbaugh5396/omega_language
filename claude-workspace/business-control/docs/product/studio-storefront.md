@@ -150,6 +150,17 @@ The preview is inert while editing: links do not navigate the page out
 from under the editor, and Add-to-cart does not quietly build a real
 cart.
 
+Images never leave the page either. A section whose schema takes media
+grows an image button beside its drag handle, and accepts an image file
+dropped straight onto it — either way the file uploads as **site media**
+(`product_id 0`: it belongs to the storefront, not a product), the
+section's media field is set, and the section re-renders in place.
+Uploading into a hero flips it to image-background mode, because a new
+background hidden behind the gradient would look like a failed upload.
+File drags and section drags are told apart, so reordering can never
+trigger an upload; the panel's media picker lists site media beside
+product media, so an upload from the page is reusable from the form.
+
 Structure is edited in place too. The insertion points between sections
 are real elements: hover one for **＋ Add a section here** (the picker is
 built from the schema, so new section types appear with no editor

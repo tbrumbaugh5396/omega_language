@@ -6043,6 +6043,54 @@ ok("draggable = true" in _thjs and "sfe-handle" in _thjs
    "dragging is the HANDLE, not the section — a draggable section would "
    "fight the text selection that inline editing just made possible")
 
+
+# --- images without leaving the page --------------------------------------
+# Site media: product_id 0 means the image belongs to the storefront (a
+# hero background, a banner), not to any product. Everything downstream
+# already served by media id alone; only the upload guard ever cared.
+_png = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+_sm = c.post("/api/store/admin/media", headers=AA,
+             json={"product_id": 0, "data_url": _png, "alt": "hero wash"})
+ok(_sm.status_code == 200 and _sm.json()["kind"] == "image",
+   "an image uploads as SITE media — no product required, because a hero "
+   "background is not a product's photograph")
+_smid = _sm.json()["id"]
+ok(c.get(f"/media/m/{_smid}", headers=HA).status_code == 200,
+   "and serves from the same immutable URL as any other media")
+ok(any(m["id"] == _smid for m in
+       c.get("/api/store/admin/media/0", headers=AA).json()),
+   "listed under product 0, which is how the editor's picker finds it")
+ok(c.post("/api/store/admin/media", headers=AA,
+          json={"product_id": 999999, "data_url": _png}).status_code == 404,
+   "while a nonexistent real product still 404s — 0 is the one keyword")
+
+_ib = c.post("/api/store/admin/sections", headers=AA,
+             json={"page_slug": "home", "type": "image_banner"}).json()["id"]
+c.post(f"/api/store/admin/sections/{_ib}", headers=AA,
+       json={"settings": {"media_id": _smid, "heading": "From the page",
+                          "text": "", "link": "", "height": "medium"}})
+ok(f"/media/m/{_smid}" in c.get(
+       f"/api/store/admin/sections/{_ib}/html", headers=AA).json()["html"],
+   "a section pointed at site media renders it — the same swap path the "
+   "editor uses after an upload")
+c.request("DELETE", f"/api/store/admin/sections/{_ib}", headers=AA)
+
+ok("product_id: 0" in _thjs and "readAsDataURL" in _thjs
+   and "sfe-imgbtn" in _thjs,
+   "the editor's image button uploads to site media through a file picker "
+   "opened from the section itself")
+ok('s.settings.bg = "image"' in _thjs,
+   "and uploading into a hero flips it to image mode — a new background "
+   "hidden behind the gradient would look like the upload failed")
+ok('includes("Files")' in _thjs and "sfe-filedrop" in _thjs
+   and "DRAG_SID != null) return" in _thjs,
+   "an image file dropped on a section uploads there — and file drags are "
+   "told apart from section drags, so reordering can't trigger an upload")
+ok("loadSiteMedia" in _thjs and "PRODUCT_MEDIA" in _thjs,
+   "the panel's media picker lists site media beside product media, so an "
+   "upload from the page is reusable from the form")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

@@ -102,6 +102,19 @@ const EDIT_CSS = `
   [data-sid]:hover .sfe-handle, [data-sid].sfe-sel .sfe-handle {
     opacity: 1; }
   .sfe-handle:active { cursor: grabbing; }
+  .sfe-imgbtn { position: absolute; top: 6px; right: 44px; z-index: 60;
+    cursor: pointer; background: #fff; border: 1.5px solid
+    rgba(108,0,191,.35); border-radius: 8px; padding: 2px 7px;
+    font-size: 13px; line-height: 1.4; opacity: 0; transition: opacity .12s;
+    user-select: none; }
+  [data-sid]:hover .sfe-imgbtn, [data-sid].sfe-sel .sfe-imgbtn {
+    opacity: 1; }
+  [data-sid].sfe-filedrop { outline: 3px solid #6c00bf;
+    outline-offset: -3px; }
+  [data-sid].sfe-filedrop::after { content: "Drop to set this image";
+    position: absolute; top: 0; left: 0; background: #6c00bf; color: #fff;
+    font: 600 11px/1 Inter, sans-serif; padding: 4px 8px;
+    border-bottom-right-radius: 8px; z-index: 60; pointer-events: none; }
   .sfe-pick { position: absolute; left: 50%; transform: translateX(-50%);
     top: 14px; z-index: 70; background: #fff; border: 1.5px solid
     rgba(108,0,191,.3); border-radius: 12px; padding: 8px;
@@ -146,6 +159,34 @@ function wirePreview() {
       drawSections(); drawForm();
       highlightPreview(SEL, false);
     }
+  }, true);
+  // An image file dropped on a section that takes one uploads it there.
+  // Section drags (DRAG_SID set) keep their own path on the bars.
+  doc.addEventListener("dragover", (e) => {
+    if (DRAG_SID != null) return;
+    if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+    const sec = e.target.closest("[data-sid]");
+    doc.querySelectorAll(".sfe-filedrop").forEach((x) =>
+      x.classList.remove("sfe-filedrop"));
+    if (sec && mediaKeyOf(SECTIONS.find((x) => x.id === +sec.dataset.sid))) {
+      e.preventDefault();
+      sec.classList.add("sfe-filedrop");
+    }
+  }, true);
+  doc.addEventListener("drop", (e) => {
+    if (DRAG_SID != null) return;
+    const sec = e.target.closest("[data-sid]");
+    doc.querySelectorAll(".sfe-filedrop").forEach((x) =>
+      x.classList.remove("sfe-filedrop"));
+    if (!sec) return;
+    const sRow = SECTIONS.find((x) => x.id === +sec.dataset.sid);
+    const mk = mediaKeyOf(sRow);
+    const f = e.dataTransfer?.files?.[0];
+    if (!mk || !f) return;
+    e.preventDefault();
+    SEL = sRow.id; drawSections(); drawForm();
+    highlightPreview(SEL, false);
+    uploadImage(f, { sid: sRow.id, key: mk });
   }, true);
   injectBars(doc);
   highlightPreview(SEL, false);
@@ -212,6 +253,66 @@ async function swapSection(sid) {
 }
 
 
+
+// ---------- images, without leaving the page ----------
+/* A section whose schema has a media field gets an image button beside its
+   drag handle, and accepts an image file dropped straight onto it. Either
+   way the file uploads as SITE media (product_id 0 — it belongs to the
+   storefront, not a product), the section's media field is set, and the
+   section re-renders in place. */
+
+const FILE_IN = document.createElement("input");
+FILE_IN.type = "file";
+FILE_IN.accept = "image/*";
+FILE_IN.hidden = true;
+document.body.appendChild(FILE_IN);
+let UPLOAD_FOR = null;                     // {sid, key} while the picker is up
+FILE_IN.onchange = () => {
+  const f = FILE_IN.files[0];
+  if (f && UPLOAD_FOR) uploadImage(f, UPLOAD_FOR);
+  FILE_IN.value = "";
+};
+
+const mediaKeyOf = (s) => s &&
+  (SCHEMA[s.type].fields.find((f) => f.t === "media") || {}).k;
+
+async function uploadImage(file, { sid, key }) {
+  if (!/^image\//.test(file.type)) return;
+  if (file.size > 8_000_000) {
+    alert("That image is over the 8 MB cap — resize it and try again.");
+    return;
+  }
+  const data_url = await new Promise((res) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.readAsDataURL(file);
+  });
+  const out = await api("/api/store/admin/media", { method: "POST",
+    body: JSON.stringify({ product_id: 0, data_url,
+      alt: file.name.replace(/\.[a-z0-9]+$/i, "") }) });
+  const s = SECTIONS.find((x) => x.id === sid);
+  if (!s) return;
+  setPath(s.settings, key, out.id);
+  // A hero shows its image only in "image" background mode — uploading one
+  // and leaving the gradient up would look like the upload failed.
+  if (SCHEMA[s.type].fields.some((f) => f.k === "bg"
+      && (f.options || []).includes("image")))
+    s.settings.bg = "image";
+  await loadSiteMedia();
+  if (SEL === sid) drawForm();
+  pushSettings(s);
+}
+
+/* Site media in the panel's picker, alongside product media. */
+let SITE_MEDIA = [];
+async function loadSiteMedia() {
+  try {
+    SITE_MEDIA = (await api("/api/store/admin/media/0")).map((m) =>
+      ({ ...m, alt: m.alt || `site image #${m.id}` }));
+  } catch { SITE_MEDIA = []; }
+  MEDIA = [...SITE_MEDIA, ...PRODUCT_MEDIA];
+}
+
 // ---------- add-in-place and drag-to-reorder ----------
 /* The insertion points between sections are real elements injected into
    the preview: each bar knows which section it sits before. The same bars
@@ -222,8 +323,9 @@ async function swapSection(sid) {
 let DRAG_SID = null;
 
 function decorate(doc, secEl) {
-  // the drag handle, top-right so the label pseudo keeps the top-left
-  if (secEl.querySelector(".sfe-handle")) return;
+  // the drag handle, top-right so the label pseudo keeps the top-left;
+  // idempotent, because it runs again when the section list arrives
+  if (secEl.querySelector(".sfe-handle")) { addImgBtn(doc, secEl); return; }
   const h = doc.createElement("span");
   h.className = "sfe-handle";
   h.title = "Drag to move this section";
@@ -242,6 +344,27 @@ function decorate(doc, secEl) {
     doc.body.classList.remove("sfe-dragging-page");
   };
   secEl.appendChild(h);
+  addImgBtn(doc, secEl);
+}
+
+function addImgBtn(doc, secEl) {
+  if (secEl.querySelector(".sfe-imgbtn")) return;
+  const sRow = SECTIONS.find((x) => x.id === +secEl.dataset.sid);
+  const mk = mediaKeyOf(sRow);
+  if (!mk) return;
+  const ib = doc.createElement("span");
+  ib.className = "sfe-imgbtn";
+  ib.title = "Upload an image for this section (or drop one onto it)";
+  // the storefront page carries the icon sprite, so the button can use
+  // the shop's own glyph (and the codebase's no-emoji rule holds)
+  ib.innerHTML = '<svg class="ico ico-sm" aria-hidden="true">'
+    + '<use href="#i-image"/></svg>';
+  ib.onclick = (e) => {
+    e.stopPropagation();
+    UPLOAD_FOR = { sid: sRow.id, key: mk };
+    FILE_IN.click();
+  };
+  secEl.appendChild(ib);
 }
 
 function injectBars(doc) {
@@ -360,6 +483,11 @@ async function loadSections() {
   SECTIONS = await api(`/api/store/admin/sections/${SLUG}`);
   drawSections();
   drawForm();
+  // The preview can wire before the section list arrives at boot — the
+  // image buttons need to know each section's schema, so pass again.
+  const doc = pdoc();
+  if (doc && doc.getElementById("sfe-css"))
+    doc.querySelectorAll("[data-sid]").forEach((el) => decorate(doc, el));
 }
 
 function drawSections() {
@@ -598,7 +726,7 @@ function pushTheme() {
 }
 
 // ---------- boot ----------
-let MEDIA = [], COLLECTIONS = [];
+let MEDIA = [], PRODUCT_MEDIA = [], COLLECTIONS = [];
 async function boot() {
   $("#login").classList.add("hidden");
   $("#topbar").classList.remove("hidden");
@@ -608,8 +736,9 @@ async function boot() {
     `<option value="${k}">${v.label}</option>`).join("");
   const cat = await (await fetch("/api/store/catalog")).json();
   COLLECTIONS = cat.collections;
-  MEDIA = cat.products.flatMap((p) =>
+  PRODUCT_MEDIA = cat.products.flatMap((p) =>
     (p.media || []).map((m) => ({ ...m, alt: m.alt || p.name })));
+  await loadSiteMedia();
   THEME = await api("/api/store/admin/theme");
   drawTheme();
   await loadPages();

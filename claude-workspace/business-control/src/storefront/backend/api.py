@@ -2117,8 +2117,12 @@ def list_media(product_id: int, u=Depends(admin_user), con=Depends(get_con)):
 @router.post("/api/store/admin/media")
 def add_media(body: MediaBody, u=Depends(admin_user), con=Depends(get_con)):
     import base64
-    if not con.execute("SELECT 1 FROM products WHERE id=?",
-                       (body.product_id,)).fetchone():
+    # product_id 0 is SITE media — a hero background, a banner — owned by
+    # the storefront rather than any product. Everything downstream already
+    # serves by media id alone; only this guard ever cared.
+    if body.product_id and not con.execute(
+            "SELECT 1 FROM products WHERE id=?",
+            (body.product_id,)).fetchone():
         raise HTTPException(404, "no such product")
     nxt = (con.execute(
         "SELECT COALESCE(MAX(position), -1) + 1 n FROM product_media"
@@ -2156,7 +2160,7 @@ def add_media(body: MediaBody, u=Depends(admin_user), con=Depends(get_con)):
         if kind == "image":
             make_derivatives(mid, ext)
     # Keep the ERP's legacy art flag in step with the primary image.
-    if kind == "image" and nxt == 0:
+    if kind == "image" and nxt == 0 and body.product_id:
         con.execute("UPDATE products SET image=1 WHERE id=?",
                     (body.product_id,))
     con.commit()
