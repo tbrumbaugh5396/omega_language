@@ -1106,6 +1106,45 @@ async function render() {
 }
 
 
+// ---------- launch: the real address, and the sold capabilities ----------
+/* One act: the hostname joins the tenant's registry row (.localhost door
+   kept), public_base_url lands in their config, the capability grant
+   refreshes from the signed quote, the engagement records the URL. DNS
+   stays the operator's job — this makes the platform answer when the
+   name arrives. */
+async function launchSite(eid, name, currentUrl, after) {
+  let sug = null;
+  try { sug = (await api(
+    `/api/store/admin/engagements/${eid}/stand-up`)).suggestion; }
+  catch { sug = null; }
+  modal(`<h3>Launch ${esc(name)}</h3>
+    <p class="dim">Their install answers on its .localhost door today.
+      Give it the real address — the platform starts answering to it the
+      moment DNS points here.</p>
+    <label>Live URL</label>
+    <input id="ls-url" placeholder="https://shop.example.com"
+      value="${esc(currentUrl || "")}">
+    <p class="dim">${sug && sug.cap_ids && sug.cap_ids.length
+      ? `${opsIcon("pen", "btn-ic")} The capability grant refreshes from
+         the ${sug.signed ? "signed" : "latest"} quote:
+         <b>${sug.cap_ids.length} capabilities</b>.`
+      : "No quote on file — the capability grant stays as it is."}</p>
+    <div class="modal-foot">
+      <button class="btn" id="ls-go">Launch</button>
+      <button class="btn alt" data-close>Later</button>
+    </div>`);
+  $("#ls-go").onclick = async () => {
+    try {
+      const out = await api(`/api/store/admin/engagements/${eid}/launch`,
+        { body: { url: $("#ls-url").value.trim() } });
+      closeModal();
+      toast(`${name} is live at ${out.url}`
+        + (out.caps.length ? ` with ${out.caps.length} capabilities` : ""));
+      if (after) after();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 // ---------- a capability the tenant hasn't bought ----------
 /* The tab exists, greyed, and opens this instead of the screen: what the
    capability is, what it costs a month (from the provider's own price
@@ -6378,10 +6417,24 @@ async function renderEngagement(id) {
         + slot(`<button class="btn alt sm" data-gate-pass="${g.gate}"
             data-kind="${g.kind}">${g.kind === "money"
               ? "Confirm" : "Mark closed"}</button>`);
+    /* The schedule, on the gate it schedules. Planned comes from the
+       Dates table (matched server-side); overdue = planned in the past on
+       a gate still open. When the gate closed, the actual date (stamped
+       at close, or written by hand) outranks the plan. */
+    const today = new Date().toISOString().slice(0, 10);
+    const dateBit = g.passed_at
+      ? (g.actual_date ? `<span class="pill ok">done ${esc(g.actual_date)}
+          </span>` : "")
+      : g.planned
+        ? `<span class="pill ${g.planned < today ? "bad" : ""}"
+             title="from the Dates table">${g.planned < today ? "overdue · "
+             : "planned "}${esc(g.planned)}</span>`
+        : "";
     return `<div class="gate-line">
       <b title="${esc(g.label)}">${esc(g.label)}</b>
       <span class="gl-state">${state}</span>
       <span class="gl-doc dim" title="${docBit}">${docBit}</span>
+      <span class="gl-date">${dateBit}</span>
       <span class="gl-closes dim">stage ${esc(stageName(g.stage))}</span>
       <span class="gl-acts">${acts}</span>
     </div>`;
@@ -6460,6 +6513,11 @@ async function renderEngagement(id) {
         <button class="btn alt sm" id="eng-quote" title="price this client on
           the bench, then file the quote as a paper — it opens where the last
           quote left off">Quote</button>
+        ${e.tenant_id && S.meta && S.meta.is_provider
+          ? `<button class="btn alt sm" id="eng-launch" title="put their
+               install on its real address, with the capabilities the quote
+               sold">${e.live_url ? "Relaunch" : "Launch site"}</button>`
+          : ""}
       </div>
     </div>
     ${e.internal_poc_status === "pending" && S.user
@@ -6547,6 +6605,9 @@ async function renderEngagement(id) {
   $("#eng-edit").onclick = () => engForm(e);
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
   $("#eng-gantt").onclick = ganttModal;
+  const lb = $("#eng-launch");
+  if (lb) lb.onclick = () =>
+    launchSite(id, e.name, e.live_url, () => renderEngagement(id));
   $("#eng-binder").onclick = async () => {
     // The first open lays the whole book out to number its contents; say so
     // rather than leaving a dead button under the cursor.
@@ -6957,6 +7018,24 @@ async function renderEngagement(id) {
   const gateDone = (out) => {
     if (out.warnings && out.warnings.length)
       toast("Out of order — still open: " + out.warnings.join(", "));
+    if (out.date_stamped)
+      toast(`Dates table: '${out.date_stamped}' marked done today`);
+    if (out.launch) {
+      modal(`<h3>Ready to launch</h3>
+        <p class="dim">${esc(out.launch.name)} runs on the platform but has
+          no public address yet. Launch them now — the URL, and the
+          capabilities the quote sold, in one act?</p>
+        <div class="modal-foot">
+          <button class="btn" id="gl-launch">Launch…</button>
+          <button class="btn alt" data-close>Later — the button stays on
+            their page</button>
+        </div>`);
+      $("#gl-launch").onclick = () => {
+        closeModal();
+        launchSite(id, e.name, e.live_url, () => renderEngagement(id));
+      };
+      return;
+    }
     if (out.stand_up) {
       // The contract just closed and no install exists: the next thing an
       // operator was going to do anyway is offered, sized from the quote.

@@ -4077,10 +4077,11 @@ ok(".doc-line:not(.folded) .dm-blanks { visibility: hidden; }" in _opscss
 ok('${x.signed} of ${' in _opsjs,
    "half-signed is its own state — one party done, one still out — and a "
    "slot that showed only the newer of the two would read as unsigned")
-ok("grid-template-columns: minmax(0, 1.35fr) 92px minmax(0, 1fr) 122px auto;"
+ok("grid-template-columns: minmax(0, 1.35fr) 92px minmax(0, 1fr) 128px 122px"
    in _opscss and ".gate-line > b { overflow: hidden;" in _opscss,
    "the gates line up the same way — one line per gate, one width per "
-   "column, so ten gates read as a list rather than ten sentences")
+   "column (six now, the schedule earned one), so ten gates read as a "
+   "list rather than ten sentences")
 ok('? "signed" : "confirmed"}</span>' in " ".join(_opsjs.split())
    and 'awaiting</span>' in _opsjs,
    "the state is one word wide on every row")
@@ -6491,6 +6492,115 @@ ok(f"bands:{{light:{_b2['light']},std:{_b2['standard']},"
    "of the price book is no longer a copy")
 
 c.request("DELETE", "/api/store/admin/fleet/tenants/partialco?keep_data=0",
+          headers=AA)
+
+
+# --- the ceremony gates stop being ceremony -------------------------------
+# Launch: the URL and the sold capabilities land on the tenant in one act.
+# Dates: the schedule reaches the gates, and a closing gate reports back.
+_le = c.post("/api/store/admin/engagements", headers=AA,
+             json={"name": "Launch Co"}).json()["id"]
+c.post(f"/api/store/admin/engagements/{_le}/quote", headers=AA,
+       json={"markdown": "# Quote",
+             "state": _bench_state(locs=1, seats=4,
+                                   on=["core", "selling", "payments"])})
+c.put(f"/api/store/admin/engagements/{_le}/dates", headers=AA,
+      json={"dates": [
+          {"label": "Requirements signed", "planned": "2026-09-12"},
+          {"label": "Launch", "planned": "2026-08-01"}]})
+_ld = c.get(f"/api/store/admin/engagements/{_le}", headers=AA).json()
+_lg = {g["gate"]: g for g in _ld["gates"]}
+ok(_lg["requirements_signed"].get("planned") == "2026-09-12",
+   "a Dates row reaches its gate by label — the schedule shows on the "
+   "gate row, not only in a separate table")
+ok(_lg["final_invoice_paid"].get("planned") == "2026-08-01",
+   "and by stage when the label is the stage's name — 'Launch' belongs "
+   "to the gate that closes 08-launch")
+ok("planned" not in _lg["contract_signed"],
+   "a gate with no scheduled date carries none, rather than a guess")
+
+_gp = c.post(f"/api/store/admin/engagements/{_le}/gates/"
+             f"requirements_signed", headers=AA,
+             json={"note": "signed on paper, filed in the drive"}).json()
+ok(_gp.get("date_stamped") == "Requirements signed",
+   "closing a gate stamps `actual` on its Dates row and says so")
+_ld2 = c.get(f"/api/store/admin/engagements/{_le}", headers=AA).json()
+ok(any(d["label"] == "Requirements signed" and d["actual"]
+       for d in _ld2["dates"]),
+   "the Dates table now records what actually happened")
+c.put(f"/api/store/admin/engagements/{_le}/dates", headers=AA,
+      json={"dates": [
+          {"label": "Requirements signed", "planned": "2026-09-12",
+           "actual": "2026-09-01"},
+          {"label": "Launch", "planned": "2026-08-01"}]})
+c.request("DELETE", f"/api/store/admin/engagements/{_le}/gates/"
+          f"requirements_signed", headers=AA)
+c.post(f"/api/store/admin/engagements/{_le}/gates/requirements_signed",
+       headers=AA, json={"note": "re-closed"})
+ok(any(d["label"] == "Requirements signed" and d["actual"] == "2026-09-01"
+       for d in c.get(f"/api/store/admin/engagements/{_le}",
+                      headers=AA).json()["dates"]),
+   "but an actual the operator wrote by hand outranks the clock — the "
+   "stamp fills blanks, it never overwrites a record")
+
+# launch needs an install
+ok(c.post(f"/api/store/admin/engagements/{_le}/launch", headers=AA,
+          json={"url": "shop.launchco.test"}).status_code == 400,
+   "launching before the stand-up is refused with the reason")
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "launchco", "brand": "Launch Co", "klass": "micro",
+             "engagement_id": _le})
+
+# the offer appears on the ceremony gate, once
+_fo = c.post(f"/api/store/admin/engagements/{_le}/gates/"
+             f"final_invoice_paid", headers=AA,
+             json={"note": "wire ref 900"}).json()
+ok(_fo.get("launch", {}).get("tenant_id") == "launchco",
+   "closing the launch-side gate OFFERS the launch when the client runs "
+   "on the platform with no public address yet")
+
+ok(c.post(f"/api/store/admin/engagements/{_le}/launch", headers=AA,
+          json={"url": "not a hostname"}).status_code == 400,
+   "a launch needs a real hostname")
+ok(c.post(f"/api/store/admin/engagements/{_le}/launch", headers=AA,
+          json={"url": "beta.test"}).status_code == 400,
+   "and one no other business already answers to")
+_lo = c.post(f"/api/store/admin/engagements/{_le}/launch", headers=AA,
+             json={"url": "shop.launchco.test"}).json()
+ok(_lo["url"] == "https://shop.launchco.test"
+   and "shop.launchco.test" in _lo["hosts"]
+   and "launchco.localhost" in _lo["hosts"],
+   "the launch merges the real hostname into the registry — the "
+   ".localhost door stays open")
+ok(_lo["caps"] == ["payments", "selling"],
+   "and refreshes the capability grant from the signed quote in the "
+   "same act")
+ok(c.get("/api/products",
+         headers={"host": "shop.launchco.test"}).status_code == 200,
+   "the platform answers on the real name the moment it arrives")
+_lcfg = _jn.loads((_tn.tenant_dir("launchco") / "config.json").read_text())
+ok(_lcfg["public_base_url"] == "https://shop.launchco.test",
+   "public_base_url lands in the tenant's config, so QR codes, sign-in "
+   "links and Stripe returns carry the right domain")
+ok(c.get(f"/api/store/admin/engagements/{_le}", headers=AA).json()
+   ["engagement"]["live_url"] == "https://shop.launchco.test",
+   "and the engagement records where they went live")
+ok(any(e2["what"] == "site launched" for e2 in
+       c.get("/api/store/admin/fleet", headers=AA).json()["events"]),
+   "on the fleet's own history")
+ok(not c.request("DELETE", f"/api/store/admin/engagements/{_le}/gates/"
+                 "final_invoice_paid", headers=AA).json().get("launch")
+   and not c.post(f"/api/store/admin/engagements/{_le}/gates/"
+                  "final_invoice_paid", headers=AA,
+                  json={"note": "again"}).json().get("launch"),
+   "once launched, the offer stops — a button that launches must vanish "
+   "when the site is live")
+_ljs = Path("src/erp/frontend/app.js").read_text()
+ok("launchSite" in _ljs and "eng-launch" in _ljs and "out.launch" in _ljs
+   and "gl-date" in _ljs,
+   "the editor carries it — a Launch button on the client's page, the "
+   "offer at gate close, and the schedule on every gate row")
+c.request("DELETE", "/api/store/admin/fleet/tenants/launchco?keep_data=0",
           headers=AA)
 
 _shm.rmtree(_split_dir, ignore_errors=True)

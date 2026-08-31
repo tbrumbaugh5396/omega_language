@@ -271,6 +271,37 @@ def _name_the_shop(tid: str, brand: str) -> None:
         CURRENT.reset(tok)
 
 
+def add_hosts(tid: str, hosts: list) -> list:
+    """Give a tenant more names to answer to. Returns the full host list.
+    Merging, never replacing — launching on a real domain must not take
+    the .localhost door away."""
+    reg = registry() or {}
+    t = (reg.get("tenants") or {}).get(tid)
+    if t is None:
+        raise ValueError(f"no tenant '{tid}'")
+    have = set(t.get("hosts", []))
+    t["hosts"] = sorted(have | {h.strip().lower() for h in hosts
+                                if h.strip()})
+    REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    bust_cache()
+    return t["hosts"]
+
+
+def set_caps(tid: str, caps: list) -> None:
+    """Replace a tenant's capability grant. Only ever called with a real
+    list from a quote — an empty grant is never written, because missing
+    caps means everything on and that meaning must stay unambiguous."""
+    if not caps:
+        return
+    reg = registry() or {}
+    t = (reg.get("tenants") or {}).get(tid)
+    if t is None:
+        raise ValueError(f"no tenant '{tid}'")
+    t["caps"] = sorted(set(caps))
+    REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    bust_cache()
+
+
 def set_status(tid: str, status: str) -> None:
     """Shut a tenant down, or wake it up. Suspended keeps every byte and
     stops answering — the reversible half of 'remove this client'."""

@@ -184,6 +184,28 @@ before entitlements keep the whole product. The lock is UI-level and
 honest-advisory by design; per-route API enforcement across ~400 routes
 is an explicit non-goal. The fleet board shows each tenant's grant count.
 
+**The ceremony gates launch the site.** When `final_invoice_paid` or
+`handover_accepted` closes on a client who runs on the platform with no
+public address yet, the launch is offered on the spot (and a Launch
+button lives on their page either way). One act, four writes, all
+already agreed: the hostname merges into the tenant's registry row (the
+`.localhost` door stays), `public_base_url` lands in their config so QR
+codes, sign-in links and Stripe returns carry the right domain, the
+capability grant refreshes from the signed quote, and the engagement
+records the URL — with a `site launched` line in the fleet history. DNS
+and the reverse proxy remain the operator's job: this makes the platform
+answer when the name arrives, it does not buy the name. A hostname
+another business answers to is refused.
+
+**And the schedule reaches the gates.** A row in the engagement's Dates
+table matches its gate — by label first, then by the stage the gate
+closes ("Launch" belongs to whatever closes `08-launch`) — and the gate
+row shows it: planned, or overdue in red while open, done-date once
+closed. The match runs one rule server-side, used both to display and
+to write back: **a closing gate stamps `actual` on its Dates row**,
+only where the operator has not already written one — their record of
+what happened outranks the clock's.
+
 **Billing flags, not billing actions.** A plan subscription can be linked
 to the install it pays for (ops Admin → Plans → "Pays for"); the fleet
 board then pulls the linked subscriptions' live Stripe status (cached ~5

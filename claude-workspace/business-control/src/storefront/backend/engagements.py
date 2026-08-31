@@ -211,6 +211,30 @@ GATES = [
 GATE_KEYS = {g[0] for g in GATES}
 
 
+def match_gate_date(gate: dict, dates: list):
+    """The dates table's row for this gate, if the operator wrote one.
+
+    The Dates table is free-form on purpose — it is the client-facing
+    schedule, in the operator's words. Matching is by the gate's label
+    first ("Requirements signed" names both), then by the stage the gate
+    closes ("Launch" belongs to whatever closes 08-launch). One rule, used
+    both to show the date on the gate row and to stamp `actual` when the
+    gate closes — so the two can never disagree about which row is whose.
+    """
+    def norm(x):
+        return re.sub(r"[^a-z0-9 ]", "", str(x or "").lower()).strip()
+    g_label = norm(gate["label"])
+    stage_word = norm(re.sub(r"^\d\d-", "", gate.get("stage") or ""))
+    for d in dates:
+        if norm(d["label"]) == g_label:
+            return d
+    for d in dates:
+        dl = norm(d["label"])
+        if dl and stage_word and (dl in stage_word or stage_word in dl):
+            return d
+    return None
+
+
 def resolve_gates(con, eid: int) -> list:
     rows = {r["gate"]: r for r in con.execute(
         "SELECT * FROM engagement_gates WHERE engagement_id=?", (eid,))}
@@ -1054,11 +1078,18 @@ def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     ej["portal_url"] = (f"/engage/{e['portal_token']}"
                         if e["portal_token"] else "")
     ej.pop("portal_token", None)
-    dates = con.execute(
+    dates = [dict(r) for r in con.execute(
         "SELECT label, planned, actual, moved_because FROM engagement_dates"
-        " WHERE engagement_id=? ORDER BY ord", (eid,)).fetchall()
+        " WHERE engagement_id=? ORDER BY ord", (eid,))]
+    # The schedule reaches the gates: a gate that has a row in the Dates
+    # table shows its planned (and actual) date wherever the gate appears.
+    for g in gates:
+        dr = match_gate_date(g, dates)
+        if dr:
+            g["planned"] = dr["planned"]
+            g["actual_date"] = dr["actual"]
     return {"engagement": ej,
-            "dates": [dict(r) for r in dates],
+            "dates": dates,
             "docs": docs,
             "gates": gates,
             "current_stage": current_stage(gates),
@@ -1747,6 +1778,21 @@ def pass_gate(eid: int, gate: str, body: GateBody, u=Depends(admin_user),
             "warnings": ", ".join(warnings)})
     out = {"gate": g, "current_stage": current_stage(gates),
            "warnings": warnings}
+    if g["passed_at"]:
+        # The schedule learns what actually happened: a closing gate stamps
+        # `actual` on its row in the Dates table (matched by the same rule
+        # that shows the planned date on the gate), only where the operator
+        # has not already written one — their record of what happened
+        # outranks the clock's.
+        drows = [dict(r) for r in con.execute(
+            "SELECT id, label, planned, actual FROM engagement_dates"
+            " WHERE engagement_id=?", (eid,))]
+        dr = match_gate_date(g, drows)
+        if dr and not dr["actual"]:
+            con.execute("UPDATE engagement_dates SET actual=? WHERE id=?",
+                        (time.strftime("%Y-%m-%d"), dr["id"]))
+            con.commit()
+            out["date_stamped"] = dr["label"]
     # The contract closing is the moment the platform's half becomes real:
     # the client has agreed, the quote says what size they are, and the
     # stand-up is one click that was going to be asked for anyway. Offered,
@@ -1757,6 +1803,19 @@ def pass_gate(eid: int, gate: str, body: GateBody, u=Depends(admin_user),
                 and tenancy.provider() == tenancy.CURRENT.get()):
             out["stand_up"] = {"slug": e["slug"], "name": e["name"],
                                "suggestion": stand_up_suggestion(con, eid)}
+    # The ceremony gates stop being ceremony: when the launch-side gates
+    # close on a client who runs on the platform but has no public address
+    # yet, the launch is offered on the spot — the URL and the capability
+    # grant in one act. Offered, not performed, like everything else the
+    # fleet does.
+    if (gate in ("final_invoice_paid", "handover_accepted")
+            and g["passed_at"] and e["tenant_id"] and not e["live_url"]):
+        from erp.backend import tenancy
+        if (tenancy.provider() is not None
+                and tenancy.provider() == tenancy.CURRENT.get()
+                and e["tenant_id"] in tenancy.all_tenants()):
+            out["launch"] = {"tenant_id": e["tenant_id"],
+                             "name": e["name"]}
     return out
 
 
@@ -2730,6 +2789,68 @@ def fleet_tenant_remove(tid: str, keep_data: int = 1,
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, **out}
+
+
+class LaunchBody(BaseModel):
+    url: str
+
+
+@router.post("/api/store/admin/engagements/{eid}/launch")
+def launch_site(eid: int, body: LaunchBody, u=Depends(admin_user),
+                con=Depends(get_con)):
+    """Put the client's install on its real address, with the capabilities
+    that were sold.
+
+    One act, four writes, all derived from things already agreed: the
+    hostname joins the tenant's registry row (merged — the .localhost door
+    stays), public_base_url lands in their config so QR codes, sign-in
+    links and Stripe returns carry the right domain, the capability grant
+    refreshes from the signed quote, and the engagement records the URL.
+    DNS and the reverse proxy stay the operator's job — this makes the
+    platform answer when the name arrives, it does not buy the name.
+    """
+    _provider_only()
+    from urllib.parse import urlparse
+    from erp.backend import fleet, tenancy
+    e = _eng_or_404(con, eid)
+    tid = e["tenant_id"]
+    if not tid or tid not in tenancy.all_tenants():
+        raise HTTPException(400, "no install to launch — stand them up "
+                                 "first")
+    raw = (body.url or "").strip()
+    if raw and "://" not in raw:
+        raw = "https://" + raw
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if not host or "." not in host:
+        raise HTTPException(400, "a launch needs a real hostname, like "
+                                 "shop.example.com")
+    taken = {h.lower(): t for t, cfg in
+             (tenancy.registry() or {}).get("tenants", {}).items()
+             for h in cfg.get("hosts", [])}
+    if taken.get(host, tid) != tid:
+        raise HTTPException(400, f"'{host}' already answers for "
+                                 f"{taken[host]} — one name, one business")
+    url = f"{parsed.scheme}://{host}" + (f":{parsed.port}"
+                                         if parsed.port else "")
+    hosts = tenancy.add_hosts(tid, [host])
+    with tenancy.run_as(tid):
+        from erp.backend import config as _config
+        from erp.backend.main import CFG as _tcfg
+        _tcfg["public_base_url"] = url
+        _config.save(_tcfg)
+    sug = stand_up_suggestion(con, eid)
+    caps = sorted(set((sug or {}).get("cap_ids") or []))
+    if caps:
+        tenancy.set_caps(tid, caps)
+    con.execute("UPDATE engagements SET live_url=? WHERE id=?", (url, eid))
+    log(con, eid, u["name"],
+        f"launched at {url}" + (f" with {len(caps)} capabilities from the "
+                                f"signed quote" if caps else ""))
+    con.commit()
+    fleet.log("site launched", f"{tid} → {url}"
+              + (f" · {len(caps)} caps" if caps else ""), u["name"])
+    return {"ok": True, "url": url, "hosts": hosts, "caps": caps}
 
 
 # ---------- the design library: design once, place everywhere ----------
