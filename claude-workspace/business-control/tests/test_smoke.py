@@ -6603,6 +6603,66 @@ ok("launchSite" in _ljs and "eng-launch" in _ljs and "out.launch" in _ljs
 c.request("DELETE", "/api/store/admin/fleet/tenants/launchco?keep_data=0",
           headers=AA)
 
+
+# --- the public door: fill the form, hand over a website ------------------
+# With fleet.public_suffix set and wildcard DNS pointed at the box, a
+# stand-up's output is a URL you can SEND someone. The Caddy ask endpoint
+# is the gate that keeps on-demand TLS from minting certs for strangers.
+_acfg2 = _jn.loads((_tn.tenant_dir("alpha") / "config.json").read_text())
+_acfg2["fleet"] = {**_acfg2.get("fleet", {}),
+                   "public_suffix": "clients.alpha.test"}
+(_tn.tenant_dir("alpha") / "config.json").write_text(_jn.dumps(_acfg2))
+from erp.backend.main import CFG as _CFGPROXY
+_CFGPROXY.invalidate("alpha")
+
+_pub = c.post("/api/store/admin/fleet/tenants", headers=AA,
+              json={"id": "pubco", "brand": "Pub Co",
+                    "klass": "micro"}).json()
+ok(_pub["public_url"] == "https://pubco.clients.alpha.test",
+   "with a public suffix configured, the stand-up's answer is a URL you "
+   "can send someone — not just a .localhost door on this machine")
+ok(sorted(_tn.registry()["tenants"]["pubco"]["hosts"])
+   == ["pubco.clients.alpha.test", "pubco.localhost"],
+   "both doors registered: the public name AND the local one")
+ok(c.get("/api/products",
+         headers={"host": "pubco.clients.alpha.test"}).status_code == 200,
+   "and the platform answers on the public name immediately")
+ok(_jn.loads((_tn.tenant_dir("pubco") / "config.json").read_text())
+   ["public_base_url"] == "https://pubco.clients.alpha.test",
+   "public_base_url set from birth — QR codes, sign-in links and Stripe "
+   "returns carry the public name without a launch step")
+
+ok(c.get("/caddy/ask", params={"domain": "pubco.clients.alpha.test"}
+         ).status_code == 200,
+   "Caddy's ask gate says yes to a hostname the registry claims")
+ok(c.get("/caddy/ask", params={"domain": "evil.stranger.example"}
+         ).status_code == 404,
+   "and no to everything else — without the gate, on-demand TLS is a "
+   "cert-minting service for any stranger with a DNS record")
+c.post("/api/store/admin/fleet/tenants/pubco/status", headers=AA,
+       json={"status": "suspended"})
+ok(c.get("/caddy/ask", params={"domain": "pubco.clients.alpha.test"}
+         ).json().get("suspended") is True,
+   "a suspended tenant still gets its certificate — the 503 page "
+   "deserves TLS too")
+c.post("/api/store/admin/fleet/tenants/pubco/status", headers=AA,
+       json={"status": "active"})
+ok(c.get("/caddy/ask").status_code == 404,
+   "asking about nothing is a no")
+c.request("DELETE", "/api/store/admin/fleet/tenants/pubco?keep_data=0",
+          headers=AA)
+
+_acfg2.pop("fleet", None)
+(_tn.tenant_dir("alpha") / "config.json").write_text(_jn.dumps(_acfg2))
+_CFGPROXY.invalidate("alpha")
+_pub2 = c.post("/api/store/admin/fleet/tenants", headers=AA,
+               json={"id": "pubco2", "klass": "micro"}).json()
+ok(_pub2["public_url"] == "" and _tn.registry()["tenants"]["pubco2"]
+   ["hosts"] == ["pubco2.localhost"],
+   "no suffix configured = exactly the old behaviour, nothing invented")
+c.request("DELETE", "/api/store/admin/fleet/tenants/pubco2?keep_data=0",
+          headers=AA)
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

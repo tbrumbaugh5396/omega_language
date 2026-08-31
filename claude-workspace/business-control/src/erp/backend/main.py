@@ -3760,6 +3760,35 @@ def store_worker():
     return _worker_response(config.STOREFRONT_DIR / "sf-sw.js")
 
 
+@app.get("/caddy/ask")
+def caddy_ask(domain: str = ""):
+    """Caddy's on-demand-TLS gate: may a certificate be issued for this name?
+
+    200 = the registry answers to it (suspended included — the 503 page
+    deserves TLS too); 404 = nobody here by that name, so no certificate.
+    Without this gate, on-demand TLS would mint a cert for any hostname a
+    stranger points at the box — a free resource-exhaustion lever and a
+    reputation risk. Unauthenticated by design (Caddy calls it locally);
+    it leaks exactly one bit.
+
+    Caddyfile:  on_demand_tls { ask http://127.0.0.1:8860/caddy/ask }
+    """
+    name = (domain or "").split(":", 1)[0].lower().strip()
+    if not name:
+        raise HTTPException(404, "no domain asked about")
+    try:
+        tid = tenancy.resolve(name)
+    except tenancy.Suspended:
+        return {"ok": True, "suspended": True}
+    except tenancy.UnknownHost:
+        raise HTTPException(404, f"no tenant answers to '{name}'")
+    if tid is None:
+        # legacy single-shop install: no registry to consult — list your
+        # domains in the Caddyfile directly rather than using on-demand.
+        raise HTTPException(404, "tenancy is off — use explicit site blocks")
+    return {"ok": True, "tenant": tid}
+
+
 @app.get("/store.webmanifest")
 def store_manifest(con=Depends(get_con)):
     """The installed app is named for the tenant's brand, not the demo's.

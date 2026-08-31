@@ -4125,6 +4125,9 @@ async function standUpClient(slug, eid, name, opts = {}) {
     <label>Hostname</label>
     <input id="t-host" placeholder="acme.localhost"
       value="${slug ? esc(slug) + ".localhost" : ""}">
+    ${f.public_suffix ? `<p class="dim" id="t-pubnote">They'll also answer
+      publicly at <b id="t-pub"></b> — added automatically, TLS on
+      demand.</p>` : ""}
     <div class="row2">
       <div><label>Size</label><select id="t-class">${
         Object.entries(f.classes).map(([k, v]) =>
@@ -4162,7 +4165,10 @@ async function standUpClient(slug, eid, name, opts = {}) {
   };
   const host = follow($("#t-host"), (v) => v ? `${v}.localhost` : "");
   const nid = follow($("#t-nid"), (v) => v ? `node-${v}` : "");
-  $("#t-id").oninput = () => { host(); nid(); };
+  const pub = () => { const el = $("#t-pub"); if (el) el.textContent =
+    `${$("#t-id").value.trim() || "…"}.${f.public_suffix}`; };
+  pub();
+  $("#t-id").oninput = () => { host(); nid(); pub(); };
   $("#t-go").onclick = async () => {
     try {
       const out = await api("/api/store/admin/fleet/tenants", {
@@ -4176,6 +4182,7 @@ async function standUpClient(slug, eid, name, opts = {}) {
                 engagement_id: eid || 0 } });
       closeModal();
       toast(`${out.tenant} is live on ${out.node}`
+        + (out.public_url ? ` at ${out.public_url}` : "")
         + (out.layout ? ` with a ${out.layout} starter layout` : "")
         + (out.hosting_doc
            ? " — hosting schedule filed in their binder, ready to sign"

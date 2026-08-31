@@ -2489,6 +2489,22 @@ def export_zip(eid: int, side: str = "to_client", u=Depends(admin_user),
 # asking about other people's businesses, so the gate is the first line of
 # every handler rather than a rule written down somewhere.
 
+def fleet_cfg() -> dict:
+    """The provider's fleet settings — provision commands, public suffix.
+
+    Read fresh from disk, not through the cached proxy: these are edited
+    in config.json by hand, the reads are rare (stand-up, the board), and
+    an operator who sets public_suffix should not need a restart for the
+    next stand-up to honour it."""
+    from erp.backend import config, tenancy
+    prov = tenancy.provider()
+    try:
+        cfg = config.load(tenancy.tenant_dir(prov) / "config.json")
+    except Exception:
+        return {}
+    return dict(cfg.get("fleet") or {})
+
+
 def _provider_only(request=None):
     from erp.backend import tenancy
     tid = tenancy.CURRENT.get()
@@ -2598,6 +2614,7 @@ def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
             t["client"] = clients.get(t["id"])
             t["billing"] = billing.get(t["id"])
     return {"nodes": board, "classes": fleet.CLASSES,
+            "public_suffix": (fleet_cfg() or {}).get("public_suffix", ""),
             "events": fleet.events(20),
             "unplaced": [dict(v, slug=k) for k, v in clients.items()
                          if not any(t["id"] == k for n in board
@@ -2649,6 +2666,17 @@ def fleet_tenant_add(body: TenantBody, request: Request,
     # "localhost" itself, which is somebody else's front door.
     hosts = [h for h in (h.strip().lower() for h in body.hosts)
              if h and h.split(".")[0]]
+    if not hosts:
+        hosts = [f"{tid}.localhost"]
+    # The public door, granted at birth: with fleet.public_suffix set (a
+    # wildcard-DNS'd domain like clients.example.com), every stand-up also
+    # answers at <tenant>.<suffix> — so the form's output is a URL you can
+    # SEND someone. Appended AFTER the local fallback is settled: the
+    # public name must never crowd out the .localhost door.
+    suffix = (fleet_cfg() or {}).get("public_suffix", "").strip(". ").lower()
+    public_host = f"{tid}.{suffix}" if suffix else ""
+    if public_host and public_host not in hosts:
+        hosts.append(public_host)
     taken = {h.lower(): t for t, cfg in
              (tenancy.registry() or {}).get("tenants", {}).items()
              for h in cfg.get("hosts", [])}
@@ -2672,10 +2700,16 @@ def fleet_tenant_add(body: TenantBody, request: Request,
     # what was sold, so the ops app can say which tabs are theirs.
     sug0 = (stand_up_suggestion(con, body.engagement_id)
             if body.engagement_id else None)
-    tenancy.create(tid, hosts=hosts or [f"{tid}.localhost"], node=nid,
+    tenancy.create(tid, hosts=hosts, node=nid,
                    klass=klass, brand=body.brand or tid.title(),
                    caps=(sug0 or {}).get("cap_ids"))
     fleet.log("tenant created", f"{tid} on {nid} ({klass})", u["name"])
+    if public_host:
+        with tenancy.run_as(tid):
+            from erp.backend import config as _config
+            from erp.backend.main import CFG as _tcfg
+            _tcfg["public_base_url"] = f"https://{public_host}"
+            _config.save(_tcfg)
     hosting_doc = 0
     layout = ""
     if body.engagement_id:
@@ -2734,7 +2768,8 @@ def fleet_tenant_add(body: TenantBody, request: Request,
                 # the operator can still generate the schedule by hand
                 hosting_doc = 0
     return {"ok": True, "tenant": tid, "node": nid,
-            "hosting_doc": hosting_doc, "layout": layout}
+            "hosting_doc": hosting_doc, "layout": layout,
+            "public_url": f"https://{public_host}" if public_host else ""}
 
 
 @router.post("/api/store/admin/fleet/tenants/{tid}/status")

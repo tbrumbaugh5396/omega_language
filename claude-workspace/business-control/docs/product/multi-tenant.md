@@ -301,7 +301,13 @@ studio.example.com, zenjoy.example.com {
 For customer domains at fleet scale, Caddy's
 [on-demand TLS](https://caddyserver.com/docs/automatic-https#on-demand-tls)
 issues certificates at handshake time for any hostname the registry
-answers — pair it with an `ask` endpoint that checks `tenants.json`.
+answers — **the `ask` endpoint is built**: `GET /caddy/ask?domain=…`
+answers 200 for names the registry claims (suspended included) and 404
+for strangers. And with `fleet.public_suffix` set in the provider's
+config (plus one wildcard DNS record), every stand-up registers
+`<tenant>.<suffix>` and sets `public_base_url` at birth — the stand-up
+form's output is a sendable URL. Full runbook in
+[DEPLOY.md](DEPLOY.md).
 Set each tenant's `public_base_url` in its own `config.json` so QR codes,
 sign-in links and Stripe returns carry the right domain.
 

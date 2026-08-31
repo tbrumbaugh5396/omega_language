@@ -101,3 +101,84 @@ Copy `data/backups/` off the server periodically (rsync/rclone) — a backup on 
 - Sign in as founder/owner with the new admin key **and set your password immediately** (the same password field at login adopts it).
 - Re-print shelf/packaging QRs — they now encode the public URL.
 - The LAN start commands still work on your Mac for a local copy; keep the production `data/` and your local `data/` mentally separate (backups tell you which is which).
+
+## The fleet, publicly: a website from a form
+
+With one public box configured this way, standing up a client IS handing
+them a website: fill the stand-up form, and they answer at
+`<tenant>.clients.yourbrand.com` with TLS, a shaped storefront and their
+name on it — before the call ends.
+
+**One-time setup, three pieces:**
+
+1. **Wildcard DNS.** One record: `*.clients.yourbrand.com → <your VPS IP>`.
+   Every future tenant is covered by it; standing one up never touches DNS
+   again.
+
+2. **The public suffix**, in the provider tenant's `config.json`:
+
+   ```json
+   "fleet": {"public_suffix": "clients.yourbrand.com"}
+   ```
+
+   From then on every stand-up also registers
+   `<tenant>.clients.yourbrand.com` and sets that tenant's
+   `public_base_url`, so QR codes, sign-in links and Stripe returns carry
+   the public name from birth. The stand-up modal shows the address before
+   you click, and the toast hands it to you after.
+
+3. **Caddy with on-demand TLS**, gated by the registry:
+
+   ```
+   {
+     on_demand_tls {
+       ask http://127.0.0.1:8860/caddy/ask
+     }
+   }
+
+   *.clients.yourbrand.com {
+     tls {
+       on_demand
+     }
+     reverse_proxy 127.0.0.1:8860
+   }
+   ```
+
+   `/caddy/ask` answers 200 only for hostnames the tenant registry
+   actually claims (suspended tenants included — their 503 page deserves
+   TLS too), and 404 for everything else. Without the gate, on-demand TLS
+   would mint a certificate for any hostname a stranger pointed at your
+   box.
+
+**A client's own domain later** (`shop.theirbrand.com`) is the launch
+flow: point their DNS at the box, click Launch on their engagement, and
+`/caddy/ask` starts saying yes to the new name because the registry does.
+
+**Run it as a service** so it survives reboots (`systemd`):
+
+```ini
+# /etc/systemd/system/business-control.service
+[Unit]
+Description=Business Control
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/business-control
+ExecStart=/opt/business-control/.venv/bin/python scripts/launch.py --port 8860
+Restart=always
+User=www-data
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```sh
+sudo systemctl enable --now business-control
+```
+
+What this is **not**: multi-machine orchestration. All tenants still run
+in this one process on this one box; the fleet's nodes stay bookkeeping
+until `fleet.provision_cmd` points at a real provider and tenants
+actually move. One 4 GB box carries 25 units — by the book's own
+arithmetic, that is a real client roster before a second machine earns
+its keep.
