@@ -199,6 +199,14 @@ def _addons(shape: str, caps) -> list:
             body="What arrives, how often, and how to pause it. A "
                  "subscription pitched clearly outsells one hidden on a "
                  "product page.\n\nReplace this.")))
+    if "learning" in caps and shape != "courses":
+        out.append(("end", _s(
+            "rich_text",
+            heading="Learn with us",
+            body="The courses this business teaches — what they cover and "
+                 "who they're for. Lessons, quizzes and your progress live "
+                 "on the learning page.\n\nReplace this, and keep the "
+                 "link: <a href=\"/learn\">learning</a>.")))
     if "events" in caps:
         out.append(("end", _s(
             "rich_text",

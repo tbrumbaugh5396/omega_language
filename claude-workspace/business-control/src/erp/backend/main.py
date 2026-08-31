@@ -35,6 +35,11 @@ def _init_core(tid=None):
         auth.migrate_pins(con, CFG["pin_pepper"])
         supply.init_tables(con)
         integrations.init_tables(con)
+        # imported here, not at the top: learning imports main's auth deps
+        # back, which only exist once this module has finished defining them
+        # — and _init_core first runs at the bottom of this file, where it has
+        from . import learning
+        learning.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -970,6 +975,16 @@ def _place(con, user, body, as_guest):
         con.execute("INSERT INTO order_items(order_id,product_id,qty,"
                     " unit_price_cents,variant_id,variant_name)"
                     " VALUES(?,?,?,?,?,?)", (oid, pid, qty, unit, vid, vname))
+    # A product can be a course's door: buying it enrols the buyer. Placement
+    # is the moment (COD is this store's normal); a cancelled order is the
+    # operator's cue to end the seat, same as any other refund consequence.
+    if kind == "customer":
+        from . import learning
+        enrolled_courses = learning.enroll_by_order(con, oid, user["id"])
+        if enrolled_courses:
+            notify.push(con, f"Enrolled by order #{oid}",
+                        f"{user['name']} joined: "
+                        + ", ".join(enrolled_courses), kind="learning")
     # Affiliate attribution
     if body.affiliate_code:
         aff = con.execute("SELECT * FROM affiliates WHERE code=?",
@@ -3745,6 +3760,11 @@ app.include_router(store_crud.router)
 app.include_router(store_discord.router)
 app.include_router(store_email.router)
 app.include_router(store_v1.router)
+
+from . import learning  # noqa: E402  (safe here — see _init_core)
+from storefront.backend import learn as store_learn  # noqa: E402
+app.include_router(learning.router)
+app.include_router(store_learn.router)
 
 
 @app.exception_handler(404)

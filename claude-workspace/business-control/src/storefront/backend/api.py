@@ -562,6 +562,7 @@ def render_shell(con, body_html: str, *, title=None, description=None,
     # the menu follows the grant, same null-means-everything rule
     from .partners import cap_on
     _CAP_PATHS = {"/find": "distribution", "/events": "events",
+                  "/learn": "learning",
                   "/blog": "marketing", "/affiliates": "affiliates"}
     def _nav_ok(m):
         for path, cap in _CAP_PATHS.items():

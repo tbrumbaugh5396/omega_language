@@ -7173,4 +7173,259 @@ ok("something specific" in c.get("/find", headers=HA).text
 
 _shm.rmtree(_split_dir, ignore_errors=True)
 
+# --- Learning: the grading rules, ported from lingua-portal ----------------
+# The pure engine came over whole, and so did its judgement calls: accents
+# forgiven, partial credit floored at zero, a provisional score never shown
+# as a score. These checks are the source's own tests, restated here so a
+# future change to the port has to argue with the same policies.
+from erp.backend import assessment as _As  # noqa: E402
+
+_Q, _R = _As.Question, _As.Response
+_q1 = _Q(1, _As.CHOICE, "¿Cómo se dice 'hello'?", ["adiós", "hola", "gracias"],
+         answer=[1], points=2)
+ok(_As.grade_question(_q1, _R(1, chosen=[1]))["points"] == 2.0
+   and _As.grade_question(_q1, _R(1, chosen=[0]))["points"] == 0.0
+   and _As.grade_question(_q1, None)["settled"],
+   "single choice: right scores full, wrong zero, unanswered settles at zero")
+_q2 = _Q(2, _As.MULTI, "Which are greetings?",
+         ["hola", "mesa", "buenos días", "silla"], answer=[0, 2], points=4)
+ok(_As.grade_question(_q2, _R(2, chosen=[0, 2]))["points"] == 4.0
+   and _As.grade_question(_q2, _R(2, chosen=[0]))["points"] == 2.0
+   and _As.grade_question(_q2, _R(2, chosen=[0, 1]))["points"] == 0.0
+   and _As.grade_question(_q2, _R(2, chosen=[1, 3]))["points"] == 0.0,
+   "multi: partial credit, a wrong pick cancels a right one, floored at zero "
+   "— selecting everything is not a strategy")
+_q3 = _Q(3, _As.TEXT, "Translate 'good morning'", accepted=["buenos días"])
+ok(_As.grade_question(_q3, _R(3, text="buenos dias"))["points"] == 1.0
+   and _As.grade_question(_q3, _R(3, text="  BUENOS Días! "))["points"] == 1.0
+   and _As.grade_question(_q3, _R(3, text="buenas noches"))["points"] == 0.0,
+   "written answers: accents, case and punctuation forgiven — we mark "
+   "language, not typing")
+_q3b = _Q(4, _As.TEXT, "Describe your weekend", points=5)
+ok(_As.grade_question(_q3b, _R(4, text="fui al cine"))["settled"] is False
+   and not _q3b.auto,
+   "a text question with no answer key waits for the teacher")
+_q4 = _Q(5, _As.SPEAKING, "Introduce yourself", points=10)
+ok(not _q4.auto
+   and _As.grade_question(_q4, _R(5, material_id=9))["settled"] is False
+   and _As.grade_question(_q4, _R(5))["settled"] is True
+   and _As.grade_question(_q4, _R(5, material_id=9, awarded=99))["points"] == 10.0
+   and _As.grade_question(_q1, _R(1, chosen=[0], awarded=2))["points"] == 2.0,
+   "recorded answers wait for a human; a teacher's mark is capped at the "
+   "question's worth and overrides an auto-grade")
+_res = _As.grade_attempt([_q1, _q3], [_R(1, chosen=[1]),
+                                      _R(3, text="buenos dias")], pass_mark=60)
+_res2 = _As.grade_attempt([_q1, _q4], [_R(1, chosen=[1]), _R(5, material_id=1)])
+_stu = _As.summarise_for_student(_res2)
+ok(_res["is_final"] and _res["percent"] == 100.0 and _res["passed"]
+   and not _res2["is_final"] and _res2["passed"] is None
+   and "percent" not in _stu and "awaiting" in _stu["message"],
+   "an all-auto attempt is final at once; one with pending marks withholds "
+   "pass/fail AND never shows the student a provisional score")
+def _qz_code(kind, prompt, choices, answer, points=1):
+    try:
+        _As.validate_question(kind, prompt, choices, answer, [], points)
+        return None
+    except _As.QuizError as e:
+        return e.code
+
+
+ok([_qz_code("vibes", "p", ["a", "b"], [0]),
+    _qz_code(_As.CHOICE, " ", ["a", "b"], [0]),
+    _qz_code(_As.CHOICE, "p", ["a"], [0]),
+    _qz_code(_As.CHOICE, "p", ["a", "b"], []),
+    _qz_code(_As.CHOICE, "p", ["a", "b"], [5]),
+    _qz_code(_As.CHOICE, "p", ["a", "b"], [0, 1]),
+    _qz_code(_As.TEXT, "p", [], [], points=0)]
+   == ["bad_kind", "no_prompt", "too_few_choices", "no_answer",
+       "bad_answer", "one_answer", "bad_points"],
+   "authoring validation refuses every malformed question at authoring time, "
+   "not silently at grading time")
+
+# --- Learning: the lifecycle over the wire ---------------------------------
+# Course → lessons → quiz → enrollment → attempt → grade, through the same
+# doors staff and learners use. The staff door is the ops API; the learner
+# door is the storefront's /api/learn, which strips the answer key. All of
+# it on tenant alpha — the runtime default from the split tests — with its
+# own staff, learner and product, which is itself a wall check: nothing
+# below leans on state from any other tenant.
+_tch = c.post("/api/login", headers=HA, json={"name": "Tina Teacher",
+                                              "role": "employee"}).json()
+TT = {"Authorization": f"Bearer {_tch['token']}", **HA}
+_lrn = c.post("/api/login", headers=HA, json={"name": "Lara Learner",
+                                              "role": "customer"}).json()
+LN = {"Authorization": f"Bearer {_lrn['token']}", **HA}
+_crs = c.post("/api/learning/courses", headers=AA, json={
+    "name": "Spanish A1", "language": "Spanish", "level": "beginner",
+    "blurb": "First steps.", "teacher_id": _tch["id"]}).json()["id"]
+ok(c.post("/api/learning/courses", headers=TT,
+          json={"name": "Rogue"}).status_code == 403,
+   "only an admin creates courses; a teacher teaches the ones they're given")
+_l1 = c.post("/api/learning/lessons", headers=TT, json={
+    "course_id": _crs, "title": "Greetings",
+    "body": "# Hola\n\nSay **hola**.\n\n- hola\n- buenos días"}).json()["id"]
+_l2 = c.post("/api/learning/lessons", headers=TT, json={
+    "course_id": _crs, "title": "Numbers", "body": "uno, dos, tres"}).json()["id"]
+ok(c.post("/api/learning/lessons", headers=LN, json={
+    "course_id": _crs, "title": "Hack", "body": ""}).status_code == 403,
+   "a learner cannot author lessons — editing is the teacher's and admin's")
+c.post(f"/api/learning/lessons/{_l1}", headers=TT, json={
+    "title": "Greetings", "body": "# Hola\n\nSay **hola**.", "published": 1})
+_lrn_home = c.get("/api/learn/courses", headers=LN).json()
+ok(_lrn_home["enrolled"] == [] and any(
+    x["name"] == "Spanish A1" for x in _lrn_home["available"]),
+   "before enrolment the course is a blurb in the catalogue, not content")
+ok(c.get(f"/api/learn/courses/{_crs}", headers=LN).status_code == 403,
+   "and its lessons are a closed door")
+c.post(f"/api/learning/courses/{_crs}/enroll", headers=AA,
+       json={"user_id": _lrn["id"]})
+_cv = c.get(f"/api/learn/courses/{_crs}", headers=LN).json()
+ok([x["title"] for x in _cv["lessons"]] == ["Greetings"],
+   "an enrolled learner sees published lessons only — the draft stays "
+   "invisible until the teacher says so")
+_lv = c.get(f"/api/learn/lessons/{_l1}", headers=LN).json()
+ok("<b>hola</b>" in _lv["html"] and "<h2>Hola</h2>" in _lv["html"],
+   "lesson markdown renders server-side, escaped first")
+c.post(f"/api/learn/lessons/{_l1}/done", headers=LN)
+c.post(f"/api/learning/lessons/{_l2}", headers=TT, json={
+    "title": "Numbers", "body": "uno, dos, tres", "published": 1})
+_prog = c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["progress"]
+ok(_prog["lessons_done"] == 1 and _prog["lessons_total"] == 2,
+   "progress is derived on read: one of two published lessons done")
+
+_qz = c.post("/api/learning/quizzes", headers=TT, json={
+    "course_id": _crs, "title": "Greetings check", "pass_mark": 60}).json()["id"]
+ok(c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT, json={
+    "kind": "choice", "prompt": "p", "choices": ["a"], "answer": [0]},
+    ).status_code == 400,
+   "the ops door refuses a malformed question with the engine's own reason")
+ok(c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT, json={
+    "kind": "speaking", "prompt": "Say hola"}).status_code == 400,
+   "recorded answers are honestly not-yet: refused at authoring, not "
+   "silently accepted and never markable")
+c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT, json={
+    "kind": "choice", "prompt": "'Hello' is…",
+    "choices": ["adiós", "hola"], "answer": [1], "points": 2})
+c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT, json={
+    "kind": "text", "prompt": "Translate 'good morning'",
+    "accepted": ["buenos días"]})
+ok(c.post(f"/api/learn/quizzes/{_qz}/start", headers=LN).status_code == 403,
+   "an unpublished quiz is not open, even to the enrolled")
+c.post(f"/api/learning/quizzes/{_qz}", headers=TT, json={
+    "title": "Greetings check", "pass_mark": 60, "published": 1})
+_at = c.post(f"/api/learn/quizzes/{_qz}/start", headers=LN).json()
+_qs = _at["quiz"]["questions"]
+ok(all("answer" not in q and "accepted" not in q for q in _qs),
+   "the answer key never reaches a learner — stripped at the source, not "
+   "filtered in the UI")
+ok(c.post(f"/api/learn/quizzes/{_qz}/start", headers=LN).json()
+   ["attempt"]["id"] == _at["attempt"]["id"],
+   "starting again resumes the open attempt — never a silent second try")
+_aid = _at["attempt"]["id"]
+c.post(f"/api/learn/attempts/{_aid}/answer", headers=LN, json={
+    "question_id": _qs[0]["id"], "chosen": [1]})
+c.post(f"/api/learn/attempts/{_aid}/answer", headers=LN, json={
+    "question_id": _qs[1]["id"], "text": "buenos dias"})
+_sub = c.post(f"/api/learn/attempts/{_aid}/submit", headers=LN).json()
+ok(_sub["grade"]["is_final"] and _sub["grade"]["percent"] == 100.0
+   and _sub["grade"]["passed"] and _sub["attempt"]["state"] == "graded",
+   "an all-auto attempt settles at submit — accent forgiven, full marks, "
+   "state graded with no human in the loop")
+ok(c.post(f"/api/learn/attempts/{_aid}/answer", headers=LN, json={
+    "question_id": _qs[0]["id"], "chosen": [0]}).status_code == 409,
+   "a submitted attempt no longer takes answers")
+_prog2 = c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["progress"]
+ok(_prog2["quizzes_passed"] == 1, "and the pass lands in derived progress")
+
+# the human-graded path: a question with no key → queue → mark → final
+_qz2 = c.post("/api/learning/quizzes", headers=TT, json={
+    "course_id": _crs, "title": "Free writing", "pass_mark": 50}).json()["id"]
+c.post(f"/api/learning/quizzes/{_qz2}/questions", headers=TT, json={
+    "kind": "text", "prompt": "Describe your weekend", "points": 4})
+c.post(f"/api/learning/quizzes/{_qz2}", headers=TT, json={
+    "title": "Free writing", "pass_mark": 50, "published": 1})
+_at2 = c.post(f"/api/learn/quizzes/{_qz2}/start", headers=LN).json()
+_aid2 = _at2["attempt"]["id"]
+c.post(f"/api/learn/attempts/{_aid2}/answer", headers=LN, json={
+    "question_id": _at2["quiz"]["questions"][0]["id"], "text": "fui al cine"})
+_sub2 = c.post(f"/api/learn/attempts/{_aid2}/submit", headers=LN).json()
+ok(not _sub2["grade"]["is_final"] and "percent" not in _sub2["grade"]
+   and _sub2["grade"]["pending"] == 1,
+   "a written answer with no key leaves the attempt submitted-not-final, "
+   "and the learner sees no provisional number")
+_queue = c.get("/api/learning/grading", headers=TT).json()
+ok(any(a["id"] == _aid2 for a in _queue),
+   "the attempt sits in the teacher's grading queue")
+ok(not any(a["id"] == _aid2
+           for a in c.get("/api/learning/grading", headers=LN).json()),
+   "…and in nobody else's — a learner's queue is empty")
+_g = c.post(f"/api/learning/attempts/{_aid2}/grade", headers=TT, json={
+    "question_id": _at2["quiz"]["questions"][0]["id"], "awarded": 3,
+    "feedback": "¡bien!"}).json()
+ok(_g["is_final"] and _g["percent"] == 75.0,
+   "the teacher's mark settles it at 3/4")
+_fin = c.get(f"/api/learn/attempts/{_aid2}", headers=LN).json()
+ok(_fin["grade"]["is_final"] and _fin["grade"]["percent"] == 75.0
+   and _fin["grade"]["passed"],
+   "and only now does the learner see a score — final, with pass/fail")
+_ncon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+ok(_ncon.execute("SELECT 1 FROM notifications WHERE kind='learning'"
+                 " AND title LIKE 'Quiz to grade%'").fetchone() is not None
+   and _ncon.execute("SELECT 1 FROM notifications WHERE kind='learning'"
+                     " AND user_id=?", (_lrn["id"],)).fetchone() is not None,
+   "both moments notified: staff when a human mark was needed, the learner "
+   "when their score became real")
+_ncon.close()
+
+# buying a course product enrols you — the checkout rail is the admissions
+# office, which is the one thing the source never had
+c.post("/api/admin/products", headers=AA, json={
+    "sku": "CRS-FR1", "name": "French A1 (course)", "price_cents": 9900,
+    "case_price_cents": 99000})
+_frp = [p["id"] for p in c.get("/api/products", headers=HA).json()
+        if p["sku"] == "CRS-FR1"][0]
+_crs2 = c.post("/api/learning/courses", headers=AA, json={
+    "name": "French A1", "language": "French", "product_id": _frp,
+    "teacher_id": _tch["id"]}).json()["id"]
+# a first pay-on-delivery order from an unconfirmed address is held, not
+# placed — Lara starts as an established customer, like every order fixture
+_acon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon.execute("UPDATE users SET email='lara@example.test',"
+              " email_verified_at=? WHERE id=?", (_t0.time(), _lrn["id"]))
+_acon.commit(); _acon.close()
+c.post("/api/orders", headers=LN, json={
+    "items": [{"product_id": _frp, "qty": 1}], "visitor_id": "vlearn",
+    "ship_name": "Lara", "address": "9 Elm St", "city": "Boston"})
+ok(any(x["id"] == _crs2 for x in
+       c.get("/api/learn/courses", headers=LN).json()["enrolled"]),
+   "placing an order for the linked product enrolled the buyer — no clerk "
+   "in the loop")
+_e_ops = c.get(f"/api/learning/courses/{_crs2}", headers=AA).json()["enrollments"]
+ok(_e_ops and _e_ops[0]["source"].startswith("order:"),
+   "and the seat records which order opened it")
+
+# the capability wall: /learn is part of the Learning grant, not the core
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "learnco", "brand": "Learn Co", "klass": "micro"})
+_LH = {"host": "learnco.localhost"}
+ok(c.get("/learn", headers=_LH).status_code == 200,
+   "no grant recorded = everything on — /learn answers, same null rule")
+c.post("/api/store/admin/fleet/tenants/learnco/caps", headers=AA,
+       json={"caps": ["selling", "payments"]})
+ok(c.get("/learn", headers=_LH).status_code == 404,
+   "a tenant without the Learning grant has no /learn — a 404, not a husk")
+c.post("/api/store/admin/fleet/tenants/learnco/caps", headers=AA,
+       json={"caps": ["selling", "payments", "learning"]})
+ok(c.get("/learn", headers=_LH).status_code == 200,
+   "granting Learning opens the door again")
+c.request("DELETE", "/api/store/admin/fleet/tenants/learnco?keep_data=0",
+          headers=AA)
+_appjs_lrn = (Path(__file__).parent.parent / "src/erp/frontend/app.js"
+              ).read_text(encoding="utf-8")
+ok('id: "learning"' in _appjs_lrn
+   and "learning: renderLearning" in _appjs_lrn
+   and 'learning: "learning"' in _appjs_lrn,
+   "the ops app carries the Learning tab, its renderer, and its capability "
+   "lock — the same entitlement the storefront's /learn answers to")
+
 print(f"\nall {checks} checks passed")

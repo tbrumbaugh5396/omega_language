@@ -850,6 +850,8 @@ const TABS = [
     roles: ["admin"], perm: "supply" },
   { id: "outreach", label: "Outreach", icon: "handshake", group: "Operate",
     roles: ["admin", "employee"] },
+  { id: "learning", label: "Learning", icon: "pen", group: "Operate",
+    roles: ["admin", "employee"] },
   { id: "scan", label: "Scan", icon: "camera", group: "Operate", roles: "*" },
   { id: "feed", label: "Feed", icon: "feed", group: "Grow", roles: "*" },
   { id: "affiliates", label: "Affiliates", icon: "link", group: "Grow", roles: "*" },
@@ -897,6 +899,7 @@ const TAB_CAP = {
   inventory: "inventory", supply: "sourcing",
   routes: "distribution", stores: "distribution",
   analytics: "intelligence", events: "events", affiliates: "affiliates",
+  learning: "learning",
   chat: "comms", feed: "comms",
   integrations: "api", discord: "api", slack: "api", trello: "api",
   dropbox: "api",
@@ -907,6 +910,7 @@ const CAP_LABEL = {
   workforce: "Workforce", inventory: "Inventory", sourcing: "Sourcing",
   distribution: "Distribution", intelligence: "Intelligence",
   events: "Events", affiliates: "Affiliates", comms: "Comms",
+  learning: "Learning",
   api: "API & data platform", infosec: "InfoSec",
 };
 // null caps = everything on: legacy installs, the provider, and any tenant
@@ -1122,6 +1126,7 @@ async function render() {
     integrations: renderIntegrations, slack: renderSlack,
     trello: renderTrello, dropbox: renderDropbox,
     hq: renderHQ, fleet: renderFleet, admin: renderAdmin,
+    learning: renderLearning,
     login: renderLogin,
   }[S.tab] || renderShop;
   const tabDef = TABS.find((t) => t.id === S.tab);
@@ -3832,6 +3837,7 @@ const NOTIF_TAB = {
   // a capability ask is fulfilled on the Platform tab — the notification
   // lands you where the grant button is, not on a board to hunt through
   lead: "fleet",
+  learning: "learning",
 };
 const NOTIF_LABEL = {
   order: "open orders", inventory: "open inventory", logistics: "open routes",
@@ -8106,6 +8112,392 @@ function eventForm(e) {
     await api(`/api/store/admin/events/${e.id}`, { method: "DELETE" });
     closeModal(); renderEvents();
   };
+}
+
+/* ---------- Learning ----------
+   The LMS behind the Learning capability, ported from lingua-portal. Staff
+   author courses, lessons and quizzes here and mark what a machine can't;
+   learners meet the same content on the storefront at /learn. Grading rules
+   live server-side in one pure module — this screen only displays them. */
+
+async function renderLearning() {
+  const [courses, queue] = await Promise.all([
+    api("/api/learning/courses"), api("/api/learning/grading")]);
+  const card = (c) => `
+    <div class="card ${c.active ? "" : "dim-card"}" data-course="${c.id}"
+      style="cursor:pointer">
+      <div class="doc-top">
+        <div class="doc-main">
+          <b>${esc(c.name)}</b>
+          <span class="dim">${esc([c.language, c.level].filter(Boolean)
+            .join(" · ") || "course")}${
+            c.teacher_name ? " · taught by " + esc(c.teacher_name) : ""}
+            · ${c.enrolled} enrolled · ${c.lessons} lesson${
+            c.lessons === 1 ? "" : "s"} · ${c.quizzes} quiz${
+            c.quizzes === 1 ? "" : "zes"}</span>
+        </div>
+        <span class="pill ${c.active ? "ok" : ""}">${
+          c.active ? "open" : "closed"}</span>
+      </div>
+      ${c.blurb ? `<p class="dim" style="margin-top:8px">${esc(c.blurb)}</p>` : ""}
+    </div>`;
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Learning</h2>
+        <p class="dim">Courses, lessons and quizzes. Learners take them on
+          <a href="/learn" target="_blank">the storefront</a>; scores settle
+          automatically except where a human must mark.</p></div>
+      ${S.user.is_admin
+        ? `<button class="btn" id="lc-new">${opsIcon("pen", "btn-ic")}
+            New course</button>` : ""}
+    </div>
+    ${queue.length ? `<h3>Needs a human mark (${queue.length})</h3>
+      ${queue.map((a) => `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main"><b>${esc(a.quiz_title)}</b>
+            <span class="dim">${esc(a.student)} · ${a.pending} answer${
+              a.pending === 1 ? "" : "s"} waiting</span></div>
+          <button class="btn sm" data-grade="${a.id}">Grade</button>
+        </div></div>`).join("")}` : ""}
+    <h3>Courses (${courses.length})</h3>
+    ${courses.map(card).join("") || `<div class="card empty"><span class="e-ic">${
+      opsIcon("pen")}</span><b>No courses yet</b><span class="dim">${
+      S.user.is_admin ? "Create one — lessons and quizzes hang off it."
+        : "An owner can create one and appoint you its teacher."}</span></div>`}`;
+  if ($("#lc-new")) $("#lc-new").onclick = () => courseForm(null);
+  view().querySelectorAll("[data-course]").forEach((el) =>
+    el.onclick = () => learningCourse(+el.dataset.course));
+  view().querySelectorAll("[data-grade]").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation(); gradeAttempt(+b.dataset.grade); });
+}
+
+async function courseForm(c) {
+  const [users, products] = await Promise.all([
+    S.user.is_admin ? api("/api/admin/users") : Promise.resolve([]),
+    api("/api/products").catch(() => [])]);
+  const staff = users.filter((u) => u.active &&
+    (u.role === "employee" || u.is_admin));
+  modal(`<h3>${c ? "Edit course" : "New course"}</h3>
+    <label>Name</label><input id="cf-name" value="${esc((c && c.name) || "")}">
+    <div class="row2">
+      <div><label>Language / subject</label>
+        <input id="cf-lang" value="${esc((c && c.language) || "")}"></div>
+      <div><label>Level</label>
+        <input id="cf-level" value="${esc((c && c.level) || "")}"
+          placeholder="beginner, B1, …"></div>
+    </div>
+    <label>Blurb <span class="dim">(shown to learners not yet enrolled)</span></label>
+    <textarea id="cf-blurb" rows="2">${esc((c && c.blurb) || "")}</textarea>
+    <div class="row2">
+      <div><label>Teacher</label><select id="cf-teacher">
+        <option value="">— none —</option>
+        ${staff.map((u) => `<option value="${u.id}" ${c && c.teacher_id === u.id
+          ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div>
+      <div><label>Sold as <span class="dim">(buying enrols)</span></label>
+        <select id="cf-product"><option value="">— not sold —</option>
+        ${products.map((p) => `<option value="${p.id}" ${c && c.product_id === p.id
+          ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></div>
+    </div>
+    <label class="perm" style="margin-top:14px">
+      <input type="checkbox" id="cf-active" ${!c || c.active ? "checked" : ""}>
+      <span><b>Open</b><small>Visible to learners on the storefront</small></span></label>
+    <div class="modal-acts">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="cf-save">Save</button>
+    </div>`);
+  $("#cf-save").onclick = async () => {
+    const name = $("#cf-name").value.trim();
+    if (!name) return toast("a course needs a name");
+    const body = { name, language: $("#cf-lang").value.trim(),
+      level: $("#cf-level").value.trim(), blurb: $("#cf-blurb").value.trim(),
+      teacher_id: +$("#cf-teacher").value || null,
+      product_id: +$("#cf-product").value || null,
+      active: $("#cf-active").checked ? 1 : 0 };
+    try {
+      if (c) await api(`/api/learning/courses/${c.id}`, { body });
+      else await api("/api/learning/courses", { body });
+      closeModal();
+      c ? learningCourse(c.id) : renderLearning();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+async function learningCourse(cid) {
+  const d = await api(`/api/learning/courses/${cid}`);
+  const lesson = (l) => `<div class="card">
+    <div class="doc-top">
+      <div class="doc-main"><b>${esc(l.title)}</b>
+        <span class="dim">${l.published ? "published" : "draft"}</span></div>
+      <button class="btn alt sm" data-lmove="${l.id}:-1" title="Move up">↑</button>
+      <button class="btn alt sm" data-lmove="${l.id}:1" title="Move down">↓</button>
+      <button class="btn alt sm" data-ledit="${l.id}">Edit</button>
+      <button class="btn ${l.published ? "alt " : ""}sm" data-lpub="${l.id}">
+        ${l.published ? "Unpublish" : "Publish"}</button>
+    </div></div>`;
+  const quiz = (q) => `<div class="card">
+    <div class="doc-top">
+      <div class="doc-main"><b>${esc(q.title)}</b>
+        <span class="dim">${q.questions} question${q.questions === 1 ? "" : "s"}
+          · pass ${q.pass_mark}% · ${q.published ? "published" : "draft"}</span></div>
+      <button class="btn alt sm" data-qedit="${q.id}">Questions</button>
+      <button class="btn ${q.published ? "alt " : ""}sm" data-qpub="${q.id}">
+        ${q.published ? "Unpublish" : "Publish"}</button>
+    </div></div>`;
+  const seat = (e) => `<div class="card ${e.until ? "dim-card" : ""}">
+    <div class="doc-top">
+      <div class="doc-main"><b>${esc(e.name)}</b>
+        <span class="dim">${esc(e.role)} · via ${esc(e.source)} ·
+          ${e.progress.lessons_done}/${e.progress.lessons_total} lessons ·
+          ${e.progress.quizzes_passed}/${e.progress.quizzes_total} quizzes
+          ${e.until ? " · ended" : ""}</span></div>
+      ${!e.until && S.user.is_admin
+        ? `<button class="btn alt sm" data-eend="${e.id}">End seat</button>` : ""}
+    </div></div>`;
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>${esc(d.name)}</h2>
+        <p class="dim">${esc([d.language, d.level].filter(Boolean).join(" · ")
+          || "course")}${d.product_id
+          ? " · sold on the storefront (buying enrols)" : ""}</p></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn alt" id="lc-back">All courses</button>
+        <button class="btn alt" id="lc-edit">Edit course</button>
+      </div>
+    </div>
+    <div class="page-head" style="margin-top:8px">
+      <h3>Lessons (${d.lessons.length})</h3>
+      <button class="btn sm" id="ll-new">New lesson</button>
+    </div>
+    ${d.lessons.map(lesson).join("")
+      || '<div class="card empty"><b>No lessons yet</b></div>'}
+    <div class="page-head" style="margin-top:16px">
+      <h3>Quizzes (${d.quizzes.length})</h3>
+      <button class="btn sm" id="lq-new">New quiz</button>
+    </div>
+    ${d.quizzes.map(quiz).join("")
+      || '<div class="card empty"><b>No quizzes yet</b></div>'}
+    <div class="page-head" style="margin-top:16px">
+      <h3>Enrolled (${d.enrollments.filter((e) => !e.until).length})</h3>
+      ${S.user.is_admin
+        ? '<button class="btn sm" id="le-new">Enrol someone</button>' : ""}
+    </div>
+    ${d.enrollments.map(seat).join("")
+      || '<div class="card empty"><b>Nobody enrolled yet</b><span class="dim">Link the course to a product, or enrol by hand.</span></div>'}`;
+  $("#lc-back").onclick = renderLearning;
+  $("#lc-edit").onclick = () => courseForm(d);
+  $("#ll-new").onclick = () => lessonForm(cid, null);
+  $("#lq-new").onclick = async () => {
+    modal(`<h3>New quiz</h3>
+      <label>Title</label><input id="qf-title">
+      <label>Intro <span class="dim">(optional)</span></label>
+      <textarea id="qf-intro" rows="2"></textarea>
+      <label>Pass mark %</label><input id="qf-pass" type="number" value="60">
+      <div class="modal-acts">
+        <button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="qf-save">Create</button>
+      </div>`);
+    $("#qf-save").onclick = async () => {
+      const title = $("#qf-title").value.trim();
+      if (!title) return toast("a quiz needs a title");
+      try {
+        const r = await api("/api/learning/quizzes", { body: {
+          course_id: cid, title, intro: $("#qf-intro").value.trim(),
+          pass_mark: +$("#qf-pass").value || 60 } });
+        closeModal(); quizQuestions(r.id, cid);
+      } catch (err) { toast(err.message); }
+    };
+  };
+  if ($("#le-new")) $("#le-new").onclick = async () => {
+    const users = await api("/api/admin/users");
+    modal(`<h3>Enrol someone</h3>
+      <label>Person</label><select id="en-user">
+        ${users.filter((u) => u.active).map((u) =>
+          `<option value="${u.id}">${esc(u.name)} (${esc(u.role)})</option>`)
+          .join("")}</select>
+      <div class="modal-acts">
+        <button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="en-save">Enrol</button>
+      </div>`);
+    $("#en-save").onclick = async () => {
+      try {
+        await api(`/api/learning/courses/${cid}/enroll`,
+          { body: { user_id: +$("#en-user").value } });
+        closeModal(); learningCourse(cid);
+      } catch (err) { toast(err.message); }
+    };
+  };
+  view().querySelectorAll("[data-ledit]").forEach((b) => b.onclick =
+    () => lessonForm(cid, +b.dataset.ledit));
+  view().querySelectorAll("[data-lpub]").forEach((b) => b.onclick = async () => {
+    const l = await api(`/api/learning/lessons/${b.dataset.lpub}`);
+    await api(`/api/learning/lessons/${l.id}`, { body: {
+      title: l.title, body: l.body, published: l.published ? 0 : 1 } });
+    learningCourse(cid);
+  });
+  view().querySelectorAll("[data-lmove]").forEach((b) => b.onclick = async () => {
+    const [lid, dir] = b.dataset.lmove.split(":");
+    await api(`/api/learning/lessons/${lid}/move`,
+      { body: { direction: +dir } });
+    learningCourse(cid);
+  });
+  view().querySelectorAll("[data-qedit]").forEach((b) => b.onclick =
+    () => quizQuestions(+b.dataset.qedit, cid));
+  view().querySelectorAll("[data-qpub]").forEach((b) => b.onclick = async () => {
+    const q = d.quizzes.find((x) => x.id === +b.dataset.qpub);
+    await api(`/api/learning/quizzes/${q.id}`, { body: {
+      title: q.title, intro: q.intro, pass_mark: q.pass_mark,
+      published: q.published ? 0 : 1 } });
+    learningCourse(cid);
+  });
+  view().querySelectorAll("[data-eend]").forEach((b) => b.onclick = async () => {
+    if (!confirm("End this seat? Their progress is kept.")) return;
+    await api(`/api/learning/enrollments/${b.dataset.eend}/end`, { body: {} });
+    learningCourse(cid);
+  });
+}
+
+async function lessonForm(cid, lid) {
+  const l = lid ? await api(`/api/learning/lessons/${lid}`) : null;
+  modal(`<h3>${l ? "Edit lesson" : "New lesson"}</h3>
+    <label>Title</label><input id="lf-title" value="${esc((l && l.title) || "")}">
+    <label>Body <span class="dim">(markdown: # headings, **bold**, - lists,
+      \`\`\` code)</span></label>
+    <textarea id="lf-body" rows="14" style="font-family:monospace">${
+      esc((l && l.body) || "")}</textarea>
+    <div class="modal-acts">
+      ${l ? '<button class="btn alt" id="lf-del" style="margin-right:auto">Delete</button>' : ""}
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="lf-save">Save</button>
+    </div>`, "wide");
+  $("#lf-save").onclick = async () => {
+    const title = $("#lf-title").value.trim();
+    if (!title) return toast("a lesson needs a title");
+    const body = { course_id: cid, title, body: $("#lf-body").value,
+      published: l ? l.published : 0 };
+    try {
+      if (l) await api(`/api/learning/lessons/${l.id}`, { body });
+      else await api("/api/learning/lessons", { body });
+      closeModal(); learningCourse(cid);
+    } catch (err) { toast(err.message); }
+  };
+  if (l && $("#lf-del")) $("#lf-del").onclick = async () => {
+    if (!confirm(`Delete "${l.title}"?`)) return;
+    await api(`/api/learning/lessons/${l.id}/delete`, { body: {} });
+    closeModal(); learningCourse(cid);
+  };
+}
+
+async function quizQuestions(qid, cid) {
+  const q = await api(`/api/learning/quizzes/${qid}`);
+  const row = (x, i) => `<div class="card">
+    <div class="doc-top">
+      <div class="doc-main"><b>${i + 1}. ${esc(x.prompt)}</b>
+        <span class="dim">${x.kind} · ${x.points} pt${x.points === 1 ? "" : "s"}${
+          x.kind !== "text" ? " · " + x.choices.map((c, j) =>
+            x.answer.includes(j) ? "✓" + esc(c) : esc(c)).join(" / ")
+          : x.accepted.length ? " · accepts: " + x.accepted.map(esc).join(", ")
+          : " · marked by a teacher"}</span></div>
+      <button class="btn alt sm" data-xdel="${x.id}">Delete</button>
+    </div></div>`;
+  modal(`<h3>${esc(q.title)}</h3>
+    <p class="dim">Learners never receive the answer key — it is stripped
+      server-side before the quiz leaves the building.</p>
+    ${q.questions.map(row).join("") || '<p class="dim">No questions yet.</p>'}
+    <h4 style="margin-top:14px">Add a question</h4>
+    <div class="row2">
+      <div><label>Kind</label><select id="nq-kind">
+        <option value="choice">single choice</option>
+        <option value="multi">multiple answers (partial credit)</option>
+        <option value="text">written answer</option></select></div>
+      <div><label>Points</label><input id="nq-points" type="number" value="1"></div>
+    </div>
+    <label>Prompt</label><input id="nq-prompt">
+    <div id="nq-choice-wrap">
+      <label>Options <span class="dim">(one per line; prefix the correct
+        one(s) with *)</span></label>
+      <textarea id="nq-choices" rows="4" placeholder="*hola&#10;mesa&#10;buenos días"></textarea>
+    </div>
+    <div id="nq-text-wrap" style="display:none">
+      <label>Accepted answers <span class="dim">(one per line; case, accents
+        and punctuation are forgiven; empty = a teacher marks it)</span></label>
+      <textarea id="nq-accepted" rows="3"></textarea>
+    </div>
+    <div class="modal-acts">
+      <button class="btn alt" data-close>Done</button>
+      <button class="btn" id="nq-add">Add question</button>
+    </div>`, "wide");
+  $("#nq-kind").onchange = () => {
+    const text = $("#nq-kind").value === "text";
+    $("#nq-choice-wrap").style.display = text ? "none" : "";
+    $("#nq-text-wrap").style.display = text ? "" : "none";
+  };
+  $("#nq-add").onclick = async () => {
+    const kind = $("#nq-kind").value;
+    const lines = $("#nq-choices").value.split("\n")
+      .map((s) => s.trim()).filter(Boolean);
+    const body = { kind, prompt: $("#nq-prompt").value.trim(),
+      points: +$("#nq-points").value || 1,
+      choices: lines.map((s) => s.replace(/^\*/, "")),
+      answer: lines.map((s, i) => s.startsWith("*") ? i : -1)
+        .filter((i) => i >= 0),
+      accepted: $("#nq-accepted").value.split("\n")
+        .map((s) => s.trim()).filter(Boolean) };
+    if (kind === "text") { body.choices = []; body.answer = []; }
+    try {
+      await api(`/api/learning/quizzes/${qid}/questions`, { body });
+      quizQuestions(qid, cid);
+    } catch (err) { toast(err.message); }
+  };
+  // the buttons live in the modal, which hangs off <body>, not the view
+  document.querySelectorAll("[data-xdel]").forEach((b) => b.onclick = async () => {
+    await api(`/api/learning/questions/${b.dataset.xdel}/delete`, { body: {} });
+    quizQuestions(qid, cid);
+  });
+}
+
+async function gradeAttempt(aid) {
+  const d = await api(`/api/learning/attempts/${aid}`);
+  const item = (x, i) => {
+    return `<div class="card">
+      <b>${i + 1}. ${esc(x.prompt)}</b>
+      <span class="dim">(${x.points} pt${x.points === 1 ? "" : "s"})</span>
+      <p style="margin:6px 0">${x.kind === "text"
+        ? (x.text ? esc(x.text) : "<i class='dim'>no answer</i>")
+        : esc(x.chosen.map((j) => x.choices[j]).join(", ") || "no answer")}</p>
+      ${x.kind === "text" && !x.accepted.length ? `
+        <div class="row2">
+          <div><label>Points (0–${x.points})</label>
+            <input type="number" id="aw-${x.question_id}" min="0"
+              max="${x.points}" value="${x.awarded ?? ""}"></div>
+          <div><label>Feedback</label>
+            <input id="fb-${x.question_id}" value="${esc(x.feedback)}"></div>
+        </div>
+        <button class="btn sm" data-award="${x.question_id}"
+          style="margin-top:6px">Save mark</button>`
+        : `<span class="dim">${x.awarded !== null
+          ? "marked: " + x.awarded : "auto-graded"}</span>`}
+    </div>`;
+  };
+  modal(`<h3>Grading — ${esc(d.student)}</h3>
+    <p class="dim">${esc(d.quiz.title)} ·
+      ${d.grade.pending} answer${d.grade.pending === 1 ? "" : "s"} pending ·
+      provisional ${d.grade.percent}% (the learner sees no number until it
+      is final)</p>
+    ${d.items.map(item).join("")}
+    <div class="modal-acts"><button class="btn" data-close>Done</button></div>`,
+    "wide");
+  document.querySelectorAll("[data-award]").forEach((b) => b.onclick =
+    async () => {
+      const qidn = +b.dataset.award;
+      try {
+        const g = await api(`/api/learning/attempts/${aid}/grade`, { body: {
+          question_id: qidn, awarded: +$(`#aw-${qidn}`).value || 0,
+          feedback: $(`#fb-${qidn}`).value } });
+        toast(g.is_final ? "Attempt settled — the learner has their score"
+          : "Saved — " + g.pending + " still pending");
+        if (g.is_final) { closeModal(); renderLearning(); }
+      } catch (err) { toast(err.message); }
+    });
 }
 
 // ---------- profile ----------
