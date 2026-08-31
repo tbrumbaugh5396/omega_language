@@ -26,9 +26,11 @@ other node runs the commands in config `fleet.provision_cmd` /
 node is a booking in the registry: honest, and still the right bookkeeping
 for a fleet you provision by hand.
 """
+import io
 import json
 import shlex
 import subprocess
+import tarfile
 import time
 
 from . import tenancy
@@ -93,6 +95,7 @@ def fleet() -> list:
                        "created": t.get("created") or 0})
         used = sum(t["units"] for t in on)
         cap = int(n.get("units") or DEFAULT_UNITS)
+        n = {k: v for k, v in n.items() if k != "key"}   # never ship keys to UIs
         out.append({**n, "id": nid, "tenants": sorted(
             on, key=lambda t: (not t["provider"], t["id"])),
             "used": used, "capacity": cap, "free": max(0, cap - used),
@@ -163,9 +166,127 @@ def events(limit: int = 40) -> list:
             con.close()
 
 
+def node_addr(node_id: str) -> str:
+    """Where a node's process listens, or "" for bookkeeping-only nodes.
+    An addr is what turns a booking into a machine: with one, tenants are
+    actually SHIPPED there and served from it."""
+    n = nodes().get(node_id) or {}
+    return (n.get("addr") or "").rstrip("/")
+
+
+def node_key(node_id: str) -> str:
+    n = nodes().get(node_id) or {}
+    return n.get("key") or ""
+
+
+def _node_call(node_id: str, method: str, path: str, content=None,
+               timeout: float = 120.0):
+    """One authenticated call to a worker node's process. Raises with the
+    node's own words on failure — a shipment that half-happened must say
+    so loudly."""
+    import httpx
+    addr = node_addr(node_id)
+    if not addr:
+        raise RuntimeError(f"node '{node_id}' has no address — it is a "
+                           f"booking, not a machine")
+    r = httpx.request(method, addr + path,
+                      headers={"X-Fleet-Key": node_key(node_id)},
+                      content=content, timeout=timeout)
+    if r.status_code >= 400:
+        raise RuntimeError(f"node '{node_id}' refused {path}: "
+                           f"{r.text[:200]}")
+    return r
+
+
+def pack_tenant(tid: str) -> bytes:
+    """A tenant's whole directory as one tar.gz — database, config,
+    uploads, push keys. The unit of shipment."""
+    from . import tenancy
+    d = tenancy.tenant_dir(tid)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        tf.add(d, arcname=".")
+    return buf.getvalue()
+
+
+def unpack_tenant(tid: str, blob: bytes) -> None:
+    """The receiving side. Members are screened — a tar that tries to
+    write outside the tenant's own directory is an attack, not a
+    shipment."""
+    from . import tenancy
+    d = tenancy.tenant_dir(tid)
+    d.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tf:
+        for m in tf.getmembers():
+            name = m.name.lstrip("./")
+            if m.name.startswith("/") or ".." in m.name.split("/"):
+                raise ValueError(f"unsafe path in shipment: {m.name}")
+            if not (m.isfile() or m.isdir()):
+                continue
+        tf.extractall(d, filter="data")
+
+
+def _tenant_entry(tid: str) -> dict:
+    from . import tenancy
+    return (tenancy.registry() or {}).get("tenants", {}).get(tid, {})
+
+
+def ship_tenant(tid: str, node_id: str, actor: str = "") -> None:
+    """Move a tenant's data TO its booked node and hand serving over.
+
+    Order is the whole safety story: the data lands and is acknowledged,
+    the node learns the tenant (registry slice), and only THEN does the
+    local copy go — a failure anywhere earlier leaves the tenant served
+    from here exactly as before, and says so.
+    """
+    import shutil
+    from . import tenancy
+    _node_call(node_id, "POST", f"/api/node/tenants/{tid}/import",
+               content=pack_tenant(tid))
+    _node_call(node_id, "POST", "/api/node/registry", content=json.dumps(
+        {"tenants": {tid: {**_tenant_entry(tid), "node": node_id}}}))
+    shutil.rmtree(tenancy.tenant_dir(tid), ignore_errors=True)
+    log("tenant shipped", f"{tid} → {node_id}", actor or "operator")
+
+
+def recall_tenant(tid: str, node_id: str, actor: str = "") -> None:
+    """Bring a tenant's data BACK from its node — the reverse shipment,
+    with the same order of operations: fetched, unpacked, verified here,
+    and only then removed there."""
+    r = _node_call(node_id, "GET", f"/api/node/tenants/{tid}/export",
+                   timeout=300.0)
+    unpack_tenant(tid, r.content)
+    from . import tenancy
+    if not (tenancy.tenant_dir(tid) / "business_control.db").exists():
+        raise RuntimeError(f"recall of '{tid}' unpacked no database — "
+                           f"the node's copy is untouched")
+    _node_call(node_id, "DELETE", f"/api/node/tenants/{tid}")
+    log("tenant recalled", f"{tid} ← {node_id}", actor or "operator")
+
+
+def set_status_pushed(tid: str) -> None:
+    """After a suspend/resume: the tenant's own node must honour it."""
+    push_entry(tid)
+
+
+def push_entry(tid: str) -> None:
+    """Keep a remote tenant's node current on status/caps/hosts — called
+    after any registry change that a worker must honour (suspension, a
+    launch's new hostname, a refreshed grant)."""
+    from . import tenancy
+    nid = tenancy.node_of(tid)
+    if node_addr(nid):
+        try:
+            _node_call(nid, "POST", "/api/node/registry", content=json.dumps(
+                {"tenants": {tid: {**_tenant_entry(tid), "node": nid}}}))
+        except Exception as e:
+            log("registry push failed",
+                f"{tid} → {nid}: {e}"[:380], "system")
+
+
 def provision(node_id: str, size: str = "4gb", region: str = "",
               provider: str = "", units: int = DEFAULT_UNITS,
-              actor: str = "") -> dict:
+              actor: str = "", addr: str = "") -> dict:
     """Spin up a node. Runs the configured command when there is one, and
     records the booking either way."""
     node_id = (node_id or "").strip()
@@ -176,10 +297,15 @@ def provision(node_id: str, size: str = "4gb", region: str = "",
         raise ValueError(f"node '{node_id}' already exists")
     out = _run(_cfg().get("provision_cmd", ""), node=node_id, size=size,
                region=region)
+    import secrets as _secrets
     reg.setdefault("nodes", {})[node_id] = {
         "provider": provider or _cfg().get("provider", "manual"),
         "size": size, "region": region, "units": int(units),
-        "created": time.time()}
+        "created": time.time(),
+        # an addr turns the booking into a machine; the key is what the
+        # provider presents on every shipment to it
+        "addr": (addr or "").rstrip("/"),
+        "key": _secrets.token_urlsafe(24) if addr else ""}
     _save(reg)
     log("node provisioned", f"{node_id} · {size}"
         + (f" · {region}" if region else "") + (f" · {out}" if out else ""),
@@ -211,12 +337,20 @@ def destroy(node_id: str, actor: str = "", auto: bool = False) -> None:
 
 
 def reap(actor: str = "") -> list:
-    """Destroy every node nothing lives on. Called after a tenant leaves —
-    an empty node is pure cost, and the minute it empties is the only
-    minute anyone would think to look."""
+    """Destroy every empty node the reap can actually TEAR DOWN. Called
+    after a tenant leaves — an empty node is pure cost, and the minute it
+    empties is the only minute anyone would think to look.
+
+    The refinement a live machine forced: an addr'd node with no
+    destroy_cmd is a running server we merely know the address of.
+    Auto-destroying its record doesn't stop the bill — it loses the
+    address and the key while the machine runs on. Those stay on the
+    board, flagged empty, until an operator destroys them deliberately
+    (or a destroy_cmd exists to really tear them down)."""
+    teardown = bool(_cfg().get("destroy_cmd"))
     gone = []
     for n in fleet():
-        if n["destroyable"]:
+        if n["destroyable"] and (teardown or not n.get("addr")):
             try:
                 destroy(n["id"], actor=actor, auto=True)
                 gone.append(n["id"])
@@ -244,15 +378,55 @@ def pick_node(units: int, prefer: str = "") -> str:
     return sorted(fits, key=lambda n: (n["free"], n["id"]))[0]["id"]
 
 
+def park_local(tid: str) -> None:
+    """Point a tenant's booking back at local WITHOUT moving any data —
+    for the failure paths where the data never left."""
+    reg = _reg()
+    t = (reg.get("tenants") or {}).get(tid)
+    if t is not None:
+        t["node"] = LOCAL
+        _save(reg)
+
+
 def place(tid: str, node: str, klass: str = DEFAULT_CLASS,
           actor: str = "") -> None:
+    """Move a tenant between nodes — the DATA moves with the booking.
+
+    A move off an addr'd node recalls the directory here first; a move
+    onto one ships it after. Failure order is the design: a recall that
+    fails leaves everything where it was; a ship that fails after a
+    successful recall parks the tenant on local and says so — served,
+    slower, honest — rather than a registry pointing at a machine that
+    does not have the data.
+    """
     reg = _reg()
     t = (reg.get("tenants") or {}).get(tid)
     if t is None:
         raise ValueError(f"no tenant '{tid}'")
     was = t.get("node") or LOCAL
-    t["node"] = node
-    t["class"] = klass
+    if was != node:
+        if node_addr(was):
+            recall_tenant(tid, was, actor)
+        if node_addr(node):
+            try:
+                # the slice shipped with the data must already say the
+                # destination, so update the booking first
+                t["node"] = node
+                t["class"] = klass
+                _save(reg)
+                ship_tenant(tid, node, actor)
+            except Exception as e:
+                t["node"] = LOCAL
+                _save(reg)
+                log("move failed — parked on local",
+                    f"{tid}: {e}"[:300], actor or "operator")
+                raise RuntimeError(
+                    f"could not ship '{tid}' to {node} — parked on local, "
+                    f"still served: {e}")
+    t = (_reg().get("tenants") or {}).get(tid)
+    reg = _reg()
+    reg["tenants"][tid]["node"] = node
+    reg["tenants"][tid]["class"] = klass
     _save(reg)
     if was != node:
         log("tenant moved", f"{tid}: {was} → {node}", actor or "operator")

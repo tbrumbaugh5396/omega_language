@@ -141,6 +141,31 @@ touched. **Remove** takes them off the fleet; their directory moves to
 business that leaves still owns its records and the week after a
 cancellation is exactly when someone asks for an export.
 
+**A node with an `addr` is a machine.** Give a node the URL of a real
+process (`Address` in the New-node modal; the process starts with
+`BUSINESS_CONTROL_NODE=<id>` and `BUSINESS_CONTROL_NODE_KEY=<key>` on its
+own data directory) and the fleet stops being bookkeeping:
+
+- **Standing up ships.** The tenant's whole directory — database, config,
+  uploads, keys — travels as one tar to the node after every local write
+  (schema, layout, hosting paper) has landed. The provider's copy is then
+  removed: data lives in one place.
+- **The worker serves its tenants directly** (point their DNS at the
+  node), and the front box **reverse-proxies HTTP** for them, so one
+  public IP still serves the whole fleet. WebSockets connect to the
+  tenant's own node — direct DNS is the production pattern.
+- **Moves recall-and-ship**; a shipment that fails parks the tenant on
+  local, served and honest, never a registry pointing at a machine
+  without the data. Suspensions, launches and grant changes push the
+  tenant's registry slice to its node.
+- **The dock is keyed.** Workers accept `/api/node/*` only with their
+  fleet key; a process with no key configured accepts nothing, and a
+  shipment whose tar reaches outside the tenant's directory is refused
+  as the attack it is.
+- **The reap spares live machines**: an addr'd node with no
+  `destroy_cmd` survives emptying — auto-forgetting a running server's
+  address and key saves nothing.
+
 Provisioning is a driver, configured per provider tenant:
 
 ```json

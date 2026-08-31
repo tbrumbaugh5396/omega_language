@@ -2523,6 +2523,7 @@ class NodeBody(BaseModel):
     region: str = ""
     provider: str = ""
     units: int = 25
+    addr: str = ""       # the node process's base URL — booking becomes machine
 
 
 class TenantBody(BaseModel):
@@ -2631,7 +2632,8 @@ def fleet_node_add(body: NodeBody, u=Depends(admin_user),
         n = fleet.provision(body.id, size=body.size, region=body.region,
                             provider=body.provider,
                             units=body.units or fleet.DEFAULT_UNITS,
-                            actor=u["name"])
+                            actor=u["name"],
+                        addr=body.addr)
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "node": {**n, "id": body.id}}
@@ -2767,7 +2769,21 @@ def fleet_tenant_add(body: TenantBody, request: Request,
                 # a stand-up must not fail for want of its paperwork —
                 # the operator can still generate the schedule by hand
                 hosting_doc = 0
-    return {"ok": True, "tenant": tid, "node": nid,
+    shipped = ""
+    if fleet.node_addr(nid):
+        # Everything local is written — schema, layout, hosting paper —
+        # so the shipment carries the finished install. A ship that fails
+        # parks the tenant on local, served and honest, never a registry
+        # pointing at a machine without the data.
+        try:
+            fleet.ship_tenant(tid, nid, u["name"])
+            shipped = nid
+        except Exception as e:
+            fleet.park_local(tid)
+            fleet.log("stand-up ship failed — parked on local",
+                      f"{tid}: {e}"[:300], u["name"])
+            nid = "local"
+    return {"ok": True, "tenant": tid, "node": nid, "shipped": shipped,
             "hosting_doc": hosting_doc, "layout": layout,
             "public_url": f"https://{public_host}" if public_host else ""}
 
@@ -2784,6 +2800,7 @@ def fleet_tenant_status(tid: str, body: StatusBody, u=Depends(admin_user),
         tenancy.set_status(tid, body.status)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    fleet.set_status_pushed(tid)
     fleet.log(f"tenant {body.status}", tid, u["name"])
     return {"ok": True, "status": body.status}
 
@@ -2883,6 +2900,7 @@ def launch_site(eid: int, body: LaunchBody, u=Depends(admin_user),
         f"launched at {url}" + (f" with {len(caps)} capabilities from the "
                                 f"signed quote" if caps else ""))
     con.commit()
+    fleet.push_entry(tid)      # the tenant's node learns the new name
     fleet.log("site launched", f"{tid} → {url}"
               + (f" · {len(caps)} caps" if caps else ""), u["name"])
     return {"ok": True, "url": url, "hosts": hosts, "caps": caps}

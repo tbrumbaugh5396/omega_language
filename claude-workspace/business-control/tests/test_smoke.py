@@ -6663,6 +6663,147 @@ ok(_pub2["public_url"] == "" and _tn.registry()["tenants"]["pubco2"]
 c.request("DELETE", "/api/store/admin/fleet/tenants/pubco2?keep_data=0",
           headers=AA)
 
+
+# --- multi-machine orchestration: tenants run on their booked nodes -------
+# A node with an addr is a MACHINE: standing up ships the tenant's whole
+# directory there, the worker serves it, the front box proxies for it,
+# moves recall-and-ship, and a failed shipment parks the tenant on local —
+# served, slower, honest. Tested against a real second process, because a
+# proxy that only ever met a stub has not been tested.
+import socket as _sck
+import subprocess as _sp2
+import time
+import urllib.request as _ur
+
+_ws = _sck.socket(); _ws.bind(("127.0.0.1", 0))
+_wport = _ws.getsockname()[1]; _ws.close()
+_wdata = Path(tempfile.mkdtemp(prefix="bc_node_"))
+
+ok(c.post("/api/store/admin/fleet/nodes", headers=AA,
+          json={"id": "node-w", "units": 8,
+                "addr": f"http://127.0.0.1:{_wport}"}).status_code == 200,
+   "a node provisions WITH an address — the booking names its machine")
+_wkey = _tn.registry()["nodes"]["node-w"]["key"]
+ok(len(_wkey) > 20, "and mints the key every shipment must present")
+
+_wproc = _sp2.Popen(
+    [sys.executable, str(ROOT / "scripts" / "launch.py"),
+     "--port", str(_wport)],
+    env={**os.environ, "BUSINESS_CONTROL_DATA": str(_wdata),
+         "BUSINESS_CONTROL_NODE": "node-w",
+         "BUSINESS_CONTROL_NODE_KEY": _wkey},
+    stdout=_sp2.DEVNULL, stderr=_sp2.DEVNULL)
+try:
+    for _ in range(120):
+        try:
+            _rq = _ur.Request(f"http://127.0.0.1:{_wport}/api/node/ping",
+                              headers={"X-Fleet-Key": _wkey})
+            if _ur.urlopen(_rq, timeout=1).status == 200:
+                break
+        except Exception:
+            time.sleep(0.25)
+    else:
+        raise RuntimeError("worker node never came up")
+
+    _rq2 = _ur.Request(f"http://127.0.0.1:{_wport}/api/node/ping",
+                       headers={"X-Fleet-Key": "wrong"})
+    try:
+        _ur.urlopen(_rq2, timeout=2); _bad = 200
+    except Exception as e2:
+        _bad = getattr(e2, "code", 0)
+    ok(_bad == 403, "a wrong fleet key is refused")
+    ok(c.get("/api/node/ping").status_code == 404,
+       "and a process with no node key configured accepts nothing — a "
+       "plain install cannot be talked into hosting")
+
+    _su = c.post("/api/store/admin/fleet/tenants", headers=AA,
+                 json={"id": "remoteco", "brand": "Remote Co",
+                       "klass": "micro", "node": "node-w"}).json()
+    ok(_su["shipped"] == "node-w",
+       "standing up onto an addr'd node SHIPS the tenant there")
+    ok(not (_tn.tenant_dir("remoteco")).exists(),
+       "the provider's copy is gone — data lives in one place")
+    ok((_wdata / "tenants" / "remoteco" / "business_control.db").exists(),
+       "and that place is the worker's own data directory")
+
+    _direct = _ur.Request(f"http://127.0.0.1:{_wport}/",
+                          headers={"Host": "remoteco.localhost"})
+    ok(b"Remote Co" in _ur.urlopen(_direct, timeout=5).read(),
+       "the worker serves the tenant DIRECTLY, named — point DNS at the "
+       "node and the front box is not even in the path")
+    ok("Remote Co" in c.get("/", headers={"host": "remoteco.localhost"}
+                            ).text,
+       "and the front box PROXIES for it — one public IP still serves "
+       "every tenant, wherever each one lives")
+
+    c.post("/api/store/admin/fleet/tenants/remoteco/status", headers=AA,
+           json={"status": "suspended"})
+    try:
+        _ur.urlopen(_ur.Request(f"http://127.0.0.1:{_wport}/",
+                    headers={"Host": "remoteco.localhost"}), timeout=5)
+        _sus2 = 200
+    except Exception as e3:
+        _sus2 = getattr(e3, "code", 0)
+    ok(_sus2 == 503,
+       "a suspension pushed from the provider is honoured ON THE NODE — "
+       "the worker's own registry slice said so")
+    c.post("/api/store/admin/fleet/tenants/remoteco/status", headers=AA,
+           json={"status": "active"})
+
+    ok(c.post("/api/store/admin/fleet/tenants/remoteco/move", headers=AA,
+              json={"node": "local"}).json()["node"] == "local",
+       "a move back to local recalls the data")
+    ok(any(n["id"] == "node-w" for n in
+           c.get("/api/store/admin/fleet", headers=AA).json()["nodes"]),
+       "the emptied node SURVIVES the reap — an addr'd node with no "
+       "destroy_cmd is a running server we merely know the address of, "
+       "and auto-forgetting it loses the address and key while the "
+       "machine runs on")
+    ok((_tn.tenant_dir("remoteco") / "business_control.db").exists()
+       and not (_wdata / "tenants" / "remoteco").exists(),
+       "— here again, gone there: the recall is a move, not a copy")
+    ok("Remote Co" in c.get("/", headers={"host": "remoteco.localhost"}
+                            ).text,
+       "and serving follows the data home without a restart")
+
+    c.post("/api/store/admin/fleet/tenants/remoteco/move", headers=AA,
+           json={"node": "node-w"})
+    ok(not _tn.tenant_dir("remoteco").exists(),
+       "moved out again for the destroy test")
+    c.request("DELETE",
+              "/api/store/admin/fleet/tenants/remoteco?keep_data=1",
+              headers=AA)
+    ok(not (_wdata / "tenants" / "remoteco").exists()
+       and any(p.name.startswith("remoteco-") for p in
+               (Path(os.environ["BUSINESS_CONTROL_DATA"]) / "retired"
+                ).glob("*")),
+       "destroying a remote tenant recalls the data FIRST and retires it "
+       "on the provider — the machine stops holding a business that "
+       "left, and the business still owns its records")
+finally:
+    _wproc.terminate()
+    try:
+        _wproc.wait(timeout=5)
+    except Exception:
+        _wproc.kill()
+    _shm.rmtree(_wdata, ignore_errors=True)
+c.request("DELETE", "/api/store/admin/fleet/nodes/node-w", headers=AA)
+
+import io as _io2, tarfile as _tf2
+_evb = _io2.BytesIO()
+with _tf2.open(fileobj=_evb, mode="w:gz") as _tf3:
+    _info = _tf2.TarInfo("../escape.txt"); _info.size = 2
+    _tf3.addfile(_info, _io2.BytesIO(b"hi"))
+try:
+    _fl.unpack_tenant("evilco", _evb.getvalue())
+    _esc = False
+except ValueError:
+    _esc = True
+ok(_esc and not (Path(os.environ["BUSINESS_CONTROL_DATA"]) / "tenants"
+                 / "escape.txt").exists(),
+   "a shipment that tries to write outside the tenant's directory is an "
+   "attack, not a shipment — refused before a byte lands")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

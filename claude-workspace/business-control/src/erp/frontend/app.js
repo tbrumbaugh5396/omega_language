@@ -4182,6 +4182,7 @@ async function standUpClient(slug, eid, name, opts = {}) {
                 engagement_id: eid || 0 } });
       closeModal();
       toast(`${out.tenant} is live on ${out.node}`
+        + (out.shipped ? " (shipped to its machine)" : "")
         + (out.public_url ? ` at ${out.public_url}` : "")
         + (out.layout ? ` with a ${out.layout} starter layout` : "")
         + (out.hosting_doc
@@ -4207,6 +4208,11 @@ async function renderFleet() {
           ? " · " + esc(n.region) : ""} · ${esc(n.provider || "")}</span>
         <span class="dim">${n.used} / ${n.capacity} units${n.free
           ? "" : " · full"}</span>
+        ${n.addr ? `<span class="pill ok" title="${esc(n.addr)}">machine
+          </span>` : n.id !== "local"
+          ? `<span class="pill" title="no address — provision_cmd or the
+             Address field turns a booking into a machine">booking</span>`
+          : ""}
         ${n.id === "local" ? `<span class="pill">this machine</span>`
           : `<button class="btn alt sm" data-nodekill="${esc(n.id)}"
                ${n.tenants.length ? "disabled title='move or shut down its "
@@ -4298,6 +4304,9 @@ async function renderFleet() {
         <div><label>Capacity (units)</label>
           <input id="n-units" type="number" value="25"></div>
       </div>
+      <label>Address <span class="dim">(optional — the node process's
+        URL; set it and tenants are actually shipped there)</span></label>
+      <input id="n-addr" placeholder="http://10.0.0.2:8860">
       <div class="modal-foot">
         <button class="btn" id="n-go">Provision</button>
         <button class="btn alt" data-close>Cancel</button>
@@ -4307,7 +4316,8 @@ async function renderFleet() {
         await api("/api/store/admin/fleet/nodes", {
           body: { id: $("#n-id").value.trim(), size: $("#n-size").value,
                   region: $("#n-region").value,
-                  units: +$("#n-units").value || 25 } });
+                  units: +$("#n-units").value || 25,
+                  addr: $("#n-addr").value.trim() } });
         closeModal(); toast("node provisioned"); renderFleet();
       } catch (err) { toast(err.message); }
     };
@@ -6520,10 +6530,15 @@ async function renderEngagement(id) {
         <button class="btn alt sm" id="eng-quote" title="price this client on
           the bench, then file the quote as a paper — it opens where the last
           quote left off">Quote</button>
-        ${e.tenant_id && S.meta && S.meta.is_provider
-          ? `<button class="btn alt sm" id="eng-launch" title="put their
-               install on its real address, with the capabilities the quote
-               sold">${e.live_url ? "Relaunch" : "Launch site"}</button>`
+        ${S.meta && S.meta.is_provider
+          ? (e.tenant_id
+            ? `<button class="btn alt sm" id="eng-launch" title="put their
+                 install on its real address, with the capabilities the
+                 quote sold">${e.live_url ? "Relaunch" : "Launch site"}
+               </button>`
+            : `<button class="btn alt sm" id="eng-standup" title="a tenant
+                 of their own — sized and shaped from the quote, on a node
+                 with room">Stand up</button>`)
           : ""}
       </div>
     </div>
@@ -6615,6 +6630,10 @@ async function renderEngagement(id) {
   const lb = $("#eng-launch");
   if (lb) lb.onclick = () =>
     launchSite(id, e.name, e.live_url, () => renderEngagement(id));
+  const su2 = $("#eng-standup");
+  if (su2) su2.onclick = () =>
+    standUpClient(e.slug, id, e.name,
+      { after: () => renderEngagement(id) });
   $("#eng-binder").onclick = async () => {
     // The first open lays the whole book out to number its contents; say so
     // rather than leaving a dead button under the cursor.

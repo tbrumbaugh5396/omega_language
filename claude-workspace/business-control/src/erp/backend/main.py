@@ -98,6 +98,15 @@ async def resolve_tenant(request: Request, call_next):
     after call_next — that write must still land in the tenant's database,
     so the tenant context has to outlive the whole audit wrapper.
     """
+    # The node dock and the TLS gate are addressed to the PROCESS, not to
+    # a tenant — a shipment arrives at 127.0.0.1, which no tenant claims,
+    # and must not be bounced by the resolver that exists for storefronts.
+    # (This is exactly what broke the first registry push to a worker: the
+    # ship itself landed while the worker was still registry-less, and
+    # every call after tenancy activated died here.)
+    if (request.url.path.startswith("/api/node/")
+            or request.url.path == "/caddy/ask"):
+        return await call_next(request)
     try:
         tid = tenancy.resolve(request.headers.get("host", ""))
     except tenancy.UnknownHost as e:
@@ -110,11 +119,60 @@ async def resolve_tenant(request: Request, call_next):
         return JSONResponse(
             {"detail": f"'{e}' is suspended — the data is intact; ask the "
                        f"platform operator to resume it"}, status_code=503)
+    # A tenant whose booked node is a real machine elsewhere is SERVED
+    # from there. When public DNS points at that node directly this branch
+    # never fires; when traffic arrives here (one public IP, wildcard DNS
+    # at the front box), the request is proxied through. Data never lives
+    # in two places — this process simply does not have it.
+    if tid is not None:
+        _nid = tenancy.node_of(tid)
+        if _nid != tenancy.NODE_ID:
+            from . import fleet
+            _addr = fleet.node_addr(_nid)
+            if _addr and not request.url.path.startswith("/api/node/"):
+                if request.headers.get("upgrade", "").lower() == "websocket":
+                    return JSONResponse(
+                        {"detail": f"'{tid}' lives on node {_nid} — "
+                         "websockets connect to it directly; point the "
+                         "tenant's DNS at its node"}, status_code=421)
+                return await _proxy_to_node(request, _addr)
     tok = tenancy.CURRENT.set(tid)
     try:
         return await call_next(request)
     finally:
         tenancy.CURRENT.reset(tok)
+
+
+async def _proxy_to_node(request: Request, addr: str):
+    """Forward one HTTP request to the node that holds the tenant.
+
+    Hop-by-hop headers are dropped; the Host header travels intact, since
+    it is the whole tenancy mechanism. A node that does not answer is a
+    502 with the truth, not a hang.
+    """
+    import httpx
+    from starlette.responses import Response as RawResponse
+    body = await request.body()
+    drop = {"connection", "keep-alive", "transfer-encoding", "upgrade",
+            "proxy-authorization", "te", "trailers"}
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in drop}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as cl:
+            r = await cl.request(
+                request.method, addr + request.url.path,
+                params=dict(request.query_params), headers=headers,
+                content=body)
+    except Exception as e:                              # noqa: BLE001
+        return JSONResponse(
+            {"detail": f"this tenant's node is not answering "
+                       f"({str(e)[:100]})"}, status_code=502)
+    out_drop = drop | {"content-length", "content-encoding"}
+    return RawResponse(
+        content=r.content, status_code=r.status_code,
+        headers={k: v for k, v in r.headers.items()
+                 if k.lower() not in out_drop},
+        media_type=r.headers.get("content-type"))
 
 
 JOBS = ["general", "driver", "dsd", "warehouse", "sales_rep", "ambassador",
@@ -3758,6 +3816,81 @@ def ops_worker():
 @app.get("/sf-sw.js")
 def store_worker():
     return _worker_response(config.STOREFRONT_DIR / "sf-sw.js")
+
+
+# ---------- the node dock: what a worker accepts from its provider ----------
+# A worker process (BUSINESS_CONTROL_NODE=<id>) serves its tenants like any
+# install, plus these — the receiving side of the fleet's shipments. Every
+# call must present the node's key; a process with no key configured
+# accepts nothing, so a plain install cannot be talked into hosting.
+
+def _fleet_auth(request: Request) -> None:
+    if not tenancy.NODE_KEY:
+        raise HTTPException(404, "this process is not a fleet worker")
+    if request.headers.get("X-Fleet-Key", "") != tenancy.NODE_KEY:
+        raise HTTPException(403, "wrong fleet key")
+
+
+@app.get("/api/node/ping")
+def node_ping(request: Request):
+    _fleet_auth(request)
+    return {"ok": True, "node": tenancy.NODE_ID,
+            "tenants": tenancy.all_tenants()}
+
+
+@app.post("/api/node/registry")
+async def node_registry(request: Request):
+    """The provider keeping this node's registry slice current — the
+    tenant's hosts, status and caps, replaced whole because the provider
+    is the source of truth and a worker has no competing opinion."""
+    _fleet_auth(request)
+    data = json.loads(await request.body() or b"{}")
+    tenancy.merge_tenants(data.get("tenants") or {})
+    return {"ok": True}
+
+
+@app.post("/api/node/tenants/{tid}/import")
+async def node_import(tid: str, request: Request):
+    """Receive a tenant: unpack the shipment, give it schema, serve it."""
+    _fleet_auth(request)
+    from . import fleet
+    if not tid.replace("-", "").replace("_", "").isalnum():
+        raise HTTPException(400, "bad tenant id")
+    blob = await request.body()
+    if not blob:
+        raise HTTPException(400, "empty shipment")
+    try:
+        fleet.unpack_tenant(tid, blob)
+    except (ValueError, Exception) as e:
+        raise HTTPException(400, f"shipment refused: {str(e)[:200]}")
+    if not (tenancy.tenant_dir(tid) / "business_control.db").exists():
+        raise HTTPException(400, "shipment carried no database")
+    if init_tenant:
+        init_tenant(tid)          # idempotent — migrations run on arrival
+    return {"ok": True, "tenant": tid, "node": tenancy.NODE_ID}
+
+
+@app.get("/api/node/tenants/{tid}/export")
+def node_export(tid: str, request: Request):
+    """Hand a tenant back — the recall's first half."""
+    _fleet_auth(request)
+    from . import fleet
+    if tid not in tenancy.all_tenants() and not             tenancy.tenant_dir(tid).exists():
+        raise HTTPException(404, f"'{tid}' is not on this node")
+    from fastapi.responses import Response as RawResp
+    return RawResp(content=fleet.pack_tenant(tid),
+                   media_type="application/gzip")
+
+
+@app.delete("/api/node/tenants/{tid}")
+def node_delete(tid: str, request: Request):
+    """Forget a tenant that was recalled or destroyed. Only ever called
+    AFTER the provider holds (or has knowingly discarded) the data."""
+    _fleet_auth(request)
+    import shutil
+    shutil.rmtree(tenancy.tenant_dir(tid), ignore_errors=True)
+    tenancy.drop_tenant_entry(tid)
+    return {"ok": True}
 
 
 @app.get("/caddy/ask")

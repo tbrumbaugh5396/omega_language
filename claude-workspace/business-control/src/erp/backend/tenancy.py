@@ -14,6 +14,7 @@ whole existing test suite — untouched by this machinery.
 """
 import contextvars
 import json
+import os
 import secrets
 import threading
 import time
@@ -27,6 +28,18 @@ CURRENT: contextvars.ContextVar = contextvars.ContextVar(
     "tenant", default=None)
 
 REGISTRY_PATH = config.DATA_DIR / "tenants.json"
+
+# Which fleet node this PROCESS is. "local" is the provider's own box —
+# the default, and what every single-machine install is. A worker node's
+# process is started with BUSINESS_CONTROL_NODE=<node id> and serves only
+# the tenants placed on that node; everything else in the codebase keys
+# off this one name.
+NODE_ID = os.environ.get("BUSINESS_CONTROL_NODE", "local")
+
+# The key a WORKER process requires on inbound /api/node/* calls. Set by
+# the same environment that names the node; the provider holds each
+# node's key in its registry and sends it with every shipment.
+NODE_KEY = os.environ.get("BUSINESS_CONTROL_NODE_KEY", "")
 
 _reg_cache = {"mtime": None, "data": None}
 _reg_lock = threading.Lock()
@@ -147,6 +160,42 @@ def resolve(host: str):
                 name.replace(".", "").isdigit()):
             return _live(default)
     raise UnknownHost(name)
+
+
+def node_of(tid) -> str:
+    """Which node a tenant is placed on ("local" when unplaced)."""
+    reg = registry()
+    if not reg or not tid:
+        return "local"
+    return (reg.get("tenants", {}).get(tid, {}).get("node")
+            or "local")
+
+
+def merge_tenants(entries: dict) -> None:
+    """A worker node learning about its tenants from the provider.
+
+    The provider's registry is the source of truth; a worker holds only
+    the slice that concerns it — the tenants shipped to it, with their
+    hosts, status and caps — and never a "provider" key, so the fleet's
+    own routes stay 404 on every worker. Entries replace whole: the
+    provider said so, and the worker has no competing opinion to merge.
+    """
+    reg = registry() or {"tenants": {}}
+    reg.setdefault("tenants", {})
+    for tid, entry in entries.items():
+        if not str(tid).replace("-", "").replace("_", "").isalnum():
+            continue
+        reg["tenants"][tid] = entry
+    REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    bust_cache()
+
+
+def drop_tenant_entry(tid: str) -> None:
+    """A worker forgetting a tenant that was recalled or destroyed."""
+    reg = registry() or {}
+    (reg.get("tenants") or {}).pop(tid, None)
+    REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    bust_cache()
 
 
 def tenant_dir(tid) -> Path:
@@ -329,6 +378,16 @@ def destroy(tid: str, keep_data: bool = True, actor: str = ""):
     if tid == reg.get("provider"):
         raise ValueError("the provider runs the platform — it cannot be "
                          "removed from inside itself")
+    from . import fleet
+    nid = node_of(tid)
+    if fleet.node_addr(nid):
+        # the data lives on a worker: recall it for retirement, or tell
+        # the node to purge — either way the machine stops holding a
+        # business that left
+        if keep_data:
+            fleet.recall_tenant(tid, nid, actor)
+        else:
+            fleet._node_call(nid, "DELETE", f"/api/node/tenants/{tid}")
     d = tenant_dir(tid)
     kept = ""
     if d.exists():
