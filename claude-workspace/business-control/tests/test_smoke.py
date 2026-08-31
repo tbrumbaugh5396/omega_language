@@ -7000,9 +7000,11 @@ ok(_ame["is_admin"] and _ame["name"].startswith("Studio · "),
 _aout2 = c.post("/api/store/admin/fleet/tenants/actasco/act-as",
                 headers=AA, json={}).json()
 ok(c.get("/api/me", headers={"host": "actasco.localhost",
-         "Authorization": f"Bearer {_atok}"}).status_code == 401,
-   "each use rotates the token — an old link is dead the moment a new "
-   "one exists")
+         "Authorization": f"Bearer {_atok}"}).status_code == 200
+   and _aout2["url"] == _aout["url"],
+   "repeat act-as REUSES the token — rotating on every click signed the "
+   "operator's open session out the moment anyone acted again; revoking "
+   "is deactivating the account in Team & access, not racing tokens")
 ok(any(e["what"] == "acted as tenant admin" for e in
        c.get("/api/store/admin/fleet", headers=AA).json()["events"]),
    "and the act is on the fleet history")
@@ -7034,6 +7036,11 @@ ok(any("asked for a capability" in (i.get("title") or "")
        for i in _bitems),
    "a capability ask RINGS THE BELL for every studio admin — a request "
    "for money does not wait to be found on a board")
+ok(next(i for i in _bitems if "asked for a capability"
+        in (i.get("title") or ""))["kind"] == "lead"
+   and 'lead: "fleet"' in Path("src/erp/frontend/app.js").read_text(),
+   "and CLICKING it lands on the Platform tab where the grant button is "
+   "— a notification that names a place must go there")
 c.request("DELETE", "/api/store/admin/fleet/tenants/actasco?keep_data=0",
           headers=AA)
 

@@ -3022,8 +3022,10 @@ def act_as_tenant_admin(tid: str, request: Request, u=Depends(admin_user),
     provider's operator gets a named account ("Studio · <operator>")
     minted in the TENANT'S own user directory with a fresh token, and the
     act is written down on both sides: the fleet history and, when the
-    client has an engagement, their file. Each use rotates the token, so
-    an old link is dead the moment a new one exists."""
+    client has an engagement, their file. Repeat uses REUSE the account's
+    token so the operator's open session survives another click; revoking
+    access is deactivating the account in the tenant's Team & access, not
+    racing tokens."""
     _provider_only()
     import secrets as _secrets
     from erp.backend import db as _db, fleet, tenancy
@@ -3035,22 +3037,33 @@ def act_as_tenant_admin(tid: str, request: Request, u=Depends(admin_user),
         raise HTTPException(400, "this tenant lives on a worker node — "
                                  "sign in on its own host directly")
     acct = f"Studio · {u['name']}"[:60]
-    token = _secrets.token_urlsafe(24)
     with tenancy.run_as(tid):
         tcon = _db.connect()
         try:
             row = tcon.execute(
-                "SELECT id FROM users WHERE name=?", (acct,)).fetchone()
-            if row:
-                tcon.execute(
-                    "UPDATE users SET token=?, is_admin=1, active=1,"
-                    " role='owner' WHERE id=?", (token, row["id"]))
+                "SELECT id, token FROM users WHERE name=?",
+                (acct,)).fetchone()
+            if row and row["token"]:
+                # Reuse, don't rotate: rotating on every click signed the
+                # operator's OPEN session out the moment anyone (including
+                # a second tab) acted again. The account is the security
+                # boundary — revoke it in the tenant's Team & access, not
+                # by racing tokens.
+                token = row["token"]
+                tcon.execute("UPDATE users SET is_admin=1, active=1,"
+                             " role='owner' WHERE id=?", (row["id"],))
             else:
-                tcon.execute(
-                    "INSERT INTO users(name, role, token, region,"
-                    " is_admin, password_hash, created_at)"
-                    " VALUES(?, 'owner', ?, '', 1, '', ?)",
-                    (acct, token, time.time()))
+                token = _secrets.token_urlsafe(24)
+                if row:
+                    tcon.execute("UPDATE users SET token=?, is_admin=1,"
+                                 " active=1, role='owner' WHERE id=?",
+                                 (token, row["id"]))
+                else:
+                    tcon.execute(
+                        "INSERT INTO users(name, role, token, region,"
+                        " is_admin, password_hash, created_at)"
+                        " VALUES(?, 'owner', ?, '', 1, '', ?)",
+                        (acct, token, time.time()))
             tcon.commit()
         finally:
             tcon.close()

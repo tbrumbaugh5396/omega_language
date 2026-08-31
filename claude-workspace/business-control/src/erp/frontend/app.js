@@ -98,7 +98,14 @@ async function api(path, opts = {}) {
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch {}
-    if (r.status === 401 && S.user) { logout(); }
+    if (r.status === 401 && S.user) {
+      // A session can be ended from elsewhere — an admin rotating tokens,
+      // an account deactivated. Dumping to the login screen with no word
+      // reads as the app breaking; one line of truth reads as what it is.
+      toast("Signed out — this session was ended elsewhere. Sign in "
+        + "again.");
+      logout();
+    }
     throw new Error(msg);
   }
   return r.json();
@@ -3711,12 +3718,16 @@ const NOTIF_TAB = {
   experiment: "experiments", achievement: "profile",
   document: "docs", ticket: "chat", enquiry: "outreach",
   engagement: "clients",
+  // a capability ask is fulfilled on the Platform tab — the notification
+  // lands you where the grant button is, not on a board to hunt through
+  lead: "fleet",
 };
 const NOTIF_LABEL = {
   order: "open orders", inventory: "open inventory", logistics: "open routes",
   affiliate: "open affiliates", analytics: "open analytics",
   experiment: "open experiments", achievement: "see your profile",
   document: "open documents", ticket: "open chat", enquiry: "open outreach",
+  lead: "open the Platform tab",
 };
 
 async function fetchNotifs() {
