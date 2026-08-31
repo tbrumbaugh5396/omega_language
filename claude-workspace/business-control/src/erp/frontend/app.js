@@ -1141,6 +1141,65 @@ async function render() {
 }
 
 
+// ---------- the grant editor: what a tenant is entitled to ----------
+/* One editor, two doors: the Platform tab's row and the client's own
+   page. It fetches the fleet board itself when not handed one, saves the
+   grant, and grows the site additively for what was newly granted. */
+async function capsEditor(tid, opts = {}) {
+  let f = opts.fleet;
+  try { if (!f) f = await api("/api/store/admin/fleet"); }
+  catch (err) { toast(err.message); return; }
+  const ten = f.nodes.flatMap((n) => n.tenants).find((t) => t.id === tid);
+  if (!ten) { toast(`no install named '${tid}' on the fleet`); return; }
+  const cur = new Set(ten.cap_ids || []);
+  const all = !cur.size;
+  const done = opts.after || renderFleet;
+  modal(`<h3>Capabilities — ${esc(tid)}</h3>
+    <p class="dim">${all
+      ? "No grant recorded — <b>everything is on</b>. Ticking boxes "
+        + "replaces that with an explicit grant."
+      : "What the quote sold, editable — this is the button that "
+        + "fulfils a capability ask."}</p>
+    <div class="cap-grid">${f.cap_catalog.map((cc) => `
+      <label><input type="checkbox" value="${cc.id}" data-cg
+        ${all || cur.has(cc.id) ? "checked" : ""}> ${esc(cc.name)}
+      </label>`).join("")}</div>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <input type="checkbox" id="cg-extend" checked style="width:auto">
+      Grow their storefront for newly granted capabilities (additive —
+      never rewrites their pages)</label>
+    <div class="modal-foot">
+      <button class="btn" id="cg-go">Save grant</button>
+      <button class="btn alt sm" id="cg-clear" title="back to no grant
+        recorded — everything on">Clear grant</button>
+      <button class="btn alt" data-close>Cancel</button>
+    </div>`);
+  $("#cg-go").onclick = async () => {
+    const caps = [...document.querySelectorAll("[data-cg]:checked")]
+      .map((x) => x.value);
+    try {
+      const out = await api(
+        `/api/store/admin/fleet/tenants/${tid}/caps`,
+        { body: { caps, extend_site: $("#cg-extend").checked } });
+      closeModal();
+      const g = out.grown || {};
+      const grew = [...(g.sections || []), ...(g.pages || [])];
+      toast(`${tid}: ${out.caps.length} capabilities`
+        + (out.added && out.added.length
+           ? ` (+${out.added.join(", ")})` : "")
+        + (grew.length ? ` — site grew: ${grew.join(", ")}` : ""));
+      done();
+    } catch (err) { toast(err.message); }
+  };
+  $("#cg-clear").onclick = async () => {
+    try {
+      await api(`/api/store/admin/fleet/tenants/${tid}/caps`,
+        { body: { clear: true } });
+      closeModal(); toast(`${tid}: everything on`); done();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 // ---------- launch: the real address, and the sold capabilities ----------
 /* One act: the hostname joins the tenant's registry row (.localhost door
    kept), public_base_url lands in their config, the capability grant
@@ -4424,57 +4483,8 @@ async function renderFleet() {
         toast(`opened as ${out.account} — logged on the fleet history`);
       } catch (err) { toast(err.message); }
     });
-  view().querySelectorAll("[data-tcaps]").forEach((b) => b.onclick = () => {
-    const tid = b.dataset.tcaps;
-    const ten = f.nodes.flatMap((n) => n.tenants)
-      .find((t) => t.id === tid);
-    const cur = new Set(ten.cap_ids || []);
-    const all = !cur.size;
-    modal(`<h3>Capabilities — ${esc(tid)}</h3>
-      <p class="dim">${all
-        ? "No grant recorded — <b>everything is on</b>. Ticking boxes "
-          + "replaces that with an explicit grant."
-        : "What the quote sold, editable — this is the button that "
-          + "fulfils a capability ask."}</p>
-      <div class="cap-grid">${f.cap_catalog.map((cc) => `
-        <label><input type="checkbox" value="${cc.id}" data-cg
-          ${all || cur.has(cc.id) ? "checked" : ""}> ${esc(cc.name)}
-        </label>`).join("")}</div>
-      <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
-        <input type="checkbox" id="cg-extend" checked style="width:auto">
-        Grow their storefront for newly granted capabilities (additive —
-        never rewrites their pages)</label>
-      <div class="modal-foot">
-        <button class="btn" id="cg-go">Save grant</button>
-        <button class="btn alt sm" id="cg-clear" title="back to no grant
-          recorded — everything on">Clear grant</button>
-        <button class="btn alt" data-close>Cancel</button>
-      </div>`);
-    $("#cg-go").onclick = async () => {
-      const caps = [...document.querySelectorAll("[data-cg]:checked")]
-        .map((x) => x.value);
-      try {
-        const out = await api(
-          `/api/store/admin/fleet/tenants/${tid}/caps`,
-          { body: { caps, extend_site: $("#cg-extend").checked } });
-        closeModal();
-        const g = out.grown || {};
-        const grew = [...(g.sections || []), ...(g.pages || [])];
-        toast(`${tid}: ${out.caps.length} capabilities`
-          + (out.added && out.added.length
-             ? ` (+${out.added.join(", ")})` : "")
-          + (grew.length ? ` — site grew: ${grew.join(", ")}` : ""));
-        renderFleet();
-      } catch (err) { toast(err.message); }
-    };
-    $("#cg-clear").onclick = async () => {
-      try {
-        await api(`/api/store/admin/fleet/tenants/${tid}/caps`,
-          { body: { clear: true } });
-        closeModal(); toast(`${tid}: everything on`); renderFleet();
-      } catch (err) { toast(err.message); }
-    };
-  });
+  view().querySelectorAll("[data-tcaps]").forEach((b) => b.onclick = () =>
+    capsEditor(b.dataset.tcaps, { fleet: f }));
   view().querySelectorAll("[data-tmove]").forEach((b) => b.onclick = () => {
     modal(`<h3>Move ${esc(b.dataset.tmove)}</h3>
       <p class="dim">Whichever node it leaves behind empty is destroyed.</p>
@@ -6659,7 +6669,11 @@ async function renderEngagement(id) {
           quote left off">Quote</button>
         ${S.meta && S.meta.is_provider
           ? (e.tenant_id
-            ? `<button class="btn alt sm" id="eng-launch" title="put their
+            ? `<button class="btn alt sm" id="eng-caps" title="what
+                 they're entitled to — grant new capabilities and their
+                 site grows the pieces that sell them">Capabilities
+               </button>
+               <button class="btn alt sm" id="eng-launch" title="put their
                  install on its real address, with the capabilities the
                  quote sold">${e.live_url ? "Relaunch" : "Launch site"}
                </button>`
@@ -6757,6 +6771,9 @@ async function renderEngagement(id) {
   const lb = $("#eng-launch");
   if (lb) lb.onclick = () =>
     launchSite(id, e.name, e.live_url, () => renderEngagement(id));
+  const capsBtn = $("#eng-caps");
+  if (capsBtn) capsBtn.onclick = () =>
+    capsEditor(e.tenant_id, { after: () => renderEngagement(id) });
   const su2 = $("#eng-standup");
   if (su2) su2.onclick = () =>
     standUpClient(e.slug, id, e.name,

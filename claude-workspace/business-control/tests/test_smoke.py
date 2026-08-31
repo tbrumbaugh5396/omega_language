@@ -6976,6 +6976,11 @@ ok("data-tcaps" in _appjs3 and "cg-extend" in _appjs3
    "the Platform tab carries the editor — per-tenant Capabilities button, "
    "the grow-the-site checkbox, and clear-grant as its own deliberate "
    "button")
+_appjs6 = Path("src/erp/frontend/app.js").read_text()
+ok("async function capsEditor" in _appjs6 and "eng-caps" in _appjs6
+   and 'capsEditor(e.tenant_id' in _appjs6,
+   "one grant editor, two doors — the Platform row AND the client's own "
+   "page, so fulfilling an ask happens where the client's story lives")
 
 
 # --- act-as, the bell, and the platform beside its clients ----------------
