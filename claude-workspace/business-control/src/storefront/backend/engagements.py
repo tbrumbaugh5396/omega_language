@@ -3012,6 +3012,63 @@ def set_tenant_caps(tid: str, body: GrantBody, u=Depends(admin_user),
     return {"ok": True, "caps": caps, "added": added, "grown": grown}
 
 
+@router.post("/api/store/admin/fleet/tenants/{tid}/act-as")
+def act_as_tenant_admin(tid: str, request: Request, u=Depends(admin_user),
+                        con=Depends(get_con)):
+    """One click from the Platform tab into a client tenant's ops app, as
+    an admin of THAT install.
+
+    The wall stays a wall: no shared session, no key exchange — the
+    provider's operator gets a named account ("Studio · <operator>")
+    minted in the TENANT'S own user directory with a fresh token, and the
+    act is written down on both sides: the fleet history and, when the
+    client has an engagement, their file. Each use rotates the token, so
+    an old link is dead the moment a new one exists."""
+    _provider_only()
+    import secrets as _secrets
+    from erp.backend import db as _db, fleet, tenancy
+    if tid not in tenancy.all_tenants():
+        raise HTTPException(404, f"no tenant '{tid}'")
+    if tid == tenancy.provider():
+        raise HTTPException(400, "you are already the provider's admin")
+    if fleet.node_addr(tenancy.node_of(tid)):
+        raise HTTPException(400, "this tenant lives on a worker node — "
+                                 "sign in on its own host directly")
+    acct = f"Studio · {u['name']}"[:60]
+    token = _secrets.token_urlsafe(24)
+    with tenancy.run_as(tid):
+        tcon = _db.connect()
+        try:
+            row = tcon.execute(
+                "SELECT id FROM users WHERE name=?", (acct,)).fetchone()
+            if row:
+                tcon.execute(
+                    "UPDATE users SET token=?, is_admin=1, active=1,"
+                    " role='owner' WHERE id=?", (token, row["id"]))
+            else:
+                tcon.execute(
+                    "INSERT INTO users(name, role, token, region,"
+                    " is_admin, password_hash, created_at)"
+                    " VALUES(?, 'owner', ?, '', 1, '', ?)",
+                    (acct, token, time.time()))
+            tcon.commit()
+        finally:
+            tcon.close()
+    host = next((h for h in (tenancy.registry() or {}).get("tenants", {})
+                 .get(tid, {}).get("hosts", []) if h.endswith(".localhost")),
+                f"{tid}.localhost")
+    port = f":{request.url.port}" if request.url.port else ""
+    fleet.log("acted as tenant admin", f"{u['name']} → {tid}", u["name"])
+    e = con.execute("SELECT id FROM engagements WHERE tenant_id=? AND"
+                    " status != 'archived' LIMIT 1", (tid,)).fetchone()
+    if e:
+        log(con, e["id"], u["name"], f"opened their ops app as '{acct}'")
+        con.commit()
+    return {"ok": True,
+            "url": f"http://{host}{port}/ops/?actas={token}",
+            "account": acct}
+
+
 # ---------- the design library: design once, place everywhere ----------
 # A section the studio got right on one storefront, saved by name and
 # placed onto others. The rule that keeps the wall honest: a push ADDS a
@@ -3295,6 +3352,14 @@ def capability_request(body: CapAskBody, u=Depends(admin_user),
                 (f"{brand} — {cap}"[:80], "", "",
                  f"Turn on '{cap}' for {brand} ({u['name']} asked from "
                  f"their own ops app)", time.time() + 86400, time.time()))
+            # a request for money should ring the bell, not wait to be
+            # found on a board — every studio admin hears it, once
+            from erp.backend import notify
+            notify.push(
+                pcon, f"{brand} asked for a capability",
+                f"'{cap}' — the lead is on Outreach; grant it from "
+                f"Platform → {tid} → Capabilities", kind="lead",
+                dedup=f"capask:{tid}:{cap}:{int(time.time() // 86400)}")
             e = pcon.execute(
                 "SELECT id FROM engagements WHERE tenant_id=? AND"
                 " status != 'archived' LIMIT 1", (tid,)).fetchone()

@@ -1,6 +1,23 @@
 /* Business Control — single-page PWA frontend. */
 "use strict";
 
+/* Arriving as somebody: the Platform tab's "Act as admin" opens this app
+   with ?actas=<token> — a fresh admin token minted in THIS tenant's own
+   user directory. Trade it for the account, drop it from the URL (tokens
+   do not belong in history), and reload signed in. */
+(() => {
+  const q = new URLSearchParams(location.search);
+  const t = q.get("actas");
+  if (!t) return;
+  fetch("/api/me", { headers: { Authorization: "Bearer " + t } })
+    .then((r) => r.ok ? r.json() : Promise.reject())
+    .then((me) => {
+      localStorage.setItem("bc_user", JSON.stringify({ ...me, token: t }));
+      location.replace(location.pathname + location.hash);
+    })
+    .catch(() => location.replace(location.pathname + location.hash));
+})();
+
 // ---------- state ----------
 const S = {
   user: JSON.parse(localStorage.getItem("bc_user") || "null"),
@@ -811,6 +828,10 @@ const TABS = [
     roles: ["admin", "employee"] },
   { id: "clients", label: "Clients (B2B)", icon: "handshake", group: "Sell",
     roles: ["admin"], perm: "documents" },
+  // The fleet lives next to the clients it deploys — burying the platform
+  // at the bottom of Company meant the operator never saw it.
+  { id: "fleet", label: "Platform", icon: "shield2", group: "Sell",
+    roles: ["admin"], provider: true },
   { id: "clock", label: "Time Clock", icon: "clock", group: "Operate", roles: "*" },
   { id: "stores", label: "Stores", icon: "pin", group: "Operate",
     roles: ["admin", "employee", "distributor"] },
@@ -855,8 +876,6 @@ const TABS = [
     roles: "*" },
   { id: "chat", label: "Chat", icon: "chat", group: "Company", roles: "*" },
   { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
-  { id: "fleet", label: "Platform", icon: "shield2", group: "Company",
-    roles: ["admin"], provider: true },
   { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
 ];
 /* Which purchased capability each tab belongs to. Tabs with no entry are
@@ -4251,6 +4270,10 @@ async function renderFleet() {
           </span>
           <span class="dl-acts" style="grid-template-columns:74px 74px 70px">
             ${t.provider ? "<span></span><span></span><span></span>" : `
+            <button class="btn alt sm" data-tactas="${esc(t.id)}"
+              title="open their ops app as an admin of THEIR install —
+              minted in their own user directory, written to the fleet
+              history and their file">Act as admin</button>
             <button class="btn alt sm" data-tcaps="${esc(t.id)}"
               title="what they're entitled to — grants fulfil capability
               asks, and the site grows the pieces new capabilities earn"
@@ -4381,6 +4404,15 @@ async function renderFleet() {
       } catch (err) { toast(err.message); }
     });
 
+  view().querySelectorAll("[data-tactas]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        const out = await api("/api/store/admin/fleet/tenants/"
+          + `${b.dataset.tactas}/act-as`, { body: {} });
+        window.open(out.url, "_blank");
+        toast(`opened as ${out.account} — logged on the fleet history`);
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-tcaps]").forEach((b) => b.onclick = () => {
     const tid = b.dataset.tcaps;
     const ten = f.nodes.flatMap((n) => n.tenants)

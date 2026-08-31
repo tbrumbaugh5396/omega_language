@@ -6977,6 +6977,77 @@ ok("data-tcaps" in _appjs3 and "cg-extend" in _appjs3
    "the grow-the-site checkbox, and clear-grant as its own deliberate "
    "button")
 
+
+# --- act-as, the bell, and the platform beside its clients ----------------
+_aa2 = c.post("/api/store/admin/engagements", headers=AA,
+              json={"name": "ActAs Co"}).json()["id"]
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "actasco", "brand": "ActAs Co", "klass": "micro",
+             "engagement_id": _aa2})
+_aout = c.post("/api/store/admin/fleet/tenants/actasco/act-as",
+               headers=AA, json={}).json()
+ok("actas=" in _aout["url"] and "actasco.localhost" in _aout["url"]
+   and _aout["account"].startswith("Studio · "),
+   "act-as mints a NAMED admin in the tenant's own directory and hands "
+   "back a link — no shared session, no key exchange, the wall stays a "
+   "wall")
+_atok = _aout["url"].split("actas=")[1]
+_ame = c.get("/api/me", headers={"host": "actasco.localhost",
+                                 "Authorization": f"Bearer {_atok}"}).json()
+ok(_ame["is_admin"] and _ame["name"].startswith("Studio · "),
+   "the token IS an admin of that install, visibly the studio's operator "
+   "— not an impersonation of anyone")
+_aout2 = c.post("/api/store/admin/fleet/tenants/actasco/act-as",
+                headers=AA, json={}).json()
+ok(c.get("/api/me", headers={"host": "actasco.localhost",
+         "Authorization": f"Bearer {_atok}"}).status_code == 401,
+   "each use rotates the token — an old link is dead the moment a new "
+   "one exists")
+ok(any(e["what"] == "acted as tenant admin" for e in
+       c.get("/api/store/admin/fleet", headers=AA).json()["events"]),
+   "and the act is on the fleet history")
+_acon5 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+ok(_acon5.execute("SELECT 1 FROM engagement_log WHERE engagement_id=?"
+                  " AND what LIKE '%opened their ops app%'",
+                  (_aa2,)).fetchone() is not None,
+   "and on the client's own file — both sides know")
+ok(c.post("/api/store/admin/fleet/tenants/actasco/act-as", headers=BB,
+          json={}).status_code == 404,
+   "a client tenant cannot act as anyone")
+ok(c.post("/api/store/admin/fleet/tenants/alpha/act-as", headers=AA,
+          json={}).status_code == 400,
+   "and acting as the provider itself is refused — you are already that")
+
+# the capability ask rings the bell on the studio side
+_akey5 = _jn.loads((_tn.tenant_dir("actasco") / "config.json"
+                    ).read_text())["admin_key"]
+_atok5 = c.post("/api/login", headers={"host": "actasco.localhost"},
+                json={"name": "AC Admin", "role": "admin",
+                      "admin_key": _akey5}).json()["token"]
+c.post("/api/capability-request",
+       headers={"host": "actasco.localhost",
+                "Authorization": f"Bearer {_atok5}"},
+       json={"capability": "distribution"})
+_bell = c.get("/api/notifications", headers=AA).json()
+_bitems = _bell["items"] if isinstance(_bell, dict) else _bell
+ok(any("asked for a capability" in (i.get("title") or "")
+       for i in _bitems),
+   "a capability ask RINGS THE BELL for every studio admin — a request "
+   "for money does not wait to be found on a board")
+c.request("DELETE", "/api/store/admin/fleet/tenants/actasco?keep_data=0",
+          headers=AA)
+
+_appjs5 = Path("src/erp/frontend/app.js").read_text()
+ok('q.get("actas")' in _appjs5 and "location.replace" in _appjs5,
+   "the ops app trades ?actas for the account and drops the token from "
+   "the URL — tokens do not belong in history")
+_tabs_src = _appjs5.split("const TABS = [")[1].split("];")[0]
+ok(_tabs_src.index('"clients"') < _tabs_src.index('"fleet"')
+   and _tabs_src.index('"fleet"') < _tabs_src.index('"clock"'),
+   "the Platform tab sits beside Clients (B2B) in the Sell group — "
+   "burying the fleet at the bottom of Company meant the operator never "
+   "saw it")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")
