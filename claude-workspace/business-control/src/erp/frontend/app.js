@@ -1154,16 +1154,38 @@ async function capsEditor(tid, opts = {}) {
   const cur = new Set(ten.cap_ids || []);
   const all = !cur.size;
   const done = opts.after || renderFleet;
+  // the quote's own capability list, for the coverage line — a grant that
+  // outruns what was sold should be a visible choice, not a drift
+  let quote = null;
+  if (ten.client && ten.client.engagement_id) {
+    try {
+      quote = (await api("/api/store/admin/engagements/"
+        + `${ten.client.engagement_id}/stand-up`)).suggestion;
+    } catch { quote = null; }
+  }
+  const groups = [];
+  for (const cc of f.cap_catalog) {
+    let g = groups.find((x) => x.name === cc.group);
+    if (!g) { g = { name: cc.group, items: [] }; groups.push(g); }
+    g.items.push(cc);
+  }
   modal(`<h3>Capabilities — ${esc(tid)}</h3>
     <p class="dim">${all
       ? "No grant recorded — <b>everything is on</b>. Ticking boxes "
         + "replaces that with an explicit grant."
       : "What the quote sold, editable — this is the button that "
         + "fulfils a capability ask."}</p>
-    <div class="cap-grid">${f.cap_catalog.map((cc) => `
-      <label><input type="checkbox" value="${cc.id}" data-cg
-        ${all || cur.has(cc.id) ? "checked" : ""}> ${esc(cc.name)}
-      </label>`).join("")}</div>
+    ${groups.map((g) => `
+      <div class="cap-group">${esc(g.name || "Capabilities")}</div>
+      <div class="cap-grid">${g.items.map((cc) => `
+        <label><input type="checkbox" value="${cc.id}" data-cg
+          data-price="${cc.price}"
+          ${all || cur.has(cc.id) ? "checked" : ""}> ${esc(cc.name)}
+          ${cc.price ? `<span class="cap-price">$${cc.price} ·
+            ${esc(cc.band)}</span>` : ""}
+        </label>`).join("")}</div>`).join("")}
+    <p id="cg-total" style="margin-top:10px;font-size:13.5px"></p>
+    <p class="dim" id="cg-quote" style="font-size:12.5px"></p>
     <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
       <input type="checkbox" id="cg-extend" checked style="width:auto">
       Grow their storefront for newly granted capabilities (additive —
@@ -1174,6 +1196,27 @@ async function capsEditor(tid, opts = {}) {
         recorded — everything on">Clear grant</button>
       <button class="btn alt" data-close>Cancel</button>
     </div>`);
+  /* The money, while approving the money: the live total from the same
+     parse every other price on the platform comes from, and how much of
+     it the quote actually sold. */
+  const retally = () => {
+    const on = [...document.querySelectorAll("[data-cg]:checked")];
+    const sum = on.reduce((a, x) => a + (+x.dataset.price || 0), 0);
+    $("#cg-total").innerHTML = `${on.length} capabilities →
+      <b>$${sum}/mo</b>${f.core_price
+        ? ` + Platform Core $${f.core_price}` : ""}, before volume
+      discount`;
+    const qc = quote && quote.cap_ids ? new Set(quote.cap_ids) : null;
+    $("#cg-quote").textContent = qc
+      ? `The ${quote.signed ? "signed" : "latest (unsigned)"} quote covers `
+        + `${on.filter((x) => qc.has(x.value)).length} of these `
+        + `${on.length} — anything beyond it is a grant you are choosing `
+        + "to make unbilled."
+      : "No quote on file — nothing here is billed until one exists.";
+  };
+  retally();
+  document.querySelectorAll("[data-cg]").forEach((x) =>
+    x.addEventListener("change", retally));
   $("#cg-go").onclick = async () => {
     const caps = [...document.querySelectorAll("[data-cg]:checked")]
       .map((x) => x.value);

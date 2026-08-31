@@ -6919,11 +6919,30 @@ _gcon.execute("UPDATE page_sections SET settings=json_set(settings,"
               " AND type='hero'")
 _gcon.commit()
 
-ok("cap_catalog" in c.get("/api/store/admin/fleet", headers=AA).json()
-   and len(c.get("/api/store/admin/fleet", headers=AA).json()
-           ["cap_catalog"]) == 27,
+_fbrd = c.get("/api/store/admin/fleet", headers=AA).json()
+ok(len(_fbrd["cap_catalog"]) == 27 and _fbrd["core_price"] == 50,
    "the board carries the full catalog, so the grant editor lists what "
    "can actually be sold")
+_sellcap = next(x for x in _fbrd["cap_catalog"] if x["id"] == "selling")
+ok(_sellcap == {"id": "selling", "name": "Selling", "group": "Revenue ops",
+                "band": "heavy", "price": 50},
+   "each catalog entry carries its commercial facts from the BOOK's own "
+   "parse — the grant editor is a screen where money is approved, so it "
+   "shows the money")
+ok([x["group"] for x in _fbrd["cap_catalog"]].index("Revenue ops")
+   > [x["group"] for x in _fbrd["cap_catalog"]].index("Operations"),
+   "in the book's own group order, so the editor reads as the same "
+   "document as the menu and the deck")
+_appjsC = Path("src/erp/frontend/app.js").read_text()
+ok("cg-total" in _appjsC and "before volume" in " ".join(_appjsC.split())
+   and "cap-price" in _appjsC and "cap-group" in _appjsC,
+   "the modal groups by the book's sections, prices every box, and keeps "
+   "a live monthly total while boxes are ticked")
+ok("quote covers" in " ".join(_appjsC.split())
+   and "unbilled" in _appjsC,
+   "and the coverage line says how much of the grant the quote actually "
+   "sold — a grant that outruns the sale is a visible choice, not a "
+   "drift")
 _gr = c.post("/api/store/admin/fleet/tenants/growco/caps", headers=AA,
              json={"caps": ["selling", "payments", "subs",
                             "events"]}).json()

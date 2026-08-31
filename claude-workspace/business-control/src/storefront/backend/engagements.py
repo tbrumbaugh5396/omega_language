@@ -2634,8 +2634,8 @@ def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
             t["billing"] = billing.get(t["id"])
     return {"nodes": board, "classes": fleet.CLASSES,
             "backup": _backup_health(),
-            "cap_catalog": [{"id": k, "name": v}
-                            for k, v in sorted(CAP_NAMES.items())],
+            "cap_catalog": _cap_catalog(),
+            "core_price": _core_price(),
             "public_suffix": (fleet_cfg() or {}).get("public_suffix", ""),
             "events": fleet.events(20),
             "unplaced": [dict(v, slug=k) for k, v in clients.items()
@@ -3311,6 +3311,32 @@ CAP_NAMES = {
     "comms": "Comms", "infosec": "InfoSec",
     "api": "API & data platform", "legal": "Legal",
 }
+
+
+def _cap_catalog() -> list:
+    """The 27 capabilities WITH their commercial facts — group, band,
+    price — in the price book's own order. The grant editor is a screen
+    where money is approved; it must show the money, from the same parse
+    everything else prices from. Fail-safe to names alone: a book that
+    won't parse should not take the grant editor down with it."""
+    from .pricebook import capabilities
+    by_name = {v: k for k, v in CAP_NAMES.items()}
+    try:
+        return [{"id": by_name[c["name"]], "name": c["name"],
+                 "group": c["group"], "band": c["band"],
+                 "price": c["price"]}
+                for c in capabilities() if c["name"] in by_name]
+    except Exception:
+        return [{"id": k, "name": v, "group": "", "band": "", "price": 0}
+                for k, v in sorted(CAP_NAMES.items())]
+
+
+def _core_price() -> int:
+    from .pricebook import core_price
+    try:
+        return core_price()
+    except Exception:
+        return 0
 
 
 @router.get("/api/capability-info/{cap_id}")
