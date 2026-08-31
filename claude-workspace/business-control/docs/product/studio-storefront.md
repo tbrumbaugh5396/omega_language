@@ -150,6 +150,16 @@ The preview is inert while editing: links do not navigate the page out
 from under the editor, and Add-to-cart does not quietly build a real
 cart.
 
+Structure is edited in place too. The insertion points between sections
+are real elements: hover one for **＋ Add a section here** (the picker is
+built from the schema, so new section types appear with no editor
+changes), and the same bars are the drop targets for **drag-to-reorder**
+— each section grows a drag handle, because a draggable section would
+fight the text selection inline editing just made possible. Both gestures
+name their destination as "before this section", translated to an index
+in the full list — the preview hides disabled sections, so its own
+ordinals would lie the moment one is hidden.
+
 ## The one it did not fix
 
 At 357 px the top bar overflowed once the wordmark was two words. The

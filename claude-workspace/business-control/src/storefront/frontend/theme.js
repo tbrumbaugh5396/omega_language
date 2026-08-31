@@ -81,7 +81,40 @@ const EDIT_CSS = `
   .sfe-sel [data-sf]:hover { background: rgba(108,0,191,.07);
     border-radius: 4px; }
   .sfe-sel [data-sf]:focus { outline: 1.5px solid rgba(108,0,191,.5);
-    outline-offset: 2px; border-radius: 4px; background: #fff3; }`;
+    outline-offset: 2px; border-radius: 4px; background: #fff3; }
+  .sfe-add { position: relative; height: 0; overflow: visible; z-index: 55;
+    text-align: center; }
+  .sfe-add-pill { position: relative; top: -13px; border: 1.5px solid
+    rgba(108,0,191,.35); background: #fff; color: #6c00bf; cursor: pointer;
+    font: 600 12px/1 Inter, sans-serif; padding: 6px 12px;
+    border-radius: 999px; opacity: 0; transition: opacity .12s; }
+  .sfe-add:hover .sfe-add-pill, .sfe-add.sfe-drop .sfe-add-pill {
+    opacity: 1; }
+  .sfe-add.sfe-drop { outline: 2px solid #6c00bf; outline-offset: -1px; }
+  .sfe-add.sfe-drop .sfe-add-pill { background: #6c00bf; color: #fff; }
+  .sfe-dragging-page .sfe-add-pill { opacity: .55; }
+  .sfe-dragging { opacity: .45; }
+  .sfe-handle { position: absolute; top: 6px; right: 8px; z-index: 60;
+    cursor: grab; color: #6c00bf; background: #fff; border: 1.5px solid
+    rgba(108,0,191,.35); border-radius: 8px; padding: 3px 7px;
+    font: 700 13px/1 Inter, sans-serif; letter-spacing: -1px; opacity: 0;
+    transition: opacity .12s; user-select: none; }
+  [data-sid]:hover .sfe-handle, [data-sid].sfe-sel .sfe-handle {
+    opacity: 1; }
+  .sfe-handle:active { cursor: grabbing; }
+  .sfe-pick { position: absolute; left: 50%; transform: translateX(-50%);
+    top: 14px; z-index: 70; background: #fff; border: 1.5px solid
+    rgba(108,0,191,.3); border-radius: 12px; padding: 8px;
+    box-shadow: 0 12px 34px rgba(27,24,31,.18); display: grid;
+    grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 4px;
+    width: max-content; max-width: 460px; }
+  .sfe-pick button { border: none; background: none; cursor: pointer;
+    font: 500 12.5px/1.2 Inter, sans-serif; color: #1b181f; padding: 8px;
+    border-radius: 8px; text-align: left; }
+  .sfe-pick button:hover { background: rgba(108,0,191,.09);
+    color: #6c00bf; }
+  .sfe-pick .sfe-pick-x { grid-column: 1 / -1; text-align: center;
+    color: #8a82a0; border-top: 1px solid #eee; border-radius: 0; }`;
 
 const pdoc = () => $("#preview").contentDocument;
 
@@ -96,6 +129,8 @@ function wirePreview() {
   // the page being edited out from under the editor, and any click lands
   // on the section it happened in.
   doc.addEventListener("click", (e) => {
+    // the editor's own chrome is the one thing the interceptor lets live
+    if (e.target.closest(".sfe-add, .sfe-pick, .sfe-handle")) return;
     const sec = e.target.closest("[data-sid]");
     if (e.target.closest("a") || e.target.closest("button")) {
       // Inert, not interactive: a link would navigate the page being
@@ -112,6 +147,7 @@ function wirePreview() {
       highlightPreview(SEL, false);
     }
   }, true);
+  injectBars(doc);
   highlightPreview(SEL, false);
 }
 
@@ -168,10 +204,124 @@ async function swapSection(sid) {
   const fresh = tpl.content.firstElementChild;
   if (!fresh) { refresh(0); return; }
   el.replaceWith(fresh);
+  decorate(doc, fresh);
   if (SEL === sid) {
     fresh.classList.add("sfe-sel");
     armInline(fresh);
   }
+}
+
+
+// ---------- add-in-place and drag-to-reorder ----------
+/* The insertion points between sections are real elements injected into
+   the preview: each bar knows which section it sits before. The same bars
+   serve both gestures — click one to add a section there, drop a dragged
+   section on one to move it there — because "where between the sections"
+   is the only question either gesture asks. */
+
+let DRAG_SID = null;
+
+function decorate(doc, secEl) {
+  // the drag handle, top-right so the label pseudo keeps the top-left
+  if (secEl.querySelector(".sfe-handle")) return;
+  const h = doc.createElement("span");
+  h.className = "sfe-handle";
+  h.title = "Drag to move this section";
+  h.draggable = true;
+  h.textContent = "⋮⋮";
+  h.ondragstart = (e) => {
+    DRAG_SID = +secEl.dataset.sid;
+    secEl.classList.add("sfe-dragging");
+    doc.body.classList.add("sfe-dragging-page");
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setDragImage(secEl, 24, 24); } catch {}
+  };
+  h.ondragend = () => {
+    DRAG_SID = null;
+    secEl.classList.remove("sfe-dragging");
+    doc.body.classList.remove("sfe-dragging-page");
+  };
+  secEl.appendChild(h);
+}
+
+function injectBars(doc) {
+  doc.querySelectorAll(".sfe-add").forEach((b) => b.remove());
+  const secs = [...doc.querySelectorAll("[data-sid]")];
+  if (!secs.length) return;
+  const mkBar = (beforeSid) => {
+    const bar = doc.createElement("div");
+    bar.className = "sfe-add";
+    bar.dataset.before = beforeSid;
+    bar.innerHTML = `<button class="sfe-add-pill" type="button">＋ Add a
+      section here</button>`;
+    bar.querySelector("button").onclick = (e) => {
+      e.stopPropagation(); openPicker(doc, bar);
+    };
+    bar.ondragover = (e) => {
+      if (DRAG_SID == null) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      bar.classList.add("sfe-drop");
+    };
+    bar.ondragleave = () => bar.classList.remove("sfe-drop");
+    bar.ondrop = (e) => {
+      e.preventDefault();
+      bar.classList.remove("sfe-drop");
+      dropAt(DRAG_SID, bar.dataset.before);
+    };
+    return bar;
+  };
+  secs.forEach((s2) => {
+    s2.parentElement.insertBefore(mkBar(s2.dataset.sid), s2);
+    decorate(doc, s2);
+  });
+  secs[secs.length - 1].after(mkBar("end"));
+}
+
+/* The type picker, in place: the bar expands into the same list the
+   sidebar's dropdown offers, built from the schema so a new section type
+   appears here with no editor changes. */
+function openPicker(doc, bar) {
+  doc.querySelectorAll(".sfe-pick").forEach((p) => p.remove());
+  const pick = doc.createElement("div");
+  pick.className = "sfe-pick";
+  pick.innerHTML = Object.entries(SCHEMA).map(([k, v]) =>
+    `<button type="button" data-t="${k}">${v.label}</button>`).join("") +
+    `<button type="button" class="sfe-pick-x">Cancel</button>`;
+  pick.querySelectorAll("[data-t]").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation(); addAt(b.dataset.t, bar.dataset.before);
+  });
+  pick.querySelector(".sfe-pick-x").onclick = (e) => {
+    e.stopPropagation(); pick.remove();
+  };
+  bar.appendChild(pick);
+}
+
+/* Both gestures speak in "before this section" and translate to an index
+   in the FULL list (the preview hides disabled sections, so its own
+   ordinals would be wrong the moment one is hidden). */
+const beforeIndex = (beforeSid) =>
+  beforeSid === "end" ? SECTIONS.length
+    : SECTIONS.findIndex((x) => x.id === +beforeSid);
+
+async function addAt(type, beforeSid) {
+  const out = await api("/api/store/admin/sections", { method: "POST",
+    body: JSON.stringify({ page_slug: SLUG, type,
+                           position: beforeIndex(beforeSid) }) });
+  SEL = out.id;
+  await loadSections(); refresh(0);
+}
+
+async function dropAt(sid, beforeSid) {
+  if (sid == null) return;
+  const i = SECTIONS.findIndex((x) => x.id === sid);
+  let a = beforeIndex(beforeSid);
+  if (a === i || a === i + 1) return;       // dropped where it already is
+  if (a > i) a -= 1;                        // its own removal shifts the rest
+  await api(`/api/store/admin/sections/${sid}`, { method: "POST",
+    body: JSON.stringify({ position: a }) });
+  SEL = sid;
+  await loadSections(); refresh(0);
 }
 
 // ---------- pages ----------

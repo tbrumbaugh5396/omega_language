@@ -5990,6 +5990,59 @@ ok('data-sid="9"' in _rich_html,
    "even a section with no text is addressed — selection and reordering "
    "work on every type, not just the wordy ones")
 
+
+# --- add-in-place and drag-to-reorder -------------------------------------
+# Both gestures ask one question — "where between the sections?" — and the
+# server answers in one write: an insert lands where the merchant pointed,
+# a drag names its destination outright.
+_dp_ids = [x["id"] for x in
+           c.get("/api/store/admin/sections/home", headers=AA).json()]
+_dp_new = c.post("/api/store/admin/sections", headers=AA,
+                 json={"page_slug": "home", "type": "spacer",
+                       "position": 1}).json()["id"]
+_dp_now = [x["id"] for x in
+           c.get("/api/store/admin/sections/home", headers=AA).json()]
+ok(_dp_now.index(_dp_new) == 1 and _dp_now[0] == _dp_ids[0]
+   and _dp_now[2] == _dp_ids[1],
+   "adding at a position INSERTS there — not append-then-shuffle, so the "
+   "section lands where the merchant pointed and nothing else moves")
+
+c.post(f"/api/store/admin/sections/{_dp_new}", headers=AA,
+       json={"position": len(_dp_now) - 1})
+_dp_now = [x["id"] for x in
+           c.get("/api/store/admin/sections/home", headers=AA).json()]
+ok(_dp_now[-1] == _dp_new and _dp_now[:-1] == _dp_ids,
+   "a drag names its destination as an absolute index — the dragged "
+   "section lands there and every other section keeps its order")
+c.post(f"/api/store/admin/sections/{_dp_new}", headers=AA,
+       json={"position": 999})
+ok([x["id"] for x in c.get("/api/store/admin/sections/home",
+                           headers=AA).json()][-1] == _dp_new,
+   "and a stale editor naming an index the page no longer has is clamped, "
+   "not crashed")
+c.request("DELETE", f"/api/store/admin/sections/{_dp_new}", headers=AA)
+ok([x["id"] for x in c.get("/api/store/admin/sections/home",
+                           headers=AA).json()] == _dp_ids,
+   "cleanup restores the page exactly")
+
+ok("injectBars" in _thjs and 'dataset.before' in _thjs
+   and "beforeIndex" in _thjs,
+   "the preview's insertion bars name the section they sit before — the "
+   "preview hides disabled sections, so its own ordinals would lie the "
+   "moment one is hidden")
+ok("a > i ? a - 1 : a" in _thjs.replace("a -= 1", "a > i ? a - 1 : a")
+   or "if (a > i) a -= 1;" in _thjs,
+   "and a drop past the dragged section's own slot accounts for its "
+   "removal — the classic off-by-one that makes drag-and-drop land one "
+   "short")
+ok('closest(".sfe-add, .sfe-pick, .sfe-handle")' in _thjs,
+   "the click interceptor that keeps the preview inert exempts the "
+   "editor's own chrome, or the add button would swallow its own clicks")
+ok("draggable = true" in _thjs and "sfe-handle" in _thjs
+   and "setDragImage" in _thjs,
+   "dragging is the HANDLE, not the section — a draggable section would "
+   "fight the text selection that inline editing just made possible")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

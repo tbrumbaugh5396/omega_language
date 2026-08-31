@@ -1917,28 +1917,37 @@ def get_sections(slug: str, u=Depends(admin_user), con=Depends(get_con)):
 class SectionAddBody(BaseModel):
     page_slug: str
     type: str
+    position: int = -1               # -1 = append; else insert at this index
 
 
 @router.post("/api/store/admin/sections")
 def add_section(body: SectionAddBody, u=Depends(admin_user),
                 con=Depends(get_con)):
+    """Add a section — at the end, or at a position. The live editor's
+    "+ between two sections" is an insert, not an append-then-shuffle:
+    the section should land where the merchant pointed, in one write."""
     if body.type not in sect.SECTION_TYPES:
         raise HTTPException(400, "unknown section type")
-    nxt = con.execute(
-        "SELECT COALESCE(MAX(position), -1) + 1 n FROM page_sections"
-        " WHERE page_slug=?", (body.page_slug,)).fetchone()["n"]
+    ids = [r["id"] for r in page_rows(con, body.page_slug)]
     cur = con.execute(
         "INSERT INTO page_sections(page_slug,type,settings,position)"
         " VALUES(?,?,?,?)",
         (body.page_slug, body.type,
-         json.dumps(sect.defaults_for(body.type)), nxt))
+         json.dumps(sect.defaults_for(body.type)), len(ids)))
+    new_id = cur.lastrowid
+    if 0 <= body.position <= len(ids):
+        ids.insert(body.position, new_id)
+        for pos, rid in enumerate(ids):
+            con.execute("UPDATE page_sections SET position=? WHERE id=?",
+                        (pos, rid))
     con.commit()
-    return {"ok": True, "id": cur.lastrowid}
+    return {"ok": True, "id": new_id}
 
 
 class SectionPatchBody(BaseModel):
     settings: dict | None = None
     move: str | None = None          # up|down
+    position: int | None = None      # absolute index — a drag lands anywhere
     enabled: bool | None = None
 
 
@@ -1958,15 +1967,22 @@ def patch_section(sid: int, body: SectionPatchBody, u=Depends(admin_user),
     if body.enabled is not None:
         con.execute("UPDATE page_sections SET enabled=? WHERE id=?",
                     (int(body.enabled), sid))
-    if body.move in ("up", "down"):
+    if body.move in ("up", "down") or body.position is not None:
         ids = [r["id"] for r in page_rows(con, s["page_slug"])]
         i = ids.index(sid)
-        j = i - 1 if body.move == "up" else i + 1
-        if 0 <= j < len(ids):
-            ids[i], ids[j] = ids[j], ids[i]
-            for pos, rid in enumerate(ids):
-                con.execute("UPDATE page_sections SET position=? WHERE id=?",
-                            (pos, rid))
+        if body.position is not None:
+            # A drag names the destination outright; up/down stays for the
+            # sidebar arrows. Clamped, because a stale editor can name an
+            # index the page no longer has.
+            ids.pop(i)
+            ids.insert(max(0, min(body.position, len(ids))), sid)
+        else:
+            j = i - 1 if body.move == "up" else i + 1
+            if 0 <= j < len(ids):
+                ids[i], ids[j] = ids[j], ids[i]
+        for pos, rid in enumerate(ids):
+            con.execute("UPDATE page_sections SET position=? WHERE id=?",
+                        (pos, rid))
     con.commit()
     return {"ok": True}
 
