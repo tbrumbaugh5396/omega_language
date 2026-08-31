@@ -210,6 +210,10 @@ STORE_MIGRATIONS = (
     # lands — this column is how the provider's board can say where a
     # design lives without ever implying it may overwrite it.
     "ALTER TABLE page_sections ADD COLUMN design_id INTEGER DEFAULT 0",
+    # 1 = the placement FOLLOWS its design: updates to the library entry
+    # rewrite it, until the tenant's first edit detaches it. Opt-in at
+    # push time; 0 for everything placed before the flag existed.
+    "ALTER TABLE page_sections ADD COLUMN design_sync INTEGER DEFAULT 0",
 )
 
 
@@ -1976,8 +1980,13 @@ def patch_section(sid: int, body: SectionPatchBody, u=Depends(admin_user),
         allowed = {f["k"] for f in
                    sect.SECTION_TYPES[s["type"]]["fields"]}
         clean = {k: v for k, v in body.settings.items() if k in allowed}
-        con.execute("UPDATE page_sections SET settings=? WHERE id=?",
-                    (json.dumps(clean), sid))
+        # Editing a linked placement is the act of making it yours: the
+        # first settings write detaches it from its design, here at the
+        # only path a tenant's edit can take. Moving or hiding it does
+        # not — the design governs the section's content, not its place
+        # on the page.
+        con.execute("UPDATE page_sections SET settings=?, design_sync=0"
+                    " WHERE id=?", (json.dumps(clean), sid))
     if body.enabled is not None:
         con.execute("UPDATE page_sections SET enabled=? WHERE id=?",
                     (int(body.enabled), sid))

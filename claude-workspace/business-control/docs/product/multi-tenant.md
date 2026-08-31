@@ -219,6 +219,19 @@ grip: it lets the library report where each design lives, counted across
 the fleet, so reach is visible before anyone pushes again. Every push
 lands in the fleet history with who, what and where.
 
+**Linked placements** are the opt-in exception, chosen at push time
+(off by default): a linked placement *follows* the design — saving over
+the library entry rewrites it across the fleet, reported per tenant and
+logged — **until the tenant's first edit**, which detaches it at the one
+write path an edit can take. The tenant's editor says so before they
+edit ("your first edit makes it yours, and it stops updating"); moving
+or hiding a linked section does not detach it, because the design
+governs the section's content, not its place on the page. The board
+tells plain from linked placements apart, deleting a design ends all
+following without touching any page, and a detached placement is passed
+by forever. Fleet-wide notices are the canonical use: one banner, pushed
+linked everywhere, edited once.
+
 Pushed copy is scaffolding under the same contract as the starter
 layouts — a starting point the receiving tenant edits, not the studio's
 voice compiled into their shop. A tenant without the target page is

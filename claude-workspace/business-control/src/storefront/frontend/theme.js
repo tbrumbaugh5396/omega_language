@@ -597,6 +597,11 @@ function drawForm() {
   if (IS_PROVIDER)
     html += `<button class="btn ghost sm" id="save-design"
       style="margin-bottom:8px">Save to library</button>`;
+  if (s.design_sync)
+    html += `<p style="font-size:12px;color:#6c00bf;background:
+      rgba(108,0,191,.07);border-radius:8px;padding:6px 9px;
+      margin-bottom:8px">This section follows a studio design — your
+      first edit makes it yours, and it stops updating.</p>`;
   for (const f of spec.fields) {
     if (f.t === "list") {
       const items = s.settings[f.k] || [];
@@ -624,9 +629,13 @@ function drawForm() {
     const name = prompt("Name this design (same name updates it):",
       s.label);
     if (!name || !name.trim()) return;
-    await api("/api/store/admin/designs", { method: "POST",
+    const out = await api("/api/store/admin/designs", { method: "POST",
       body: JSON.stringify({ name: name.trim(), type: s.type,
         settings: s.settings }) });
+    const r = out.refreshed || {};
+    const n = Object.values(r).reduce((a, b) => a + b, 0);
+    if (n) alert(`Updated — and refreshed ${n} linked placement${
+      n === 1 ? "" : "s"} (${Object.keys(r).join(", ")}).`);
     await loadDesigns();
   };
   host.querySelectorAll("[data-mirror]").forEach((el) =>
@@ -703,7 +712,8 @@ function drawLibrary() {
   const host = $("#library");
   host.innerHTML = DESIGNS.map((d) => {
     const where = Object.entries(d.placements)
-      .map(([t, n]) => `${t}${n > 1 ? ` ×${n}` : ""}`).join(", ");
+      .map(([t, p]) => `${t}${p.n > 1 ? ` ×${p.n}` : ""}`
+        + (p.linked ? ` (${p.linked} linked)` : "")).join(", ");
     return `<div class="sec">
       <div class="sec-head">
         <span>${d.name}</span>
@@ -754,6 +764,10 @@ async function openPush(did) {
     ${me.map((t) => `<label style="display:flex;gap:6px;font-size:13px;
       margin-top:4px"><input type="checkbox" value="${t.id}"
       data-pt> ${t.id}</label>`).join("")}
+    <label style="display:flex;gap:6px;font-size:12px;margin-top:8px;
+      color:#8a82a0;border-top:1px solid #eee;padding-top:8px">
+      <input type="checkbox" id="push-linked"> Linked — placements follow
+      this design's updates until the client edits them</label>
     <div style="display:flex;gap:6px;margin-top:8px">
       <button class="btn sm" id="push-go">Push</button>
       <button class="btn ghost sm" id="push-x">Cancel</button>
@@ -764,7 +778,8 @@ async function openPush(did) {
       .map((x) => x.value);
     if (!tenants.length) return;
     const out = await api(`/api/store/admin/designs/${did}/push`,
-      { method: "POST", body: JSON.stringify({ tenants }) });
+      { method: "POST", body: JSON.stringify({ tenants,
+        linked: $("#push-linked").checked }) });
     $("#push-box").remove();
     const n = Object.keys(out.placed).length;
     const sk = Object.entries(out.skipped)

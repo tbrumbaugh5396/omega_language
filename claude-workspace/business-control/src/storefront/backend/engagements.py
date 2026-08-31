@@ -2674,11 +2674,12 @@ def list_designs(u=Depends(admin_user), con=Depends(get_con)):
                 tcon = _db.connect()
                 try:
                     for r in tcon.execute(
-                            "SELECT design_id, COUNT(*) n FROM"
-                            " page_sections WHERE design_id > 0"
-                            " GROUP BY design_id"):
+                            "SELECT design_id, COUNT(*) n,"
+                            " SUM(design_sync) live FROM page_sections"
+                            " WHERE design_id > 0 GROUP BY design_id"):
                         if r["design_id"] in placements and r["n"]:
-                            placements[r["design_id"]][tid] = r["n"]
+                            placements[r["design_id"]][tid] = {
+                                "n": r["n"], "linked": r["live"] or 0}
                 except Exception:
                     pass
                 finally:
@@ -2714,6 +2715,11 @@ def save_design(body: DesignBody, u=Depends(admin_user),
                     " updated_at=? WHERE id=?",
                     (body.type, settings, time.time(), row["id"]))
         did = row["id"]
+        con.commit()
+        refreshed = _refresh_linked(did, body.type, settings, name,
+                                    u["name"])
+        return {"ok": True, "id": did, "updated": True,
+                "refreshed": refreshed}
     else:
         cur = con.execute(
             "INSERT INTO section_designs(name,type,settings,created_by,"
@@ -2725,20 +2731,68 @@ def save_design(body: DesignBody, u=Depends(admin_user),
     return {"ok": True, "id": did, "updated": bool(row)}
 
 
+def _refresh_linked(did: int, dtype: str, settings: str, name: str,
+                    actor: str) -> dict:
+    """Rewrite every placement that still FOLLOWS this design.
+
+    Only design_sync=1 rows — a placement a tenant has edited detached
+    itself at the moment of the edit, so this write can never reach a
+    page anyone has made their own. Type moves with the design: the
+    placement renders the design, whatever the design now is."""
+    from erp.backend import db as _db, fleet, tenancy
+    out = {}
+    for tid in tenancy.all_tenants():
+        with tenancy.run_as(tid):
+            tcon = _db.connect()
+            try:
+                n = tcon.execute(
+                    "UPDATE page_sections SET type=?, settings=?"
+                    " WHERE design_id=? AND design_sync=1",
+                    (dtype, settings, did)).rowcount
+                if n:
+                    tcon.commit()
+                    out[tid] = n
+            except Exception:
+                pass
+            finally:
+                tcon.close()
+    if out:
+        fleet.log("design updated",
+                  f"'{name}' refreshed on "
+                  + ", ".join(f"{t}×{n}" if n > 1 else t
+                              for t, n in sorted(out.items())), actor)
+    return out
+
+
 @router.delete("/api/store/admin/designs/{did}")
 def delete_design(did: int, u=Depends(admin_user), con=Depends(get_con)):
     """Remove a design from the library. Its placements stay — they became
     the tenants' sections the moment they landed."""
     _provider_only()
+    from erp.backend import db as _db, tenancy
     _designs_table(con)
     con.execute("DELETE FROM section_designs WHERE id=?", (did,))
     con.commit()
+    # A linked placement now follows nothing; the flag comes off so no
+    # later design reusing the id could ever inherit a grip on it.
+    for tid in tenancy.all_tenants():
+        with tenancy.run_as(tid):
+            tcon = _db.connect()
+            try:
+                tcon.execute("UPDATE page_sections SET design_sync=0"
+                             " WHERE design_id=?", (did,))
+                tcon.commit()
+            except Exception:
+                pass
+            finally:
+                tcon.close()
     return {"ok": True}
 
 
 class PushBody(BaseModel):
     tenants: list[str]
     page_slug: str = "home"
+    linked: bool = False             # placements follow the design's updates
 
 
 @router.post("/api/store/admin/designs/{did}/push")
@@ -2774,14 +2828,16 @@ def push_design(did: int, body: PushBody, u=Depends(admin_user),
                     (body.page_slug,)).fetchone()["n"]
                 cur = tcon.execute(
                     "INSERT INTO page_sections(page_slug,type,settings,"
-                    " position,enabled,design_id) VALUES(?,?,?,?,1,?)",
-                    (body.page_slug, d["type"], d["settings"], nxt, did))
+                    " position,enabled,design_id,design_sync)"
+                    " VALUES(?,?,?,?,1,?,?)",
+                    (body.page_slug, d["type"], d["settings"], nxt, did,
+                     int(body.linked)))
                 tcon.commit()
                 placed[tid] = cur.lastrowid
             finally:
                 tcon.close()
     if placed:
-        fleet.log("design pushed",
+        fleet.log("design pushed" + (" (linked)" if body.linked else ""),
                   f"'{d['name']}' → {', '.join(sorted(placed))}"
                   f" ({body.page_slug})", u["name"])
     return {"ok": True, "placed": placed, "skipped": skipped}

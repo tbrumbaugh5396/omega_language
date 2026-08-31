@@ -6211,7 +6211,7 @@ _bcon2.commit()
 
 _dl = c.get("/api/store/admin/designs", headers=AA).json()["designs"]
 _dme = next(d for d in _dl if d["id"] == _did2)
-ok(_dme["placements"].get("beta") == 1,
+ok(_dme["placements"].get("beta", {}).get("n") == 1,
    "the library says where each design lives, counted across the fleet — "
    "reach is visible before anyone pushes again")
 c.request("DELETE", f"/api/store/admin/designs/{_did2}", headers=AA)
@@ -6232,6 +6232,108 @@ ok("save-design" in _thjs2 and "IS_PROVIDER" in _thjs2
    and "data-dpush" in _thjs2 and "design_id: d.id" in _thjs2,
    "the editor carries the loop — save from the selected section, insert "
    "with provenance, push to chosen clients — shown only on the provider")
+
+
+# --- linked placements: follow the design, until the first edit -----------
+# The opt-in version of the push. design_sync=1 means the placement is
+# rewritten when the library entry is; the tenant's first settings edit
+# detaches it at the one write path an edit can take. The provenance stamp
+# was the hook; this is what hangs on it.
+_dl2 = c.post("/api/store/admin/designs", headers=AA,
+              json={"name": "Care banner", "type": "image_banner",
+                    "settings": {"heading": "We keep it running",
+                                 "text": "v1", "link": "", "media_id": "",
+                                 "height": "short"}}).json()["id"]
+c.post(f"/api/store/admin/designs/{_dl2}/push", headers=AA,
+       json={"tenants": ["beta"], "linked": True})
+c.post(f"/api/store/admin/designs/{_dl2}/push", headers=AA,
+       json={"tenants": ["beta"], "linked": False})
+_bc = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc.row_factory = sqlite3.Row
+_linked, _plain = [dict(r) for r in _bc.execute(
+    "SELECT * FROM page_sections WHERE design_id=? ORDER BY id",
+    (_dl2,))]
+ok(_linked["design_sync"] == 1 and _plain["design_sync"] == 0,
+   "a push chooses: linked placements carry the flag, plain ones don't")
+
+_sv = c.post("/api/store/admin/designs", headers=AA,
+             json={"name": "Care banner", "type": "image_banner",
+                   "settings": {"heading": "We keep it running",
+                                "text": "v2", "link": "", "media_id": "",
+                                "height": "short"}}).json()
+ok(_sv["refreshed"].get("beta") == 1,
+   "saving over the design refreshes the linked placement and reports it")
+_bc2 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc2.row_factory = sqlite3.Row
+_now = {r["id"]: r["settings"] for r in _bc2.execute(
+    "SELECT id, settings FROM page_sections WHERE design_id=?", (_dl2,))}
+ok('"v2"' in _now[_linked["id"]] and '"v1"' in _now[_plain["id"]],
+   "the linked copy moved to v2 across the wall; the plain copy is the "
+   "tenant's from the moment it landed and did not")
+
+# the detach: an edit through the tenant's own editor makes it theirs
+c.post(f"/api/store/admin/sections/{_linked['id']}",
+       headers={**BB},
+       json={"settings": {"heading": "Beta's banner now", "text": "v2",
+                          "link": "", "media_id": "", "height": "short"}})
+_bc3 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+ok(_bc3.execute("SELECT design_sync FROM page_sections WHERE id=?",
+                (_linked["id"],)).fetchone()[0] == 0,
+   "the tenant's first settings edit detaches — enforced at the one "
+   "write path an edit can take, not remembered by the editor")
+c.post(f"/api/store/admin/sections/{_linked['id']}", headers={**BB},
+       json={"move": "up"})
+ok(_bc3.execute("SELECT design_sync FROM page_sections WHERE id=?",
+                (_plain["id"],)).fetchone()[0] == 0
+   and c.post(f"/api/store/admin/designs/{_dl2}/push", headers=AA,
+              json={"tenants": ["beta"], "linked": True}).json()["placed"],
+   "sanity: pushes still place")
+_bc4 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_third = _bc4.execute(
+    "SELECT id FROM page_sections WHERE design_id=? AND design_sync=1",
+    (_dl2,)).fetchone()[0]
+c.post(f"/api/store/admin/sections/{_third}", headers={**BB},
+       json={"move": "up"})
+ok(_bc4.execute("SELECT design_sync FROM page_sections WHERE id=?",
+                (_third,)).fetchone()[0] == 1,
+   "moving or hiding a linked section does NOT detach it — the design "
+   "governs the section's content, not its place on the page")
+
+c.post("/api/store/admin/designs", headers=AA,
+       json={"name": "Care banner", "type": "image_banner",
+             "settings": {"heading": "We keep it running", "text": "v3",
+                          "link": "", "media_id": "", "height": "short"}})
+_bc5 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+ok('"v2"' in _bc5.execute(
+       "SELECT settings FROM page_sections WHERE id=?",
+       (_linked["id"],)).fetchone()[0],
+   "and a later design update passes the detached placement by — the "
+   "write can never reach a page anyone has made their own")
+
+_pl = next(d for d in c.get("/api/store/admin/designs",
+                            headers=AA).json()["designs"]
+           if d["id"] == _dl2)["placements"]["beta"]
+ok(_pl["n"] == 3 and _pl["linked"] == 1,
+   "the board tells the two apart — how many placements, how many still "
+   "follow")
+c.request("DELETE", f"/api/store/admin/designs/{_dl2}", headers=AA)
+_bc6 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+ok(_bc6.execute("SELECT SUM(design_sync) FROM page_sections WHERE"
+                " design_id=?", (_dl2,)).fetchone()[0] == 0
+   and _bc6.execute("SELECT COUNT(*) FROM page_sections WHERE"
+                    " design_id=?", (_dl2,)).fetchone()[0] == 3,
+   "deleting the design ends the following without touching the pages — "
+   "and no later design reusing the id could inherit a grip")
+_bc6.execute("DELETE FROM page_sections WHERE design_id=?", (_dl2,))
+_bc6.commit()
+for _cx in (_bc, _bc2, _bc3, _bc4, _bc5, _bc6):
+    _cx.close()
+_thjs3 = Path("src/storefront/frontend/theme.js").read_text()
+ok('id="push-linked"' in _thjs3 and "s.design_sync" in _thjs3
+   and "first edit makes it yours" in " ".join(_thjs3.split()),
+   "the push chooser offers linked as an off-by-default checkbox, and a "
+   "tenant editing a linked section is told what their first edit does "
+   "BEFORE they make it")
 
 _shm.rmtree(_split_dir, ignore_errors=True)
 
