@@ -196,3 +196,20 @@ def resume_subscription(cfg: dict, sub_id: str) -> bool:
                    data={"cancel_at_period_end": "false"},
                    auth=(cfg["stripe_secret_key"], ""), timeout=20)
     return r.status_code == 200
+
+
+def subscription_status(cfg: dict, sub_id: str) -> str:
+    """One subscription's live status at Stripe — active, past_due, unpaid,
+    canceled, … — or "" when it cannot be asked. Pulled, not trusted from
+    our own last write: the question is what Stripe will actually do next
+    billing day."""
+    if not enabled(cfg) or not sub_id:
+        return ""
+    try:
+        r = httpx.get(f"{API}/subscriptions/{sub_id}",
+                      auth=(cfg["stripe_secret_key"], ""), timeout=15)
+    except Exception:                      # noqa: BLE001
+        return ""
+    if r.status_code != 200:
+        return ""
+    return r.json().get("status") or ""

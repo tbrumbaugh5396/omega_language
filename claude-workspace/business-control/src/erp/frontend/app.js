@@ -850,6 +850,38 @@ const TABS = [
     roles: ["admin"], provider: true },
   { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
 ];
+/* Which purchased capability each tab belongs to. Tabs with no entry are
+   core — part of Platform Core, on for everyone. The ids are the price
+   book's own (the same ones the quote carries), so the entitlement written
+   at stand-up and the lock shown here can never speak different names. */
+const TAB_CAP = {
+  shop: "selling", orders: "selling",
+  promos: "marketing", email: "marketing", experiments: "marketing",
+  clients: "crm", outreach: "crm",
+  clock: "workforce", staff: "workforce",
+  inventory: "inventory", supply: "sourcing",
+  routes: "distribution", stores: "distribution",
+  analytics: "intelligence", events: "events", affiliates: "affiliates",
+  chat: "comms", feed: "comms",
+  integrations: "api", discord: "api", slack: "api", trello: "api",
+  dropbox: "api",
+  audit: "infosec",
+};
+const CAP_LABEL = {
+  selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
+  workforce: "Workforce", inventory: "Inventory", sourcing: "Sourcing",
+  distribution: "Distribution", intelligence: "Intelligence",
+  events: "Events", affiliates: "Affiliates", comms: "Comms",
+  api: "API & data platform", infosec: "InfoSec",
+};
+// null caps = everything on: legacy installs, the provider, and any tenant
+// stood up before entitlements existed keep the whole product.
+const capLocked = (t) => {
+  const need = TAB_CAP[t.id];
+  const caps = S.meta && S.meta.caps;
+  return !!(need && Array.isArray(caps) && !caps.includes(need));
+};
+
 const NAV_GROUPS = ["Sell", "Operate", "Grow", "Company"];
 // Where each staff job lands after sign-in.
 const JOB_HOME = { driver: "routes", dsd: "routes", warehouse: "inventory",
@@ -900,8 +932,11 @@ function renderChrome() {
   const tabs = allowedTabs();
   if (S.tab !== "login" && !tabs.find((t) => t.id === S.tab)) S.tab = tabs[0].id;
   const btn = (t) =>
-    `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}">
-      <span class="ic">${opsIcon(t.icon)}</span><span>${t.label}</span></button>`;
+    `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}${
+        capLocked(t) ? " cap-locked" : ""}">
+      <span class="ic">${opsIcon(t.icon)}</span><span>${t.label}</span>${
+        capLocked(t) ? `<span class="cap-lock-ic">${opsIcon("shield2")}</span>`
+                     : ""}</button>`;
   /* Rewriting the nav resets its scroll to the top, so a tab picked from the
      bottom of the list would jump the menu back up and hide where you just
      were. Keep the offset across the rewrite. */
@@ -1054,12 +1089,62 @@ async function render() {
     hq: renderHQ, fleet: renderFleet, admin: renderAdmin,
     login: renderLogin,
   }[S.tab] || renderShop;
+  const tabDef = TABS.find((t) => t.id === S.tab);
+  if (tabDef && capLocked(tabDef)) {
+    try { await renderCapLocked(tabDef); } catch (e) { view().innerHTML =
+      `<div class="card">Error: ${esc(e.message)}</div>`; }
+    document.querySelectorAll(".map-wrap").forEach((m) => wireMap(m.id));
+    drawStoreRail();
+    return;
+  }
   try { await fn(); } catch (e) { view().innerHTML =
     `<div class="card">Error: ${esc(e.message)}</div>`; }
   // Maps are inserted as markup by whichever view drew them; wiring happens
   // here so every view gets pan/zoom without remembering to ask.
   document.querySelectorAll(".map-wrap").forEach((m) => wireMap(m.id));
   drawStoreRail();
+}
+
+
+// ---------- a capability the tenant hasn't bought ----------
+/* The tab exists, greyed, and opens this instead of the screen: what the
+   capability is, what it costs a month (from the provider's own price
+   book, not a guess), and one button that opens a lead on the studio's
+   sales board. The product sells its own upgrades. */
+async function renderCapLocked(tab) {
+  const cap = TAB_CAP[tab.id];
+  let info = null;
+  try { info = await api(`/api/capability-info/${cap}`); } catch {}
+  const name = (info && info.name) || CAP_LABEL[cap] || cap;
+  view().innerHTML = `
+    <h2>${esc(tab.label)}</h2>
+    <div class="card" style="max-width:560px">
+      <b>${esc(name)} isn't on your plan yet.</b>
+      <p class="dim">${info && info.note ? esc(info.note) + " " : ""}It's a
+        capability of the platform you're already running on — turning it
+        on is a plan change, not a build.</p>
+      ${info && info.price ? `<p><b>$${info.price}/month</b>
+        <span class="dim">· ${esc(info.band)} band, from the published
+        price book${info.requires ? ` · requires ${esc(info.requires)}`
+        : ""}</span></p>` : ""}
+      <div class="chips" style="margin-top:10px">
+        <button class="btn" id="cap-ask">${opsIcon("handshake","btn-ic")}
+          Ask us to turn this on</button>
+      </div>
+      <p class="dim" id="cap-ask-msg" style="margin-top:8px"></p>
+    </div>`;
+  const b = $("#cap-ask");
+  if (b) b.onclick = async () => {
+    b.disabled = true;
+    try {
+      await api("/api/capability-request", { body: { capability: cap } });
+      $("#cap-ask-msg").textContent =
+        "Asked — it's on our board, and we'll come back to you.";
+    } catch (e) {
+      b.disabled = false;
+      $("#cap-ask-msg").textContent = e.message;
+    }
+  };
 }
 
 // ---------- login ----------
@@ -4090,6 +4175,11 @@ async function renderFleet() {
             ${t.provider ? `<span class="pill ok">runs the platform</span>`
               : ""}
             <span class="pill">${esc(t.class)} · ${t.units}u</span>
+            ${t.caps ? `<span class="pill" title="capabilities granted from
+              their quote">${t.caps} caps</span>` : ""}
+            ${t.billing ? `<span class="pill bad" title="their ${esc(
+              t.billing.plan)} subscription — the card processor says so">
+              card ${esc(t.billing.status)}</span>` : ""}
             ${t.status === "suspended"
               ? `<span class="pill warn">suspended</span>` : ""}
             <span class="dim">${(t.hosts || []).map(esc).join(" · ")}</span>
@@ -4866,7 +4956,8 @@ async function renderAdmin() {
         invoiced by hand</span>` : ""}</summary><div class="inner">
       ${plans.plans.length ? `<div class="tablewrap"><table class="tbl">
         <thead><tr><th>Customer</th><th>Plan</th><th>Price</th>
-          <th>Status</th><th>Billing</th><th>Started</th></tr></thead>
+          <th>Status</th><th>Billing</th><th>Started</th><th>Pays for</th>
+        </tr></thead>
         <tbody>${plans.plans.map((r) => `<tr>
           <td>${esc(r.who)}<div class="dim">${esc(r.email || "")}</div></td>
           <td>${esc(r.plan)}</td>
@@ -4876,6 +4967,13 @@ async function renderAdmin() {
           <td>${r.payment_ref ? '<span class="pill ok">card</span>'
             : '<span class="pill warn">invoice</span>'}</td>
           <td>${new Date(r.created_at * 1000).toLocaleDateString()}</td>
+          <td>${S.meta && S.meta.is_provider ? `<select data-subten="${r.id}"
+              title="which install this plan pays for — links the card's
+              health to the fleet board">
+              <option value="">— not linked —</option>
+              ${(plans.tenants || []).map((tid) => `<option value="${esc(tid)}"
+                ${r.tenant_id === tid ? "selected" : ""}>${esc(tid)}</option>`
+              ).join("")}</select>` : esc(r.tenant_id || "")}</td>
         </tr>`).join("")}</tbody></table></div>` : `<div class="dim">Nobody is
           on a plan yet. A product becomes one by setting its
           <code>billing</code> to <code>month</code> in the store admin.</div>`}
@@ -5015,6 +5113,15 @@ async function renderAdmin() {
     b.onclick = async () => {
       await cycUpdate(+b.dataset.cycClose, { closed: true });
       render();
+    };
+  });
+  document.querySelectorAll("[data-subten]").forEach((sel) => {
+    sel.onchange = async () => {
+      try {
+        await api(`/api/store/admin/plans/${sel.dataset.subten}/tenant`,
+          { body: { tenant_id: sel.value } });
+        toast(sel.value ? `linked to ${sel.value}` : "unlinked");
+      } catch (e) { toast(e.message); }
     };
   });
   $("#brand-form").onsubmit = async (e) => {

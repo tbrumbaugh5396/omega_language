@@ -86,6 +86,7 @@ def fleet() -> list:
                 continue
             on.append({"id": tid, "class": t.get("class") or DEFAULT_CLASS,
                        "units": units_of(t),
+                       "caps": len(t.get("caps") or []) or None,
                        "status": t.get("status") or "active",
                        "hosts": t.get("hosts") or [],
                        "provider": tid == prov,

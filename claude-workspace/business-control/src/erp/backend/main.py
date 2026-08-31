@@ -219,6 +219,9 @@ def meta(con=Depends(get_con)):
             # for a plain single-shop install.
             "is_provider": tenancy.provider() is not None
                            and tenancy.provider() == tenancy.CURRENT.get(),
+            # What this install is entitled to. null = everything — a
+            # tenant with no recorded grant keeps the whole product.
+            "caps": tenancy.caps_of(tenancy.CURRENT.get()),
             "tagline": CFG.get("brand_tagline", ""),
             "accent": CFG.get("brand_accent", ""),
             "regions": CFG["regions"], "jobs": JOBS,

@@ -1006,3 +1006,9 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
   #tab-sheet .sheet-card { max-width: 640px; border-radius: 16px;
     border: 1px solid var(--line); }
 }
+
+/* a capability the tenant hasn't bought: present, greyed, honest */
+#tabs button.cap-locked, #bottomnav button.cap-locked { opacity: .5; }
+#tabs button.cap-locked .cap-lock-ic svg,
+#bottomnav button.cap-locked .cap-lock-ic svg {
+  width: 12px; height: 12px; margin-left: auto; opacity: .8; }

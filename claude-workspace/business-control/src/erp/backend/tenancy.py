@@ -183,8 +183,22 @@ def with_tenant(tid, fn):
 INIT = None
 
 
+def caps_of(tid) -> list | None:
+    """What the provider granted this tenant — the capability ids from the
+    quote it was stood up on. None = everything (legacy installs, the
+    provider itself, tenants stood up before entitlements existed): the
+    absence of a grant must never take features away from anyone who
+    already had them all."""
+    reg = registry()
+    if not reg or not tid:
+        return None
+    caps = reg.get("tenants", {}).get(tid, {}).get("caps")
+    return list(caps) if caps else None
+
+
 def create(tid: str, hosts: list | None = None, default: bool = False,
-           node: str = "", klass: str = "growing", brand: str = ""):
+           node: str = "", klass: str = "growing", brand: str = "",
+           caps: list | None = None):
     """Mint a tenant: directory, config with its own secrets, registry row,
     a node to live on, schema. Idempotent on the directory."""
     if not tid.replace("-", "").replace("_", "").isalnum():
@@ -201,6 +215,10 @@ def create(tid: str, hosts: list | None = None, default: bool = False,
     reg["tenants"][tid]["class"] = klass
     if node:
         reg["tenants"][tid]["node"] = node
+    if caps:
+        # the entitlement: what the quote sold, recorded where the provider
+        # keeps its bookkeeping. Never written empty — see caps_of().
+        reg["tenants"][tid]["caps"] = sorted(set(caps))
     d = tenant_dir(tid)
     d.mkdir(parents=True, exist_ok=True)
     cfg_path = d / "config.json"

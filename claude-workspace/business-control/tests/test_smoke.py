@@ -6335,6 +6335,164 @@ ok('id="push-linked"' in _thjs3 and "s.design_sync" in _thjs3
    "tenant editing a linked section is told what their first edit does "
    "BEFORE they make it")
 
+
+# --- closing the loops: entitlements, plan bridge, dunning, one book ------
+
+# 1. entitlements: the quote's capability set becomes the tenant's grant
+_ee = c.post("/api/store/admin/engagements", headers=AA,
+             json={"name": "Partial Co"}).json()["id"]
+c.post(f"/api/store/admin/engagements/{_ee}/quote", headers=AA,
+       json={"markdown": "# Quote",
+             "state": _bench_state(locs=1, seats=4,
+                                   on=["core", "selling", "payments",
+                                       "workforce"])})
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "partialco", "brand": "Partial Co", "klass": "micro",
+             "engagement_id": _ee})
+ok(_tn.registry()["tenants"]["partialco"]["caps"]
+   == ["payments", "selling", "workforce"],
+   "stand-up records WHAT WAS SOLD on the registry row — the same "
+   "capability list that sized the node and shaped the home page, no "
+   "longer discarded after one use")
+_pm = c.get("/api/meta", headers={"host": "partialco.localhost"}).json()
+ok(_pm["caps"] == ["payments", "selling", "workforce"],
+   "and the tenant's own ops app is told, through meta")
+ok(c.get("/api/meta", headers=HB).json()["caps"] is None,
+   "a tenant with no recorded grant gets null — everything on. The "
+   "absence of a grant must never take features away from anyone who "
+   "already had them all")
+
+_appjs = Path("src/erp/frontend/app.js").read_text()
+ok("TAB_CAP" in _appjs and "capLocked" in _appjs
+   and "cap-locked" in _appjs and "renderCapLocked" in _appjs,
+   "unsold tabs show LOCKED rather than vanish — the tab opens the ask "
+   "panel instead of the screen, so the product sells its own upgrades")
+ok('"selling"' in _appjs.split("TAB_CAP")[1][:900]
+   and "Array.isArray(caps)" in _appjs,
+   "the tab→capability map speaks the price book's own ids, and null "
+   "caps unlocks everything")
+
+_ci = c.get("/api/capability-info/distribution",
+            headers={"host": "partialco.localhost"}).json()
+ok(_ci["name"] == "Distribution" and _ci["price"] == 50
+   and _ci["band"] == "heavy",
+   "the locked panel's price comes from the BOOK via the parser, not a "
+   "number the frontend remembered")
+ok(c.get("/api/capability-info/nonsense").status_code == 404,
+   "and an unknown capability is a 404, not a guess")
+
+# the ask crosses the wall the narrow way
+_padmin = json.loads((_tn.tenant_dir("partialco") / "config.json"
+                      ).read_text())["admin_key"]
+_ptok = c.post("/api/login", headers={"host": "partialco.localhost"},
+               json={"name": "PC Admin", "role": "admin",
+                     "admin_key": _padmin}).json()["token"]
+ok(c.post("/api/capability-request",
+          headers={"host": "partialco.localhost",
+                   "Authorization": f"Bearer {_ptok}"},
+          json={"capability": "distribution"}).json()["ok"],
+   "a client admin can ask for a capability from their own ops app")
+_acon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon.row_factory = sqlite3.Row
+_lead = _acon.execute(
+    "SELECT * FROM outreach WHERE name LIKE '%distribution%'"
+    " ORDER BY id DESC LIMIT 1").fetchone()
+ok(_lead is not None and "Partial Co" in _lead["name"]
+   and _lead["stage"] == "lead",
+   "and the ask lands as a lead on the STUDIO's sales board, across the "
+   "wall the narrow way — not in a table on the client's side nobody "
+   "opens")
+ok(_acon.execute(
+       "SELECT 1 FROM engagement_log WHERE engagement_id=? AND"
+       " what LIKE '%distribution%'", (_ee,)).fetchone() is not None,
+   "with a line on the engagement, so the client's file tells the story")
+_acon.close()
+
+# 2. a plan purchase is heard
+_buyer = c.post("/api/login", headers=HA,
+                json={"name": "Self Serve", "role": "customer",
+                      "email": "self@serve.test"}).json()
+_pcat2 = {p["name"]: p for p in
+          c.get("/api/store/catalog", headers=HA).json()["products"]}
+if "Pro plan" not in _pcat2:
+    c2 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+    c2.execute("INSERT INTO products(sku,name,description,category,"
+               "price_cents,case_size,case_price_cents,active)"
+               " VALUES('PLAN-PRO2','Pro plan','x','Plans',34900,1,34900,1)")
+    _pid2 = c2.execute("SELECT last_insert_rowid()").fetchone()[0]
+    c2.execute("INSERT OR REPLACE INTO store_product_meta(product_id,k,v)"
+               " VALUES(?,'billing','month')", (_pid2,))
+    c2.commit(); c2.close()
+    _pcat2 = {p["name"]: p for p in
+              c.get("/api/store/catalog", headers=HA).json()["products"]}
+c.post("/api/store/plans/subscribe",
+       headers={"Authorization": f"Bearer {_buyer['token']}", **HA},
+       json={"product_id": _pcat2["Pro plan"]["id"]})
+_acon2 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+ok(_acon2.execute("SELECT 1 FROM outreach WHERE name LIKE"
+                  " '%Self Serve%'").fetchone() is not None,
+   "a self-serve plan purchase opens a lead on the sales board — a buyer "
+   "of a deployment plan is a client the moment they pay, not when "
+   "someone happens to open the admin panel")
+_acon2.close()
+ok('fire_webhooks("plan.started"' in
+   Path("src/storefront/backend/api.py").read_text(),
+   "and fires the same webhook rail every other commercial event uses")
+
+# 3. dunning: the failed card surfaces next to the install it pays for
+_dsub = c.get("/api/store/admin/plans", headers=AA).json()["plans"][0]
+ok(c.post(f"/api/store/admin/plans/{_dsub['id']}/tenant", headers=AA,
+          json={"tenant_id": "partialco"}).json()["tenant_id"]
+   == "partialco",
+   "a plan links to the install it pays for")
+ok(c.post(f"/api/store/admin/plans/{_dsub['id']}/tenant", headers=AA,
+          json={"tenant_id": "no-such"}).status_code == 400,
+   "and not to a tenant the fleet doesn't have")
+from erp.backend import payments as _pay2
+from storefront.backend import engagements as _eng2
+_acon3 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon3.execute("UPDATE store_subscriptions SET payment_ref='sub_dun_1'"
+               " WHERE id=?", (_dsub["id"],))
+_acon3.commit(); _acon3.close()
+_realget2 = _pay2.httpx.get
+_realen = _pay2.enabled
+_pay2.enabled = lambda cfg: True
+_pay2.httpx.get = lambda url, auth=None, timeout=None: type(
+    "R", (), {"status_code": 200,
+              "json": lambda self: {"status": "past_due"}})()
+_eng2._BILLING_CACHE["at"] = 0
+try:
+    _fbb = c.get("/api/store/admin/fleet", headers=AA).json()
+finally:
+    _pay2.httpx.get = _realget2
+    _pay2.enabled = _realen
+_pten = next(t for n in _fbb["nodes"] for t in n["tenants"]
+             if t["id"] == "partialco")
+ok(_pten["billing"] and _pten["billing"]["status"] == "past_due",
+   "the fleet board flags the tenant whose linked card Stripe would not "
+   "bill — the fact sits beside the Suspend button, and suspension stays "
+   "a human's click")
+ok(any(e["what"] == "billing warning" for e in _fbb["events"]),
+   "recorded once per state change on the fleet's own history")
+ok(next(t for n in c.get("/api/store/admin/fleet", headers=AA).json()
+        ["nodes"] for t in n["tenants"] if t["id"] == "partialco")
+   .get("caps") == 3,
+   "and the board says how many capabilities each tenant was granted")
+_eng2._BILLING_CACHE["at"] = 0
+
+# 4. the served bench reads the book
+_qb2 = c.get("/api/store/admin/quote-bench", headers=AA).text
+from storefront.backend import pricebook as _pb2
+_b2 = _pb2.bands()
+ok(f"bands:{{light:{_b2['light']},std:{_b2['standard']},"
+   f"heavy:{_b2['heavy']}}}, corePrice:{_pb2.core_price()}" in _qb2,
+   "the SERVED bench carries the book's numbers, substituted at serve "
+   "time from the same parse the storefront seeds from — the fourth copy "
+   "of the price book is no longer a copy")
+
+c.request("DELETE", "/api/store/admin/fleet/tenants/partialco?keep_data=0",
+          headers=AA)
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

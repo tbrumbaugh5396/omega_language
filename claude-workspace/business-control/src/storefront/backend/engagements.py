@@ -1357,7 +1357,47 @@ def quote_bench(u=Depends(admin_user)):
     if not BENCH.is_file():
         raise HTTPException(404, "the quote bench ships with the working "
                                  "tree — docs/product/quote-bench.html")
-    return HTMLResponse(BENCH.read_text())
+    return HTMLResponse(_bench_priced(BENCH.read_text()))
+
+
+def _bench_priced(html: str) -> str:
+    """The bench's price literals, replaced from the book at serve time.
+
+    The bench carries its own copy of the numbers — the fourth copy, held
+    to price-book.md only by tests. Substituting here makes the SERVED
+    bench read from the same parse the storefront seeds from, so a price
+    changed in the book reaches the next quote without anyone re-editing
+    the HTML. Surgical and fail-safe: each pattern is the exact literal
+    the tests already pin, and a miss serves the file unchanged — a bench
+    with last week's prices beats no bench.
+    """
+    try:
+        from .pricebook import bands, capabilities, core_price, tiers
+        b = bands()
+        t = {x["name"].lower(): x["price"] for x in tiers()}
+        html2, n1 = re.subn(
+            r"bands:\{light:\d+,std:\d+,heavy:\d+\}, corePrice:\d+",
+            f"bands:{{light:{b['light']},std:{b['standard']},"
+            f"heavy:{b['heavy']}}}, corePrice:{core_price()}", html)
+        html2, n2 = re.subn(
+            r"tierPrice:\{starter:\d+,pro:\d+,scale:\d+\}",
+            f"tierPrice:{{starter:{t['starter']},pro:{t['pro']},"
+            f"scale:{t['scale']}}}", html2)
+        # band assignments per capability: the bench's CAPS rows carry
+        # band:'light|std|heavy'; rewrite each from the book by name.
+        bench_band = {"light": "light", "standard": "std", "heavy": "heavy"}
+        n3 = 0
+        for cap in capabilities():
+            html2, k = re.subn(
+                r"(n:'" + re.escape(cap["name"]) + r"',[^}]*?band:')"
+                r"(?:light|std|heavy)(')",
+                r"\g<1>" + bench_band[cap["band"]] + r"\g<2>", html2)
+            n3 += k
+        if n1 and n2:
+            return html2
+    except Exception:
+        pass
+    return html
 
 
 class VerifyBody(BaseModel):
@@ -2431,6 +2471,56 @@ class MoveBody(BaseModel):
     klass: str = ""
 
 
+_BILLING_CACHE = {"at": 0.0, "flags": {}}
+
+
+def _billing_flags(con) -> dict:
+    """Which tenants' linked subscriptions Stripe would not bill today.
+
+    Pulled when the board loads, cached ~5 minutes so opening the Platform
+    tab is not a Stripe call per tenant per refresh. Card-billed rows only
+    — an invoice-mode plan has no processor to disagree with. The flag is
+    for the OPERATOR: suspension stays a human's click, this puts the fact
+    beside the button.
+    """
+    from erp.backend import payments
+    from erp.backend.main import CFG
+    import time as _t
+    if _t.time() - _BILLING_CACHE["at"] < 300:
+        return _BILLING_CACHE["flags"]
+    flags = {}
+    if payments.enabled(CFG):
+        rows = con.execute(
+            "SELECT s.id, s.tenant_id, s.payment_ref, s.created_at,"
+            " p.name plan FROM store_subscriptions s"
+            " JOIN products p ON p.id=s.product_id"
+            " WHERE s.tenant_id != '' AND s.payment_ref != ''"
+            " AND s.status NOT IN ('cancelled','failed')").fetchall()
+        for r in rows:
+            st = payments.subscription_status(CFG, r["payment_ref"])
+            if st and st not in ("active", "trialing"):
+                flags[r["tenant_id"]] = {"status": st, "plan": r["plan"],
+                                         "sub_id": r["id"]}
+                # once per state change, on the fleet's own record
+                marker = f"stripe:{st}"
+                cur = con.execute(
+                    "UPDATE store_subscriptions SET payment_status=?"
+                    " WHERE id=? AND payment_status != ?",
+                    (marker, r["id"], marker))
+                if cur.rowcount:
+                    con.commit()
+                    fleet_mod_log(r["tenant_id"], r["plan"], st)
+    _BILLING_CACHE["at"] = _t.time()
+    _BILLING_CACHE["flags"] = flags
+    return flags
+
+
+def fleet_mod_log(tid: str, plan: str, status: str) -> None:
+    from erp.backend import fleet
+    fleet.log("billing warning",
+              f"{tid}: {plan} is {status} at the card processor", "stripe")
+
+
 @router.get("/api/store/admin/fleet")
 def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
     """The whole board: nodes, capacity, who lives where, recent history."""
@@ -2443,9 +2533,11 @@ def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
         clients[key] = {"engagement_id": r["id"], "name": r["name"],
                         "status": r["status"]}
     board = fleet.fleet()
+    billing = _billing_flags(con)
     for n in board:
         for t in n["tenants"]:
             t["client"] = clients.get(t["id"])
+            t["billing"] = billing.get(t["id"])
     return {"nodes": board, "classes": fleet.CLASSES,
             "events": fleet.events(20),
             "unplaced": [dict(v, slug=k) for k, v in clients.items()
@@ -2516,8 +2608,14 @@ def fleet_tenant_add(body: TenantBody, request: Request,
             nid = fleet.pick_node(units, prefer=body.node)
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e))
+    # The quote's capability set becomes the tenant's entitlement — the
+    # same list that sizes the node and shapes the home page also records
+    # what was sold, so the ops app can say which tabs are theirs.
+    sug0 = (stand_up_suggestion(con, body.engagement_id)
+            if body.engagement_id else None)
     tenancy.create(tid, hosts=hosts or [f"{tid}.localhost"], node=nid,
-                   klass=klass, brand=body.brand or tid.title())
+                   klass=klass, brand=body.brand or tid.title(),
+                   caps=(sug0 or {}).get("cap_ids"))
     fleet.log("tenant created", f"{tid} on {nid} ({klass})", u["name"])
     hosting_doc = 0
     layout = ""
@@ -2526,7 +2624,7 @@ def fleet_tenant_add(body: TenantBody, request: Request,
         # the new tenant's home page opens shaped like the business, not
         # like the generic shop. Only at stand-up, onto a page nobody has
         # touched; and never a reason the stand-up fails.
-        sug = stand_up_suggestion(con, body.engagement_id)
+        sug = sug0
         if sug and sug.get("cap_ids"):
             from erp.backend import db as _db
             from .layouts import apply as apply_layout
@@ -2841,6 +2939,89 @@ def push_design(did: int, body: PushBody, u=Depends(admin_user),
                   f"'{d['name']}' → {', '.join(sorted(placed))}"
                   f" ({body.page_slug})", u["name"])
     return {"ok": True, "placed": placed, "skipped": skipped}
+
+
+# ---------- entitlements: what a tenant asks about, and how it asks ----------
+
+@router.get("/api/capability-info/{cap_id}")
+def capability_info(cap_id: str, con=Depends(get_con)):
+    """One capability, priced from the book — for the locked tab's panel.
+
+    Served to any tenant: the price shown next to "ask us to turn this on"
+    must be the published one, not a number the frontend remembered."""
+    from .pricebook import capabilities
+    # The bench's ids and the book's names differ; the bench ids are what
+    # the entitlement carries, so map through the same table the deck uses.
+    names = {
+        "sourcing": "Sourcing", "inventory": "Inventory",
+        "production": "Production", "warehouse": "Warehouse",
+        "distribution": "Distribution", "learning": "Learning",
+        "voice": "Voice & translation", "selling": "Selling",
+        "subs": "Subscriptions & boxes", "fundraising": "Fundraising",
+        "marketing": "Marketing", "crm": "CRM & Support", "events": "Events",
+        "affiliates": "Affiliates", "payments": "Payments",
+        "accounting": "Accounting", "finance": "Finance",
+        "treasury": "Treasury & investments", "workforce": "Workforce",
+        "onboarding": "Onboarding", "payroll": "Payroll",
+        "intelligence": "Intelligence", "automation": "Automation",
+        "comms": "Comms", "infosec": "InfoSec",
+        "api": "API & data platform", "legal": "Legal",
+    }
+    name = names.get(cap_id)
+    if not name:
+        raise HTTPException(404, "no such capability")
+    try:
+        cap = next(c for c in capabilities() if c["name"] == name)
+    except (StopIteration, Exception):
+        return {"name": name, "price": 0, "band": "", "requires": "",
+                "note": ""}
+    return {"name": name, "price": cap["price"], "band": cap["band"],
+            "requires": cap["requires"],
+            "note": f"Part of {cap['group']}."}
+
+
+class CapAskBody(BaseModel):
+    capability: str
+
+
+@router.post("/api/capability-request")
+def capability_request(body: CapAskBody, u=Depends(admin_user),
+                       con=Depends(get_con)):
+    """A tenant asks for a capability they haven't bought.
+
+    The ask crosses the wall the narrow way the client window established:
+    under run_as(provider), for exactly the width of one lead insert and
+    one engagement log line — landing on the sales board the studio
+    already watches, not in a table on the client's side nobody opens."""
+    from erp.backend import db as _db, tenancy
+    cap = re.sub(r"[^a-z]", "", (body.capability or "").lower())[:24]
+    if not cap:
+        raise HTTPException(400, "which capability?")
+    tid = tenancy.CURRENT.get()
+    prov = tenancy.provider()
+    if not prov or prov == tid:
+        raise HTTPException(400, "this install is not managed by a studio")
+    from erp.backend.main import CFG
+    brand = CFG.get("brand_name", tid or "a client")
+    with tenancy.run_as(prov):
+        pcon = _db.connect()
+        try:
+            pcon.execute(
+                "INSERT INTO outreach(name,region,city,stage,next_action,"
+                " next_action_date,updated_at) VALUES(?,?,?,'lead',?,?,?)",
+                (f"{brand} — {cap}"[:80], "", "",
+                 f"Turn on '{cap}' for {brand} ({u['name']} asked from "
+                 f"their own ops app)", time.time() + 86400, time.time()))
+            e = pcon.execute(
+                "SELECT id FROM engagements WHERE tenant_id=? AND"
+                " status != 'archived' LIMIT 1", (tid,)).fetchone()
+            if e:
+                log(pcon, e["id"], f"{brand} (client)",
+                    f"asked to turn on the '{cap}' capability")
+            pcon.commit()
+        finally:
+            pcon.close()
+    return {"ok": True}
 
 
 # ---------- the client's window into the provider's pipeline ----------

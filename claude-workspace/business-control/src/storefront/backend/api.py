@@ -214,6 +214,10 @@ STORE_MIGRATIONS = (
     # rewrite it, until the tenant's first edit detaches it. Opt-in at
     # push time; 0 for everything placed before the flag existed.
     "ALTER TABLE page_sections ADD COLUMN design_sync INTEGER DEFAULT 0",
+    # Which fleet tenant a plan subscription pays for. '' = not linked —
+    # the link is how a failed card can show up next to the install it
+    # keeps alive, instead of in a table nobody cross-references.
+    "ALTER TABLE store_subscriptions ADD COLUMN tenant_id TEXT DEFAULT ''",
 )
 
 
@@ -1250,6 +1254,7 @@ def plan_subscribe(body: PlanStartBody, request: Request,
         con.execute("UPDATE store_subscriptions SET status='active'"
                     " WHERE id=?", (sid,))
         con.commit()
+        _plan_started(con, user, p, sid)
         return {"ok": True, "id": sid, "invoiced": True,
                 "message": f"{p['name']} is set up — we invoice this one "
                            f"monthly, and the first invoice comes by email."}
@@ -1267,6 +1272,40 @@ def plan_subscribe(body: PlanStartBody, request: Request,
                 (sess["id"], sid))
     con.commit()
     return {"ok": True, "id": sid, "checkout_url": sess["url"]}
+
+
+def _plan_started(con, user, product, sid: int) -> None:
+    """A plan just went live: the moment somebody has to hear about it.
+
+    A self-serve purchase used to produce a database row and a charge and
+    tell no one through any coded path. Now it fires the webhook rail every
+    other commercial event uses, and — on the tenant that runs the platform
+    — opens a lead on the sales board the operator already watches, because
+    a buyer of a deployment plan is a client the moment they pay, not when
+    someone happens to open the admin panel."""
+    try:
+        fire_webhooks("plan.started", {
+            "subscription_id": sid, "plan": product["name"],
+            "price_cents": product["price_cents"],
+            "customer": user["name"], "email": user["email"] or ""})
+    except Exception:
+        pass
+    from erp.backend import tenancy
+    if not (tenancy.provider()
+            and tenancy.provider() == tenancy.CURRENT.get()):
+        return
+    try:
+        con.execute(
+            "INSERT INTO outreach(name,region,city,stage,next_action,"
+            " next_action_date,updated_at) VALUES(?,?,?,'lead',?,?,?)",
+            (f"{product['name']} — {user['name']}"[:80], "", "",
+             f"Onboard: bought {product['name']} "
+             f"(${product['price_cents'] / 100:.0f}/mo)"
+             + (f" · {user['email']}" if user["email"] else ""),
+             db.now() + 86400, db.now()))
+        con.commit()
+    except Exception:
+        pass          # a missing lead must not fail the purchase
 
 
 class PlanConfirmBody(BaseModel):
@@ -1296,6 +1335,9 @@ def plan_confirm(sid: int, body: PlanConfirmBody,
                 " payment_ref=?, payment_status='paid' WHERE id=?",
                 (out["subscription"], sid))
     con.commit()
+    p2 = con.execute("SELECT * FROM products WHERE id=?",
+                     (row["product_id"],)).fetchone()
+    _plan_started(con, user, p2, sid)
     return {"ok": True, "status": "active"}
 
 
@@ -2068,7 +2110,7 @@ def admin_plans(u=Depends(admin_user), con=Depends(get_con)):
     """
     rows = [dict(r) for r in con.execute(
         "SELECT s.id, s.status, s.price_cents, s.qty, s.interval,"
-        " s.payment_status, s.payment_ref, s.created_at,"
+        " s.payment_status, s.payment_ref, s.created_at, s.tenant_id,"
         " p.name AS plan, u.name AS who, u.email"
         " FROM store_subscriptions s"
         " JOIN products p ON p.id=s.product_id"
@@ -2080,7 +2122,40 @@ def admin_plans(u=Depends(admin_user), con=Depends(get_con)):
             "mrr_cents": sum(r["price_cents"] * r["qty"] for r in live),
             "invoiced": sum(1 for r in live
                             if r["payment_status"] == "invoice"),
-            "card_enabled": _card_on()}
+            "card_enabled": _card_on(),
+            # the fleet's tenant ids, so a plan can be linked to the
+            # install it pays for (provider only — elsewhere it is empty
+            # and the link column is read-only)
+            "tenants": _linkable_tenants()}
+
+
+def _linkable_tenants() -> list:
+    from erp.backend import tenancy
+    prov = tenancy.provider()
+    if not prov or prov != tenancy.CURRENT.get():
+        return []
+    return [t for t in tenancy.all_tenants() if t != prov]
+
+
+class SubTenantBody(BaseModel):
+    tenant_id: str = ""
+
+
+@router.post("/api/store/admin/plans/{sid}/tenant")
+def link_plan_tenant(sid: int, body: SubTenantBody, u=Depends(admin_user),
+                     con=Depends(get_con)):
+    """Say which install a plan pays for. The link is what lets a failed
+    card surface next to the tenant it keeps alive on the fleet board."""
+    tid = body.tenant_id.strip()
+    if tid and tid not in _linkable_tenants():
+        raise HTTPException(400, f"no tenant '{tid}' on the fleet")
+    if not con.execute("SELECT 1 FROM store_subscriptions WHERE id=?",
+                       (sid,)).fetchone():
+        raise HTTPException(404, "no such subscription")
+    con.execute("UPDATE store_subscriptions SET tenant_id=? WHERE id=?",
+                (tid, sid))
+    con.commit()
+    return {"ok": True, "tenant_id": tid}
 
 
 def _card_on() -> bool:

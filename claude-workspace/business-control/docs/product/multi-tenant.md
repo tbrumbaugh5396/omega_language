@@ -170,6 +170,35 @@ tenant exists. From one signature, the click-path is: contract signed →
 stand-up offered at the sold size → tenant live on its hostname, named on
 its storefront, hosting schedule filed in the binder.
 
+**And the quote becomes the entitlement.** The capability ids are written
+to the tenant's registry row (`caps`) at stand-up — the same list that
+sizes the node and shapes the pages now also records what was sold.
+`/api/meta` tells the tenant's ops app; unsold capabilities show as
+**locked tabs** that open an ask panel instead of the screen: the
+capability's name, its band price read live from the price book
+(`/api/capability-info`), and one button whose ask crosses the wall the
+narrow way (`run_as(provider)`, one lead insert + one engagement log
+line) onto the studio's sales board. **Missing/empty `caps` means
+everything on** — legacy installs, the provider, and tenants stood up
+before entitlements keep the whole product. The lock is UI-level and
+honest-advisory by design; per-route API enforcement across ~400 routes
+is an explicit non-goal. The fleet board shows each tenant's grant count.
+
+**Billing flags, not billing actions.** A plan subscription can be linked
+to the install it pays for (ops Admin → Plans → "Pays for"); the fleet
+board then pulls the linked subscriptions' live Stripe status (cached ~5
+minutes) and flags a tenant whose card is past due — a chip beside the
+Suspend button, a "billing warning" line in the fleet history once per
+state change. Suspension stays the operator's click. A self-serve plan
+purchase now also fires `plan.started` on the webhook rail and opens an
+onboarding lead on the provider's sales board.
+
+**The served quote bench reads the book.** The bench file still carries
+literals, but the serving route substitutes bands, core, tier prices and
+all 27 band assignments from `pricebook.py` at serve time (fail-safe: a
+pattern miss serves the file unchanged). The menu and the deck remain
+test-reconciled copies.
+
 **And the quote shapes the home page.** The same capability set picks a
 starter layout (`storefront/backend/layouts.py`): a **shape** gives the
 skeleton — commerce, courses, nonprofit, or services — and capabilities the
