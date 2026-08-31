@@ -176,7 +176,15 @@ skeleton — commerce, courses, nonprofit, or services — and capabilities the
 shape doesn't lead with still earn their sections, so a teaching nonprofit
 gets the courses page with the support banner composed in. Priority is
 deliberate: what a business *makes* beats how it takes money (learning >
-fundraising > selling > services). The nav's first word follows the shape.
+fundraising > selling > services). Each shape also ships its **secondary pages** — where "tell them more"
+lives: a shop gets its story and a delivery-and-returns page, a school
+gets the instructor and the curriculum, a nonprofit gets the mission and
+an impact page (which the hero's "See the work" links), a practice gets
+who-we-are and how-an-engagement-runs. The nav is rebuilt to carry them,
+keeps Reviews only where the home actually has a reviews section to
+anchor, and names the pages that *exist* under their stored titles — a
+re-run neither overwrites a page an operator has touched nor drops its
+link. The nav's first word follows the shape.
 Every section is built on the schema's own defaults, and the scaffolding
 never invents a fact — no customer counts, no shipping policy nobody set.
 Applied once, at stand-up, onto a page nobody has touched; without a

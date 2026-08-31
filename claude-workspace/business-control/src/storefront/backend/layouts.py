@@ -116,7 +116,7 @@ def _nonprofit(brand: str) -> list:
            sub="The mission in one breath — who is helped, and what "
                "changes for them. Replace this.",
            cta_text="Donate", cta_link="/#shop",
-           cta2_text="See the work", cta2_link="/#impact",
+           cta2_text="See the work", cta2_link="/p/impact",
            show_product=False,
            stat1="|people helped", stat2="|of every dollar to the work",
            stat3="|years doing it"),
@@ -209,6 +209,156 @@ def _addons(shape: str, caps) -> list:
     return out
 
 
+# ------------------------------------------------------- secondary pages --
+# The pages a business shape needs BESIDE its home — where "tell them more"
+# actually lives. Same scaffolding contract as the home sections: the copy
+# says what to write, and never invents a fact. An image banner left empty
+# renders as a labeled placeholder, which in the live editor is a
+# click-to-upload target — the page tells the merchant where its photo
+# goes.
+
+def _about_page(heading: str, body: str, cols_heading: str,
+                cols: list) -> list:
+    return [
+        _s("rich_text", heading=heading, body=body, align="left"),
+        _s("image_banner", heading="", text="", link="", height="medium"),
+        _s("feature_columns", heading=cols_heading, items=cols),
+    ]
+
+
+def _pages_commerce(brand: str) -> list:
+    return [
+        ("our-story", "Our story", _about_page(
+            "Our story",
+            "Where this started, and why. A founding story is not a "
+            "timeline — it is the one problem you refused to live with, "
+            "told so a stranger nods.\n\nReplace this.",
+            "What we stand for",
+            [{"icon": "check", "title": "The first thing",
+              "text": "A value is only real if it costs you something — "
+                      "name what this one costs."},
+             {"icon": "shield", "title": "The second",
+              "text": "Different from the first."},
+             {"icon": "sparkle", "title": "The third",
+              "text": "Then stop."}])),
+        ("delivery-and-returns", "Delivery & returns", [
+            _s("rich_text", heading="Delivery & returns",
+               body="The policy, in the customer's language: when it "
+                    "ships, what it costs, and what happens when "
+                    "something is wrong. Write the real numbers — an "
+                    "invented policy is worse than a blank.\n\n"
+                    "Replace this.", align="left"),
+            _s("faq", heading="The details", items=[
+                {"q": "When will my order ship?", "a": ""},
+                {"q": "What does delivery cost?", "a": ""},
+                {"q": "How do returns work?", "a": ""},
+                {"q": "My order arrived damaged — now what?", "a": ""}]),
+        ]),
+    ]
+
+
+def _pages_courses(brand: str) -> list:
+    return [
+        ("our-story", "Who teaches this", _about_page(
+            "Who teaches this",
+            "The instructor's story, told for the student: not a CV, but "
+            "the road that qualifies this person to get them to the "
+            "outcome the home page promised.\n\nReplace this.",
+            "Why students trust it",
+            [{"icon": "check", "title": "The experience",
+              "text": "Years, students, results — only what you can "
+                      "stand behind."},
+             {"icon": "shield", "title": "The method's origin",
+              "text": "Where this way of teaching came from."},
+             {"icon": "sparkle", "title": "The proof",
+              "text": "One student outcome, concrete and true."}])),
+        ("curriculum", "The curriculum", [
+            _s("rich_text", heading="The curriculum",
+               body="Module by module, in outcome language: after each, "
+                    "what can the student now do? A syllabus of topics "
+                    "sells to nobody; a ladder of abilities sells "
+                    "itself.\n\nReplace this.", align="left"),
+            _s("faq", heading="How the course runs", items=[
+                {"q": "How much time does it take each week?", "a": ""},
+                {"q": "Is it live, or at my own pace?", "a": ""},
+                {"q": "What do I need before starting?", "a": ""},
+                {"q": "What happens when I'm stuck?", "a": ""}]),
+        ]),
+    ]
+
+
+def _pages_nonprofit(brand: str) -> list:
+    return [
+        ("our-story", "The mission", _about_page(
+            "The mission",
+            "Why this organisation exists — the gap it stepped into, who "
+            "fell through it, and what changes when the work succeeds."
+            "\n\nReplace this.",
+            "How we work",
+            [{"icon": "check", "title": "On the ground",
+              "text": "What a week of the work actually looks like."},
+             {"icon": "shield", "title": "With partners",
+              "text": "Who you work alongside, and why."},
+             {"icon": "truck", "title": "At what scale",
+              "text": "Honest about size — small and real beats big and "
+                      "vague."}])),
+        ("impact", "The work", [
+            _s("rich_text", heading="The work, this year",
+               body="What happened, what it cost, what changed — numbers "
+                    "you can stand behind, sourced from your own records. "
+                    "Donors forgive small numbers; they do not forgive "
+                    "invented ones.\n\nReplace this.", align="left"),
+            _s("image_banner", heading="", text="", link="",
+               height="medium"),
+            _s("rich_text", heading="Who checks the numbers",
+               body="The audit, the filing, the register entry — where a "
+                    "sceptical donor can verify every claim above without "
+                    "asking permission.\n\nReplace this.", align="left"),
+        ]),
+    ]
+
+
+def _pages_services(brand: str) -> list:
+    return [
+        ("our-story", "Who we are", _about_page(
+            "Who we are",
+            "The people behind the practice, and the work that shaped "
+            "them. Clients hire the people, not the brand — show the "
+            "people.\n\nReplace this.",
+            "How we think",
+            [{"icon": "check", "title": "A conviction",
+              "text": "Something you believe about this work that not "
+                      "everyone does."},
+             {"icon": "shield", "title": "A boundary",
+              "text": "Work you turn down, and why — it is the fastest "
+                      "way to be believed."},
+             {"icon": "sparkle", "title": "A habit",
+              "text": "The thing you always do that clients mention."}])),
+        ("how-we-work", "How an engagement runs", [
+            _s("rich_text", heading="How an engagement runs",
+               body="Stage by stage, in the client's language: what they "
+                    "get at each, what it costs, and where they can stop. "
+                    "A written process is what separates a practice from "
+                    "a freelancer with a phone.\n\nReplace this.",
+               align="left"),
+            _s("faq", heading="What clients ask first", items=[
+                {"q": "How does it start?", "a": ""},
+                {"q": "How do you charge?", "a": ""},
+                {"q": "Who will we actually work with?", "a": ""},
+                {"q": "What if we want to stop halfway?", "a": ""}]),
+        ]),
+    ]
+
+
+SHAPE_PAGES = {"commerce": _pages_commerce, "courses": _pages_courses,
+               "nonprofit": _pages_nonprofit, "services": _pages_services}
+
+
+def secondary_pages(shape: str, brand: str = "") -> list:
+    """[(slug, title, [(type, settings), ...]), ...] for this shape."""
+    return SHAPE_PAGES[shape](brand)
+
+
 def home_sections(caps, brand: str = "") -> tuple:
     """(shape, [(type, settings), ...]) for this capability set."""
     shape = shape_of(caps)
@@ -222,10 +372,12 @@ def home_sections(caps, brand: str = "") -> tuple:
 
 
 def apply(con, caps, brand: str = "") -> str:
-    """Replace the tenant's home page with the shape's layout. Returns the
-    shape name. Only ever called at stand-up, against a page nobody has
-    touched — an operator's later edits are theirs."""
+    """Seed the tenant's home page, secondary pages and nav from the
+    shape. Returns the shape name. Only ever called at stand-up, against
+    pages nobody has touched — an operator's later edits are theirs, and
+    a page whose slug already exists is left entirely alone."""
     import json
+    import time
     shape, secs = home_sections(caps, brand)
     con.execute("DELETE FROM page_sections WHERE page_slug='home'")
     for i, (stype, settings) in enumerate(secs):
@@ -233,12 +385,48 @@ def apply(con, caps, brand: str = "") -> str:
             "INSERT INTO page_sections(page_slug,type,settings,position,"
             " enabled) VALUES('home',?,?,?,1)",
             (stype, json.dumps(settings), i))
-    # The nav's first word should match the shape: "Shop" over a list of
-    # courses reads as a mistake. Same link — the grid is still there.
+
+    # The pages beside the home — where "tell them more" lives. Created
+    # only where the slug is free: a page that already exists is someone's
+    # work, whatever stand-up is re-running over it.
+    for slug, title, psecs in secondary_pages(shape, brand):
+        cur = con.execute(
+            "INSERT OR IGNORE INTO store_pages(slug,title,published,"
+            " created_at) VALUES(?,?,1,?)", (slug, title, time.time()))
+        if not cur.rowcount:
+            continue
+        for i, (stype, settings) in enumerate(psecs):
+            con.execute(
+                "INSERT INTO page_sections(page_slug,type,settings,"
+                " position,enabled) VALUES(?,?,?,?,1)",
+                (slug, stype, json.dumps(settings), i))
+    # The nav names the shape's pages that EXIST — not only the ones this
+    # run created, or a re-run would silently drop the links to pages it
+    # left alone — under their stored titles, because a renamed page is
+    # the operator's rename.
+    made = []
+    for slug, _, _ in secondary_pages(shape, brand):
+        row = con.execute("SELECT title FROM store_pages WHERE slug=?"
+                          " AND published=1", (slug,)).fetchone()
+        if row:
+            made.append((slug, row[0]))
+
+    # The nav, rebuilt to carry the shape: its word for the grid, the new
+    # pages, then the anchors the home page actually has. A "Reviews" link
+    # on a shape with no reviews section is a link to nothing.
     label = {"commerce": "Shop", "courses": "Courses",
              "nonprofit": "Ways to give", "services": "What we do"}[shape]
-    con.execute("UPDATE store_menus SET label=? WHERE url='/#shop'",
-                (label,))
+    header = [(label, "/#shop")] + [(t, f"/p/{sl}") for sl, t in made]
+    if any(t == "reviews" for t, _ in secs):
+        header.append(("Reviews", "/#reviews"))
+    header += [("FAQ", "/#faq"), ("Blog", "/blog")]
+    footer = ([(label, "/#shop")] + [(t, f"/p/{sl}") for sl, t in made]
+              + [("Blog", "/blog")])
+    con.execute("DELETE FROM store_menus")
+    for loc, links in (("header", header), ("footer", footer)):
+        for pos, (lbl, url) in enumerate(links):
+            con.execute("INSERT INTO store_menus(location,label,url,"
+                        " position) VALUES(?,?,?,?)", (loc, lbl, url, pos))
     # This layout is deliberate — mark the back-fill applied so a restart
     # doesn't put the drinks showcase on top of it.
     con.execute("INSERT OR REPLACE INTO store_meta(k,v)"

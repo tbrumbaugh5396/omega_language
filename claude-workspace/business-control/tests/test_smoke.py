@@ -5899,11 +5899,61 @@ ok(_scon.execute("SELECT v FROM store_meta WHERE k='home_backfill'"
                  ).fetchone() is not None,
    "the layout marks the back-fill applied — a restart must not put the "
    "drinks showcase on top of a page that was chosen")
+_scon.execute(
+    "UPDATE page_sections SET settings=json_set(settings,'$.heading',"
+    " 'Edited by hand') WHERE page_slug='our-story' AND type='rich_text'")
+_scon.commit()
+_lay.apply(_scon, ["learning", "subs", "payments"], "School Co")
+ok(_scon.execute(
+       "SELECT COUNT(*) FROM page_sections WHERE page_slug='our-story'"
+       " AND settings LIKE '%Edited by hand%'").fetchone()[0] == 1
+   and _scon.execute("SELECT COUNT(*) FROM store_pages WHERE"
+                     " slug='our-story'").fetchone()[0] == 1,
+   "a page whose slug already exists is left entirely alone by a re-run — "
+   "it is someone's work, whatever stand-up is re-running over it")
+ok(_scon.execute("SELECT COUNT(*) FROM store_menus WHERE"
+                 " url='/p/our-story'").fetchone()[0] == 2,
+   "and the re-run still NAMES it in the nav — links are built from the "
+   "pages that exist, not just the ones this run created, which is the "
+   "bug the first version of this had")
 _scon.close()
 _shome = c.get("/", headers={"host": "schoolco.localhost"}).text
 ok("able to do" in _shome and "School Co" in _shome,
    "and it renders — the courses hero on their own hostname, their name "
    "on it, before anyone has touched a thing")
+
+# the pages beside the home — where "tell them more" lives
+_SH = {"host": "schoolco.localhost"}
+_sabout = c.get("/p/our-story", headers=_SH).text
+ok(c.get("/p/our-story", headers=_SH).status_code == 200
+   and "Who teaches this" in _sabout,
+   "the shape ships its secondary pages — a school's about page is about "
+   "the teacher, not 'our story' in a shop's voice")
+ok("image-banner placeholder" in _sabout,
+   "with the photo slot rendered as a labeled placeholder — in the live "
+   "editor that is a click-to-upload target, so the page says where its "
+   "picture goes")
+_scurr = c.get("/p/curriculum", headers=_SH).text
+ok("outcome language" in _scurr and "stuck" in _scurr,
+   "and the curriculum page scaffolds outcomes, not a topic list")
+ok('>The curriculum</a>' in _shome and '>Who teaches this</a>' in _shome
+   and ">Reviews</a>" in _shome,
+   "the nav carries the pages, and keeps Reviews because this shape's "
+   "home actually has a reviews section to anchor to")
+
+for _st2, _pg, _mark in ((["fundraising"], "impact", "stand behind"),
+                        (["selling"], "delivery-and-returns",
+                         "an invented policy is worse than a blank"),
+                        (["crm"], "how-we-work",
+                         "freelancer with a phone")):
+    _sh2, _pp = _lay.home_sections(_st2)
+    _pgs = {sl: secs for sl, _, secs in _lay.secondary_pages(_sh2)}
+    ok(_pg in _pgs and _mark in _jn.dumps(_pgs[_pg]),
+       f"the {_sh2} shape ships /p/{_pg} with its own voice")
+_np_hero = dict(_lay.home_sections(["fundraising"])[1])["hero"]
+ok(_np_hero["cta2_link"] == "/p/impact",
+   "the nonprofit hero's 'See the work' points at the impact page that "
+   "now exists — it used to link an anchor no section rendered")
 ok(">Courses</a>" in _shome and ">Shop</a>" not in _shome,
    "the nav's first word follows the shape — 'Shop' over a list of "
    "courses reads as a mistake")
