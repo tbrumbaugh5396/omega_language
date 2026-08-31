@@ -5841,6 +5841,11 @@ ok(not c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
    "creates a thing must vanish when the thing does")
 c.request("DELETE", "/api/store/admin/fleet/tenants/sizedco?keep_data=0",
           headers=AA)
+ok(c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
+         headers=AA).json()["offer"],
+   "and removing the install clears the engagement's pointer — a "
+   "dangling tenant_id left the client page offering Launch for nothing "
+   "while hiding the Stand up that could fix it")
 ok(not c.post(f"/api/store/admin/engagements/{_qeid}/gates/deposit_cleared",
               headers=AA, json={"note": "wire ref 123"}).json()
    .get("stand_up"),

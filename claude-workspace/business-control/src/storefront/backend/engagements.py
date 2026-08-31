@@ -2877,6 +2877,12 @@ def fleet_tenant_remove(tid: str, keep_data: int = 1,
                               actor=u["name"])
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # The engagement stops pointing at an install that no longer exists —
+    # a dangling tenant_id left the client page offering Launch for
+    # nothing, and hid the Stand up chip that could fix it.
+    con.execute("UPDATE engagements SET tenant_id='' WHERE tenant_id=?",
+                (tid,))
+    con.commit()
     return {"ok": True, **out}
 
 
