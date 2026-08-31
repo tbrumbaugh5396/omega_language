@@ -7144,12 +7144,26 @@ _out_r2 = c.post("/api/store/admin/fleet/tenants/revokeco/caps",
                  headers=AA,
                  json={"caps": ["selling", "payments", "subs"]}).json()
 _rcon4 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
-ok(not _out_r2["trimmed"] and _rcon4.execute(
-       "SELECT COUNT(*) FROM page_sections WHERE page_slug='home' AND"
-       " settings LIKE '%operator rewrote%'").fetchone()[0] == 1,
-   "but an EDITED section survives its capability's revocation — the "
-   "moment they touched it, it became their page, and revoking a "
-   "capability is not licence to delete their work")
+_redited = _rcon4.execute(
+    "SELECT enabled FROM page_sections WHERE page_slug='home' AND"
+    " settings LIKE '%operator rewrote%'").fetchone()
+ok(not _out_r2["trimmed"] and "Come find us" in _out_r2["hidden"]
+   and _redited is not None and _redited[0] == 0,
+   "an EDITED section is HIDDEN with its capability, not deleted — their "
+   "work is preserved off the page, and the toast says which and why")
+ok("operator rewrote" not in c.get("/", headers=_RH).text,
+   "so the revoked remnant is no longer visible on the storefront")
+_out_r3 = c.post("/api/store/admin/fleet/tenants/revokeco/caps",
+                 headers=AA, json={"caps": ["selling", "payments", "subs",
+                                            "events"]}).json()
+_rcon5 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+ok("Come find us" in (_out_r3["grown"].get("restored") or [])
+   and _rcon5.execute(
+       "SELECT enabled FROM page_sections WHERE page_slug='home' AND"
+       " settings LIKE '%operator rewrote%'").fetchone()[0] == 1
+   and "The operator rewrote this" in c.get("/", headers=_RH).text,
+   "and re-granting the capability RESTORES the hidden edited section — "
+   "their words come back exactly as they left them")
 c.request("DELETE", "/api/store/admin/fleet/tenants/revokeco?keep_data=0",
           headers=AA)
 ok("something specific" in c.get("/find", headers=HA).text

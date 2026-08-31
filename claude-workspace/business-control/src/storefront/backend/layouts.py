@@ -504,18 +504,30 @@ def extend_for_caps(con, added, all_caps, brand: str = "") -> dict:
     shape = shape_of(all_caps)
     done = {"sections": [], "pages": [], "nav": []}
 
-    have = {(r[0], (json.loads(r[1] or "{}")).get("heading", ""))
-            for r in con.execute(
-                "SELECT type, settings FROM page_sections"
-                " WHERE page_slug='home'")}
+    have = {}
+    for r in con.execute("SELECT id, type, settings, enabled FROM"
+                         " page_sections WHERE page_slug='home'"):
+        try:
+            have[(r[1], json.loads(r[2] or "{}").get("heading", ""))] = \
+                (r[0], r[3])
+        except ValueError:
+            continue
     # The shape-skips in _addons are stand-up reasoning ("the commerce
     # skeleton already sells, so no subs explainer") — reasoning that does
     # not hold for a page built BEFORE the capability existed. A later
     # purchase earns its section unconditionally; "services" is the shape
     # with no skips.
+    done["restored"] = []
     for _where, (stype, settings) in _addons("services", added):
         key = (stype, settings.get("heading", ""))
         if key in have:
+            sid_, enabled_ = have[key]
+            if not enabled_:
+                # hidden when its capability was revoked, edited copy kept
+                # — the capability is back, so is their section
+                con.execute("UPDATE page_sections SET enabled=1 WHERE"
+                            " id=?", (sid_,))
+                done["restored"].append(key[1] or stype)
             continue
         nxt = con.execute(
             "SELECT COALESCE(MAX(position), -1) + 1 FROM page_sections"
@@ -553,28 +565,36 @@ def extend_for_caps(con, added, all_caps, brand: str = "") -> dict:
     return done
 
 
-def trim_for_caps(con, removed) -> list:
-    """The reverse of growth, under a stricter rule: a revoked capability
-    takes back its add-on sections ONLY where the section is still
-    exactly the scaffolding growth placed — byte-for-byte untouched. The
-    moment an operator edited one, it became their page, and revocation
-    of a capability is not licence to delete their work; an edited
-    remnant merely stops being reachable through the gated routes.
-    Returns what was removed, so the caller can say it."""
+def trim_for_caps(con, removed) -> dict:
+    """The reverse of growth, in two strengths. A section still byte-for-
+    byte the scaffolding growth placed is DELETED with its capability. A
+    section the operator edited is HIDDEN (disabled), not deleted — their
+    work is preserved, off the page, and comes back if the capability
+    does. An edited section is recognised by type + heading; one whose
+    heading was also rewritten has lost its identity and simply stays,
+    which errs on the side of never touching someone's page by mistake.
+    Returns {"trimmed": [...], "hidden": [...]}."""
     import json
-    trimmed = []
+    out = {"trimmed": [], "hidden": []}
     for _where, (stype, settings) in _addons("services", removed):
+        head = settings.get("heading", "")
         for r in con.execute(
-                "SELECT id, settings FROM page_sections WHERE"
+                "SELECT id, settings, enabled FROM page_sections WHERE"
                 " page_slug='home' AND type=?", (stype,)).fetchall():
             try:
-                if json.loads(r[1]) == settings:
-                    con.execute("DELETE FROM page_sections WHERE id=?",
-                                (r[0],))
-                    trimmed.append(settings.get("heading") or stype)
-                    break
+                stored = json.loads(r[1])
             except ValueError:
                 continue
-    if trimmed:
+            if stored == settings:
+                con.execute("DELETE FROM page_sections WHERE id=?",
+                            (r[0],))
+                out["trimmed"].append(head or stype)
+                break
+            if head and stored.get("heading") == head and r[2]:
+                con.execute("UPDATE page_sections SET enabled=0 WHERE"
+                            " id=?", (r[0],))
+                out["hidden"].append(head)
+                break
+    if out["trimmed"] or out["hidden"]:
         con.commit()
-    return trimmed
+    return out

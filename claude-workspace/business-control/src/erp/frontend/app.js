@@ -1188,10 +1188,10 @@ async function capsEditor(tid, opts = {}) {
     <p class="dim" id="cg-quote" style="font-size:12.5px"></p>
     <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
       <input type="checkbox" id="cg-extend" checked style="width:auto">
-      Keep their storefront in step — adds what new capabilities earn,
-      and trims a revoked capability's sections only where still
-      untouched scaffolding (an edited section is theirs and stays)
-      </label>
+      Keep their storefront in step — adds what new capabilities earn;
+      a revoked capability's untouched scaffolding is removed, and an
+      edited section is hidden, kept, and restored if the capability
+      returns</label>
     <div class="modal-foot">
       <button class="btn" id="cg-go">Save grant</button>
       <button class="btn alt sm" id="cg-clear" title="back to no grant
@@ -1228,7 +1228,8 @@ async function capsEditor(tid, opts = {}) {
         { body: { caps, extend_site: $("#cg-extend").checked } });
       closeModal();
       const g = out.grown || {};
-      const grew = [...(g.sections || []), ...(g.pages || [])];
+      const grew = [...(g.sections || []), ...(g.pages || []),
+                    ...(g.restored || []).map((x) => `${x} (restored)`)];
       toast(`${tid}: ${out.caps.length} capabilities`
         + (out.added && out.added.length
            ? ` (+${out.added.join(", ")})` : "")
@@ -1236,7 +1237,9 @@ async function capsEditor(tid, opts = {}) {
            ? ` (−${out.removed.join(", ")})` : "")
         + (grew.length ? ` — site grew: ${grew.join(", ")}` : "")
         + (out.trimmed && out.trimmed.length
-           ? ` — site trimmed: ${out.trimmed.join(", ")}` : ""));
+           ? ` — site trimmed: ${out.trimmed.join(", ")}` : "")
+        + (out.hidden && out.hidden.length
+           ? ` — hidden (edited, kept): ${out.hidden.join(", ")}` : ""));
       done();
     } catch (err) { toast(err.message); }
   };
