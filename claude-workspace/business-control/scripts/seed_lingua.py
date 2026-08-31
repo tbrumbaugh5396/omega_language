@@ -39,10 +39,12 @@ THEME = {
     "brand": "lingua", "dot": ".",
     "title": "Lingua — learn a language with us",
     "description": "Small classes, real teachers, and progress you can see.",
-    "purple": "#2dd4bf",       # the accent (links, brand marks)
-    "lavender": "#5eead4",     # its lighter step
+    "purple": "#14b8a6",       # the accent: readable on the dark ground,
+                               # and carries dark-ink labels when a fill
+    "lavender": "#2dd4bf",     # its lighter step (soft tints derive from it)
     "orange": "#0d9488",       # the one hot button
     "ink": "#e8eaed", "bg": "#14161a",
+    "paper": "#1c1f25",        # lingua-portal's --surface, verbatim
     "font": "Inter", "display_font": "Inter", "wordmark_font": "Inter",
     "announce": [], "art": "card",
     "footer": "Lingua — a language school",

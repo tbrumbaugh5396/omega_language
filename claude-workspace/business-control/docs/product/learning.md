@@ -103,7 +103,30 @@ class of up to 12.
 
 ## Still waiting from the source
 
-- **Library loans** (and the bookworm badge), speaking/video quiz answers
-  (the grading engine already understands them; recording UI is what's
-  missing — they refuse at authoring rather than sit unmarkable), and the
-  SFU video transport for classes too large for a mesh.
+Audited against the source's full endpoint surface. Ported and live:
+courses/lessons/quizzes/grading, the class-session loop and derived
+payroll, admissions, the social layer, mesh video, notifications. Covered
+by the platform's own richer versions (deliberate substitutions, not
+gaps): auth and sessions, tenancy and licensing, audit, the admin
+console, tuition (course seats are products on the checkout rail), the
+seven-role matrix (mapped to admin/teacher/enrolled). Genuinely not yet
+ported:
+
+- **Recordings** — speaking/video quiz answers (the grading engine
+  understands them; authoring refuses until the capture flow lands),
+  teacher audio drills attached to lessons, and class recording (the
+  source composited the teacher's received tiles into one stream).
+- **The library** — lending desk with derived availability (and the
+  bookworm badge that waits on it).
+- **Lookup + speech** — the offline glossary/thesaurus with optional
+  LibreTranslate/Datamuse, and browser dictation/TTS. Together these are
+  the seed of the priced **Voice & translation** capability ($30,
+  depends Learning).
+- **QR identity** — per-person unguessable QR cards: scan-to-check-in at
+  class and scan-as-contact-handshake (the platform has QR scanning
+  infrastructure to build on).
+- **Data rights** — per-person export, and erasure with a shown plan
+  (the community module keeps messages ready to go with their person,
+  but nothing calls it yet).
+- **The calendar** — the month grid of class sessions.
+- **SFU transport** for classes too large for a 12-person mesh.

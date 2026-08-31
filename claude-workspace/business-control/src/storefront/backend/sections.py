@@ -352,9 +352,13 @@ def _hero(con, s) -> str:
                  f'rgba(27,24,31,.42),rgba(27,24,31,.42)),url({img});'
                  f'background-size:cover;background-position:center"')
     elif bg == "gradient":
-        # Soft wash rather than a saturated flood — the copy has to sit on it.
+        # Soft wash rather than a saturated flood — the copy has to sit on
+        # it. Every stop derives from the theme: a hardcoded near-white
+        # middle stop was a silver blob on any dark palette.
         style = (' style="background:radial-gradient(120% 100% at 78% 30%,'
-                 'var(--lav-soft) 0%, #f6f1fb 42%, var(--bg) 100%)"')
+                 'var(--lav-soft) 0%,'
+                 'color-mix(in srgb, var(--lav-soft) 55%, var(--bg)) 42%,'
+                 'var(--bg) 100%)"')
     else:
         canvas = '<canvas id="shader-bg"></canvas>'
     btns = ""

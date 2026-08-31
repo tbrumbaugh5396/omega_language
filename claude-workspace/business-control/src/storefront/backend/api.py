@@ -372,8 +372,14 @@ def theme_css(t: dict) -> str:
     variables, so a colour change can't fight the stylesheet's cascade."""
     disp = t.get("display_font") or THEME_DEFAULT["display_font"]
     mark = t.get("wordmark_font") or THEME_DEFAULT["wordmark_font"]
+    # `paper` is the card/menu surface — the one neutral the ink/bg
+    # arithmetic in store.css cannot derive (both a light and a dark theme
+    # want their cards LIGHTER than the page). Optional: absent means the
+    # stylesheet's white, which is what every light theme wants anyway.
+    paper = f"--paper:{t['paper']};" if t.get("paper") else ""
     return (f":root{{--purple:{t['purple']};--lavender:{t['lavender']};"
             f"--orange:{t['orange']};--ink:{t['ink']};--bg:{t['bg']};"
+            f"{paper}"
             f"--ui:'{t['font']}',system-ui,sans-serif;"
             f"--display:'{disp}',Georgia,serif;"
             f"--wordmark:'{mark}',var(--ui);}}")

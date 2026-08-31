@@ -6,19 +6,25 @@
 :root {
   /* brand */
   --purple: #6c00bf;
-  --purple-deep: #43007a;
+  --purple-deep: color-mix(in srgb, var(--purple) 70%, #000);
   --lavender: #8a77e1;
-  --lav-soft: #efe9f8;
+  --lav-soft: color-mix(in srgb, var(--lavender) 14%, var(--bg));
   --orange: #ff6900;
 
-  /* neutrals — warm paper, not grey */
+  /* neutrals — DERIVED from the theme's ink/bg pair rather than assuming a
+     light page. A tenant whose theme is dark (ink light, bg dark) gets a
+     consistent scale for free; on the default palette these land within a
+     hair of the old hand-picked values. --paper is the one the arithmetic
+     cannot decide (a light theme's card is LIGHTER than its page, a dark
+     theme's card is lighter too but from the other side), so the theme may
+     override it; this is the light default. */
   --ink: #1b181f;
-  --ink-2: #5d5768;
-  --ink-3: #8b8496;
+  --ink-2: color-mix(in srgb, var(--ink) 70%, var(--bg));
+  --ink-3: color-mix(in srgb, var(--ink) 48%, var(--bg));
   --bg: #fbf9f6;
   --paper: #ffffff;
-  --line: #e8e3ee;
-  --line-2: #f1edf6;
+  --line: color-mix(in srgb, var(--ink) 12%, var(--bg));
+  --line-2: color-mix(in srgb, var(--ink) 7%, var(--bg));
 
   /* the five flavours — ring colour per SKU, from the brand system */
   --f-yuzu: #ff8c1a;
@@ -90,7 +96,7 @@ svg.can { display: block; width: 100%; height: auto; }
 .ico-lg { width: 26px; height: 26px; }
 
 /* announcement — one message, quiet */
-.announce { background: var(--purple); color: #fff; overflow: hidden;
+.announce { background: var(--purple); color: var(--bg); overflow: hidden;
   font-size: 12.5px; font-weight: 500; letter-spacing: .01em; }
 .announce-track { display: flex; gap: 56px; width: max-content;
   padding: 9px 0; animation: marquee 40s linear infinite; }
@@ -277,13 +283,13 @@ svg.can { display: block; width: 100%; height: auto; }
   border: 1.5px solid transparent; transition: background .18s, color .18s,
   border-color .18s, transform .18s; letter-spacing: -0.005em; }
 .btn-pill:hover { transform: translateY(-1px); }
-.btn-pill.primary { background: var(--orange); color: #fff; }
+.btn-pill.primary { background: var(--orange); color: var(--bg); }
 .btn-pill.primary:hover { background: #e85f00; }
 .btn-pill.ghost { background: transparent; color: var(--ink);
   border-color: var(--line); }
 .btn-pill.ghost:hover { border-color: var(--ink); background: var(--paper); }
 .hero.centred .btn-pill.ghost { color: #fff; border-color: rgba(255,255,255,.7); }
-.btn-pill.dark { background: var(--ink); color: #fff; }
+.btn-pill.dark { background: var(--ink); color: var(--bg); }
 .btn-pill.dark:hover { background: var(--purple); }
 .btn-pill.sm { padding: 9px 18px; font-size: 13.5px; }
 .btn-pill.wide { width: 100%; }
@@ -378,7 +384,7 @@ svg.can { display: block; width: 100%; height: auto; }
   gap: 12px; margin-top: 10px; }
 .price { font-weight: 600; font-size: 17px; font-variant-numeric: tabular-nums; }
 .price .per { font-size: 12.5px; color: var(--ink-3); font-weight: 500; }
-.add-btn { background: var(--orange); color: #fff; border: none;
+.add-btn { background: var(--orange); color: var(--bg); border: none;
   border-radius: var(--r-pill); padding: 11px 20px; font-weight: 700;
   cursor: pointer; font-family: var(--ui); font-size: 14px;
   transition: background .18s, transform .18s; }
@@ -412,7 +418,7 @@ svg.can { display: block; width: 100%; height: auto; }
   font-size: 13.5px; cursor: pointer; font-family: var(--ui); color: var(--ink);
   transition: border-color .18s, background .18s, color .18s; }
 .tab:hover { border-color: var(--ink-3); }
-.tab.on { background: var(--purple); border-color: var(--purple); color: #fff; }
+.tab.on { background: var(--purple); border-color: var(--purple); color: var(--bg); }
 .tab .swatch { width: 9px; height: 9px; border-radius: 50%; }
 
 /* ---------- product page ---------- */
@@ -487,7 +493,8 @@ svg.can { display: block; width: 100%; height: auto; }
 .ingredients { font-size: 13.5px; color: var(--ink-2); line-height: 1.65; }
 /* sticky add-to-cart */
 .sticky-buy { position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
-  background: rgba(255,255,255,.94); backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
+  backdrop-filter: blur(14px);
   border-top: 1px solid var(--line); padding: 12px 26px;
   transform: translateY(105%); transition: transform .3s cubic-bezier(.4,0,.2,1); }
 .sticky-buy.show { transform: none; }
