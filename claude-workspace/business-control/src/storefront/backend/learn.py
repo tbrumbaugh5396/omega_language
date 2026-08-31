@@ -21,13 +21,14 @@ and — when the course names a product — a link to buy the seat.
 
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from erp.backend import classroom as CR
 from erp.backend import learning as L
 from . import sections as sect
-from .api import current_customer, get_con, render_shell
+from .api import current_customer, get_con, rate_limit, render_shell
 from .partners import _require_cap, brand_name
 
 router = APIRouter()
@@ -106,7 +107,8 @@ def my_courses(user=Depends(current_customer), con=Depends(get_con)):
             if p:
                 d["product"] = dict(p)
             more.append(d)
-    return {"enrolled": mine, "available": more}
+    return {"enrolled": mine, "available": more,
+            "achievements": L.achievements_of(con, user["id"])}
 
 
 @router.get("/api/learn/courses/{cid}")
@@ -135,10 +137,20 @@ def course_view(cid: int, user=Depends(current_customer),
             " ORDER BY id DESC LIMIT 1", (q["id"], user["id"])).fetchone()
         d["attempt"] = dict(a) if a else None
         quizzes.append(d)
+    open_s = CR.open_session_for_course(con, cid)
+    session = None
+    if open_s:
+        mine = con.execute(
+            "SELECT status FROM checkins WHERE session_id=? AND student_id=?",
+            (open_s.id, user["id"])).fetchone()
+        session = {"id": open_s.id, "started_at": open_s.started_at,
+                   "my_status": mine["status"] if mine else None}
     return {"course": {k: c[k] for k in ("id", "name", "language", "level",
                                          "blurb")},
             "lessons": lessons, "quizzes": quizzes,
-            "progress": L.course_progress(con, cid, user["id"])}
+            "progress": L.course_progress(con, cid, user["id"]),
+            "session": session,
+            "attendance": CR.attendance_of(con, cid, user["id"])}
 
 
 @router.get("/api/learn/lessons/{lid}")
@@ -220,6 +232,51 @@ def quiz_result(aid: int, user=Depends(current_customer),
     return L.attempt_result(con, user, aid)
 
 
+@router.post("/api/learn/sessions/{sid}/checkin")
+def session_checkin(sid: int, user=Depends(current_customer),
+                    con=Depends(get_con)):
+    """Self check-in: a student may say "I am here" — the pure rules decide
+    present vs late, refuse the unenrolled, and never let self-service
+    overwrite a teacher's ruling."""
+    _require_cap("learning")
+    c, fresh = CR.do_check_in(con, session_id=sid, student_id=user["id"])
+    con.commit()
+    return {"status": c.status, "at": c.at, "new_achievements": fresh}
+
+
+# ── the public door: programmes + registration ───────────────────────────────
+# No sign-in required. Submitting grants nothing — an administrator approves
+# the application in ops, and THAT creates the account and the seat.
+
+@router.get("/api/learn/programs")
+def programs(con=Depends(get_con)):
+    _require_cap("learning")
+    return L.public_programs(con)
+
+
+class RegisterBody(BaseModel):
+    name: str = ""
+    email: str = ""
+    phone: str = ""
+    language: str = ""
+    level: str = "A1"
+    goals: str = ""
+    availability: str = ""
+    course_id: int | None = None
+
+
+@router.post("/api/learn/register")
+def register(body: RegisterBody, request: Request, con=Depends(get_con)):
+    _require_cap("learning")
+    rate_limit(request)
+    rid = L.register_submit(
+        con, name=body.name, email=body.email, language=body.language,
+        level=body.level, phone=body.phone, goals=body.goals,
+        availability=body.availability, course_id=body.course_id)
+    con.commit()
+    return {"ok": True, "id": rid}
+
+
 # ── the page ─────────────────────────────────────────────────────────────────
 # One server-rendered shell; the little SPA inside talks to the APIs above
 # with the storefront's own stored sign-in.
@@ -256,6 +313,9 @@ def learn_page(con=Depends(get_con)):
  .lrn-meta{opacity:.7;font-size:.9em}
  .lrn-lesson h2,.lrn-lesson h3,.lrn-lesson h4{margin-top:1.2em}
  .lrn-lesson pre{background:rgba(127,127,127,.12);padding:12px;border-radius:8px;overflow-x:auto}
+ .lrn-live{border:1px solid currentColor;border-radius:10px;padding:12px 16px;margin:12px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+ .lrn-badges{display:flex;gap:8px;flex-wrap:wrap}
+ .lrn-badge{border:1px solid rgba(127,127,127,.4);border-radius:999px;padding:4px 12px;font-size:.9em}
 </style>
 <script>
 (() => {
@@ -279,10 +339,51 @@ def learn_page(con=Depends(get_con)):
     }
     return r.json();
   }
-  function needSignIn() {
-    root.innerHTML = `<p>Sign in to see your courses — use the
+  async function needSignIn() {
+    let programs = [];
+    try { programs = await api("/api/learn/programs"); } catch {}
+    root.innerHTML = `<p>Already a student? Sign in with the
       <b>account</b> door on <a href="/">the shop</a> (the same sign-in you
-      order with), then come back here.</p>`;
+      order with), then come back here.</p>
+      <h2 style="margin-top:28px">Apply to join</h2>
+      <p class="lrn-meta">Applying doesn't create an account — we review
+        every application, and approval is what opens your seat.</p>
+      <form id="lrn-apply" style="max-width:480px;display:grid;gap:10px">
+        <label>Your name<br><input name="name" required style="width:100%"></label>
+        <label>Email<br><input name="email" type="email" required style="width:100%"></label>
+        <label>Phone <span class="lrn-meta">(optional)</span><br>
+          <input name="phone" style="width:100%"></label>
+        <label>What do you want to learn?<br>
+          <input name="language" required style="width:100%"
+            placeholder="Spanish, French, …"></label>
+        ${programs.length ? `<label>Course<br>
+          <select name="course_id" style="width:100%">
+            <option value="">Let us suggest one</option>
+            ${programs.map((p) => `<option value="${p.id}">${esc(p.name)}${
+              p.language ? " — " + esc(p.language) : ""}${
+              p.level ? " (" + esc(p.level) + ")" : ""}</option>`).join("")}
+          </select></label>` : ""}
+        <label>Your goals <span class="lrn-meta">(optional)</span><br>
+          <textarea name="goals" rows="3" style="width:100%"></textarea></label>
+        <button class="lrn-btn primary" type="submit">Apply</button>
+      </form>`;
+    document.getElementById("lrn-apply").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        await api("/api/learn/register", {
+          name: f.name.value, email: f.email.value, phone: f.phone.value,
+          language: f.language.value, goals: f.goals.value,
+          course_id: f.course_id && f.course_id.value
+            ? +f.course_id.value : null });
+        root.innerHTML = `<h2>Application received</h2>
+          <p>Thank you — we read every application. Once it's approved
+          you'll have an account and a seat, and this page becomes your
+          classroom.</p>`;
+      } catch (err) {
+        alert(err.message);
+      }
+    };
   }
   async function home() {
     const d = await api("/api/learn/courses");
@@ -304,6 +405,11 @@ def learn_page(con=Depends(get_con)):
     root.innerHTML = (d.enrolled.length
         ? `<div class="lrn-grid">${d.enrolled.map(card).join("")}</div>`
         : "<p>You aren't enrolled in a course yet.</p>")
+      + (d.achievements && d.achievements.length
+        ? `<h2 style="margin-top:28px">Achievements</h2>
+           <div class="lrn-badges">${d.achievements.map((a) =>
+             `<span class="lrn-badge" title="you ${esc(a.what)}">${
+               esc(a.name)}</span>`).join("")}</div>` : "")
       + (d.available.length
         ? `<h2 style="margin-top:28px">More courses</h2>
            <div class="lrn-grid">${d.available.map(offer).join("")}</div>` : "");
@@ -312,11 +418,19 @@ def learn_page(con=Depends(get_con)):
   }
   async function course(cid) {
     const d = await api("/api/learn/courses/" + cid);
+    const att = d.attendance || {};
     root.innerHTML = `<span class="lrn-back" id="lrn-back">&larr; My courses</span>
       <h2>${esc(d.course.name)}</h2>
+      ${d.session ? `<div class="lrn-live">
+        <b>Class is in session.</b>
+        ${d.session.my_status
+          ? ` You're checked in — ${esc(d.session.my_status)}.`
+          : ` <button class="lrn-btn primary" id="lrn-here">I'm here</button>`}
+        </div>` : ""}
       <div class="lrn-bar"><i style="width:${d.progress.percent}%"></i></div>
       <p class="lrn-meta">${d.progress.lessons_done}/${d.progress.lessons_total} lessons done ·
-        ${d.progress.quizzes_passed}/${d.progress.quizzes_total} quizzes passed</p>
+        ${d.progress.quizzes_passed}/${d.progress.quizzes_total} quizzes passed${
+        att.classes_held ? ` · attended ${att.attended}/${att.classes_held} classes` : ""}</p>
       <h3>Lessons</h3>
       <ul class="lrn-list">${d.lessons.map((l) =>
         `<li><a href="#" data-l="${l.id}" class="${l.done ? "lrn-done" : ""}">${
@@ -327,6 +441,16 @@ def learn_page(con=Depends(get_con)):
         `<li><a href="#" data-q="${q.id}">${esc(q.title)}</a>
           <span class="lrn-meta">${q.attempt ? q.attempt.state : ""}</span></li>`).join("")}</ul>` : ""}`;
     document.getElementById("lrn-back").onclick = home;
+    const here = document.getElementById("lrn-here");
+    if (here) here.onclick = async () => {
+      try {
+        const r = await api(`/api/learn/sessions/${d.session.id}/checkin`, {});
+        alert("Checked in — " + r.status
+          + (r.new_achievements.length
+            ? ". Achievement: " + r.new_achievements[0].name : ""));
+        course(cid);
+      } catch (err) { alert(err.message); }
+    };
     root.querySelectorAll("[data-l]").forEach((el) => el.onclick = (e) => {
       e.preventDefault(); lesson(+el.dataset.l, cid); });
     root.querySelectorAll("[data-q]").forEach((el) => el.onclick = (e) => {

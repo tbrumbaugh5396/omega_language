@@ -38,8 +38,9 @@ def _init_core(tid=None):
         # imported here, not at the top: learning imports main's auth deps
         # back, which only exist once this module has finished defining them
         # — and _init_core first runs at the bottom of this file, where it has
-        from . import learning
+        from . import classroom, learning
         learning.init_tables(con)
+        classroom.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -3761,9 +3762,10 @@ app.include_router(store_discord.router)
 app.include_router(store_email.router)
 app.include_router(store_v1.router)
 
-from . import learning  # noqa: E402  (safe here — see _init_core)
+from . import classroom, learning  # noqa: E402  (safe here — see _init_core)
 from storefront.backend import learn as store_learn  # noqa: E402
 app.include_router(learning.router)
+app.include_router(classroom.router)
 app.include_router(store_learn.router)
 
 

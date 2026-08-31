@@ -8121,8 +8121,10 @@ function eventForm(e) {
    live server-side in one pure module — this screen only displays them. */
 
 async function renderLearning() {
-  const [courses, queue] = await Promise.all([
-    api("/api/learning/courses"), api("/api/learning/grading")]);
+  const [courses, queue, regs] = await Promise.all([
+    api("/api/learning/courses"), api("/api/learning/grading"),
+    S.user.is_admin ? api("/api/learning/registrations") : Promise.resolve([]),
+  ]);
   const card = (c) => `
     <div class="card ${c.active ? "" : "dim-card"}" data-course="${c.id}"
       style="cursor:pointer">
@@ -8151,6 +8153,18 @@ async function renderLearning() {
         ? `<button class="btn" id="lc-new">${opsIcon("pen", "btn-ic")}
             New course</button>` : ""}
     </div>
+    ${regs.length ? `<h3>Applications (${regs.length})</h3>
+      ${regs.map((r) => `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main"><b>${esc(r.name)}</b>
+            <span class="dim">${esc(r.email)} · wants ${esc(r.language)}${
+              r.level ? " (" + esc(r.level) + ")" : ""}${
+              r.course_name ? " · asked for " + esc(r.course_name) : ""}</span></div>
+          <button class="btn sm" data-regok="${r.id}">Approve</button>
+          <button class="btn alt sm" data-regno="${r.id}">Decline</button>
+        </div>
+        ${r.goals ? `<p class="dim" style="margin-top:8px">${esc(r.goals)}</p>` : ""}
+      </div>`).join("")}` : ""}
     ${queue.length ? `<h3>Needs a human mark (${queue.length})</h3>
       ${queue.map((a) => `<div class="card">
         <div class="doc-top">
@@ -8169,6 +8183,97 @@ async function renderLearning() {
     el.onclick = () => learningCourse(+el.dataset.course));
   view().querySelectorAll("[data-grade]").forEach((b) => b.onclick = (e) => {
     e.stopPropagation(); gradeAttempt(+b.dataset.grade); });
+  view().querySelectorAll("[data-regok]").forEach((b) => b.onclick = async () => {
+    try {
+      const out = await api(`/api/learning/registrations/${b.dataset.regok}/approve`,
+        { body: {} });
+      toast(out.existing_account
+        ? `${out.person.name} already had an account — enrolled`
+        : `Account created for ${out.person.name} — they sign in with that `
+          + "name on the storefront");
+      renderLearning();
+    } catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-regno]").forEach((b) => b.onclick = async () => {
+    const note = prompt("Why? (kept on the record)") || "";
+    await api(`/api/learning/registrations/${b.dataset.regno}/decline`,
+      { body: { note } });
+    renderLearning();
+  });
+  if (S.user.is_admin) learningPayroll();
+}
+
+async function learningPayroll() {
+  /* Payroll is a DERIVATION, not a ledger: every figure traces to a closed
+     class session; administrators own only the approve/hold/paid overlay. */
+  const p = await api("/api/learning/payroll");
+  if (!p.teachers.length) return;
+  const money = (c) => "$" + (c / 100).toFixed(2);
+  const el = document.createElement("div");
+  el.innerHTML = `
+    <h3 style="margin-top:16px">Teaching pay (derived from sessions)</h3>
+    ${p.teachers.map((t) => `<div class="card">
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(t.name)}</b>
+          <span class="dim">${t.sessions} session${t.sessions === 1 ? "" : "s"}
+            · ${t.billable_minutes} billable min
+            · owed ${money(t.amount_cents)}${
+            t.held_cents ? " · held " + money(t.held_cents) : ""}</span></div>
+        <button class="btn alt sm" data-rate="${t.teacher_id}">Rate</button>
+      </div>
+      ${t.lines.map((ln) => `<div class="doc-top" style="margin-top:6px">
+        <div class="doc-main"><span>${esc(ln.course)} ·
+          ${new Date(ln.started_at * 1000).toLocaleDateString()}</span>
+          <span class="dim">${ln.billable_minutes} min ·
+            ${ln.students_attended} attended · ${money(ln.amount_cents)}</span></div>
+        <span class="pill ${ln.state === "paid" ? "ok" : ""}">${ln.state}</span>
+        ${["approved", "held", "paid"].filter((s) => s !== ln.state).map((s) =>
+          `<button class="btn alt sm" data-pay="${ln.session_id}:${s}">${s}</button>`
+        ).join("")}
+      </div>`).join("")}
+    </div>`).join("")}`;
+  view().appendChild(el);
+  el.querySelectorAll("[data-pay]").forEach((b) => b.onclick = async () => {
+    const [sid, state] = b.dataset.pay.split(":");
+    await api(`/api/learning/payroll/${sid}/state`, { body: { state } });
+    renderLearning();
+  });
+  el.querySelectorAll("[data-rate]").forEach((b) => b.onclick = () =>
+    payRateForm(+b.dataset.rate, p.rates.find(
+      (r) => r.teacher_id === +b.dataset.rate)));
+}
+
+function payRateForm(teacherId, r) {
+  modal(`<h3>Pay rate</h3>
+    <p class="dim">Pay derives from closed sessions at these knobs — there is
+      no editable "amount owed" anywhere.</p>
+    <div class="row2">
+      <div><label>Hourly ($)</label><input id="pr-h" type="number" step="0.01"
+        value="${r ? (r.hourly_cents / 100).toFixed(2) : "0.00"}"></div>
+      <div><label>Per session ($)</label><input id="pr-s" type="number" step="0.01"
+        value="${r ? (r.per_session_cents / 100).toFixed(2) : "0.00"}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Minimum minutes</label><input id="pr-m" type="number"
+        value="${r ? r.minimum_minutes : 0}"></div>
+      <div><label>Round up to (min)</label><input id="pr-r" type="number"
+        value="${r ? r.round_to_min : 1}"></div>
+    </div>
+    <div class="modal-acts">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="pr-save">Save</button>
+    </div>`);
+  $("#pr-save").onclick = async () => {
+    try {
+      await api("/api/learning/payrates", { body: {
+        teacher_id: teacherId,
+        hourly_cents: Math.round((+$("#pr-h").value || 0) * 100),
+        per_session_cents: Math.round((+$("#pr-s").value || 0) * 100),
+        minimum_minutes: +$("#pr-m").value || 0,
+        round_to_min: +$("#pr-r").value || 1 } });
+      closeModal(); renderLearning();
+    } catch (err) { toast(err.message); }
+  };
 }
 
 async function courseForm(c) {
@@ -8262,6 +8367,9 @@ async function learningCourse(cid) {
       <div style="display:flex;gap:8px">
         <button class="btn alt" id="lc-back">All courses</button>
         <button class="btn alt" id="lc-edit">Edit course</button>
+        ${d.open_session_id
+          ? `<button class="btn" id="lc-session">Open class</button>`
+          : `<button class="btn" id="lc-start">Start class</button>`}
       </div>
     </div>
     <div class="page-head" style="margin-top:8px">
@@ -8282,9 +8390,32 @@ async function learningCourse(cid) {
         ? '<button class="btn sm" id="le-new">Enrol someone</button>' : ""}
     </div>
     ${d.enrollments.map(seat).join("")
-      || '<div class="card empty"><b>Nobody enrolled yet</b><span class="dim">Link the course to a product, or enrol by hand.</span></div>'}`;
+      || '<div class="card empty"><b>Nobody enrolled yet</b><span class="dim">Link the course to a product, or enrol by hand.</span></div>'}
+    ${d.sessions && d.sessions.length ? `
+      <h3 style="margin-top:16px">Classes held</h3>
+      ${d.sessions.map((s) => `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main">
+            <b>${new Date(s.started_at * 1000).toLocaleString()}</b>
+            <span class="dim">${s.status}${s.minutes ? " · " + s.minutes
+              + " min" : ""} · ${s.summary.attended}/${s.summary.enrolled}
+              attended${s.summary.counts.late
+              ? " (" + s.summary.counts.late + " late)" : ""}</span></div>
+          <button class="btn alt sm" data-sroster="${s.id}">Roster</button>
+        </div></div>`).join("")}` : ""}`;
   $("#lc-back").onclick = renderLearning;
   $("#lc-edit").onclick = () => courseForm(d);
+  if ($("#lc-start")) $("#lc-start").onclick = async () => {
+    try {
+      const r = await api("/api/learning/sessions",
+        { body: { course_id: cid } });
+      sessionRoster(r.session.id, cid);
+    } catch (err) { toast(err.message); }
+  };
+  if ($("#lc-session")) $("#lc-session").onclick = () =>
+    sessionRoster(d.open_session_id, cid);
+  view().querySelectorAll("[data-sroster]").forEach((b) => b.onclick = () =>
+    sessionRoster(+b.dataset.sroster, cid));
   $("#ll-new").onclick = () => lessonForm(cid, null);
   $("#lq-new").onclick = async () => {
     modal(`<h3>New quiz</h3>
@@ -8353,6 +8484,63 @@ async function learningCourse(cid) {
     if (!confirm("End this seat? Their progress is kept.")) return;
     await api(`/api/learning/enrollments/${b.dataset.eend}/end`, { body: {} });
     learningCourse(cid);
+  });
+}
+
+async function sessionRoster(sid, cid) {
+  /* The attendance screen, straight from the source's loop: every enrolled
+     student appears; no check-in reads as absent and is never silently
+     upgraded; a teacher's mark records who made it and beats self check-in. */
+  const d = await api(`/api/learning/sessions/${sid}`);
+  const open = d.session.status === "open";
+  const STATUSES = ["present", "late", "absent", "excused"];
+  const row = (r) => `<div class="card">
+    <div class="doc-top">
+      <div class="doc-main"><b>${esc(r.name)}</b>
+        <span class="dim">${r.method
+          ? `${esc(r.status)} · ${r.method === "self" ? "checked in"
+            : r.method === "system" ? "auto-marked at close"
+            : "marked by teacher"}${r.at ? " · " + new Date(r.at * 1000)
+            .toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}`
+          : (open ? "not here yet" : esc(r.status))}${
+          r.note ? " · " + esc(r.note) : ""}</span></div>
+      <span class="pill ${["present", "late"].includes(r.status) ? "ok" : ""}">${
+        esc(r.status)}</span>
+      ${open ? STATUSES.map((s) =>
+        `<button class="btn alt sm" data-mk="${r.student_id}:${s}">${s}</button>`
+      ).join("") : ""}
+    </div></div>`;
+  const sum = d.summary;
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>${esc(d.course.name)} — ${open ? "class in session"
+        : "class record"}</h2>
+        <p class="dim">${new Date(d.session.started_at * 1000).toLocaleString()}
+          · ${d.session.minutes} min${open ? " so far" : ""}
+          · late after ${d.session.late_after_min} min
+          · ${sum.attended}/${sum.enrolled} attended
+          (${Math.round(sum.rate * 100)}%)</p></div>
+      <div style="display:flex;gap:8px">
+        <button class="btn alt" id="sr-back">Course</button>
+        ${open ? '<button class="btn" id="sr-close">End class</button>' : ""}
+      </div>
+    </div>
+    ${d.roster.map(row).join("")
+      || '<div class="card empty"><b>Nobody is enrolled</b></div>'}`;
+  $("#sr-back").onclick = () => learningCourse(cid);
+  if ($("#sr-close")) $("#sr-close").onclick = async () => {
+    if (!confirm("End the class? Students who never checked in are recorded "
+      + "absent.")) return;
+    await api(`/api/learning/sessions/${sid}/close`, { body: {} });
+    sessionRoster(sid, cid);
+  };
+  view().querySelectorAll("[data-mk]").forEach((b) => b.onclick = async () => {
+    const [uid, status] = b.dataset.mk.split(":");
+    try {
+      await api(`/api/learning/sessions/${sid}/mark`,
+        { body: { student_id: +uid, status } });
+      sessionRoster(sid, cid);
+    } catch (err) { toast(err.message); }
   });
 }
 

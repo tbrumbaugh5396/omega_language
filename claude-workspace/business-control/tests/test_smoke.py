@@ -7404,6 +7404,237 @@ _e_ops = c.get(f"/api/learning/courses/{_crs2}", headers=AA).json()["enrollments
 ok(_e_ops and _e_ops[0]["source"].startswith("order:"),
    "and the seat records which order opened it")
 
+# --- the classroom: attendance rules, ported pure from lingua-portal -------
+# Every check states a rule a school actually has. Where a rule could go
+# either way (late still counts as attending; rounding favours the teacher),
+# the check records the decision so a future change has to argue with it.
+from erp.backend import attendance as _At  # noqa: E402
+
+_T0 = 1_700_000_000
+_M = 60
+
+
+def _sess(**kw):
+    base = dict(id=1, course_id=10, teacher_id=100, started_at=_T0,
+                late_after_min=10)
+    base.update(kw)
+    return _At.Session(**base)
+
+
+def _at_code(fn, *a, **kw):
+    try:
+        fn(*a, **kw)
+        return None
+    except _At.DomainError as e:
+        return e.code
+
+
+ok(_At.start_session(course_id=10, teacher_id=100, now=_T0)["status"] == "open"
+   and _at_code(_At.start_session, course_id=10, teacher_id=100, now=_T0,
+                open_sessions=[_sess()]) == "already_open"
+   and _At.start_session(course_id=11, teacher_id=100, now=_T0,
+                         open_sessions=[_sess()])["course_id"] == 11,
+   "one open session per course — a second would split the roster and "
+   "double-pay the teacher; a different course may start concurrently")
+_closed = _At.close_session(_sess(), now=_T0 + 50 * _M, actor_id=100)
+ok(_closed["ended_at"] == _T0 + 50 * _M and _closed["closed_by"] == 100
+   and _at_code(_At.close_session, _sess(status="closed", ended_at=_T0),
+                now=_T0, actor_id=100) == "already_closed"
+   and _at_code(_At.close_session, _sess(), now=_T0 - 60,
+                actor_id=100) == "ends_before_start",
+   "closing records end time and WHO closed; twice is refused; a class "
+   "cannot end before it began")
+_E = [1, 2, 3]
+ok(_At.check_in(_sess(), student_id=1, at=_T0 + 2 * _M,
+                enrolled_ids=_E).status == "present"
+   and _At.check_in(_sess(), student_id=1, at=_T0 + 11 * _M,
+                    enrolled_ids=_E).status == "late"
+   and _At.check_in(_sess(), student_id=1, at=_T0 + 10 * _M,
+                    enrolled_ids=_E).status == "present",
+   "the late window classifies arrivals, and the boundary minute itself is "
+   "still present")
+ok(_at_code(_At.check_in, _sess(), student_id=99, at=_T0,
+            enrolled_ids=_E) == "not_enrolled"
+   and _at_code(_At.check_in, _sess(status="closed"), student_id=1, at=_T0,
+                enrolled_ids=_E) == "session_not_open"
+   and _at_code(_At.check_in, _sess(), student_id=1, at=_T0 - 30 * _M,
+                enrolled_ids=_E) == "too_early"
+   and _at_code(_At.check_in, _sess(), student_id=1, at=_T0,
+                enrolled_ids=_E, status="excused") == "self_status_forbidden",
+   "check-in refuses the unenrolled, the closed class, the early bird, and "
+   "a student excusing themselves")
+_tm = _At.check_in(_sess(), student_id=2, at=_T0 + _M, enrolled_ids=_E,
+                   method="teacher", marked_by=100, status="excused")
+ok(_tm.status == "excused" and _tm.marked_by == 100
+   and _at_code(_At.check_in, _sess(), student_id=2, at=_T0 + 5 * _M,
+                enrolled_ids=_E, existing=_tm) == "teacher_marked"
+   and _At.check_in(_sess(), student_id=2, at=_T0 + 5 * _M, enrolled_ids=_E,
+                    existing=_tm, method="teacher", marked_by=100,
+                    status="present").status == "present",
+   "a teacher may set any status and it records who; self check-in never "
+   "overwrites a teacher's ruling, but the teacher may correct their own")
+_ros = _At.finalize_roster(
+    _sess(), enrolled=[(1, "Ana"), (2, "Bo"), (3, "Cy")],
+    checkins=[_At.CheckIn(1, 1, _T0, "present", "self"),
+              _At.CheckIn(1, 2, _T0, "excused", "teacher", 100)], now=_T0)
+_sm = _At.attendance_summary(_ros)
+ok(len(_ros) == 3 and _ros[2].status == "absent"
+   and _sm["attended"] == 1 and _sm["rate"] == 0.5
+   and _At.attendance_summary(
+       [_At.RosterRow(1, "L", "late")])["attended"] == 1,
+   "no check-in defaults to absent, never silently upgraded; LATE counts as "
+   "attending; EXCUSED leaves the denominator instead of counting against "
+   "the class")
+_hr = _At.PayRate(teacher_id=100, hourly_cents=5000)
+_done = _sess(ended_at=_T0 + 90 * _M, status="closed")
+ok(_At.pay_for_session(_done, _hr, students_attended=4).amount_cents == 7500
+   and _at_code(_At.pay_for_session, _sess(), _hr,
+                students_attended=0) == "session_open"
+   and _At.pay_for_session(
+       _sess(ended_at=_T0 + 20 * _M, status="closed"), _hr,
+       students_attended=1, minimum_minutes=60).amount_cents == 5000,
+   "90 min at $50/h is $75; an open session is not billable; a minimum pays "
+   "the floor when a class ends early")
+ok(_At.billable_minutes(_sess(ended_at=_T0 + 31 * _M, status="closed"),
+                        round_to_min=15) == 45
+   and _At.billable_minutes(_sess(ended_at=_T0 + 30 * _M, status="closed"),
+                            round_to_min=15) == 30
+   and _At.pay_for_session(
+       _sess(ended_at=_T0 + 60 * _M, status="cancelled"), _hr,
+       students_attended=0).amount_cents == 0
+   and _At.pay_for_session(
+       _sess(ended_at=_T0 + 60 * _M, status="cancelled"), _hr,
+       students_attended=0, pay_cancelled=True).amount_cents == 5000,
+   "rounding is UP — the ambiguity favours the person who did the work; an "
+   "exact block does not round up; a cancelled class pays nothing unless "
+   "the school chooses to")
+_pp = _At.payroll_period([
+    _At.PayLine(1, 10, 100, _T0, 60, 60, 5000, 3, "approved"),
+    _At.PayLine(2, 10, 100, _T0, 60, 60, 5000, 3, "pending"),
+    _At.PayLine(3, 10, 100, _T0, 60, 60, 5000, 0, "held"),
+    _At.PayLine(4, 11, 200, _T0, 30, 30, 2500, 5, "approved")])
+_t100 = [t for t in _pp["teachers"] if t["teacher_id"] == 100][0]
+ok(len(_pp["teachers"]) == 2 and _t100["amount_cents"] == 10000
+   and _pp["held_cents"] == 5000 and _pp["total_cents"] == 12500
+   and _At.money(7500) == "$75.00" and _At.money(5) == "$0.05",
+   "a period groups by teacher; held lines are excluded from the payable "
+   "total but still reported, so a dispute is visible rather than silently "
+   "deducted")
+
+# --- admissions: a registration is not an account --------------------------
+# The public form grants nothing; an administrator's approval is what
+# creates the person and the seat. Still on alpha, still over the wire.
+_reg1 = c.post("/api/learn/register", headers=HA, json={
+    "name": "Nina New", "email": "nina@example.test", "language": "Spanish",
+    "goals": "I want to order coffee in Madrid"}).json()
+ok(_reg1["ok"], "the public form takes an application with no sign-in")
+_reg2 = c.post("/api/learn/register", headers=HA, json={
+    "name": "Nina New", "email": "NINA@example.test", "language": "Spanish",
+    "course_id": _crs}).json()
+ok(_reg2["id"] == _reg1["id"],
+   "a resubmission UPDATES the pending application — a queue of "
+   "near-identical rows is how a real applicant gets lost")
+_rq = c.get("/api/learning/registrations", headers=AA).json()
+ok(any(r["id"] == _reg1["id"] and r["course_id"] == _crs for r in _rq),
+   "the application sits in the ops queue with the course it asked for")
+ok(c.get("/api/learning/registrations", headers=TT).status_code == 403,
+   "the queue is the administrator's, not the teacher's")
+_app = c.post(f"/api/learning/registrations/{_reg1['id']}/approve",
+              headers=AA, json={}).json()
+ok(not _app["existing_account"] and _app["course_id"] == _crs,
+   "approval creates the account and the seat in one act")
+ok(c.post(f"/api/learning/registrations/{_reg1['id']}/approve",
+          headers=AA, json={}).status_code == 409,
+   "and refuses to run twice — idempotence is what keeps a double-click "
+   "from minting two students")
+_nina = c.post("/api/login", headers=HA, json={
+    "name": _app["person"]["name"], "role": "customer"}).json()
+NN = {"Authorization": f"Bearer {_nina['token']}", **HA}
+ok(any(x["id"] == _crs for x in
+       c.get("/api/learn/courses", headers=NN).json()["enrolled"]),
+   "the approved student signs in and finds their course waiting")
+c.post("/api/learn/register", headers=HA, json={
+    "name": "Turned Away", "email": "no@example.test", "language": "Latin"})
+_reg3 = [r for r in c.get("/api/learning/registrations", headers=AA).json()
+         if r["email"] == "no@example.test"][0]
+c.post(f"/api/learning/registrations/{_reg3['id']}/decline", headers=AA,
+       json={"note": "no Latin programme this term"})
+ok(not any(r["id"] == _reg3["id"] for r in
+           c.get("/api/learning/registrations", headers=AA).json())
+   and c.get("/api/learning/registrations?state=declined",
+             headers=AA).json()[0]["note"] == "no Latin programme this term",
+   "declining keeps the record with its reason — 'why was this person "
+   "turned away' is a question schools get asked")
+
+# --- the class-session loop over the wire ----------------------------------
+ok(c.post("/api/learning/sessions", headers=LN,
+          json={"course_id": _crs}).status_code == 403,
+   "a learner cannot start a class")
+_cls = c.post("/api/learning/sessions", headers=TT,
+              json={"course_id": _crs}).json()
+_sid = _cls["session"]["id"]
+ok(_cls["session"]["status"] == "open"
+   and c.post("/api/learning/sessions", headers=TT,
+              json={"course_id": _crs}).status_code == 409,
+   "the teacher opens a class; a second open session for the same course "
+   "is refused")
+_ci = c.post(f"/api/learn/sessions/{_sid}/checkin", headers=LN).json()
+ok(_ci["status"] == "present",
+   "a student says 'I'm here' from the learning page and the rules "
+   "classify the arrival")
+ok(any(a["code"] == "first_checkin" for a in _ci["new_achievements"]),
+   "…and the first check-in is a badge moment, granted at the moment it "
+   "was earned")
+c.post(f"/api/learning/sessions/{_sid}/mark", headers=TT, json={
+    "student_id": _nina["id"], "status": "excused",
+    "note": "travelling this week"})
+ok(c.post(f"/api/learn/sessions/{_sid}/checkin", headers=NN)
+   .status_code == 409,
+   "a teacher's ruling is not overwritten by a later self check-in")
+_ros2 = c.get(f"/api/learning/sessions/{_sid}", headers=TT).json()
+ok(_ros2["summary"]["attended"] == 1
+   and any(r["status"] == "excused" and r["note"] == "travelling this week"
+           for r in _ros2["roster"]),
+   "the roster shows every enrolled student with who-asserted-what")
+_closed_r = c.post(f"/api/learning/sessions/{_sid}/close",
+                   headers=TT).json()
+ok(_closed_r["session"]["status"] == "closed"
+   and all(r["status"] != "absent" or r["method"] == "system"
+           for r in _closed_r["roster"]),
+   "closing records system-marked absents for the silent — 'no row' is "
+   "never ambiguous between absent and nobody-took-attendance")
+_att = c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["attendance"]
+ok(_att["classes_held"] == 1 and _att["attended"] == 1,
+   "the learner's course page carries their attendance standing")
+
+# --- payroll, derived --------------------------------------------------------
+c.post("/api/learning/payrates", headers=AA, json={
+    "teacher_id": _tch["id"], "hourly_cents": 5000, "minimum_minutes": 30})
+_pr = c.get("/api/learning/payroll", headers=AA).json()
+_trow = [t for t in _pr["teachers"] if t["teacher_id"] == _tch["id"]][0]
+ok(_trow["amount_cents"] == 2500 and _trow["lines"][0]["state"] == "pending",
+   "pay derives from the closed session — a class that ended early pays the "
+   "30-minute floor at $50/h, and no stored amount exists anywhere")
+c.post(f"/api/learning/payroll/{_sid}/state", headers=AA,
+       json={"state": "held", "note": "roster query"})
+_pr2 = c.get("/api/learning/payroll", headers=AA).json()
+_trow2 = [t for t in _pr2["teachers"] if t["teacher_id"] == _tch["id"]][0]
+ok(_trow2["amount_cents"] == 0 and _trow2["held_cents"] == 2500,
+   "a held line leaves the payable total but stays visible — a dispute is "
+   "never silently deducted")
+c.post(f"/api/learning/payroll/{_sid}/state", headers=AA,
+       json={"state": "approved"})
+ok([t for t in c.get("/api/learning/payroll", headers=AA).json()["teachers"]
+    if t["teacher_id"] == _tch["id"]][0]["amount_cents"] == 2500,
+   "approving restores it to the payable total")
+ok(c.get("/api/learning/payroll", headers=TT).status_code == 403,
+   "payroll is the administrator's screen")
+_ach = c.get("/api/learn/courses", headers=LN).json()["achievements"]
+ok({"first_checkin", "quiz_pass", "quiz_perfect"} <=
+   {a["code"] for a in _ach},
+   "the learner's badges accumulated from what actually happened: a "
+   "check-in, a pass, a perfect score")
+
 # the capability wall: /learn is part of the Learning grant, not the core
 c.post("/api/store/admin/fleet/tenants", headers=AA,
        json={"id": "learnco", "brand": "Learn Co", "klass": "micro"})

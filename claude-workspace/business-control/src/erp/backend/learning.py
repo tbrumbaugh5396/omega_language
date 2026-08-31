@@ -122,6 +122,32 @@ CREATE TABLE IF NOT EXISTS quiz_responses (
   feedback TEXT DEFAULT '',
   PRIMARY KEY (attempt_id, question_id)
 );
+
+CREATE TABLE IF NOT EXISTS registrations (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT DEFAULT '',
+  language TEXT NOT NULL,
+  level TEXT DEFAULT 'A1',
+  goals TEXT DEFAULT '',
+  availability TEXT DEFAULT '',
+  course_id INTEGER,
+  state TEXT NOT NULL DEFAULT 'pending'
+    CHECK (state IN ('pending','approved','declined')),
+  note TEXT DEFAULT '',
+  decided_by INTEGER,
+  decided_at REAL,
+  person_id INTEGER,                       -- users.id once approved
+  created_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS student_achievements (
+  user_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  earned_at REAL NOT NULL,
+  PRIMARY KEY (user_id, code)
+);
 """
 
 
@@ -340,6 +366,7 @@ def submit_attempt(con, user, attempt_id: int) -> dict:
     if grade["is_final"]:                   # nothing needs a human — settle now
         con.execute("UPDATE quiz_attempts SET state='graded', graded_at=?"
                     " WHERE id=?", (time.time(), attempt_id))
+        award_achievements(con, user["id"], quiz=grade)   # the badge moment
     else:
         notify.push(
             con, f"Quiz to grade: {quiz['title']}",
@@ -375,6 +402,7 @@ def grade_response(con, grader, attempt_id: int, question_id: int, *,
         notify.push(con, f"Your quiz was graded: {quiz['title']}",
                     f"scored {grade['percent']}%", kind="learning",
                     user_id=a["user_id"], dedup=f"graded:{attempt_id}")
+        award_achievements(con, a["user_id"], quiz=grade)
     return grade
 
 
@@ -433,6 +461,199 @@ def course_progress(con, course_id: int, user_id: int) -> dict:
             "quizzes_passed": passed, "quizzes_total": quizzes_total,
             "percent": round(100.0 * (done + passed) /
                              max(1, total + quizzes_total))}
+
+
+# ── programme registration ───────────────────────────────────────────────────
+# The shape that matters, kept from the source: **a registration is not an
+# account.** Anyone can submit the public form, and submitting grants nothing
+# — no login, no enrolment, no access. An administrator reviews it, and
+# *approving* is what creates the person and places them in a course. That
+# separation is what keeps a public form from being a way to appear on a
+# class roster. Declining keeps the record with a reason rather than deleting
+# it, because "why was this person turned away" is a question schools get
+# asked.
+
+REG_PENDING, REG_APPROVED, REG_DECLINED = "pending", "approved", "declined"
+
+
+def register_submit(con, *, name: str, email: str, language: str,
+                    level: str = "A1", phone: str = "", goals: str = "",
+                    availability: str = "",
+                    course_id: int | None = None) -> int:
+    name = str(name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(400, "please give your name")
+    email = str(email or "").strip().lower()
+    if "@" not in email:
+        raise HTTPException(400, "a working email is how we reach you")
+    if not str(language or "").strip():
+        raise HTTPException(400, "choose the language you want to learn")
+    # An existing application is UPDATED rather than duplicated: people
+    # resubmit forms, and a queue of near-identical rows loses the applicant.
+    # A resubmission that names no course keeps the one already chosen — an
+    # absent field is "unchanged", not "cleared".
+    prev = con.execute("SELECT * FROM registrations WHERE lower(email)=?"
+                       " AND state='pending'", (email,)).fetchone()
+    if prev:
+        keep_course = course_id if course_id is not None else prev["course_id"]
+        con.execute(
+            "UPDATE registrations SET name=?, phone=?, language=?, level=?,"
+            " goals=?, availability=?, course_id=?, created_at=? WHERE id=?",
+            (name[:120], str(phone)[:40], language[:20], (level or "A1")[:20],
+             str(goals)[:2000], str(availability)[:500], keep_course,
+             time.time(), prev["id"]))
+        return prev["id"]
+    cur = con.execute(
+        "INSERT INTO registrations(name,email,phone,language,level,goals,"
+        " availability,course_id,state,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (name[:120], email, str(phone)[:40], language[:20],
+         (level or "A1")[:20], str(goals)[:2000], str(availability)[:500],
+         course_id, REG_PENDING, time.time()))
+    notify.push(con, f"Course application: {name}",
+                f"wants to learn {language}", kind="learning",
+                dedup=f"reg:{email}")
+    return cur.lastrowid
+
+
+def register_approve(con, actor, reg_id: int,
+                     course_id: int | None = None) -> dict:
+    """Create the learner's account and enrol them — approving is the act
+    that grants access, and it refuses to run twice."""
+    r = con.execute("SELECT * FROM registrations WHERE id=?",
+                    (reg_id,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such registration")
+    if r["state"] != REG_PENDING:
+        raise HTTPException(409, f"this registration is already {r['state']}")
+    course_id = course_id or r["course_id"]
+    existing = con.execute("SELECT * FROM users WHERE lower(email)=?"
+                           " AND email != ''",
+                           (r["email"].lower(),)).fetchone()
+    if existing:
+        person = dict(existing)             # already a person: enrol, don't duplicate
+    else:
+        import secrets
+        name = r["name"]
+        n = 2
+        while con.execute("SELECT 1 FROM users WHERE name=?",
+                          (name,)).fetchone():
+            name = f"{r['name']} ({n})"; n += 1
+        cur = con.execute(
+            "INSERT INTO users(name,email,role,token,created_at)"
+            " VALUES(?,?,?,?,?)",
+            (name, r["email"], "customer", secrets.token_urlsafe(24),
+             time.time()))
+        person = dict(con.execute("SELECT * FROM users WHERE id=?",
+                                  (cur.lastrowid,)).fetchone())
+    if course_id:
+        enroll(con, course_id, person["id"], source=f"registration:{reg_id}")
+    con.execute(
+        "UPDATE registrations SET state=?, decided_by=?, decided_at=?,"
+        " person_id=?, course_id=? WHERE id=?",
+        (REG_APPROVED, actor["id"], time.time(), person["id"], course_id,
+         reg_id))
+    return {"person": {k: person[k] for k in ("id", "name", "email", "role")},
+            "course_id": course_id, "existing_account": bool(existing)}
+
+
+def register_decline(con, actor, reg_id: int, note: str = "") -> None:
+    r = con.execute("SELECT state FROM registrations WHERE id=?",
+                    (reg_id,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such registration")
+    if r["state"] != REG_PENDING:
+        raise HTTPException(409, f"this registration is already {r['state']}")
+    con.execute("UPDATE registrations SET state=?, decided_by=?, decided_at=?,"
+                " note=? WHERE id=?",
+                (REG_DECLINED, actor["id"], time.time(), str(note)[:1000],
+                 reg_id))
+
+
+def public_programs(con) -> list:
+    """What the public form offers. Only active courses, and never the
+    teacher's private details."""
+    rows = con.execute(
+        "SELECT c.id, c.name, c.language, c.level, u.name AS teacher_name,"
+        " (SELECT COUNT(*) FROM enrollments e WHERE e.course_id=c.id"
+        "  AND (e.until IS NULL OR e.until > ?)) AS enrolled"
+        " FROM courses c LEFT JOIN users u ON u.id=c.teacher_id"
+        " WHERE c.active=1 ORDER BY c.language, c.level",
+        (time.time(),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── achievements ─────────────────────────────────────────────────────────────
+# Earned once, kept forever, computed from what actually happened. The engine
+# is deliberately dumb: award() re-derives every badge from the data each
+# call and inserts whichever are missing — the tables that record check-ins
+# and attempts ARE the progress, so a badge can never be wrong, only late.
+# Definitions live in code because a badge is a product decision: adding one
+# is a one-line edit, granted retroactively to everyone who already
+# qualifies. (The source's friend and library badges wait for their
+# subsystems to arrive.)
+
+ACHIEVEMENT_DEFS = {
+    "first_checkin": ("First day", "checked in to your first class"),
+    "checkins_10":   ("Regular", "checked in ten times"),
+    "checkins_50":   ("Fixture", "checked in fifty times"),
+    "quiz_pass":     ("Quiz passer", "passed your first quiz"),
+    "quiz_perfect":  ("Perfectionist", "scored 100% on a quiz"),
+}
+
+
+def _earned_codes(con, uid: int) -> set:
+    n = con.execute("SELECT COUNT(*) AS n FROM checkins WHERE student_id=?"
+                    " AND status IN ('present','late')", (uid,)).fetchone()["n"]
+    out = set()
+    if n >= 1:
+        out.add("first_checkin")
+    if n >= 10:
+        out.add("checkins_10")
+    if n >= 50:
+        out.add("checkins_50")
+    return out
+
+
+def award_achievements(con, user_id: int, *, quiz: dict | None = None) -> list:
+    """Grant whatever this person has earned but not yet been given; the new
+    ones come back already notified. Quiz badges are the one exception to
+    derive-from-data: grades are derived (like payroll), never stored, so the
+    grading path hands its freshly computed result in via `quiz`."""
+    uid = int(user_id)
+    have = {r["code"] for r in con.execute(
+        "SELECT code FROM student_achievements WHERE user_id=?",
+        (uid,)).fetchall()}
+    earned = _earned_codes(con, uid)
+    if quiz:
+        if quiz.get("passed"):
+            earned.add("quiz_pass")
+        if (quiz.get("percent") or 0) >= 100:
+            earned.add("quiz_perfect")
+    fresh = []
+    for code in earned - have:
+        if code not in ACHIEVEMENT_DEFS:
+            continue
+        con.execute("INSERT OR IGNORE INTO student_achievements"
+                    "(user_id,code,earned_at) VALUES(?,?,?)",
+                    (uid, code, time.time()))
+        name, what = ACHIEVEMENT_DEFS[code]
+        fresh.append({"code": code, "name": name, "what": what})
+        notify.push(con, f"Achievement: {name}", f"you {what}",
+                    kind="learning", user_id=uid, dedup=f"ach:{uid}:{code}")
+    return fresh
+
+
+def achievements_of(con, user_id: int) -> list:
+    out = []
+    for r in con.execute("SELECT code, earned_at FROM student_achievements"
+                         " WHERE user_id=? ORDER BY earned_at",
+                         (int(user_id),)).fetchall():
+        if r["code"] in ACHIEVEMENT_DEFS:
+            name, what = ACHIEVEMENT_DEFS[r["code"]]
+            out.append({"code": r["code"], "name": name, "what": what,
+                        "earned_at": r["earned_at"]})
+    return out
 
 
 # ── ops routes ───────────────────────────────────────────────────────────────
@@ -537,6 +758,10 @@ def ops_course_detail(cid: int, user=Depends(current_user),
         " WHERE e.course_id=? ORDER BY e.since DESC", (cid,)).fetchall()]
     for e in d["enrollments"]:
         e["progress"] = course_progress(con, cid, e["user_id"])
+    from . import classroom                 # lazy: classroom imports us back
+    open_s = classroom.open_session_for_course(con, cid)
+    d["open_session_id"] = open_s.id if open_s else None
+    d["sessions"] = classroom.sessions_for_course(con, cid, limit=15)
     return d
 
 
@@ -815,3 +1040,34 @@ def ops_grade(aid: int, body: GradeBody, user=Depends(current_user),
                            awarded=body.awarded, feedback=body.feedback)
     con.commit()
     return grade
+
+
+@router.get("/api/learning/registrations")
+def ops_registrations(user=Depends(admin_user), con=Depends(get_con),
+                      state: str = REG_PENDING):
+    rows = con.execute(
+        "SELECT r.*, c.name AS course_name FROM registrations r"
+        " LEFT JOIN courses c ON c.id=r.course_id"
+        " WHERE r.state=? ORDER BY r.created_at", (state,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+class RegDecideBody(BaseModel):
+    course_id: int | None = None
+    note: str = ""
+
+
+@router.post("/api/learning/registrations/{rid}/approve")
+def ops_reg_approve(rid: int, body: RegDecideBody, user=Depends(admin_user),
+                    con=Depends(get_con)):
+    out = register_approve(con, user, rid, course_id=body.course_id)
+    con.commit()
+    return out
+
+
+@router.post("/api/learning/registrations/{rid}/decline")
+def ops_reg_decline(rid: int, body: RegDecideBody, user=Depends(admin_user),
+                    con=Depends(get_con)):
+    register_decline(con, user, rid, note=body.note)
+    con.commit()
+    return {"ok": True}
