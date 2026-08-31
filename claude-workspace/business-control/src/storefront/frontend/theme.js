@@ -594,6 +594,9 @@ function drawForm() {
     return; }
   const spec = SCHEMA[s.type];
   let html = `<p style="font-size:12px;color:#8a82a0">${spec.help || ""}</p>`;
+  if (IS_PROVIDER)
+    html += `<button class="btn ghost sm" id="save-design"
+      style="margin-bottom:8px">Save to library</button>`;
   for (const f of spec.fields) {
     if (f.t === "list") {
       const items = s.settings[f.k] || [];
@@ -616,6 +619,16 @@ function drawForm() {
       ? "change" : "input";
     el.addEventListener(ev, () => saveSection(el.dataset.k, el));
   });
+  const sd = $("#save-design");
+  if (sd) sd.onclick = async () => {
+    const name = prompt("Name this design (same name updates it):",
+      s.label);
+    if (!name || !name.trim()) return;
+    await api("/api/store/admin/designs", { method: "POST",
+      body: JSON.stringify({ name: name.trim(), type: s.type,
+        settings: s.settings }) });
+    await loadDesigns();
+  };
   host.querySelectorAll("[data-mirror]").forEach((el) =>
     el.oninput = () => { const t = document.getElementById(el.dataset.mirror);
       t.value = el.value; t.dispatchEvent(new Event("change")); });
@@ -670,6 +683,100 @@ async function pushSettings(s, { swap = true } = {}) {
   if (NEEDS_RELOAD.has(s.type)) refresh();
   else swapSection(s.id);
 }
+
+
+// ---------- the design library (provider only) ----------
+/* Design once on this storefront, place everywhere: save a section by
+   name, insert it on this page, or push it onto client tenants. A push
+   ADDS — the placement belongs to the tenant the moment it lands. */
+let IS_PROVIDER = false, DESIGNS = [];
+
+async function loadDesigns() {
+  if (!IS_PROVIDER) return;
+  $("#library-wrap").classList.remove("hidden");
+  try { DESIGNS = (await api("/api/store/admin/designs")).designs; }
+  catch { DESIGNS = []; }
+  drawLibrary();
+}
+
+function drawLibrary() {
+  const host = $("#library");
+  host.innerHTML = DESIGNS.map((d) => {
+    const where = Object.entries(d.placements)
+      .map(([t, n]) => `${t}${n > 1 ? ` ×${n}` : ""}`).join(", ");
+    return `<div class="sec">
+      <div class="sec-head">
+        <span>${d.name}</span>
+        <span style="font-size:11px;color:#8a82a0">${d.label}</span>
+        <span class="sp"></span>
+        <span class="sec-acts">
+          <button data-dins="${d.id}" title="insert on this page">＋</button>
+          <button data-dpush="${d.id}" title="push to clients">→</button>
+          <button data-ddel="${d.id}" title="delete from library">${icon("trash")}</button>
+        </span>
+      </div>
+      ${where ? `<div style="font-size:11px;color:#8a82a0;
+        padding:0 8px 6px">on: ${where}</div>` : ""}
+    </div>`;
+  }).join("") || `<p style="font-size:13px;color:#8a82a0">Nothing saved
+    yet — select a section and use “Save to library”.</p>`;
+
+  host.querySelectorAll("[data-dins]").forEach((b) => b.onclick =
+    async () => {
+      const d = DESIGNS.find((x) => x.id === +b.dataset.dins);
+      const out = await api("/api/store/admin/sections", { method: "POST",
+        body: JSON.stringify({ page_slug: SLUG, type: d.type,
+          settings: d.settings, design_id: d.id }) });
+      SEL = out.id;
+      await loadSections(); refresh(0);
+    });
+  host.querySelectorAll("[data-ddel]").forEach((b) => b.onclick =
+    async () => {
+      if (!confirm("Remove from the library? Placements already made "
+        + "stay — they belong to their tenants.")) return;
+      await api(`/api/store/admin/designs/${b.dataset.ddel}`,
+        { method: "DELETE" });
+      await loadDesigns();
+    });
+  host.querySelectorAll("[data-dpush]").forEach((b) => b.onclick =
+    () => openPush(+b.dataset.dpush));
+}
+
+async function openPush(did) {
+  const d = DESIGNS.find((x) => x.id === did);
+  const fleetBoard = await api("/api/store/admin/fleet");
+  const me = tenantsOf(fleetBoard).filter((t) => !t.provider);
+  if (!me.length) { alert("No client tenants to push to yet."); return; }
+  const host = $("#library");
+  host.insertAdjacentHTML("afterbegin", `<div class="sec" id="push-box"
+    style="padding:8px">
+    <b style="font-size:13px">Push “${d.name}” to:</b>
+    ${me.map((t) => `<label style="display:flex;gap:6px;font-size:13px;
+      margin-top:4px"><input type="checkbox" value="${t.id}"
+      data-pt> ${t.id}</label>`).join("")}
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button class="btn sm" id="push-go">Push</button>
+      <button class="btn ghost sm" id="push-x">Cancel</button>
+    </div></div>`);
+  $("#push-x").onclick = () => $("#push-box").remove();
+  $("#push-go").onclick = async () => {
+    const tenants = [...document.querySelectorAll("[data-pt]:checked")]
+      .map((x) => x.value);
+    if (!tenants.length) return;
+    const out = await api(`/api/store/admin/designs/${did}/push`,
+      { method: "POST", body: JSON.stringify({ tenants }) });
+    $("#push-box").remove();
+    const n = Object.keys(out.placed).length;
+    const sk = Object.entries(out.skipped)
+      .map(([t, r]) => `${t}: ${r}`).join("; ");
+    alert(`Placed on ${n} storefront${n === 1 ? "" : "s"}.`
+      + (sk ? ` Skipped — ${sk}` : ""));
+    await loadDesigns();
+  };
+}
+
+const tenantsOf = (board) =>
+  board.nodes.flatMap((n) => n.tenants);
 
 // ---------- theme ----------
 const THEME_FIELDS = [
@@ -739,6 +846,9 @@ async function boot() {
   PRODUCT_MEDIA = cat.products.flatMap((p) =>
     (p.media || []).map((m) => ({ ...m, alt: m.alt || p.name })));
   await loadSiteMedia();
+  try { IS_PROVIDER = !!(await (await fetch("/api/meta")).json())
+    .is_provider; } catch { IS_PROVIDER = false; }
+  await loadDesigns();
   THEME = await api("/api/store/admin/theme");
   drawTheme();
   await loadPages();

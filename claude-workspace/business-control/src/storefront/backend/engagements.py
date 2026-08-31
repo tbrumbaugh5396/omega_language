@@ -2634,6 +2634,159 @@ def fleet_tenant_remove(tid: str, keep_data: int = 1,
     return {"ok": True, **out}
 
 
+# ---------- the design library: design once, place everywhere ----------
+# A section the studio got right on one storefront, saved by name and
+# placed onto others. The rule that keeps the wall honest: a push ADDS a
+# section, stamped with where it came from, and from that moment the
+# placement belongs to the tenant — movable, editable, deletable in their
+# own editor, never overwritten by a later push. The library can say where
+# a design lives; it cannot reach back into anyone's page.
+
+def _designs_table(con) -> None:
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS section_designs ("
+        " id INTEGER PRIMARY KEY, name TEXT NOT NULL,"
+        " type TEXT NOT NULL, settings TEXT NOT NULL,"
+        " created_by TEXT DEFAULT '', created_at REAL NOT NULL,"
+        " updated_at REAL NOT NULL)")
+
+
+class DesignBody(BaseModel):
+    name: str
+    type: str
+    settings: dict = {}
+
+
+@router.get("/api/store/admin/designs")
+def list_designs(u=Depends(admin_user), con=Depends(get_con)):
+    """The library, with where each design lives — counted across the
+    fleet so the operator can see a design's reach before touching it."""
+    _provider_only()
+    from erp.backend import db as _db, tenancy
+    from .sections import SECTION_TYPES
+    _designs_table(con)
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM section_designs ORDER BY updated_at DESC")]
+    placements = {r["id"]: {} for r in rows}
+    if rows:
+        for tid in tenancy.all_tenants():
+            with tenancy.run_as(tid):
+                tcon = _db.connect()
+                try:
+                    for r in tcon.execute(
+                            "SELECT design_id, COUNT(*) n FROM"
+                            " page_sections WHERE design_id > 0"
+                            " GROUP BY design_id"):
+                        if r["design_id"] in placements and r["n"]:
+                            placements[r["design_id"]][tid] = r["n"]
+                except Exception:
+                    pass
+                finally:
+                    tcon.close()
+    for r in rows:
+        r["settings"] = json.loads(r["settings"])
+        r["label"] = SECTION_TYPES.get(r["type"], {}).get("label", r["type"])
+        r["placements"] = placements[r["id"]]
+    return {"designs": rows}
+
+
+@router.post("/api/store/admin/designs")
+def save_design(body: DesignBody, u=Depends(admin_user),
+                con=Depends(get_con)):
+    """Save a section's design to the library, by name. Same name updates
+    the design — the library entry is the studio's to revise; the
+    placements already made are not."""
+    _provider_only()
+    from .sections import SECTION_TYPES
+    if body.type not in SECTION_TYPES:
+        raise HTTPException(400, "unknown section type")
+    name = body.name.strip()[:80]
+    if not name:
+        raise HTTPException(400, "a design needs a name")
+    allowed = {f["k"] for f in SECTION_TYPES[body.type]["fields"]}
+    settings = json.dumps({k: v for k, v in (body.settings or {}).items()
+                           if k in allowed})
+    _designs_table(con)
+    row = con.execute("SELECT id FROM section_designs WHERE name=?",
+                      (name,)).fetchone()
+    if row:
+        con.execute("UPDATE section_designs SET type=?, settings=?,"
+                    " updated_at=? WHERE id=?",
+                    (body.type, settings, time.time(), row["id"]))
+        did = row["id"]
+    else:
+        cur = con.execute(
+            "INSERT INTO section_designs(name,type,settings,created_by,"
+            " created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (name, body.type, settings, u["name"], time.time(),
+             time.time()))
+        did = cur.lastrowid
+    con.commit()
+    return {"ok": True, "id": did, "updated": bool(row)}
+
+
+@router.delete("/api/store/admin/designs/{did}")
+def delete_design(did: int, u=Depends(admin_user), con=Depends(get_con)):
+    """Remove a design from the library. Its placements stay — they became
+    the tenants' sections the moment they landed."""
+    _provider_only()
+    _designs_table(con)
+    con.execute("DELETE FROM section_designs WHERE id=?", (did,))
+    con.commit()
+    return {"ok": True}
+
+
+class PushBody(BaseModel):
+    tenants: list[str]
+    page_slug: str = "home"
+
+
+@router.post("/api/store/admin/designs/{did}/push")
+def push_design(did: int, body: PushBody, u=Depends(admin_user),
+                con=Depends(get_con)):
+    """Place a design onto other tenants' pages — appended, stamped, and
+    theirs from that moment. A tenant without the target page is skipped
+    and said so, not silently given a page they never made."""
+    _provider_only()
+    from erp.backend import db as _db, fleet, tenancy
+    _designs_table(con)
+    d = con.execute("SELECT * FROM section_designs WHERE id=?",
+                    (did,)).fetchone()
+    if d is None:
+        raise HTTPException(404, "no such design")
+    known = set(tenancy.all_tenants())
+    placed, skipped = {}, {}
+    for tid in body.tenants[:50]:
+        if tid not in known:
+            skipped[tid] = "no such tenant"
+            continue
+        with tenancy.run_as(tid):
+            tcon = _db.connect()
+            try:
+                if body.page_slug != "home" and not tcon.execute(
+                        "SELECT 1 FROM store_pages WHERE slug=? AND"
+                        " published=1", (body.page_slug,)).fetchone():
+                    skipped[tid] = f"no page '{body.page_slug}'"
+                    continue
+                nxt = tcon.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 n FROM"
+                    " page_sections WHERE page_slug=?",
+                    (body.page_slug,)).fetchone()["n"]
+                cur = tcon.execute(
+                    "INSERT INTO page_sections(page_slug,type,settings,"
+                    " position,enabled,design_id) VALUES(?,?,?,?,1,?)",
+                    (body.page_slug, d["type"], d["settings"], nxt, did))
+                tcon.commit()
+                placed[tid] = cur.lastrowid
+            finally:
+                tcon.close()
+    if placed:
+        fleet.log("design pushed",
+                  f"'{d['name']}' → {', '.join(sorted(placed))}"
+                  f" ({body.page_slug})", u["name"])
+    return {"ok": True, "placed": placed, "skipped": skipped}
+
+
 # ---------- the client's window into the provider's pipeline ----------
 # When a client RUNS ON this platform (zenjoy is a tenant here, and also a
 # client of the studio's), their own ops app should show the paperwork the

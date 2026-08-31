@@ -205,6 +205,11 @@ STORE_MIGRATIONS = (
     "ALTER TABLE store_subscriptions ADD COLUMN payment_ref TEXT DEFAULT ''",
     "ALTER TABLE store_subscriptions ADD COLUMN payment_status TEXT"
     " DEFAULT ''",
+    # Which library design a section was placed from, 0 = drawn by hand.
+    # Provenance only: the placement belongs to the tenant the moment it
+    # lands — this column is how the provider's board can say where a
+    # design lives without ever implying it may overwrite it.
+    "ALTER TABLE page_sections ADD COLUMN design_id INTEGER DEFAULT 0",
 )
 
 
@@ -1918,6 +1923,8 @@ class SectionAddBody(BaseModel):
     page_slug: str
     type: str
     position: int = -1               # -1 = append; else insert at this index
+    settings: dict | None = None     # start from these instead of defaults
+    design_id: int = 0               # provenance, when placed from the library
 
 
 @router.post("/api/store/admin/sections")
@@ -1929,11 +1936,18 @@ def add_section(body: SectionAddBody, u=Depends(admin_user),
     if body.type not in sect.SECTION_TYPES:
         raise HTTPException(400, "unknown section type")
     ids = [r["id"] for r in page_rows(con, body.page_slug)]
+    if body.settings is not None:
+        allowed = {f["k"] for f in sect.SECTION_TYPES[body.type]["fields"]}
+        settings = {**sect.defaults_for(body.type),
+                    **{k: v for k, v in body.settings.items()
+                       if k in allowed}}
+    else:
+        settings = sect.defaults_for(body.type)
     cur = con.execute(
-        "INSERT INTO page_sections(page_slug,type,settings,position)"
-        " VALUES(?,?,?,?)",
-        (body.page_slug, body.type,
-         json.dumps(sect.defaults_for(body.type)), len(ids)))
+        "INSERT INTO page_sections(page_slug,type,settings,position,"
+        " design_id) VALUES(?,?,?,?,?)",
+        (body.page_slug, body.type, json.dumps(settings), len(ids),
+         body.design_id))
     new_id = cur.lastrowid
     if 0 <= body.position <= len(ids):
         ids.insert(body.position, new_id)

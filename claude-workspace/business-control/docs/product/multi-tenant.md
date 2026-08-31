@@ -202,6 +202,28 @@ and it exists so the authority to run a business on the platform is a
 signed page, not an understanding. A re-stand-up after a move does not file
 it twice.
 
+## The design library — design once, place everywhere
+
+Provider-only, in the theme editor. Select a section on the studio's own
+storefront and **Save to library** (same name updates the entry); the
+library then offers **insert on this page** and **push to clients** — a
+tenant chooser drawn from the fleet board, the provider itself excluded.
+
+The rule that keeps the wall honest: **a push adds a section, stamped
+with the design it came from, and from that moment the placement belongs
+to the tenant** — movable, editable, deletable in their own editor. A
+later push adds another copy rather than reaching back into anyone's
+page; deleting a design from the library leaves every placement
+standing. The stamp (`page_sections.design_id`) is provenance, not a
+grip: it lets the library report where each design lives, counted across
+the fleet, so reach is visible before anyone pushes again. Every push
+lands in the fleet history with who, what and where.
+
+Pushed copy is scaffolding under the same contract as the starter
+layouts — a starting point the receiving tenant edits, not the studio's
+voice compiled into their shop. A tenant without the target page is
+skipped and said so, never silently given a page they never made.
+
 ## Public deployment
 
 Caddy, with a host per tenant — automatic TLS per name:

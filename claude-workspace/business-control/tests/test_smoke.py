@@ -6141,6 +6141,98 @@ ok("loadSiteMedia" in _thjs and "PRODUCT_MEDIA" in _thjs,
    "the panel's media picker lists site media beside product media, so an "
    "upload from the page is reusable from the form")
 
+
+# --- the design library: design once, place everywhere --------------------
+# The rule that keeps the wall honest: a push ADDS a section, stamped with
+# where it came from, and from that moment the placement belongs to the
+# tenant — never overwritten by a later push, surviving the design's
+# deletion from the library.
+ok(c.get("/api/store/admin/designs", headers=BB).status_code == 404,
+   "the library is the provider's — a client tenant has no such API, the "
+   "same wall as the fleet")
+_dz = c.post("/api/store/admin/designs", headers=AA,
+             json={"name": "Signature FAQ", "type": "faq",
+                   "settings": {"heading": "The honest questions",
+                                "items": [{"q": "What does it cost?",
+                                           "a": "It depends — here's how."}
+                                          ]}}).json()
+ok(_dz["ok"] and not _dz["updated"],
+   "a section's design saves to the library by name")
+_did2 = _dz["id"]
+ok(c.post("/api/store/admin/designs", headers=AA,
+          json={"name": "Signature FAQ", "type": "faq",
+                "settings": {"heading": "The honest questions, v2",
+                             "items": []}}).json()["updated"],
+   "and the same name updates it — the library entry is the studio's to "
+   "revise")
+
+_bcon0 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bb_before = _bcon0.execute(
+    "SELECT COUNT(*) FROM page_sections WHERE page_slug='home'"
+    ).fetchone()[0]
+_bcon0.close()
+_push = c.post(f"/api/store/admin/designs/{_did2}/push", headers=AA,
+               json={"tenants": ["beta", "nobody-here"]}).json()
+ok("beta" in _push["placed"]
+   and _push["skipped"].get("nobody-here") == "no such tenant",
+   "a push places onto real tenants and says plainly who was skipped and "
+   "why")
+_bcon = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bcon.row_factory = sqlite3.Row
+_brow = _bcon.execute("SELECT * FROM page_sections WHERE design_id=?",
+                      (_did2,)).fetchone()
+ok(_brow is not None and _brow["type"] == "faq"
+   and "v2" in _brow["settings"],
+   "the placement carries the design's CURRENT settings and its stamp")
+ok(_bcon.execute("SELECT COUNT(*) FROM page_sections WHERE"
+                 " page_slug='home'").fetchone()[0] == _bb_before + 1,
+   "and it was ADDED — nothing beta already had moved or changed")
+ok("The honest questions" in c.get("/", headers=HB).text,
+   "beta's storefront renders it, live")
+
+_bcon.execute("UPDATE page_sections SET settings=json_set(settings,"
+              "'$.heading','Beta made this theirs') WHERE id=?",
+              (_brow["id"],))
+_bcon.commit()
+c.post(f"/api/store/admin/designs/{_did2}/push", headers=AA,
+       json={"tenants": ["beta"]})
+_bcon2 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bcon2.row_factory = sqlite3.Row
+_beta_rows = [dict(r) for r in _bcon2.execute(
+    "SELECT * FROM page_sections WHERE design_id=?", (_did2,))]
+ok(len(_beta_rows) == 2
+   and any("Beta made this theirs" in r["settings"] for r in _beta_rows),
+   "a second push adds a second copy and leaves the edited first alone — "
+   "the placement became beta's the moment it landed, and no push ever "
+   "reaches back into a tenant's page")
+_bcon2.execute("DELETE FROM page_sections WHERE id=?",
+               (max(r["id"] for r in _beta_rows),))
+_bcon2.commit()
+
+_dl = c.get("/api/store/admin/designs", headers=AA).json()["designs"]
+_dme = next(d for d in _dl if d["id"] == _did2)
+ok(_dme["placements"].get("beta") == 1,
+   "the library says where each design lives, counted across the fleet — "
+   "reach is visible before anyone pushes again")
+c.request("DELETE", f"/api/store/admin/designs/{_did2}", headers=AA)
+_bcon3 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+ok(_bcon3.execute("SELECT COUNT(*) FROM page_sections WHERE design_id=?",
+                  (_did2,)).fetchone()[0] == 1,
+   "deleting a design from the library leaves its placements standing — "
+   "they are the tenants' sections, not the library's")
+_bcon3.execute("DELETE FROM page_sections WHERE design_id=?", (_did2,))
+_bcon3.commit(); _bcon3.close()
+
+ok(c.post(f"/api/store/admin/designs/{_did2}/push", headers=BB,
+          json={"tenants": ["alpha"]}).status_code == 404,
+   "and a client tenant cannot push at anyone — the library's verbs are "
+   "all provider-side")
+_thjs2 = Path("src/storefront/frontend/theme.js").read_text()
+ok("save-design" in _thjs2 and "IS_PROVIDER" in _thjs2
+   and "data-dpush" in _thjs2 and "design_id: d.id" in _thjs2,
+   "the editor carries the loop — save from the selected section, insert "
+   "with provenance, push to chosen clients — shown only on the provider")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")
