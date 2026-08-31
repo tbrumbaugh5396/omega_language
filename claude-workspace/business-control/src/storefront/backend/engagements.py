@@ -1422,6 +1422,76 @@ def quote_state(eid: int, did: int = 0, u=Depends(admin_user),
             "state": r["notes"][len(QUOTE_NOTE):]}
 
 
+def stand_up_suggestion(con, eid: int) -> dict | None:
+    """The size class the signed quote implies — the bridge between the
+    paper and the platform.
+
+    The quote already knows the locations, seats and capabilities the
+    client is buying; the fleet's classes are defined by the same numbers.
+    Deriving one from the other here means the operator standing a client
+    up is offered what was SOLD, not a guess — and a dedicated quote never
+    quietly lands on a shared node. Prefers the signed quote; falls back to
+    the latest, saying which it used.
+    """
+    import base64
+    rows = con.execute(
+        "SELECT d.id, d.notes,"
+        "  (SELECT COUNT(*) FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND d.notes LIKE ?"
+        "   AND d.status!='archived' ORDER BY d.created_at DESC",
+        (eid, QUOTE_NOTE + "%")).fetchall()
+    row = next((r for r in rows if r["signed"]), rows[0] if rows else None)
+    if row is None:
+        return None
+    try:
+        state = json.loads(base64.b64decode(
+            row["notes"][len(QUOTE_NOTE):]).decode("utf-8"))
+    except Exception:
+        return None
+    locs = int(state.get("locs") or 1)
+    seats = int(state.get("seats") or 5)
+    dedicated = bool(state.get("dedicated"))
+    # The fleet's own class boundaries, from the price book: a client
+    # bigger than 'large' has outgrown sharing a node.
+    if dedicated or locs > 10 or seats > 75:
+        klass = "dedicated"
+    elif locs <= 1 and seats <= 5:
+        klass = "micro"
+    elif locs <= 3 and seats <= 20:
+        klass = "growing"
+    else:
+        klass = "large"
+    caps = [c for c in (state.get("on") or []) if c != "core"]
+    return {"klass": klass, "locs": locs, "seats": seats,
+            "dedicated": dedicated, "capabilities": len(caps),
+            "quote_doc": row["id"], "signed": bool(row["signed"]),
+            "reason": f"{locs} location{'s' if locs != 1 else ''}, "
+                      f"{seats} seat{'s' if seats != 1 else ''}"
+                      + (", dedicated by request" if dedicated else "")
+                      + f" → {klass}"
+                      + ("" if row["signed"]
+                         else " (from the latest quote — not signed yet)")}
+
+
+@router.get("/api/store/admin/engagements/{eid}/stand-up")
+def stand_up_info(eid: int, u=Depends(admin_user), con=Depends(get_con)):
+    """Whether this client can be stood up, and at what size.
+
+    offer=False the moment a tenant exists — the button must disappear
+    once the thing it creates does."""
+    e = _eng_or_404(con, eid)
+    from erp.backend import tenancy
+    is_provider = (tenancy.provider() is not None
+                   and tenancy.provider() == tenancy.CURRENT.get())
+    sug = stand_up_suggestion(con, eid)
+    return {"offer": bool(is_provider and not e["tenant_id"]),
+            "tenant_id": e["tenant_id"] or "",
+            "slug": e["slug"], "name": e["name"],
+            "suggestion": sug}
+
+
 @router.post("/api/store/admin/engagements/{eid}/quote")
 def file_quote(eid: int, body: QuoteBody, u=Depends(admin_user),
                con=Depends(get_con)):
@@ -1633,8 +1703,19 @@ def pass_gate(eid: int, gate: str, body: GateBody, u=Depends(admin_user),
         fire_webhooks("gate.passed", {
             "id": eid, "client": e["name"], "gate": g["label"],
             "warnings": ", ".join(warnings)})
-    return {"gate": g, "current_stage": current_stage(gates),
-            "warnings": warnings}
+    out = {"gate": g, "current_stage": current_stage(gates),
+           "warnings": warnings}
+    # The contract closing is the moment the platform's half becomes real:
+    # the client has agreed, the quote says what size they are, and the
+    # stand-up is one click that was going to be asked for anyway. Offered,
+    # not performed — infrastructure appears when an operator says so.
+    if gate == "contract_signed" and g["passed_at"] and not e["tenant_id"]:
+        from erp.backend import tenancy
+        if (tenancy.provider() is not None
+                and tenancy.provider() == tenancy.CURRENT.get()):
+            out["stand_up"] = {"slug": e["slug"], "name": e["name"],
+                               "suggestion": stand_up_suggestion(con, eid)}
+    return out
 
 
 @router.delete("/api/store/admin/engagements/{eid}/gates/{gate}")

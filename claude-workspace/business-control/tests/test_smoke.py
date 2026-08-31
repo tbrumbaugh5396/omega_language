@@ -5749,6 +5749,92 @@ ok('id: "fleet"' in _opsjs and "provider: true" in _opsjs
    "the Platform tab is in the frontend, provider-gated, with the node and "
    "tenant controls on it")
 
+
+# --- quote → stand-up: the paper sizes the platform -----------------------
+# The quote knows the locations, seats and capabilities being bought; the
+# fleet's classes are defined by the same numbers. Closing the contract
+# gate offers the stand-up, sized from what was SOLD rather than guessed.
+import base64 as _b64
+
+
+def _bench_state(**kw):
+    return _b64.b64encode(_jn.dumps(kw).encode()).decode()
+
+
+_qeid = c.post("/api/store/admin/engagements", headers=AA,
+               json={"name": "Sized Co"}).json()["id"]
+ok(c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
+         headers=AA).json()["suggestion"] is None,
+   "with no quote filed there is nothing to derive from — the modal says "
+   "so instead of inventing a size")
+
+c.post(f"/api/store/admin/engagements/{_qeid}/quote", headers=AA,
+       json={"markdown": "# Quote", "title": "Quote — Sized Co",
+             "state": _bench_state(locs=2, seats=12,
+                                   on=["core", "selling", "payments"])})
+_sug = c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
+             headers=AA).json()["suggestion"]
+ok(_sug["klass"] == "growing" and _sug["capabilities"] == 2
+   and "not signed yet" in _sug["reason"],
+   "2 locations and 12 seats derive 'growing' — and an unsigned quote "
+   "says so in the rationale, because a size from a draft is a draft")
+
+for _st, _want in ((dict(locs=1, seats=5), "micro"),
+                   (dict(locs=8, seats=60), "large"),
+                   (dict(locs=12, seats=30), "dedicated"),
+                   (dict(locs=2, seats=90), "dedicated"),
+                   (dict(locs=1, seats=3, dedicated=True), "dedicated")):
+    c.post(f"/api/store/admin/engagements/{_qeid}/quote", headers=AA,
+           json={"markdown": "# Quote", "state": _bench_state(**_st)})
+    _k = c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
+               headers=AA).json()["suggestion"]["klass"]
+    ok(_k == _want,
+       f"the class boundaries are the price book's: {_st} → {_want} "
+       f"(got {_k}) — a client bigger than 'large', or one who asked, "
+       f"never quietly lands on a shared node")
+
+# sign the growing-sized quote, then file a bigger draft: the SIGNED one
+# must win, because it is the offer the client actually accepted
+c.post(f"/api/store/admin/engagements/{_qeid}/quote", headers=AA,
+       json={"markdown": "# Quote", "state": _bench_state(locs=2, seats=12)})
+_qdid = c.get(f"/api/store/admin/engagements/{_qeid}/quote",
+              headers=AA).json()["doc_id"]
+_qsig = c.post(f"/api/store/admin/documents/{_qdid}/request-signature",
+               headers=AA, json={"signer_name": "Sam",
+                                 "signer_email": "sam@sized.example"})
+_qtok = _qsig.json()["link"].rsplit("/", 1)[-1]
+c.post(f"/sign/{_qtok}", headers=AA, json={"typed_name": "Sam"})
+c.post(f"/api/store/admin/engagements/{_qeid}/quote", headers=AA,
+       json={"markdown": "# Quote v2",
+             "state": _bench_state(locs=9, seats=70)})
+_sug2 = c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
+              headers=AA).json()["suggestion"]
+ok(_sug2["klass"] == "growing" and _sug2["signed"]
+   and "not signed" not in _sug2["reason"],
+   "the SIGNED quote sizes the install even when a bigger draft was filed "
+   "after it — the offer the client accepted governs, not the upsell in "
+   "progress")
+
+# the gate: closing the contract offers the stand-up
+_gout = c.post(f"/api/store/admin/engagements/{_qeid}/gates/contract_signed",
+               headers=AA, json={"doc_id": _qdid}).json()
+ok(_gout.get("stand_up", {}).get("suggestion", {}).get("klass") == "growing",
+   "closing the contract gate OFFERS the stand-up, sized from the signed "
+   "quote — the click-path from accepted paper to running install")
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "sizedco", "klass": "growing", "engagement_id": _qeid})
+ok(not c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
+             headers=AA).json()["offer"],
+   "and once the install exists the offer disappears — a button that "
+   "creates a thing must vanish when the thing does")
+c.request("DELETE", "/api/store/admin/fleet/tenants/sizedco?keep_data=0",
+          headers=AA)
+ok(not c.post(f"/api/store/admin/engagements/{_qeid}/gates/deposit_cleared",
+              headers=AA, json={"note": "wire ref 123"}).json()
+   .get("stand_up"),
+   "no other gate makes the offer — the contract is the one whose closing "
+   "means the platform's half is agreed")
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

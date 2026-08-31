@@ -158,6 +158,18 @@ Every provision, placement, move, suspension and reap is written to
 `fleet_events` in the **provider's own** database and shown as Fleet
 history, so "when did that node go, and who took it" has an answer.
 
+**The quote sizes the install.** A quote's bench state carries the
+locations, seats and capabilities being bought — the same numbers the
+fleet's classes are defined by. Closing the **contract gate** on an
+engagement with no install offers the stand-up on the spot, pre-sized from
+the **signed** quote (a bigger unsigned draft filed afterwards does not
+win — the offer the client accepted governs), with the derivation shown:
+"2 locations, 12 seats → growing". Offered, not performed: infrastructure
+appears when an operator clicks, and the offer disappears the moment the
+tenant exists. From one signature, the click-path is: contract signed →
+stand-up offered at the sold size → tenant live on its hostname, named on
+its storefront, hosting schedule filed in the binder.
+
 **And the act writes its own paper.** Standing a client up under their
 engagement files the **hosting & infrastructure schedule**
 (`04-agreement/contracts/hosting-and-infrastructure.md`) into their binder,

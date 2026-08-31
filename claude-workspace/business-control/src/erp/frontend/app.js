@@ -3969,6 +3969,96 @@ function pnlTable(p) {
    the deck's weights, made clickable — and the two rules that keep the
    bill honest are enforced here as well as on the server: a node with
    room takes the next client, and a node nobody is left on goes away. */
+/* Stand a client up — callable from the Platform tab AND from the moment
+   the contract gate closes on an engagement page. Fetches the fleet board
+   itself when not handed one, and when the client has an engagement, asks
+   what size the QUOTE says they are: the operator is offered what was
+   sold, not a guess. */
+async function standUpClient(slug, eid, name, opts = {}) {
+  let f = opts.fleet;
+  try { if (!f) f = await api("/api/store/admin/fleet"); }
+  catch (err) { toast(err.message); return; }
+  let sug = opts.suggestion;
+  if (sug === undefined && eid) {
+    try { sug = (await api(
+      `/api/store/admin/engagements/${eid}/stand-up`)).suggestion; }
+    catch { sug = null; }
+  }
+  const klass = (sug && f.classes[sug.klass]) ? sug.klass : "growing";
+  const nodeOptions = (extra) => f.nodes.map((n) =>
+    `<option value="${esc(n.id)}">${esc(n.id)} — ${n.free} of ${n.capacity}
+      units free</option>`).join("") + (extra || "");
+
+  modal(`<h3>Stand up ${esc(name || slug)}</h3>
+    <p class="dim">A tenant of their own: database, config, secrets,
+      hostname. Nothing is shared with anyone else's install.</p>
+    <div class="row2">
+      <div><label>Tenant id <span class="req">required</span></label>
+        <input id="t-id" value="${esc(slug || "")}"></div>
+      <div><label>Brand</label><input id="t-brand"
+        value="${esc(name || "")}"></div>
+    </div>
+    <label>Hostname</label>
+    <input id="t-host" placeholder="acme.localhost"
+      value="${slug ? esc(slug) + ".localhost" : ""}">
+    <div class="row2">
+      <div><label>Size</label><select id="t-class">${
+        Object.entries(f.classes).map(([k, v]) =>
+          `<option value="${k}"${k === klass ? " selected" : ""}>${k}
+            — ${v.units || "whole node"} unit${v.units === 1 ? "" : "s"}
+            · ${esc(v.note)}</option>`).join("")}</select></div>
+      <div><label>Where</label><select id="t-node">${nodeOptions(
+        `<option value="new">+ a new node, just for them</option>`)}</select>
+      </div>
+    </div>
+    ${sug ? `<p class="dim">${opsIcon("pen", "btn-ic")} Sized from the
+      quote: ${esc(sug.reason)}</p>` : ""}
+    <div id="t-newnode" hidden>
+      <div class="row2">
+        <div><label>New node id</label>
+          <input id="t-nid" placeholder="node-2"
+            value="${slug ? "node-" + esc(slug) : ""}"></div>
+        <div><label>Size</label><input id="t-nsize" value="4gb"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="t-go">Stand it up</button>
+      <button class="btn alt" data-close>Cancel</button>
+    </div>`);
+  const sel = $("#t-node");
+  sel.onchange = () => { $("#t-newnode").hidden = sel.value !== "new"; };
+  // The hostname and the new node's name follow the id while nobody has
+  // touched them. Opened blank, the old prefill produced ".localhost" —
+  // a hostname with no name in front of it, which is not one.
+  const follow = (el, make) => {
+    if (el.value !== make(slug || "")) el.dataset.touched = "1";
+    el.oninput = () => { el.dataset.touched = "1"; };
+    return () => { if (!el.dataset.touched) el.value = make($("#t-id").value.trim()); };
+  };
+  const host = follow($("#t-host"), (v) => v ? `${v}.localhost` : "");
+  const nid = follow($("#t-nid"), (v) => v ? `node-${v}` : "");
+  $("#t-id").oninput = () => { host(); nid(); };
+  $("#t-go").onclick = async () => {
+    try {
+      const out = await api("/api/store/admin/fleet/tenants", {
+        body: { id: $("#t-id").value.trim(),
+                brand: $("#t-brand").value.trim(),
+                hosts: [$("#t-host").value.trim()],
+                node: sel.value,
+                new_node: ($("#t-nid") || {}).value || "",
+                node_size: ($("#t-nsize") || {}).value || "4gb",
+                klass: $("#t-class").value,
+                engagement_id: eid || 0 } });
+      closeModal();
+      toast(out.hosting_doc
+        ? `${out.tenant} is live on ${out.node} — hosting schedule filed `
+          + `in their binder, ready to sign`
+        : `${out.tenant} is live on ${out.node}`);
+      (opts.after || renderFleet)();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 async function renderFleet() {
   const f = await api("/api/store/admin/fleet");
   const bar = (n) => {
@@ -4054,79 +4144,6 @@ async function renderFleet() {
             ? " — " + esc(e.detail) : ""}</span></div>`).join("")}
       </div></div>` : ""}`;
 
-  const nodeOptions = (extra) => f.nodes.map((n) =>
-    `<option value="${esc(n.id)}">${esc(n.id)} — ${n.free} of ${n.capacity}
-      units free</option>`).join("") + (extra || "");
-
-  const standUp = (slug, eid, name) => {
-    modal(`<h3>Stand up ${esc(name || slug)}</h3>
-      <p class="dim">A tenant of their own: database, config, secrets,
-        hostname. Nothing is shared with anyone else's install.</p>
-      <div class="row2">
-        <div><label>Tenant id <span class="req">required</span></label>
-          <input id="t-id" value="${esc(slug || "")}"></div>
-        <div><label>Brand</label><input id="t-brand"
-          value="${esc(name || "")}"></div>
-      </div>
-      <label>Hostname</label>
-      <input id="t-host" placeholder="acme.localhost"
-        value="${slug ? esc(slug) + ".localhost" : ""}">
-      <div class="row2">
-        <div><label>Size</label><select id="t-class">${
-          Object.entries(f.classes).map(([k, v]) =>
-            `<option value="${k}"${k === "growing" ? " selected" : ""}>${k}
-              — ${v.units || "whole node"} unit${v.units === 1 ? "" : "s"}
-              · ${esc(v.note)}</option>`).join("")}</select></div>
-        <div><label>Where</label><select id="t-node">${nodeOptions(
-          `<option value="new">+ a new node, just for them</option>`)}</select>
-        </div>
-      </div>
-      <div id="t-newnode" hidden>
-        <div class="row2">
-          <div><label>New node id</label>
-            <input id="t-nid" placeholder="node-2"
-              value="${slug ? "node-" + esc(slug) : ""}"></div>
-          <div><label>Size</label><input id="t-nsize" value="4gb"></div>
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn" id="t-go">Stand it up</button>
-        <button class="btn alt" data-close>Cancel</button>
-      </div>`);
-    const sel = $("#t-node");
-    sel.onchange = () => { $("#t-newnode").hidden = sel.value !== "new"; };
-    // The hostname and the new node's name follow the id while nobody has
-    // touched them. Opened blank, the old prefill produced ".localhost" —
-    // a hostname with no name in front of it, which is not one.
-    const follow = (el, make) => {
-      if (el.value !== make(slug || "")) el.dataset.touched = "1";
-      el.oninput = () => { el.dataset.touched = "1"; };
-      return () => { if (!el.dataset.touched) el.value = make($("#t-id").value.trim()); };
-    };
-    const host = follow($("#t-host"), (v) => v ? `${v}.localhost` : "");
-    const nid = follow($("#t-nid"), (v) => v ? `node-${v}` : "");
-    $("#t-id").oninput = () => { host(); nid(); };
-    $("#t-go").onclick = async () => {
-      try {
-        const out = await api("/api/store/admin/fleet/tenants", {
-          body: { id: $("#t-id").value.trim(),
-                  brand: $("#t-brand").value.trim(),
-                  hosts: [$("#t-host").value.trim()],
-                  node: sel.value,
-                  new_node: ($("#t-nid") || {}).value || "",
-                  node_size: ($("#t-nsize") || {}).value || "4gb",
-                  klass: $("#t-class").value,
-                  engagement_id: eid || 0 } });
-        closeModal();
-        toast(out.hosting_doc
-          ? `${out.tenant} is live on ${out.node} — hosting schedule filed `
-            + `in their binder, ready to sign`
-          : `${out.tenant} is live on ${out.node}`);
-        renderFleet();
-      } catch (err) { toast(err.message); }
-    };
-  };
-
   const nn = $("#node-new");
   if (nn) nn.onclick = () => {
     modal(`<h3>New node</h3>
@@ -4158,9 +4175,10 @@ async function renderFleet() {
     };
   };
   const tn = $("#tenant-new");
-  if (tn) tn.onclick = () => standUp("", 0, "");
+  if (tn) tn.onclick = () => standUpClient("", 0, "", { fleet: f });
   view().querySelectorAll("[data-standup]").forEach((b) => b.onclick = () =>
-    standUp(b.dataset.standup, +b.dataset.eid, b.dataset.name));
+    standUpClient(b.dataset.standup, +b.dataset.eid, b.dataset.name,
+                  { fleet: f }));
 
   view().querySelectorAll("[data-nodekill]").forEach((b) => b.onclick =
     async () => {
@@ -6830,6 +6848,29 @@ async function renderEngagement(id) {
   const gateDone = (out) => {
     if (out.warnings && out.warnings.length)
       toast("Out of order — still open: " + out.warnings.join(", "));
+    if (out.stand_up) {
+      // The contract just closed and no install exists: the next thing an
+      // operator was going to do anyway is offered, sized from the quote.
+      const su = out.stand_up;
+      modal(`<h3>The contract is signed</h3>
+        <p class="dim">${esc(su.name)} has no install yet. Stand them up on
+          the platform now? ${su.suggestion
+            ? `The quote sizes them: <b>${esc(su.suggestion.reason)}</b>.`
+            : "No quote is filed, so the size will be a choice, not a "
+              + "derivation."}</p>
+        <div class="modal-foot">
+          <button class="btn" id="su-go">Stand them up</button>
+          <button class="btn alt" data-close>Later — it stays on the
+            Platform tab</button>
+        </div>`);
+      $("#su-go").onclick = () => {
+        closeModal();
+        standUpClient(su.slug, id, su.name,
+          { suggestion: su.suggestion,
+            after: () => renderEngagement(id) });
+      };
+      return;
+    }
     renderEngagement(id);
   };
   view().querySelectorAll("[data-gate-pass]").forEach((b) => b.onclick = async () => {
