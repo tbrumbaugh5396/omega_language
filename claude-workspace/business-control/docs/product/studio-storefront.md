@@ -92,6 +92,7 @@ data, with the shipped value as the default:
 | `ZJ-` on every ticket reference | Brand initials, or `support_contact.ref_prefix` — zenjoy pins `ZJ` |
 | "A question about the drinks" ticket topic | Neutral label; `support_contact.topics` renames per tenant |
 | "breathe in, check out." over the cart | `ui_strings.cart_tag`, per tenant |
+| "Free shipping over $40" in the announce default and cart note | Empty defaults (`ui_strings.cart_note`); an invented policy is worse than a blank, and an empty announce bar hides itself |
 
 **The business phone is one saved value.** Store admin → Support holds the
 number (point it at a VoIP service and edit it there when it changes), the

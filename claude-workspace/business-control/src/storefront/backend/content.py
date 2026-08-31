@@ -77,6 +77,10 @@ UI_KEYS = {
     # The line over the cart. It was "breathe in, check out." — one brand's
     # breathing exercise in everyone's drawer.
     "cart_tag": "",
+    # Under the checkout button. Shipped with an invented shipping policy
+    # and box language; a policy line belongs to the tenant that has the
+    # policy.
+    "cart_note": "",
 }
 
 CURRENCY_DEFAULT = [

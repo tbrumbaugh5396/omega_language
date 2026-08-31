@@ -117,7 +117,9 @@ def main() -> int:
                  (json.dumps({"shop_cta": "Shop your Zen",
                               "offer_title":
                                   "Take 10% off your first calm.",
-                              "cart_tag": "breathe in, check out."}),))
+                              "cart_tag": "breathe in, check out.",
+                              "cart_note": "Free shipping over $40 · skip "
+                                           "or cancel boxes any time"}),))
     # ...and its ticket references and topic wording, which were also the
     # codebase's until they became tenant data.
     zcon.execute("INSERT OR REPLACE INTO store_meta(k,v)"

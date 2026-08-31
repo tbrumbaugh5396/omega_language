@@ -170,6 +170,18 @@ tenant exists. From one signature, the click-path is: contract signed →
 stand-up offered at the sold size → tenant live on its hostname, named on
 its storefront, hosting schedule filed in the binder.
 
+**And the quote shapes the home page.** The same capability set picks a
+starter layout (`storefront/backend/layouts.py`): a **shape** gives the
+skeleton — commerce, courses, nonprofit, or services — and capabilities the
+shape doesn't lead with still earn their sections, so a teaching nonprofit
+gets the courses page with the support banner composed in. Priority is
+deliberate: what a business *makes* beats how it takes money (learning >
+fundraising > selling > services). The nav's first word follows the shape.
+Every section is built on the schema's own defaults, and the scaffolding
+never invents a fact — no customer counts, no shipping policy nobody set.
+Applied once, at stand-up, onto a page nobody has touched; without a
+quote, the shipped default stays.
+
 **And the act writes its own paper.** Standing a client up under their
 engagement files the **hosting & infrastructure schedule**
 (`04-agreement/contracts/hosting-and-infrastructure.md`) into their binder,

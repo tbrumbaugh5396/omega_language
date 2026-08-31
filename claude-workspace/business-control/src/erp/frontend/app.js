@@ -4012,7 +4012,8 @@ async function standUpClient(slug, eid, name, opts = {}) {
       </div>
     </div>
     ${sug ? `<p class="dim">${opsIcon("pen", "btn-ic")} Sized from the
-      quote: ${esc(sug.reason)}</p>` : ""}
+      quote: ${esc(sug.reason)}${sug.shape ? ` · starter layout:
+      <b>${esc(sug.shape)}</b>` : ""}</p>` : ""}
     <div id="t-newnode" hidden>
       <div class="row2">
         <div><label>New node id</label>
@@ -4050,10 +4051,11 @@ async function standUpClient(slug, eid, name, opts = {}) {
                 klass: $("#t-class").value,
                 engagement_id: eid || 0 } });
       closeModal();
-      toast(out.hosting_doc
-        ? `${out.tenant} is live on ${out.node} — hosting schedule filed `
-          + `in their binder, ready to sign`
-        : `${out.tenant} is live on ${out.node}`);
+      toast(`${out.tenant} is live on ${out.node}`
+        + (out.layout ? ` with a ${out.layout} starter layout` : "")
+        + (out.hosting_doc
+           ? " — hosting schedule filed in their binder, ready to sign"
+           : ""));
       (opts.after || renderFleet)();
     } catch (err) { toast(err.message); }
   };

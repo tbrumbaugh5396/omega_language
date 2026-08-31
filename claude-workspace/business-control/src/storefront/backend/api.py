@@ -330,7 +330,10 @@ THEME_DEFAULT = {
     # A third face, and the one most often wrong: the wordmark. Quicksand
     # is round and soft — right for a drinks brand, wrong for most things.
     "font": "Inter", "display_font": "Fraunces", "wordmark_font": "Quicksand",
-    "announce": ["Free shipping over $40"],
+    # No announcements until the merchant writes one. The old default
+    # promised free shipping over $40 — a POLICY, invented, on every fresh
+    # tenant, in the merchant's name. An empty list hides the bar.
+    "announce": [],
     "footer": "powered by business-control",
     # What stands in for a product with no photograph yet. "can" draws the
     # drinks can this storefront was born selling; "card" draws a neutral
@@ -536,6 +539,11 @@ def render_shell(con, body_html: str, *, title=None, description=None,
         shell = shell.replace(f'"{asset}"', f'"{asset}?v={v}"')
     announce = "".join(f"<span>{sect.esc(a)}</span>"
                        for a in (t.get("announce") or []) * 2)
+    if not announce:
+        # no announcements = no bar, not an empty purple strip
+        shell = shell.replace(
+            '<div class="announce" id="announce">',
+            '<div class="announce" id="announce" hidden>')
     nav = content_mod.menus(con)
     _ui = content_mod.ui_strings(con)
     repl = {
@@ -559,6 +567,7 @@ def render_shell(con, body_html: str, *, title=None, description=None,
         "<!--FONTS-->": font_link(t),
         "<!--OFFER-TITLE-->": sect.esc(_ui.get("offer_title", "")),
         "<!--CART-TAG-->": sect.esc(_ui.get("cart_tag", "")),
+        "<!--CART-NOTE-->": sect.esc(_ui.get("cart_note", "")),
         "<!--CONTACT-->": _footer_contact(con),
         "<!--HEAD-EXTRA-->": head_extra,
     }

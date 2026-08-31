@@ -5835,6 +5835,97 @@ ok(not c.post(f"/api/store/admin/engagements/{_qeid}/gates/deposit_cleared",
    "no other gate makes the offer — the contract is the one whose closing "
    "means the platform's half is agreed")
 
+# --- starter layouts: the quote shapes the home page ----------------------
+# The capability set says what the business IS; the new tenant's home page
+# should open shaped like the business, not like the generic shop the
+# section engine grew up as.
+from storefront.backend import layouts as _lay
+
+for _caps, _want in ((["selling", "payments"], "commerce"),
+                     (["learning", "voice"], "courses"),
+                     (["fundraising", "distribution"], "nonprofit"),
+                     (["fundraising", "learning"], "courses"),
+                     (["crm", "comms", "workforce"], "services"),
+                     ([], "services")):
+    ok(_lay.shape_of(_caps) == _want,
+       f"{_caps} shapes as {_want} — what a business MAKES beats how it "
+       f"takes money, which is why a teaching nonprofit leads with its "
+       f"courses")
+
+_lnshape, _lnsecs = _lay.home_sections(["fundraising", "learning"])
+ok(_lnshape == "courses"
+   and any(t == "image_banner" and "Support the work"
+           in st.get("heading", "") for t, st in _lnsecs),
+   "and the capability it does NOT lead with still earns its section — "
+   "the language nonprofit gets the courses skeleton with the support "
+   "banner composed in")
+_alltext = _jn.dumps([st for _, st in _lnsecs])
+ok("100,000" not in _alltext and not any(
+       t == "social_proof" for t, _ in _lnsecs),
+   "scaffolding never invents a fact — no customer counts, no fake proof, "
+   "on a page that ships in the merchant's name")
+
+_seid = c.post("/api/store/admin/engagements", headers=AA,
+               json={"name": "School Co"}).json()["id"]
+c.post(f"/api/store/admin/engagements/{_seid}/quote", headers=AA,
+       json={"markdown": "# Quote",
+             "state": _bench_state(locs=1, seats=4,
+                                   on=["core", "learning", "subs",
+                                       "payments"])})
+_ssug = c.get(f"/api/store/admin/engagements/{_seid}/stand-up",
+              headers=AA).json()["suggestion"]
+ok(_ssug["shape"] == "courses" and _ssug["cap_ids"],
+   "the stand-up suggestion carries the shape, so the modal can say what "
+   "page the click will produce")
+_sup = c.post("/api/store/admin/fleet/tenants", headers=AA,
+              json={"id": "schoolco", "brand": "School Co",
+                    "klass": "micro", "engagement_id": _seid}).json()
+ok(_sup["layout"] == "courses",
+   "standing up from a quote applies the starter layout, and says so")
+_scon = sqlite3.connect(_tn.tenant_dir("schoolco") / "business_control.db")
+_stypes = [r[0] for r in _scon.execute(
+    "SELECT type FROM page_sections WHERE page_slug='home'"
+    " ORDER BY position")]
+ok(_stypes[0] == "hero" and "showcase" not in _stypes
+   and any(t == "rich_text" for t in _stypes),
+   f"the new tenant's home is the courses skeleton, not the drinks-shop "
+   f"default ({_stypes})")
+ok(any("subscription" in (r[0] or "")
+       for r in _scon.execute("SELECT settings FROM page_sections"
+                              " WHERE page_slug='home'")),
+   "and the subs capability composed its explainer in, on a non-commerce "
+   "shape where it is not otherwise told")
+ok(_scon.execute("SELECT v FROM store_meta WHERE k='home_backfill'"
+                 ).fetchone() is not None,
+   "the layout marks the back-fill applied — a restart must not put the "
+   "drinks showcase on top of a page that was chosen")
+_scon.close()
+_shome = c.get("/", headers={"host": "schoolco.localhost"}).text
+ok("able to do" in _shome and "School Co" in _shome,
+   "and it renders — the courses hero on their own hostname, their name "
+   "on it, before anyone has touched a thing")
+ok(">Courses</a>" in _shome and ">Shop</a>" not in _shome,
+   "the nav's first word follows the shape — 'Shop' over a list of "
+   "courses reads as a mistake")
+ok("Free shipping over $40" not in _shome
+   and 'id="announce" hidden' in _shome,
+   "and no invented policy in the announce bar — the old default promised "
+   "free shipping on every fresh tenant, in the merchant's name; empty "
+   "now, and an empty bar is hidden rather than an empty purple strip")
+c.request("DELETE", "/api/store/admin/fleet/tenants/schoolco?keep_data=0",
+          headers=AA)
+
+ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
+          json={"id": "noquote", "klass": "micro"}).json()["layout"] == ""
+   and "showcase" in [r[0] for r in sqlite3.connect(
+       _tn.tenant_dir("noquote") / "business_control.db").execute(
+       "SELECT type FROM page_sections WHERE page_slug='home'")],
+   "with no engagement there is nothing to derive from — the shipped "
+   "default stays, and nothing pretends otherwise")
+c.request("DELETE", "/api/store/admin/fleet/tenants/noquote?keep_data=0",
+          headers=AA)
+
+
 _shm.rmtree(_split_dir, ignore_errors=True)
 
 print(f"\nall {checks} checks passed")

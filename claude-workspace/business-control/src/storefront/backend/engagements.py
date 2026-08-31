@@ -1464,8 +1464,10 @@ def stand_up_suggestion(con, eid: int) -> dict | None:
     else:
         klass = "large"
     caps = [c for c in (state.get("on") or []) if c != "core"]
+    from .layouts import shape_of
     return {"klass": klass, "locs": locs, "seats": seats,
             "dedicated": dedicated, "capabilities": len(caps),
+            "cap_ids": caps, "shape": shape_of(caps),
             "quote_doc": row["id"], "signed": bool(row["signed"]),
             "reason": f"{locs} location{'s' if locs != 1 else ''}, "
                       f"{seats} seat{'s' if seats != 1 else ''}"
@@ -2518,6 +2520,29 @@ def fleet_tenant_add(body: TenantBody, request: Request,
                    klass=klass, brand=body.brand or tid.title())
     fleet.log("tenant created", f"{tid} on {nid} ({klass})", u["name"])
     hosting_doc = 0
+    layout = ""
+    if body.engagement_id:
+        # The quote knows what the business IS — its capability set — so
+        # the new tenant's home page opens shaped like the business, not
+        # like the generic shop. Only at stand-up, onto a page nobody has
+        # touched; and never a reason the stand-up fails.
+        sug = stand_up_suggestion(con, body.engagement_id)
+        if sug and sug.get("cap_ids"):
+            from erp.backend import db as _db
+            from .layouts import apply as apply_layout
+            try:
+                with tenancy.run_as(tid):
+                    tcon = _db.connect()
+                    try:
+                        layout = apply_layout(tcon, sug["cap_ids"],
+                                              body.brand or tid.title())
+                    finally:
+                        tcon.close()
+                fleet.log("starter layout", f"{tid}: {layout} "
+                          f"({len(sug['cap_ids'])} capabilities)",
+                          u["name"])
+            except Exception:
+                layout = ""
     if body.engagement_id:
         con.execute("UPDATE engagements SET tenant_id=? WHERE id=?",
                     (tid, body.engagement_id))
@@ -2552,7 +2577,7 @@ def fleet_tenant_add(body: TenantBody, request: Request,
                 # the operator can still generate the schedule by hand
                 hosting_doc = 0
     return {"ok": True, "tenant": tid, "node": nid,
-            "hosting_doc": hosting_doc}
+            "hosting_doc": hosting_doc, "layout": layout}
 
 
 @router.post("/api/store/admin/fleet/tenants/{tid}/status")
