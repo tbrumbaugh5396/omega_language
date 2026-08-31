@@ -6750,6 +6750,60 @@ try:
     c.post("/api/store/admin/fleet/tenants/remoteco/status", headers=AA,
            json={"status": "active"})
 
+
+    # --- backups follow shipments (worker still alive) --------------------
+    import importlib.util as _ilu
+    _bspec = _ilu.spec_from_file_location("bc_backup",
+                                         ROOT / "scripts" / "backup.py")
+    _bmod = _ilu.module_from_spec(_bspec)
+    _bspec.loader.exec_module(_bmod)
+    ok(_bmod.main() == 0,
+       "the fleet backup runs clean while a tenant lives on a worker")
+    _bdir = Path(os.environ["BUSINESS_CONTROL_DATA"]) / "backups"
+    _barch = sorted(_bdir.glob("business-control-*.tar.gz"))[-1]
+    import tarfile as _tf4
+    with _tf4.open(_barch) as _bt:
+        _bnames = _bt.getnames()
+        ok("tenants/remoteco/business_control.db" in _bnames,
+           "the archive contains the REMOTE tenant, pulled from its node — "
+           "the backup goes to the data, because the data no longer comes "
+           "to the backup")
+        _bdb = _bt.extractfile("tenants/remoteco/business_control.db").read()
+    _btmp = Path(tempfile.mktemp()); _btmp.write_bytes(_bdb)
+    ok(sqlite3.connect(_btmp).execute("PRAGMA integrity_check")
+       .fetchone()[0] == "ok",
+       "and the pulled database is a clean snapshot, not a torn live file")
+    _blast = _jn.loads((_bdir / "last.json").read_text())
+    ok(_blast["ok"] and not _blast["failures"],
+       "last.json records the success the Platform tab will report")
+
+    # a node that does not answer: loud, partial, honest
+    _reg9 = _jn.loads(_tn.REGISTRY_PATH.read_text())
+    _reg9["nodes"]["node-dead"] = {"addr": "http://127.0.0.1:9",
+                                   "key": "k", "units": 25}
+    _reg9["tenants"]["ghostco"] = {"hosts": ["ghostco.localhost"],
+                                   "node": "node-dead"}
+    _tn.REGISTRY_PATH.write_text(_jn.dumps(_reg9)); _tn.bust_cache()
+    ok(_bmod.main() == 1,
+       "a node that does not answer makes the backup exit non-zero — "
+       "cron surfaces it instead of a silent gap")
+    _blast2 = _jn.loads((_bdir / "last.json").read_text())
+    ok(not _blast2["ok"] and "ghostco" in _blast2["failures"],
+       "with the missing tenant named in last.json")
+    with _tf4.open(sorted(_bdir.glob("business-control-*.tar.gz"))[-1]) as _bt2:
+        ok("tenants/remoteco/business_control.db" in _bt2.getnames(),
+           "while everyone reachable is still in the archive — partial "
+           "beats nothing")
+    _reg9 = _jn.loads(_tn.REGISTRY_PATH.read_text())
+    _reg9["nodes"].pop("node-dead"); _reg9["tenants"].pop("ghostco")
+    _tn.REGISTRY_PATH.write_text(_jn.dumps(_reg9)); _tn.bust_cache()
+
+    _fb9 = c.get("/api/store/admin/fleet", headers=AA).json()["backup"]
+    ok(_fb9["ok"] is False and _fb9["stale"] is False
+       and "ghostco" in _fb9["failures"],
+       "the board reads the record the script wrote — reporting, not "
+       "guessing")
+
     ok(c.post("/api/store/admin/fleet/tenants/remoteco/move", headers=AA,
               json={"node": "local"}).json()["node"] == "local",
        "a move back to local recalls the data")

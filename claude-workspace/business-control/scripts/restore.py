@@ -41,6 +41,27 @@ def main() -> int:
             p.rename(aside / name)
     with tarfile.open(archive) as tar:
         tar.extractall(config.DATA_DIR, filter="data")
+    # A restored remote tenant is parked on local: the archive's copy is
+    # now the authoritative one, and it must not fight whatever a worker
+    # node still holds. Reconciling the worker (wipe or re-ship) is the
+    # operator's deliberate act, said out loud here.
+    import json
+    reg_p = config.DATA_DIR / "tenants.json"
+    if reg_p.exists():
+        reg = json.loads(reg_p.read_text())
+        nodes = reg.get("nodes") or {}
+        parked = []
+        for tid, t in (reg.get("tenants") or {}).items():
+            nid = t.get("node") or "local"
+            if (nodes.get(nid) or {}).get("addr"):
+                t["node"] = "local"
+                parked.append(f"{tid} (was on {nid})")
+        if parked:
+            reg_p.write_text(json.dumps(reg, indent=2))
+            print("parked on local — the restored copy is authoritative; "
+                  "reconcile the worker before re-shipping:")
+            for line in parked:
+                print(f"  {line}")
     print(f"restored from {archive.name}")
     print(f"previous state kept in {aside}")
     return 0

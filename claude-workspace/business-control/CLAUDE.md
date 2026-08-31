@@ -26,3 +26,9 @@
 `PYTHONPATH=src .venv/bin/python tests/test_smoke.py` — script-style, one
 file, prints `all N checks passed`. Takes ~3–4 minutes; run in background
 with output to a file.
+
+## Backups
+
+`scripts/backup.py` archives the whole fleet (pulls from worker nodes) and
+writes `data/backups/last.json`; exit 1 = some tenant missed. Production
+cron: `17 2 * * *` on the provider box only — see docs/product/DEPLOY.md.

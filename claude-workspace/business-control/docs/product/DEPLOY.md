@@ -72,6 +72,19 @@ WantedBy=multi-user.target
 sudo systemctl enable --now business-control
 ```
 
+**The one cron.** Nightly backups pull from every worker node, so the
+whole fleet lands in one archive on the provider and a worker needs no
+cron of its own. One line on the provider box:
+
+```
+17 2 * * * cd /opt/business-control && .venv/bin/python scripts/backup.py >> data/backups/backup.log 2>&1
+```
+
+The script exits non-zero when any tenant could not be pulled (cron mails
+you), writes `data/backups/last.json`, and the Platform tab reads it — a
+green "backed up 3h ago" chip when the promise is being kept, a red one
+when it is not.
+
 Binding to 127.0.0.1 means only Caddy (with TLS) can reach it.
 
 ## 5. Harden the app config (`data/config.json`)

@@ -193,6 +193,15 @@ function logout() {
 // ---------- small shared helpers ----------
 const fmtDate = (t) => t ? new Date(t * 1000).toLocaleDateString(undefined,
   { day: "numeric", month: "short", year: "numeric" }) : "—";
+// "3h ago" — for the freshness chips, where a date reads as older than
+// it is and an exact time is more digits than the question deserves.
+const fmtAgo = (t) => {
+  if (!t) return "—";
+  const m = Math.max(0, (Date.now() / 1000 - t) / 60);
+  return m < 60 ? `${Math.round(m)}m ago`
+    : m < 60 * 36 ? `${Math.round(m / 60)}h ago`
+    : `${Math.round(m / 1440)}d ago`;
+};
 
 /* A modal. The ops app previously did every form inline in a view, which is
    fine for a settings page and poor for anything you open from a list. */
@@ -4264,6 +4273,18 @@ async function renderFleet() {
           distributor are not the same load. A node nobody is left on is
           destroyed automatically.</p></div>
       <span class="chips">
+        ${f.backup && f.backup.never
+          ? `<span class="pill" title="run scripts/backup.py — the DEPLOY
+               runbook has the cron line">no backup yet</span>`
+          : f.backup && (f.backup.stale || !f.backup.ok)
+          ? `<span class="pill bad" title="${esc((f.backup.failures
+               && Object.entries(f.backup.failures).map(([t, r]) =>
+               `${t}: ${r}`).join("; ")) || "older than a day")}">backup
+               ${f.backup.ok ? "stale" : "FAILED"}</span>`
+          : f.backup
+          ? `<span class="pill ok" title="${esc(f.backup.archive || "")}">
+               backed up ${fmtAgo(f.backup.at)}</span>`
+          : ""}
         <button class="btn alt" id="node-new">${opsIcon("shield2","btn-ic")}
           New node</button>
         <button class="btn" id="tenant-new">${opsIcon("users","btn-ic")}

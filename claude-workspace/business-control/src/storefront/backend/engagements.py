@@ -2597,6 +2597,24 @@ def fleet_mod_log(tid: str, plan: str, status: str) -> None:
               f"{tid}: {plan} is {status} at the card processor", "stripe")
 
 
+def _backup_health() -> dict:
+    """Is the nightly promise being kept? Read from what the backup script
+    itself wrote — the board reports the record, it does not guess. Stale
+    means older than 26 hours: one missed night, with an hour of slack for
+    the cron's own clock."""
+    from erp.backend import config
+    p = config.DATA_DIR / "backups" / "last.json"
+    if not p.exists():
+        return {"never": True, "stale": True}
+    try:
+        d = json.loads(p.read_text())
+    except ValueError:
+        return {"never": True, "stale": True}
+    d["stale"] = (time.time() - (d.get("at") or 0)) > 26 * 3600
+    return d
+
+
+
 @router.get("/api/store/admin/fleet")
 def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
     """The whole board: nodes, capacity, who lives where, recent history."""
@@ -2615,6 +2633,7 @@ def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
             t["client"] = clients.get(t["id"])
             t["billing"] = billing.get(t["id"])
     return {"nodes": board, "classes": fleet.CLASSES,
+            "backup": _backup_health(),
             "public_suffix": (fleet_cfg() or {}).get("public_suffix", ""),
             "events": fleet.events(20),
             "unplaced": [dict(v, slug=k) for k, v in clients.items()

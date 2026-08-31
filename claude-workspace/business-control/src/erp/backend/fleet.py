@@ -32,6 +32,7 @@ import shlex
 import subprocess
 import tarfile
 import time
+from pathlib import Path
 
 from . import tenancy
 
@@ -200,12 +201,39 @@ def _node_call(node_id: str, method: str, path: str, content=None,
 
 def pack_tenant(tid: str) -> bytes:
     """A tenant's whole directory as one tar.gz — database, config,
-    uploads, push keys. The unit of shipment."""
+    uploads, push keys. The unit of shipment, and of backup.
+
+    The database goes in as a WAL-safe SNAPSHOT (sqlite's backup API),
+    not the live file: taring a database mid-write ships torn pages, and
+    a shipment is exactly when the tenant may still be serving. The
+    snapshot is self-contained, so the -wal/-shm siblings stay out."""
+    import sqlite3
+    import tempfile
     from . import tenancy
     d = tenancy.tenant_dir(tid)
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        tf.add(d, arcname=".")
+        with tempfile.TemporaryDirectory() as td:
+            for p in sorted(d.rglob("*")):
+                rel = p.relative_to(d)
+                name = str(rel)
+                if p.is_dir():
+                    tf.add(p, arcname=f"./{name}", recursive=False)
+                    continue
+                if not p.is_file():
+                    continue
+                if p.suffix == ".db":
+                    snap = Path(td) / name.replace("/", "_")
+                    src = sqlite3.connect(p)
+                    dst = sqlite3.connect(snap)
+                    src.backup(dst)
+                    dst.close()
+                    src.close()
+                    tf.add(snap, arcname=f"./{name}")
+                elif p.name.endswith((".db-wal", ".db-shm")):
+                    continue          # folded into the snapshot above
+                else:
+                    tf.add(p, arcname=f"./{name}")
     return buf.getvalue()
 
 

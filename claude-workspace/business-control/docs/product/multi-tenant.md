@@ -162,6 +162,13 @@ own data directory) and the fleet stops being bookkeeping:
   fleet key; a process with no key configured accepts nothing, and a
   shipment whose tar reaches outside the tenant's directory is refused
   as the attack it is.
+- **Backups follow shipments.** `scripts/backup.py` pulls a backup-grade
+  export from every worker (the pack is itself a WAL-safe snapshot), so
+  one archive on the provider covers the fleet and a worker needs no cron
+  of its own; a node that does not answer is skipped loudly (exit 1) while
+  everyone else is still backed up, and the Platform tab shows the result.
+  A restore parks recovered remote tenants on local — the archive's copy
+  is authoritative, and reconciling the worker is a deliberate act.
 - **The reap spares live machines**: an addr'd node with no
   `destroy_cmd` survives emptying — auto-forgetting a running server's
   address and key saves nothing.
