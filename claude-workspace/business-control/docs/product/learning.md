@@ -41,6 +41,21 @@ exists to consult, so a key-holder's create confers the role directly
 (the role, not the admin flag — only owner and director carry that).
 The bare API's mode-less login keeps find-or-create for scripts and dev.
 
+The third way in is an **invitation**: the office mints a link
+(`POST /api/roles/invites`, minting takes the same right as granting)
+that carries a role, and whoever opens `/join/{token}` signs up straight
+into it — no queue. Bound to a premade account (ops Learning → The team →
+Add person), the sign-up claims that account: name fixed, password set,
+role wired, single-use. The team desk on the Learning tab also edits and
+deactivates teachers, tutors, office staff and volunteers, and a
+**Customers** tab (Sell group, `selling` cap) finally shows the consumer
+half of the CRM — orders, spend and enrolments per person. Courses
+archive (active=0; every record stands) or delete only when they have no
+history; library items carry a QR label (`bc:item:<uid>`, scan-at-desk
+lookup), partial edits including copies (retire worn ones) and owner, and
+removal that retires when loan history exists and deletes only when
+nothing ever referenced them.
+
 ## What moved verbatim
 
 Two pure modules came over whole, with their tests restated in the suite:

@@ -2737,9 +2737,73 @@ function wireReviewButtons() {
   }
 }
 
+// ---------- the invitation page ----------
+// /join/<token> renders a #join-root; the invite carries the role, and
+// maybe a premade account's name. Finishing here IS the sign-in.
+async function joinPage() {
+  const root = document.getElementById("join-root");
+  if (!root) return;
+  const token = root.dataset.token;
+  let inv;
+  try {
+    const r = await fetch(`/api/join/${encodeURIComponent(token)}`);
+    inv = await r.json();
+    if (!r.ok) throw new Error(inv.detail || "that invitation is not valid");
+  } catch (e) {
+    root.innerHTML = `<h2>This invitation isn't open</h2>
+      <p class="dim">${esc(e.message)}</p>`;
+    return;
+  }
+  root.innerHTML = `
+    <h2>You're invited to ${esc(inv.brand)}</h2>
+    <p>This link signs you up as <b>${esc(inv.role_label)}</b> — no
+      approval queue, the invitation is the approval.</p>
+    <label>Your name</label>
+    <input id="jn-name" value="${esc(inv.name || "")}"
+      ${inv.locked ? "disabled" : ""} style="max-width:340px">
+    ${inv.locked ? `<p class="dim">The office already made your account —
+      this sign-up claims it.</p>` : ""}
+    <label>Password</label>
+    <input id="jn-pass" type="password" autocomplete="new-password"
+      style="max-width:340px">
+    <label>Repeat password</label>
+    <input id="jn-pass2" type="password" autocomplete="new-password"
+      style="max-width:340px">
+    <p class="dim">A short phrase you will remember beats a short password
+      with symbols in it.</p>
+    <p><button class="btn-pill primary" id="jn-go">Join</button></p>
+    <p class="dim" id="jn-msg"></p>`;
+  $("#jn-go").onclick = async () => {
+    const msg = $("#jn-msg");
+    if ($("#jn-pass").value !== $("#jn-pass2").value) {
+      msg.textContent = "the passwords do not match";
+      return;
+    }
+    const r = await fetch(`/api/join/${encodeURIComponent(token)}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("#jn-name").value.trim(),
+                             password: $("#jn-pass").value }) });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || !out.token) {
+      msg.textContent = out.detail || "that didn't work — try again";
+      return;
+    }
+    localStorage.setItem("sf_support",
+      JSON.stringify({ token: out.token, me: out.id }));
+    // The ops app keeps its own session key — set both, so landing on
+    // either surface finds them already signed in.
+    localStorage.setItem("bc_user", JSON.stringify(out));
+    // Land where the new role's work lives: the office side for staffish
+    // roles, the learner portal for the rest.
+    location.href = ["teacher", "employee", "director", "owner"]
+      .includes(out.role) ? "/ops/" : "/learn";
+  };
+}
+
 // ---------- boot ----------
 buildPickers();
 saveCart();
+joinPage();
 loadCatalog().then(() => {
   loadPromos();
   confirmPaidReturn();

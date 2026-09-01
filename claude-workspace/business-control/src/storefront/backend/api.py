@@ -1817,6 +1817,20 @@ if(bf)bf.onclick=addToCart;
                       f'{json.dumps(ld)}</script>')))
 
 
+@router.get("/join/{token}")
+def join_page(token: str, con=Depends(get_con)):
+    """Where an invitation link lands: a one-field welcome, rendered in the
+    shop's own shell. store.js sees #join-root and takes it from there —
+    the invite's role and any premade name come from /api/join/{token}."""
+    body = f"""<section class="section"><div id="join-root"
+      data-token="{sect.esc(token)}">
+      <p class="dim">Checking your invitation…</p>
+    </div></section>"""
+    return HTMLResponse(render_shell(
+        con, body, title="You're invited",
+        description="Finish setting up your account."))
+
+
 @router.get("/sitemap.xml")
 def sitemap(request: Request, con=Depends(get_con)):
     base = str(request.base_url).rstrip("/")

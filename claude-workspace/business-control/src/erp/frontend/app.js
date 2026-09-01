@@ -831,6 +831,8 @@ const opsIcon = (n, cls = "") =>
 const TABS = [
   { id: "shop", label: "Shop", icon: "cart", group: "Sell", roles: "*" },
   { id: "orders", label: "Orders", icon: "box", group: "Sell", roles: "*" },
+  { id: "customers", label: "Customers", icon: "users", group: "Sell",
+    roles: ["admin", "employee"] },
   { id: "promos", label: "Promos", icon: "megaphone", group: "Sell",
     roles: ["admin", "employee"] },
   { id: "clients", label: "Clients (B2B)", icon: "handshake", group: "Sell",
@@ -894,7 +896,7 @@ const TABS = [
    book's own (the same ones the quote carries), so the entitlement written
    at stand-up and the lock shown here can never speak different names. */
 const TAB_CAP = {
-  shop: "selling", orders: "selling",
+  shop: "selling", orders: "selling", customers: "selling",
   promos: "marketing", email: "marketing", experiments: "marketing",
   clients: "crm", outreach: "crm",
   clock: "workforce", staff: "workforce",
@@ -1121,7 +1123,7 @@ async function render() {
     routes: renderRoutes, promos: renderPromos, outreach: renderOutreach,
     experiments: renderExperiments, analytics: renderAnalytics,
     docs: renderDocs, clients: renderClients,
-    staff: renderStaff, events: renderEvents,
+    staff: renderStaff, events: renderEvents, customers: renderCustomers,
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
@@ -5081,11 +5083,12 @@ const ROLES = ["customer", "distributor", "influencer", "employee", "owner"];
 
 async function renderAdmin() {
   const [products, stores, employees, users, emailCfg, emailLog, cyclesList,
-         pay, plans] = await Promise.all([
+         pay, plans, inv] = await Promise.all([
       api("/api/products"), api("/api/stores"), api("/api/admin/employees"),
       api("/api/admin/users"), api("/api/admin/email/config"),
       api("/api/admin/email/log"), api("/api/cycles"),
-      api("/api/admin/payments"), api("/api/store/admin/plans")]);
+      api("/api/admin/payments"), api("/api/store/admin/plans"),
+      api("/api/inventory").catch(() => [])]);
   view().innerHTML = `
     <h2>Admin</h2>
 
@@ -5371,14 +5374,30 @@ async function renderAdmin() {
             : l.status === "dry" ? "" : "bad"}">${esc(l.status)}</span></td>
         </tr>`).join("")}</tbody></table>` : ""}
     </div></details>
-    <details class="sect"><summary>Set inventory</summary><div class="inner">
+    <details class="sect"><summary>Inventory
+      ${inv.length ? `<span class="pill">${inv.length} row${
+        inv.length === 1 ? "" : "s"}</span>` : ""}</summary><div class="inner">
+    ${stores.length ? "" : `<p class="dim">No stores yet — inventory lives
+      at a store, so add one on the Stores tab first.</p>`}
     <form class="inline" id="inv-form">
       <select id="iv-store">${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select>
       <select id="iv-prod">${products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
       <input id="iv-qty" type="number" placeholder="qty" required style="width:90px">
       <input id="iv-par" type="number" placeholder="par" value="24" style="width:90px">
-      <button class="btn">Set</button>
-    </form></div></details>`;
+      <button class="btn">Add / set</button>
+    </form>
+    ${inv.length ? `<table><thead><tr><th>Store</th><th>Product</th>
+      <th>Qty</th><th>Par</th><th></th></tr></thead><tbody>
+      ${inv.map((r) => `<tr>
+        <td>${esc(r.store_name)}</td><td>${esc(r.product_name)}</td>
+        <td><input type="number" value="${r.qty}" style="width:80px"
+          data-ivq="${r.store_id}:${r.product_id}"></td>
+        <td><input type="number" value="${r.par}" style="width:80px"
+          data-ivp="${r.store_id}:${r.product_id}"></td>
+        <td><button class="btn alt sm" data-invset="${r.store_id}:${r.product_id}">Set</button>
+          <button class="btn alt sm" data-invdel="${r.store_id}:${r.product_id}">Delete</button></td>
+      </tr>`).join("")}</tbody></table>` : ""}
+    </div></details>`;
   $("#cyc-form").onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -5576,7 +5595,25 @@ async function renderAdmin() {
       store_id: +$("#iv-store").value, product_id: +$("#iv-prod").value,
       qty: +$("#iv-qty").value, par: +$("#iv-par").value } });
     toast("inventory set");
+    renderAdmin();
   };
+  view().querySelectorAll("[data-invset]").forEach((b) => b.onclick =
+    async () => {
+      const [sid, pid] = b.dataset.invset.split(":");
+      await api("/api/admin/inventory", { body: {
+        store_id: +sid, product_id: +pid,
+        qty: +view().querySelector(`[data-ivq="${b.dataset.invset}"]`).value,
+        par: +view().querySelector(`[data-ivp="${b.dataset.invset}"]`).value,
+      } });
+      toast("inventory set");
+    });
+  view().querySelectorAll("[data-invdel]").forEach((b) => b.onclick =
+    async () => {
+      const [sid, pid] = b.dataset.invdel.split(":");
+      await api(`/api/admin/inventory/${sid}/${pid}`, { method: "DELETE" });
+      toast("inventory row removed");
+      renderAdmin();
+    });
 }
 
 // ---------- boot ----------
@@ -7962,6 +7999,83 @@ async function drawStoreRail() {
 }
 
 // ---------- staff permissions ----------
+/* Customers — the consumer half of the CRM. Clients (B2B) had a tab from
+   day one; the people who simply buy things could place orders the ERP
+   would happily count without ever being visible as people. */
+async function renderCustomers(q) {
+  const rows = await api(`/api/customers?q=${encodeURIComponent(q || "")}`);
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Customers</h2>
+        <p class="dim">Everyone who shops (or studies) here — with what
+          they've bought and where they're enrolled. B2B relationships
+          live under Clients.</p></div>
+    </div>
+    <div class="card"><input id="cu-q" placeholder="Search name or email"
+      value="${esc(q || "")}" style="max-width:340px"></div>
+    ${rows.map((r) => `<div class="card${r.active ? "" : " dim-card"}">
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(r.name)}</b>
+          <span class="dim">${[r.email, r.region].filter(Boolean)
+            .map(esc).join(" · ") || "no contact on file"}${
+            r.active ? "" : " · deactivated"}</span></div>
+        <span class="dim">${r.orders} order${r.orders === 1 ? "" : "s"}
+          · ${money(r.spent_cents)}</span>
+        <button class="btn alt sm" data-cust="${r.id}">Open</button>
+      </div></div>`).join("")
+      || '<div class="card empty"><b>No customers yet</b><span class="dim">They appear here the moment somebody signs up or orders.</span></div>'}`;
+  let t = null;
+  $("#cu-q").oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(() => renderCustomers($("#cu-q").value), 300);
+  };
+  if (q !== undefined) {
+    const el = $("#cu-q");
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }
+  view().querySelectorAll("[data-cust]").forEach((b) => b.onclick =
+    () => customerCard(+b.dataset.cust));
+}
+
+async function customerCard(uid) {
+  const d = await api(`/api/customers/${uid}`);
+  const isAdmin = S.user && S.user.is_admin;
+  modal(`<h3>${esc(d.name)}</h3>
+    <p class="dim">customer since ${fmtDate(d.created_at)}${
+      d.active ? "" : " · deactivated"}${d.requested_role
+      ? ` · asked to be ${esc(d.requested_role)}` : ""}</p>
+    <label>Email</label>
+    <input id="cu-email" value="${esc(d.email || "")}" ${isAdmin ? "" : "disabled"}>
+    ${d.courses.length ? `<p><b>Enrolled:</b>
+      ${d.courses.map(esc).join(", ")}</p>` : ""}
+    ${d.orders.length ? `<table><thead><tr><th>Order</th><th>Status</th>
+      <th>Total</th><th>When</th></tr></thead><tbody>
+      ${d.orders.map((o) => `<tr><td>#${o.id}</td><td>${esc(o.status)}</td>
+        <td>${money(o.total_cents)}</td><td>${fmtDate(o.created_at)}</td>
+      </tr>`).join("")}</tbody></table>`
+      : '<p class="dim">No orders yet.</p>'}
+    ${isAdmin ? `<div style="margin-top:12px;display:flex;gap:8px">
+      <button class="btn sm" id="cu-save">Save</button>
+      <button class="btn alt sm" id="cu-toggle">${d.active
+        ? "Deactivate" : "Reactivate"}</button>
+    </div>` : ""}`);
+  if ($("#cu-save")) $("#cu-save").onclick = async () => {
+    await api(`/api/admin/users/${uid}/update`,
+              { body: { email: $("#cu-email").value.trim() } });
+    toast("saved");
+    closeModal();
+    renderCustomers();
+  };
+  if ($("#cu-toggle")) $("#cu-toggle").onclick = async () => {
+    await api(`/api/admin/users/${uid}/update`,
+              { body: { active: !d.active } });
+    toast(d.active ? "deactivated" : "reactivated");
+    closeModal();
+    renderCustomers();
+  };
+}
+
 /* Role requests: what somebody asked to be at sign-up (roles.py decides
    who may review what). One card, two homes — Team & access for any
    tenant with Workforce, and the Learning tab beside the applications
@@ -8209,11 +8323,13 @@ function eventForm(e) {
    live server-side in one pure module — this screen only displays them. */
 
 async function renderLearning() {
-  const [courses, queue, regs, conduct, roleReqs] = await Promise.all([
+  const [courses, queue, regs, conduct, roleReqs, team] = await Promise.all([
     api("/api/learning/courses"), api("/api/learning/grading"),
     S.user.is_admin ? api("/api/learning/registrations") : Promise.resolve([]),
     S.user.is_admin ? api("/api/learning/conduct") : Promise.resolve([]),
     api("/api/roles/requests").catch(() => []),
+    S.user.is_admin ? api("/api/learning/team").catch(() => [])
+                    : Promise.resolve([]),
   ]);
   const card = (c) => `
     <div class="card ${c.active ? "" : "dim-card"}" data-course="${c.id}"
@@ -8280,8 +8396,29 @@ async function renderLearning() {
     ${courses.map(card).join("") || `<div class="card empty"><span class="e-ic">${
       opsIcon("pen")}</span><b>No courses yet</b><span class="dim">${
       S.user.is_admin ? "Create one — lessons and quizzes hang off it."
-        : "An owner can create one and appoint you its teacher."}</span></div>`}`;
+        : "An owner can create one and appoint you its teacher."}</span></div>`}
+    ${S.user.is_admin ? `<div class="page-head" style="margin-top:16px">
+      <h3>The team (${team.length})</h3>
+      <div style="display:flex;gap:8px">
+        <button class="btn alt sm" id="lt-invite">Invite by link</button>
+        <button class="btn sm" id="lt-add">Add person</button>
+      </div>
+    </div>
+    ${team.map((p) => `<div class="card${p.active ? "" : " dim-card"}">
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(p.name)}</b>
+          <span class="dim">${esc(p.role)}${p.is_admin ? " · admin" : ""}${
+            p.email ? " · " + esc(p.email) : ""}${p.active
+            ? "" : " · deactivated"}${p.teaches
+            ? ` · teaches ${p.teaches} course${p.teaches === 1 ? "" : "s"}`
+            : ""}</span></div>
+        <button class="btn alt sm" data-tedit="${p.id}">Edit</button>
+      </div></div>`).join("")}` : ""}`;
   if ($("#lc-new")) $("#lc-new").onclick = () => courseForm(null);
+  if ($("#lt-add")) $("#lt-add").onclick = () => teamForm(null);
+  if ($("#lt-invite")) $("#lt-invite").onclick = () => inviteForm(team);
+  view().querySelectorAll("[data-tedit]").forEach((b) => b.onclick = () =>
+    teamForm(team.find((p) => p.id === +b.dataset.tedit)));
   wireRoleRequests(renderLearning);
   view().querySelectorAll("[data-course]").forEach((el) =>
     el.onclick = () => learningCourse(+el.dataset.course));
@@ -8327,7 +8464,10 @@ async function learningLibrary() {
     <div class="page-head" style="margin-top:16px">
       <h3>Library (${d.items.length} item${d.items.length === 1 ? "" : "s"},
         ${d.loans.length} out)</h3>
-      <button class="btn sm" id="lib-add">Add item</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn alt sm" id="lib-scan">Scan item</button>
+        <button class="btn sm" id="lib-add">Add item</button>
+      </div>
     </div>
     ${d.loans.length ? d.loans.map((l) => `<div class="card">
       <div class="doc-top">
@@ -8342,7 +8482,11 @@ async function learningLibrary() {
       <div class="doc-top">
         <div class="doc-main"><b>${esc(i.name)}</b>
           <span class="dim">${esc(i.kind)} · ${i.available} of ${i.copies}
-            available${i.notes ? " · " + esc(i.notes) : ""}</span></div>
+            available${i.owner ? " · " + esc(i.owner) + "'s" : ""}${
+            i.notes ? " · " + esc(i.notes) : ""}</span></div>
+        <button class="btn alt sm" data-libqr="${i.id}">QR</button>
+        <button class="btn alt sm" data-libedit="${i.id}">Edit</button>
+        <button class="btn alt sm" data-libdel="${i.id}">Remove</button>
         <button class="btn alt sm" data-libout="${i.id}"
           ${i.available ? "" : "disabled"}>${i.available
             ? "Check out" : "all out"}</button>
@@ -8381,9 +8525,9 @@ async function learningLibrary() {
       renderLearning();
     } catch (err) { toast(err.message); }
   });
-  el.querySelectorAll("[data-libout]").forEach((b) => b.onclick = async () => {
+  const checkoutModal = async (itemId, itemName) => {
     const users = await api("/api/admin/users").catch(() => null);
-    modal(`<h3>Check out</h3>
+    modal(`<h3>Check out${itemName ? " — " + esc(itemName) : ""}</h3>
       <label>To</label>${users
         ? `<select id="lo-user">${users.filter((u) => u.active).map((u) =>
             `<option value="${u.id}">${esc(u.name)} (${esc(u.role)})</option>`)
@@ -8396,7 +8540,7 @@ async function learningLibrary() {
         <button class="btn" id="lo-save">Check out</button>
       </div>`);
     $("#lo-save").onclick = async () => {
-      const body = { item_id: +b.dataset.libout,
+      const body = { item_id: itemId,
         due_days: +$("#lo-days").value || null };
       if (users) body.user_id = +$("#lo-user").value;
       else body.name = $("#lo-name").value.trim();
@@ -8405,7 +8549,78 @@ async function learningLibrary() {
         closeModal(); renderLearning();
       } catch (err) { toast(err.message); }
     };
+  };
+  el.querySelectorAll("[data-libout]").forEach((b) => b.onclick = () =>
+    checkoutModal(+b.dataset.libout));
+  el.querySelectorAll("[data-libqr]").forEach((b) => b.onclick = async () => {
+    const item = d.items.find((i) => i.id === +b.dataset.libqr);
+    try {
+      const r = await api(`/api/learning/library/items/${b.dataset.libqr}/qr`);
+      modal(`<h3>${esc(item ? item.name : "Item")} — QR label</h3>
+        <p style="text-align:center"><img
+          src="/api/qr.svg?data=${encodeURIComponent(r.payload)}"
+          alt="item label" style="width:220px;background:#fff;padding:10px;
+          border-radius:8px"></p>
+        <p class="dim">Stick it on the item. Scanning it at the desk pulls
+          the item straight up — the label survives renames, and a photo
+          of it is only ever a library label.</p>
+        <div class="modal-acts">
+          <button class="btn alt" data-close>Done</button>
+        </div>`);
+    } catch (err) { toast(err.message); }
   });
+  el.querySelectorAll("[data-libedit]").forEach((b) => b.onclick = () => {
+    const i = d.items.find((x) => x.id === +b.dataset.libedit);
+    if (!i) return;
+    modal(`<h3>Edit — ${esc(i.name)}</h3>
+      <label>Name</label><input id="le-name" value="${esc(i.name)}">
+      <div class="row2">
+        <div><label>Kind</label><select id="le-kind">
+          ${["book", "material", "equipment"].map((k) =>
+            `<option ${i.kind === k ? "selected" : ""}>${k}</option>`).join("")}
+        </select></div>
+        <div><label>Copies</label>
+          <input id="le-copies" type="number" value="${i.copies}"></div>
+      </div>
+      <p class="dim">Lower the copies to retire worn-out ones — it can't
+        drop below what's currently out (${i.out}).</p>
+      <label>Owner <span class="dim">(whose property; blank = the school's)</span></label>
+      <input id="le-owner" value="${esc(i.owner || "")}">
+      <label>Notes</label><input id="le-notes" value="${esc(i.notes || "")}">
+      <div class="modal-acts">
+        <button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="le-save">Save</button>
+      </div>`);
+    $("#le-save").onclick = async () => {
+      try {
+        await api(`/api/learning/library/items/${i.id}`, {
+          method: "PATCH", body: {
+            name: $("#le-name").value, kind: $("#le-kind").value,
+            copies: +$("#le-copies").value,
+            owner: $("#le-owner").value, notes: $("#le-notes").value } });
+        closeModal(); renderLearning();
+      } catch (err) { toast(err.message); }
+    };
+  });
+  el.querySelectorAll("[data-libdel]").forEach((b) => b.onclick = async () => {
+    try {
+      const r = await api(`/api/learning/library/items/${b.dataset.libdel}`,
+                          { method: "DELETE" });
+      toast(r.result === "retired"
+        ? "retired — its loan history stands" : "deleted");
+      renderLearning();
+    } catch (err) { toast(err.message); }
+  });
+  $("#lib-scan").onclick = async () => {
+    const text = await QRScan.scan({ title: "Scan the item's label" });
+    if (!text) return;
+    try {
+      const item = await api("/api/learning/library/scan",
+                             { body: { payload: text } });
+      if (item.available) checkoutModal(item.id, item.name);
+      else toast(`${item.name}: every copy is out`);
+    } catch (err) { toast(err.message); }
+  };
 }
 
 async function learningDataRights() {
@@ -8772,6 +8987,92 @@ async function courseForm(c) {
   };
 }
 
+/* The team: teachers, tutors, office staff and volunteers, managed where
+   the school's work is. Adding directly is an admin act; the invite link
+   is the door for the person themself — bound to a premade account, their
+   sign-up wires straight into it. */
+const TEAM_ROLES = [["teacher", "teacher / tutor"], ["employee",
+  "office staff"], ["volunteer", "volunteer"], ["director",
+  "executive director"], ["board", "board member"], ["donor", "donor"]];
+
+function teamForm(p) {
+  modal(`<h3>${p ? "Edit " + esc(p.name) : "Add a person"}</h3>
+    ${p ? "" : `<label>Name</label><input id="tf-name">`}
+    <label>Role</label>
+    <select id="tf-role">${TEAM_ROLES.map(([v, l]) =>
+      `<option value="${v}" ${p && p.role === v ? "selected" : ""}>${l}</option>`)
+      .join("")}</select>
+    <label>Email</label>
+    <input id="tf-email" value="${esc(p ? p.email || "" : "")}">
+    ${p ? "" : `<p class="dim">This makes the account now, without its
+      person — pair it with an invite link so their sign-up claims it,
+      or hand them the name to sign in with.</p>`}
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn sm" id="tf-save">${p ? "Save" : "Add"}</button>
+      ${p && p.id !== S.user.id ? `<button class="btn alt sm" id="tf-toggle">
+        ${p.active ? "Deactivate" : "Reactivate"}</button>` : ""}
+    </div>
+    ${p ? `<p class="dim">Deactivating keeps every record they appear in —
+      it only closes the door.</p>` : ""}`);
+  $("#tf-save").onclick = async () => {
+    try {
+      if (p) {
+        await api(`/api/admin/users/${p.id}/update`, { body: {
+          role: $("#tf-role").value, email: $("#tf-email").value.trim() } });
+      } else {
+        await api("/api/learning/team", { body: {
+          name: $("#tf-name").value.trim(), role: $("#tf-role").value,
+          email: $("#tf-email").value.trim() } });
+      }
+      closeModal();
+      renderLearning();
+    } catch (err) { toast(err.message); }
+  };
+  if ($("#tf-toggle")) $("#tf-toggle").onclick = async () => {
+    await api(`/api/admin/users/${p.id}/update`,
+              { body: { active: !p.active } });
+    closeModal();
+    renderLearning();
+  };
+}
+
+function inviteForm(team) {
+  const premade = (team || []).filter((p) => p.active);
+  modal(`<h3>Invite by link</h3>
+    <p class="dim">The link carries the role — whoever opens it signs up
+      straight in, no approval queue. Single-use.</p>
+    <label>Role</label>
+    <select id="iv-role">${TEAM_ROLES.map(([v, l]) =>
+      `<option value="${v}">${l}</option>`).join("")}</select>
+    <label>Bind to a premade account <span class="dim">(optional)</span></label>
+    <select id="iv-person"><option value="">— a fresh account —</option>
+      ${premade.map((p) =>
+        `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+    <label>Their name <span class="dim">(optional prefill)</span></label>
+    <input id="iv-name">
+    <label>Their email <span class="dim">(optional)</span></label>
+    <input id="iv-mail">
+    <p><button class="btn sm" id="iv-make">Make the link</button></p>
+    <p id="iv-out"></p>`);
+  $("#iv-make").onclick = async () => {
+    try {
+      const out = await api("/api/roles/invites", { body: {
+        role: $("#iv-role").value,
+        person_id: +$("#iv-person").value || null,
+        name: $("#iv-name").value.trim(),
+        email: $("#iv-mail").value.trim() } });
+      const url = location.origin + out.path;
+      document.getElementById("iv-out").innerHTML =
+        `<input id="iv-url" value="${esc(url)}" readonly style="width:100%">
+         <span class="dim">Send this to your ${esc(out.role_label)} —
+           it works once.</span>`;
+      const box = document.getElementById("iv-url");
+      box.onfocus = () => box.select();
+      box.focus();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 async function learningCourse(cid) {
   const d = await api(`/api/learning/courses/${cid}`);
   const lesson = (l) => `<div class="card">
@@ -8809,14 +9110,21 @@ async function learningCourse(cid) {
         <p class="dim">${esc([d.language, d.level].filter(Boolean).join(" · ")
           || "course")}${d.product_id
           ? " · sold on the storefront (buying enrols)" : ""}</p></div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn alt" id="lc-back">All courses</button>
         <button class="btn alt" id="lc-edit">Edit course</button>
+        ${S.user.is_admin ? `<button class="btn alt" id="lc-arch">
+            ${d.active ? "Archive" : "Reopen"}</button>
+          <button class="btn alt" id="lc-del">Delete</button>` : ""}
         ${d.open_session_id
           ? `<button class="btn" id="lc-session">Open class</button>`
           : `<button class="btn" id="lc-start">Start class</button>`}
       </div>
     </div>
+    ${d.active ? "" : `<div class="card"><b>Archived.</b>
+      <span class="dim">The storefront hides it and nobody new can enrol;
+      every transcript, class record and payslip it produced stands.
+      Reopen it any time.</span></div>`}
     <div class="page-head" style="margin-top:8px">
       <h3>Lessons (${d.lessons.length})</h3>
       <button class="btn sm" id="ll-new">New lesson</button>
@@ -8850,6 +9158,23 @@ async function learningCourse(cid) {
         </div></div>`).join("")}` : ""}`;
   $("#lc-back").onclick = renderLearning;
   $("#lc-edit").onclick = () => courseForm(d);
+  if ($("#lc-arch")) $("#lc-arch").onclick = async () => {
+    try {
+      await api(`/api/learning/courses/${cid}`, { body: {
+        name: d.name, language: d.language || "", level: d.level || "",
+        blurb: d.blurb || "", teacher_id: d.teacher_id,
+        product_id: d.product_id, active: d.active ? 0 : 1 } });
+      toast(d.active ? "archived — reopen any time" : "reopened");
+      learningCourse(cid);
+    } catch (err) { toast(err.message); }
+  };
+  if ($("#lc-del")) $("#lc-del").onclick = async () => {
+    try {
+      await api(`/api/learning/courses/${cid}`, { method: "DELETE" });
+      toast("course deleted");
+      renderLearning();
+    } catch (err) { toast(err.message); }
+  };
   if ($("#lc-start")) $("#lc-start").onclick = async () => {
     try {
       const r = await api("/api/learning/sessions",

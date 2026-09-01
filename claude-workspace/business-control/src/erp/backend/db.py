@@ -312,6 +312,22 @@ CREATE TABLE IF NOT EXISTS login_tokens (
   used INTEGER DEFAULT 0
 );
 
+/* An invitation is authority in link form: the office mints it carrying a
+   role, and whoever opens the link signs up straight into that role — or
+   into a premade account the invite was bound to. Single-use, so a
+   forwarded link is worth nothing once its person arrived. */
+CREATE TABLE IF NOT EXISTS invites (
+  id INTEGER PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  role TEXT NOT NULL,
+  name TEXT DEFAULT '',
+  email TEXT DEFAULT '',
+  person_id INTEGER,                       -- NULL = the sign-up creates one
+  created_by INTEGER NOT NULL,
+  created_at REAL NOT NULL,
+  used_at REAL
+);
+
 /* A pay-on-delivery order waiting on its email confirmation.
 
    Deliberately not a row in `orders` with a different status: thirteen

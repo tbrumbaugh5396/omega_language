@@ -8395,6 +8395,113 @@ _kl = c.post("/api/login", headers=HA, json={
 ok(_kl["role"] == "customer" and _kl["requested_role"] == "teacher",
    "a wrong key grants nothing — the claim is filed like anyone's")
 
+# --- invites: authority in link form ------------------------------------------
+_pre = c.post("/api/learning/team", headers=AA, json={
+    "name": "Toni Tutor", "role": "teacher",
+    "email": "toni@school.test"}).json()
+ok("id" in _pre, "the office premakes an account before its person arrives")
+ok(c.post("/api/learning/team", headers=AA,
+          json={"name": "Toni Tutor", "role": "teacher"}).status_code == 409,
+   "but never two under one name")
+_tm = c.get("/api/learning/team", headers=AA).json()
+ok(any(p["name"] == "Toni Tutor" and p["role"] == "teacher" for p in _tm)
+   and any(p["name"] == "Tina Teacher" for p in _tm),
+   "the team list gathers teachers, staff and volunteers in one place")
+
+_inv = c.post("/api/roles/invites", headers=AA, json={
+    "role": "teacher", "person_id": _pre["id"]}).json()
+ok(_inv["path"].startswith("/join/"),
+   "an invite is a link that carries a role")
+ok(c.post("/api/roles/invites", headers=TT,
+          json={"role": "director"}).status_code == 403,
+   "and minting one takes the same right as granting — office staff "
+   "cannot link-in a director")
+_peek = c.get(f"/api/join/{_inv['token']}", headers=HA).json()
+ok(_peek["locked"] and _peek["name"] == "Toni Tutor",
+   "the link-holder sees the account waiting for them")
+_joined = c.post(f"/api/join/{_inv['token']}", headers=HA,
+                 json={"password": "chalk and talk"}).json()
+ok(_joined["id"] == _pre["id"] and _joined["role"] == "teacher"
+   and _joined["has_password"],
+   "signing up through the link claims the premade account — role wired, "
+   "password set")
+ok(c.get(f"/api/join/{_inv['token']}", headers=HA).status_code == 410,
+   "and the link dies with its first use")
+
+_inv2 = c.post("/api/roles/invites", headers=AA,
+               json={"role": "volunteer"}).json()
+_fresh = c.post(f"/api/join/{_inv2['token']}", headers=HA,
+                json={"name": "Vinnie Volunteers",
+                      "password": "many hands"}).json()
+ok(_fresh["role"] == "volunteer" and not _fresh["is_admin"],
+   "an unbound invite creates the account fresh, straight into its role")
+_inv3 = c.post("/api/roles/invites", headers=AA,
+               json={"role": "teacher"}).json()
+ok(c.post(f"/api/join/{_inv3['token']}", headers=HA,
+          json={"name": "Toni Tutor", "password": "x"}).status_code == 409,
+   "an unbound invite refuses a taken name — bind it instead")
+
+# --- the customer book --------------------------------------------------------
+_cbook = c.get("/api/customers", headers=TT).json()
+ok(any(r["name"] == "Lara Learner" for r in _cbook)
+   and all("spent_cents" in r for r in _cbook),
+   "office staff can finally SEE the people whose orders the ERP counts")
+ok(c.get("/api/customers", headers=_WW2).status_code == 403,
+   "a teacher is not the office — the customer book stays closed to them")
+_lara_row = [r for r in _cbook if r["name"] == "Lara Learner"][0]
+_cd = c.get(f"/api/customers/{_lara_row['id']}", headers=AA).json()
+ok("orders" in _cd and "Spanish A1" in _cd["courses"],
+   "one customer, whole: orders and enrolments together")
+
+# --- library lifecycle: edit, label, retire -----------------------------------
+_li = c.post("/api/learning/library/items", headers=TT, json={
+    "name": "Loaner Laptop", "kind": "equipment", "copies": 3}).json()
+c.patch(f"/api/learning/library/items/{_li['id']}", headers=TT,
+        json={"copies": 2, "owner": "Kenji"})
+_lib2 = c.get("/api/learning/library", headers=TT).json()
+_lap = [i for i in _lib2["items"] if i["id"] == _li["id"]][0]
+ok(_lap["copies"] == 2 and _lap["owner"] == "Kenji",
+   "items are editable — copies retire, ownership is recorded")
+_qr2 = c.get(f"/api/learning/library/items/{_li['id']}/qr",
+             headers=TT).json()
+ok(_qr2["payload"].startswith("bc:item:")
+   and c.post("/api/learning/library/scan", headers=TT,
+              json={"payload": _qr2["payload"]}).json()["id"] == _li["id"],
+   "the QR label round-trips: scan it at the desk and the item comes up")
+c.post("/api/learning/library/checkout", headers=TT,
+       json={"item_id": _li["id"], "user_id": _lara_row["id"]})
+ok(c.patch(f"/api/learning/library/items/{_li['id']}", headers=TT,
+           json={"copies": 0}).status_code in (400, 409),
+   "copies can never drop below what is out")
+ok(c.delete(f"/api/learning/library/items/{_li['id']}",
+            headers=TT).status_code == 409,
+   "and an item with copies out refuses to go")
+_lo2 = [x for x in c.get("/api/learning/library", headers=TT).json()["loans"]
+        if x["item_id"] == _li["id"]][0]
+c.post(f"/api/learning/library/return/{_lo2['id']}", headers=TT)
+_fate = c.delete(f"/api/learning/library/items/{_li['id']}",
+                 headers=TT).json()
+ok(_fate["result"] == "retired"
+   and not any(i["id"] == _li["id"] for i in
+               c.get("/api/learning/library", headers=TT).json()["items"]),
+   "once loaned, removal retires — the borrowing history keeps its item")
+_li2 = c.post("/api/learning/library/items", headers=TT,
+              json={"name": "Never Touched", "copies": 1}).json()
+ok(c.delete(f"/api/learning/library/items/{_li2['id']}",
+            headers=TT).json()["result"] == "deleted",
+   "never loaned = truly gone")
+
+# --- courses: archive is the exit, delete is for mistakes ---------------------
+ok(c.delete(f"/api/learning/courses/{_crs}", headers=AA).status_code == 409,
+   "a course with history refuses deletion — archiving is its exit")
+_tmpc = c.post("/api/learning/courses", headers=AA,
+               json={"name": "Typo Course 101"}).json()
+ok(c.delete(f"/api/learning/courses/{_tmpc['id']}",
+            headers=AA).status_code == 200
+   and not any(x["id"] == _tmpc["id"] for x in
+               c.get("/api/learning/courses", headers=AA).json()),
+   "a course that never happened deletes clean")
+
 # --- my record: the whole standing, exportable -------------------------------
 _rec = c.get("/api/learn/record", headers=LN).json()
 _rc = [x for x in _rec["courses"] if x["id"] == _crs]
@@ -8449,6 +8556,22 @@ ok("data-roleok" in _ajs2 and "data-roleno" in _ajs2
 ok('mode: door === "create" ? "create" : "signin"' in _ajs2,
    "the ops door refuses to mint: sign-in is sign-in, and creating a team "
    "account is a deliberate act behind the admin key")
+ok("customers: renderCustomers" in _ajs2 and 'id: "customers"' in _ajs2,
+   "the CRM finally shows its customers — a tab of their own in the "
+   "side nav")
+ok(all(s in _ajs2 for s in ("data-libqr", "data-libedit", "data-libdel",
+                            '$("#lib-scan").onclick =')),
+   "library items carry their whole lifecycle — label, edit, retire, "
+   "scan-at-the-desk")
+ok(all(s in _ajs2 for s in ('id="lt-invite"', 'id="lt-add"', "data-tedit",
+                            'id="lc-arch"', 'id="lc-del"', "data-invdel")),
+   "the team desk, course archive/delete, and inventory rows all have "
+   "their controls")
+ok('id="join-root"' in (
+       Path(__file__).parent.parent / "src/storefront/backend/api.py"
+   ).read_text(encoding="utf-8")
+   and "joinPage" in _sjs2,
+   "the invitation link lands on a real page in the shop's own shell")
 ok('mode: key ? "" : "signin"' in (
        Path(__file__).parent.parent
        / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),

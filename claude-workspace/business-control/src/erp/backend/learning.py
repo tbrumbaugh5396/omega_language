@@ -807,6 +807,40 @@ def ops_course_update(cid: int, body: CourseBody, user=Depends(current_user),
     return {"ok": True}
 
 
+@router.delete("/api/learning/courses/{cid}")
+def ops_course_delete(cid: int, user=Depends(admin_user),
+                      con=Depends(get_con)):
+    """Deleting is for courses that never happened. The moment a course has
+    a seat, a held class or an attempt, it is somebody's record — archive
+    it (active=0) and the storefront forgets it while the transcripts
+    keep their footing."""
+    if con.execute("SELECT 1 FROM courses WHERE id=?",
+                   (cid,)).fetchone() is None:
+        raise HTTPException(404, "course not found")
+    n = con.execute
+    history = (
+        n("SELECT COUNT(*) AS c FROM enrollments WHERE course_id=?",
+          (cid,)).fetchone()["c"]
+        + n("SELECT COUNT(*) AS c FROM class_sessions WHERE course_id=?",
+            (cid,)).fetchone()["c"]
+        + n("SELECT COUNT(*) AS c FROM quiz_attempts a JOIN quizzes q"
+            " ON q.id=a.quiz_id WHERE q.course_id=?", (cid,)).fetchone()["c"])
+    if history:
+        raise HTTPException(409, "this course has history — enrolments, "
+                                 "classes or attempts. Archive it instead.")
+    con.execute("DELETE FROM quiz_questions WHERE quiz_id IN"
+                " (SELECT id FROM quizzes WHERE course_id=?)", (cid,))
+    con.execute("DELETE FROM quizzes WHERE course_id=?", (cid,))
+    con.execute("DELETE FROM lesson_progress WHERE lesson_id IN"
+                " (SELECT id FROM lessons WHERE course_id=?)", (cid,))
+    con.execute("DELETE FROM lessons WHERE course_id=?", (cid,))
+    con.execute("UPDATE registrations SET course_id=NULL WHERE course_id=?",
+                (cid,))
+    con.execute("DELETE FROM courses WHERE id=?", (cid,))
+    con.commit()
+    return {"ok": True}
+
+
 @router.get("/api/learning/courses/{cid}")
 def ops_course_detail(cid: int, user=Depends(current_user),
                       con=Depends(get_con)):

@@ -14,6 +14,8 @@ out is a badge moment — the bookworm badge is "ever borrowed", awarded at
 the desk.
 """
 
+import secrets
+import sqlite3
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -49,6 +51,16 @@ CREATE TABLE IF NOT EXISTS library_loans (
 
 def init_tables(con):
     con.executescript(TABLES)
+    # Later columns ride the same try/except ladder db.MIGRATIONS uses:
+    # uid backs the item's QR label, owner records whose property it is,
+    # retired_at hides an item whose loan history must outlive it.
+    for stmt in ("ALTER TABLE library_items ADD COLUMN uid TEXT",
+                 "ALTER TABLE library_items ADD COLUMN owner TEXT DEFAULT ''",
+                 "ALTER TABLE library_items ADD COLUMN retired_at REAL"):
+        try:
+            con.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
     con.commit()
 
 
@@ -64,12 +76,101 @@ def items(con) -> list:
     now = time.time()
     out = []
     for r in con.execute("SELECT * FROM library_items"
+                         " WHERE retired_at IS NULL"
                          " ORDER BY kind, name COLLATE NOCASE").fetchall():
         d = dict(r)
         d["out"] = _open_loans(con, d["id"])
         d["available"] = d["copies"] - d["out"]
         out.append(d)
     return out
+
+
+def ensure_uid(con, item_id: int) -> str:
+    """The item's QR label, minted on first ask. Not the row id — the row
+    id leaks how many items exist and is guessable from a photo of one."""
+    r = con.execute("SELECT uid FROM library_items WHERE id=?"
+                    " AND retired_at IS NULL", (int(item_id),)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such item")
+    if r["uid"]:
+        return r["uid"]
+    uid = secrets.token_urlsafe(9)
+    con.execute("UPDATE library_items SET uid=? WHERE id=?",
+                (uid, int(item_id)))
+    return uid
+
+
+ITEM_PREFIX = "bc:item:"
+
+
+def by_payload(con, payload: str):
+    """Resolve a scanned label back to its item."""
+    text = str(payload or "").strip()
+    if not text.startswith(ITEM_PREFIX):
+        raise HTTPException(400, "that is not a library item's code")
+    r = con.execute("SELECT * FROM library_items WHERE uid=?"
+                    " AND retired_at IS NULL",
+                    (text[len(ITEM_PREFIX):],)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no item wears that code")
+    d = dict(r)
+    d["out"] = _open_loans(con, d["id"])
+    d["available"] = d["copies"] - d["out"]
+    return d
+
+
+def edit_item(con, item_id: int, fields: dict) -> None:
+    """Partial update: only the fields sent change, same as the platform's
+    _patch discipline. Copies may shrink — retiring worn-out copies — but
+    never below what is currently out."""
+    item = con.execute("SELECT * FROM library_items WHERE id=?"
+                       " AND retired_at IS NULL", (int(item_id),)).fetchone()
+    if item is None:
+        raise HTTPException(404, "no such item")
+    sets, args = [], []
+    for k in ("name", "kind", "notes", "owner"):
+        if fields.get(k) is not None:
+            v = str(fields[k]).strip()
+            if k == "name" and not v:
+                raise HTTPException(400, "an item needs a name")
+            if k == "kind" and v not in KINDS:
+                raise HTTPException(400,
+                                    f"kind must be one of {', '.join(KINDS)}")
+            sets.append(f"{k}=?")
+            args.append(v[:400])
+    if fields.get("copies") is not None:
+        copies = int(fields["copies"])
+        if not (0 < copies <= MAX_COPIES):
+            raise HTTPException(400, f"copies must be 1-{MAX_COPIES}")
+        if copies < _open_loans(con, item["id"]):
+            raise HTTPException(409, "more copies are out than that — check "
+                                     "them in first")
+        sets.append("copies=?")
+        args.append(copies)
+    if sets:
+        con.execute(f"UPDATE library_items SET {', '.join(sets)} WHERE id=?",
+                    args + [int(item_id)])
+
+
+def remove_item(con, item_id: int) -> str:
+    """Delete when nothing ever referenced it; retire when history exists.
+    A loan record pointing at a vanished item would turn somebody's
+    borrowing history into a dangling number."""
+    item = con.execute("SELECT * FROM library_items WHERE id=?"
+                       " AND retired_at IS NULL", (int(item_id),)).fetchone()
+    if item is None:
+        raise HTTPException(404, "no such item")
+    if _open_loans(con, item["id"]):
+        raise HTTPException(409, "copies are still out — check them in "
+                                 "first")
+    ever = con.execute("SELECT COUNT(*) AS n FROM library_loans"
+                       " WHERE item_id=?", (item["id"],)).fetchone()["n"]
+    if ever:
+        con.execute("UPDATE library_items SET retired_at=? WHERE id=?",
+                    (time.time(), item["id"]))
+        return "retired"
+    con.execute("DELETE FROM library_items WHERE id=?", (item["id"],))
+    return "deleted"
 
 
 def open_loans(con) -> list:
@@ -231,3 +332,51 @@ def ops_library_return(lid: int, user=Depends(current_user),
     check_in(con, lid)
     con.commit()
     return {"ok": True}
+
+
+class ItemPatchBody(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    copies: int | None = None
+    notes: str | None = None
+    owner: str | None = None
+
+
+@router.patch("/api/learning/library/items/{iid}")
+def ops_library_edit(iid: int, body: ItemPatchBody,
+                     user=Depends(current_user), con=Depends(get_con)):
+    _desk(con, user)
+    edit_item(con, iid, body.model_dump())
+    con.commit()
+    return {"ok": True}
+
+
+@router.delete("/api/learning/library/items/{iid}")
+def ops_library_remove(iid: int, user=Depends(current_user),
+                       con=Depends(get_con)):
+    _desk(con, user)
+    fate = remove_item(con, iid)
+    con.commit()
+    return {"result": fate}
+
+
+@router.get("/api/learning/library/items/{iid}/qr")
+def ops_library_qr(iid: int, user=Depends(current_user),
+                   con=Depends(get_con)):
+    """The label to stick on the physical item: scanning it at the desk
+    pulls the item straight up, no typing."""
+    _desk(con, user)
+    uid = ensure_uid(con, iid)
+    con.commit()
+    return {"payload": ITEM_PREFIX + uid}
+
+
+class ScanBody(BaseModel):
+    payload: str = ""
+
+
+@router.post("/api/learning/library/scan")
+def ops_library_scan(body: ScanBody, user=Depends(current_user),
+                     con=Depends(get_con)):
+    _desk(con, user)
+    return by_payload(con, body.payload)
