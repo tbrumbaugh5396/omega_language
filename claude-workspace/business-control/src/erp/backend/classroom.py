@@ -411,6 +411,16 @@ def ops_end_class(sid: int, user=Depends(current_user), con=Depends(get_con)):
     _teaches(con, user, s.course_id)
     end_class(con, session_id=sid, actor_id=user["id"])
     con.commit()
+    # The tapes come home with the class. Best-effort: a segment the SFU
+    # is still finalising waits for the collect-tape route — closing a
+    # class must never fail because a recording was slow.
+    try:
+        from . import materials
+        row = con.execute("SELECT * FROM class_sessions WHERE id=?",
+                          (sid,)).fetchone()
+        materials.collect_sfu_tapes(con, row, owner_id=user["id"])
+    except Exception:
+        pass
     return roster(con, sid)
 
 

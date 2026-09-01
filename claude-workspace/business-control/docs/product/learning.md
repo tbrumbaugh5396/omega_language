@@ -190,5 +190,11 @@ The seven areas the first audit left open all landed:
   own attendance and nobody else's; recordings badge the day.
 - **SFU transport** — see the live-video section above.
 
-Still deliberately absent: the source's people-photos, and central
-SFU-side recording (record where the media server is, once one exists).
+Central SFU-side recording landed 2026-09-01 with the sfu node service
+(see node-services.md): the machine's MediaMTX records what it forwards
+under tenant-prefixed paths, and closing the class collects the tapes
+into that tenant's own media store — sniffed, sharded, served and
+data-rights-swept like every other recording. `collect-tape` on the
+session picks up segments that finished late.
+
+Still deliberately absent: the source's people-photos.

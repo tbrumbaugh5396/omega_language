@@ -31,6 +31,12 @@ import urllib.request
 KNOWN = {
     "translate": {"probe": "/languages",
                   "what": "LibreTranslate-compatible translation"},
+    # Any server speaking WHIP/WHEP (MediaMTX is what install_sfu.sh
+    # stands up). Extra manifest keys it carries: public_url (what the
+    # BROWSER dials — the probe url may be localhost), record_dir (where
+    # its class tapes land before the platform collects them home).
+    "sfu": {"probe": "/",
+            "what": "WHIP/WHEP media server for large classes"},
 }
 
 _cache = {"stamp": None, "data": {}}
@@ -61,10 +67,11 @@ def manifest() -> dict:
 
 def service(name: str) -> dict | None:
     """One service's config, or None — a manifest row without a url is a
-    note, not a service."""
+    note, not a service. url and key are normalised; any other keys the
+    manifest carries (public_url, record_dir, ...) ride along."""
     s = manifest().get(name)
     if isinstance(s, dict) and str(s.get("url") or "").strip():
-        return {"url": str(s["url"]).rstrip("/"),
+        return {**s, "url": str(s["url"]).rstrip("/"),
                 "key": str(s.get("key") or "")}
     return None
 

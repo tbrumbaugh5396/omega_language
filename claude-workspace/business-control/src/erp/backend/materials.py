@@ -164,6 +164,55 @@ def of_lesson(con, lesson_id: int) -> list:
         (int(lesson_id),)).fetchall()]
 
 
+def collect_sfu_tapes(con, session, owner_id: int) -> list:
+    """The class tapes come home. The machine's SFU records what it
+    forwards under record_dir/bc-<tenant>-<room>-<peer>/; when the class
+    ends (or an operator asks), everything recorded for this session's
+    room is ingested into the sharded store as a session recording —
+    sniffed like any upload, served like any tape, swept by data rights
+    like everything else — and the source file is REMOVED, because data
+    that lives in two places is data that disagrees eventually.
+
+    Best-effort by design: a segment still being finalised, or a torn
+    one, is skipped and waits for the next collect. Returns the material
+    ids it landed."""
+    import glob
+
+    from . import services, tenancy
+    s = services.service("sfu")
+    rec = (s or {}).get("record_dir") or ""
+    room = session["room"] if session["room"] else ""
+    if not (s and rec and room):
+        return []
+    tid = tenancy.CURRENT.get() or "default"
+    got = []
+    for f in sorted(glob.glob(os.path.join(
+            rec, f"bc-{tid}-{room}-*", "*"))):
+        try:
+            data = open(f, "rb").read()
+        except OSError:
+            continue
+        if len(data) < 4096:
+            continue                    # torn or still-open segment
+        try:
+            saved = save(data, allow=("video", "audio"))
+        except HTTPException:
+            continue                    # not a media file we recognise
+        peer = os.path.basename(os.path.dirname(f))
+        peer = peer[len(f"bc-{tid}-{room}-"):]
+        mid = record(con, saved=saved, owner_id=owner_id,
+                     session_id=session["id"],
+                     original=f"class tape — {peer}")
+        got.append(mid)
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    if got:
+        con.commit()
+    return got
+
+
 def of_session(con, session_id: int) -> list:
     return [dict(r) for r in con.execute(
         "SELECT id, kind, path, original, mime, bytes, created_at"
@@ -250,6 +299,23 @@ async def ops_class_recording(sid: int, request: Request,
                  original=request.headers.get("x-filename", ""))
     con.commit()
     return {"id": mid, **saved}
+
+
+@router.post("/api/learning/sessions/{sid}/collect-tape")
+def ops_collect_tape(sid: int, user=Depends(current_user),
+                     con=Depends(get_con)):
+    """Bring home whatever the machine's SFU recorded for this class —
+    the manual half of the sweep that also runs when the class closes,
+    for segments that finished late."""
+    s = con.execute("SELECT * FROM class_sessions WHERE id=?",
+                    (sid,)).fetchone()
+    if s is None:
+        raise HTTPException(404, "session not found")
+    if not user["is_admin"] and s["teacher_id"] != user["id"]:
+        raise HTTPException(403, "only the teacher of this class collects"
+                                 " its tapes")
+    got = collect_sfu_tapes(con, s, owner_id=user["id"])
+    return {"collected": len(got), "ids": got}
 
 
 @router.get("/api/learning/sessions/{sid}/recordings")

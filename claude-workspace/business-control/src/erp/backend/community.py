@@ -672,6 +672,22 @@ def rtc_config(cfg) -> dict:
         ice.append(entry)
     whip = (cfg.get("whip_url") or "").strip()
     whep = (cfg.get("whep_url") or "").strip()
+    via = "remote" if (whip and whep) else ""
+    if not (whip and whep):
+        # The node-services floor: a machine with an SFU installed serves
+        # every tenant on it. The path is composed HERE, tenant-prefixed —
+        # bc-<tenant>-<room>-<peer> — so two tenants' rooms can never
+        # collide on the shared daemon, and the room token (rm-<hex>, held
+        # only by members) is the path's capability, the same way a media
+        # token is the file's.
+        from . import services
+        s = services.service("sfu")
+        if s:
+            base = (s.get("public_url") or s["url"]).rstrip("/")
+            tid = tenancy.CURRENT.get() or "default"
+            path = f"{base}/bc-{tid}-{{room}}-{{id}}"
+            whip, whep = path + "/whip", path + "/whep"
+            via = "node service"
     available = bool(whip and whep)
     mode = (cfg.get("sfu_mode") or "auto").strip().lower()
     if mode not in ("auto", "mesh", "sfu"):
@@ -679,7 +695,7 @@ def rtc_config(cfg) -> dict:
     if mode == "sfu" and not available:
         mode = "mesh"          # never promise a transport that is not there
     return {"mode": mode, "available": available, "mesh_max": MESH_MAX,
-            "whip_url": whip, "whep_url": whep,
+            "whip_url": whip, "whep_url": whep, "via": via,
             "token": (cfg.get("sfu_token") or "").strip(),
             "simulcast": str(cfg.get("simulcast", "1")).lower()
                          not in ("0", "false", "no"),

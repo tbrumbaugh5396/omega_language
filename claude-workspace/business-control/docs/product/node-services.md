@@ -53,6 +53,37 @@ without systemd (a dev Mac), run LibreTranslate however you like and
 write the manifest line by hand — `services.declare("translate", url)`
 or one line of JSON.
 
+## The second service: the SFU (MediaMTX)
+
+```sh
+sudo bash scripts/install_sfu.sh --host sfu.yourbrand.com
+```
+
+One binary speaking exactly what `rtc-sfu.js` already speaks — WHIP to
+publish, WHEP to subscribe — so big classes stop meshing (upload once,
+not N times) with zero client changes. The platform composes the paths
+server-side, **tenant-prefixed**: `bc-<tenant>-<room>-<peer>`, so two
+tenants' rooms can never collide on the shared daemon, and the room
+token (`rm-<hex>`, held only by class members) is the path's capability
+— the same discipline as token-named media files. A tenant with its own
+`whip_url`/`whep_url` still outranks the machine, and with neither the
+mesh carries on exactly as before.
+
+**Recording egress:** the daemon records what it forwards
+(fmp4 segments under `record_dir`). When a class closes — or on the
+session's `collect-tape` route, for segments that finish late — the
+platform sweeps that session's paths home: each file is ingested into
+the **tenant's own sharded media store** as a class recording (sniffed
+like any upload, served like any tape, erased by data rights like
+everything else) and the source file is removed, because data living in
+two places is data that disagrees eventually. The daemon keeps a 7-day
+rotation as the safety net for tapes nothing collected.
+
+Manifest keys beyond the common two: `public_url` (what browsers dial;
+the probe `url` may stay localhost) and `record_dir`. Firewall: the
+WHIP/WHEP port TCP plus 8189/udp to participants; TLS by fronting with
+Caddy and pointing `public_url` at the https name.
+
 ## What this is not
 
 Not placement policy: a tenant whose plan includes Voice still works on

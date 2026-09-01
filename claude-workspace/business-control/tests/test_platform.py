@@ -3057,6 +3057,77 @@ ok("chooseTransport" in _sfujs and "sendEncodings" in _sfujs
 ok("chooseTransport" in _ljs and "rtc-sfu.js" in _ljs,
    "the learner call picks its transport from config and roster size")
 
+# --- the sfu node service: the floor, the namespace, the tapes ---------------
+_sfudir = Path(tempfile.mkdtemp(prefix="bc_sfu_"))
+_svcm.declare("sfu", "http://127.0.0.1:65000")
+_svcm.declare("sfu", "http://127.0.0.1:65000")   # idempotent
+_m9 = _jn.loads((Path(os.environ["BUSINESS_CONTROL_DATA"])
+                 / "node_services.json").read_text())
+_m9["sfu"] = {"url": "http://127.0.0.1:65000",
+              "public_url": "https://sfu.alpha.test",
+              "record_dir": str(_sfudir), "key": ""}
+(Path(os.environ["BUSINESS_CONTROL_DATA"])
+ / "node_services.json").write_text(_jn.dumps(_m9))
+_rtc2 = c.get("/api/learn/rtc/config", headers=LN).json()
+ok(_rtc2["available"] is True and _rtc2["via"] == "node service"
+   and _rtc2["whip_url"].startswith("https://sfu.alpha.test/bc-alpha-")
+   and "{room}-{id}/whip" in _rtc2["whip_url"]
+   and "{room}-{id}/whep" in _rtc2["whep_url"],
+   "the machine's SFU is the floor, browsers dial its public name, and "
+   "the path is composed server-side with the TENANT in it — two "
+   "tenants' rooms cannot collide on the shared daemon")
+_acfg8 = _jn.loads((_tn.tenant_dir("alpha") / "config.json").read_text())
+_acfg8["whip_url"] = "https://own.example/w/{room}/{id}"
+_acfg8["whep_url"] = "https://own.example/r/{room}/{id}"
+(_tn.tenant_dir("alpha") / "config.json").write_text(_jn.dumps(_acfg8))
+_CFGPROXY.invalidate("alpha")
+_rtc3 = c.get("/api/learn/rtc/config", headers=LN).json()
+ok(_rtc3["via"] == "remote"
+   and _rtc3["whip_url"].startswith("https://own.example/"),
+   "a tenant's own media server outranks the machine's — verbatim")
+_acfg8.pop("whip_url")
+_acfg8.pop("whep_url")
+(_tn.tenant_dir("alpha") / "config.json").write_text(_jn.dumps(_acfg8))
+_CFGPROXY.invalidate("alpha")
+
+_cls9 = c.post("/api/learning/sessions", headers=TT,
+               json={"course_id": _crs}).json()
+_room9 = _cls9["session"]["room"]
+_sid9 = _cls9["session"]["id"]
+_mp4 = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 8000
+_pdir = _sfudir / f"bc-alpha-{_room9}-teacher"
+_pdir.mkdir(parents=True)
+(_pdir / "2026-09-01_10-00-00-000000.mp4").write_bytes(_mp4)
+(_pdir / "torn.mp4").write_bytes(b"\x00\x00\x00\x20ftypisom")
+c.post(f"/api/learning/sessions/{_sid9}/close", headers=TT)
+_recs9 = c.get(f"/api/learning/sessions/{_sid9}/recordings",
+               headers=TT).json()
+ok(len(_recs9) == 1 and _recs9[0]["kind"] == "video"
+   and "class tape — teacher" in _recs9[0]["original"],
+   "closing the class brings the SFU's tape home — into the tenant's own "
+   "sharded store, as a session recording like any other")
+ok(not (_pdir / "2026-09-01_10-00-00-000000.mp4").exists()
+   and (_pdir / "torn.mp4").exists(),
+   "the collected source is removed — one home per tape — while a torn "
+   "segment is left for the next sweep, never half-ingested")
+(_pdir / "late.mp4").write_bytes(_mp4)
+ok(c.post(f"/api/learning/sessions/{_sid9}/collect-tape",
+          headers=LN).status_code == 403,
+   "a student cannot sweep the tapes — the class's teacher or an admin "
+   "does")
+_late = c.post(f"/api/learning/sessions/{_sid9}/collect-tape",
+               headers=TT).json()
+ok(_late["collected"] == 1
+   and len(c.get(f"/api/learning/sessions/{_sid9}/recordings",
+                 headers=TT).json()) == 2,
+   "and a segment that finished late comes home on the collect-tape "
+   "route")
+_its2 = (ROOT / "scripts" / "install_sfu.sh").read_text()
+ok("mediamtx" in _its2 and "bc-<tenant>-<room>-<peer>" in _its2
+   and "record_dir" in _its2 and "recordFormat: fmp4" in _its2,
+   "the installer stands MediaMTX up recording what it forwards, and "
+   "ships in every app bundle")
+
 # --- data rights: export, and erasure with a shown plan ----------------------
 _myx = c.get("/api/learn/me/export", headers=LN)
 ok(_myx.status_code == 200
