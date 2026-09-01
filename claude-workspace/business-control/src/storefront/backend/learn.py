@@ -833,7 +833,8 @@ def learn_page(con=Depends(get_con)):
  .lrn-cal .dot{{display:block;margin:2px auto 0;width:6px;height:6px;border-radius:3px;background:currentColor;opacity:.5}}
  .lrn-cal .dot.present,.lrn-cal .dot.late{{background:#3c9;opacity:1}}
  .lrn-cal .dot.absent{{background:#e66;opacity:1}}
- .lrn-bar{{display:flex;justify-content:flex-end;margin:0 0 12px}}
+ .lrn-tabs .lrn-spacer{{flex:1;border-bottom:none}}
+ .lrn-tabs #lrn-bell{{align-self:center;margin-bottom:6px}}
  .lrn-noti-panel{{border:1px solid rgba(127,127,127,.35);border-radius:12px;padding:10px 14px;margin-bottom:14px;max-height:320px;overflow-y:auto}}
  .lrn-item{{display:flex;gap:10px;align-items:baseline;padding:9px 2px;border-bottom:1px solid rgba(127,127,127,.15)}}
  .lrn-item .grow{{flex:1}}

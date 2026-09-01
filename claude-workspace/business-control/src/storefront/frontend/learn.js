@@ -61,16 +61,18 @@
   function tabs() {
     const t = (id, label) => `<span class="lrn-tab ${VIEW === id ? "on" : ""}"
       data-t="${id}">${label}</span>`;
-    return `<div class="lrn-bar">
-        <button class="lrn-btn sm" id="lrn-bell">Notifications${
-          UNREAD ? ` <span class="lrn-unread">${UNREAD}</span>` : ""}</button>
-      </div>
-      <div id="lrn-noti" hidden></div>
-      <div class="lrn-tabs">
+    // One row: the six tabs, and the bell riding the same rail at the
+    // right — not a second bar above (whose class name once collided with
+    // the course cards' progress bar and broke both).
+    return `<div class="lrn-tabs">
       ${t("checkin", "Check in")}${t("courses", "Courses")}
       ${t("quizzes", "Quizzes")}${t("live", "Live class")}
       ${t("people", "People")}${t("profile", "Profile")}
-    </div>`;
+      <span class="lrn-spacer"></span>
+      <button class="lrn-btn sm" id="lrn-bell">Notifications${
+        UNREAD ? ` <span class="lrn-unread">${UNREAD}</span>` : ""}</button>
+    </div>
+    <div id="lrn-noti" hidden></div>`;
   }
   const VIEWS = () => ({ checkin, courses: home, quizzes: quizzesView,
                          live: liveView, people, profile: profileView });
