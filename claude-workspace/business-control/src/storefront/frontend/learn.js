@@ -61,41 +61,54 @@
   function tabs() {
     const t = (id, label) => `<span class="lrn-tab ${VIEW === id ? "on" : ""}"
       data-t="${id}">${label}</span>`;
-    // One row: the six tabs, and the bell riding the same rail at the
-    // right — not a second bar above (whose class name once collided with
-    // the course cards' progress bar and broke both).
     return `<div class="lrn-tabs">
       ${t("checkin", "Check in")}${t("courses", "Courses")}
       ${t("quizzes", "Quizzes")}${t("live", "Live class")}
       ${t("people", "People")}${t("profile", "Profile")}
-      <span class="lrn-spacer"></span>
-      <button class="lrn-btn sm" id="lrn-bell">Notifications${
-        UNREAD ? ` <span class="lrn-unread">${UNREAD}</span>` : ""}</button>
-    </div>
-    <div id="lrn-noti" hidden></div>`;
+      ${t("record", "My record")}
+    </div>`;
   }
   const VIEWS = () => ({ checkin, courses: home, quizzes: quizzesView,
-                         live: liveView, people, profile: profileView });
+                         live: liveView, people, profile: profileView,
+                         record: recordView });
   function wireTabs() {
     root.querySelectorAll("[data-t]").forEach((el) => el.onclick = () => {
       VIEW = el.dataset.t;
       (VIEWS()[VIEW] || home)();
     });
-    const bell = root.querySelector("#lrn-bell");
-    if (bell) bell.onclick = toggleNoti;
+  }
+  // The bell rides the site header's icon cluster, next to the cart —
+  // exactly where the account and chat icons live — so notifications are
+  // one glance away from any tab, not a strip inside the portal.
+  function mountBell() {
+    if (document.getElementById("lrn-bell")) return;
+    const actions = document.querySelector(".top-actions");
+    if (!actions) return;
+    const b = document.createElement("button");
+    b.className = "icon-btn";
+    b.id = "lrn-bell";
+    b.title = "Notifications";
+    b.setAttribute("aria-label", "Notifications");
+    b.innerHTML = `<svg class="ico" aria-hidden="true"><use href="#i-bell"/></svg>
+      <span class="lrn-bell-dot" hidden></span>`;
+    actions.insertBefore(b, document.getElementById("cart-btn"));
+    const box = document.createElement("div");
+    box.id = "lrn-noti";
+    box.hidden = true;
+    document.body.appendChild(box);
+    b.onclick = toggleNoti;
     refreshBell();
   }
   async function refreshBell() {
     try {
       const d = await api("/api/learn/notifications");
       UNREAD = d.unread;
-      const bell = root.querySelector("#lrn-bell");
-      if (bell) bell.innerHTML = "Notifications" + (UNREAD
-        ? ` <span class="lrn-unread">${UNREAD}</span>` : "");
+      const dot = document.querySelector("#lrn-bell .lrn-bell-dot");
+      if (dot) { dot.hidden = !UNREAD; dot.textContent = UNREAD || ""; }
     } catch (e) { /* signed out, or the cap is off */ }
   }
   async function toggleNoti() {
-    const box = root.querySelector("#lrn-noti");
+    const box = document.getElementById("lrn-noti");
     if (!box) return;
     if (!box.hidden) { box.hidden = true; return; }
     let d;
@@ -857,6 +870,127 @@
     };
   }
 
+  /* ── My record: the whole standing, exportable ─────────────────────────
+     One page that answers "how am I doing, across everything" — per-course
+     progress, attendance and final quiz results — and turns into paper:
+     a printable transcript, a JSON download, and a certificate for any
+     completed course. The server hands over facts; the stationery is
+     rendered here. */
+  let RECORD = null;
+  async function recordView() {
+    const d = RECORD = await api("/api/learn/record");
+    const pct = (r) => `<div class="lrn-bar"><i style="width:${r.progress.percent}%"></i></div>`;
+    root.innerHTML = tabs() + `
+      <div class="lrn-row-gap" style="margin-bottom:10px">
+        <h2 style="margin:0">My record</h2>
+        <span style="flex:1"></span>
+        <button class="lrn-btn" id="rec-print">Print transcript</button>
+        <button class="lrn-btn" id="rec-json">Download (JSON)</button>
+      </div>
+      <div class="lrn-rtotals">
+        <span><b>${d.totals.courses}</b><span class="lrn-meta">courses</span></span>
+        <span><b>${d.totals.classes_attended}</b><span class="lrn-meta">classes attended</span></span>
+        <span><b>${d.totals.quizzes_passed}</b><span class="lrn-meta">quizzes passed</span></span>
+        <span><b>${d.totals.completed_courses}</b><span class="lrn-meta">completed</span></span>
+      </div>
+      ${d.courses.map((c) => `<div class="lrn-rcourse">
+        <div class="lrn-row-gap">
+          <b>${esc(c.name)}</b>
+          ${c.complete ? '<span class="pill-done">complete</span>' : ""}
+          <span class="lrn-meta">${[c.language, c.level, c.teacher]
+            .filter(Boolean).map(esc).join(" · ")}</span>
+          <span style="flex:1"></span>
+          ${c.complete
+            ? `<button class="lrn-btn sm" data-cert="${c.id}">Print certificate</button>` : ""}
+        </div>
+        ${pct(c)}
+        <div class="lrn-meta">${c.progress.lessons_done}/${c.progress.lessons_total} lessons
+          · ${c.progress.quizzes_passed}/${c.progress.quizzes_total} quizzes
+          · ${c.progress.percent}%
+          · attended ${c.attendance.attended}/${c.attendance.classes_held} classes</div>
+        ${c.results.length ? `<table class="lrn-rtable">
+          <tr><th>Quiz</th><th>Score</th><th>Result</th><th>Graded</th></tr>
+          ${c.results.map((r) => `<tr><td>${esc(r.quiz)}</td>
+            <td>${r.percent}%</td>
+            <td>${r.passed ? "passed" : `not yet (pass mark ${r.pass_mark}%)`}</td>
+            <td>${r.graded_at ? new Date(r.graded_at * 1000).toLocaleDateString() : ""}</td>
+          </tr>`).join("")}
+        </table>` : '<p class="lrn-meta">No final quiz results yet.</p>'}
+      </div>`).join("")
+        || "<p>Nothing on record yet — enrol in a course and it starts here.</p>"}
+      ${d.achievements.length ? `<h3>Achievements</h3>
+        <div class="lrn-badges">${d.achievements.map((a) =>
+          `<span class="lrn-badge" title="${esc(a.what || "")}">${esc(a.name)}</span>`).join("")}
+        </div>` : ""}`;
+    wireTabs();
+    root.querySelector("#rec-json").onclick = () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob(
+        [JSON.stringify(RECORD, null, 2)], { type: "application/json" }));
+      a.download = "my-record.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    root.querySelector("#rec-print").onclick = () => printDoc(transcriptDoc(RECORD));
+    root.querySelectorAll("[data-cert]").forEach((b) => b.onclick = () => {
+      const c = RECORD.courses.find((x) => x.id === +b.dataset.cert);
+      if (c) printDoc(certificateDoc(RECORD, c));
+    });
+  }
+  // Swap the root for the paper, print, then put the tab back. The print
+  // stylesheet hides everything but the root, so the paper is the page.
+  function printDoc(html) {
+    root.innerHTML = html;
+    window.print();
+    recordView();
+  }
+  function transcriptDoc(d) {
+    const day = new Date(d.generated_at * 1000).toLocaleDateString();
+    return `<div class="lrn-doc">
+      <p class="lrn-meta">${esc(d.school)} — academic record</p>
+      <h1>${esc(d.student.name)}</h1>
+      <p class="lrn-meta">${esc(d.student.email || "")}${
+        d.student.email ? " · " : ""}generated ${day}</p>
+      <div class="rule"></div>
+      ${d.courses.map((c) => `
+        <h3>${esc(c.name)}${c.complete ? " — completed" : ""}</h3>
+        <p class="lrn-meta">${[c.language, c.level,
+          c.teacher && "taught by " + c.teacher].filter(Boolean).map(esc).join(" · ")}</p>
+        <p>${c.progress.lessons_done}/${c.progress.lessons_total} lessons ·
+           ${c.progress.quizzes_passed}/${c.progress.quizzes_total} quizzes ·
+           ${c.progress.percent}% ·
+           attended ${c.attendance.attended}/${c.attendance.classes_held} classes</p>
+        ${c.results.length ? `<table class="lrn-rtable">
+          <tr><th>Quiz</th><th>Score</th><th>Result</th></tr>
+          ${c.results.map((r) => `<tr><td>${esc(r.quiz)}</td><td>${r.percent}%</td>
+            <td>${r.passed ? "passed" : "not passed"}</td></tr>`).join("")}
+        </table>` : ""}`).join("")}
+      ${d.achievements.length ? `<div class="rule"></div>
+        <p><b>Achievements:</b> ${d.achievements.map((a) => esc(a.name)).join(", ")}</p>` : ""}
+      <div class="rule"></div>
+      <p class="lrn-meta">Scores are final only once every answer is marked.
+        Issued by ${esc(d.school)} on ${day}.</p>
+    </div>`;
+  }
+  function certificateDoc(d, c) {
+    const day = new Date(d.generated_at * 1000).toLocaleDateString();
+    return `<div class="lrn-cert">
+      <p class="lrn-meta">${esc(d.school)}</p>
+      <h1>Certificate of Completion</h1>
+      <p>This certifies that</p>
+      <p class="who"><b>${esc(d.student.name)}</b></p>
+      <p>has completed <b>${esc(c.name)}</b>${[c.language, c.level]
+        .filter(Boolean).length ? " (" + [c.language, c.level]
+        .filter(Boolean).map(esc).join(", ") + ")" : ""}
+        — ${c.progress.lessons_done} lessons and
+        ${c.progress.quizzes_passed} ${c.progress.quizzes_passed === 1
+          ? "quiz" : "quizzes"} passed,
+        ${c.attendance.attended}/${c.attendance.classes_held} classes attended.</p>
+      <p class="lrn-meta" style="margin-top:26px">${c.teacher
+        ? esc(c.teacher) + " · " : ""}${day}</p>
+    </div>`;
+  }
+
   /* ── the scan handshake (deep link from a card's URL) ─────────────────── */
   async function handleScan(codeText) {
     let p;
@@ -1200,6 +1334,7 @@
     VIEW = live.length ? "checkin" : "courses";
     return (VIEWS()[VIEW])();
   }).then(() => {
+    mountBell();
     probeVoice();
     if (scanned) handleScan(scanned);
   }).catch((e) => {

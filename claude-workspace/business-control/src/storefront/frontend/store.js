@@ -1140,6 +1140,13 @@ function signIn(intro, onDone) {
     localStorage.setItem("sf_support",
       JSON.stringify({ token: out.token, me: out.id }));
     SUPPORT.token = out.token; SUPPORT.me = out.id;
+    // The learner and nutrition portals render who-you-are pages; a
+    // sign-in on one of them means the whole page changes, not just the
+    // modal — reload so "Apply to join" becomes "Your courses" at once.
+    if (document.getElementById("learn-root")
+        || document.getElementById("nutrition-root")) {
+      closeModal(); location.reload(); return;
+    }
     onDone();
   };
   const login = async (payload) => {
@@ -1390,7 +1397,12 @@ async function drawAccount() {
       drawAccount();
     });
   $("#ac-out").onclick = () => {
-    localStorage.removeItem("sf_support"); closeModal(); };
+    localStorage.removeItem("sf_support"); closeModal();
+    // Same as signing in: on a portal page the content IS the account,
+    // so signing out must take the page with it.
+    if (document.getElementById("learn-root")
+        || document.getElementById("nutrition-root")) location.reload();
+  };
 }
 
 $("#account-btn").onclick = openAccount;

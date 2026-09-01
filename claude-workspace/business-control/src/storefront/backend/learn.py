@@ -582,6 +582,74 @@ def me_signout_all(user=Depends(current_customer), con=Depends(get_con)):
     return {"ok": True}
 
 
+# ── the record: performance across every course, exportable ─────────────────
+
+@router.get("/api/learn/record")
+def my_record(user=Depends(current_customer), con=Depends(get_con)):
+    """The student's whole standing in one answer: per-course progress,
+    attendance and every FINAL quiz result — derived on read like all
+    grades here, so the record can never disagree with the data. The
+    client turns this into the printable transcript and certificates;
+    the server hands over facts, not stationery."""
+    _require_cap("learning")
+    from erp.backend import assessment as A
+    courses = []
+    for c in con.execute(
+            "SELECT c.*, u.name AS teacher_name FROM courses c"
+            " LEFT JOIN users u ON u.id=c.teacher_id"
+            " WHERE c.active=1 ORDER BY c.name").fetchall():
+        if not L.enrolled_in(con, c["id"], user["id"]):
+            continue
+        progress = L.course_progress(con, c["id"], user["id"])
+        results = []
+        for q in con.execute(
+                "SELECT id, title, pass_mark FROM quizzes WHERE course_id=?"
+                " AND published=1 ORDER BY id", (c["id"],)).fetchall():
+            best = None
+            for a in con.execute(
+                    "SELECT id, graded_at FROM quiz_attempts WHERE quiz_id=?"
+                    " AND user_id=? AND state='graded'",
+                    (q["id"], user["id"])).fetchall():
+                g = A.grade_attempt(L.questions(con, q["id"]),
+                                    L.responses(con, a["id"]),
+                                    pass_mark=q["pass_mark"])
+                if g["is_final"] and (best is None
+                                      or g["percent"] > best["percent"]):
+                    best = {"quiz": q["title"], "percent": g["percent"],
+                            "passed": g["passed"],
+                            "pass_mark": q["pass_mark"],
+                            "graded_at": a["graded_at"]}
+            if best:
+                results.append(best)
+        att = CR.attendance_of(con, c["id"], user["id"])
+        complete = (progress["percent"] == 100
+                    and progress["lessons_total"]
+                    + progress["quizzes_total"] > 0)
+        courses.append({
+            "id": c["id"], "name": c["name"],
+            "language": c["language"] or "", "level": c["level"] or "",
+            "teacher": c["teacher_name"] or "",
+            "progress": progress, "attendance": att,
+            "results": results, "complete": complete})
+    attended = con.execute(
+        "SELECT COUNT(*) AS n FROM checkins WHERE student_id=?"
+        " AND status IN ('present','late')", (user["id"],)).fetchone()["n"]
+    return {
+        "student": {"id": user["id"], "name": user["name"],
+                    "email": user["email"] or ""},
+        "school": brand_name(con),
+        "generated_at": time.time(),
+        "courses": courses,
+        "achievements": L.achievements_of(con, user["id"]),
+        "totals": {"courses": len(courses), "classes_attended": attended,
+                   "quizzes_passed": sum(
+                       1 for c in courses for r in c["results"]
+                       if r["passed"]),
+                   "completed_courses": sum(
+                       1 for c in courses if c["complete"])},
+    }
+
+
 # ── discovery: ask to join a course you can see ──────────────────────────────
 
 class JoinBody(BaseModel):
@@ -833,9 +901,13 @@ def learn_page(con=Depends(get_con)):
  .lrn-cal .dot{{display:block;margin:2px auto 0;width:6px;height:6px;border-radius:3px;background:currentColor;opacity:.5}}
  .lrn-cal .dot.present,.lrn-cal .dot.late{{background:#3c9;opacity:1}}
  .lrn-cal .dot.absent{{background:#e66;opacity:1}}
- .lrn-tabs .lrn-spacer{{flex:1;border-bottom:none}}
- .lrn-tabs #lrn-bell{{align-self:center;margin-bottom:6px}}
- .lrn-noti-panel{{border:1px solid rgba(127,127,127,.35);border-radius:12px;padding:10px 14px;margin-bottom:14px;max-height:320px;overflow-y:auto}}
+ /* The bell lives in the site header's icon cluster (learn.js mounts it
+    next to the cart), so the dropdown is a fixed panel under that corner
+    rather than a strip inside the portal. */
+ #lrn-bell{{position:relative}}
+ #lrn-bell .lrn-bell-dot{{position:absolute;top:0;right:-2px;background:var(--accent,currentColor);color:var(--bg,#fff);border-radius:999px;font-size:.62rem;line-height:1;padding:2px 5px;font-weight:700}}
+ #lrn-noti{{position:fixed;top:74px;right:14px;z-index:210;width:min(400px,92vw)}}
+ .lrn-noti-panel{{border:1px solid rgba(127,127,127,.35);border-radius:12px;padding:10px 14px;max-height:320px;overflow-y:auto;background:var(--bg,#111);box-shadow:0 12px 40px rgba(0,0,0,.4)}}
  .lrn-item{{display:flex;gap:10px;align-items:baseline;padding:9px 2px;border-bottom:1px solid rgba(127,127,127,.15)}}
  .lrn-item .grow{{flex:1}}
  .lrn-item.lrn-new b{{border-left:3px solid currentColor;padding-left:8px}}
@@ -853,7 +925,22 @@ def learn_page(con=Depends(get_con)):
  .lrn-rec{{border:1px dashed rgba(127,127,127,.4);border-radius:10px;padding:10px;margin:8px 0}}
  .lrn-rec .state{{opacity:.7;font-size:.9em}}
  audio,video.lrn-media{{max-width:100%;border-radius:8px}}
- @media print{{.lrn-tabs,.lrn-back,.no-print,header,footer,nav{{display:none !important}}}}
+ .lrn-rtotals{{display:flex;gap:26px;flex-wrap:wrap;margin:2px 0 16px}}
+ .lrn-rtotals b{{font-size:1.5em;display:block}}
+ .lrn-rcourse{{border:1px solid rgba(127,127,127,.35);border-radius:12px;padding:14px 18px;margin-bottom:14px}}
+ .lrn-rtable{{width:100%;border-collapse:collapse;margin-top:8px}}
+ .lrn-rtable th,.lrn-rtable td{{text-align:left;padding:6px 8px;border-bottom:1px solid rgba(127,127,127,.2);font-size:.92em}}
+ .lrn-rtable th{{opacity:.65;font-weight:600}}
+ .pill-done{{border:1px solid #3c9;color:#3c9;border-radius:999px;padding:1px 9px;font-size:.75em;vertical-align:middle}}
+ .lrn-doc{{max-width:720px;margin:0 auto;padding:12px 4px}}
+ .lrn-doc .rule{{border-top:2px solid currentColor;margin:12px 0}}
+ .lrn-cert{{border:6px double currentColor;border-radius:6px;padding:48px 36px;text-align:center;max-width:680px;margin:24px auto}}
+ .lrn-cert h1{{font-size:2.1em;letter-spacing:.04em;margin:8px 0}}
+ .lrn-cert .who{{font-size:1.7em;margin:18px 0 6px}}
+ /* Printing a transcript or certificate: the document is the only thing
+    on the paper — chrome, hero, fabs and the bell's dropdown all vanish. */
+ @media print{{.lrn-tabs,.lrn-back,.no-print,header,footer,nav,.partner-head,#lrn-noti,.lrn-lookup,.buy-fab,.a11y-fab{{display:none !important}}
+  body{{background:#fff !important;color:#000 !important}}}}
 </style>
 <script src="/rtc-mesh.js?v={v}"></script>
 <script src="/learn.js?v={v}"></script>"""

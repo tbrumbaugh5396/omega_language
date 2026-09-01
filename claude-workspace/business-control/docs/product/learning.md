@@ -9,7 +9,7 @@ surfaces every tenant already has:
 | --- | --- | --- |
 | Public storefront | site.py marketing pages, public registration form | `/` (courses shape) + `/learn` catalogue + the apply form — submitting grants nothing; approval creates the account and the seat |
 | Frontend admin | operator console pages | `/admin` — pages, theme, sections, media (richer than the source had) |
-| Behind the sign-in | server.py portal: students, teachers, directors | students on `/learn` (lessons, quizzes, progress, check-in, badges, attendance standing); teachers and directors on the ops **Learning** tab (authoring, live roster, grading queue) |
+| Behind the sign-in | server.py portal: students, teachers, directors | students on `/learn` (lessons, quizzes, progress, check-in, badges, attendance standing, and **My record** — the whole standing across courses on `/api/learn/record`, derived on read, with a JSON download, a printable transcript, and a certificate for any completed course; stationery rendered client-side, facts served); teachers and directors on the ops **Learning** tab (authoring, live roster, grading queue) |
 | ERP / CRM | payroll derivation, registrations queue, audit | `/ops` — derived teaching pay with the approve/hold/paid overlay, the applications queue, and the platform's own audit log, notifications, orders and staff |
 
 ## What moved verbatim

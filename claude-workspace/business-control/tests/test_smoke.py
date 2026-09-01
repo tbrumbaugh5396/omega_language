@@ -8290,6 +8290,21 @@ ok(c.get("/api/learn/me", headers=_dt).status_code == 401,
    "sign out everywhere rotates the token — every device, this one "
    "included")
 
+# --- my record: the whole standing, exportable -------------------------------
+_rec = c.get("/api/learn/record", headers=LN).json()
+_rc = [x for x in _rec["courses"] if x["id"] == _crs]
+ok(_rec["student"]["name"] == "Lara Learner" and len(_rc) == 1
+   and _rec["totals"]["classes_attended"] >= 1,
+   "the record gathers every enrolled course under the student's name")
+_all_res = [r for x in _rec["courses"] for r in x["results"]]
+ok(_all_res and all(set(r) >= {"quiz", "percent", "passed", "pass_mark"}
+                    for r in _all_res)
+   and _rc[0]["attendance"]["classes_held"] >= 1,
+   "final quiz results and attendance ride each course — derived on read, "
+   "so the record can never disagree with the data")
+ok(c.get("/api/learn/record", headers=HA).status_code == 401,
+   "the record answers only to its student")
+
 _ljs2 = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
          ).read_text(encoding="utf-8")
 _sjs2 = (Path(__file__).parent.parent / "src/storefront/frontend/store.js"
@@ -8298,12 +8313,22 @@ ok(all(s in _ljs2 for s in ('t("checkin", "Check in")',
                             't("quizzes", "Quizzes")',
                             't("live", "Live class")',
                             't("profile", "Profile")',
+                            't("record", "My record")',
+                            "Certificate of Completion",
                             "lrn-bell", "Ask to join")),
-   "the learner app carries the portal's six tabs, the bell, and the "
-   "ask-to-join door")
+   "the learner app carries the portal's seven tabs, the bell, the "
+   "printable record, and the ask-to-join door")
+ok('"#i-bell"' in _ljs2 and "i-bell" in (
+       Path(__file__).parent.parent / "src/storefront/frontend/icons.svg"
+   ).read_text(encoding="utf-8"),
+   "the bell mounts in the site header's icon cluster, drawn from the "
+   "shared sprite")
 ok(all(s in _sjs2 for s in ('["create", "Create account"]',
                             '["apply", "Apply to a programme"]',
                             'mode: "signin"', 'mode: "create"')),
    "the storefront door offers all three ways in — sign in, create, apply")
+ok(_sjs2.count("learn-root") >= 2,
+   "signing in or out on a portal page reloads it — the content IS the "
+   "account")
 
 print(f"\nall {checks} checks passed")
