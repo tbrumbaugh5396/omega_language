@@ -38,10 +38,14 @@ def _init_core(tid=None):
         # imported here, not at the top: learning imports main's auth deps
         # back, which only exist once this module has finished defining them
         # — and _init_core first runs at the bottom of this file, where it has
-        from . import classroom, community, learning
+        from . import classroom, community, learning, library, materials
+        from . import nutrition
         learning.init_tables(con)
         classroom.init_tables(con)
         community.init_tables(con)
+        library.init_tables(con)
+        materials.init_tables(con)
+        nutrition.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -981,12 +985,18 @@ def _place(con, user, body, as_guest):
     # is the moment (COD is this store's normal); a cancelled order is the
     # operator's cue to end the seat, same as any other refund consequence.
     if kind == "customer":
-        from . import learning
+        from . import learning, nutrition
         enrolled_courses = learning.enroll_by_order(con, oid, user["id"])
         if enrolled_courses:
             notify.push(con, f"Enrolled by order #{oid}",
                         f"{user['name']} joined: "
                         + ", ".join(enrolled_courses), kind="learning")
+        # same rail, different desk: a product can open a coaching seat
+        opened = nutrition.open_by_order(con, oid, user["id"])
+        if opened:
+            notify.push(con, f"Coaching seat by order #{oid}",
+                        f"{user['name']} joined: " + ", ".join(opened),
+                        kind="nutrition")
     # Affiliate attribution
     if body.affiliate_code:
         aff = con.execute("SELECT * FROM affiliates WHERE code=?",
@@ -3764,11 +3774,19 @@ app.include_router(store_email.router)
 app.include_router(store_v1.router)
 
 from . import classroom, community, learning  # noqa: E402  (safe — see _init_core)
+from . import datarights, identity, library, materials, nutrition  # noqa: E402
 from storefront.backend import learn as store_learn  # noqa: E402
+from storefront.backend import nutrition as store_nutrition  # noqa: E402
 app.include_router(learning.router)
 app.include_router(classroom.router)
 app.include_router(community.router)
+app.include_router(library.router)
+app.include_router(materials.router)
+app.include_router(identity.router)
+app.include_router(datarights.router)
+app.include_router(nutrition.router)
 app.include_router(store_learn.router)
+app.include_router(store_nutrition.router)
 
 
 @app.exception_handler(404)

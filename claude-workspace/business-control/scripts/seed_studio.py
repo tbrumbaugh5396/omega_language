@@ -62,7 +62,7 @@ def esc(v) -> str:
 # --- the capability menu, drawn from the book ------------------------------
 
 def menu_html() -> str:
-    """The 27 capabilities, grouped, banded and priced. This is the piece
+    """The 28 capabilities, grouped, banded and priced. This is the piece
     of the site that does the selling: a buyer who can see the whole menu
     and add it up is a buyer who does not need to ask for a call first."""
     bands = pb.bands()

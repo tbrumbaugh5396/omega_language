@@ -647,10 +647,17 @@ def _rtc_leave(room: str, peer: str) -> None:
 
 
 def rtc_config(cfg) -> dict:
-    """ICE servers for the mesh. A deployment without TURN quietly fails for
-    anyone behind symmetric NAT — the call simply never connects — so this
-    is where a school configures one (config keys turn_url/turn_user/
-    turn_pass)."""
+    """Transport config for calls. A deployment without TURN quietly fails
+    for anyone behind symmetric NAT — the call simply never connects — so
+    this is where a school configures one (config keys turn_url/turn_user/
+    turn_pass).
+
+    An SFU is configured with whip_url + whep_url (any media server
+    speaking WHIP/WHEP: Cloudflare Realtime, MediaMTX, Janus, LiveKit
+    ingress), optionally sfu_token and sfu_mode (auto|mesh|sfu). The
+    client's chooseTransport() picks per call; `auto` stays on the mesh
+    until a class outgrows it AND an SFU is actually configured — this
+    function never promises a transport that is not there."""
     ice = [{"urls": ["stun:stun.l.google.com:19302",
                      "stun:stun1.l.google.com:19302"]}]
     turn = (cfg.get("turn_url") or "").strip()
@@ -660,8 +667,20 @@ def rtc_config(cfg) -> dict:
             entry["username"] = cfg["turn_user"]
             entry["credential"] = cfg.get("turn_pass", "")
         ice.append(entry)
-    return {"mode": "mesh", "mesh_max": MESH_MAX, "ice_servers": ice,
-            "has_turn": bool(turn)}
+    whip = (cfg.get("whip_url") or "").strip()
+    whep = (cfg.get("whep_url") or "").strip()
+    available = bool(whip and whep)
+    mode = (cfg.get("sfu_mode") or "auto").strip().lower()
+    if mode not in ("auto", "mesh", "sfu"):
+        mode = "auto"
+    if mode == "sfu" and not available:
+        mode = "mesh"          # never promise a transport that is not there
+    return {"mode": mode, "available": available, "mesh_max": MESH_MAX,
+            "whip_url": whip, "whep_url": whep,
+            "token": (cfg.get("sfu_token") or "").strip(),
+            "simulcast": str(cfg.get("simulcast", "1")).lower()
+                         not in ("0", "false", "no"),
+            "ice_servers": ice, "has_turn": bool(turn)}
 
 
 # ── ops routes: the report queue ─────────────────────────────────────────────

@@ -96,6 +96,7 @@ An asterisk marks the nine that had no price in v1.
 | Distribution | Heavy | **$50** | Inventory |
 | Learning | Heavy | **$50** | Core |
 | Voice & translation * | Standard | **$30** | Learning |
+| Nutrition | Standard | **$30** | Core |
 
 | **Revenue ops** | | | |
 | Selling | Heavy | **$50** | Core |

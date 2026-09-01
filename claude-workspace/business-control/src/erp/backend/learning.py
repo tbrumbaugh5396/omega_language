@@ -21,10 +21,11 @@ What moved and what changed in the move:
 - Lesson ordering renormalises to 0,1,2,… on every move, exactly as the
   source did: sparse indices save a write and eventually produce two
   lessons at the same position.
-- Recorded answers (speaking/video) are understood by the grading engine
-  but not yet authorable — the classroom phase of the port brings the
-  recording flow with it. A text question with no answer key already
-  exercises the human-grading path end to end.
+- Recorded answers (speaking/video) are authorable and fully wired: the
+  student's recording lands in `learning_materials` (see materials.py),
+  `quiz_responses.material_id` points at it, and the attempt waits in the
+  grading queue with the tape attached — the same human-grading path a
+  text question with no answer key exercises.
 """
 
 import json
@@ -118,6 +119,7 @@ CREATE TABLE IF NOT EXISTS quiz_responses (
   question_id INTEGER NOT NULL,
   chosen_json TEXT DEFAULT '[]',
   text TEXT DEFAULT '',
+  material_id INTEGER,                -- a spoken or video answer
   awarded REAL,
   feedback TEXT DEFAULT '',
   PRIMARY KEY (attempt_id, question_id)
@@ -151,8 +153,21 @@ CREATE TABLE IF NOT EXISTS student_achievements (
 """
 
 
+# Columns added after the tables first shipped. CREATE TABLE IF NOT EXISTS
+# leaves an existing table exactly as it was, so installs from before these
+# existed need them added explicitly.
+MIGRATIONS = (
+    "ALTER TABLE quiz_responses ADD COLUMN material_id INTEGER",
+)
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    for stmt in MIGRATIONS:
+        try:
+            con.execute(stmt)
+        except Exception:
+            pass            # already there
     con.commit()
 
 
@@ -254,7 +269,8 @@ def responses(con, attempt_id: int) -> list:
         question_id=r["question_id"],
         chosen=json.loads(r["chosen_json"] or "[]"),
         text=r["text"] or "", awarded=r["awarded"],
-        feedback=r["feedback"] or "")
+        feedback=r["feedback"] or "",
+        material_id=r["material_id"])
         for r in con.execute(
             "SELECT * FROM quiz_responses WHERE attempt_id=?",
             (attempt_id,)).fetchall()]
@@ -322,17 +338,22 @@ def start_attempt(con, user, quiz_id: int) -> dict:
 
 
 def save_answer(con, user, attempt_id: int, question_id: int, *,
-                chosen=None, text: str = "") -> None:
+                chosen=None, text: str = "",
+                material_id: int | None = None) -> None:
     a = own_attempt(con, user, attempt_id)
     if a["state"] != "open":
         raise HTTPException(409, "this attempt has been submitted")
+    # COALESCE keeps an existing recording when a text edit follows it —
+    # re-answering the words must not silently wipe the audio.
     con.execute(
-        "INSERT INTO quiz_responses(attempt_id,question_id,chosen_json,text)"
-        " VALUES(?,?,?,?)"
+        "INSERT INTO quiz_responses(attempt_id,question_id,chosen_json,text,"
+        " material_id) VALUES(?,?,?,?,?)"
         " ON CONFLICT(attempt_id,question_id) DO UPDATE SET"
-        "  chosen_json=excluded.chosen_json, text=excluded.text",
+        "  chosen_json=excluded.chosen_json, text=excluded.text,"
+        "  material_id=COALESCE(excluded.material_id,"
+        "                       quiz_responses.material_id)",
         (attempt_id, question_id, json.dumps(list(chosen or [])),
-         str(text or "")[:5000]))
+         str(text or "")[:5000], material_id))
 
 
 def attempt_result(con, user, attempt_id: int) -> dict:
@@ -590,8 +611,7 @@ def public_programs(con) -> list:
 # and attempts ARE the progress, so a badge can never be wrong, only late.
 # Definitions live in code because a badge is a product decision: adding one
 # is a one-line edit, granted retroactively to everyone who already
-# qualifies. (The source's friend and library badges wait for their
-# subsystems to arrive.)
+# qualifies.
 
 ACHIEVEMENT_DEFS = {
     "first_checkin": ("First day", "checked in to your first class"),
@@ -600,6 +620,7 @@ ACHIEVEMENT_DEFS = {
     "quiz_pass":     ("Quiz passer", "passed your first quiz"),
     "quiz_perfect":  ("Perfectionist", "scored 100% on a quiz"),
     "first_friend":  ("Connected", "made your first friend here"),
+    "bookworm":      ("Bookworm", "borrowed something from the library"),
 }
 
 
@@ -616,6 +637,11 @@ def _earned_codes(con, uid: int) -> set:
     if con.execute("SELECT 1 FROM contacts WHERE (a_id=? OR b_id=?)"
                    " AND state='accepted' LIMIT 1", (uid, uid)).fetchone():
         out.add("first_friend")
+    # ever-borrowed, not currently-borrowed: returning the book keeps the
+    # badge, same as the source
+    if con.execute("SELECT 1 FROM library_loans WHERE user_id=? LIMIT 1",
+                   (uid,)).fetchone():
+        out.add("bookworm")
     return out
 
 
@@ -854,7 +880,10 @@ def ops_lesson_get(lid: int, user=Depends(current_user),
         raise HTTPException(404, "lesson not found")
     if not may_edit(con, user, r["course_id"]):
         raise HTTPException(403, "you do not teach this course")
-    return dict(r)
+    from . import materials
+    out = dict(r)
+    out["materials"] = materials.of_lesson(con, lid)
+    return out
 
 
 class MoveBody(BaseModel):
@@ -960,9 +989,6 @@ def ops_question_add(qid: int, body: QuestionBody, user=Depends(current_user),
     quiz = get_quiz(con, qid)
     if not may_edit(con, user, quiz["course_id"]):
         raise HTTPException(403, "you do not teach this course")
-    if body.kind in A.RECORDED_KINDS:
-        raise HTTPException(400, "recorded answers arrive with the classroom"
-                                 " phase of the port — not yet authorable")
     try:
         A.validate_question(body.kind, body.prompt, body.choices, body.answer,
                             body.accepted, int(body.points))
@@ -1016,6 +1042,15 @@ def ops_attempt(aid: int, user=Depends(current_user), con=Depends(get_con)):
     grade = A.grade_attempt(qs, list(rs.values()), pass_mark=quiz["pass_mark"])
     student = con.execute("SELECT name FROM users WHERE id=?",
                           (a["user_id"],)).fetchone()
+
+    def _material(q):
+        r = rs.get(q.id)
+        if not r or not r.material_id:
+            return None
+        m = con.execute("SELECT kind, path FROM learning_materials WHERE id=?",
+                        (r.material_id,)).fetchone()
+        return dict(m) if m else None
+
     return {
         "attempt": dict(a), "quiz": quiz, "grade": grade,
         "student": student["name"] if student else "?",
@@ -1027,6 +1062,7 @@ def ops_attempt(aid: int, user=Depends(current_user), con=Depends(get_con)):
             "text": rs[q.id].text if q.id in rs else "",
             "awarded": rs[q.id].awarded if q.id in rs else None,
             "feedback": rs[q.id].feedback if q.id in rs else "",
+            "material": _material(q),
         } for q in qs],
     }
 

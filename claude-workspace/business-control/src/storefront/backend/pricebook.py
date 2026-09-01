@@ -54,8 +54,8 @@ def capabilities() -> list:
             out.append({"name": m.group(1).strip(), "group": group,
                         "band": m.group(2).lower(), "price": int(m.group(3)),
                         "requires": m.group(4).strip()})
-    if len(out) != 27:
-        raise ValueError(f"price book: parsed {len(out)} capabilities, not 27")
+    if len(out) != 28:
+        raise ValueError(f"price book: parsed {len(out)} capabilities, not 28")
     return out
 
 

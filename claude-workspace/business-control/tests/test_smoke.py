@@ -4414,8 +4414,8 @@ _menu = Path("docs/business-control-b2b-client/templates/02-consultation/"
              "capability-menu.md").read_text()
 _caps = re.findall(r"^\| ([A-Z][^|*]+?)(?: \*)? \| (?:Light|Standard|Heavy)"
                    r" \| \*\*\$(\d+)\*\* \|", _book, re.M)
-ok(len(_caps) == 27,
-   f"the book's capability table parses whole ({len(_caps)} of 27)")
+ok(len(_caps) == 28,
+   f"the book's capability table parses whole ({len(_caps)} of 28)")
 _off = [f"{n} ${p}" for n, p in _caps
         if not re.search(r"\*\*" + re.escape(n) + r"\*\*[^|]*\| [^|]*\|"
                          r" \$" + p + r" \|", _menu)]
@@ -4443,7 +4443,8 @@ ok("bands:{light:20,std:30,heavy:50}, corePrice:50" in _qb.text
 _deck = Path("docs/product/ecommerce-stack-deck.html").read_text()
 _D_ID = {"Sourcing": "src", "Inventory": "inv", "Production": "prd",
          "Warehouse": "wh", "Distribution": "log", "Learning": "lrn",
-         "Voice & translation": "lng", "Selling": "sell",
+         "Voice & translation": "lng", "Nutrition": "ntr",
+         "Selling": "sell",
          "Subscriptions & boxes": "box", "Fundraising": "fund",
          "Marketing": "mkt", "CRM & Support": "crm", "Events": "evt",
          "Affiliates": "aff", "Payments": "pay", "Accounting": "acc",
@@ -5370,8 +5371,8 @@ ok('data-studioview="' in _opsjs and '"/api/store/admin/studio"' in _opsjs
 from storefront.backend import pricebook as _pb
 
 _caps_pb = _pb.capabilities()
-ok(len(_caps_pb) == 27 and {c["price"] for c in _caps_pb} == {20, 30, 50},
-   "the price book parses into code — 27 capabilities on three bands, one "
+ok(len(_caps_pb) == 28 and {c["price"] for c in _caps_pb} == {20, 30, 50},
+   "the price book parses into code — 28 capabilities on three bands, one "
    "table read rather than a fourth copy typed out")
 ok(_pb.core_price() == 50
    and [t["price"] for t in _pb.tiers()] == [199, 349, 699]
@@ -5391,8 +5392,8 @@ ok(_seed.returncode == 0, f"the studio storefront seeds ({_seed.stderr[-200:]})"
 _tn.bust_cache()
 _shop = c.get("/", headers=HA).text
 ok('class="band band-light"' in _shop
-   and _shop.count("class=\"band band-") == 27,
-   "the home page carries the whole capability menu — all 27, banded — "
+   and _shop.count("class=\"band band-") == 28,
+   "the home page carries the whole capability menu — all 28, banded — "
    "because a buyer who can see the menu and add it up does not have to "
    "ask for a call first")
 for _fig in ("$50", "$199", "$150"):
@@ -6920,7 +6921,7 @@ _gcon.execute("UPDATE page_sections SET settings=json_set(settings,"
 _gcon.commit()
 
 _fbrd = c.get("/api/store/admin/fleet", headers=AA).json()
-ok(len(_fbrd["cap_catalog"]) == 27 and _fbrd["core_price"] == 50,
+ok(len(_fbrd["cap_catalog"]) == 28 and _fbrd["core_price"] == 50,
    "the board carries the full catalog, so the grant editor lists what "
    "can actually be sold")
 _sellcap = next(x for x in _fbrd["cap_catalog"] if x["id"] == "selling")
@@ -7299,10 +7300,12 @@ ok(c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT, json={
     "kind": "choice", "prompt": "p", "choices": ["a"], "answer": [0]},
     ).status_code == 400,
    "the ops door refuses a malformed question with the engine's own reason")
-ok(c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT, json={
-    "kind": "speaking", "prompt": "Say hola"}).status_code == 400,
-   "recorded answers are honestly not-yet: refused at authoring, not "
-   "silently accepted and never markable")
+_spk_probe = c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT,
+                    json={"kind": "speaking", "prompt": "Say hola"}).json()
+ok("id" in _spk_probe,
+   "recorded answers are authorable now — the capture flow landed with the"
+   " classroom phase")
+c.post(f"/api/learning/questions/{_spk_probe['id']}/delete", headers=TT)
 c.post(f"/api/learning/quizzes/{_qz}/questions", headers=TT, json={
     "kind": "choice", "prompt": "'Hello' is…",
     "choices": ["adiós", "hola"], "answer": [1], "points": 2})
@@ -7845,5 +7848,363 @@ ok('id: "learning"' in _appjs_lrn
    and 'learning: "learning"' in _appjs_lrn,
    "the ops app carries the Learning tab, its renderer, and its capability "
    "lock — the same entitlement the storefront's /learn answers to")
+
+# --- the library: a lending desk with derived availability ------------------
+_bk = c.post("/api/learning/library/items", headers=TT,
+             json={"name": "Madrigal's Magic Key", "kind": "book",
+                   "copies": 1}).json()
+ok("id" in _bk, "a teacher runs the desk — adding an item is staff work")
+ok(c.post("/api/learning/library/items", headers=LN,
+          json={"name": "x"}).status_code == 403,
+   "a learner does not: the desk is staff-only")
+_lo = c.post("/api/learning/library/checkout", headers=TT,
+             json={"item_id": _bk["id"], "name": "Lara Learner",
+                   "due_days": 14}).json()
+ok("id" in _lo, "checkout by exact name, like enrolment")
+_lib = c.get("/api/learning/library", headers=TT).json()
+_bk_row = [i for i in _lib["items"] if i["id"] == _bk["id"]][0]
+ok(_bk_row["available"] == 0 and _bk_row["out"] == 1,
+   "availability is DERIVED — copies minus open loans, nothing stored")
+ok(c.post("/api/learning/library/checkout", headers=TT,
+          json={"item_id": _bk["id"], "name": "Nina New"}
+          ).status_code == 409,
+   "every copy out = the desk refuses, it does not overbook")
+_myloans = c.get("/api/learn/loans", headers=LN).json()
+ok(len(_myloans) == 1 and _myloans[0]["item_name"] == "Madrigal's Magic Key"
+   and not _myloans[0]["returned_at"],
+   "the borrower sees their own loan on /learn")
+_achs = c.get("/api/learn/courses", headers=LN).json()["achievements"]
+ok(any(a["code"] == "bookworm" for a in _achs),
+   "borrowing mints the bookworm badge — ever-borrowed, derived like the "
+   "rest")
+ok(c.post(f"/api/learning/library/return/{_lo['id']}",
+          headers=TT).json()["ok"], "and the book comes back")
+ok(c.post(f"/api/learning/library/return/{_lo['id']}",
+          headers=TT).status_code == 404,
+   "a double return fails loudly instead of rewriting the timestamp")
+
+# --- the calendar: sessions, month grid data ---------------------------------
+_cal = c.get(f"/api/learn/courses/{_crs}/sessions", headers=LN).json()
+ok(len(_cal) >= 1 and all("started_at" in s and "mine" in s
+                          and "recordings" in s for s in _cal),
+   "the learner's calendar feed carries each class with their OWN status "
+   "and a recordings count — never the roster")
+ok(c.get(f"/api/learn/courses/{_crs}/sessions", headers=SH).status_code
+   == 403,
+   "an outsider gets no calendar — enrolment gates it like everything else")
+ok("monthGrid" in _ljs and "cursor.getDate()" in _ljs,
+   "the month grid is client-side, with the DST normalisation the source "
+   "learned the hard way")
+
+# --- QR identity: the card, the handshake, scan-to-check-in ------------------
+_card = c.get("/api/learn/me/card", headers=LN).json()
+ok(_card["uid"] and _card["plain"].startswith("bc:person:")
+   and "/p/" in _card["payload"],
+   "the card carries an unguessable uid in both forms — scheme for "
+   "scanners, URL for an iPhone camera")
+_hs = c.post("/api/learn/people/scan", headers=NN,
+             json={"payload": _card["plain"]}).json()
+ok(_hs["name"] == "Lara Learner",
+   "scanning a card shows the FULL name whatever the privacy level — "
+   "handing over your code is the consent")
+ok(c.post("/api/learn/people/scan", headers=NN,
+          json={"payload": "bc:person:not-a-uuid"}).status_code == 400,
+   "permissive about the wrapper, strict about the UUID")
+_cls3 = c.post("/api/learning/sessions", headers=TT,
+               json={"course_id": _crs}).json()
+_scan = c.post(f"/api/learning/sessions/{_cls3['session']['id']}/scan",
+               headers=TT, json={"code": _card["payload"]}).json()
+ok(_scan["student"]["name"] == "Lara Learner"
+   and _scan["status"] in ("present", "late"),
+   "a teacher scans a card and the ordinary check-in rules decide the "
+   "status — the QR answers WHO, never WHETHER")
+_ros3 = c.get(f"/api/learning/sessions/{_cls3['session']['id']}",
+              headers=TT).json()
+_lara_row = [r for r in _ros3["roster"] if r["name"] == "Lara Learner"][0]
+ok(_lara_row["method"] == "teacher",
+   "the scan records the teacher as the marker — a student scanning their "
+   "own card cannot mark themselves present")
+_old_uid = _card["uid"]
+_new_uid = c.post("/api/learn/me/qr/reissue", headers=LN).json()["uid"]
+ok(_new_uid != _old_uid
+   and c.post("/api/learn/people/scan", headers=NN,
+              json={"payload": f"bc:person:{_old_uid}"}).status_code == 404,
+   "reissue mints a new code and the lost card stops working that moment")
+c.post(f"/api/learning/sessions/{_cls3['session']['id']}/close", headers=TT)
+
+# --- recordings: spoken answers, drills, the class tape ----------------------
+_qz2 = c.post("/api/learning/quizzes", headers=TT,
+              json={"course_id": _crs, "title": "Speaking check",
+                    "pass_mark": 50}).json()
+ok("id" in _qz2 and c.post(
+    f"/api/learning/quizzes/{_qz2['id']}/questions", headers=TT,
+    json={"kind": "speaking", "prompt": "Say hello in Spanish",
+          "points": 2}).status_code == 200,
+   "speaking questions are authorable now — the refusal came out with the "
+   "capture flow landing")
+c.post(f"/api/learning/quizzes/{_qz2['id']}", headers=TT,
+       json={"title": "Speaking check", "pass_mark": 50, "published": 1})
+_att2 = c.post(f"/api/learn/quizzes/{_qz2['id']}/start", headers=LN).json()
+_sq = _att2["quiz"]["questions"][0]
+ok(c.post(f"/api/learn/attempts/{_att2['attempt']['id']}/recording"
+          f"?question_id={_sq['id']}",
+          headers={**LN, "Content-Type": "application/pdf"},
+          content=b"MZ\x90\x00 not audio at all").status_code == 400,
+   "the leading bytes decide what a file is — a mislabeled executable is "
+   "refused, not stored")
+_rec = c.post(f"/api/learn/attempts/{_att2['attempt']['id']}/recording"
+              f"?question_id={_sq['id']}",
+              headers={**LN, "Content-Type": "audio/ogg"},
+              content=b"OggS" + b"\x00" * 64).json()
+ok(_rec["ok"] and _rec["kind"] == "audio",
+   "a spoken answer uploads as raw bytes and lands as a material")
+_sub2 = c.post(f"/api/learn/attempts/{_att2['attempt']['id']}/submit",
+               headers=LN).json()
+ok(not _sub2["grade"]["marks_visible"],
+   "an attempt with a recording is submitted but not final — no "
+   "provisional number is ever shown")
+_gq2 = c.get("/api/learning/grading", headers=TT).json()
+ok(any(a["id"] == _att2["attempt"]["id"] for a in _gq2),
+   "and it waits in the grading queue")
+_ga = c.get(f"/api/learning/attempts/{_att2['attempt']['id']}",
+            headers=TT).json()
+_gi = [i for i in _ga["items"] if i["question_id"] == _sq["id"]][0]
+ok(_gi["material"] and _gi["material"]["kind"] == "audio",
+   "the grader is handed the recording to play")
+_media = c.get(f"/media/{_gi['material']['path']}")
+ok(_media.status_code == 200
+   and _media.headers["x-content-type-options"] == "nosniff",
+   "stored media serves by its unguessable token name, nosniff, never "
+   "executed")
+_fin = c.post(f"/api/learning/attempts/{_att2['attempt']['id']}/grade",
+              headers=TT, json={"question_id": _sq["id"], "awarded": 2,
+                                "feedback": "perfecto"}).json()
+ok(_fin["is_final"] and _fin["percent"] == 100,
+   "a human mark settles the attempt, whatever the kind")
+_les2 = c.post("/api/learning/lessons", headers=TT,
+               json={"course_id": _crs, "title": "Drill day"}).json()
+_dr = c.post(f"/api/learning/lessons/{_les2['id']}/material",
+             headers={**TT, "Content-Type": "audio/ogg",
+                      "X-Filename": "drill.ogg"},
+             content=b"OggS" + b"\x00" * 32).json()
+ok("id" in _dr, "a teacher attaches an audio drill to a lesson")
+c.post(f"/api/learning/lessons/{_les2['id']}", headers=TT,
+       json={"title": "Drill day", "body": "", "published": 1})
+_lv = c.get(f"/api/learn/lessons/{_les2['id']}", headers=LN).json()
+ok(len(_lv["materials"]) == 1 and _lv["materials"][0]["kind"] == "audio",
+   "and the learner's lesson page carries it")
+_cls4 = c.post("/api/learning/sessions", headers=TT,
+               json={"course_id": _crs}).json()
+_sid4 = _cls4["session"]["id"]
+ok(c.post(f"/api/learning/sessions/{_sid4}/recording",
+          headers={**AA, "Content-Type": "video/webm"},
+          content=b"\x1aE\xdf\xa3" + b"\x00" * 32).status_code == 200,
+   "an admin may attach the class recording")
+ok(c.post(f"/api/learning/sessions/{_sid4}/recording",
+          headers={**NN, "Content-Type": "video/webm"},
+          content=b"\x1aE\xdf\xa3" + b"\x00" * 32).status_code == 403,
+   "but not a bystander: a recording of a class is a recording of the "
+   "students in it — ownership, not just role")
+_srl = c.get(f"/api/learn/sessions/{_sid4}/recordings", headers=LN).json()
+ok(len(_srl) == 1,
+   "the recording reaches the enrolled — gated on enrolment, not "
+   "attendance, because missing the class is why you want the tape")
+c.post(f"/api/learning/sessions/{_sid4}/close", headers=TT)
+ok("LinguaCompose" in (Path(__file__).parent.parent
+                       / "src/storefront/frontend/rtc-compose.js"
+                       ).read_text(encoding="utf-8")
+   and "recorderWidget" in _ljs and "rtc-compose.js" in _opsjs2,
+   "one recorder for all three flows — quiz answers, drills, the class "
+   "tape — shared by both surfaces")
+
+# --- voice & translation: its own capability ---------------------------------
+_vp = c.get("/api/learn/voice/providers", headers=LN).json()
+ok(_vp["translate"] == "local" and "es" in _vp["languages"],
+   "voice ships offline-first — no config means the local glossary, not a "
+   "third party")
+_tr = c.get("/api/learn/voice/translate?q=hello&source=en&target=es",
+            headers=LN).json()
+ok(_tr["found"] and _tr["text"] == "hola" and _tr["via"] == "local glossary",
+   "the glossary answers what it knows and says where the answer came from")
+_tr2 = c.get("/api/learn/voice/translate?q=zeitgeist&source=en&target=es",
+             headers=LN).json()
+ok(not _tr2["found"] and "reason" in _tr2,
+   "a miss is an honest miss — never a plausible-looking guess")
+_th = c.get("/api/learn/voice/thesaurus?q=glad", headers=LN).json()
+ok(_th["found"] and "happy" in _th["synonyms"],
+   "the thesaurus answers even when the word is inside a synonym group")
+ok("speechSynthesis" in _ljs and "webkitSpeechRecognition" in _ljs
+   and "rate = 0.95" in _ljs,
+   "dictation and TTS are browser-side — a learner's words never reach a "
+   "server for speech")
+
+# --- SFU: the config contract ------------------------------------------------
+_rtc = c.get("/api/learn/rtc/config", headers=LN).json()
+ok(_rtc["available"] is False and _rtc["mode"] in ("auto", "mesh")
+   and _rtc["mesh_max"] == 12 and _rtc["simulcast"] is True,
+   "no media server configured = the config says so, and never promises a "
+   "transport that is not there")
+_sfujs = (Path(__file__).parent.parent
+          / "src/storefront/frontend/rtc-sfu.js").read_text(encoding="utf-8")
+ok("chooseTransport" in _sfujs and "sendEncodings" in _sfujs
+   and "application/sdp" in _sfujs and "LinguaSfu" in _sfujs,
+   "the WHIP/WHEP client is ported — vendor-free, simulcast-aware, a "
+   "config switch away")
+ok("chooseTransport" in _ljs and "rtc-sfu.js" in _ljs,
+   "the learner call picks its transport from config and roster size")
+
+# --- data rights: export, and erasure with a shown plan ----------------------
+_myx = c.get("/api/learn/me/export", headers=LN)
+ok(_myx.status_code == 200
+   and "attachment" in _myx.headers.get("content-disposition", ""),
+   "a member downloads their own record without asking anyone")
+_myxj = _myx.json()
+ok("token" not in _myxj["person"] and "password_hash" not in _myxj["person"]
+   and "attendance" in _myxj and "achievements" in _myxj,
+   "the bundle holds their record, never their keys — and no messages, "
+   "because a conversation belongs to two people")
+_vic = c.post("/api/login", headers=HA,
+              json={"name": "Vic Timer", "role": "customer"}).json()
+c.post(f"/api/learning/courses/{_crs}/enroll", headers=AA,
+       json={"name": "Vic Timer"})
+_vic_id = _vic["user"]["id"] if "user" in _vic else _vic["id"]
+_plan = c.get(f"/api/learning/people/{_vic_id}/erase-plan",
+              headers=AA).json()
+ok("deleted" in _plan and "retained" in _plan
+   and "attendance records" in _plan["retained"],
+   "the plan is SHOWN first: deleted, anonymised, retained — with why")
+ok(c.post(f"/api/learning/people/{_vic_id}/erase", headers=AA,
+          json={"confirm_name": "Wrong Name"}).status_code == 400,
+   "the confirmation is the typed name, exactly — not a yes/no click")
+_er = c.post(f"/api/learning/people/{_vic_id}/erase", headers=AA,
+             json={"confirm_name": "Vic Timer",
+                   "reason": "asked to be forgotten"}).json()
+ok(_er["erased"], "the right name erases")
+from erp.backend import tenancy as _tn2  # noqa: E402
+_tok_v = _tn2.CURRENT.set("alpha")
+import erp.backend.db as _edb  # noqa: E402
+_vcon = _edb.connect()
+_vrow = _vcon.execute("SELECT * FROM users WHERE id=?",
+                      (_vic_id,)).fetchone()
+_vcon.close()
+_tn2.CURRENT.reset(_tok_v)
+ok(_vrow["name"] == f"Erased person #{_vic_id}" and not _vrow["active"]
+   and _vrow["erased_at"] and not _vrow["email"],
+   "erasure is a tombstone, not a hole — the id survives so attendance "
+   "and pay still add up, but it identifies nobody")
+ok(c.get("/api/learning/people/1/erase-plan", headers=LN).status_code
+   == 403,
+   "the erasure door is admin-only")
+
+# --- nutrition: the pure arithmetic ------------------------------------------
+from erp.backend import nutrition_calc as _nc  # noqa: E402
+import datetime as _dtm  # noqa: E402
+_today = _dtm.date(2026, 8, 31)
+ok(round(_nc.mifflin_bmr(84, 175, 36, "male")) == 1759,
+   "Mifflin-St Jeor, to the kcal")
+_t0 = _nc.targets({"goal": "lose", "rate_kg_week": 0.45}, 84.0, _today)
+ok(_t0["adjust"] == -495 and _t0["target"] == _t0["tdee"] - 495,
+   "a lose goal maps through 7700 kcal/kg to a daily deficit")
+ok(_nc.targets({}, None, _today)["target"] is None,
+   "no weight, no target — the formulas refuse to guess")
+_w = [((_today - _dtm.timedelta(days=25 - i)).isoformat(), 85.0 - i * 0.03)
+      for i in range(22)]
+_intake = {d: 2100.0 for d, _ in _w}
+_obs = _nc.observed_tdee(_w, _intake, _today)
+ok(_obs and 2280 < _obs["tdee"] < 2420,
+   "observed maintenance = mean intake minus the weight slope's calories")
+ok(_nc.observed_tdee(_w[:3], _intake, _today) is None
+   and _nc.observed_tdee(_w, {d: 400.0 for d, _ in _w}, _today) is None,
+   "thin data or partial logging returns None, never a shaky number")
+ok(_nc.day_on_target(2000, 2000, "lose")
+   and not _nc.day_on_target(2200, 2000, "lose")
+   and _nc.day_on_target(1950, 2000, "gain")
+   and not _nc.day_on_target(0, 2000, "maintain"),
+   "the adherence rule bends to the goal's direction")
+
+# --- nutrition: over the wire ------------------------------------------------
+_np = c.post("/api/nutrition/me/profile", headers=LN,
+             json={"sex": "female", "birth_year": 1998, "height_cm": 165,
+                   "activity": 1.375, "goal": "lose",
+                   "rate_kg_week": 0.25}).json()
+ok(_np["sex"] == "female", "a member sets their own profile")
+ok(c.post("/api/nutrition/me/profile", headers=LN,
+          json={"protein_pct": 50, "carbs_pct": 40,
+                "fat_pct": 30}).status_code == 400,
+   "a macro split that does not add to 100 is refused")
+c.post("/api/nutrition/me/weight", headers=LN,
+       json={"day": "2026-08-30", "kg": 61.5})
+c.post("/api/nutrition/me/weight", headers=LN,
+       json={"day": "2026-08-30", "kg": 61.2})
+_st = c.get("/api/nutrition/me/state?day=2026-08-30", headers=LN).json()
+ok(len([w for w in _st["weights"] if w["day"] == "2026-08-30"]) == 1
+   and _st["weights"][-1]["kg"] == 61.2,
+   "a weigh-in is a day-keyed upsert — logging again replaces, never "
+   "duplicates")
+ok(_st["targets"]["has_numbers"] and _st["targets"]["target"],
+   "one weigh-in is enough for the formulas to speak")
+c.post("/api/nutrition/me/water", headers=LN,
+       json={"day": "2026-08-30", "delta_ml": 500})
+_wtr = c.post("/api/nutrition/me/water", headers=LN,
+              json={"day": "2026-08-30", "delta_ml": -250}).json()
+ok(_wtr["ml"] == 250, "water is an upsert too, clamped at zero")
+_ni = c.post("/api/nutrition/me/ingredients", headers=LN,
+             json={"name": "Oats", "category": "grains",
+                   "serving_name": "40 g", "cal": 150, "protein": 5,
+                   "carbs": 27, "fat": 3}).json()
+_nr = c.post("/api/nutrition/me/recipes", headers=LN,
+             json={"name": "Morning oats", "servings": 1,
+                   "items": [{"ingredient_id": _ni["id"], "qty": 2}]}).json()
+ok("id" in _nr, "recipes build on the visible food library")
+c.post("/api/nutrition/me/plan", headers=LN,
+       json={"day": "2026-08-31", "slot": "breakfast",
+             "recipe_id": _nr["id"], "servings": 1})
+_gen = c.post("/api/nutrition/me/shopping/generate", headers=LN,
+              json={"start": "2026-08-31", "end": "2026-08-31"}).json()
+ok(_gen["added"] == 1,
+   "the shopping list falls out of the plan — recipes expanded and scaled")
+c.post("/api/nutrition/me/log", headers=LN,
+       json={"day": "2026-08-30", "slot": "breakfast", "name": "Morning oats",
+             "servings": 1, "cal": 300, "protein": 10, "carbs": 54,
+             "fat": 6})
+_st2 = c.get("/api/nutrition/me/state?day=2026-08-30", headers=LN).json()
+ok(len(_st2["log"]) == 1 and _st2["log"][0]["cal"] == 300,
+   "a log entry keeps the macros it had when eaten — denormalised on "
+   "purpose, so editing the recipe later never rewrites history")
+ok(c.get("/api/nutrition/clients", headers=LN).status_code == 403,
+   "the caseload is for coaches — a self-tracker is on nobody's list")
+_prog = c.post("/api/nutrition/programs", headers=AA,
+               json={"name": "Cut & keep", "coach_id": None}).json()
+c.post("/api/nutrition/clients", headers=AA,
+       json={"user_id": _st["me"]["id"], "program_id": _prog["id"]})
+_cl = c.get("/api/nutrition/clients", headers=AA).json()
+ok(any(x["user_id"] == _st["me"]["id"] for x in _cl),
+   "an opened seat puts the member on the caseload, with adherence "
+   "derived on read")
+
+# the capability wall: /nutrition is part of the Nutrition grant
+c.post("/api/store/admin/fleet/tenants", headers=AA,
+       json={"id": "fitco", "brand": "Fit Co", "klass": "micro"})
+_FH = {"host": "fitco.localhost"}
+ok(c.get("/nutrition", headers=_FH).status_code == 200,
+   "no grant recorded = everything on — /nutrition answers, same null rule")
+c.post("/api/store/admin/fleet/tenants/fitco/caps", headers=AA,
+       json={"caps": ["selling", "payments"]})
+ok(c.get("/nutrition", headers=_FH).status_code == 404,
+   "a tenant without the Nutrition grant has no /nutrition — a 404, not a "
+   "husk")
+c.post("/api/store/admin/fleet/tenants/fitco/caps", headers=AA,
+       json={"caps": ["selling", "payments", "nutrition"]})
+ok(c.get("/nutrition", headers=_FH).status_code == 200,
+   "granting Nutrition opens the door again")
+c.request("DELETE", "/api/store/admin/fleet/tenants/fitco?keep_data=0",
+          headers=AA)
+ok('id: "nutrition"' in _appjs_lrn
+   and "nutrition: renderNutrition" in _appjs_lrn
+   and 'nutrition: "nutrition"' in _appjs_lrn,
+   "the ops app carries the Nutrition tab, its renderer, and its "
+   "capability lock")
+ok("/nutrition.js" in c.get("/nutrition").text,
+   "the member page loads its app as a versioned asset")
 
 print(f"\nall {checks} checks passed")

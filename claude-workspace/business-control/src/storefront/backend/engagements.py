@@ -3308,7 +3308,8 @@ CAP_NAMES = {
     "sourcing": "Sourcing", "inventory": "Inventory",
     "production": "Production", "warehouse": "Warehouse",
     "distribution": "Distribution", "learning": "Learning",
-    "voice": "Voice & translation", "selling": "Selling",
+    "voice": "Voice & translation", "nutrition": "Nutrition",
+    "selling": "Selling",
     "subs": "Subscriptions & boxes", "fundraising": "Fundraising",
     "marketing": "Marketing", "crm": "CRM & Support", "events": "Events",
     "affiliates": "Affiliates", "payments": "Payments",
@@ -3322,7 +3323,7 @@ CAP_NAMES = {
 
 
 def _cap_catalog() -> list:
-    """The 27 capabilities WITH their commercial facts — group, band,
+    """The 28 capabilities WITH their commercial facts — group, band,
     price — in the price book's own order. The grant editor is a screen
     where money is approved; it must show the money, from the same parse
     everything else prices from. Fail-safe to names alone: a book that

@@ -179,13 +179,32 @@ def main():
             ("multi", "Which of these are greetings?",
              ["hola", "mesa", "buenos días", "silla"], [0, 2], [], 4),
             ("text", "Translate: 'good morning'", [], [],
-             ["buenos días"], 1))):
+             ["buenos días"], 1),
+            ("speaking", "Record yourself greeting a shopkeeper", [], [],
+             [], 2))):
         con.execute(
             "INSERT INTO quiz_questions(quiz_id,position,kind,prompt,"
             " choices_json,answer_json,accepted_json,points)"
             " VALUES(?,?,?,?,?,?,?,?)",
             (quiz, pos, kind, prompt, json.dumps(choices),
              json.dumps(answer), json.dumps(accepted), pts))
+
+    # the library: a small shelf, one loan out so the desk shows work
+    lib_ids = {}
+    for name, kind, copies, notes in (
+            ("Madrigal's Magic Key to Spanish", "book", 2,
+             "the classic; two copies"),
+            ("Genki I", "book", 1, "Japanese workbook"),
+            ("Whiteboard markers (set)", "material", 3, ""),
+            ("USB headset", "equipment", 2, "for the video booth")):
+        lib_ids[name] = con.execute(
+            "INSERT INTO library_items(name,kind,copies,notes,created_at)"
+            " VALUES(?,?,?,?,?)", (name, kind, copies, notes, now)).lastrowid
+    con.execute(
+        "INSERT INTO library_loans(item_id,user_id,out_at,due_at,"
+        " checked_out_by) VALUES(?,?,?,?,?)",
+        (lib_ids["Madrigal's Magic Key to Spanish"], ana,
+         now - 3 * DAY, now + 11 * DAY, t_maria))
 
     # past sessions, CLOSED, so payroll derives real lines on first load
     def past_session(course_id, teacher_id, days_ago, minutes, present,
@@ -358,7 +377,8 @@ def main():
     print("    office:   Admin Ada (ops admin)")
     print("  courses: Spanish A1 · Spanish B1 · Japanese A1")
     print("  4 closed classes (payroll: pending + approved + held) ·")
-    print("  3 lessons + 1 draft · 1 quiz · 2 applications waiting ·")
+    print("  3 lessons + 1 draft · 1 quiz (incl. a speaking question) ·")
+    print("  2 applications waiting · a 4-item library with Ana's loan out")
     print("  Ana and Bo are friends; María's request waits on Ana")
 
 

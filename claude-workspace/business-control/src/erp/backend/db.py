@@ -399,6 +399,11 @@ MIGRATIONS = (
     "ALTER TABLE order_items ADD COLUMN variant_name TEXT DEFAULT ''",
     "ALTER TABLE orders ADD COLUMN gift_cents INTEGER DEFAULT 0",
     "ALTER TABLE orders ADD COLUMN gift_card_code TEXT DEFAULT ''",
+    # QR identity: an unguessable public identifier, separate from the row
+    # id on purpose (the id leaks how many people exist and is guessable).
+    "ALTER TABLE users ADD COLUMN uid TEXT",
+    # Data rights: erasure tombstones the row instead of deleting it.
+    "ALTER TABLE users ADD COLUMN erased_at REAL",
 )
 
 

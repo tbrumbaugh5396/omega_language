@@ -82,7 +82,14 @@ intact:
 
 Adapted in the move: the community is scoped to the school (enrolled,
 teaching, or administering — never the shop's whole customer file), and the
-source's people-photos and QR identity cards have no counterpart here yet.
+source's people-photos have no counterpart here yet. QR identity cards ARE
+ported (`erp/backend/identity.py`): every person can mint an unguessable
+UUID card from the /learn Me tab; a teacher scans it at the door
+(`POST /api/learning/sessions/{sid}/scan` — the QR decides *who*, never
+*whether*, so the ordinary check-in rules still apply and the row records
+the teacher as marker), and a member scans a classmate's card as the
+contact handshake — presenting your code IS the consent that shows your
+full name. Reissue kills a lost card the same moment.
 
 ## Live video (ported)
 
@@ -97,36 +104,47 @@ told honestly, never refused. Signaling is HTTP-polled mailboxes
 (`/api/learn/rtc/*`), keyed by tenant so two schools sharing a process
 never share a room; the server relays SDP/ICE and never touches media.
 TURN for symmetric-NAT deployments configures via `turn_url` /
-`turn_user` / `turn_pass`. The source's SFU transport (WHIP/WHEP) is not
-ported — it needs a media server nobody here runs yet; the mesh carries a
-class of up to 12.
+`turn_user` / `turn_pass`. The source's SFU transport (WHIP/WHEP) is
+ported too (`storefront/frontend/rtc-sfu.js`, one client for both
+surfaces, interface-identical to the mesh): configure any media server
+speaking the standards — Cloudflare Realtime, MediaMTX, Janus, LiveKit
+ingress — via `whip_url` / `whep_url` / `sfu_token` / `sfu_mode`, and
+`chooseTransport` picks per call from the enrolled roster size, with
+simulcast layers narrowed by the device's own core count. Unconfigured,
+the config never promises a transport that is not there and the mesh
+carries a class of up to 12, exactly as before.
 
-## Still waiting from the source
+## The rest of the source, now ported
 
-Audited against the source's full endpoint surface. Ported and live:
-courses/lessons/quizzes/grading, the class-session loop and derived
-payroll, admissions, the social layer, mesh video, notifications. Covered
-by the platform's own richer versions (deliberate substitutions, not
-gaps): auth and sessions, tenancy and licensing, audit, the admin
-console, tuition (course seats are products on the checkout rail), the
-seven-role matrix (mapped to admin/teacher/enrolled). Genuinely not yet
-ported:
+The seven areas the first audit left open all landed:
 
-- **Recordings** — speaking/video quiz answers (the grading engine
-  understands them; authoring refuses until the capture flow lands),
-  teacher audio drills attached to lessons, and class recording (the
-  source composited the teacher's received tiles into one stream).
-- **The library** — lending desk with derived availability (and the
-  bookworm badge that waits on it).
-- **Lookup + speech** — the offline glossary/thesaurus with optional
-  LibreTranslate/Datamuse, and browser dictation/TTS. Together these are
-  the seed of the priced **Voice & translation** capability ($30,
-  depends Learning).
-- **QR identity** — per-person unguessable QR cards: scan-to-check-in at
-  class and scan-as-contact-handshake (the platform has QR scanning
-  infrastructure to build on).
-- **Data rights** — per-person export, and erasure with a shown plan
-  (the community module keeps messages ready to go with their person,
-  but nothing calls it yet).
-- **The calendar** — the month grid of class sessions.
-- **SFU transport** for classes too large for a 12-person mesh.
+- **Recordings** (`erp/backend/materials.py` + `rtc-compose.js`) —
+  speaking/video quiz answers (raw-body uploads, magic-byte sniffing,
+  token-named sharded storage; the response points at the material and
+  the grader gets the tape), teacher drills on lessons, and class
+  recording — the teacher's browser composites its received tiles onto a
+  canvas, states its limits on the button, and uploads on stop.
+- **The library** (`erp/backend/library.py`) — the lending desk on the
+  ops Learning tab; availability is copies minus open loans, derived on
+  read; the bookworm badge awards at checkout, ever-borrowed.
+- **Lookup + speech** — shipped as the priced **Voice & translation**
+  capability ($30, depends Learning): `erp/backend/lookup.py` (offline
+  glossary/thesaurus first, LibreTranslate/Datamuse only by deliberate
+  config, every answer says `via` where it came from) plus browser-side
+  dictation and TTS in the /learn lookup panel. Revoked = the panel
+  never renders and the four API doors are 404s.
+- **QR identity** — see the community section above.
+- **Data rights** (`erp/backend/datarights.py`) — self-service export
+  from the Me tab (their record, never their keys, never a DM);
+  admin-side export and erasure with the SHOWN plan — deleted /
+  anonymised / retained with why — confirmed by the typed name. Erasure
+  is a tombstone: files first, community rows whole, sign-ins rotated,
+  the audit log keeps what happened with their name taken off it.
+- **The calendar** — month grid on the learner's course page (Monday
+  weeks, local day keys, the DST fix), fed by
+  `GET /api/learn/courses/{cid}/sessions` where `mine` is the viewer's
+  own attendance and nobody else's; recordings badge the day.
+- **SFU transport** — see the live-video section above.
+
+Still deliberately absent: the source's people-photos, and central
+SFU-side recording (record where the media server is, once one exists).

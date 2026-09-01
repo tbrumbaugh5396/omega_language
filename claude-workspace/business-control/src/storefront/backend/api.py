@@ -461,9 +461,13 @@ def card_svg(pid: int, name: str, colour: str, key: str = "",
 def product_art(theme: dict, pid: int, name: str, colour: str, key: str = "",
                 mini: bool = False, brand: str = "") -> str:
     """Which stand-in this tenant draws — one switch, read from the theme,
-    so the storefront grid and the server-rendered product page agree."""
+    so the storefront grid and the server-rendered product page agree.
+    A product with no colour of its own draws in the TENANT'S accent, not
+    the drinks brand's purple — a school's placeholder art should look
+    like the school."""
     fn = can_svg if (theme or {}).get("art") == "can" else card_svg
-    return fn(pid, name, colour, key, mini, brand)
+    return fn(pid, name, colour or (theme or {}).get("purple") or "",
+              key, mini, brand)
 
 
 def can_svg(pid: int, name: str, colour: str, key: str = "",
@@ -568,7 +572,7 @@ def render_shell(con, body_html: str, *, title=None, description=None,
     # the menu follows the grant, same null-means-everything rule
     from .partners import cap_on
     _CAP_PATHS = {"/find": "distribution", "/events": "events",
-                  "/learn": "learning",
+                  "/learn": "learning", "/nutrition": "nutrition",
                   "/blog": "marketing", "/affiliates": "affiliates"}
     def _nav_ok(m):
         for path, cap in _CAP_PATHS.items():
@@ -1476,7 +1480,7 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
                         or f"{p['name']} from {_t['brand'].title()}.")
     canonical = f"{base}/product/{pid}-{slugify(p['name'])}"
     meta = product_meta(con, pid)
-    colour = meta.get("colour") or "#6c00bf"
+    colour = meta.get("colour") or _t.get("purple") or "#6c00bf"
     note = _html.escape(meta.get("note") or "")
     ingredients = _html.escape(meta.get("ingredients") or "")
     try:
@@ -1629,7 +1633,7 @@ def product_page(pid_slug: str, request: Request, con=Depends(get_con)):
         # inside an <a> without breaking both the link and the button.
         cards = "".join(
             f'<div class="product"'
-            f' style="--flavour:{product_meta(con, r["id"]).get("colour") or "#6c00bf"}">'
+            f' style="--flavour:{product_meta(con, r["id"]).get("colour") or _t.get("purple") or "#6c00bf"}">'
             + f'<a href="/product/{r["id"]}-{r["slug"]}" aria-label="{_html.escape(r["name"])}">'
             + (f'<div class="art"><img src="{r["media"][0]["thumb"]}"'
                f' alt="" loading="lazy"></div>' if r.get("media")

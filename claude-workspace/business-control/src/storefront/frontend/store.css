@@ -108,7 +108,8 @@ svg.can { display: block; width: 100%; height: auto; }
 /* top bar */
 .topbar { position: sticky; top: 0; z-index: 40; display: flex;
   align-items: center; gap: 18px; padding: 14px 26px;
-  background: rgba(251,249,246,.85); backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line); }
 /* A wordmark is however long the business's name is. At a fixed 25px a
    two-word name wrapped and pushed the cart off the right edge of a phone,
@@ -152,7 +153,8 @@ svg.can { display: block; width: 100%; height: auto; }
 .side-menu.open { transform: none; }
 .menu-bar { position: sticky; top: 0; z-index: 2; display: flex;
   align-items: center; gap: 16px; padding: 14px 26px;
-  background: rgba(251,249,246,.9); backdrop-filter: blur(14px);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line); }
 .menu-bar .brand { margin-right: auto; }
 .menu-inner { max-width: var(--wrap); margin: 0 auto;
@@ -183,9 +185,12 @@ svg.can { display: block; width: 100%; height: auto; }
 .menu-fold summary:hover .side-group,
 .menu-fold summary:hover .fold-chev { color: var(--purple); }
 /* the locator is the one link people hunt for, so it wears the CTA colour */
-.menu-link.locator-link { background: #fff4ec; border: 1px solid #ffd6bb; }
+.menu-link.locator-link {
+  background: color-mix(in srgb, var(--orange) 10%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--orange) 32%, var(--bg)); }
 .menu-link.locator-link .ico { color: var(--orange); }
-.menu-link.locator-link:hover { background: #ffe9d9; }
+.menu-link.locator-link:hover {
+  background: color-mix(in srgb, var(--orange) 17%, var(--bg)); }
 @media (max-width: 900px) {
   .menu-grid { grid-template-columns: 1fr; gap: 32px; }
   .menu-inner { padding: 24px 22px 60px; }
@@ -349,7 +354,7 @@ svg.can { display: block; width: 100%; height: auto; }
   flex-direction: column; transition: box-shadow .24s, transform .24s,
   border-color .24s; position: relative; }
 .product:hover { box-shadow: var(--sh-2); transform: translateY(-4px);
-  border-color: color-mix(in srgb, var(--flavour) 45%, white); }
+  border-color: color-mix(in srgb, var(--flavour) 45%, var(--paper)); }
 .product .art { aspect-ratio: 4/5; display: flex; align-items: center;
   justify-content: center; position: relative; overflow: hidden;
   background: var(--flavour-soft); }
@@ -506,7 +511,7 @@ svg.can { display: block; width: 100%; height: auto; }
   background: var(--flavour-soft); display: flex; align-items: center;
   justify-content: center; overflow: hidden; }
 .sticky-shot img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
-.sticky-buy { --flavour-soft: color-mix(in srgb, var(--flavour, var(--purple)) 13%, #fff); }
+.sticky-buy { --flavour-soft: color-mix(in srgb, var(--flavour, var(--purple)) 13%, var(--paper)); }
 .sticky-inner .who { flex: 1; min-width: 0; }
 .sticky-inner b { font-size: 15px; font-weight: 600; display: block;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1044,7 +1049,7 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
   display: flex; align-items: center; justify-content: center; gap: 48px;
   padding: 34px clamp(20px, 6vw, 90px) 58px; }
 
-.show-video { padding: 30px 0 58px; background: #fff;
+.show-video { padding: 30px 0 58px; background: var(--paper);
   flex-direction: column; justify-content: center; gap: 20px; }
 .show-video video { width: 100%; max-height: calc(0.62 * var(--slide-h));
   object-fit: contain; display: block; }
@@ -1053,7 +1058,8 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
   font-size: clamp(17px, 2.1vw, 26px); color: var(--ink); }
 .show-sound { position: absolute; right: clamp(20px, 5vw, 46px); top: 24px;
   display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
-  border: 1px solid var(--line); background: rgba(255,255,255,.86);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 86%, transparent);
   color: var(--ink); border-radius: var(--r-pill); padding: 8px 15px;
   font-family: var(--ui); font-size: 13px; }
 .show-sound:hover { border-color: var(--purple); color: var(--purple); }
@@ -1071,10 +1077,11 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
 
 .show-arrow { position: absolute; top: 50%; transform: translateY(-50%);
   z-index: 3; width: 46px; height: 46px; border-radius: 50%;
-  border: 1px solid var(--line); background: rgba(255,255,255,.92);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
   color: var(--ink); cursor: pointer; display: flex; align-items: center;
   justify-content: center; box-shadow: var(--sh-1); transition: all .18s; }
-.show-arrow:hover { background: #fff; color: var(--purple);
+.show-arrow:hover { background: var(--paper); color: var(--purple);
   border-color: var(--purple); }
 .show-arrow.prev { left: clamp(8px, 2vw, 22px); }
 .show-arrow.prev .ico { transform: rotate(180deg); }
@@ -1083,7 +1090,8 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
 .show-dots { position: absolute; left: 0; right: 0; bottom: 12px; z-index: 3;
   display: flex; justify-content: center; gap: 8px; }
 .show-dot { width: 8px; height: 8px; padding: 0; border-radius: 50%;
-  border: none; cursor: pointer; background: rgba(60,40,80,.26); }
+  border: none; cursor: pointer;
+  background: color-mix(in srgb, var(--ink) 30%, transparent); }
 .show-dot.on { background: var(--purple); transform: scale(1.35); }
 
 @media (max-width: 780px) {
@@ -1160,7 +1168,9 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
 .product.feature { grid-column: 1 / -1; display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: center;
   gap: clamp(20px, 4vw, 56px); padding: clamp(20px, 3vw, 40px);
-  background: linear-gradient(120deg, #f7f1ff 0%, #fdf6ff 100%); }
+  background: linear-gradient(120deg,
+    color-mix(in srgb, var(--lavender) 10%, var(--paper)) 0%,
+    color-mix(in srgb, var(--lavender) 3%, var(--paper)) 100%); }
 .product.feature .feature-art { display: flex; align-items: center;
   justify-content: center; }
 /* The card art normally sits on a flavour-tinted panel; at feature size that
@@ -1324,7 +1334,7 @@ body.offer-open { overflow: hidden; }
    the right colour over a tint inherited from further up the page, which is
    the original bug wearing a different hat. */
 .art, .feature-art {
-  --flavour-soft: color-mix(in srgb, var(--flavour, var(--purple)) 13%, #fff);
+  --flavour-soft: color-mix(in srgb, var(--flavour, var(--purple)) 13%, var(--paper));
 }
 
 /* ---------- review entry points ---------- */

@@ -20,7 +20,8 @@ Kept current with the code. If one of these is wrong, it's a bug.
 | [USERS.md](USERS.md) | Who can sign in, what each role sees, the tab access matrix, and the security model to read **before** going multi-user |
 | [studio-storefront.md](studio-storefront.md) | Business Control's own shop — seeded from the price book, and the branding that had to leave the codebase for it to exist |
 | [multi-tenant.md](multi-tenant.md) | Running several businesses from one process — the host-header router, the tenant registry, what is shared vs owned, and the split that separated the studio from ZenJoy, and the fleet of nodes clients are placed on |
-| [learning.md](learning.md) | The Learning capability — the lingua-portal port: which layer landed on which surface, the two pure modules that moved verbatim, checkout-as-admissions, and what still waits |
+| [learning.md](learning.md) | The Learning capability — the lingua-portal port: which layer landed on which surface, the two pure modules that moved verbatim, checkout-as-admissions, and the seven follow-on areas now landed (recordings, library, voice, QR identity, data rights, calendar, SFU) |
+| [nutrition.md](nutrition.md) | The Nutrition capability — the macro-kitchen port: pure calorie math, tenant food library, coach caseload, checkout-as-coaching-desk |
 
 > `DEPLOY.md` is the technical runbook the studio's [delivery
 > roadmap](../business-control-b2b-client/roadmap.md) points at rather than

@@ -208,7 +208,12 @@ const ico = (name, cls = "ico") =>
 
 // Flavour colour drives the card, the PDP and the cart line. Falls back to
 // brand purple for anything without merchandising meta.
-const flavourOf = (p) => p.colour || "#6c00bf";
+/* A product with no colour of its own draws in the tenant's accent — the
+   theme injects --purple into :root before this file runs, so the
+   drinks-era fallback only fires when there is no theme at all. */
+const THEME_ACCENT = (getComputedStyle(document.documentElement)
+  .getPropertyValue("--purple") || "").trim();
+const flavourOf = (p) => p.colour || THEME_ACCENT || "#6c00bf";
 
 /* Stand-in product art until photography exists.
    Draws the can using the brand's packaging grammar — same geometry, one ring

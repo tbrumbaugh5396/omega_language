@@ -19,18 +19,26 @@ flows already store. A course the learner is not enrolled in shows its blurb
 and — when the course names a product — a link to buy the seat.
 """
 
+import os
 import re
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse)
 from pydantic import BaseModel
 
 from erp.backend import classroom as CR
 from erp.backend import community as CM
+from erp.backend import datarights as DR
+from erp.backend import identity as ID
 from erp.backend import learning as L
+from erp.backend import library as LIB
+from erp.backend import lookup as LK
+from erp.backend import materials as MAT
 from . import sections as sect
 from .api import current_customer, get_con, rate_limit, render_shell
-from .partners import _require_cap, brand_name
+from .partners import _require_cap, brand_name, cap_on
 
 router = APIRouter()
 
@@ -148,7 +156,11 @@ def course_view(cid: int, user=Depends(current_customer),
                            (open_s.id,)).fetchone()["room"]
         session = {"id": open_s.id, "started_at": open_s.started_at,
                    "my_status": mine["status"] if mine else None,
-                   "room": room}
+                   "room": room,
+                   # the enrolled count travels with the room: it decides
+                   # which video transport the call opens with, so a full
+                   # class picks the SFU on the FIRST join
+                   "enrolled": len(CR.enrolled(con, cid))}
     return {"course": {k: c[k] for k in ("id", "name", "language", "level",
                                          "blurb")},
             "lessons": lessons, "quizzes": quizzes,
@@ -172,7 +184,8 @@ def lesson_view(lid: int, user=Depends(current_customer),
         (lid, user["id"])).fetchone() is not None
     return {"id": lesson["id"], "course_id": lesson["course_id"],
             "title": lesson["title"], "html": render_markdown(lesson["body"]),
-            "position": lesson["position"], "done": done}
+            "position": lesson["position"], "done": done,
+            "materials": MAT.of_lesson(con, lid)}
 
 
 @router.post("/api/learn/lessons/{lid}/done")
@@ -199,7 +212,8 @@ def quiz_start(qid: int, user=Depends(current_customer),
     attempt = L.start_attempt(con, user, qid)
     con.commit()
     quiz = L.quiz_for_student(con, user, qid)
-    answered = {r.question_id: {"chosen": r.chosen, "text": r.text}
+    answered = {r.question_id: {"chosen": r.chosen, "text": r.text,
+                                "material_id": r.material_id}
                 for r in L.responses(con, attempt["id"])}
     return {"attempt": attempt, "quiz": quiz, "answered": answered}
 
@@ -408,6 +422,186 @@ def rtc_leave(room: str, body: RtcBody, user=Depends(current_customer),
     return {"ok": True}
 
 
+# ── the calendar: my sessions, month by month ────────────────────────────────
+# One JSON list per course; the month grid, navigation and day panels are all
+# client-side. Each row carries only what the viewer is entitled to: `mine`
+# is their OWN attendance and nobody else's — the roster stays teacher-side.
+
+@router.get("/api/learn/courses/{cid}/sessions")
+def course_sessions(cid: int, user=Depends(current_customer),
+                    con=Depends(get_con)):
+    _require_cap("learning")
+    if not L.enrolled_in(con, cid, user["id"]) \
+            and not L.may_edit(con, user, cid):
+        raise HTTPException(403, "you are not enrolled in this course")
+    rows = con.execute(
+        "SELECT s.id, s.started_at, s.ended_at, s.status, s.lesson_id,"
+        " (SELECT l.title FROM lessons l WHERE l.id=s.lesson_id)"
+        "   AS lesson_title,"
+        " (SELECT COUNT(*) FROM checkins ch WHERE ch.session_id=s.id"
+        "   AND ch.status IN ('present','late')) AS attended,"
+        " (SELECT COUNT(*) FROM learning_materials m"
+        "   WHERE m.session_id=s.id) AS recordings,"
+        " (SELECT ch.status FROM checkins ch WHERE ch.session_id=s.id"
+        "   AND ch.student_id=?) AS mine"
+        " FROM class_sessions s WHERE s.course_id=?"
+        " AND s.status != 'cancelled' ORDER BY s.started_at",
+        (user["id"], cid)).fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.get("/api/learn/sessions/{sid}/recordings")
+def session_recordings(sid: int, user=Depends(current_customer),
+                       con=Depends(get_con)):
+    """Gated on enrolment, not attendance: missing the class is the
+    commonest reason to want the recording, so gating on attendance would
+    withhold it from exactly the people it is most for."""
+    _require_cap("learning")
+    s = con.execute("SELECT course_id FROM class_sessions WHERE id=?",
+                    (sid,)).fetchone()
+    if s is None:
+        raise HTTPException(404, "session not found")
+    if not L.enrolled_in(con, s["course_id"], user["id"]) \
+            and not L.may_edit(con, user, s["course_id"]):
+        raise HTTPException(403, "you are not enrolled in this course")
+    return MAT.of_session(con, sid)
+
+
+# ── the library: my loans ────────────────────────────────────────────────────
+
+@router.get("/api/learn/loans")
+def my_loans(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    return LIB.my_loans(con, user["id"])
+
+
+# ── QR identity: my card, and the handshake ──────────────────────────────────
+
+@router.get("/api/learn/me/card")
+def my_card(request: Request, user=Depends(current_customer),
+            con=Depends(get_con)):
+    """The printable ID card. The QR carries a URL built from the request's
+    own host — no configured hostname to get wrong — so a card printed on
+    the LAN carries the LAN address an iPhone camera can open."""
+    _require_cap("learning")
+    uid = ID.ensure_uid(con, user["id"])
+    con.commit()
+    from erp.backend.main import base_url
+    return {"uid": uid, "payload": ID.payload_for(uid, base=base_url()),
+            "plain": ID.payload_for(uid)}
+
+
+@router.post("/api/learn/me/qr/reissue")
+def my_card_reissue(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    uid = ID.reissue(con, user["id"])
+    con.commit()
+    from erp.backend.main import base_url
+    return {"uid": uid, "payload": ID.payload_for(uid, base=base_url())}
+
+
+class ScanBody(BaseModel):
+    payload: str = ""
+
+
+@router.post("/api/learn/people/scan")
+def people_scan(body: ScanBody, user=Depends(current_customer),
+                con=Depends(get_con)):
+    _require_cap("learning")
+    _member(con, user)
+    return ID.resolve_handshake(con, user, body.payload)
+
+
+@router.get("/p/{uid}")
+def person_deeplink(uid: str):
+    """The iPhone path: the Camera app opens the card's URL, landing here
+    already holding the code. The SPA finishes the handshake."""
+    _require_cap("learning")
+    return RedirectResponse(f"/learn?scan={uid}", status_code=302)
+
+
+# ── data rights: my own export ───────────────────────────────────────────────
+
+@router.get("/api/learn/me/export")
+def my_export(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    data = DR.export_person(con, user, user["id"])
+    return JSONResponse(data, headers={
+        "Content-Disposition":
+            f'attachment; filename="my-data-{user["id"]}.json"'})
+
+
+# ── voice & translation: lookup + the speech panel's server half ─────────────
+# Its own capability ($30, depends Learning): revoked = these four doors are
+# 404s and the panel never renders. Dictation and TTS are browser-side and
+# need no server at all.
+
+@router.get("/api/learn/voice/providers")
+def voice_providers(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    _require_cap("voice")
+    from erp.backend.main import CFG
+    return LK.providers(CFG)
+
+
+@router.get("/api/learn/voice/translate")
+def voice_translate(q: str = "", source: str = "en", target: str = "es",
+                    user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    _require_cap("voice")
+    from erp.backend.main import CFG
+    return LK.translate(CFG, q, source=source[:8], target=target[:8])
+
+
+@router.get("/api/learn/voice/thesaurus")
+def voice_thesaurus(q: str = "", lang: str = "en",
+                    user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    _require_cap("voice")
+    from erp.backend.main import CFG
+    return LK.thesaurus(CFG, q, lang=lang[:8])
+
+
+# ── recordings: spoken and video answers, and playback ───────────────────────
+
+@router.post("/api/learn/attempts/{aid}/recording")
+async def attempt_recording(aid: int, request: Request, question_id: int = 0,
+                            user=Depends(current_customer),
+                            con=Depends(get_con)):
+    """A spoken or video answer: raw bytes in, stored as a material, linked
+    to the question through the same save path as any other answer."""
+    _require_cap("learning")
+    L.own_attempt(con, user, aid)           # theirs, and it must exist
+    data = await MAT.read_upload(request)
+    saved = MAT.save(data, allow=("audio", "video"))
+    mid = MAT.record(con, saved=saved, owner_id=user["id"],
+                     original=f"answer to question {question_id}")
+    L.save_answer(con, user, aid, question_id, material_id=mid)
+    con.commit()
+    return {"ok": True, "material_id": mid, **saved}
+
+
+@router.get("/media/{shard}/{name}")
+def serve_media(shard: str, name: str, con=Depends(get_con)):
+    """Stored media, by its unguessable token name. The token IS the read
+    capability — a <video src> cannot send a bearer token, exactly as in
+    the source. nosniff + a fixed mime, never executed."""
+    _require_cap("learning")
+    if not re.fullmatch(r"[0-9a-f]{2}", shard) \
+            or not re.fullmatch(r"[0-9a-f]{32}\.[a-z0-9]{2,5}", name):
+        raise HTTPException(404, "no such file")
+    path = os.path.join(MAT.uploads_root(), shard, name)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "no such file")
+    r = con.execute("SELECT mime FROM learning_materials WHERE path=?",
+                    (f"{shard}/{name}",)).fetchone()
+    return FileResponse(path, media_type=(r["mime"] if r else
+                                          "application/octet-stream"),
+                        headers={"X-Content-Type-Options": "nosniff",
+                                 "Cache-Control":
+                                     "private, max-age=31536000, immutable"})
+
+
 # ── the public door: programmes + registration ───────────────────────────────
 # No sign-in required. Submitting grants nothing — an administrator approves
 # the application in ops, and THAT creates the account and the seat.
@@ -500,6 +694,24 @@ def learn_page(con=Depends(get_con)):
  .lrn-call-head{{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(127,127,127,.25)}}
  .lrn-call-grid{{display:grid;gap:8px;padding:12px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));overflow-y:auto}}
  .lrn-call-grid video{{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3;object-fit:cover}}
+ .lrn-cal{{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:420px}}
+ .lrn-cal .dow{{font-size:.75em;opacity:.6;text-align:center;padding:2px 0}}
+ .lrn-cal .day{{text-align:center;padding:6px 0;border-radius:8px;border:1px solid transparent}}
+ .lrn-cal .day.dim{{opacity:.3}}
+ .lrn-cal button.day{{border-color:rgba(127,127,127,.4);background:none;color:inherit;cursor:pointer}}
+ .lrn-cal button.day.sel{{border-color:currentColor;font-weight:700}}
+ .lrn-cal .dot{{display:block;margin:2px auto 0;width:6px;height:6px;border-radius:3px;background:currentColor;opacity:.5}}
+ .lrn-cal .dot.present,.lrn-cal .dot.late{{background:#3c9;opacity:1}}
+ .lrn-cal .dot.absent{{background:#e66;opacity:1}}
+ .lrn-idcard{{border:1px solid rgba(127,127,127,.4);border-radius:14px;padding:20px;max-width:340px;text-align:center}}
+ .lrn-idcard img{{width:220px;height:220px;background:#fff;padding:8px;border-radius:8px}}
+ .lrn-lookup{{position:fixed;right:16px;bottom:16px;z-index:150;max-width:340px}}
+ .lrn-lookup .panel{{background:var(--bg,#111);border:1px solid rgba(127,127,127,.4);border-radius:14px;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.4)}}
+ .lrn-lookup input,.lrn-lookup select{{padding:6px 8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:none;color:inherit}}
+ .lrn-rec{{border:1px dashed rgba(127,127,127,.4);border-radius:10px;padding:10px;margin:8px 0}}
+ .lrn-rec .state{{opacity:.7;font-size:.9em}}
+ audio,video.lrn-media{{max-width:100%;border-radius:8px}}
+ @media print{{.lrn-tabs,.lrn-back,.no-print,header,footer,nav{{display:none !important}}}}
 </style>
 <script src="/rtc-mesh.js?v={v}"></script>
 <script src="/learn.js?v={v}"></script>"""
