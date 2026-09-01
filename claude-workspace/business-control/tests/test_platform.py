@@ -1337,7 +1337,7 @@ ok(c.post(f"/api/store/admin/plans/{_dsub['id']}/tenant", headers=AA,
           json={"tenant_id": "no-such"}).status_code == 400,
    "and not to a tenant the fleet doesn't have")
 from erp.backend import payments as _pay2
-from storefront.backend import engagements as _eng2
+from storefront.backend import fleetadmin as _eng2
 _acon3 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
 _acon3.execute("UPDATE store_subscriptions SET payment_ref='sub_dun_1'"
                " WHERE id=?", (_dsub["id"],))
