@@ -23,9 +23,22 @@
 
 ## Tests
 
-`PYTHONPATH=src .venv/bin/python tests/test_smoke.py` — script-style, one
-file, prints `all N checks passed`. Takes ~3–4 minutes; run in background
-with output to a file.
+`PYTHONPATH=src .venv/bin/python tests/test_smoke.py` — script-style,
+prints `all N checks passed`. Since 2026-09-01 that command is a runner
+over three independent part files executed in parallel (~100s total),
+each on its own throwaway database:
+
+- `tests/test_core.py` — single-tenant install: commerce, ops, supply,
+  integrations, storefront
+- `tests/test_studio.py` — B2B paperwork: kit, engagements, vault,
+  quotes, SOW
+- `tests/test_platform.py` — tenancy and up: split, router, fleet,
+  Learning on tenant alpha
+
+Debug one part live with `tests/test_smoke.py --only core` (or run the
+part file directly). Shared prologue lives in `tests/_harness.py` — a
+part must build all of its own state; never lean on another part's.
+Still run the full suite in background with output to a file.
 
 ## Backups
 
