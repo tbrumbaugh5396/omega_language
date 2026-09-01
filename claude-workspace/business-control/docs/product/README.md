@@ -24,6 +24,7 @@ Kept current with the code. If one of these is wrong, it's a bug.
 | [nutrition.md](nutrition.md) | The Nutrition capability — the macro-kitchen port: pure calorie math, tenant food library, coach caseload, checkout-as-coaching-desk |
 | [node-services.md](node-services.md) | Node services — daemons installed once per machine and shared by every tenant on it: the manifest, the tenant-wins/node-floor/graceful-absence resolution rule, and the LibreTranslate installer that proves the pattern |
 | [api.md](api.md) | The API — the machine door: scoped keys bound to accounts, read keys walled from mutations, instant revocation, live /docs, and what else is machine-shaped (webhooks, exports, the fleet API) |
+| [first-deploy-runbook.md](first-deploy-runbook.md) | The first real deploy as a checklist — every step ends with the command that proves it, from the suite on the box through hardening assertions, installer first-runs, and the optional second machine |
 
 > `DEPLOY.md` is the technical runbook the studio's [delivery
 > roadmap](../business-control-b2b-client/roadmap.md) points at rather than
