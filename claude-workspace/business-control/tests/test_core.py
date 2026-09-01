@@ -485,6 +485,65 @@ c.post(f"/api/admin/users/{pat_id['id']}/update", headers=A,
 ok(c.post("/api/login", json={"name": "Pat Password"}).status_code == 200,
    "admin password reset lets user back in")
 
+# --- going public hardens the doors by itself --------------------------------
+from erp.backend.main import CFG as _CFGH  # noqa: E402
+_CFGH["public_base_url"] = "https://harden.example.com"
+ok(c.post("/api/login", json={"name": "Naive Nate",
+                              "mode": "create"}).status_code == 400,
+   "public install: creating without a password is refused — nobody set "
+   "require_passwords, exposure decided it")
+ok(c.post("/api/login", json={"name": "Careful Cara", "mode": "create",
+                              "password": "a long phrase"}).json()
+   ["role"] == "customer",
+   "and creating WITH one still works — customers sign themselves up")
+ok(c.post("/api/login",
+          json={"name": "Script Kid"}).status_code == 404,
+   "the bare mode-less login stops minting: an unknown name gets sign-in's "
+   "own answer")
+_kb = c.post("/api/login", json={"name": "Keyed Boot", "password": "x y z",
+                                 "admin_key": CFG["admin_key"]}).json()
+ok(_kb.get("is_admin"),
+   "while the key-holder's bootstrap still works — the key IS the "
+   "authority")
+ok(c.post("/api/login", json={"name": "Would Be Staff", "mode": "create",
+                              "role": "employee",
+                              "password": "w x y"}).json()["role"]
+   == "customer",
+   "and a self-picked staff role lands as customer — public installs "
+   "confer every non-customer role")
+_CFGH["require_passwords"] = False
+ok(c.post("/api/login", json={"name": "Opted Out",
+                              "mode": "create"}).status_code == 200,
+   "an explicit require_passwords=false opts a public install out")
+_CFGH["require_passwords"] = None
+_CFGH["public_base_url"] = ""
+ok(c.post("/api/login", json={"name": "Lan Larry",
+                              "mode": "create"}).status_code == 200,
+   "and back on the LAN, name-only stays the dev convenience it was")
+
+# --- sessions age: the sliding window ----------------------------------------
+_slp = c.post("/api/login", json={"name": "Sleepy Session"}).json()
+_SL = {"Authorization": f"Bearer {_slp['token']}"}
+ok(c.get("/api/notifications", headers=_SL).status_code == 200,
+   "a fresh token works")
+_hcon = _db.connect()
+_hcon.execute("UPDATE users SET token_seen_at=? WHERE id=?",
+              (_t0.time() - 40 * 86400, _slp["id"]))
+_hcon.commit()
+ok(c.get("/api/notifications", headers=_SL).status_code == 401,
+   "a token unused past session_days is refused")
+_row9 = _hcon.execute("SELECT token FROM users WHERE id=?",
+                      (_slp["id"],)).fetchone()
+ok(_row9["token"] != _slp["token"],
+   "and rotated dead — the stale bearer cannot be replayed either")
+_slp2 = c.post("/api/login", json={"name": "Sleepy Session"}).json()
+ok(c.get("/api/notifications",
+         headers={"Authorization": f"Bearer {_slp2['token']}"}
+         ).status_code == 200,
+   "signing in again mints a live session — expiry ends tokens, not "
+   "accounts")
+_hcon.close()
+
 # --- backups ---
 import subprocess  # noqa: E402
 r = subprocess.run([sys.executable, str(ROOT / "scripts" / "backup.py")],

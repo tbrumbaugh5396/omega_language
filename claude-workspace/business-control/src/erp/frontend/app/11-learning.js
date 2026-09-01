@@ -744,10 +744,18 @@ function inviteForm(team) {
         name: $("#iv-name").value.trim(),
         email: $("#iv-mail").value.trim() } });
       const url = location.origin + out.path;
+      const sent = out.emailed === "sent"
+        ? " Emailed to them too."
+        : out.emailed === "dry"
+          ? " (No SMTP configured, so nothing was emailed — send the link"
+            + " yourself.)"
+          : out.emailed
+            ? ` (Email failed: ${esc(out.emailed)} — send the link`
+              + ` yourself.)` : "";
       document.getElementById("iv-out").innerHTML =
         `<input id="iv-url" value="${esc(url)}" readonly style="width:100%">
          <span class="dim">Send this to your ${esc(out.role_label)} —
-           it works once.</span>`;
+           it works once.${sent}</span>`;
       const box = document.getElementById("iv-url");
       box.onfocus = () => box.select();
       box.focus();

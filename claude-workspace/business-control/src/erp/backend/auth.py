@@ -115,11 +115,46 @@ def user_for_badge(con, token: str):
         " AND active=1", (token,)).fetchone()
 
 
+def passwords_required(cfg) -> bool:
+    """An explicit require_passwords answers either way. Unset, the
+    question becomes "is this install public?" — name-only sign-in is
+    fine on a trusted LAN and reckless on the internet, and the operator
+    who set public_base_url should not also have to remember this row of
+    the checklist."""
+    v = cfg.get("require_passwords")
+    if v is not None:
+        return bool(v)
+    return bool(cfg.get("public_base_url"))
+
+
 def user_for_token(con, token: str):
     if not token:
         return None
     row = con.execute(
         "SELECT * FROM users WHERE token=? AND active=1", (token,)).fetchone()
+    if row is None:
+        return None
+    # The sliding window: a token unused for session_days expires — and
+    # expires DEAD, rotated so the stale bearer cannot be replayed. Use
+    # refreshes the stamp (at most hourly, so this read path stays a
+    # read). 0 on the row means pre-window history: stamped on first
+    # touch, so shipping this change signs nobody out.
+    from .main import CFG                       # tenant-aware, late
+    days = CFG.get("session_days", 30) or 0
+    if days:
+        import time as _t
+        now = _t.time()
+        seen = row["token_seen_at"] or 0
+        if seen and now - seen > days * 86400:
+            con.execute(
+                "UPDATE users SET token=?, token_seen_at=0 WHERE id=?",
+                (secrets.token_urlsafe(24), row["id"]))
+            con.commit()
+            return None
+        if now - seen > 3600:
+            con.execute("UPDATE users SET token_seen_at=? WHERE id=?",
+                        (now, row["id"]))
+            con.commit()
     return row
 
 
@@ -148,11 +183,17 @@ def login(con, name: str, role: str, region: str, admin_key: str, cfg: dict,
         if not (valid_key and role in ("teacher", "volunteer", "director",
                                        "board", "donor")):
             role = "customer"
+    if (cfg.get("public_base_url") and not valid_key
+            and role != "customer"):
+        # Public installs confer EVERY non-customer role — partner and
+        # staff included. On a LAN the historic self-serve picker is a
+        # dev convenience; on the internet it is an escalation form.
+        role = "customer"
     is_admin = 1 if valid_key else 0
     row = con.execute(
         "SELECT * FROM users WHERE lower(name)=lower(?)", (name,)).fetchone()
     if row is None:
-        if cfg.get("require_passwords") and not password:
+        if passwords_required(cfg) and not password:
             raise ValueError("a password is required to create an account")
         token = secrets.token_urlsafe(24)
         con.execute(

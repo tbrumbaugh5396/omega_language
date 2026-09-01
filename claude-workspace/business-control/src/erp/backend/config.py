@@ -50,8 +50,14 @@ DEFAULTS = {
     # Going public: set to e.g. "https://shop.yourbrand.com" once deployed —
     # QR codes, sign-in links, and emails then use it instead of the LAN IP.
     "public_base_url": "",
-    # When true, accounts must have a password (set on first sign-in).
-    "require_passwords": False,
+    # Passwords on accounts. True/False is an explicit answer either way;
+    # None means "decide by exposure" — required the moment
+    # public_base_url is set, optional on a trusted LAN. Going public
+    # flips the default, and nobody has to remember the checklist row.
+    "require_passwords": None,
+    # A bearer token unused this many days expires (sliding window,
+    # refreshed by use). 0 disables — sessions then live until rotated.
+    "session_days": 30,
     # Route time model: highway-ish average speed + per-stop service time
     "route_avg_kmh": 55,
     "stop_service_min": 20,

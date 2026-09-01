@@ -132,8 +132,25 @@ def invite_create(body: InviteBody, user=Depends(_reviewer),
         (token, role, body.name.strip()[:200], body.email.strip()[:200],
          body.person_id, user["id"], db.now()))
     con.commit()
+    # An invite with an email on it is SENT, not just minted — through the
+    # same mailer everything else leaves by, so it lands in the email log
+    # beside the campaigns and the signature requests. No SMTP = dry, and
+    # the copy-paste link still works either way.
+    emailed = ""
+    if body.email.strip():
+        from . import mailer
+        base = (CFG.get("public_base_url") or "").rstrip("/")
+        link = f"{base}/join/{token}" if base else f"/join/{token}"
+        brand = CFG.get("brand_name", "Business Control")
+        emailed = mailer.send_logged(
+            con, CFG, body.email.strip(),
+            f"You're invited to {brand}",
+            f"{user['name']} invited you to {brand} as "
+            f"{R.LABELS.get(role, role)}.\n\nFinish signing up here:\n"
+            f"{link}\n\nThe link works once.",
+            kind="invite")
     return {"token": token, "path": f"/join/{token}", "role": role,
-            "role_label": R.LABELS.get(role, role)}
+            "role_label": R.LABELS.get(role, role), "emailed": emailed}
 
 
 def _invite(con, token: str):
@@ -172,7 +189,7 @@ class JoinBody(BaseModel):
 def invite_join(token: str, body: JoinBody, con=Depends(get_con)):
     from . import roles as R
     inv = _invite(con, token)
-    if CFG.get("require_passwords") and not body.password:
+    if auth.passwords_required(CFG) and not body.password:
         raise HTTPException(400, "a password is required here")
     flag = 1 if R.carries_admin(inv["role"]) else 0
     if inv["person_id"]:

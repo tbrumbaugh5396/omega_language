@@ -423,6 +423,10 @@ MIGRATIONS = (
     # Role claims: what somebody asked to be at sign-up. The account works
     # as what it IS meanwhile; approval (roles.py rules) is the promotion.
     "ALTER TABLE users ADD COLUMN requested_role TEXT DEFAULT ''",
+    # Sessions age: the token's last use, for the sliding expiry window.
+    # 0 = never seen under this scheme; first use stamps it, so a deploy
+    # never signs anybody out.
+    "ALTER TABLE users ADD COLUMN token_seen_at REAL DEFAULT 0",
 )
 
 

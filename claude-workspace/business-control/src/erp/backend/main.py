@@ -271,6 +271,17 @@ def login(body: LoginBody, con=Depends(get_con)):
     if body.mode == "create" and existed:
         raise HTTPException(409, "that name is already taken — sign in"
                                  " instead")
+    # The historic mode-less find-or-create stays for scripts, seeds and
+    # LAN dev — but a PUBLIC install creates accounts only through its
+    # doors (the storefront's create/claim, invites, the key). A bare API
+    # call with an unknown name gets the same answer sign-in gives.
+    if (body.mode == "" and not existed
+            and CFG.get("public_base_url")
+            and not (body.admin_key
+                     and body.admin_key == CFG.get("admin_key"))):
+        raise HTTPException(404, "no account by that name — this install "
+                                 "creates accounts through its sign-up "
+                                 "doors")
     # The storefront door's role picker is a CLAIM, not a grant. Anything
     # beyond student files a request the office decides (roles.py rules);
     # the account is created as a plain customer meanwhile — so the door's

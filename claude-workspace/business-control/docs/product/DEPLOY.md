@@ -91,10 +91,11 @@ Binding to 127.0.0.1 means only Caddy (with TLS) can reach it.
 
 | key | set to | why |
 |---|---|---|
-| `public_base_url` | `https://shop.yourbrand.com` | QRs, sign-in links, emails, and Stripe return URLs use it instead of the LAN IP |
-| `require_passwords` | `true` | name-only sign-in is fine on a trusted LAN, not on the internet. Existing accounts adopt a password on their next sign-in; new accounts must set one |
+| `public_base_url` | `https://shop.yourbrand.com` | QRs, sign-in links, emails, and Stripe return URLs use it instead of the LAN IP — **and setting it hardens the doors by itself**: passwords become required, the bare API's find-or-create login stops minting accounts, and self-serve role pickers confer `customer` only |
+| `require_passwords` | (leave unset) | unset = decided by exposure: required once `public_base_url` is set, optional on a trusted LAN. `false` opts a public install out; `true` forces it on a LAN |
+| `session_days` | `30` (default) | a sign-in token unused this many days expires and is rotated dead; use refreshes it. `0` disables |
 | `admin_key` | (rotate it) | anyone who ever saw the old one can mint admins |
-| `smtp` / `stripe_secret_key` | your real creds | entered on the server, never committed anywhere |
+| `smtp` / `stripe_secret_key` | your real creds | entered on the server, never committed anywhere. With SMTP set, team invites are emailed as well as linked |
 
 Firewall: allow only 22/80/443 (`ufw allow 22,80,443/tcp && ufw enable`).
 

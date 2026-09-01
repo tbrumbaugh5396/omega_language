@@ -3352,6 +3352,18 @@ ok(_joined["id"] == _pre["id"] and _joined["role"] == "teacher"
 ok(c.get(f"/api/join/{_inv['token']}", headers=HA).status_code == 410,
    "and the link dies with its first use")
 
+# an invite with an email on it is SENT — dry without SMTP, but logged
+# where every outbound email lands, with the join link in the record
+_invm = c.post("/api/roles/invites", headers=AA,
+               json={"role": "teacher",
+                     "email": "toni@school.test"}).json()
+ok(_invm["emailed"].startswith(("dry", "error", "sent")),
+   "the caller sees the send's fate — dry, sent, or the error itself — "
+   "and the copy-paste link works regardless")
+ok(any(r["kind"] == "invite" and r["to_addr"] == "toni@school.test"
+       for r in c.get("/api/admin/email/log", headers=AA).json()),
+   "and the attempt lands in the email log beside everything else sent")
+
 _inv2 = c.post("/api/roles/invites", headers=AA,
                json={"role": "volunteer"}).json()
 _fresh = c.post(f"/api/join/{_inv2['token']}", headers=HA,
