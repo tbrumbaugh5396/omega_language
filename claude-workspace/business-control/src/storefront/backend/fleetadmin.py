@@ -856,4 +856,72 @@ def tenant_report(tid: str, u=Depends(admin_user), con=Depends(get_con)):
                       "price": catalog[c]["price"]} for c in granted],
             "monthly_software": _core_price()
             + sum(catalog[c]["price"] for c in granted),
-            **usage, "notes": notes}
+            **usage, "notes": notes,
+            "node_info": _node_report(tid, reg),
+            "billing": _billing_report(con, tid),
+            "history": _maintenance_history(tid, reg)}
+
+
+def _node_report(tid: str, reg: dict) -> dict:
+    """The box under the business, live: capacity shared with whom, what
+    code it wears, which node services answer. A dead worker is a fact
+    the dossier states, not an exception it dies on."""
+    from erp.backend import fleet, services as _svc, tenancy
+    nid = reg.get("node") or fleet.LOCAL
+    board = next((n for n in fleet.fleet() if n["id"] == nid), {})
+    out = {"id": nid, "size": board.get("size") or "",
+           "region": board.get("region") or "",
+           "provider": board.get("provider") or "",
+           "tenant_units": fleet.units_of(reg),
+           "used": board.get("used") or 0,
+           "capacity": board.get("capacity") or 0,
+           "neighbours": max(0, len(board.get("tenants") or []) - 1)}
+    if nid == tenancy.NODE_ID:
+        out.update({"alive": True, "version": fleet.app_version(),
+                    "services": _svc.summary()})
+    else:
+        try:
+            p = fleet.check_node(nid)
+            out.update({"alive": True, "version": p.get("version"),
+                        "services": p.get("services") or {}})
+        except Exception as e:                          # noqa: BLE001
+            out.update({"alive": False, "error": str(e)[:120]})
+    return out
+
+
+def _billing_report(con, tid: str) -> dict:
+    """What keeps the lights on: the linked subscription as WE sold it,
+    the card processor's live opinion of it, the engagement it hangs off,
+    and whether last night's backup actually included this tenant."""
+    sub = con.execute(
+        "SELECT s.id, s.status, s.payment_status, s.price_cents,"
+        " s.interval, s.created_at, p.name AS plan"
+        " FROM store_subscriptions s JOIN products p ON p.id=s.product_id"
+        " WHERE s.tenant_id=? ORDER BY s.id DESC LIMIT 1",
+        (tid,)).fetchone()
+    eng = con.execute(
+        "SELECT id, name, status FROM engagements WHERE tenant_id=?"
+        " ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+    bak = _backup_health()
+    return {"subscription": dict(sub) if sub else None,
+            "flag": _billing_flags(con).get(tid),
+            "engagement": dict(eng) if eng else None,
+            "backup": {"ok": bool(bak.get("ok")),
+                       "stale": bool(bak.get("stale")),
+                       "at": bak.get("at") or 0,
+                       "missed": tid in (bak.get("failures") or {})}}
+
+
+def _maintenance_history(tid: str, reg: dict) -> list:
+    """This client's slice of the fleet record — stand-ups, moves, node
+    updates, billing warnings — plus their node's own maintenance lines."""
+    from erp.backend import fleet
+    nid = reg.get("node") or fleet.LOCAL
+    picked = []
+    for e in fleet.events(300):
+        hay = f"{e.get('what', '')} {e.get('detail', '')}"
+        if tid in hay or (nid != fleet.LOCAL and nid in hay):
+            picked.append(e)
+        if len(picked) >= 15:
+            break
+    return picked

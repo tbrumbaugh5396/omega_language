@@ -3934,6 +3934,19 @@ ok(any(v["label"] == "products" for v in _rp["meters"]["selling"])
 ok(any("granted but idle" in n for n in _rp["notes"]),
    "and the advice writes itself: a capability they pay for but never "
    "touched is either a training gap or a line to trim")
+ok(_rp["node_info"]["id"] == "local" and _rp["node_info"]["alive"]
+   and _rp["node_info"]["capacity"] >= _rp["node_info"]["tenant_units"]
+   and _rp["node_info"]["version"],
+   "the dossier carries the node under the business, live — what code it "
+   "wears, and how much of its capacity this client occupies")
+ok(_rp["billing"]["subscription"] is None
+   and "missed" in _rp["billing"]["backup"],
+   "the billing panel says plainly when an install is not billed through "
+   "the store — beside whether last night's backup covered this tenant")
+ok(any("meterco" in (e.get("what", "") + (e.get("detail") or ""))
+       for e in _rp["history"]),
+   "the maintenance history is this client's slice of the fleet record — "
+   "their own stand-up is already on it")
 ok(c.get("/api/store/admin/fleet/tenants/meterco/report",
          headers=BB).status_code == 404,
    "a hosted client cannot pull dossiers — the fleet view is the "
@@ -3953,6 +3966,11 @@ ok("data-treport" in _ajs2 and "clientDossier" in _ajs2
    and 'id="eng-report"' in _ajs2,
    "the dossier opens from both doors — the Platform board's tenant row "
    "and the client page's own header")
+ok(all(s in _ajs2 for s in ('data-dsec', 'id="ds-refresh"', 'id="dq"',
+                            'data-dtrim', 'id="ds-actas"')),
+   "and it is a working surface, not a printout — tabbed sections, a "
+   "live refresh, a meter filter, and the advice notes open the "
+   "capability editor themselves")
 ok("referrer: ref" in _sjs2 and "document.referrer" in _sjs2,
    "and the storefront sends where each visit came from — off-site "
    "referrers only, our own pages are navigation")

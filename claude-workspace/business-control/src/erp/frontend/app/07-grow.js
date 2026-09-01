@@ -674,29 +674,29 @@ async function renderHQ() {
 
 
 /* ---------- the client dossier ----------
-   Which plan fits them? — answered from their own tables, live: scale
-   against the class lines, thirty days of traffic and referrers, a
-   meter for every capability they hold, and the advisory notes read
-   down the phone. */
-async function clientDossier(tid) {
+   Which plan fits them? — answered from their own tables, live, in five
+   tabs: the overview an advisor reads down the phone, a filterable meter
+   per capability, traffic drawn as bars, the node and the billing that
+   keep the lights on, and this client's slice of the maintenance record. */
+const DSECS = [["overview", "Overview"], ["meters", "Meters"],
+               ["traffic", "Traffic"], ["infra", "Node & billing"],
+               ["history", "History"]];
+
+async function clientDossier(tid, sec = "overview") {
   let d;
   try {
     d = await api(`/api/store/admin/fleet/tenants/${tid}/report`);
   } catch (err) { return toast(err.message); }
+  dossierModal(tid, d, sec);
+}
+
+function dossierModal(tid, d, sec) {
   const n = (v) => (v || 0).toLocaleString();
-  const meterRows = d.caps.map((c) => {
-    const vals = (d.meters[c.id] || []).map((v) =>
-      `${v.label === "revenue_cents" ? "revenue " + money(v.value)
-        : `${v.label} ${n(v.value)}`}${v.period ? ` <span class="dim">/${
-        v.period}</span>` : ""}`).join(" · ");
-    return `<tr><td>${esc(c.name)}</td>
-      <td class="dim">\$${c.price}/mo</td>
-      <td>${vals || '<span class="dim">no meter yet</span>'}</td></tr>`;
-  }).join("");
-  modal(`<h3>${esc(d.tenant)} — the dossier</h3>
-    <p class="dim">${esc(d.class)} class · node ${esc(d.node)} ·
-      ${esc(d.status)} · software \$${d.monthly_software}/mo ·
-      ${(d.hosts || []).map(esc).join(", ")}</p>
+  const day = (ts) => ts ? new Date(ts * 1000).toLocaleDateString() : "?";
+  const ni = d.node_info || {};
+  const bl = d.billing || {};
+
+  const overview = () => `
     <div class="lrn-rtotals" style="display:flex;gap:26px;flex-wrap:wrap">
       <span><b>${n(d.scale.locations)}</b><span class="dim"> locations</span></span>
       <span><b>${n(d.scale.seats_used)}</b><span class="dim"> seats used</span></span>
@@ -704,26 +704,150 @@ async function clientDossier(tid) {
       <span><b>${n(d.traffic.visitors)}</b><span class="dim"> visitors /30d</span></span>
       <span><b>${n(d.traffic.pageviews)}</b><span class="dim"> pageviews /30d</span></span>
     </div>
-    ${d.notes.length ? `<div class="card" style="margin-top:10px">
+    ${d.notes.length ? `<div class="card" style="margin-top:12px">
       <b>The advice</b>
-      ${d.notes.map((x) => `<p class="dim">· ${esc(x)}</p>`).join("")}
-    </div>` : ""}
-    <h3>Capability meters</h3>
+      ${d.notes.map((x) => `<p class="dim" style="display:flex;gap:8px;
+        align-items:center;justify-content:space-between">
+        <span>· ${esc(x)}</span>
+        ${/granted but idle/.test(x) ? `<button class="btn alt sm"
+          data-dtrim title="open the capability editor — trim or keep">
+          adjust</button>` : ""}</p>`).join("")}
+    </div>` : `<p class="dim" style="margin-top:12px">Nothing to flag —
+      scale fits the plan and every capability shows use.</p>`}`;
+
+  const meters = () => `
+    <div style="display:flex;gap:10px;margin:4px 0 8px">
+      <input id="dq" placeholder="filter capabilities…" style="flex:1">
+      <label class="dim" style="display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="dz"> hide idle</label>
+    </div>
     <div class="tablewrap"><table>
       <thead><tr><th>capability</th><th>price</th><th>use</th></tr></thead>
-      <tbody>${meterRows}</tbody></table></div>
-    <div class="row2" style="margin-top:10px">
-      <div><h3>Top pages <span class="dim">/30d</span></h3>
-        ${(d.traffic.top_pages || []).map((x) =>
-          `<p class="dim">${esc(x.page)} — ${n(x.visitors)} visitors,
-           ${n(x.hits)} views</p>`).join("")
-          || '<p class="dim">no traffic recorded yet</p>'}</div>
-      <div><h3>Referred from <span class="dim">/30d</span></h3>
-        ${(d.traffic.top_referrers || []).map((x) =>
-          `<p class="dim">${esc(x.referrer)} — ${n(x.visitors)}
-           visitors</p>`).join("")
-          || '<p class="dim">no off-site referrals yet</p>'}</div>
-    </div>
-    <div class="modal-foot"><button class="btn" data-close>Done</button>
-    </div>`, "wide");
+      <tbody id="ds-mrows"></tbody></table></div>`;
+
+  const meterRows = (q, hideIdle) => d.caps.filter((c) => {
+    const vals = d.meters[c.id] || [];
+    if (q && !c.name.toLowerCase().includes(q)) return false;
+    if (hideIdle && !vals.some((v) => v.value)) return false;
+    return true;
+  }).map((c) => {
+    const vals = (d.meters[c.id] || []).map((v) =>
+      `${v.label === "revenue_cents" ? "revenue " + money(v.value)
+        : `${v.label} ${n(v.value)}`}${v.period ? ` <span class="dim">/${
+        v.period}</span>` : ""}`).join(" · ");
+    return `<tr><td>${esc(c.name)}</td>
+      <td class="dim">\$${c.price}/mo</td>
+      <td>${vals || '<span class="dim">no meter yet</span>'}</td></tr>`;
+  }).join("") || `<tr><td colspan="3" class="dim">nothing matches</td></tr>`;
+
+  const bars = (rows, label, val) => {
+    const top = Math.max(1, ...rows.map(val));
+    return rows.map((r) => `<div style="margin:6px 0">
+      <div class="dim" style="display:flex;justify-content:space-between">
+        <span>${esc(label(r))}</span><span>${n(val(r))}</span></div>
+      <div style="height:6px;border-radius:3px;background:var(--line,#333)">
+        <div style="height:6px;border-radius:3px;width:${
+          Math.round(100 * val(r) / top)}%;background:var(--acc,#7c5cff)">
+        </div></div></div>`).join("");
+  };
+
+  const traffic = () => `<div class="row2">
+    <div><h3>Top pages <span class="dim">by visitors /30d</span></h3>
+      ${bars(d.traffic.top_pages || [], (r) => `${r.page} (${
+        n(r.hits)} views)`, (r) => r.visitors)
+        || '<p class="dim">no traffic recorded yet</p>'}</div>
+    <div><h3>Referred from <span class="dim">across the internet /30d</span></h3>
+      ${bars(d.traffic.top_referrers || [], (r) => r.referrer,
+             (r) => r.visitors)
+        || '<p class="dim">no off-site referrals yet</p>'}</div></div>`;
+
+  const infra = () => {
+    const sub = bl.subscription;
+    const pills = Object.entries(ni.services || {}).map(([k, up]) =>
+      `<span class="pill" style="border-color:${up ? "#2dd4bf" : "#f66"}">
+       ${esc(k)} ${up ? "up" : "down"}</span>`).join(" ");
+    return `<div class="row2">
+    <div class="card"><b>The node</b>
+      <p class="dim">${esc(ni.id || "?")} · ${esc(ni.size || "")}
+        ${ni.region ? " · " + esc(ni.region) : ""}
+        ${ni.provider ? " · " + esc(ni.provider) : ""}</p>
+      <p class="dim">${ni.alive
+        ? `answering · code ${esc(ni.version || "?")}`
+        : `<span style="color:#f66">NOT ANSWERING</span> — ${
+           esc(ni.error || "")}`}</p>
+      <p class="dim">capacity ${n(ni.used)} / ${n(ni.capacity)} units —
+        this client is ${n(ni.tenant_units)} of them, sharing with
+        ${n(ni.neighbours)} neighbour(s)</p>
+      <div style="height:6px;border-radius:3px;background:var(--line,#333)">
+        <div style="height:6px;border-radius:3px;background:var(--acc,#7c5cff);
+          width:${Math.round(100 * (ni.used || 0)
+          / Math.max(1, ni.capacity || 1))}%"></div></div>
+      ${pills ? `<p style="margin-top:8px">${pills}</p>` : ""}</div>
+    <div class="card"><b>The billing</b>
+      ${sub ? `<p class="dim">${esc(sub.plan)} — ${money(sub.price_cents)}
+          ${esc(sub.interval || "")} · ${esc(sub.status)} · since
+          ${day(sub.created_at)}</p>
+        <p class="dim">payment: ${esc(sub.payment_status || "—")}</p>`
+        : `<p class="dim">no linked subscription — this install is not
+           billed through the store (invoice-mode, or internal)</p>`}
+      ${bl.flag ? `<p style="color:#f66">card processor says
+        "${esc(bl.flag.status)}" on ${esc(bl.flag.plan)} — money is NOT
+        arriving</p>` : ""}
+      <p class="dim">backup: ${bl.backup && bl.backup.missed
+        ? '<span style="color:#f66">MISSED last night</span>'
+        : bl.backup && bl.backup.stale
+          ? '<span style="color:#f66">stale — no fresh archive</span>'
+          : `covered, ${day((bl.backup || {}).at)}`}</p>
+      ${bl.engagement ? `<button class="btn alt sm" id="ds-eng">
+        open engagement: ${esc(bl.engagement.name)} →</button>` : ""}
+    </div></div>`;
+  };
+
+  const history = () => (d.history || []).length
+    ? (d.history || []).map((e) => `<p class="dim">
+        <b>${day(e.at)}</b> · ${esc(e.actor || "system")} —
+        ${esc(e.what)}${e.detail ? ` · ${esc(e.detail)}` : ""}</p>`).join("")
+    : '<p class="dim">no fleet events mention this client yet</p>';
+
+  const body = { overview, meters, traffic, infra, history };
+  modal(`<h3>${esc(d.tenant)} — the dossier</h3>
+    <p class="dim">${esc(d.class)} class · ${esc(d.status)} ·
+      software \$${d.monthly_software}/mo ·
+      ${(d.hosts || []).map(esc).join(", ")}</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+      ${DSECS.map(([k, t]) => `<button class="btn sm ${k === sec ? ""
+        : "alt"}" data-dsec="${k}">${t}</button>`).join("")}</div>
+    <div id="ds-body">${body[sec]()}</div>
+    <div class="modal-foot" style="display:flex;gap:8px">
+      <button class="btn alt" id="ds-refresh"
+        title="read their tables again, right now">Refresh</button>
+      <button class="btn alt" id="ds-actas">Act as admin</button>
+      <button class="btn alt" id="ds-caps">Capabilities</button>
+      <button class="btn" data-close>Done</button></div>`, "wide");
+
+  document.querySelectorAll("[data-dsec]").forEach((b) => b.onclick =
+    () => dossierModal(tid, d, b.dataset.dsec));
+  document.querySelectorAll("[data-dtrim]").forEach((b) => b.onclick =
+    () => capsEditor(tid, { after: () => clientDossier(tid) }));
+  $("#ds-refresh").onclick = () => clientDossier(tid, sec);
+  $("#ds-caps").onclick =
+    () => capsEditor(tid, { after: () => clientDossier(tid, sec) });
+  $("#ds-actas").onclick = async () => {
+    try {
+      const out = await api(
+        `/api/store/admin/fleet/tenants/${tid}/act-as`, { body: {} });
+      window.open(out.url, "_blank");
+      toast(`opened as ${out.account} — logged on the fleet history`);
+    } catch (err) { toast(err.message); }
+  };
+  if ($("#ds-eng")) $("#ds-eng").onclick = () => {
+    closeModal(); location.hash = `#/clients/${bl.engagement.id}`;
+  };
+  const paint = () => { $("#ds-mrows").innerHTML =
+    meterRows(($("#dq").value || "").toLowerCase(), $("#dz").checked); };
+  if (sec === "meters") {
+    paint();
+    $("#dq").oninput = paint;
+    $("#dz").onchange = paint;
+  }
 }
