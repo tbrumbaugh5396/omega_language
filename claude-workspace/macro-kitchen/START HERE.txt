@@ -1,0 +1,36 @@
+MacroKitchen — start here
+
+1) Double-click:  command_utilities/Install MacroKitchen.command
+   (one-time setup — builds a private .venv inside this folder)
+
+2) Double-click:  command_utilities/Start MacroKitchen.command
+   Your browser opens at http://127.0.0.1:8900
+
+3) On first launch you'll see a landing page — click "Sign up" to create
+   your account. Each account keeps its own private data on this machine.
+   Your profile (top-right) lets you rename yourself, change your password,
+   or log out.
+
+Stop the server:  command_utilities/Stop MacroKitchen.command
+Desktop app icon: command_utilities/Install App Icon.command
+Uninstall:        command_utilities/Uninstall MacroKitchen.command
+                  (keeps your data unless you say otherwise)
+
+Want example content to explore first?
+  Easiest: after signing up, the Today tab shows a "Load starter content"
+  button while your account is empty — one click gives you a pantry of
+  common ingredients, meal-prep recipes, and a few planned days.
+  Or double-click: command_utilities/Seed Starter Content.command
+  (same content; with several accounts, pass --user <name>)
+
+Backup & restore live in the app itself: the Targets tab has a
+"Data & backup" card to save everything to a JSON file or restore from one.
+
+Suggested first session:
+  · Targets tab — fill in your profile; watch your BMR, maintenance
+    calories, and daily target compute live
+  · Guide tab — the visual walk-through of energy balance, macros,
+    the plate method, and the weekly meal-prep workflow
+  · Plan tab — drop recipes onto the week, then generate a shopping list
+  · Each day: log meals on the Log tab, tap water glasses on Today,
+    and add a morning weigh-in — Body shows your trend vs. goal

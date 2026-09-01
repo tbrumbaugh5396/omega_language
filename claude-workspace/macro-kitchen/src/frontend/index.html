@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MacroKitchen</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+<meta name="theme-color" content="#0f1a14">
+<link rel="stylesheet" href="/static/styles.css?v=3">
+</head>
+<body>
+
+<!-- ============ auth screen (shown when signed out) ============ -->
+<section id="auth-screen" hidden>
+  <div class="auth-hero">
+    <span class="brand-mark big"></span>
+    <h1>MacroKitchen</h1>
+    <p class="auth-tag">Meal planning, meal prep, and nutrition tracking —
+      a visual guide and a daily log in one place.</p>
+    <ul class="auth-points">
+      <li>Your maintenance calories, deficit and daily target — computed live</li>
+      <li>A weekly meal plan built from your own recipes and pantry</li>
+      <li>One-click shopping lists aggregated from the plan</li>
+      <li>Diet log with macro totals, plus weight and water tracking</li>
+      <li>Every account keeps its own private data on this machine</li>
+    </ul>
+  </div>
+  <div class="auth-card card">
+    <div class="auth-toggle">
+      <button id="tab-login" class="active">Log in</button>
+      <button id="tab-signup">Sign up</button>
+    </div>
+    <form id="auth-form" autocomplete="on">
+      <label id="row-display" hidden>
+        <span>Display name</span>
+        <input type="text" id="au-display" autocomplete="name" placeholder="what should we call you?">
+      </label>
+      <label>
+        <span>Username</span>
+        <input type="text" id="au-username" autocomplete="username" placeholder="username" required>
+      </label>
+      <label>
+        <span>Password</span>
+        <input type="password" id="au-password" autocomplete="current-password" placeholder="password" required>
+      </label>
+      <button type="submit" class="btn" id="au-submit">Log in</button>
+      <p class="auth-msg" id="auth-msg"></p>
+    </form>
+  </div>
+</section>
+
+<!-- ============ the app (shown when signed in) ============ -->
+<div id="app" hidden>
+<header>
+  <div class="brand">
+    <span class="brand-mark"></span>
+    <div>
+      <h1>MacroKitchen</h1>
+      <div class="sub" id="greeting">plan · prep · track</div>
+    </div>
+    <span class="grow"></span>
+    <div class="user-chip" id="user-chip"></div>
+  </div>
+  <nav id="tabs">
+    <button data-tab="today" class="active">Today</button>
+    <button data-tab="guide">Guide</button>
+    <button data-tab="log">Log</button>
+    <button data-tab="plan">Plan</button>
+    <button data-tab="recipes">Recipes</button>
+    <button data-tab="ingredients">Ingredients</button>
+    <button data-tab="shopping">Shopping</button>
+    <button data-tab="body">Body</button>
+    <button data-tab="targets">Targets</button>
+  </nav>
+</header>
+
+<main>
+  <section id="tab-today" class="tab active"></section>
+  <section id="tab-guide" class="tab"></section>
+  <section id="tab-log" class="tab"></section>
+  <section id="tab-plan" class="tab"></section>
+  <section id="tab-recipes" class="tab"></section>
+  <section id="tab-ingredients" class="tab"></section>
+  <section id="tab-shopping" class="tab"></section>
+  <section id="tab-body" class="tab"></section>
+  <section id="tab-targets" class="tab"></section>
+</main>
+</div>
+
+<script src="/static/app.js?v=3"></script>
+</body>
+</html>

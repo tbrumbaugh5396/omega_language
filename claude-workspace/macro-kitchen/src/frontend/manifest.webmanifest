@@ -1,0 +1,13 @@
+{
+  "name": "MacroKitchen",
+  "short_name": "MacroKitchen",
+  "description": "Meal planning, meal prep, nutrition tracking, shopping lists, and a diet log with weight, water, and calorie targets.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1a14",
+  "theme_color": "#0f1a14",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
