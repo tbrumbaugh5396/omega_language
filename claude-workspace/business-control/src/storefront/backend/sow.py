@@ -112,26 +112,7 @@ def sow_body(con, e) -> str:
         L += ["[DELIVERABLES — no quote is filed on this engagement yet; "
               "file one on the bench and regenerate, or write the "
               "deliverables here]", ""]
-    L += ["### 3. Timeline", ""]
-    gates, _dates = _gates_with_dates(con, e["id"])
-    tracks = tracks_of(gates)
-    est_any = any(t["estimated"] for t in tracks)
-    if tracks:
-        L += ["| Phase | Begins | Ends | Duration |", "|---|---|---|---|"]
-        for t in tracks:
-            mark = " *(est.)*" if t["estimated"] else ""
-            wk = (f"{t['days']} days" if t["days"] < 10
-                  else f"~{round(t['days'] / 7)} weeks")
-            L.append(f"| {t['name']}"
-                     + (" *(optional)*" if t.get("optional") else "")
-                     + f" | {t['start']}{mark} | {t['end']}{mark}"
-                     + f" | {wk}{mark} |")
-        if est_any:
-            L += ["", "Dates marked *(est.)* are planning durations, not "
-                  "commitments — the engagement's Dates table is the "
-                  "governing schedule, and written dates replace these "
-                  "estimates wherever they appear."]
-        L.append("")
+    L += timeline_md(con, e)
     L += [
         "### 4. Fees & payment",
         "",
@@ -162,6 +143,66 @@ def sow_body(con, e) -> str:
         "**[INTERNAL POC]**. Signature attests to this text as it stands.",
     ]
     return "\n".join(L)
+
+
+def timeline_md(con, e) -> list:
+    """Section 3, composed from the live schedule — one builder, used by
+    the first draft AND by refresh-timeline, so the two can never render
+    the table differently."""
+    L = ["### 3. Timeline", ""]
+    gates, _dates = _gates_with_dates(con, e["id"])
+    tracks = tracks_of(gates)
+    est_any = any(t["estimated"] for t in tracks)
+    if tracks:
+        L += ["| Phase | Begins | Ends | Duration |", "|---|---|---|---|"]
+        for t in tracks:
+            mark = " *(est.)*" if t["estimated"] else ""
+            wk = (f"{t['days']} days" if t["days"] < 10
+                  else f"~{round(t['days'] / 7)} weeks")
+            L.append(f"| {t['name']}"
+                     + (" *(optional)*" if t.get("optional") else "")
+                     + f" | {t['start']}{mark} | {t['end']}{mark}"
+                     + f" | {wk}{mark} |")
+        if est_any:
+            L += ["", "Dates marked *(est.)* are planning durations, not "
+                  "commitments — the engagement's Dates table is the "
+                  "governing schedule, and written dates replace these "
+                  "estimates wherever they appear."]
+        L.append("")
+    return L
+
+
+@router.post("/api/store/admin/engagements/{eid}/sow/{did}/refresh-timeline")
+def refresh_timeline(eid: int, did: int, u=Depends(admin_user),
+                     con=Depends(get_con)):
+    """Editing the timeline, the governed way: write real dates in the
+    Dates table (or pass gates), then refresh — section 3 is re-derived
+    from the live schedule while every other edit in the paper stands.
+    A SIGNED SOW refuses: its text is what was attested; scope moves by
+    change order."""
+    e = _eng_or_404(con, eid)
+    d = con.execute(
+        "SELECT d.*, (SELECT COUNT(*) FROM document_signatures s"
+        "  WHERE s.document_id=d.id AND s.status='signed') AS signed"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND d.id=?", (eid, did)).fetchone()
+    if d is None or not str(d["notes"] or "").startswith(SOW_NOTE):
+        raise HTTPException(404, "that document is not this engagement's "
+                                 "Scope of Work")
+    if d["signed"]:
+        raise HTTPException(409, "a signed SOW's text is what was attested "
+                                 "— changes ride a change order")
+    body = d["body"] or ""
+    lo = body.find("### 3. Timeline")
+    hi = body.find("### 4.")
+    if lo == -1 or hi == -1 or hi < lo:
+        raise HTTPException(409, "the timeline section was edited beyond "
+                                 "recognition — update it by hand")
+    new = body[:lo] + "\n".join(timeline_md(con, e)) + body[hi:]
+    con.execute("UPDATE documents SET body=? WHERE id=?", (new, did))
+    log(con, eid, u["name"], "SOW timeline refreshed from the schedule")
+    con.commit()
+    return {"ok": True}
 
 
 def change_order_body(e, sow) -> str:

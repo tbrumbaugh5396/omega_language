@@ -1005,16 +1005,24 @@ async function sessionRoster(sid, cid) {
     ${d.roster.map(row).join("")
       || '<div class="card empty"><b>Nobody is enrolled</b></div>'}`;
   $("#sr-back").onclick = () => learningCourse(cid);
-  if ($("#sr-scan")) $("#sr-scan").onclick = () =>
-    QRScan.scan({ title: "Scan a student's ID card" }).then(async (code) => {
-      if (!code) return;
+  if ($("#sr-scan")) $("#sr-scan").onclick = async () => {
+    // Door mode: the scanner reopens after every card until cancelled —
+    // students file past, nobody touches the screen between them.
+    let door = 0;
+    for (;;) {
+      const code = await QRScan.scan(
+        { title: door ? `${door} checked in — next card`
+                      : "Scan a student's ID card" });
+      if (!code) break;
       try {
         const r = await api(`/api/learning/sessions/${sid}/scan`,
           { body: { code } });
+        door += 1;
         toast(`${r.student.name} — ${r.status}`);
-        sessionRoster(sid, cid);
       } catch (err) { toast(err.message); }
-    });
+    }
+    sessionRoster(sid, cid);
+  };
   if ($("#sr-video")) $("#sr-video").onclick = () =>
     classCall(d.session.room, d.course.name,
       { sid, expected: sum.enrolled + 1 });

@@ -1093,6 +1093,18 @@ ok(c.post(f"/api/store/admin/engagements/{_eid}/sow", headers=A,
 ok(c.post(f"/api/store/admin/engagements/{_eid}/sow", headers=A,
           json={"change_order_for": _qr["doc_id"]}).status_code == 404,
    "and it refuses to amend a paper that is not a SOW at all")
+# the timeline is editable the governed way: write real dates, refresh —
+# section 3 re-derives while every other edit in the paper stands
+c.put(f"/api/store/admin/engagements/{_eid}/dates", headers=A, json={
+    "dates": [{"label": "Requirements signed", "planned": "2027-04-15"}]})
+ok(c.post(f"/api/store/admin/engagements/{_eid}/sow/{_sw['doc_id']}"
+          "/refresh-timeline", headers=A, json={}).status_code == 200,
+   "refresh-timeline re-derives section 3 from the live schedule")
+_swtxt2 = c.get(f"/api/store/admin/documents/{_sw['doc_id']}/preview",
+                headers=A).text
+ok("2027-04-15" in _swtxt2,
+   "the Dates table's new date lands in the paper — the table governs, "
+   "the SOW follows")
 _swsig = c.post(f"/api/store/admin/documents/{_sw['doc_id']}"
                 "/request-signature", headers=A,
                 json={"signer_name": "Scope Signer",
@@ -1100,6 +1112,10 @@ _swsig = c.post(f"/api/store/admin/documents/{_sw['doc_id']}"
                       "role": "signer", "in_person": True}).json()
 c.post("/sign/" + _swsig["link"].split("/sign/")[1],
        json={"typed_name": "Scope Signer"})
+ok(c.post(f"/api/store/admin/engagements/{_eid}/sow/{_sw['doc_id']}"
+          "/refresh-timeline", headers=A, json={}).status_code == 409,
+   "a signed SOW's timeline refuses even a refresh — the text is what "
+   "was attested; changes ride a change order")
 _co = c.post(f"/api/store/admin/engagements/{_eid}/sow", headers=A,
              json={"change_order_for": _sw["doc_id"]}).json()
 _cotxt = c.get(f"/api/store/admin/documents/{_co['doc_id']}/preview",

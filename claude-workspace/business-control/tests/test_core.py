@@ -12,6 +12,11 @@ ok(admin["is_admin"], "admin login via admin key")
 A = {"Authorization": f"Bearer {admin['token']}"}
 cust = c.post("/api/login", json={"name": "Carl Customer", "region": "West"}).json()
 CU = {"Authorization": f"Bearer {cust['token']}"}
+_who = c.get("/api/whoami", headers=A).json()
+ok(_who["name"] == "Boss" and _who["is_admin"] and _who["token"],
+   "whoami hands any surface the session in its own shape — walking from "
+   "the storefront to /ops or /admin carries the sign-in")
+ok(c.get("/api/whoami").status_code == 401, "and a stranger gets nothing")
 
 
 def verified_customer(headers, addr):

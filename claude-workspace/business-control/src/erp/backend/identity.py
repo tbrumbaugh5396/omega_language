@@ -139,8 +139,8 @@ def ops_scan_checkin(sid: int, body: ScanBody, user=Depends(current_user),
                     (sid,)).fetchone()
     if s is None:
         raise HTTPException(404, "session not found")
-    if not may_edit(con, user, s["course_id"]):
-        raise HTTPException(403, "you do not teach this course")
+    from . import classroom
+    classroom._door(con, user, s["course_id"])
     out = scan_check_in(con, user, session_id=sid, scanned=body.code)
     con.commit()
     return out

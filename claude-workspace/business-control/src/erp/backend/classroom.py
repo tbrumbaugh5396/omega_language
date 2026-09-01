@@ -391,6 +391,20 @@ def _teaches(con, user, course_id: int):
         raise HTTPException(403, "you do not teach this course")
 
 
+def _door(con, user, course_id: int):
+    """Who may run the DOOR: the course's teacher, staff (admins and
+    confirmed teachers), or a volunteer — the person at the entrance with
+    the scanner and the sheet. The door sees the roster, scans cards and
+    marks presence; opening, closing and pay stay the teacher's."""
+    if may_edit(con, user, course_id):
+        return
+    from . import community as CM
+    if CM.is_staff(con, user) or user["role"] in ("volunteer", "employee"):
+        return
+    raise HTTPException(403, "the door is run by the class's teacher, "
+                             "staff, or a volunteer")
+
+
 class StartBody(BaseModel):
     course_id: int = 0
     lesson_id: int | None = None
@@ -409,7 +423,7 @@ def ops_start_class(body: StartBody, user=Depends(current_user),
 @router.get("/api/learning/sessions/{sid}")
 def ops_roster(sid: int, user=Depends(current_user), con=Depends(get_con)):
     s = get_session(con, sid)
-    _teaches(con, user, s.course_id)
+    _door(con, user, s.course_id)
     return roster(con, sid)
 
 
@@ -442,7 +456,7 @@ class MarkBody(BaseModel):
 def ops_mark(sid: int, body: MarkBody, user=Depends(current_user),
              con=Depends(get_con)):
     s = get_session(con, sid)
-    _teaches(con, user, s.course_id)
+    _door(con, user, s.course_id)
     do_check_in(con, session_id=sid, student_id=body.student_id,
                 method=A.BY_TEACHER, marked_by=user["id"],
                 status=body.status, note=body.note)[0]

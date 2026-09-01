@@ -3002,6 +3002,47 @@ ok(_new_uid != _old_uid
    "reissue mints a new code and the lost card stops working that moment")
 c.post(f"/api/learning/sessions/{_cls3['session']['id']}/close", headers=TT)
 
+# --- the door: a volunteer runs the scanner ----------------------------------
+# lingua-portal's entrance, whole: the person at the door — volunteer,
+# staff or the teacher — sees every open class from the portal, scans
+# arriving students' cards, and can mark by hand off the roster. Opening,
+# closing and pay stay the teacher's.
+c.post("/api/learning/team", headers=AA,
+       json={"name": "Val Doorkeeper", "role": "volunteer"})
+_vin = c.post("/api/login", headers=HA, json={
+    "name": "Val Doorkeeper", "mode": "signin"}).json()
+_VV = {"Authorization": f"Bearer {_vin['token']}", **HA}
+_clsD = c.post("/api/learning/sessions", headers=TT,
+               json={"course_id": _crs}).json()
+_sidD = _clsD["session"]["id"]
+_dl = [s for s in c.get("/api/learn/live", headers=_VV).json()
+       if s["id"] == _sidD]
+ok(_dl and _dl[0]["door"] is True and _dl[0]["member"] is False,
+   "a volunteer sees every open class flagged for the door — without "
+   "being offered a check-in that is not theirs")
+ok(c.get(f"/api/learning/sessions/{_sidD}", headers=_VV).status_code
+   == 200,
+   "and reads the roster — the sheet at the entrance")
+_cardL = c.get("/api/learn/me/card", headers=LN).json()
+_dscan = c.post(f"/api/learning/sessions/{_sidD}/scan", headers=_VV,
+                json={"code": _cardL["payload"]}).json()
+ok(_dscan["student"]["name"] == "Lara Learner"
+   and _dscan["status"] in ("present", "late"),
+   "the volunteer scans an arriving student's card and the ordinary "
+   "check-in rules decide the status")
+ok(c.post(f"/api/learning/sessions/{_sidD}/mark", headers=_VV,
+          json={"student_id": _dscan["student"]["id"],
+                "status": "late"}).status_code == 200,
+   "and can correct a mark by hand off the roster")
+ok(c.post(f"/api/learning/sessions/{_sidD}/close",
+          headers=_VV).status_code == 403,
+   "while ending the class stays the teacher's act — the door marks "
+   "presence, it does not run the school")
+_shl = c.get("/api/learn/live", headers=SH).json()
+ok(all(not s.get("door") for s in _shl),
+   "and a plain shopper is still nobody at the door")
+c.post(f"/api/learning/sessions/{_sidD}/close", headers=TT)
+
 # --- recordings: spoken answers, drills, the class tape ----------------------
 _qz2 = c.post("/api/learning/quizzes", headers=TT,
               json={"course_id": _crs, "title": "Speaking check",
@@ -3838,6 +3879,17 @@ ok(all(s in _ajs2 for s in ('id="ak-new"', "data-akrev", 'id="ak-secret"',
                             'href="/docs"')),
    "API keys live on the Integrations tab — mint (secret shown once), "
    "revoke, and the live /docs reference linked where scripts are born")
+ok("next card" in _ajs2 and "next card" in _ljs2
+   and "data-door" in _ljs2 and 'id="pp-scan"' in _ljs2,
+   "door mode loops the scanner on both surfaces — students file past — "
+   "and People carries scan-to-connect beside search")
+ok("data-crossdoor" in _sjs2 and "/api/whoami" in _sjs2,
+   "the account panel walks a signed-in person into /ops and /admin "
+   "carrying their session")
+ok("data-sowfresh" in _ajs2 and "startCall" in _ajs2
+   and 'id="call-video"' in _ajs2,
+   "the SOW row refreshes its timeline, and ops chat already carries "
+   "voice and video calls")
 ok('mode: key ? "" : "signin"' in (
        Path(__file__).parent.parent
        / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),

@@ -528,13 +528,19 @@ def live_now(user=Depends(current_customer), con=Depends(get_con)):
     """Every class in session across MY courses — the check-in screen and
     the live-class screen both draw from this one answer."""
     _require_cap("learning")
+    # Door staff — volunteers, teachers, office staff, admins — see EVERY
+    # open class, flagged, so the person at the entrance can run the
+    # scanner from the portal they already live in.
+    is_door = (user["is_admin"] or CM.is_staff(con, user)
+               or user["role"] in ("volunteer", "employee"))
     out = []
     for s in con.execute(
             "SELECT s.*, c.name AS course, c.language, u.name AS teacher"
             " FROM class_sessions s JOIN courses c ON c.id=s.course_id"
             " LEFT JOIN users u ON u.id=s.teacher_id"
             " WHERE s.status='open' ORDER BY s.started_at").fetchall():
-        if not L.enrolled_in(con, s["course_id"], user["id"]):
+        member = L.enrolled_in(con, s["course_id"], user["id"])
+        if not member and not is_door:
             continue
         mine = con.execute(
             "SELECT status FROM checkins WHERE session_id=? AND student_id=?",
@@ -544,6 +550,7 @@ def live_now(user=Depends(current_customer), con=Depends(get_con)):
                     "teacher": s["teacher"] or "",
                     "started_at": s["started_at"], "room": s["room"],
                     "my_status": mine["status"] if mine else None,
+                    "member": bool(member), "door": is_door,
                     "enrolled": len(CR.enrolled(con, s["course_id"]))})
     return out
 
@@ -919,6 +926,8 @@ def learn_page(con=Depends(get_con)):
  .lrn-avatar{{width:34px;height:34px;border-radius:50%;object-fit:cover;flex:none;display:inline-flex;align-items:center;justify-content:center;background:rgba(127,127,127,.25);font-weight:700;vertical-align:middle}}
  .lrn-me-photo{{display:flex;flex-direction:column;gap:8px;align-items:center;max-width:150px;text-align:center}}
  .lrn-me-photo .lrn-avatar{{width:72px;height:72px;font-size:1.6em}}
+ .lrn-toast{{position:fixed;left:50%;bottom:26px;transform:translate(-50%,20px);background:var(--bg,#111);border:1px solid rgba(127,127,127,.5);border-radius:10px;padding:10px 18px;z-index:300;opacity:0;transition:.25s;pointer-events:none;box-shadow:0 8px 30px rgba(0,0,0,.4)}}
+ .lrn-toast.on{{opacity:1;transform:translate(-50%,0)}}
  .lrn-person-acts{{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}}
  .lrn-unread{{background:currentColor;color:var(--bg,#fff);border-radius:999px;padding:0 8px;font-size:.8em}}
  .lrn-prefs{{display:grid;gap:10px;max-width:480px}}

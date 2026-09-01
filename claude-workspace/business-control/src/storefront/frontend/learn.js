@@ -49,6 +49,20 @@
     ? `<img class="lrn-avatar" src="/media/${esc(p.photo)}" alt="">`
     : `<span class="lrn-avatar lrn-avatar-blank">${esc((p.name || "?")
         .trim()[0] || "?").toUpperCase()}</span>`;
+  // A non-blocking notice — the door loop greets each student without
+  // an alert() stealing the scanner's focus.
+  let _toastEl = null;
+  function toast(msg) {
+    if (!_toastEl) {
+      _toastEl = document.createElement("div");
+      _toastEl.className = "lrn-toast";
+      document.body.appendChild(_toastEl);
+    }
+    _toastEl.textContent = msg;
+    _toastEl.classList.add("on");
+    clearTimeout(_toastEl._t);
+    _toastEl._t = setTimeout(() => _toastEl.classList.remove("on"), 2600);
+  }
   const loadScript = (src) => new Promise((res, rej) => {
     if (document.querySelector(`script[src="${src}"]`)) return res();
     const s = document.createElement("script");
@@ -168,12 +182,19 @@
             ? " · " + esc(s.language) : ""} · started ${when(s.started_at)}</div>
         </div>
         <span style="flex:1"></span>
-        ${s.my_status
+        ${s.member ? (s.my_status
           ? `<span class="lrn-meta">You're checked in — ${esc(s.my_status)}.</span>`
-          : `<button class="lrn-btn primary" data-here="${s.id}">I'm here — check me in</button>`}
-        ${s.room ? `<button class="lrn-btn" data-joincall="${s.id}">Join the class online</button>` : ""}
+          : `<button class="lrn-btn primary" data-here="${s.id}">I'm here — check me in</button>`)
+          : ""}
+        ${s.door && window.QRScan && QRScan.supported()
+          ? `<button class="lrn-btn" data-door="${s.id}">Run the door —
+             scan student cards</button>` : ""}
+        ${s.room && s.member ? `<button class="lrn-btn" data-joincall="${s.id}">Join the class online</button>` : ""}
       </div>
-      <p class="lrn-meta">Joining online checks you in too.</p>`).join("")
+      <p class="lrn-meta">${live.some((x) => x.member)
+        ? "Joining online checks you in too."
+        : "Scan each arriving student's ID card — the door checks them "
+          + "in as they come."}</p>`).join("")
       : `<p>No class is in session right now.</p>
          <p class="lrn-meta">When a teacher starts one of your classes, it
          appears here with one-tap check-in — and a notification lands on
@@ -194,6 +215,27 @@
       api(`/api/learn/sessions/${s.id}/checkin`, {}).catch(() => {});
       openCall(s.room, s.course, (s.enrolled || 0) + 1);
     });
+    root.querySelectorAll("[data-door]").forEach((b) => b.onclick =
+      async () => {
+        /* Door mode: scan, greet, scan again — the scanner reopens after
+           every card until the person at the door cancels. Students file
+           past; nobody touches the screen between them. */
+        const sid = b.dataset.door;
+        let door = 0;
+        for (;;) {
+          const code = await QRScan.scan(
+            { title: door ? `${door} checked in — next card`
+                          : "Scan the student's ID card" });
+          if (!code) break;
+          try {
+            const r = await api(`/api/learning/sessions/${sid}/scan`,
+                                { code });
+            door += 1;
+            toast(`${r.student.name} — ${r.status}`);
+          } catch (err) { toast(err.message); }
+        }
+        checkin();
+      });
   }
 
   /* ── Live class: the same sessions, framed as the call ────────────────── */
@@ -507,8 +549,10 @@
       ${p.unread ? `<span class="lrn-unread">${p.unread}</span>` : ""}
       <span class="lrn-person-acts">${acts}</span></div>`;
     root.innerHTML = tabs() + `
-      <div class="lrn-search"><input id="pp-q" placeholder="Find people by name"
-        autocomplete="off"><div id="pp-results"></div></div>
+      <div class="lrn-search lrn-row-gap"><input id="pp-q"
+        placeholder="Find people by name" autocomplete="off">
+        <button class="lrn-btn sm" id="pp-scan">Scan a card</button>
+        <div id="pp-results" style="flex-basis:100%"></div></div>
       ${d.incoming.length ? `<h3>Want to connect (${d.incoming.length})</h3>
         ${d.incoming.map((p) => row(p,
           `<button class="lrn-btn sm" data-acc="${p.id}">Accept</button>
@@ -556,6 +600,13 @@
     document.getElementById("pf-open").onchange = savePrefs;
     document.getElementById("pf-ghost").onchange = savePrefs;
     let timer = null;
+    const ppScan = document.getElementById("pp-scan");
+    if (ppScan) ppScan.onclick = async () => {
+      if (!(window.QRScan && QRScan.supported()))
+        return toast("no camera available here");
+      const code = await QRScan.scan({ title: "Scan a classmate's card" });
+      if (code) handleScan(code);
+    };
     document.getElementById("pp-q").oninput = (e) => {
       clearTimeout(timer);
       timer = setTimeout(() => searchPeople(e.target.value), 250);

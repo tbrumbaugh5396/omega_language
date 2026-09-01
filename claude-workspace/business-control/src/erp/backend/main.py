@@ -355,6 +355,14 @@ def login(body: LoginBody, con=Depends(get_con)):
     return auth.user_json(u)
 
 
+@app.get("/api/whoami")
+def whoami(user=Depends(current_user)):
+    """The signed-in account, in the shape every surface's session store
+    keeps — so walking from the storefront to /ops or /admin carries the
+    session instead of showing a stranger a sign-in form."""
+    return auth.user_json(user)
+
+
 @app.get("/api/meta")
 def meta(con=Depends(get_con)):
     return {"brand": CFG["brand_name"],

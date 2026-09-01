@@ -822,7 +822,12 @@ async function renderEngagement(id) {
         </span>
       </span>
       <span class="dl-acts fold-body">
-        <span class="ga-slot">${x.blanks ? `<button class="btn alt sm"
+        <span class="ga-slot">${x.sow && !x.signed ? `<button
+          class="btn alt sm" data-sowfresh="${x.id}" title="re-derive the
+          timeline from the live schedule — Dates-table edits and passed
+          gates flow in; every other edit in the paper stands"
+          >Refresh timeline</button>` : ""}
+        ${x.blanks ? `<button class="btn alt sm"
           data-engfill="${x.id}" title="the brackets still unfilled — same
           form as generation, shorter each time">Fill (${x.blanks})</button>`
           : ""}</span>
@@ -1672,6 +1677,17 @@ async function renderEngagement(id) {
       } catch (err) { toast(err.message); }
     };
   });
+  view().querySelectorAll("[data-sowfresh]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        await api(`/api/store/admin/engagements/${id}/sow/`
+          + `${b.dataset.sowfresh}/refresh-timeline`,
+          { method: "POST", body: {} });
+        toast("timeline re-derived from the schedule — the rest of the "
+          + "paper stands");
+        renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-engfill]").forEach((b) => b.onclick = async () => {
     const did = +b.dataset.engfill;
     try {

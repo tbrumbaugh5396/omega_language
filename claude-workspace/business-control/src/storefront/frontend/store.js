@@ -1396,6 +1396,12 @@ async function drawAccount() {
        <span>${o.status} · ${money(o.total_cents)}</span>
       </div>`).join("") || '<p class="dim">No orders yet.</p>'}
     ${affBlock}
+    <p class="dim" style="margin-top:14px;padding-top:12px;
+      border-top:1px solid var(--line)">Work here?
+      <a class="text-link" data-crossdoor href="/ops/">ERP / ops →</a> ·
+      <a class="text-link" data-crossdoor href="/admin">Store admin →</a>
+      <span class="dim"> — you arrive signed in; each door still checks
+        its own keys.</span></p>
     <div class="modal-actions">
       <button class="btn-pill ghost sm" id="ac-out">Sign out</button>
       <button class="btn-pill primary sm" data-close-modal>Done</button>
@@ -1408,6 +1414,20 @@ async function drawAccount() {
           ...H }, body: JSON.stringify({ action }) });
       if (!r.ok) toast((await r.json()).detail || "not allowed");
       drawAccount();
+    });
+  document.querySelectorAll("[data-crossdoor]").forEach((a) => a.onclick =
+    async (ev) => {
+      // Carry the session across: /ops and /admin keep their own store
+      // (bc_user), so hand them this signed-in account before walking
+      // through. The door itself still decides what this role may see.
+      ev.preventDefault();
+      try {
+        const me = await fetch("/api/whoami", { headers: {
+          Authorization: "Bearer " + acctToken() } }).then((r) => r.json());
+        if (me && me.token)
+          localStorage.setItem("bc_user", JSON.stringify(me));
+      } catch (e) { /* the door's sign-in form is the fallback */ }
+      location.href = a.getAttribute("href");
     });
   $("#ac-out").onclick = () => {
     localStorage.removeItem("sf_support"); closeModal();
