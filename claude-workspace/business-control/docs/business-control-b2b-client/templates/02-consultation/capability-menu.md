@@ -122,6 +122,7 @@ native app build and two store submissions per release.
 | **Learning** — lessons, curriculum, spaced repetition, progress | — | $50 | ☐ |
 | **Voice & translation** — recording, speech to text, translation | Learning | $30 | ☐ |
 | **Nutrition** — meal plans, food log, coaching caseload | — | $30 | ☐ |
+| **Progressive App** — install to the home screen, offline shell, push-ready | — | $20 | ☐ |
 
 ### The technical shelf
 

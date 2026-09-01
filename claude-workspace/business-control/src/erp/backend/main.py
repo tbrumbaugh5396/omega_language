@@ -3933,14 +3933,40 @@ def ops_app_js():
                              media_type="text/javascript")
 
 
+def _pwa_on() -> bool:
+    """The Progressive App is a CAPABILITY ($20, price book §3): the
+    installable, offline-capable shell is what the row sells, so a tenant
+    without it gets a perfectly good website that simply does not install.
+    Null caps = everything, as everywhere."""
+    caps = tenancy.caps_of(tenancy.CURRENT.get())
+    return caps is None or "pwa" in caps
+
+
 @app.get("/ops/sw.js")
 def ops_worker():
+    if not _pwa_on():
+        raise HTTPException(404, "the Progressive App capability is not "
+                                 "on this plan")
     return _worker_response(config.FRONTEND_DIR / "sw.js")
+
+
+@app.get("/ops/manifest.webmanifest")
+def ops_manifest_gate():
+    if not _pwa_on():
+        raise HTTPException(404, "the Progressive App capability is not "
+                                 "on this plan")
+    return FileResponse(config.FRONTEND_DIR / "manifest.webmanifest",
+                        media_type="application/manifest+json")
 
 
 @app.get("/sf-sw.js")
 def store_worker():
+    if not _pwa_on():
+        raise HTTPException(404, "the Progressive App capability is not "
+                                 "on this plan")
     return _worker_response(config.STOREFRONT_DIR / "sf-sw.js")
+
+
 
 
 # ---------- the node dock: what a worker accepts from its provider ----------
@@ -4114,6 +4140,9 @@ def store_manifest(con=Depends(get_con)):
     the shape reference only — this route shadows it (routes are matched
     before the catch-all static mount).
     """
+    if not _pwa_on():
+        raise HTTPException(404, "the Progressive App capability is not "
+                                 "on this plan")
     t = store_api.get_theme(con)
     return JSONResponse({
         "name": t["brand"].title(), "short_name": t["brand"].title(),

@@ -3,6 +3,14 @@
    day one; the people who simply buy things could place orders the ERP
    would happily count without ever being visible as people. */
 async function renderCustomers(q) {
+  if (S.deepId) {                    // #/customers/12 — card over list
+    const _id = S.deepId;
+    S.deepId = null;
+    renderCustomers().then(() => customerCard(_id));
+    return;
+  }
+  if (location.hash.startsWith("#/customers/"))
+    history.pushState(null, "", "#/customers");
   const rows = await api(`/api/customers?q=${encodeURIComponent(q || "")}`);
   view().innerHTML = `
     <div class="page-head">
@@ -39,6 +47,8 @@ async function renderCustomers(q) {
 }
 
 async function customerCard(uid) {
+  if (location.hash !== `#/customers/${uid}`)
+    history.pushState(null, "", `#/customers/${uid}`);
   const d = await api(`/api/customers/${uid}`);
   const isAdmin = S.user && S.user.is_admin;
   modal(`<h3>${esc(d.name)}</h3>

@@ -124,6 +124,7 @@ An asterisk marks the nine that had no price in v1.
 | Comms | Light | **$20** | Core |
 | InfoSec * | Standard | **$30** | Core |
 | API & data platform | Standard | **$30** | Core |
+| Progressive App | Light | **$20** | Core |
 | Legal * | Light | **$20** | Core |
 
 **Affiliates** is priced but still absent from the capability graph in the

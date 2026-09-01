@@ -3730,6 +3730,7 @@ CAP_NAMES = {
     "intelligence": "Intelligence", "automation": "Automation",
     "comms": "Comms", "infosec": "InfoSec",
     "api": "API & data platform", "legal": "Legal",
+    "pwa": "Progressive App",
 }
 
 

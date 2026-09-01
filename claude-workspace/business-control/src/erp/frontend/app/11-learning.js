@@ -5,6 +5,13 @@
    live server-side in one pure module — this screen only displays them. */
 
 async function renderLearning() {
+  if (S.deepId) {                     // #/learning/5 — straight to it
+    const _id = S.deepId;
+    S.deepId = null;
+    return learningCourse(_id);
+  }
+  if (location.hash.startsWith("#/learning/"))
+    history.pushState(null, "", "#/learning");
   const [courses, queue, regs, conduct, roleReqs, team] = await Promise.all([
     api("/api/learning/courses"), api("/api/learning/grading"),
     S.user.is_admin ? api("/api/learning/registrations") : Promise.resolve([]),
@@ -764,6 +771,10 @@ function inviteForm(team) {
 }
 
 async function learningCourse(cid) {
+  // the course is a place: give it the address the back button and
+  // a pasted link both understand
+  if (location.hash !== `#/learning/${cid}`)
+    history.pushState(null, "", `#/learning/${cid}`);
   const d = await api(`/api/learning/courses/${cid}`);
   const lesson = (l) => `<div class="card">
     <div class="doc-top">

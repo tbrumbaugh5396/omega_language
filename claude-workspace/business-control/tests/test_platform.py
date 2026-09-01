@@ -217,8 +217,8 @@ ok('data-studioview="' in _opsjs and '"/api/store/admin/studio"' in _opsjs
 from storefront.backend import pricebook as _pb
 
 _caps_pb = _pb.capabilities()
-ok(len(_caps_pb) == 28 and {c["price"] for c in _caps_pb} == {20, 30, 50},
-   "the price book parses into code — 28 capabilities on three bands, one "
+ok(len(_caps_pb) == 29 and {c["price"] for c in _caps_pb} == {20, 30, 50},
+   "the price book parses into code — 29 capabilities on three bands, one "
    "table read rather than a fourth copy typed out")
 ok(_pb.core_price() == 50
    and [t["price"] for t in _pb.tiers()] == [199, 349, 699]
@@ -238,8 +238,8 @@ ok(_seed.returncode == 0, f"the studio storefront seeds ({_seed.stderr[-200:]})"
 _tn.bust_cache()
 _shop = c.get("/", headers=HA).text
 ok('class="band band-light"' in _shop
-   and _shop.count("class=\"band band-") == 28,
-   "the home page carries the whole capability menu — all 28, banded — "
+   and _shop.count("class=\"band band-") == 29,
+   "the home page carries the whole capability menu — all 29, banded — "
    "because a buyer who can see the menu and add it up does not have to "
    "ask for a call first")
 for _fig in ("$50", "$199", "$150"):
@@ -1536,6 +1536,31 @@ c.post("/api/store/admin/fleet/tenants/pubco/status", headers=AA,
        json={"status": "active"})
 ok(c.get("/caddy/ask").status_code == 404,
    "asking about nothing is a no")
+
+# --- the Progressive App is a capability, not a birthright -------------------
+# 29th price-book row ($20, IT & legal): the installable offline shell is
+# what the row sells, so a tenant without it gets a perfectly good website
+# that simply does not install — service workers and manifests answer 404.
+_regP = _jn.loads(_tn.REGISTRY_PATH.read_text())
+_regP["tenants"]["beta"]["caps"] = ["selling"]
+_tn.REGISTRY_PATH.write_text(_jn.dumps(_regP))
+_tn.bust_cache()
+ok(c.get("/sf-sw.js", headers=HB).status_code == 404
+   and c.get("/store.webmanifest", headers=HB).status_code == 404
+   and c.get("/ops/sw.js", headers=HB).status_code == 404,
+   "a plan without the Progressive App serves no worker and no manifest "
+   "— the site works, the install button never appears")
+ok(c.get("/sf-sw.js", headers=HA).status_code == 200
+   and c.get("/store.webmanifest", headers=HA).status_code == 200,
+   "while null caps still mean everything — dev and demo installs keep "
+   "the whole product")
+_regP = _jn.loads(_tn.REGISTRY_PATH.read_text())
+_regP["tenants"]["beta"].pop("caps", None)
+_tn.REGISTRY_PATH.write_text(_jn.dumps(_regP))
+_tn.bust_cache()
+ok(c.get("/sf-sw.js", headers=HB).status_code == 200,
+   "and granting it (or lifting the cap list) opens the door on the "
+   "next request — entitlement is read live, never baked")
 c.request("DELETE", "/api/store/admin/fleet/tenants/pubco?keep_data=0",
           headers=AA)
 
@@ -1851,7 +1876,7 @@ _gcon.execute("UPDATE page_sections SET settings=json_set(settings,"
 _gcon.commit()
 
 _fbrd = c.get("/api/store/admin/fleet", headers=AA).json()
-ok(len(_fbrd["cap_catalog"]) == 28 and _fbrd["core_price"] == 50,
+ok(len(_fbrd["cap_catalog"]) == 29 and _fbrd["core_price"] == 50,
    "the board carries the full catalog, so the grant editor lists what "
    "can actually be sold")
 _sellcap = next(x for x in _fbrd["cap_catalog"] if x["id"] == "selling")
@@ -3732,6 +3757,13 @@ ok("roster-face" in _ajs2 and all(
                             "pr-photo-share")),
    "faces ride the roster and the portal — upload, remove and the share "
    "switch all on the person's own profile")
+ok("S.deepId" in _ajs2 and "#/learning/${cid}" in _ajs2
+   and "#/customers/${uid}" in _ajs2,
+   "deep views get real addresses: #/learning/5 is the course, "
+   "#/customers/12 is the card — bookmark, share, back-button")
+ok("location.hash = el.dataset.t" in _ljs2 and "hashchange" in _ljs2,
+   "and the learner portal's tabs are URLs — /learn#record is a link "
+   "you can send")
 ok('mode: key ? "" : "signin"' in (
        Path(__file__).parent.parent
        / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),

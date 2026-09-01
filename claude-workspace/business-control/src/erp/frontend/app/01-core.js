@@ -39,6 +39,10 @@ function applyRoute() {
   if (!m) return false;
   S.tab = m[1];
   S.engId = (m[1] === "clients" && m[2]) ? +m[2] : null;
+  // Deep views beyond clients: #/learning/5 opens the course, and
+  // #/customers/12 opens the card — consumed once by that tab's
+  // renderer, so a later click on the tab lands on its list.
+  S.deepId = (m[1] !== "clients" && m[2]) ? +m[2] : null;
   return true;
 }
 function syncRoute() {

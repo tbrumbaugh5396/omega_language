@@ -84,11 +84,23 @@
                          live: liveView, people, profile: profileView,
                          record: recordView });
   function wireTabs() {
+    // A tab is a place: clicking writes the hash, the hash drives the
+    // view — so /learn#record is a link you can send, and the back
+    // button walks the tabs the way it walks pages.
     root.querySelectorAll("[data-t]").forEach((el) => el.onclick = () => {
-      VIEW = el.dataset.t;
-      (VIEWS()[VIEW] || home)();
+      if (location.hash === "#" + el.dataset.t) showTab(el.dataset.t);
+      else location.hash = el.dataset.t;
     });
   }
+  function showTab(id) {
+    VIEW = VIEWS()[id] ? id : "courses";
+    if (profileOnly()) VIEW = "profile";
+    (VIEWS()[VIEW] || home)();
+  }
+  addEventListener("hashchange", () => {
+    const id = location.hash.replace(/^#/, "");
+    if (VIEWS()[id] && id !== VIEW) showTab(id);
+  });
   // The bell rides the site header's icon cluster, next to the cart —
   // exactly where the account and chat icons live — so notifications are
   // one glance away from any tab, not a strip inside the portal.
@@ -1387,13 +1399,16 @@
   if (scanned) {
     try { history.replaceState({}, "", "/learn"); } catch (e) {}
   }
-  // Land on Check in when a class is live — the portal's own habit —
-  // otherwise on Courses. A board member or donor lands on Profile: it is
-  // the one tab they have.
+  // Land on the tab the URL names when it names one — /learn#record is a
+  // link you can send — else on Check in when a class is live (the
+  // portal's own habit), else on Courses. A board member or donor lands
+  // on Profile: it is the one tab they have.
   Promise.all([api("/api/learn/live"),
                api("/api/learn/me").catch(() => null)]).then(([live, me]) => {
     MYROLE = me ? me.role : "";
+    const asked = location.hash.replace(/^#/, "");
     VIEW = profileOnly() ? "profile"
+      : VIEWS()[asked] ? asked
       : live.length ? "checkin" : "courses";
     return (VIEWS()[VIEW])();
   }).then(() => {

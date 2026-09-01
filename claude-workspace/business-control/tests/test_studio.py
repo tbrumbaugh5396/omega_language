@@ -1175,8 +1175,8 @@ _menu = Path("docs/business-control-b2b-client/templates/02-consultation/"
              "capability-menu.md").read_text()
 _caps = re.findall(r"^\| ([A-Z][^|*]+?)(?: \*)? \| (?:Light|Standard|Heavy)"
                    r" \| \*\*\$(\d+)\*\* \|", _book, re.M)
-ok(len(_caps) == 28,
-   f"the book's capability table parses whole ({len(_caps)} of 28)")
+ok(len(_caps) == 29,
+   f"the book's capability table parses whole ({len(_caps)} of 29)")
 _off = [f"{n} ${p}" for n, p in _caps
         if not re.search(r"\*\*" + re.escape(n) + r"\*\*[^|]*\| [^|]*\|"
                          r" \$" + p + r" \|", _menu)]
@@ -1212,7 +1212,8 @@ _D_ID = {"Sourcing": "src", "Inventory": "inv", "Production": "prd",
          "Finance": "fin", "Treasury & investments": "tre",
          "Workforce": "work", "Onboarding": "onb", "Payroll": "pyr",
          "Intelligence": "intel", "Automation": "auto", "Comms": "com",
-         "InfoSec": "sec", "API & data platform": "api", "Legal": "leg"}
+         "InfoSec": "sec", "API & data platform": "api",
+         "Progressive App": "pwa", "Legal": "leg"}
 _doff = [f"{n} ${p}" for n, p in _caps
          if not re.search(r'id:"' + _D_ID[n] + r'",\s*nm:"[^"]*",price:'
                           + p + ",", _deck)]
