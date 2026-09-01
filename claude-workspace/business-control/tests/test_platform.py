@@ -1561,6 +1561,76 @@ _tn.bust_cache()
 ok(c.get("/sf-sw.js", headers=HB).status_code == 200,
    "and granting it (or lifting the cap list) opens the door on the "
    "next request — entitlement is read live, never baked")
+
+# --- API keys: the machine door the price book already sold ------------------
+# Named, scoped, revocable, bound to an account — a key acts AS that
+# account through every permission check the UI trusts, so there is no
+# second authorization model to drift.
+_ak = c.post("/api/admin/api-keys", headers=AA,
+             json={"name": "warehouse sync", "scope": "write"}).json()
+ok(_ak["secret"].startswith("bck_") and _ak["prefix"] == _ak["secret"][:12],
+   "minting hands over the secret — once")
+_klist = c.get("/api/admin/api-keys", headers=AA).json()
+ok(any(k["prefix"] == _ak["prefix"] and k["name"] == "warehouse sync"
+       for k in _klist)
+   and not any("secret" in k for k in _klist),
+   "the list names keys by prefix, never by secret — a screen that could "
+   "re-show the key would BE the leak")
+_AK = {"Authorization": f"Bearer {_ak['secret']}", **HA}
+ok(c.get("/api/admin/users", headers=_AK).status_code == 200,
+   "a key bound to an admin does admin things — the account's own reach, "
+   "no more, no less")
+_robo = c.post("/api/login", headers=HA,
+               json={"name": "Robo Reader", "role": "customer"}).json()
+_akl = c.post("/api/admin/api-keys", headers=AA,
+              json={"name": "robo bot", "scope": "read",
+                    "user_id": _robo["id"]}).json()
+_AKL = {"Authorization": f"Bearer {_akl['secret']}", **HA}
+ok(c.get("/api/learn/me", headers=_AKL).json()["name"] == "Robo Reader",
+   "while a key bound to a plain account sees that account's world")
+ok(c.get("/api/admin/users", headers=_AKL).status_code == 403,
+   "and cannot reach past it")
+_ro = c.post("/api/learn/notifications/read", headers=_AKL, json={})
+ok(_ro.status_code == 403 and "read-only" in _ro.json()["detail"],
+   "a read key is refused mutations at the front door — one wall, not "
+   "two hundred doors remembering")
+from erp.backend import db as _dbk
+_hc2 = _dbk.connect()
+_hc2.execute("UPDATE api_keys SET last_used_at=? WHERE prefix=?",
+             (_t0.time() - 40 * 86400, _ak["prefix"]))
+_hc2.commit()
+ok(c.get("/api/admin/users", headers=_AK).status_code == 200,
+   "machine keys never slide-expire — revocation is their lifecycle, not "
+   "a quiet timeout mid-batch")
+_hc2.close()
+c.post(f"/api/admin/api-keys/{_ak['id']}/revoke", headers=AA)
+ok(c.get("/api/admin/users", headers=_AK).status_code == 401,
+   "and revocation is immediate — the next request is a stranger's")
+
+# the entitlement outranks the secret: a key from the paid days dies the
+# moment the api capability leaves the plan
+_bboss = c.post("/api/login", headers=HB,
+                json={"name": "Beta Boss",
+                      "admin_key": _bcfg["admin_key"]}).json()
+_BB2 = {"Authorization": f"Bearer {_bboss['token']}", **HB}
+_bk = c.post("/api/admin/api-keys", headers=_BB2,
+             json={"name": "beta bot", "scope": "read"}).json()
+_BK = {"Authorization": f"Bearer {_bk['secret']}", **HB}
+ok(c.get("/api/notifications", headers=_BK).status_code == 200,
+   "a key on a null-caps tenant works")
+_regK = _jn.loads(_tn.REGISTRY_PATH.read_text())
+_regK["tenants"]["beta"]["caps"] = ["selling"]
+_tn.REGISTRY_PATH.write_text(_jn.dumps(_regK))
+_tn.bust_cache()
+ok(c.get("/api/notifications", headers=_BK).status_code == 401
+   and c.post("/api/admin/api-keys", headers=_BB2,
+              json={"name": "x"}).status_code == 404,
+   "drop the api capability and every key stops working mid-flight — "
+   "and the mint itself is a door that no longer exists")
+_regK = _jn.loads(_tn.REGISTRY_PATH.read_text())
+_regK["tenants"]["beta"].pop("caps", None)
+_tn.REGISTRY_PATH.write_text(_jn.dumps(_regK))
+_tn.bust_cache()
 c.request("DELETE", "/api/store/admin/fleet/tenants/pubco?keep_data=0",
           headers=AA)
 
@@ -3764,6 +3834,10 @@ ok("S.deepId" in _ajs2 and "#/learning/${cid}" in _ajs2
 ok("location.hash = el.dataset.t" in _ljs2 and "hashchange" in _ljs2,
    "and the learner portal's tabs are URLs — /learn#record is a link "
    "you can send")
+ok(all(s in _ajs2 for s in ('id="ak-new"', "data-akrev", 'id="ak-secret"',
+                            'href="/docs"')),
+   "API keys live on the Integrations tab — mint (secret shown once), "
+   "revoke, and the live /docs reference linked where scripts are born")
 ok('mode: key ? "" : "signin"' in (
        Path(__file__).parent.parent
        / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),

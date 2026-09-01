@@ -130,6 +130,18 @@ def passwords_required(cfg) -> bool:
 def user_for_token(con, token: str):
     if not token:
         return None
+    # An API key acts AS its bound account through every permission check
+    # the UI already trusts — one authorization model, not two. Machine
+    # keys never slide-expire; revocation (and the api capability itself)
+    # is their lifecycle, checked live in apikeys.resolve.
+    if token.startswith("bck_"):
+        from . import apikeys
+        k = apikeys.resolve(con, token)
+        if k is None:
+            return None
+        return con.execute(
+            "SELECT * FROM users WHERE id=? AND active=1",
+            (k["user_id"],)).fetchone()
     row = con.execute(
         "SELECT * FROM users WHERE token=? AND active=1", (token,)).fetchone()
     if row is None:

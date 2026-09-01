@@ -47,6 +47,8 @@ def _init_core(tid=None):
         library.init_tables(con)
         materials.init_tables(con)
         nutrition.init_tables(con)
+        from . import apikeys as _ak
+        _ak.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -150,6 +152,23 @@ async def resolve_tenant(request: Request, call_next):
                 return await _proxy_to_node(request, _addr)
     tok = tenancy.CURRENT.set(tid)
     try:
+        # A read-scoped API key is refused mutations HERE, before any
+        # route runs — one wall for two hundred doors, instead of two
+        # hundred doors remembering to check.
+        bearer = request.headers.get("authorization", "")
+        bearer = bearer.removeprefix("Bearer ").strip()
+        if (bearer.startswith("bck_")
+                and request.method not in ("GET", "HEAD", "OPTIONS")):
+            from . import apikeys
+            _kcon = db.connect()
+            try:
+                _krow = apikeys.resolve(_kcon, bearer)
+            finally:
+                _kcon.close()
+            if _krow is not None and _krow["scope"] == "read":
+                return JSONResponse(
+                    {"detail": "this API key is read-only — mint a write "
+                               "key for mutations"}, status_code=403)
         return await call_next(request)
     finally:
         tenancy.CURRENT.reset(tok)
@@ -3850,6 +3869,8 @@ app.include_router(store_learn.router)
 app.include_router(store_nutrition.router)
 from . import people  # noqa: E402  (safe: included late)
 app.include_router(people.router)
+from . import apikeys  # noqa: E402  (safe: included late)
+app.include_router(apikeys.router)
 
 
 @app.exception_handler(404)

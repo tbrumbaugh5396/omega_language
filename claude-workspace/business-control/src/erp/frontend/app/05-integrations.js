@@ -6,6 +6,7 @@
 
 async function renderIntegrations() {
   const d = await api("/api/admin/integrations");
+  const keys = await api("/api/admin/api-keys").catch(() => null);
 
   const card = (p) => {
     const status = p.connected
@@ -55,6 +56,31 @@ async function renderIntegrations() {
           own. Credentials are stored and never shown again — the screen can
           tell you what a connection reached, but not what it is.</p></div>
     </div>
+    ${keys ? `<div class="page-head" style="margin-top:4px">
+      <h3>API keys</h3>
+      <button class="btn sm" id="ak-new">Mint a key</button>
+    </div>
+    <div class="card">
+      <p class="dim">The machine door: a key acts AS the account it is
+        bound to, through every permission the app already enforces. The
+        secret shows ONCE at minting; a read key is refused mutations at
+        the front door; revocation is immediate. The interactive API
+        reference lives at <a href="/docs" target="_blank">/docs</a>.</p>
+      ${keys.length ? `<div class="tablewrap"><table>
+        <thead><tr><th>name</th><th>key</th><th>scope</th><th>acts as</th>
+          <th>last used</th><th></th></tr></thead>
+        <tbody>${keys.map((k) => `<tr class="${k.revoked_at ? "dim" : ""}">
+          <td>${esc(k.name)}</td>
+          <td class="dim">${esc(k.prefix)}…</td>
+          <td>${esc(k.scope)}</td>
+          <td>${esc(k.acts_as)}</td>
+          <td class="dim">${k.revoked_at ? "revoked"
+            : k.last_used_at ? fmtDate(k.last_used_at) : "never"}</td>
+          <td>${k.revoked_at ? "" : `<button class="btn alt sm"
+            data-akrev="${k.id}">Revoke</button>`}</td>
+        </tr>`).join("")}</tbody></table></div>`
+      : '<p class="dim">No keys yet — mint one and hand your scripts a door of their own.</p>'}
+    </div>` : ""}
     ${d.providers.map(card).join("")}
     ${d.log.length ? `<h3>Recent activity</h3>
       <div class="card"><div class="tablewrap"><table>
@@ -70,6 +96,51 @@ async function renderIntegrations() {
 
   d.providers.forEach((p) => drawForm(p, () => renderIntegrations()));
   if ($("#slack-chat")) drawSlackChat();
+
+  if ($("#ak-new")) $("#ak-new").onclick = async () => {
+    const users = await api("/api/admin/users").catch(() => []);
+    modal(`<h3>Mint an API key</h3>
+      <label>Name <span class="dim">(what will use it)</span></label>
+      <input id="ak-name" placeholder="warehouse sync">
+      <div class="row2">
+        <div><label>Scope</label><select id="ak-scope">
+          <option value="read">read — GETs only, mutations refused</option>
+          <option value="write">write — everything its account may do</option>
+        </select></div>
+        <div><label>Acts as</label><select id="ak-user">
+          ${users.filter((u) => u.active).map((u) =>
+            `<option value="${u.id}" ${u.id === S.user.id ? "selected" : ""}>
+              ${esc(u.name)} (${esc(u.role)}${u.is_admin ? " · admin" : ""})
+            </option>`).join("")}</select></div>
+      </div>
+      <p class="dim">Bind narrow: a key that acts as a plain account can
+        only ever do what that account could.</p>
+      <p><button class="btn sm" id="ak-go">Mint</button></p>
+      <p id="ak-out"></p>`);
+    $("#ak-go").onclick = async () => {
+      try {
+        const out = await api("/api/admin/api-keys", { body: {
+          name: $("#ak-name").value.trim(), scope: $("#ak-scope").value,
+          user_id: +$("#ak-user").value } });
+        document.getElementById("ak-out").innerHTML =
+          `<input id="ak-secret" value="${esc(out.secret)}" readonly
+             style="width:100%;font-family:monospace">
+           <span class="dim">This is the ONLY time the secret shows —
+             copy it now. Use it as
+             <code>Authorization: Bearer ${esc(out.prefix)}…</code></span>`;
+        const box = document.getElementById("ak-secret");
+        box.onfocus = () => box.select();
+        box.focus();
+      } catch (err) { toast(err.message); }
+    };
+  };
+  view().querySelectorAll("[data-akrev]").forEach((b) => b.onclick =
+    async () => {
+      await api(`/api/admin/api-keys/${b.dataset.akrev}/revoke`,
+                { method: "POST", body: {} });
+      toast("revoked — it stopped working the moment you clicked");
+      renderIntegrations();
+    });
 
   view().querySelectorAll("[data-iglive]").forEach((b) => b.onclick = async () => {
     const name = b.dataset.iglive;
