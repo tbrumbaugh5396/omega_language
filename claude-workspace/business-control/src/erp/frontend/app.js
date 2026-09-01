@@ -851,7 +851,7 @@ const TABS = [
   { id: "outreach", label: "Outreach", icon: "handshake", group: "Operate",
     roles: ["admin", "employee"] },
   { id: "learning", label: "Learning", icon: "pen", group: "Operate",
-    roles: ["admin", "employee"] },
+    roles: ["admin", "employee", "teacher"] },
   { id: "nutrition", label: "Nutrition", icon: "bag", group: "Operate",
     roles: ["admin", "employee"] },
   { id: "scan", label: "Scan", icon: "camera", group: "Operate", roles: "*" },
@@ -1419,7 +1419,8 @@ function renderLogin() {
       // Somewhere in particular if they were sent here mid-task; otherwise
       // an employee's job home, or the shop.
       S.tab = S.afterLogin
-        || (u.role === "employee" && JOB_HOME[u.job]) || "shop";
+        || (u.role === "employee" && JOB_HOME[u.job])
+        || (u.role === "teacher" && "learning") || "shop";
       S.afterLogin = null;
       startNotifPoll();
       connectWS();
@@ -7919,8 +7920,48 @@ async function drawStoreRail() {
 }
 
 // ---------- staff permissions ----------
+/* Role requests: what somebody asked to be at sign-up (roles.py decides
+   who may review what). One card, two homes — Team & access for any
+   tenant with Workforce, and the Learning tab beside the applications
+   queue, because a school's office lives there. */
+function roleRequestsCard(requests) {
+  if (!requests.length) return "";
+  return `<div class="card">
+    <h3 style="margin-top:0">Role requests</h3>
+    <p class="dim">What people asked to be at sign-up. Approving is the
+      promotion — it ends their sessions so the new role arrives whole —
+      and declining leaves the account a student.</p>
+    ${requests.map((r) => `
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(r.name)}</b>
+          <span class="dim">asked to be ${esc(r.requested_label)}${
+            r.email ? " · " + esc(r.email) : ""}</span></div>
+        <button class="btn sm" data-roleok="${r.id}">Approve</button>
+        <button class="btn alt sm" data-roleno="${r.id}">Decline</button>
+      </div>`).join("")}
+  </div>`;
+}
+
+function wireRoleRequests(rerender) {
+  view().querySelectorAll("[data-roleok]").forEach((b) => b.onclick =
+    async () => {
+      await api(`/api/roles/requests/${b.dataset.roleok}/decide`,
+                { method: "POST", body: { approve: true } });
+      toast("Approved — they sign in again to pick it up");
+      rerender();
+    });
+  view().querySelectorAll("[data-roleno]").forEach((b) => b.onclick =
+    async () => {
+      await api(`/api/roles/requests/${b.dataset.roleno}/decide`,
+                { method: "POST", body: { approve: false } });
+      toast("Declined");
+      rerender();
+    });
+}
+
 async function renderStaff() {
   const data = await api("/api/store/admin/staff");
+  const requests = await api("/api/roles/requests").catch(() => []);
   const perms = Object.entries(data.permissions);
   view().innerHTML = `
     <div class="page-head">
@@ -7929,6 +7970,7 @@ async function renderStaff() {
           access; everyone else gets exactly what's ticked. Changes are
           recorded in the audit log.</p></div>
     </div>
+    ${roleRequestsCard(requests)}
     ${data.staff.map((u) => `
       <div class="card">
         <div class="doc-top">
@@ -7958,6 +8000,7 @@ async function renderStaff() {
           <button class="btn sm" data-saveperm="${u.id}">Save permissions</button>
         </div>`}
       </div>`).join("")}`;
+  wireRoleRequests(renderStaff);
   view().querySelectorAll("[data-badge]").forEach((b) => b.onclick = async () => {
     const [uid, name] = b.dataset.badge.split(":");
     const { token } = await api(`/api/admin/users/${uid}/badge`,
@@ -8124,10 +8167,11 @@ function eventForm(e) {
    live server-side in one pure module — this screen only displays them. */
 
 async function renderLearning() {
-  const [courses, queue, regs, conduct] = await Promise.all([
+  const [courses, queue, regs, conduct, roleReqs] = await Promise.all([
     api("/api/learning/courses"), api("/api/learning/grading"),
     S.user.is_admin ? api("/api/learning/registrations") : Promise.resolve([]),
     S.user.is_admin ? api("/api/learning/conduct") : Promise.resolve([]),
+    api("/api/roles/requests").catch(() => []),
   ]);
   const card = (c) => `
     <div class="card ${c.active ? "" : "dim-card"}" data-course="${c.id}"
@@ -8157,6 +8201,7 @@ async function renderLearning() {
         ? `<button class="btn" id="lc-new">${opsIcon("pen", "btn-ic")}
             New course</button>` : ""}
     </div>
+    ${roleRequestsCard(roleReqs)}
     ${regs.length ? `<h3>Applications (${regs.length})</h3>
       ${regs.map((r) => `<div class="card">
         <div class="doc-top">
@@ -8195,6 +8240,7 @@ async function renderLearning() {
       S.user.is_admin ? "Create one — lessons and quizzes hang off it."
         : "An owner can create one and appoint you its teacher."}</span></div>`}`;
   if ($("#lc-new")) $("#lc-new").onclick = () => courseForm(null);
+  wireRoleRequests(renderLearning);
   view().querySelectorAll("[data-course]").forEach((el) =>
     el.onclick = () => learningCourse(+el.dataset.course));
   view().querySelectorAll("[data-grade]").forEach((b) => b.onclick = (e) => {

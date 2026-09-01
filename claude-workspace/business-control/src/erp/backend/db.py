@@ -404,6 +404,9 @@ MIGRATIONS = (
     "ALTER TABLE users ADD COLUMN uid TEXT",
     # Data rights: erasure tombstones the row instead of deleting it.
     "ALTER TABLE users ADD COLUMN erased_at REAL",
+    # Role claims: what somebody asked to be at sign-up. The account works
+    # as what it IS meanwhile; approval (roles.py rules) is the promotion.
+    "ALTER TABLE users ADD COLUMN requested_role TEXT DEFAULT ''",
 )
 
 

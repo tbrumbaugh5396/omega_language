@@ -153,9 +153,12 @@ def set_prefs(con, uid: int, **kw) -> dict:
 
 
 def is_staff(con, user) -> bool:
-    """Full-record viewers: admins, and anyone who teaches a course.
-    Attendance sheets and rosters cannot run on initials."""
+    """Full-record viewers: admins, anyone confirmed as a teacher, and
+    anyone who teaches a course. Attendance sheets and rosters cannot run
+    on initials."""
     if user["is_admin"]:      # user may be a sqlite Row — no .get on those
+        return True
+    if user["role"] == "teacher":     # confirmed by the office (roles.py)
         return True
     return con.execute("SELECT 1 FROM courses WHERE teacher_id=? AND active=1",
                        (user["id"],)).fetchone() is not None

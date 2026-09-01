@@ -180,4 +180,5 @@ def user_json(u) -> dict:
             "job": u["job"], "employment": u["employment"],
             "region": u["region"], "email": u["email"],
             "has_password": bool(u["password_hash"]),
+            "requested_role": u["requested_role"] or "",
             "is_admin": bool(u["is_admin"]), "token": u["token"]}

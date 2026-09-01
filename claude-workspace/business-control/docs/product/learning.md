@@ -12,6 +12,25 @@ surfaces every tenant already has:
 | Behind the sign-in | server.py portal: students, teachers, directors | students on `/learn` (lessons, quizzes, progress, check-in, badges, attendance standing, and **My record** — the whole standing across courses on `/api/learn/record`, derived on read, with a JSON download, a printable transcript, and a certificate for any completed course; stationery rendered client-side, facts served); teachers and directors on the ops **Learning** tab (authoring, live roster, grading queue) |
 | ERP / CRM | payroll derivation, registrations queue, audit | `/ops` — derived teaching pay with the approve/hold/paid overlay, the applications queue, and the platform's own audit log, notifications, orders and staff |
 
+## The seven roles
+
+lingua-portal's role matrix came over as `erp/backend/roles.py` — pure, so
+the whole permission table is enumerated in the suite rather than sampled.
+Student / Teacher / Volunteer / Administrator-staff / Executive director /
+Board member / Donor, mapped onto the platform's own words (a student IS a
+`customer`, office staff ARE `employee`s). The storefront's create door
+offers all seven, but anything beyond Student is a **claim**
+(`users.requested_role`), not a grant: the office decides it under ops
+Team & access, approval is the promotion (it ends the person's sessions so
+the new role arrives whole), and declining leaves the account a student.
+Office staff may confer students, teachers and volunteers; only the admin
+flag confers staff, directors, board members and donors — and a director's
+approval carries the flag, because running the organisation is the admin
+surface. Views follow the role: volunteers share the learner portal,
+teachers land on the ops Learning tab, board members and donors get a
+profile-only rail — an account to be reached at, not a console. The ops
+Team sign-in stays the historic back-office door.
+
 ## What moved verbatim
 
 Two pure modules came over whole, with their tests restated in the suite:

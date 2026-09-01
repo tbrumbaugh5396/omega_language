@@ -8290,6 +8290,98 @@ ok(c.get("/api/learn/me", headers=_dt).status_code == 401,
    "sign out everywhere rotates the token — every device, this one "
    "included")
 
+# --- the seven roles: claims at the door, approval as the promotion ----------
+from erp.backend import roles as R2
+
+ok(len(R2.ROLES) == 7 and R2.STUDENT == "customer"
+   and R2.STAFF == "employee",
+   "the seven school roles ride the platform's own words — a student IS a "
+   "customer, office staff ARE employees")
+ok(R2.grantable_by("employee") ==
+   frozenset({"customer", "teacher", "volunteer"})
+   and R2.grantable_by("teacher") == frozenset()
+   and R2.grantable_by("customer", is_admin=True) == frozenset(R2.ROLES),
+   "office staff confer students, teachers and volunteers; the admin flag "
+   "confers everything; everyone else confers nothing")
+ok("employee" not in R2.grantable_by("employee")
+   and not (R2.RESTRICTED & R2.grantable_by("employee")),
+   "no escalation rung: staff cannot mint staff, and board and donor — the "
+   "most sensitive rows a school holds — are the owner's alone")
+ok(R2.carries_admin("director") and not R2.carries_admin("employee"),
+   "only the executive director's approval carries the admin flag")
+
+_cat = c.get("/api/roles", headers=HA).json()
+ok(len(_cat) == 7 and _cat[0]["label"] == "Student"
+   and any(x["label"] == "Executive director" for x in _cat),
+   "the sign-up dropdown's roles come from the server — one source")
+
+_wnd = c.post("/api/login", headers=HA, json={
+    "name": "Wanda Wants", "mode": "create", "role": "teacher",
+    "password": "chalk dust"}).json()
+ok(_wnd["role"] == "customer" and _wnd["requested_role"] == "teacher",
+   "the door files a CLAIM: the account is a student until the office "
+   "says otherwise — the promise in the door's copy is finally true")
+_WW = {"Authorization": f"Bearer {_wnd['token']}", **HA}
+_dirk = c.post("/api/login", headers=HA, json={
+    "name": "Dirk Director", "mode": "create", "role": "director",
+    "password": "the long view"}).json()
+ok(_dirk["role"] == "customer" and _dirk["requested_role"] == "director",
+   "even the director role starts as a claim")
+
+_tq = c.get("/api/roles/requests", headers=TT).json()
+ok(any(r["name"] == "Wanda Wants" for r in _tq)
+   and not any(r["name"] == "Dirk Director" for r in _tq),
+   "office staff see only the requests they could grant — a director "
+   "request they cannot act on is an invitation to try")
+ok(c.post(f"/api/roles/requests/{_dirk['id']}/decide", headers=TT,
+          json={"approve": True}).status_code == 403,
+   "and deciding one anyway is refused, approve or decline alike")
+ok(c.get("/api/roles/requests", headers=_WW).status_code == 403,
+   "a student cannot review anybody")
+
+_out2 = c.post(f"/api/roles/requests/{_wnd['id']}/decide", headers=TT,
+               json={"approve": True}).json()
+ok(_out2["approved"] and _out2["role"] == "teacher",
+   "office staff approve a teacher — the same right as making one")
+ok(c.get("/api/learn/me", headers=_WW).status_code == 401,
+   "approval ends every session: the new role arrives whole, not "
+   "half-changed")
+_wnd2 = c.post("/api/login", headers=HA, json={
+    "name": "Wanda Wants", "mode": "signin",
+    "password": "chalk dust"}).json()
+ok(_wnd2["role"] == "teacher" and not _wnd2["is_admin"]
+   and _wnd2["requested_role"] == "",
+   "signing in again picks the role up — teacher, no admin flag, claim "
+   "cleared")
+_WW2 = {"Authorization": f"Bearer {_wnd2['token']}", **HA}
+ok(any("confirmed as Teacher" in (n["title"] or "")
+       for n in c.get("/api/learn/notifications",
+                      headers=_WW2).json()["items"]),
+   "and the decision landed on their bell")
+
+_out3 = c.post(f"/api/roles/requests/{_dirk['id']}/decide", headers=AA,
+               json={"approve": True}).json()
+_dirk2 = c.post("/api/login", headers=HA, json={
+    "name": "Dirk Director", "mode": "signin",
+    "password": "the long view"}).json()
+ok(_out3["approved"] and _dirk2["role"] == "director"
+   and _dirk2["is_admin"],
+   "the owner approves a director — and that approval carries the admin "
+   "flag, because running the organisation IS the admin surface")
+
+_ben = c.post("/api/login", headers=HA, json={
+    "name": "Benny Board", "mode": "create", "role": "board",
+    "password": "quorum"}).json()
+c.post(f"/api/roles/requests/{_ben['id']}/decide", headers=AA,
+       json={"approve": False, "note": "not this year"})
+_ben2 = c.post("/api/login", headers=HA, json={
+    "name": "Benny Board", "mode": "signin", "password": "quorum"}).json()
+ok(_ben2["role"] == "customer" and _ben2["requested_role"] == "",
+   "declining clears the claim and the account stays a student")
+ok(c.post(f"/api/roles/requests/{_ben['id']}/decide", headers=AA,
+          json={"approve": True}).status_code == 404,
+   "a decided request is gone — no second bite")
+
 # --- my record: the whole standing, exportable -------------------------------
 _rec = c.get("/api/learn/record", headers=LN).json()
 _rc = [x for x in _rec["courses"] if x["id"] == _crs]
@@ -8330,5 +8422,16 @@ ok(all(s in _sjs2 for s in ('["create", "Create account"]',
 ok(_sjs2.count("learn-root") >= 2,
    "signing in or out on a portal page reloads it — the content IS the "
    "account")
+ok('fetch("/api/roles")' in _sjs2,
+   "the create door draws its role list from the server's catalog")
+ok('MYROLE === "board" || MYROLE === "donor"' in _ljs2,
+   "board members and donors get the profile-only rail — an account to be "
+   "reached at, not a console")
+_ajs2 = (Path(__file__).parent.parent / "src/erp/frontend/app.js"
+         ).read_text(encoding="utf-8")
+ok("data-roleok" in _ajs2 and "data-roleno" in _ajs2
+   and '"teacher" && "learning"' in _ajs2,
+   "Team & access carries the approve/decline queue, and a teacher lands "
+   "on the Learning tab")
 
 print(f"\nall {checks} checks passed")

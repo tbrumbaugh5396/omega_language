@@ -58,9 +58,15 @@
   // (the platform was already pushing them at learners; nobody listened).
   let VIEW = "courses";
   let UNREAD = 0;
+  // Board members and donors have an account so they can be reached and
+  // can see their own record — not so they can take classes. Their rail
+  // is Profile alone, the same shape lingua-portal gave those roles.
+  let MYROLE = "";
+  const profileOnly = () => MYROLE === "board" || MYROLE === "donor";
   function tabs() {
     const t = (id, label) => `<span class="lrn-tab ${VIEW === id ? "on" : ""}"
       data-t="${id}">${label}</span>`;
+    if (profileOnly()) return `<div class="lrn-tabs">${t("profile", "Profile")}</div>`;
     return `<div class="lrn-tabs">
       ${t("checkin", "Check in")}${t("courses", "Courses")}
       ${t("quizzes", "Quizzes")}${t("live", "Live class")}
@@ -786,8 +792,11 @@
     root.innerHTML = tabs() + `
       ${me ? `<div class="lrn-live" style="align-items:flex-start">
         <div><h2 style="margin:0">${esc(me.name)}
-            <span class="lrn-badge">${esc(me.role === "customer"
-              ? "student" : me.role)}</span></h2>
+            <span class="lrn-badge">${esc((me.role_label
+              || me.role).toLowerCase())}</span></h2>
+          ${me.requested_role ? `<p class="lrn-meta">Asked to be
+            <b>${esc(me.requested_label || me.requested_role)}</b> — the
+            office confirms this before it opens anything.</p>` : ""}
           <p class="lrn-meta">${me.attended} class${me.attended === 1
             ? "" : "es"} attended · ${me.has_password
             ? "password set"
@@ -1329,9 +1338,13 @@
     try { history.replaceState({}, "", "/learn"); } catch (e) {}
   }
   // Land on Check in when a class is live — the portal's own habit —
-  // otherwise on Courses.
-  api("/api/learn/live").then((live) => {
-    VIEW = live.length ? "checkin" : "courses";
+  // otherwise on Courses. A board member or donor lands on Profile: it is
+  // the one tab they have.
+  Promise.all([api("/api/learn/live"),
+               api("/api/learn/me").catch(() => null)]).then(([live, me]) => {
+    MYROLE = me ? me.role : "";
+    VIEW = profileOnly() ? "profile"
+      : live.length ? "checkin" : "courses";
     return (VIEWS()[VIEW])();
   }).then(() => {
     mountBell();

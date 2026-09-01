@@ -270,8 +270,19 @@ def login(body: LoginBody, con=Depends(get_con)):
     if body.mode == "create" and existed:
         raise HTTPException(409, "that name is already taken — sign in"
                                  " instead")
+    # The storefront door's role picker is a CLAIM, not a grant. Anything
+    # beyond student files a request the office decides (roles.py rules);
+    # the account is created as a plain customer meanwhile — so the door's
+    # promise, "confirmed before it opens anything", is finally true.
+    from . import roles as R
+    claim = ""
+    role = body.role
+    if body.mode == "create" and body.role != "owner":
+        wanted = R.normalise(body.role)
+        if R.claimable(wanted):
+            claim, role = wanted, "customer"
     try:
-        u = auth.login(con, body.name, body.role, body.region, body.admin_key,
+        u = auth.login(con, body.name, role, body.region, body.admin_key,
                        CFG, body.password)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -282,6 +293,15 @@ def login(body: LoginBody, con=Depends(get_con)):
                     (body.email.strip(), u["id"]))
         con.commit()
         u = con.execute("SELECT * FROM users WHERE id=?", (u["id"],)).fetchone()
+    if claim and not existed:
+        con.execute("UPDATE users SET requested_role=? WHERE id=?",
+                    (claim, u["id"]))
+        con.commit()
+        notify.push(con, f"Role request: {u['name']} asked to be"
+                         f" {R.LABELS.get(claim, claim)}",
+                    "Decide it under Team & access.", kind="role")
+        u = con.execute("SELECT * FROM users WHERE id=?",
+                        (u["id"],)).fetchone()
     if not existed:
         store_api.fire_webhooks("customer.created", {
             "id": u["id"], "name": u["name"], "role": u["role"],
@@ -1454,9 +1474,90 @@ def add_employee(body: EmployeeBody, user=Depends(admin_user),
 def all_users(user=Depends(admin_user), con=Depends(get_con)):
     rows = con.execute(
         "SELECT id,name,role,job,employment,region,is_admin,active,created_at,"
+        " requested_role,"
         " (password_hash!='') AS password_set FROM users"
         " ORDER BY is_admin DESC, role, name").fetchall()
     return [dict(r) for r in rows]
+
+
+# ── role requests: what somebody asked to be, and who decides it ─────────────
+# The rules live in roles.py (pure, enumerable); these routes only apply
+# them. Approval IS the promotion — same rights, same audit — so the queue
+# can never become the way around the permission model.
+
+@app.get("/api/roles")
+def role_catalog():
+    """The sign-up dropdown's source of truth: every role, its label, and
+    what it is for. Public — it is shown to people who have no account."""
+    from . import roles as R
+    return [{"value": r, "label": R.LABELS[r], "what": R.DESCRIPTIONS[r]}
+            for r in R.ROLES]
+
+
+def _reviewer(user=Depends(current_user)):
+    from . import roles as R
+    if not R.is_reviewer(user["role"], is_admin=bool(user["is_admin"])):
+        raise HTTPException(403, "only the office reviews role requests")
+    return user
+
+
+@app.get("/api/roles/requests")
+def role_requests(user=Depends(_reviewer), con=Depends(get_con)):
+    """People waiting to be told what they are — only the requests this
+    reviewer could actually grant. Showing an office administrator a
+    director request they cannot act on is an invitation to try."""
+    from . import roles as R
+    grantable = R.grantable_by(user["role"],
+                               is_admin=bool(user["is_admin"]))
+    rows = con.execute(
+        "SELECT id,name,email,role,requested_role,created_at FROM users"
+        " WHERE requested_role!='' AND active=1 AND erased_at IS NULL"
+        " ORDER BY created_at").fetchall()
+    return [{**dict(r),
+             "requested_label": R.LABELS.get(r["requested_role"],
+                                             r["requested_role"])}
+            for r in rows if r["requested_role"] in grantable]
+
+
+class RoleDecideBody(BaseModel):
+    approve: bool
+    note: str = ""
+
+
+@app.post("/api/roles/requests/{uid}/decide")
+def role_decide(uid: int, body: RoleDecideBody, user=Depends(_reviewer),
+                con=Depends(get_con)):
+    from . import roles as R
+    target = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if target is None or not target["requested_role"]:
+        raise HTTPException(404, "no request standing for this person")
+    if uid == user["id"]:
+        raise HTTPException(400, "someone else decides what you are")
+    wanted = target["requested_role"]
+    if not R.can_grant(user, wanted):
+        raise HTTPException(403, "that request is for the owner to decide")
+    label = R.LABELS.get(wanted, wanted)
+    if body.approve:
+        # The promotion, and cleanly: a role change alters what every
+        # existing session may do, so the sessions end — the person signs
+        # in again and gets the new capabilities whole, not half-changed.
+        con.execute(
+            "UPDATE users SET role=?, is_admin=?, requested_role='',"
+            " token=? WHERE id=?",
+            (wanted, 1 if (R.carries_admin(wanted) or target["is_admin"])
+             else 0, secrets.token_urlsafe(24), uid))
+        con.execute("DELETE FROM login_tokens WHERE user_id=?", (uid,))
+        notify.push(con, f"You are confirmed as {label}",
+                    (body.note or "Sign in again to pick up what that"
+                                  " opens."), kind="role", user_id=uid)
+    else:
+        con.execute("UPDATE users SET requested_role='' WHERE id=?", (uid,))
+        notify.push(con, f"Your {label} request was declined",
+                    body.note or "Talk to the office if this is a surprise.",
+                    kind="role", user_id=uid)
+    con.commit()
+    return {"id": uid, "requested": wanted, "approved": body.approve,
+            "role": wanted if body.approve else target["role"]}
 
 
 class UserUpdateBody(BaseModel):
@@ -1479,7 +1580,8 @@ def update_user(uid: int, body: UserUpdateBody, user=Depends(admin_user),
     role = target["role"]
     if body.role is not None:
         if body.role not in ("customer", "distributor", "influencer",
-                             "employee", "owner"):
+                             "employee", "owner", "teacher", "volunteer",
+                             "director", "board", "donor"):
             raise HTTPException(400, "bad role")
         role = body.role
     is_admin = target["is_admin"] if body.is_admin is None else int(body.is_admin)

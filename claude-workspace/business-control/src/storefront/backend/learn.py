@@ -546,8 +546,12 @@ def me_view(user=Depends(current_customer), con=Depends(get_con)):
     attended = con.execute(
         "SELECT COUNT(*) AS n FROM checkins WHERE student_id=?"
         " AND status IN ('present','late')", (user["id"],)).fetchone()["n"]
+    from erp.backend import roles as R
     return {"id": user["id"], "name": user["name"],
             "email": user["email"] or "", "role": user["role"],
+            "role_label": R.LABELS.get(user["role"], user["role"]),
+            "requested_role": user["requested_role"] or "",
+            "requested_label": R.LABELS.get(user["requested_role"] or "", ""),
             "has_password": bool(user["password_hash"]),
             "attended": attended,
             "achievements": L.achievements_of(con, user["id"])}

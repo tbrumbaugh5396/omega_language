@@ -1222,7 +1222,6 @@ function signIn(intro, onDone) {
         <label>I am a…</label>
         <select id="cr-role">
           <option value="customer">Student — I want to take classes</option>
-          <option value="employee">Team — I teach, coach or help out</option>
         </select>
         <p class="dim">Anything other than Student is confirmed by the
           office before it opens anything. A short phrase you will remember
@@ -1244,8 +1243,22 @@ function signIn(intro, onDone) {
           role: $("#cr-role").value,
           email: $("#cr-email").value.trim(),
           password: $("#cr-pass").value });
-        if (out) finish(out);
+        if (out) {
+          if (out.requested_role) toast("Asked to be "
+            + ($("#cr-role").selectedOptions[0]?.textContent.split(" — ")[0]
+               || out.requested_role) + " — the office confirms it");
+          finish(out);
+        }
       };
+      // The full role list is the server's to declare (roles.py is the
+      // single source); the Student option above is only the no-JS floor.
+      fetch("/api/roles").then((r) => r.ok ? r.json() : null).then((rs) => {
+        const sel = $("#cr-role");
+        if (!rs || !sel) return;
+        sel.innerHTML = rs.map((r) =>
+          `<option value="${esc(r.value)}">${esc(r.label)} — ${esc(r.what)}</option>`)
+          .join("");
+      }).catch(() => {});
       setTimeout(() => $("#cr-name").focus(), 30);
     } else {
       let programs = null;

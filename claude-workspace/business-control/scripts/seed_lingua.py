@@ -88,6 +88,16 @@ def main():
         ("Ana Ruiz", "Bo Chen", "Cy Novak", "Dana Okoro", "Eli Toft",
          "Fatima Nasser"))
 
+    # the governance-and-support wing: every role the sign-up door offers
+    # exists here, so each view is a sign-in away rather than a promise
+    person("Vera Vidal", "vera@school.test", role="volunteer")
+    person("Board Bea", "bea@school.test", role="board")
+    person("Donor Dev", "dev@school.test", role="donor")
+    # and one claim still standing, so Team & access shows the queue
+    tessa = person("Tessa Marin", "tessa@school.test")
+    con.execute("UPDATE users SET requested_role='teacher'"
+                " WHERE id=? AND role='customer'", (tessa,))
+
     for tid, hourly, per_sess, minimum, rnd in (
             (t_maria, 4500, 0, 45, 15),    # $45/h, 45-min floor, 15-min blocks
             (t_kenji, 0, 6000, 0, 1)):     # flat $60 per class
