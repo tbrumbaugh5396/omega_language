@@ -427,6 +427,10 @@ MIGRATIONS = (
     # 0 = never seen under this scheme; first use stamps it, so a deploy
     # never signs anybody out.
     "ALTER TABLE users ADD COLUMN token_seen_at REAL DEFAULT 0",
+    # A person's photo: SELF-uploaded only (uploading is the consent), a
+    # token-named path in the sharded media store, shared by their own
+    # privacy_photo preference, gone with erasure.
+    "ALTER TABLE users ADD COLUMN photo TEXT DEFAULT ''",
 )
 
 

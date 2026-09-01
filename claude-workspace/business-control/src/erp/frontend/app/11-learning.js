@@ -956,6 +956,8 @@ async function sessionRoster(sid, cid) {
   const STATUSES = ["present", "late", "absent", "excused"];
   const row = (r) => `<div class="card">
     <div class="doc-top">
+      ${r.photo ? `<img class="roster-face" src="/media/${esc(r.photo)}"
+        alt="">` : ""}
       <div class="doc-main"><b>${esc(r.name)}</b>
         <span class="dim">${r.method
           ? `${esc(r.status)} · ${r.method === "self" ? "checked in"

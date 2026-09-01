@@ -84,6 +84,23 @@ the probe `url` may stay localhost) and `record_dir`. Firewall: the
 WHIP/WHEP port TCP plus 8189/udp to participants; TLS by fronting with
 Caddy and pointing `public_url` at the https name.
 
+## The pilot for the tooling family: the forge (Forgejo)
+
+```sh
+sudo bash scripts/install_forge.sh --host forge.yourbrand.com --admin-pass ...
+```
+
+One binary, SQLite storage, registration closed, an admin minted at
+install — a git forge the machine now simply *has*, wearing its pill
+like any service. This is deliberately a **pilot**: the platform knows
+the forge is here and healthy, and nothing more. Whether repos, CI and
+releases become a sellable capability — seats from the quote, accounts
+wired by invites, a Development row in the price book — is the decision
+this pilot exists to inform. The pattern it proves is the family's:
+every future tooling service (CI runners, artifact registry, preview
+environments) is a manifest line, an installer in `scripts/`, and a
+probe — the same three moves translation and the SFU already made.
+
 ## What this is not
 
 Not placement policy: a tenant whose plan includes Voice still works on

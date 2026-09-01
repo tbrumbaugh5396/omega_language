@@ -1071,3 +1071,8 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .ops-call-grid video { width: 100%; border-radius: 10px; background: #000;
   aspect-ratio: 4 / 3; object-fit: cover; }
+
+/* the roster's faces: attendance is a staff sheet, and a face beside the
+   name is what a door check actually uses */
+.roster-face { width: 36px; height: 36px; border-radius: 50%;
+  object-fit: cover; flex: none; }

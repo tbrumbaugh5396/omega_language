@@ -37,6 +37,12 @@ KNOWN = {
     # its class tapes land before the platform collects them home).
     "sfu": {"probe": "/",
             "what": "WHIP/WHEP media server for large classes"},
+    # The pilot for the tooling family: a git forge (Forgejo) on the
+    # node. Today it is an installed daemon with a health pill — the
+    # capability that would sell it (repos, CI, releases) is a
+    # price-book decision, not a service one.
+    "forge": {"probe": "/api/v1/version",
+              "what": "git forge (Forgejo) for the tooling family"},
 }
 
 _cache = {"stamp": None, "data": {}}

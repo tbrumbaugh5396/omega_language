@@ -256,6 +256,13 @@ def roster(con, session_id: int) -> dict:
     rows = A.finalize_roster(s, enrolled=enrolled(con, s.course_id),
                              checkins=checkins_for(con, session_id),
                              now=int(time.time()))
+    # Faces on the sheet: the roster is a staff surface (the same people
+    # full names already trust), so photos ride it regardless of the
+    # student's community switch — attendance cannot run on initials.
+    _ids = [r.student_id for r in rows]
+    _ph = {p["id"]: p["photo"] or "" for p in con.execute(
+        f"SELECT id, photo FROM users WHERE id IN"
+        f" ({','.join('?' * len(_ids))})", _ids)} if _ids else {}
     course = con.execute("SELECT id, name, language, level FROM courses"
                          " WHERE id=?", (s.course_id,)).fetchone()
     lesson = con.execute(
@@ -273,6 +280,7 @@ def roster(con, session_id: int) -> dict:
         "course": dict(course) if course else None,
         "lesson": dict(lesson) if lesson else None,
         "roster": [{"student_id": r.student_id, "name": r.name,
+                    "photo": _ph.get(r.student_id, ""),
                     "status": r.status, "method": r.method, "at": r.at,
                     "marked_by": r.marked_by, "note": r.note} for r in rows],
         "summary": A.attendance_summary(rows),

@@ -43,6 +43,12 @@
     }
     return r.json();
   }
+  // The face, or the initial: a photo when one is shared, the first
+  // letter otherwise — same size either way, so lists never jump.
+  const avatar = (p) => p.photo
+    ? `<img class="lrn-avatar" src="/media/${esc(p.photo)}" alt="">`
+    : `<span class="lrn-avatar lrn-avatar-blank">${esc((p.name || "?")
+        .trim()[0] || "?").toUpperCase()}</span>`;
   const loadScript = (src) => new Promise((res, rej) => {
     if (document.querySelector(`script[src="${src}"]`)) return res();
     const s = document.createElement("script");
@@ -484,6 +490,7 @@
       return;
     }
     const row = (p, acts) => `<div class="lrn-person" data-p="${p.id}">
+      ${avatar(p)}
       <b>${esc(p.name)}</b>
       ${p.unread ? `<span class="lrn-unread">${p.unread}</span>` : ""}
       <span class="lrn-person-acts">${acts}</span></div>`;
@@ -571,6 +578,7 @@
     if (!q || q.trim().length < 2) { box.innerHTML = ""; return; }
     const rows = await api("/api/learn/people/search?q=" + encodeURIComponent(q));
     box.innerHTML = rows.map((p) => `<div class="lrn-person">
+      ${avatar(p)}
       <b>${esc(p.name)}</b>
       <span class="lrn-person-acts">${
         p.contact === "accepted" ? '<span class="lrn-meta">connected</span>'
@@ -791,6 +799,19 @@
     const day = (t) => t ? new Date(t * 1000).toLocaleDateString() : "";
     root.innerHTML = tabs() + `
       ${me ? `<div class="lrn-live" style="align-items:flex-start">
+        <div class="lrn-me-photo">${avatar(me)}
+          <input type="file" id="pr-photo-file" accept="image/*" hidden>
+          <button class="lrn-btn sm" id="pr-photo">${me.photo
+            ? "Change photo" : "Add a photo"}</button>
+          ${me.photo ? `<button class="lrn-btn sm" id="pr-photo-rm">
+            Remove</button>` : ""}
+          <label class="lrn-meta"><input type="checkbox" id="pr-photo-share"
+            ${me.prefs && me.prefs.privacy_photo ? "checked" : ""}>
+            show it to people who can see me</label>
+          <span class="lrn-meta">Only you can add your photo — adding it
+            is the consent. Staff rosters always show it; the switch
+            covers everyone else.</span>
+        </div>
         <div><h2 style="margin:0">${esc(me.name)}
             <span class="lrn-badge">${esc((me.role_label
               || me.role).toLowerCase())}</span></h2>
@@ -849,6 +870,35 @@
         alert("Saved.");
       } catch (err) { alert(err.message); }
     };
+    const pf = document.getElementById("pr-photo");
+    if (pf) pf.onclick = () =>
+      document.getElementById("pr-photo-file").click();
+    const pff = document.getElementById("pr-photo-file");
+    if (pff) pff.onchange = async () => {
+      const f = pff.files && pff.files[0];
+      if (!f) return;
+      const r = await fetch("/api/learn/me/photo", {
+        method: "POST",
+        headers: { "Content-Type": f.type || "application/octet-stream",
+                   Authorization: "Bearer " + token() },
+        body: f });
+      if (!r.ok) {
+        alert((await r.json().catch(() => ({}))).detail
+          || "that photo was refused");
+        return;
+      }
+      profileView();
+    };
+    const prm = document.getElementById("pr-photo-rm");
+    if (prm) prm.onclick = async () => {
+      await fetch("/api/learn/me/photo", { method: "DELETE",
+        headers: { Authorization: "Bearer " + token() } });
+      profileView();
+    };
+    const psh = document.getElementById("pr-photo-share");
+    if (psh) psh.onchange = () =>
+      api("/api/learn/prefs", { privacy_photo: psh.checked ? 1 : 0 })
+        .catch(() => {});
     const so = document.getElementById("pr-signout-all");
     if (so) so.onclick = async () => {
       if (!window.confirm("End every session on every device, including "

@@ -252,10 +252,12 @@ def erase(con, actor, user_id: int, *, confirm_name: str,
     con.execute("UPDATE enrollments SET until=? WHERE user_id=?"
                 " AND until IS NULL", (time.time(), pid))
 
-    # 5. the tombstone
+    # 5. the tombstone — and the face goes with the name
+    if person.get("photo"):
+        M.unlink(person["photo"])
     con.execute(
         "UPDATE users SET name=?, email='', region='', uid=NULL, active=0,"
-        " erased_at=? WHERE id=?",
+        " photo='', erased_at=? WHERE id=?",
         (f"Erased person #{pid}", time.time(), pid))
 
     # 6. the audit log keeps what happened; their name comes off it

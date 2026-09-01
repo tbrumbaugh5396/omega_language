@@ -197,4 +197,12 @@ into that tenant's own media store — sniffed, sharded, served and
 data-rights-swept like every other recording. `collect-tape` on the
 session picks up segments that finished late.
 
-Still deliberately absent: the source's people-photos.
+People-photos landed 2026-09-01, and the port ledger closes with them.
+The design is consent-first: only the person uploads their own photo
+(uploading IS the consent), it lands token-named in the tenant's sharded
+store, the community's one presenter shares it by the person's own
+`privacy_photo` switch under whatever name-visibility already passed,
+staff rosters always carry it (attendance cannot run on initials), and
+it leaves with removal and with erasure — the file, not just the row.
+
+Nothing from the source remains unported.

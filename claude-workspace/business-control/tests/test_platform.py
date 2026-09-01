@@ -2694,6 +2694,53 @@ ok(c.post(f"/api/learning/conduct/{_crep['id']}/resolve", headers=AA,
           json={}).status_code == 404,
    "resolving is once — a resolved report stays resolved")
 
+# --- people photos: the face is the person's to give -------------------------
+# The last of the source's absences. Self-uploaded ONLY (uploading is the
+# consent), token-named in the sharded store, shared by the person's own
+# privacy_photo switch, always on staff rosters (attendance cannot run on
+# initials), gone with removal and with erasure.
+_png1 = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 800)
+_pup = c.post("/api/learn/me/photo", headers=LN, content=_png1)
+ok(_pup.status_code == 200 and _pup.json()["photo"].endswith(".png"),
+   "a member uploads their own photo — sniffed like any media, "
+   "token-named like any file")
+_mephoto = c.get("/api/learn/me", headers=LN).json()
+ok(_mephoto["photo"] == _pup.json()["photo"]
+   and _mephoto["prefs"]["privacy_photo"] == 1,
+   "the profile carries it, shared by default — their switch to flip")
+_pfile = _tn.tenant_dir("alpha") / "uploads" / _mephoto["photo"]
+ok(_pfile.exists(), "and the bytes live in the tenant's sharded store")
+_hit = [p for p in c.get("/api/learn/people/search?q=Lara",
+                         headers=NN).json() if p["id"] == _mephoto["id"]]
+ok(_hit and _hit[0].get("photo") == _mephoto["photo"],
+   "people who may see the name see the face — the same presenter "
+   "answers both")
+c.post("/api/learn/prefs", headers=LN, json={"privacy_photo": 0})
+_hit2 = [p for p in c.get("/api/learn/people/search?q=Lara",
+                          headers=NN).json() if p["id"] == _mephoto["id"]]
+ok(_hit2 and "photo" not in _hit2[0],
+   "switch off = the face is shown to nobody the switch covers")
+_clsP = c.post("/api/learning/sessions", headers=TT,
+               json={"course_id": _crs}).json()
+_rosP = c.get(f"/api/learning/sessions/{_clsP['session']['id']}",
+              headers=TT).json()
+_lrow = [r for r in _rosP["roster"]
+         if r["student_id"] == _mephoto["id"]]
+ok(_lrow and _lrow[0]["photo"] == _mephoto["photo"],
+   "while the teacher's roster keeps the face regardless — attendance "
+   "is the surface full names already trust")
+c.post(f"/api/learning/sessions/{_clsP['session']['id']}/close",
+       headers=TT)
+c.post("/api/learn/prefs", headers=LN, json={"privacy_photo": 1})
+ok(c.post("/api/learn/me/photo", headers=LN,
+          content=b"just words").status_code == 400,
+   "a non-image is refused at the door")
+c.request("DELETE", "/api/learn/me/photo", headers=LN)
+ok(c.get("/api/learn/me", headers=LN).json()["photo"] == ""
+   and not _pfile.exists(),
+   "removal clears the record AND the file — a face nobody can reach is "
+   "still a face on disk until it is not")
+
 # --- live video: the signaling mailboxes -----------------------------------
 _j1 = c.post("/api/learn/rtc/rm-test1/join", headers=LN, json={}).json()
 _j2 = c.post("/api/learn/rtc/rm-test1/join", headers=NN, json={}).json()
@@ -3127,6 +3174,21 @@ ok("mediamtx" in _its2 and "bc-<tenant>-<room>-<peer>" in _its2
    and "record_dir" in _its2 and "recordFormat: fmp4" in _its2,
    "the installer stands MediaMTX up recording what it forwards, and "
    "ships in every app bundle")
+
+# --- the forge pilot: the tooling family's first manifest line ---------------
+ok("forge" in _svcm.KNOWN
+   and _svcm.KNOWN["forge"]["probe"] == "/api/v1/version",
+   "the platform knows what a forge is and how to ask if it is alive")
+_its3 = (ROOT / "scripts" / "install_forge.sh").read_text()
+ok("forgejo" in _its3 and "DISABLE_REGISTRATION = true" in _its3
+   and "node_services.json" in _its3 and "INSTALL_LOCK" in _its3,
+   "the pilot installer: one binary, registration closed, the manifest "
+   "line — the capability that would SELL it stays a price-book "
+   "decision")
+_svcm.declare("forge", "http://127.0.0.1:65001")
+ok(_svcm.summary().get("forge") is False,
+   "a declared forge nobody started shows as down, not as hoped-for — "
+   "health is a probe, never a claim")
 
 # --- data rights: export, and erasure with a shown plan ----------------------
 _myx = c.get("/api/learn/me/export", headers=LN)
@@ -3665,6 +3727,11 @@ ok('id="eng-sow"' in _ajs2 and "d.tracks" in _ajs2
 ok(all(s in _ajs2 for s in ("data-njoin", "data-ncheck", "data-nupdate")),
    "every addr'd node offers its join command, a live check, and a "
    "one-click code update from the Platform tab")
+ok("roster-face" in _ajs2 and all(
+       s in _ljs2 for s in ("lrn-avatar", "/api/learn/me/photo",
+                            "pr-photo-share")),
+   "faces ride the roster and the portal — upload, remove and the share "
+   "switch all on the person's own profile")
 ok('mode: key ? "" : "signin"' in (
        Path(__file__).parent.parent
        / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),

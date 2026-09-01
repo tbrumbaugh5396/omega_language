@@ -356,6 +356,7 @@ def thread_send(pid: int, body: SendBody, user=Depends(current_customer),
 
 class PrefsBody(BaseModel):
     privacy_name: str | None = None
+    privacy_photo: int | None = None
     invisible: int | None = None
     open_dm: int | None = None
 
@@ -366,9 +367,38 @@ def prefs_set(body: PrefsBody, user=Depends(current_customer),
     _require_cap("learning")
     _member(con, user)
     out = CM.set_prefs(con, user["id"], privacy_name=body.privacy_name,
+                       privacy_photo=body.privacy_photo,
                        invisible=body.invisible, open_dm=body.open_dm)
     con.commit()
     return out
+
+
+@router.post("/api/learn/me/photo")
+async def me_photo(request: Request, user=Depends(current_customer),
+                   con=Depends(get_con)):
+    """The person's photo — self-uploaded ONLY, and uploading is the
+    consent. It lands token-named in the sharded store like every other
+    media file, is shared by their own privacy_photo switch, and leaves
+    with them: removal here, erasure everywhere."""
+    _require_cap("learning")
+    data = await MAT.read_upload(request)
+    saved = MAT.save(data, allow=("image",))
+    if user["photo"]:
+        MAT.unlink(user["photo"])
+    con.execute("UPDATE users SET photo=? WHERE id=?",
+                (saved["path"], user["id"]))
+    con.commit()
+    return {"photo": saved["path"]}
+
+
+@router.delete("/api/learn/me/photo")
+def me_photo_remove(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    if user["photo"]:
+        MAT.unlink(user["photo"])
+    con.execute("UPDATE users SET photo='' WHERE id=?", (user["id"],))
+    con.commit()
+    return {"ok": True}
 
 
 # ── live video: the signaling mailboxes ──────────────────────────────────────
@@ -548,6 +578,8 @@ def me_view(user=Depends(current_customer), con=Depends(get_con)):
         " AND status IN ('present','late')", (user["id"],)).fetchone()["n"]
     from erp.backend import roles as R
     return {"id": user["id"], "name": user["name"],
+            "photo": user["photo"] or "",
+            "prefs": CM.prefs_of(con, user["id"]),
             "email": user["email"] or "", "role": user["role"],
             "role_label": R.LABELS.get(user["role"], user["role"]),
             "requested_role": user["requested_role"] or "",
@@ -884,6 +916,9 @@ def learn_page(con=Depends(get_con)):
  .lrn-tab.on{{font-weight:700;border:1px solid rgba(127,127,127,.25);border-bottom-color:transparent}}
  .lrn-search input{{width:100%;max-width:420px;padding:10px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:none;color:inherit}}
  .lrn-person{{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid rgba(127,127,127,.15)}}
+ .lrn-avatar{{width:34px;height:34px;border-radius:50%;object-fit:cover;flex:none;display:inline-flex;align-items:center;justify-content:center;background:rgba(127,127,127,.25);font-weight:700;vertical-align:middle}}
+ .lrn-me-photo{{display:flex;flex-direction:column;gap:8px;align-items:center;max-width:150px;text-align:center}}
+ .lrn-me-photo .lrn-avatar{{width:72px;height:72px;font-size:1.6em}}
  .lrn-person-acts{{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}}
  .lrn-unread{{background:currentColor;color:var(--bg,#fff);border-radius:999px;padding:0 8px;font-size:.8em}}
  .lrn-prefs{{display:grid;gap:10px;max-width:480px}}

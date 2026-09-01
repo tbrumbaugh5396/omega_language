@@ -136,7 +136,7 @@ def prefs_of(con, uid: int) -> dict:
 
 def set_prefs(con, uid: int, **kw) -> dict:
     p = prefs_of(con, uid)
-    for k in ("privacy_name", "invisible", "open_dm"):
+    for k in ("privacy_name", "privacy_photo", "invisible", "open_dm"):
         if k in kw and kw[k] is not None:
             p[k] = kw[k]
     if p["privacy_name"] not in PRIVACY_LEVELS:
@@ -145,9 +145,11 @@ def set_prefs(con, uid: int, **kw) -> dict:
         "INSERT INTO community_prefs(user_id,privacy_name,privacy_photo,"
         " invisible,open_dm) VALUES(?,?,?,?,?)"
         " ON CONFLICT(user_id) DO UPDATE SET"
-        "  privacy_name=excluded.privacy_name, invisible=excluded.invisible,"
+        "  privacy_name=excluded.privacy_name,"
+        "  privacy_photo=excluded.privacy_photo,"
+        "  invisible=excluded.invisible,"
         "  open_dm=excluded.open_dm",
-        (int(uid), p["privacy_name"], p["privacy_photo"],
+        (int(uid), p["privacy_name"], 1 if p["privacy_photo"] else 0,
          1 if p["invisible"] else 0, 1 if p["open_dm"] else 0))
     return p
 
@@ -246,7 +248,20 @@ def present(con, viewer, person, *, contact=None, classmate=None):
     that drift. Staff always get the full record; you always see yourself.
     """
     out = {"id": person["id"], "name": person["name"]}
+
+    def _photo():
+        # Rows arrive with different SELECTs; the photo is fetched here
+        # when the caller did not carry it, so every surface gets the
+        # same answer without every query changing.
+        try:
+            return person["photo"] or ""
+        except (KeyError, IndexError):
+            r = con.execute("SELECT photo FROM users WHERE id=?",
+                            (person["id"],)).fetchone()
+            return (r["photo"] if r else "") or ""
+
     if viewer["id"] == person["id"] or is_staff(con, viewer):
+        out["photo"] = _photo()
         return out
     p = prefs_of(con, person["id"])
     # Ghost mode and blocks come before every privacy level: a ghost is
@@ -272,6 +287,11 @@ def present(con, viewer, person, *, contact=None, classmate=None):
                     return None
             else:                           # contacts-only, or nobody
                 return None
+    # The photo rides its own switch, under the visibility the name
+    # already passed: privacy_photo off = a face shown to nobody but
+    # yourself and the staff whose rosters need it.
+    if p["privacy_photo"]:
+        out["photo"] = _photo()
     return out
 
 

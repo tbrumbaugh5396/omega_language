@@ -287,6 +287,7 @@ def customer_detail(uid: int, user=Depends(current_user),
 def team_list(user=Depends(admin_user), con=Depends(get_con)):
     rows = con.execute(
         "SELECT u.id, u.name, u.email, u.role, u.active, u.is_admin,"
+        " u.photo,"
         " (SELECT COUNT(*) FROM courses c WHERE c.teacher_id=u.id"
         "   AND c.active=1) AS teaches,"
         " (SELECT 1 FROM pay_rates p WHERE p.teacher_id=u.id) AS has_rate"
