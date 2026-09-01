@@ -4422,7 +4422,15 @@ async function renderFleet() {
              Address field turns a booking into a machine">booking</span>`
           : ""}
         ${n.id === "local" ? `<span class="pill">this machine</span>`
-          : `<button class="btn alt sm" data-nodekill="${esc(n.id)}"
+          : `${n.addr ? `<button class="btn alt sm" data-njoin="${esc(n.id)}"
+               title="the one command that installs the worker on the fresh
+               machine">Join cmd</button>
+             <button class="btn alt sm" data-ncheck="${esc(n.id)}"
+               title="ping the machine: alive, version, tenants">Check</button>
+             <button class="btn alt sm" data-nupdate="${esc(n.id)}"
+               title="push this box's code and wait for the node to come
+               back wearing it">Update</button>` : ""}
+             <button class="btn alt sm" data-nodekill="${esc(n.id)}"
                ${n.tenants.length ? "disabled title='move or shut down its "
                + "tenants first'" : ""}>Destroy</button>`}
       </div>
@@ -4556,6 +4564,52 @@ async function renderFleet() {
     standUpClient(b.dataset.standup, +b.dataset.eid, b.dataset.name,
                   { fleet: f }));
 
+  view().querySelectorAll("[data-njoin]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        const j = await api(
+          `/api/store/admin/fleet/nodes/${b.dataset.njoin}/join`);
+        modal(`<h3>Join ${esc(b.dataset.njoin)} to the fleet</h3>
+          <p class="dim">Run this on the fresh machine as root. It fetches
+            the app bundle, installs the systemd service with the node's
+            identity, and proves the node answers before claiming success.
+            The key travels only in this command.</p>
+          <textarea id="nj-cmd" readonly rows="4"
+            style="width:100%;font-family:monospace;font-size:12px"
+            >${esc(j.command)}</textarea>
+          <p class="dim">${esc(j.note)}</p>
+          <div class="modal-foot">
+            <button class="btn" data-close>Done</button></div>`);
+        const box = document.getElementById("nj-cmd");
+        box.onfocus = () => box.select();
+        box.focus();
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-ncheck]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        const r = await api(
+          `/api/store/admin/fleet/nodes/${b.dataset.ncheck}/check`);
+        toast(`${b.dataset.ncheck}: up · code ${r.version}`
+          + (r.version === r.current ? " (current)" : ` — provider is on `
+            + `${r.current}, push Update`)
+          + ` · ${r.tenants} tenant${r.tenants === 1 ? "" : "s"}`);
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-nupdate]").forEach((b) => b.onclick =
+    async () => {
+      b.disabled = true;
+      b.textContent = "Updating…";
+      try {
+        const r = await api(
+          `/api/store/admin/fleet/nodes/${b.dataset.nupdate}/update`,
+          { method: "POST", body: {} });
+        toast(r.updated
+          ? `${b.dataset.nupdate} restarted on ${r.version}`
+          : `${b.dataset.nupdate} was already on ${r.version}`);
+      } catch (err) { toast(err.message); }
+      renderFleet();
+    });
   view().querySelectorAll("[data-nodekill]").forEach((b) => b.onclick =
     async () => {
       if (!confirm(`Destroy ${b.dataset.nodekill}? It carries nothing, so `

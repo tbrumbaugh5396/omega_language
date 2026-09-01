@@ -6948,6 +6948,58 @@ try:
        "destroying a remote tenant recalls the data FIRST and retires it "
        "on the provider — the machine stops holding a business that "
        "left, and the business still owns its records")
+
+    # --- the node wears a version, and the fleet can dress it -------------
+    _wping = _jn.loads(_ur.urlopen(_ur.Request(
+        f"http://127.0.0.1:{_wport}/api/node/ping",
+        headers={"X-Fleet-Key": _wkey}), timeout=5).read())
+    ok(_wping.get("version") == "dev",
+       "a worker running from a working tree says so — dev, not a hash")
+    _rqup = _ur.Request(f"http://127.0.0.1:{_wport}/api/node/update",
+                        data=b"junk", headers={"X-Fleet-Key": "wrong"})
+    try:
+        _ur.urlopen(_rqup, timeout=5)
+        _upbad = 200
+    except Exception as e9:
+        _upbad = getattr(e9, "code", 0)
+    ok(_upbad == 403,
+       "an update without the node's key is refused like any shipment")
+
+    _bz = c.get("/api/fleet/bundle", headers={"X-Fleet-Key": _wkey})
+    ok(_bz.status_code == 200
+       and len(_bz.headers.get("X-Bundle-Version", "")) == 12,
+       "a booked node's key fetches the app bundle from the provider")
+    import zipfile as _zf9
+    _zn = _zf9.ZipFile(_io2.BytesIO(_bz.content)).namelist()
+    ok("src/erp/backend/main.py" in _zn and "VERSION" in _zn
+       and "requirements.txt" in _zn
+       and "scripts/install_node.sh" in _zn
+       and not any(n.startswith("data/") for n in _zn)
+       and not any("b2b-client/clients/" in n for n in _zn),
+       "the bundle IS the app — src, scripts, docs, requirements, a "
+       "VERSION — never data, and never the kit's per-client working "
+       "papers")
+    ok(c.get("/api/fleet/bundle",
+             headers={"X-Fleet-Key": "wrong"}).status_code == 403
+       and c.get("/api/fleet/bundle", headers=AA).status_code == 200,
+       "a wrong key gets nothing; an admin can pull it by hand")
+
+    _iscript = c.get("/fleet/install.sh").text
+    ok("BUSINESS_CONTROL_NODE_KEY" in _iscript and "systemd" in _iscript
+       and "api/fleet/bundle" in _iscript,
+       "the installer curl fetches is the script the tree versions — "
+       "identity in the unit's environment, bundle from the provider")
+    _join = c.get("/api/store/admin/fleet/nodes/node-w/join",
+                  headers=AA).json()
+    ok("install.sh" in _join["command"] and _wkey in _join["command"]
+       and "--node node-w" in _join["command"],
+       "and the Platform tab hands the operator the one command that "
+       "makes the machine a worker")
+    _chk = c.get("/api/store/admin/fleet/nodes/node-w/check",
+                 headers=AA).json()
+    ok(_chk["version"] == "dev" and len(_chk["current"]) == 12,
+       "Check reads the node's running code against the provider's "
+       "current build")
 finally:
     _wproc.terminate()
     try:
@@ -6971,6 +7023,34 @@ ok(_esc and not (Path(os.environ["BUSINESS_CONTROL_DATA"]) / "tenants"
                  / "escape.txt").exists(),
    "a shipment that tries to write outside the tenant's directory is an "
    "attack, not a shipment — refused before a byte lands")
+
+# --- the bundle's other half: apply, and its walls ---------------------------
+_bb, _bv = _fl.build_bundle()
+_tgt = Path(tempfile.mkdtemp(prefix="bc_upd_"))
+ok(_fl.apply_bundle(_bb, _tgt) == _bv
+   and (_tgt / "src" / "erp" / "backend" / "main.py").exists()
+   and (_tgt / "VERSION").read_text().strip() == _bv,
+   "apply is the installer's other half: the same bundle lands the same "
+   "tree, VERSION and all — and the version is the content's own hash")
+import zipfile as _zf10
+_evz2 = _io2.BytesIO()
+with _zf10.ZipFile(_evz2, "w") as _z10:
+    _z10.writestr("VERSION", "x")
+    _z10.writestr("../evil.txt", "hi")
+try:
+    _fl.apply_bundle(_evz2.getvalue(), _tgt)
+    _zesc = False
+except ValueError:
+    _zesc = True
+ok(_zesc and not (_tgt.parent / "evil.txt").exists(),
+   "a bundle naming a path outside the app is an attack, not an update")
+try:
+    _fl.apply_bundle(b"not a zip", _tgt)
+    _zbad = False
+except ValueError:
+    _zbad = True
+ok(_zbad, "and junk is refused before a byte lands")
+_shm.rmtree(_tgt, ignore_errors=True)
 
 
 # --- the grant editor: capabilities bought AFTER stand-up -----------------
@@ -8649,6 +8729,9 @@ ok('id="eng-sow"' in _ajs2 and "d.tracks" in _ajs2
    and "PARALLEL" not in _ajs2,
    "the SOW drafts from the engagement, and the gantt reads the server's "
    "tracks — the chart and the paper share one schedule")
+ok(all(s in _ajs2 for s in ("data-njoin", "data-ncheck", "data-nupdate")),
+   "every addr'd node offers its join command, a live check, and a "
+   "one-click code update from the Platform tab")
 ok('mode: key ? "" : "signin"' in (
        Path(__file__).parent.parent
        / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),

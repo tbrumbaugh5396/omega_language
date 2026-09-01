@@ -3027,6 +3027,58 @@ def fleet_node_destroy(node_id: str, u=Depends(admin_user),
     return {"ok": True}
 
 
+@router.get("/api/store/admin/fleet/nodes/{node_id}/join")
+def fleet_node_join(node_id: str, request: Request, u=Depends(admin_user),
+                    con=Depends(get_con)):
+    """The one command that turns the booked machine into a worker: run it
+    on the fresh box and it fetches the bundle, stands up systemd with the
+    node's identity, and proves it answers. The key travels only in this
+    command — copied by the operator, never in the script itself."""
+    _provider_only()
+    from erp.backend import fleet
+    from erp.backend.main import CFG
+    key = fleet.node_key(node_id)
+    if node_id not in fleet.nodes():
+        raise HTTPException(404, "no such node")
+    if not key:
+        raise HTTPException(409, "this node has no key — give it an "
+                                 "address first (a key is minted with it)")
+    base = (CFG.get("public_base_url") or "").rstrip("/") \
+        or str(request.base_url).rstrip("/")
+    return {"command":
+            f"curl -fsSL {base}/fleet/install.sh -o /tmp/bc-install.sh"
+            f" && sudo bash /tmp/bc-install.sh --node {node_id}"
+            f" --key {key} --provider {base}",
+            "note": "run on the fresh machine as root; then Check the "
+                    "node here"}
+
+
+@router.get("/api/store/admin/fleet/nodes/{node_id}/check")
+def fleet_node_check(node_id: str, u=Depends(admin_user),
+                     con=Depends(get_con)):
+    _provider_only()
+    from erp.backend import fleet
+    try:
+        out = fleet.check_node(node_id)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(502, str(e))
+    return {**out, "current": fleet.build_bundle()[1]}
+
+
+@router.post("/api/store/admin/fleet/nodes/{node_id}/update")
+def fleet_node_update(node_id: str, u=Depends(admin_user),
+                      con=Depends(get_con)):
+    """Push this box's code to the worker and wait until the worker's
+    ping answers with the pushed version — success observed, not
+    assumed."""
+    _provider_only()
+    from erp.backend import fleet
+    try:
+        return fleet.update_node(node_id, actor=u["name"])
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(502, str(e))
+
+
 @router.post("/api/store/admin/fleet/tenants")
 def fleet_tenant_add(body: TenantBody, request: Request,
                      u=Depends(admin_user), con=Depends(get_con)):

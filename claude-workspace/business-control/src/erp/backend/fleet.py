@@ -200,6 +200,147 @@ def _node_call(node_id: str, method: str, path: str, content=None,
     return r
 
 
+# ---------- the app as cargo: bundles, versions, updates ----------
+# A worker runs the same code as the provider, and this is how it gets it:
+# the provider zips its own working tree (src, scripts, docs, requirements)
+# stamped with a VERSION derived from the content, a fresh node fetches the
+# bundle at install, and an update ships the same bundle to a running node
+# — which applies it and exits, letting systemd bring it back on the new
+# code. One artifact for both roads, so "what the installer got" and "what
+# the update pushed" can never be different things.
+
+BUNDLE_DIRS = ("src", "scripts", "docs")
+BUNDLE_FILES = ("requirements.txt",)
+_BUNDLE_SKIP = ("__pycache__", ".DS_Store")
+# The kit's clients/ folder is per-client WORKING PAPERS — an operator's
+# drafts and records, not app code — and it never leaves the provider.
+_BUNDLE_SKIP_PREFIXES = ("docs/business-control-b2b-client/clients/",)
+
+
+def _app_root():
+    from . import config
+    return config.APP_ROOT
+
+
+def app_version() -> str:
+    """What this process is running. A bundle carries a VERSION file; a
+    working tree does not, and says so."""
+    try:
+        return (_app_root() / "VERSION").read_text().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+def build_bundle() -> tuple[bytes, str]:
+    """The app as one zip, and its version — a short hash of the content,
+    so two builds of the same tree agree and any edit changes the name."""
+    import hashlib
+    import io
+    import zipfile
+    root = _app_root()
+    members = []
+    for d in BUNDLE_DIRS:
+        base = root / d
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*")):
+            if p.is_dir():
+                continue
+            rel = str(p.relative_to(root))
+            if (rel.endswith(".pyc")
+                    or any(s in rel.split("/") for s in _BUNDLE_SKIP)
+                    or rel.startswith(_BUNDLE_SKIP_PREFIXES)):
+                continue
+            members.append((rel, p.read_bytes()))
+    for f in BUNDLE_FILES:
+        p = root / f
+        if p.is_file():
+            members.append((f, p.read_bytes()))
+    h = hashlib.sha256()
+    for rel, data in members:
+        h.update(rel.encode())
+        h.update(data)
+    version = h.hexdigest()[:12]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, data in members:
+            z.writestr(rel, data)
+        z.writestr("VERSION", version)
+    return buf.getvalue(), version
+
+
+def apply_bundle(blob: bytes, target) -> str:
+    """Unpack a bundle over the app directory. Every member must resolve
+    INSIDE the target — a zip that names '..' or an absolute path is an
+    attack, not an update. Data is untouched: bundles never carry it."""
+    import io
+    import zipfile
+    from pathlib import Path as _P
+    target = _P(target).resolve()
+    try:
+        z = zipfile.ZipFile(io.BytesIO(blob))
+    except zipfile.BadZipFile:
+        raise ValueError("that is not a bundle")
+    names = z.namelist()
+    if "VERSION" not in names:
+        raise ValueError("bundle carries no VERSION — refused")
+    for name in names:
+        dest = (target / name).resolve()
+        if not str(dest).startswith(str(target) + "/"):
+            raise ValueError(f"bundle names a path outside the app: {name}")
+        if name.split("/", 1)[0] == "data":
+            raise ValueError("a bundle must never carry data/")
+    for name in names:
+        dest = target / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(z.read(name))
+    return z.read("VERSION").decode().strip()
+
+
+def check_node(node_id: str) -> dict:
+    """One live look at a worker: is it up, what code, how many tenants."""
+    p = _node_call(node_id, "GET", "/api/node/ping", timeout=6).json()
+    return {"ok": True, "node": p.get("node"),
+            "version": p.get("version", "unknown"),
+            "tenants": len(p.get("tenants") or {})}
+
+
+def update_node(node_id: str, actor: str = "") -> dict:
+    """Ship this box's code to a worker and wait for it to come back
+    wearing it. The worker applies the bundle, answers, and exits —
+    systemd restarts it on the new code — so success is observed, not
+    assumed: we poll until the ping reports the pushed version."""
+    blob, version = build_bundle()
+    before = check_node(node_id)
+    if before["version"] == version:
+        return {**before, "updated": False,
+            "note": "already on this version"}
+    _node_call(node_id, "POST", "/api/node/update", content=blob,
+               timeout=300)
+    for _ in range(30):
+        time.sleep(2)
+        try:
+            now = check_node(node_id)
+            if now["version"] == version:
+                log("node updated",
+                    f"{node_id} · {before['version']} -> {version}",
+                    actor or "operator")
+                return {**now, "updated": True, "from": before["version"]}
+        except Exception:
+            continue                       # mid-restart: keep waiting
+    raise RuntimeError(
+        f"node '{node_id}' took the bundle but never reported version "
+        f"{version} — check its service logs before pushing again")
+
+
+def install_script() -> str:
+    """The node installer, from disk — it ships in the repo (and in every
+    bundle), so the script a fresh machine curls is the script the tree
+    versions."""
+    p = _app_root() / "scripts" / "install_node.sh"
+    return p.read_text(encoding="utf-8")
+
+
 def pack_tenant(tid: str) -> bytes:
     """A tenant's whole directory as one tar.gz — database, config,
     uploads, push keys. The unit of shipment, and of backup.

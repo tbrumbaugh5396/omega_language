@@ -3,6 +3,7 @@ import csv
 import time
 import io
 import json
+import os
 import secrets
 import socket
 
@@ -4216,9 +4217,66 @@ def _fleet_auth(request: Request) -> None:
 
 @app.get("/api/node/ping")
 def node_ping(request: Request):
+    from . import fleet
     _fleet_auth(request)
     return {"ok": True, "node": tenancy.NODE_ID,
+            "version": fleet.app_version(),
             "tenants": tenancy.all_tenants()}
+
+
+@app.post("/api/node/update")
+async def node_update(request: Request):
+    """Receive a code bundle, wear it, and restart. The response leaves
+    first; then the process exits and systemd brings it back on the new
+    code — the provider polls the ping until the version it pushed is the
+    version that answers."""
+    _fleet_auth(request)
+    from . import fleet
+    blob = await request.body()
+    if not blob:
+        raise HTTPException(400, "empty bundle")
+    try:
+        version = fleet.apply_bundle(blob, config.APP_ROOT)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    import threading
+    threading.Timer(1.0, lambda: os._exit(3)).start()
+    return {"ok": True, "version": version, "restarting": True}
+
+
+@app.get("/api/fleet/bundle")
+def fleet_bundle(request: Request, con=Depends(get_con)):
+    """The app as cargo — what a fresh node installs and an update ships.
+    Authenticated by any booked node's key (the key IS the invitation to
+    run this code), or by a signed-in admin."""
+    from . import fleet
+    key = request.headers.get("X-Fleet-Key", "")
+    allowed = bool(key) and any(
+        (n.get("key") or "") == key for n in fleet.nodes().values())
+    if not allowed:
+        tok = request.headers.get("Authorization", "")
+        u = auth.user_for_token(con, tok.removeprefix("Bearer ").strip())
+        allowed = bool(u and u["is_admin"])
+    if not allowed:
+        raise HTTPException(403, "a node key or an admin signs for the "
+                                 "bundle")
+    blob, version = fleet.build_bundle()
+    from fastapi.responses import Response as _Resp
+    return _Resp(blob, media_type="application/zip",
+                 headers={"X-Bundle-Version": version})
+
+
+@app.get("/fleet/install.sh")
+def fleet_install_sh():
+    """The node installer, as curl finds it. Public and generic on
+    purpose: it carries no secrets — the node id and key travel only in
+    the command the operator copies from the Platform tab."""
+    from . import fleet
+    from fastapi.responses import PlainTextResponse as _PT
+    try:
+        return _PT(fleet.install_script())
+    except OSError:
+        raise HTTPException(404, "this install ships without the script")
 
 
 @app.post("/api/node/registry")

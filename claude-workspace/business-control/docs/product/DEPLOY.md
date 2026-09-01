@@ -189,9 +189,39 @@ WantedBy=multi-user.target
 sudo systemctl enable --now business-control
 ```
 
-What this is **not**: multi-machine orchestration. All tenants still run
-in this one process on this one box; the fleet's nodes stay bookkeeping
-until `fleet.provision_cmd` points at a real provider and tenants
-actually move. One 4 GB box carries 25 units — by the book's own
-arithmetic, that is a real client roster before a second machine earns
-its keep.
+One 4 GB box carries 25 units — by the book's own arithmetic, that is a
+real client roster before a second machine earns its keep. When it does:
+
+## The second machine: a node in three steps
+
+1. **Book it.** Platform tab → add a node with its **address**
+   (`http://10.0.0.2:8860` on a private network, or an https:// name).
+   Booking with an address mints the node's key.
+
+2. **Join it.** The node's **Join cmd** button prints one command — run
+   it on the fresh Ubuntu/Debian box as root:
+
+   ```sh
+   curl -fsSL https://shop.yourbrand.com/fleet/install.sh -o /tmp/bc-install.sh \
+     && sudo bash /tmp/bc-install.sh --node node-b --key <minted-key> \
+          --provider https://shop.yourbrand.com
+   ```
+
+   It fetches the app bundle from the provider (authenticated by the
+   node key), stands it up under systemd with the node's identity in its
+   environment, and proves the node answers before claiming success.
+   Firewall the box so only the provider (and port 22) reaches it.
+
+3. **Use it.** **Check** pings it (alive, code version, tenants);
+   stand-ups and **Move** ship tenants to it; the nightly backup pulls
+   from it; **Update** pushes the provider's current code — the worker
+   applies the bundle, exits, systemd restarts it, and the provider
+   polls until the ping answers with the pushed version. Success is
+   observed, not assumed. Requests for its tenants that still arrive at
+   the provider (wildcard DNS at the front box) are proxied through;
+   pointing a tenant's DNS at its node directly is the optimization,
+   not a prerequisite.
+
+`fleet.provision_cmd` remains the optional hook that makes step 1 also
+CREATE the VM at your cloud provider; without it, booking is a record
+and the machine is yours to rent.
