@@ -351,6 +351,10 @@ details.sect > .inner { padding: 0 14px 14px; }
   flex-wrap: wrap; margin-bottom: 20px; }
 .page-head > div { flex: 1; min-width: 240px; }
 .page-head h2 { margin: 0 0 4px; }
+/* A section header (h3 + its action button): the heading grows so the
+   button hugs the right edge, and its default block margins go — inside a
+   flex row they pushed the label below the button's baseline. */
+.page-head > h3 { flex: 1; margin: 0; align-self: center; }
 .page-head p.dim { font-size: 13.5px; max-width: 62ch; margin: 0; }
 .page-head .btn { flex: none; display: inline-flex; align-items: center;
   gap: 8px; }
@@ -405,9 +409,20 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .eng-top .btn { flex: none; margin-left: auto; }
 .eng-top .btn + .btn { margin-left: 0; }
 
-/* the Documents tab, in columns: title block · signed · expiry · actions,
-   so every state pill and every button starts at the same x down the list */
-.doc-top { display: grid; align-items: center; gap: 12px;
+/* The generic list row: a title block on the left, pills and buttons
+   trailing on the right, wrapping when the pane is narrow. Most .doc-top
+   uses across the app are this shape — squeezing their 2-3 children into
+   the Documents tab's 5-column grid stretched the first button across the
+   title column and overlapped everything. */
+.doc-top { display: flex; align-items: center; gap: 8px 10px;
+  flex-wrap: wrap; }
+.doc-top .doc-main { flex: 1 1 240px; min-width: 0; }
+.doc-top .pill, .doc-top .btn { flex: none; }
+
+/* the Documents tab keeps its columns: title block · signed · expiry ·
+   actions, so every state pill and every button starts at the same x down
+   the list. Scoped to .doc-card — the grid is that tab's, not the row's. */
+.doc-card .doc-top { display: grid; align-items: center; gap: 12px;
   grid-template-columns: 22px minmax(0, 1fr) 108px 168px auto; }
 .doc-top .dt-state, .doc-top .dt-exp { justify-self: start; }
 .dt-acts { display: grid; grid-template-columns: repeat(4, 62px); gap: 6px; }
@@ -427,8 +442,9 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .sl-acts { display: flex; gap: 6px; justify-content: flex-end; }
 
 @media (max-width: 900px) {
-  .doc-top { grid-template-columns: 22px minmax(0, 1fr); }
-  .doc-top .dt-state, .doc-top .dt-exp, .dt-acts { grid-column: 1 / -1; }
+  .doc-card .doc-top { grid-template-columns: 22px minmax(0, 1fr); }
+  .doc-card .doc-top .dt-state, .doc-card .doc-top .dt-exp,
+  .dt-acts { grid-column: 1 / -1; }
   .dt-acts { grid-template-columns: repeat(4, 1fr); }
   .sig-line { grid-template-columns: 1fr; gap: 4px; }
 }
