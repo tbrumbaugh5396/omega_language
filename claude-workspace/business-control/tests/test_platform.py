@@ -1728,6 +1728,9 @@ try:
         headers={"X-Fleet-Key": _wkey}), timeout=5).read())
     ok(_wping.get("version") == "dev",
        "a worker running from a working tree says so — dev, not a hash")
+    ok(_wping.get("services") == {},
+       "and a machine with nothing installed declares nothing — the ping "
+       "reports the manifest, not a hope")
     _rqup = _ur.Request(f"http://127.0.0.1:{_wport}/api/node/update",
                         data=b"junk", headers={"X-Fleet-Key": "wrong"})
     try:
@@ -1747,6 +1750,7 @@ try:
     ok("src/erp/backend/main.py" in _zn and "VERSION" in _zn
        and "requirements.txt" in _zn
        and "scripts/install_node.sh" in _zn
+       and "scripts/install_translate.sh" in _zn
        and not any(n.startswith("data/") for n in _zn)
        and not any("b2b-client/clients/" in n for n in _zn),
        "the bundle IS the app — src, scripts, docs, requirements, a "
@@ -2961,6 +2965,82 @@ ok("speechSynthesis" in _ljs and "webkitSpeechRecognition" in _ljs
    and "rate = 0.95" in _ljs,
    "dictation and TTS are browser-side — a learner's words never reach a "
    "server for speech")
+
+# --- node services: the machine's shared daemons ------------------------------
+# The manifest lives beside the fleet registry, outside every tenant dir.
+# Resolution everywhere: tenant config wins, the node daemon is the floor,
+# absence degrades to exactly the pre-services behavior (proved above:
+# the glossary answered before any of this existed).
+from erp.backend import services as _svcm
+ok(_svcm.manifest() == {} and _svcm.service("translate") is None
+   and _svcm.summary() == {},
+   "a plain install declares nothing")
+
+import http.server as _hs
+import socketserver as _ss
+import threading as _th2
+
+
+class _FakeLT(_hs.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'[{"code":"en"},{"code":"es"}]')
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(_jn.dumps({"translatedText": "asombroso"}).encode())
+
+
+_lts = _ss.TCPServer(("127.0.0.1", 0), _FakeLT)
+_ltp = _lts.server_address[1]
+_th2.Thread(target=_lts.serve_forever, daemon=True).start()
+_svcm.declare("translate", f"http://127.0.0.1:{_ltp}")
+ok(_svcm.service("translate")["url"].endswith(str(_ltp))
+   and _svcm.health("translate")["healthy"]
+   and _svcm.summary() == {"translate": True},
+   "one manifest line declares the machine's daemon, and health is a "
+   "live probe, never a stored claim")
+
+_trn = c.get("/api/learn/voice/translate?q=astonishing&source=en&target=es",
+             headers=LN).json()
+ok(_trn["found"] and _trn["text"] == "asombroso"
+   and _trn["via"] == "node service",
+   "a tenant with no translate_url of its own is served by the machine — "
+   "the node's daemon is the floor under every tenant on it")
+ok(c.get("/api/learn/voice/providers", headers=LN).json()["translate"]
+   == "node service",
+   "and the providers panel names the floor, so nobody guesses")
+
+_acfg7 = _jn.loads((_tn.tenant_dir("alpha") / "config.json").read_text())
+_acfg7["translate_url"] = "http://127.0.0.1:9"        # nobody home
+(_tn.tenant_dir("alpha") / "config.json").write_text(_jn.dumps(_acfg7))
+_CFGPROXY.invalidate("alpha")
+_tro = c.get("/api/learn/voice/translate?q=wonderful&source=en&target=es",
+             headers=LN).json()
+ok(not _tro["found"] and _tro["via"] == "remote",
+   "a tenant's OWN provider outranks the machine — even a broken own, "
+   "because overriding is the tenant's deliberate act")
+_acfg7.pop("translate_url")
+(_tn.tenant_dir("alpha") / "config.json").write_text(_jn.dumps(_acfg7))
+_CFGPROXY.invalidate("alpha")
+
+ok(c.get("/api/store/admin/fleet", headers=AA).json()
+   ["services"]["translate"] is True,
+   "the Platform board wears this machine's services as pills — live")
+_its = (ROOT / "scripts" / "install_translate.sh").read_text()
+ok("libretranslate" in _its and "node_services.json" in _its
+   and "systemd" in _its and "--host 127.0.0.1" in _its,
+   "the installer stands the daemon up under systemd, bound to localhost, "
+   "and writes the manifest line — and it ships in every app bundle")
+_lts.shutdown()
 
 # --- SFU: the config contract ------------------------------------------------
 _rtc = c.get("/api/learn/rtc/config", headers=LN).json()

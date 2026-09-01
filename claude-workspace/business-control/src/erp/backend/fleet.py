@@ -298,10 +298,12 @@ def apply_bundle(blob: bytes, target) -> str:
 
 
 def check_node(node_id: str) -> dict:
-    """One live look at a worker: is it up, what code, how many tenants."""
+    """One live look at a worker: is it up, what code, what services, how
+    many tenants."""
     p = _node_call(node_id, "GET", "/api/node/ping", timeout=6).json()
     return {"ok": True, "node": p.get("node"),
             "version": p.get("version", "unknown"),
+            "services": p.get("services") or {},
             "tenants": len(p.get("tenants") or {})}
 
 

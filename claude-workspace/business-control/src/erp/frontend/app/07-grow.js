@@ -309,7 +309,12 @@ async function renderFleet() {
           ? `<span class="pill" title="no address — provision_cmd or the
              Address field turns a booking into a machine">booking</span>`
           : ""}
-        ${n.id === "local" ? `<span class="pill">this machine</span>`
+        ${n.id === "local" ? `<span class="pill">this machine</span>
+          ${Object.entries(f.services || {}).map(([s, up]) =>
+            `<span class="pill ${up ? "ok" : "bad"}"
+               title="node service: shared by every tenant on this machine
+               — ${up ? "answering" : "declared but not answering"}">${
+              esc(s)}</span>`).join("")}`
           : `${n.addr ? `<button class="btn alt sm" data-njoin="${esc(n.id)}"
                title="the one command that installs the worker on the fresh
                machine">Join cmd</button>
@@ -478,10 +483,13 @@ async function renderFleet() {
       try {
         const r = await api(
           `/api/store/admin/fleet/nodes/${b.dataset.ncheck}/check`);
+        const svc = Object.entries(r.services || {});
         toast(`${b.dataset.ncheck}: up · code ${r.version}`
           + (r.version === r.current ? " (current)" : ` — provider is on `
             + `${r.current}, push Update`)
-          + ` · ${r.tenants} tenant${r.tenants === 1 ? "" : "s"}`);
+          + ` · ${r.tenants} tenant${r.tenants === 1 ? "" : "s"}`
+          + (svc.length ? " · services: " + svc.map(([s, up]) =>
+              `${s}${up ? "" : " (down)"}`).join(", ") : ""));
       } catch (err) { toast(err.message); }
     });
   view().querySelectorAll("[data-nupdate]").forEach((b) => b.onclick =

@@ -95,10 +95,26 @@ _cache: dict = {}
 _lock = threading.Lock()
 
 
+def _translate_endpoint(cfg) -> tuple[str, str, str]:
+    """Where translations go, by the node-services resolution rule: the
+    tenant's own config wins, the machine's shared daemon is the floor,
+    and nothing configured means the offline glossary — exactly the
+    behavior before node services existed."""
+    url = (cfg.get("translate_url") or "").strip()
+    if url:
+        return url, (cfg.get("translate_key") or ""), "remote"
+    from . import services
+    s = services.service("translate")
+    if s:
+        return s["url"], s["key"], "node service"
+    return "", "", ""
+
+
 def providers(cfg) -> dict:
     """What is actually configured — shown in the UI so nobody guesses."""
+    _, _, via = _translate_endpoint(cfg)
     return {
-        "translate": "remote" if cfg.get("translate_url") else "local",
+        "translate": via or "local",
         "thesaurus": cfg.get("thesaurus") or "local",
         "languages": LANGS,
     }
@@ -129,17 +145,17 @@ def translate(cfg, text: str, *, source: str = "en",
         if key in _cache:
             return _cache[key]
 
-    url = (cfg.get("translate_url") or "").strip()
+    url, api_key, via = _translate_endpoint(cfg)
     if url:
         payload = {"q": text, "source": source, "target": target,
                    "format": "text"}
-        if cfg.get("translate_key"):
-            payload["api_key"] = cfg["translate_key"]
+        if api_key:
+            payload["api_key"] = api_key
         got = _http_json(url.rstrip("/") + "/translate", data=payload)
         t = (got or {}).get("translatedText") if isinstance(got, dict) else None
-        out = ({"found": True, "text": t, "via": "remote",
+        out = ({"found": True, "text": t, "via": via,
                 "source": source, "target": target} if t else
-               {"found": False, "via": "remote",
+               {"found": False, "via": via,
                 "reason": "the translation service did not answer"})
     else:
         hit = _GLOSSARY.get((source, target), {}).get(text.lower())
@@ -149,7 +165,9 @@ def translate(cfg, text: str, *, source: str = "en",
                 "reason": f'"{text}" is not in the offline glossary'
                           f" ({LANGS.get(source, source)} to"
                           f" {LANGS.get(target, target)}). Configure"
-                          " translate_url to use a translation service."})
+                          " translate_url, or install the machine's"
+                          " translate service"
+                          " (scripts/install_translate.sh)."})
     with _lock:
         _cache[key] = out
     return out

@@ -2987,7 +2987,11 @@ def fleet_board(u=Depends(admin_user), con=Depends(get_con)):
         for t in n["tenants"]:
             t["client"] = clients.get(t["id"])
             t["billing"] = billing.get(t["id"])
+    from erp.backend import services as _svc
     return {"nodes": board, "classes": fleet.CLASSES,
+            # this machine's own shared daemons — worker nodes report
+            # theirs through Check, which asks them live
+            "services": _svc.summary(),
             "backup": _backup_health(),
             "cap_catalog": _cap_catalog(),
             "core_price": _core_price(),

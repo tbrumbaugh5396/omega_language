@@ -22,6 +22,7 @@ Kept current with the code. If one of these is wrong, it's a bug.
 | [multi-tenant.md](multi-tenant.md) | Running several businesses from one process — the host-header router, the tenant registry, what is shared vs owned, and the split that separated the studio from ZenJoy, and the fleet of nodes clients are placed on |
 | [learning.md](learning.md) | The Learning capability — the lingua-portal port: which layer landed on which surface, the two pure modules that moved verbatim, checkout-as-admissions, and the seven follow-on areas now landed (recordings, library, voice, QR identity, data rights, calendar, SFU) |
 | [nutrition.md](nutrition.md) | The Nutrition capability — the macro-kitchen port: pure calorie math, tenant food library, coach caseload, checkout-as-coaching-desk |
+| [node-services.md](node-services.md) | Node services — daemons installed once per machine and shared by every tenant on it: the manifest, the tenant-wins/node-floor/graceful-absence resolution rule, and the LibreTranslate installer that proves the pattern |
 
 > `DEPLOY.md` is the technical runbook the studio's [delivery
 > roadmap](../business-control-b2b-client/roadmap.md) points at rather than

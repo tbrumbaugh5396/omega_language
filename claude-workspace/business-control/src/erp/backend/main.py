@@ -3958,10 +3958,11 @@ def _fleet_auth(request: Request) -> None:
 
 @app.get("/api/node/ping")
 def node_ping(request: Request):
-    from . import fleet
+    from . import fleet, services
     _fleet_auth(request)
     return {"ok": True, "node": tenancy.NODE_ID,
             "version": fleet.app_version(),
+            "services": services.summary(),
             "tenants": tenancy.all_tenants()}
 
 
