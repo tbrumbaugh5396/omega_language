@@ -1233,7 +1233,10 @@ async function renderEngagement(id) {
         .join("")}</div>` : ""}
     </div>`; })()}
     ${foldable("gates", "Stages",
-      `<button class="btn alt sm" id="eng-sow">Draft SOW</button>
+      `${e.tenant_id ? `<button class="btn alt sm" id="eng-report"
+         title="scale, traffic, capability meters and the advisory notes,
+         read live from their install">Business report</button>` : ""}
+       <button class="btn alt sm" id="eng-sow">Draft SOW</button>
        <button class="btn alt sm" id="eng-gantt">Gantt chart</button>`,
       `<p class="dim">Where the project is, is the first stage that hasn't
          closed — a stage that closes on a signature reads its state from
@@ -1298,6 +1301,8 @@ async function renderEngagement(id) {
   $("#eng-edit").onclick = () => engForm(e);
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
   $("#eng-gantt").onclick = ganttModal;
+  if ($("#eng-report")) $("#eng-report").onclick =
+    () => clientDossier(e.tenant_id);
   $("#eng-sow").onclick = () => {
     /* Generated, not blank: deliverables from the quote, fees from the
        price book, the timeline from the gantt's own schedule. Once a SOW

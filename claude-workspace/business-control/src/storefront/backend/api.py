@@ -195,6 +195,8 @@ CREATE TABLE IF NOT EXISTS store_subscriptions (
 STORE_MIGRATIONS = (
     "ALTER TABLE product_reviews ADD COLUMN email TEXT DEFAULT ''",
     "ALTER TABLE product_reviews ADD COLUMN verified INTEGER DEFAULT 0",
+    # Where a visit CAME from — the client dossier's referred-sites view.
+    "ALTER TABLE store_pageviews ADD COLUMN referrer TEXT DEFAULT ''",
     # A subscription that bills money rather than shipping a box needs to
     # remember four things a box never did. `price_cents` is the important
     # one: it is what this subscriber agreed to, not what the product costs
@@ -2487,14 +2489,16 @@ def test_webhook(wid: int, u=Depends(admin_user), con=Depends(get_con)):
 class TrackBody(BaseModel):
     visitor_id: str
     page: str
+    referrer: str = ""
 
 
 @router.post("/api/store/track")
 def track_page(body: TrackBody, con=Depends(get_con),
                _rl=Depends(rate_limit)):
     con.execute(
-        "INSERT INTO store_pageviews(visitor_id, page, created_at)"
-        " VALUES(?,?,?)", (body.visitor_id[:64], body.page[:120], db.now()))
+        "INSERT INTO store_pageviews(visitor_id, page, referrer, created_at)"
+        " VALUES(?,?,?,?)", (body.visitor_id[:64], body.page[:120],
+                             body.referrer[:200], db.now()))
     con.commit()
     return {"ok": True}
 

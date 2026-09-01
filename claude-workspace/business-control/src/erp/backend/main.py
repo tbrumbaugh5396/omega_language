@@ -4112,6 +4112,25 @@ async def node_import(tid: str, request: Request):
     return {"ok": True, "tenant": tid, "node": tenancy.NODE_ID}
 
 
+@app.get("/api/node/tenants/{tid}/usage")
+def node_usage(tid: str, request: Request):
+    """The client dossier's remote half: a worker answers for a tenant it
+    hosts, through the same authenticated dock the backups pull from."""
+    _fleet_auth(request)
+    if tid not in tenancy.all_tenants():
+        raise HTTPException(404, "this node does not hold that tenant")
+    from storefront.backend import fleetadmin
+    tok = tenancy.CURRENT.set(tid)
+    try:
+        con = db.connect()
+        try:
+            return fleetadmin._usage_from(con)
+        finally:
+            con.close()
+    finally:
+        tenancy.CURRENT.reset(tok)
+
+
 @app.get("/api/node/tenants/{tid}/export")
 def node_export(tid: str, request: Request):
     """Hand a tenant back — the recall's first half."""

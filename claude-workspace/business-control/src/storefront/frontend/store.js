@@ -116,9 +116,18 @@ function funnel(step, extra = {}) {
 }
 function pageview(page) {
   if (PREVIEW) return;
+  // Where the visit came from — off-site referrers only; a hop between
+  // our own pages is navigation, not a referral.
+  let ref = "";
+  try {
+    if (document.referrer
+        && new URL(document.referrer).host !== location.host)
+      ref = document.referrer.slice(0, 200);
+  } catch (e) { /* an unparseable referrer is no referrer */ }
   fetch("/api/store/track", { method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ visitor_id: VID, page }) }).catch(() => {});
+    body: JSON.stringify({ visitor_id: VID, page, referrer: ref }) })
+    .catch(() => {});
 }
 funnel("visit");
 // the shell now serves partner pages, events and the locator too, so record

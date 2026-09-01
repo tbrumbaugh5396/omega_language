@@ -672,3 +672,188 @@ def act_as_tenant_admin(tid: str, request: Request, u=Depends(admin_user),
             "account": acct}
 
 
+
+
+# ---------- the client dossier: everything about a built business ----------
+# The advisory view: when a client asks "which plan fits us", this is the
+# breakdown — scale, traffic, and a live meter for every capability, read
+# from the tenant's own tables at ask time so it can never be last
+# month's answer. Local tenants are read directly; a tenant living on a
+# worker node answers through the same fleet-authed dock the backups use.
+
+def _q1(con, sql, args=()):
+    """A meter that cannot run is 0, never a crash — an older tenant
+    without some capability's tables simply metres zero on it."""
+    try:
+        r = con.execute(sql, args).fetchone()
+        return r[0] if r and r[0] is not None else 0
+    except Exception:
+        return 0
+
+
+# The class lines the quote sizes by (stand_up_suggestion's own numbers):
+# above them, the honest advice is the next tier.
+_CLASS_LINES = {"micro": (1, 5), "growing": (3, 20), "large": (10, 75)}
+
+
+def _usage_from(con) -> dict:
+    now = time.time()
+    mo = now - 30 * 86400
+    m = {}
+
+    def meter(cap, label, value, period=""):
+        m.setdefault(cap, []).append(
+            {"label": label, "value": value, "period": period})
+
+    meter("selling", "orders", _q1(con,
+        "SELECT COUNT(*) FROM orders WHERE created_at>? AND"
+        " status!='cancelled'", (mo,)), "30d")
+    meter("selling", "revenue_cents", _q1(con,
+        "SELECT SUM(total_cents) FROM orders WHERE created_at>? AND"
+        " status!='cancelled'", (mo,)), "30d")
+    meter("selling", "products", _q1(con,
+        "SELECT COUNT(*) FROM products WHERE active=1"))
+    meter("subs", "active subscriptions", _q1(con,
+        "SELECT COUNT(*) FROM store_subscriptions WHERE status='active'"))
+    meter("learning", "active courses", _q1(con,
+        "SELECT COUNT(*) FROM courses WHERE active=1"))
+    meter("learning", "current enrollments", _q1(con,
+        "SELECT COUNT(*) FROM enrollments WHERE until IS NULL"))
+    meter("learning", "classes held", _q1(con,
+        "SELECT COUNT(*) FROM class_sessions WHERE started_at>?", (mo,)),
+        "30d")
+    meter("voice", "lookups", _q1(con,
+        "SELECT COUNT(*) FROM translations WHERE created_at>?", (mo,)),
+        "30d")
+    meter("nutrition", "clients on programs", _q1(con,
+        "SELECT COUNT(*) FROM nutrition_clients"))
+    meter("nutrition", "food-log entries", _q1(con,
+        "SELECT COUNT(*) FROM nutrition_food_log WHERE created_at>?",
+        (mo,)), "30d")
+    meter("events", "events", _q1(con,
+        "SELECT COUNT(*) FROM store_events"))
+    meter("marketing", "promos", _q1(con, "SELECT COUNT(*) FROM promos"))
+    meter("marketing", "emails sent", _q1(con,
+        "SELECT COUNT(*) FROM email_log WHERE created_at>?", (mo,)), "30d")
+    meter("crm", "open tickets", _q1(con,
+        "SELECT COUNT(*) FROM store_tickets WHERE status!='closed'"))
+    meter("affiliates", "affiliates", _q1(con,
+        "SELECT COUNT(*) FROM affiliates"))
+    meter("workforce", "shifts", _q1(con,
+        "SELECT COUNT(*) FROM shifts WHERE start_ts>?", (mo,)), "30d")
+    meter("inventory", "stocked lines", _q1(con,
+        "SELECT COUNT(*) FROM inventory"))
+    meter("comms", "chat messages", _q1(con,
+        "SELECT COUNT(*) FROM messages WHERE created_at>?", (mo,)), "30d")
+    meter("distribution", "routes", _q1(con, "SELECT COUNT(*) FROM routes"))
+    meter("sourcing", "purchase orders", _q1(con,
+        "SELECT COUNT(*) FROM purchase_orders WHERE created_at>?", (mo,)),
+        "30d")
+    meter("api", "live keys", _q1(con,
+        "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"))
+
+    top_pages = []
+    top_refs = []
+    try:
+        top_pages = [dict(r) for r in con.execute(
+            "SELECT page, COUNT(DISTINCT visitor_id) AS visitors,"
+            " COUNT(*) AS hits FROM store_pageviews WHERE created_at>?"
+            " GROUP BY page ORDER BY visitors DESC LIMIT 6", (mo,))]
+        top_refs = [dict(r) for r in con.execute(
+            "SELECT referrer, COUNT(DISTINCT visitor_id) AS visitors"
+            " FROM store_pageviews WHERE created_at>? AND referrer!=''"
+            " GROUP BY referrer ORDER BY visitors DESC LIMIT 6", (mo,))]
+    except Exception:
+        pass
+
+    return {
+        "scale": {
+            "locations": _q1(con, "SELECT COUNT(*) FROM stores"),
+            "seats_used": _q1(con,
+                "SELECT COUNT(*) FROM users WHERE active=1 AND"
+                " (is_admin=1 OR role IN ('employee','teacher','volunteer',"
+                "  'director','owner'))"),
+            "customers": _q1(con,
+                "SELECT COUNT(*) FROM users WHERE active=1 AND"
+                " role='customer'"),
+        },
+        "traffic": {
+            "visitors": _q1(con,
+                "SELECT COUNT(DISTINCT visitor_id) FROM store_pageviews"
+                " WHERE created_at>?", (mo,)),
+            "pageviews": _q1(con,
+                "SELECT COUNT(*) FROM store_pageviews WHERE created_at>?",
+                (mo,)),
+            "period": "30d",
+            "top_pages": top_pages,
+            "top_referrers": top_refs,
+        },
+        "meters": m,
+    }
+
+
+def tenant_usage(tid: str) -> dict:
+    from erp.backend import db as _edb
+    from erp.backend import fleet, tenancy
+    node = tenancy.node_of(tid)
+    if node != tenancy.NODE_ID:
+        return fleet._node_call(
+            node, "GET", f"/api/node/tenants/{tid}/usage").json()
+    tok = tenancy.CURRENT.set(tid)
+    try:
+        con = _edb.connect()
+        try:
+            return _usage_from(con)
+        finally:
+            con.close()
+    finally:
+        tenancy.CURRENT.reset(tok)
+
+
+@router.get("/api/store/admin/fleet/tenants/{tid}/report")
+def tenant_report(tid: str, u=Depends(admin_user), con=Depends(get_con)):
+    _provider_only()
+    from erp.backend import tenancy
+    reg = tenancy.registry().get("tenants", {}).get(tid)
+    if reg is None:
+        raise HTTPException(404, "no such tenant")
+    usage = tenant_usage(tid)
+    caps = reg.get("caps")            # None = everything
+    klass = reg.get("class") or "growing"
+    catalog = {c["id"]: c for c in _cap_catalog()}
+    granted = list(catalog) if caps is None else [c for c in caps
+                                                  if c in catalog]
+
+    # The advisory notes: usage held against the plan, said plainly —
+    # the sentences an operator reads down the phone.
+    notes = []
+    lines = _CLASS_LINES.get(klass)
+    sc = usage["scale"]
+    if lines:
+        if sc["locations"] > lines[0]:
+            notes.append(f"{sc['locations']} locations on a {klass} plan "
+                         f"(line: {lines[0]}) — size up")
+        if sc["seats_used"] > lines[1]:
+            notes.append(f"{sc['seats_used']} seats in use on a {klass} "
+                         f"plan (line: {lines[1]}) — size up")
+    metered = usage["meters"]
+    for cid in granted:
+        vals = metered.get(cid)
+        if vals is not None and all(not v["value"] for v in vals):
+            notes.append(f"{catalog[cid]['name']} is granted but idle — "
+                         f"train it up, or trim ${catalog[cid]['price']}/mo")
+    for cid, vals in metered.items():
+        if (caps is not None and cid not in caps and cid in catalog
+                and any(v["value"] for v in vals)):
+            notes.append(f"{catalog[cid]['name']} shows activity without "
+                         f"a grant — data predates the plan; worth a "
+                         f"conversation")
+
+    return {"tenant": tid, "hosts": reg.get("hosts") or [],
+            "status": reg.get("status") or "active",
+            "class": klass, "node": reg.get("node") or "local",
+            "caps": [{"id": c, "name": catalog[c]["name"],
+                      "price": catalog[c]["price"]} for c in granted],
+            "monthly_software": _core_price()
+            + sum(catalog[c]["price"] for c in granted),
+            **usage, "notes": notes}

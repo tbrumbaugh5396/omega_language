@@ -3896,6 +3896,66 @@ ok('mode: key ? "" : "signin"' in (
    "the store-admin door too — only the key-holder's first sign-in still "
    "bootstraps an account")
 
+# ---- the client dossier: everything about a built business, live ------
+# "Which plan actually fits them?" — answered from their own tables at
+# ask time: scale, thirty days of traffic and referrers, a meter per
+# capability, and the advisory notes read down the phone.
+ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
+          json={"id": "meterco", "brand": "Meter Co",
+                "klass": "micro"}).status_code == 200,
+   "a client stands up for the dossier to read")
+HM = {"host": "meterco.localhost"}
+for _vid, _pg, _rf in (("dv-1", "home", "https://maps.example/listing"),
+                       ("dv-1", "classes", ""),
+                       ("dv-2", "home", "")):
+    c.post("/api/store/track", headers=HM,
+           json={"visitor_id": _vid, "page": _pg, "referrer": _rf})
+_rp = c.get("/api/store/admin/fleet/tenants/meterco/report",
+            headers=AA).json()
+ok(_rp["traffic"]["visitors"] == 2 and _rp["traffic"]["pageviews"] == 3,
+   "the dossier counts unique visitors apart from raw pageviews")
+ok(_rp["traffic"]["top_pages"][0]["page"] == "home"
+   and _rp["traffic"]["top_pages"][0]["visitors"] == 2,
+   "and ranks pages by the people who saw them, not the times they loaded")
+ok(_rp["traffic"]["top_referrers"]
+   == [{"referrer": "https://maps.example/listing", "visitors": 1}],
+   "referred-from is where their customers actually come from across the "
+   "internet — and a hop with no referrer stays out of it")
+ok(set(_rp["scale"]) == {"locations", "seats_used", "customers"},
+   "scale is the three numbers a plan is priced on")
+ok(_rp["class"] == "micro" and _rp["caps"]
+   and _rp["monthly_software"]
+   >= max(_c["price"] for _c in _rp["caps"]),
+   "with the plan, every granted capability and its price, and the "
+   "software bill they add up to")
+ok(any(v["label"] == "products" for v in _rp["meters"]["selling"])
+   and "learning" in _rp["meters"],
+   "a meter per capability — even a zero is an answer")
+ok(any("granted but idle" in n for n in _rp["notes"]),
+   "and the advice writes itself: a capability they pay for but never "
+   "touched is either a training gap or a line to trim")
+ok(c.get("/api/store/admin/fleet/tenants/meterco/report",
+         headers=BB).status_code == 404,
+   "a hosted client cannot pull dossiers — the fleet view is the "
+   "provider's alone")
+ok(c.request("DELETE",
+             "/api/store/admin/fleet/tenants/meterco?keep_data=0",
+             headers=AA).status_code == 200,
+   "cleanup: meterco leaves")
+
+_arp = c.get("/api/store/admin/fleet/tenants/alpha/report",
+             headers=AA).json()
+ok(_arp["scale"]["seats_used"] >= 1 and isinstance(_arp["notes"], list),
+   "the provider can read its own dossier too — alpha shows the seats "
+   "this very suite has been filling")
+
+ok("data-treport" in _ajs2 and "clientDossier" in _ajs2
+   and 'id="eng-report"' in _ajs2,
+   "the dossier opens from both doors — the Platform board's tenant row "
+   "and the client page's own header")
+ok("referrer: ref" in _sjs2 and "document.referrer" in _sjs2,
+   "and the storefront sends where each visit came from — off-site "
+   "referrers only, our own pages are navigation")
 
 
 done("platform")

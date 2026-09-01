@@ -347,6 +347,10 @@ async function renderFleet() {
           </span>
           <span class="dl-acts" style="grid-template-columns:74px 74px 70px">
             ${t.provider ? "<span></span><span></span><span></span>" : `
+            <button class="btn alt sm" data-treport="${esc(t.id)}"
+              title="the client dossier: scale, traffic, a live meter per
+              capability, and the advisory notes — read from their own
+              tables at ask time">Report</button>
             <button class="btn alt sm" data-tactas="${esc(t.id)}"
               title="open their ops app as an admin of THEIR install —
               minted in their own user directory, written to the fleet
@@ -530,6 +534,8 @@ async function renderFleet() {
       } catch (err) { toast(err.message); }
     });
 
+  view().querySelectorAll("[data-treport]").forEach((b) => b.onclick =
+    () => clientDossier(b.dataset.treport));
   view().querySelectorAll("[data-tactas]").forEach((b) => b.onclick =
     async () => {
       try {
@@ -664,4 +670,60 @@ async function renderHQ() {
       } catch (e) { toast(e.message); }
     };
   });
+}
+
+
+/* ---------- the client dossier ----------
+   Which plan fits them? — answered from their own tables, live: scale
+   against the class lines, thirty days of traffic and referrers, a
+   meter for every capability they hold, and the advisory notes read
+   down the phone. */
+async function clientDossier(tid) {
+  let d;
+  try {
+    d = await api(`/api/store/admin/fleet/tenants/${tid}/report`);
+  } catch (err) { return toast(err.message); }
+  const n = (v) => (v || 0).toLocaleString();
+  const meterRows = d.caps.map((c) => {
+    const vals = (d.meters[c.id] || []).map((v) =>
+      `${v.label === "revenue_cents" ? "revenue " + money(v.value)
+        : `${v.label} ${n(v.value)}`}${v.period ? ` <span class="dim">/${
+        v.period}</span>` : ""}`).join(" · ");
+    return `<tr><td>${esc(c.name)}</td>
+      <td class="dim">\$${c.price}/mo</td>
+      <td>${vals || '<span class="dim">no meter yet</span>'}</td></tr>`;
+  }).join("");
+  modal(`<h3>${esc(d.tenant)} — the dossier</h3>
+    <p class="dim">${esc(d.class)} class · node ${esc(d.node)} ·
+      ${esc(d.status)} · software \$${d.monthly_software}/mo ·
+      ${(d.hosts || []).map(esc).join(", ")}</p>
+    <div class="lrn-rtotals" style="display:flex;gap:26px;flex-wrap:wrap">
+      <span><b>${n(d.scale.locations)}</b><span class="dim"> locations</span></span>
+      <span><b>${n(d.scale.seats_used)}</b><span class="dim"> seats used</span></span>
+      <span><b>${n(d.scale.customers)}</b><span class="dim"> customers</span></span>
+      <span><b>${n(d.traffic.visitors)}</b><span class="dim"> visitors /30d</span></span>
+      <span><b>${n(d.traffic.pageviews)}</b><span class="dim"> pageviews /30d</span></span>
+    </div>
+    ${d.notes.length ? `<div class="card" style="margin-top:10px">
+      <b>The advice</b>
+      ${d.notes.map((x) => `<p class="dim">· ${esc(x)}</p>`).join("")}
+    </div>` : ""}
+    <h3>Capability meters</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th>capability</th><th>price</th><th>use</th></tr></thead>
+      <tbody>${meterRows}</tbody></table></div>
+    <div class="row2" style="margin-top:10px">
+      <div><h3>Top pages <span class="dim">/30d</span></h3>
+        ${(d.traffic.top_pages || []).map((x) =>
+          `<p class="dim">${esc(x.page)} — ${n(x.visitors)} visitors,
+           ${n(x.hits)} views</p>`).join("")
+          || '<p class="dim">no traffic recorded yet</p>'}</div>
+      <div><h3>Referred from <span class="dim">/30d</span></h3>
+        ${(d.traffic.top_referrers || []).map((x) =>
+          `<p class="dim">${esc(x.referrer)} — ${n(x.visitors)}
+           visitors</p>`).join("")
+          || '<p class="dim">no off-site referrals yet</p>'}</div>
+    </div>
+    <div class="modal-foot"><button class="btn" data-close>Done</button>
+    </div>`, "wide");
 }
