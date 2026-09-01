@@ -548,9 +548,16 @@ def register_approve(con, actor, reg_id: int,
     if r["state"] != REG_PENDING:
         raise HTTPException(409, f"this registration is already {r['state']}")
     course_id = course_id or r["course_id"]
-    existing = con.execute("SELECT * FROM users WHERE lower(email)=?"
-                           " AND email != ''",
-                           (r["email"].lower(),)).fetchone()
+    # a seat request from a signed-in member names its person up front —
+    # approval enrols THAT account, never a lookalike minted from the email
+    existing = None
+    if r["person_id"]:
+        existing = con.execute("SELECT * FROM users WHERE id=?",
+                               (r["person_id"],)).fetchone()
+    if existing is None:
+        existing = con.execute("SELECT * FROM users WHERE lower(email)=?"
+                               " AND email != ''",
+                               (r["email"].lower(),)).fetchone()
     if existing:
         person = dict(existing)             # already a person: enrol, don't duplicate
     else:
@@ -576,6 +583,40 @@ def register_approve(con, actor, reg_id: int,
          reg_id))
     return {"person": {k: person[k] for k in ("id", "name", "email", "role")},
             "course_id": course_id, "existing_account": bool(existing)}
+
+
+def request_seat(con, user, course_id: int, note: str = "") -> dict:
+    """A signed-in member asks to join a course they can SEE but are not
+    enrolled in — discovery's other half. It rides the same registrations
+    queue the public form feeds, carrying person_id from the start, so
+    approving enrols the existing account instead of minting one. Same
+    update-don't-duplicate rule: asking twice refreshes the ask."""
+    c = con.execute("SELECT * FROM courses WHERE id=? AND active=1",
+                    (course_id,)).fetchone()
+    if c is None:
+        raise HTTPException(404, "course not found")
+    if enrolled_in(con, course_id, user["id"]):
+        raise HTTPException(409, "you are already enrolled")
+    prev = con.execute(
+        "SELECT * FROM registrations WHERE person_id=? AND course_id=?"
+        " AND state='pending'", (user["id"], course_id)).fetchone()
+    if prev:
+        con.execute("UPDATE registrations SET goals=?, created_at=?"
+                    " WHERE id=?",
+                    (str(note or "")[:2000], time.time(), prev["id"]))
+        return {"id": prev["id"], "state": "pending"}
+    cur = con.execute(
+        "INSERT INTO registrations(name,email,phone,language,level,goals,"
+        " availability,course_id,person_id,state,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (user["name"][:120], (user["email"] or "").lower(), "",
+         (c["language"] or c["name"])[:20], (c["level"] or "")[:20],
+         str(note or "")[:2000], "", course_id, user["id"], REG_PENDING,
+         time.time()))
+    notify.push(con, f"Seat request: {user['name']}",
+                f"asks to join {c['name']}", kind="learning",
+                dedup=f"seatreq:{user['id']}:{course_id}")
+    return {"id": cur.lastrowid, "state": "pending"}
 
 
 def register_decline(con, actor, reg_id: int, note: str = "") -> None:

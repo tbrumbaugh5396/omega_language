@@ -1342,6 +1342,9 @@ body.offer-open { overflow: hidden; }
   --flavour-soft: color-mix(in srgb, var(--flavour, var(--purple)) 13%, var(--paper));
 }
 
+/* the sign-in door's three tabs */
+.door-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
+
 /* ---------- review entry points ---------- */
 .pp-rev-head { display: flex; align-items: center; justify-content: space-between;
   gap: 16px; flex-wrap: wrap; margin-top: 56px; margin-bottom: 18px; }

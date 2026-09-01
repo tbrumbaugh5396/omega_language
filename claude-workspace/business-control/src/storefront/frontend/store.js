@@ -8,6 +8,8 @@ const $ = (s) => document.querySelector(s);
    optional control used to throw at module scope and take the rest of the
    script — including the menu — down with it. */
 const on = (sel, fn) => { const el = $(sel); if (el) el.onclick = fn; return el; };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 // ---------- currency + locale ----------
 /* The brand, read from the shell the server already branded — the nav
@@ -1129,57 +1131,176 @@ function acctToken() {
    single door; callers say what they want to do once they're through. */
 function signIn(intro, onDone) {
   if (acctToken()) { onDone(); return; }
-  openModal(`<h3>Sign in</h3>
-    <p class="dim">${intro}</p>
-    <label>Name</label><input id="si-name" placeholder="Your name"
-      autocomplete="name">
-    <label>Email <span class="dim">(the one you ordered with)</span></label>
-    <input id="si-email" type="email" autocomplete="email">
-    <label>Password <span class="dim">(optional — add one once and it's
-      required from then on)</span></label>
-    <input id="si-pass" type="password" autocomplete="current-password">
-    <div class="modal-actions">
-      <button class="btn-pill ghost sm" data-close-modal>Later</button>
-      <button class="btn-pill ghost sm" id="si-scan">Scan a QR</button>
-      <button class="btn-pill primary sm" id="si-go">Sign in</button>
-    </div>
-    <p class="dim" id="si-msg"></p>
-    <p class="dim" style="margin-top:14px;padding-top:12px;
-      border-top:1px solid var(--line)">On the team — teaching, coaching,
-      running the place?
-      <a class="text-link" href="/ops/">Team sign-in →</a> ·
-      <a class="text-link" href="/admin">Store admin →</a></p>`);
-  on("#si-scan", async () => {
-    const msg = $("#si-msg");
-    if (msg) msg.textContent = "";
-    const r = await QRScan.signIn("Scan your sign-in QR");
-    if (!r.ok && r.error && msg) msg.textContent = r.error;
-  });
-  const go = async () => {
-    const name = $("#si-name").value.trim();
-    if (!name) { $("#si-name").focus(); return; }
-    const res = await fetch("/api/login", { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, role: "customer",
-        email: $("#si-email").value.trim(),
-        password: $("#si-pass").value }) });
-    const out = await res.json().catch(() => ({}));
-    if (!res.ok || !out.token) {
-      const msg = $("#si-msg");
-      if (msg) msg.textContent = out.detail
-        || "Couldn't sign you in — try again";
-      return;
-    }
+  /* Three honest doors, not one ambiguous one: signing in refuses to mint
+     an account from a typo, creating refuses to silently join somebody
+     else's, and applying to a programme creates nothing at all — an
+     administrator's approval is what opens a seat. */
+  let door = "signin";
+  const finish = (out) => {
     localStorage.setItem("sf_support",
       JSON.stringify({ token: out.token, me: out.id }));
     SUPPORT.token = out.token; SUPPORT.me = out.id;
     onDone();
   };
-  $("#si-go").onclick = go;
-  $("#si-name").onkeydown = (e) => { if (e.key === "Enter") go(); };
-  $("#si-email").onkeydown = (e) => { if (e.key === "Enter") go(); };
-  $("#si-pass").onkeydown = (e) => { if (e.key === "Enter") go(); };
-  setTimeout(() => $("#si-name").focus(), 30);
+  const login = async (payload) => {
+    const res = await fetch("/api/login", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.token) {
+      const msg = $("#si-msg");
+      if (msg) msg.textContent = out.detail
+        || "Couldn't sign you in — try again";
+      return null;
+    }
+    return out;
+  };
+  const doorTabs = () => `<div class="door-tabs">
+    ${[["signin", "Sign in"], ["create", "Create account"],
+       ["apply", "Apply to a programme"]].map(([id, label]) =>
+      `<button class="btn-pill sm ${door === id ? "primary" : "ghost"}"
+        data-door="${id}">${label}</button>`).join("")}</div>`;
+  const draw = async () => {
+    if (door === "signin") {
+      openModal(`<h3>Sign in</h3>
+        <p class="dim">${intro}</p>
+        ${doorTabs()}
+        <label>Name</label><input id="si-name" placeholder="Your name"
+          autocomplete="name">
+        <label>Email <span class="dim">(optional)</span></label>
+        <input id="si-email" type="email" autocomplete="email">
+        <label>Password <span class="dim">(only if you set one)</span></label>
+        <input id="si-pass" type="password" autocomplete="current-password">
+        <div class="modal-actions">
+          <button class="btn-pill ghost sm" data-close-modal>Later</button>
+          <button class="btn-pill ghost sm" id="si-scan">Scan a QR</button>
+          <button class="btn-pill primary sm" id="si-go">Sign in</button>
+        </div>
+        <p class="dim" id="si-msg"></p>
+        <p class="dim" style="margin-top:14px;padding-top:12px;
+          border-top:1px solid var(--line)">On the team — teaching,
+          coaching, running the place?
+          <a class="text-link" href="/ops/">Team sign-in →</a> ·
+          <a class="text-link" href="/admin">Store admin →</a></p>`);
+      on("#si-scan", async () => {
+        const msg = $("#si-msg");
+        if (msg) msg.textContent = "";
+        const r = await QRScan.signIn("Scan your sign-in QR");
+        if (!r.ok && r.error && msg) msg.textContent = r.error;
+      });
+      const go = async () => {
+        const name = $("#si-name").value.trim();
+        if (!name) { $("#si-name").focus(); return; }
+        const out = await login({ name, role: "customer", mode: "signin",
+          email: $("#si-email").value.trim(),
+          password: $("#si-pass").value });
+        if (out) finish(out);
+      };
+      $("#si-go").onclick = go;
+      ["#si-name", "#si-email", "#si-pass"].forEach((s) => {
+        $(s).onkeydown = (e) => { if (e.key === "Enter") go(); }; });
+      setTimeout(() => $("#si-name").focus(), 30);
+    } else if (door === "create") {
+      openModal(`<h3>Create an account</h3>
+        <p class="dim">For people who already have a place here. Applying
+          to a programme is the tab on the right.</p>
+        ${doorTabs()}
+        <label>Your name</label><input id="cr-name" autocomplete="name">
+        <label>Email</label>
+        <input id="cr-email" type="email" autocomplete="email">
+        <label>Password</label>
+        <input id="cr-pass" type="password" autocomplete="new-password">
+        <label>Repeat password</label>
+        <input id="cr-pass2" type="password" autocomplete="new-password">
+        <label>I am a…</label>
+        <select id="cr-role">
+          <option value="customer">Student — I want to take classes</option>
+          <option value="employee">Team — I teach, coach or help out</option>
+        </select>
+        <p class="dim">Anything other than Student is confirmed by the
+          office before it opens anything. A short phrase you will remember
+          beats a short password with symbols in it.</p>
+        <div class="modal-actions">
+          <button class="btn-pill ghost sm" data-close-modal>Later</button>
+          <button class="btn-pill primary sm" id="cr-go">Create account</button>
+        </div>
+        <p class="dim" id="si-msg"></p>`);
+      $("#cr-go").onclick = async () => {
+        const name = $("#cr-name").value.trim();
+        const msg = $("#si-msg");
+        if (!name) { $("#cr-name").focus(); return; }
+        if ($("#cr-pass").value !== $("#cr-pass2").value) {
+          if (msg) msg.textContent = "the passwords do not match";
+          return;
+        }
+        const out = await login({ name, mode: "create",
+          role: $("#cr-role").value,
+          email: $("#cr-email").value.trim(),
+          password: $("#cr-pass").value });
+        if (out) finish(out);
+      };
+      setTimeout(() => $("#cr-name").focus(), 30);
+    } else {
+      let programs = null;
+      try {
+        const r = await fetch("/api/learn/programs");
+        if (r.ok) programs = await r.json();
+      } catch (e) { /* no Learning capability: the form still sends */ }
+      openModal(`<h3>Apply to a programme</h3>
+        <p class="dim">Tell us what you would like to learn. This does not
+          create an account — an administrator reviews every application,
+          and approval is what opens your seat.</p>
+        ${doorTabs()}
+        <label>Your name</label><input id="ap-name" autocomplete="name">
+        <label>Email</label>
+        <input id="ap-email" type="email" autocomplete="email">
+        <label>Phone <span class="dim">(optional)</span></label>
+        <input id="ap-phone" autocomplete="tel">
+        ${programs && programs.length ? `<label>Programme</label>
+          <select id="ap-course"><option value="">— choose a class —</option>
+          ${programs.map((p) => `<option value="${p.id}">${esc(p.name)}${
+            p.language ? " — " + esc(p.language) : ""}</option>`).join("")}
+          </select>` : ""}
+        <label>What do you want to learn?</label>
+        <input id="ap-lang" placeholder="Spanish, Japanese, …">
+        <label>What do you want to get out of it?
+          <span class="dim">(optional)</span></label>
+        <textarea id="ap-goals" rows="3"></textarea>
+        <div class="modal-actions">
+          <button class="btn-pill ghost sm" data-close-modal>Later</button>
+          <button class="btn-pill primary sm" id="ap-go">Send application</button>
+        </div>
+        <p class="dim" id="si-msg"></p>`);
+      $("#ap-go").onclick = async () => {
+        const msg = $("#si-msg");
+        const sel = $("#ap-course");
+        const res = await fetch("/api/learn/register", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: $("#ap-name").value.trim(),
+            email: $("#ap-email").value.trim(),
+            phone: $("#ap-phone").value.trim(),
+            language: $("#ap-lang").value.trim(),
+            goals: $("#ap-goals").value.trim(),
+            course_id: sel && sel.value ? +sel.value : null }) });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (msg) msg.textContent = out.detail || "that didn't send";
+          return;
+        }
+        openModal(`<h3>Application received</h3>
+          <p>Thank you — we read every application. Once it is approved
+            you will have an account and a seat.</p>
+          <div class="modal-actions">
+            <button class="btn-pill primary sm" data-close-modal>Done</button>
+          </div>`);
+      };
+      setTimeout(() => $("#ap-name").focus(), 30);
+    }
+    document.querySelectorAll("[data-door]").forEach((b) => b.onclick =
+      () => { door = b.dataset.door; draw(); });
+  };
+  draw();
 }
 
 function openAccount() {

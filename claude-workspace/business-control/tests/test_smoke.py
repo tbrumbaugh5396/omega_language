@@ -8207,4 +8207,103 @@ ok('id: "nutrition"' in _appjs_lrn
 ok("/nutrition.js" in c.get("/nutrition").text,
    "the member page loads its app as a versioned asset")
 
+# --- the door: three honest modes --------------------------------------------
+ok(c.post("/api/login", headers=HA, json={
+    "name": "Lara Learner", "mode": "create"}).status_code == 409,
+   "creating an account refuses to silently join somebody else's")
+ok(c.post("/api/login", headers=HA, json={
+    "name": "Total Stranger", "mode": "signin"}).status_code == 404,
+   "signing in refuses to mint an account from a typo")
+_new = c.post("/api/login", headers=HA, json={
+    "name": "Door Tester", "mode": "create",
+    "password": "a long phrase"}).json()
+ok(bool(_new.get("token")),
+   "create mode makes the account — with its password from birth")
+
+# --- the portal surfaces: bell, live, quizzes, me ----------------------------
+_bell = c.get("/api/learn/notifications", headers=LN).json()
+ok(_bell["unread"] >= 1 and any("graded" in (n["title"] or "").lower()
+                                for n in _bell["items"]),
+   "the bell finally reads what the platform was always pushing — the "
+   "graded-quiz notification is waiting for Lara")
+c.post("/api/learn/notifications/read", headers=LN)
+ok(c.get("/api/learn/notifications", headers=LN).json()["unread"] == 0,
+   "and opening it marks everything read")
+_cls5 = c.post("/api/learning/sessions", headers=TT,
+               json={"course_id": _crs}).json()
+_live = c.get("/api/learn/live", headers=LN).json()
+ok(len(_live) == 1 and _live[0]["course_id"] == _crs
+   and _live[0]["room"] and _live[0]["enrolled"] >= 1,
+   "Check in and Live class draw from one answer: every open session "
+   "across MY courses, with the room and the roster size")
+ok(c.get("/api/learn/live", headers=SH).json() == [],
+   "an outsider's live list is empty — enrolment scopes it")
+c.post(f"/api/learning/sessions/{_cls5['session']['id']}/close", headers=TT)
+_myqs = c.get("/api/learn/quizzes", headers=LN).json()
+ok(any(q["title"] == "Speaking check" for q in _myqs)
+   and all("attempt" in q for q in _myqs),
+   "the Quizzes tab gathers every published quiz across my courses with "
+   "where I stand on each")
+_me = c.get("/api/learn/me", headers=LN).json()
+ok(_me["name"] == "Lara Learner" and _me["attended"] >= 1
+   and "password_hash" not in _me,
+   "the profile answers who I am and how often I showed up — never my "
+   "secrets")
+
+# --- discovery: ask to join a course you can see -----------------------------
+_all = c.get("/api/learn/courses", headers=SH).json()
+_tourable = [x for x in _all["available"] if x["id"] == _crs]
+ok(len(_tourable) == 1 and _tourable[0]["requested"] is False,
+   "an unenrolled member sees the course in Discover, not yet asked")
+_ask = c.post(f"/api/learn/courses/{_crs}/request", headers=SH,
+              json={"note": "heard great things"}).json()
+ok(_ask["state"] == "pending",
+   "asking to join files a seat request instead of opening the door")
+ok(c.post(f"/api/learn/courses/{_crs}/request", headers=SH,
+          json={"note": "still keen"}).json()["id"] == _ask["id"],
+   "asking twice refreshes the ask — update, don't duplicate")
+ok([x for x in c.get("/api/learn/courses", headers=SH).json()["available"]
+    if x["id"] == _crs][0]["requested"] is True,
+   "and Discover now shows it as asked")
+_reqs = c.get("/api/learning/registrations", headers=AA).json()
+_mine_req = [r for r in _reqs if r["id"] == _ask["id"]][0]
+ok(_mine_req["person_id"] is not None,
+   "the request rides the same queue as the public form, carrying its "
+   "person from the start")
+_n_users = c.get("/api/admin/users", headers=AA).json()
+_out = c.post(f"/api/learning/registrations/{_ask['id']}/approve",
+              headers=AA, json={}).json()
+ok(_out["existing_account"]
+   and len(c.get("/api/admin/users", headers=AA).json()) == len(_n_users),
+   "approving enrols the EXISTING account — no lookalike minted from an "
+   "email")
+ok(c.get(f"/api/learn/courses/{_crs}", headers=SH).status_code == 200,
+   "and the course opens for them")
+ok(c.post(f"/api/learn/courses/{_crs}/request", headers=SH,
+          json={}).status_code == 409,
+   "already enrolled = nothing to ask")
+
+# --- sign out everywhere -----------------------------------------------------
+_dt = {"Authorization": f"Bearer {_new['token']}", **HA}
+c.post("/api/learn/me/signout-all", headers=_dt)
+ok(c.get("/api/learn/me", headers=_dt).status_code == 401,
+   "sign out everywhere rotates the token — every device, this one "
+   "included")
+
+_ljs2 = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
+         ).read_text(encoding="utf-8")
+_sjs2 = (Path(__file__).parent.parent / "src/storefront/frontend/store.js"
+         ).read_text(encoding="utf-8")
+ok(all(s in _ljs2 for s in ('t("checkin", "Check in")',
+                            't("quizzes", "Quizzes")',
+                            't("live", "Live class")',
+                            't("profile", "Profile")',
+                            "lrn-bell", "Ask to join")),
+   "the learner app carries the portal's six tabs, the bell, and the "
+   "ask-to-join door")
+ok(all(s in _sjs2 for s in ('["create", "Create account"]',
+                            '["apply", "Apply to a programme"]',
+                            'mode: "signin"', 'mode: "create"')),
+   "the storefront door offers all three ways in — sign in, create, apply")
+
 print(f"\nall {checks} checks passed")

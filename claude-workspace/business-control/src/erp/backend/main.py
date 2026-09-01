@@ -255,12 +255,21 @@ class LoginBody(BaseModel):
     admin_key: str = ""
     email: str = ""
     password: str = ""
+    # "" keeps the historic find-or-create; "signin" refuses to mint an
+    # account by typo; "create" refuses to silently join someone else's.
+    mode: str = ""
 
 
 @app.post("/api/login")
 def login(body: LoginBody, con=Depends(get_con)):
     existed = con.execute("SELECT 1 FROM users WHERE lower(name)=lower(?)",
                           (body.name.strip(),)).fetchone() is not None
+    if body.mode == "signin" and not existed:
+        raise HTTPException(404, "no account by that name — create one"
+                                 " first")
+    if body.mode == "create" and existed:
+        raise HTTPException(409, "that name is already taken — sign in"
+                                 " instead")
     try:
         u = auth.login(con, body.name, body.role, body.region, body.admin_key,
                        CFG, body.password)

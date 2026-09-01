@@ -115,6 +115,10 @@ def my_courses(user=Depends(current_customer), con=Depends(get_con)):
                 " WHERE id=? AND active=1", (r["product_id"],)).fetchone()
             if p:
                 d["product"] = dict(p)
+            d["requested"] = con.execute(
+                "SELECT 1 FROM registrations WHERE person_id=? AND"
+                " course_id=? AND state='pending'",
+                (user["id"], r["id"])).fetchone() is not None
             more.append(d)
     return {"enrolled": mine, "available": more,
             "achievements": L.achievements_of(con, user["id"])}
@@ -467,6 +471,132 @@ def session_recordings(sid: int, user=Depends(current_customer),
     return MAT.of_session(con, sid)
 
 
+# ── the portal surfaces: notifications, live now, my quizzes, me ─────────────
+# The bell reads what the platform already pushes at learners (grades,
+# achievements, class starts, seat decisions) — the rows were always
+# written; this is the reader they never had on /learn.
+
+@router.get("/api/learn/notifications")
+def my_notifications(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    from erp.backend import notify
+    items, unread = notify.for_user(con, user)
+    return {"items": items, "unread": unread}
+
+
+@router.post("/api/learn/notifications/read")
+def my_notifications_read(user=Depends(current_customer),
+                          con=Depends(get_con)):
+    _require_cap("learning")
+    from erp.backend import notify
+    notify.mark_all_read(con, user)
+    return {"ok": True}
+
+
+@router.get("/api/learn/live")
+def live_now(user=Depends(current_customer), con=Depends(get_con)):
+    """Every class in session across MY courses — the check-in screen and
+    the live-class screen both draw from this one answer."""
+    _require_cap("learning")
+    out = []
+    for s in con.execute(
+            "SELECT s.*, c.name AS course, c.language, u.name AS teacher"
+            " FROM class_sessions s JOIN courses c ON c.id=s.course_id"
+            " LEFT JOIN users u ON u.id=s.teacher_id"
+            " WHERE s.status='open' ORDER BY s.started_at").fetchall():
+        if not L.enrolled_in(con, s["course_id"], user["id"]):
+            continue
+        mine = con.execute(
+            "SELECT status FROM checkins WHERE session_id=? AND student_id=?",
+            (s["id"], user["id"])).fetchone()
+        out.append({"id": s["id"], "course_id": s["course_id"],
+                    "course": s["course"], "language": s["language"] or "",
+                    "teacher": s["teacher"] or "",
+                    "started_at": s["started_at"], "room": s["room"],
+                    "my_status": mine["status"] if mine else None,
+                    "enrolled": len(CR.enrolled(con, s["course_id"]))})
+    return out
+
+
+@router.get("/api/learn/quizzes")
+def my_quizzes(user=Depends(current_customer), con=Depends(get_con)):
+    """Published quizzes across my courses with where I stand on each —
+    the portal's Quizzes tab in one answer."""
+    _require_cap("learning")
+    out = []
+    for q in con.execute(
+            "SELECT q.id, q.title, q.intro, q.pass_mark, q.course_id,"
+            " c.name AS course FROM quizzes q"
+            " JOIN courses c ON c.id=q.course_id"
+            " WHERE q.published=1 AND c.active=1 ORDER BY c.name, q.id"
+            ).fetchall():
+        if not L.enrolled_in(con, q["course_id"], user["id"]):
+            continue
+        a = con.execute(
+            "SELECT id, state FROM quiz_attempts WHERE quiz_id=? AND"
+            " user_id=? ORDER BY id DESC LIMIT 1",
+            (q["id"], user["id"])).fetchone()
+        out.append({**dict(q), "attempt": dict(a) if a else None})
+    return out
+
+
+@router.get("/api/learn/me")
+def me_view(user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    attended = con.execute(
+        "SELECT COUNT(*) AS n FROM checkins WHERE student_id=?"
+        " AND status IN ('present','late')", (user["id"],)).fetchone()["n"]
+    return {"id": user["id"], "name": user["name"],
+            "email": user["email"] or "", "role": user["role"],
+            "has_password": bool(user["password_hash"]),
+            "attended": attended,
+            "achievements": L.achievements_of(con, user["id"])}
+
+
+class MeBody(BaseModel):
+    email: str = ""
+
+
+@router.post("/api/learn/me")
+def me_update(body: MeBody, user=Depends(current_customer),
+              con=Depends(get_con)):
+    _require_cap("learning")
+    email = body.email.strip()
+    if email and "@" not in email:
+        raise HTTPException(400, "that does not look like an email")
+    con.execute("UPDATE users SET email=? WHERE id=?", (email, user["id"]))
+    con.commit()
+    return {"ok": True}
+
+
+@router.post("/api/learn/me/signout-all")
+def me_signout_all(user=Depends(current_customer), con=Depends(get_con)):
+    """Rotate the bearer token: every session on every device ends,
+    including this one — which is the point when a device is lost."""
+    _require_cap("learning")
+    import secrets as _secrets
+    con.execute("UPDATE users SET token=? WHERE id=?",
+                (_secrets.token_urlsafe(24), user["id"]))
+    con.execute("DELETE FROM login_tokens WHERE user_id=?", (user["id"],))
+    con.commit()
+    return {"ok": True}
+
+
+# ── discovery: ask to join a course you can see ──────────────────────────────
+
+class JoinBody(BaseModel):
+    note: str = ""
+
+
+@router.post("/api/learn/courses/{cid}/request")
+def course_request(cid: int, body: JoinBody,
+                   user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    out = L.request_seat(con, user, cid, note=body.note)
+    con.commit()
+    return out
+
+
 # ── the library: my loans ────────────────────────────────────────────────────
 
 @router.get("/api/learn/loans")
@@ -703,6 +833,15 @@ def learn_page(con=Depends(get_con)):
  .lrn-cal .dot{{display:block;margin:2px auto 0;width:6px;height:6px;border-radius:3px;background:currentColor;opacity:.5}}
  .lrn-cal .dot.present,.lrn-cal .dot.late{{background:#3c9;opacity:1}}
  .lrn-cal .dot.absent{{background:#e66;opacity:1}}
+ .lrn-bar{{display:flex;justify-content:flex-end;margin:0 0 12px}}
+ .lrn-noti-panel{{border:1px solid rgba(127,127,127,.35);border-radius:12px;padding:10px 14px;margin-bottom:14px;max-height:320px;overflow-y:auto}}
+ .lrn-item{{display:flex;gap:10px;align-items:baseline;padding:9px 2px;border-bottom:1px solid rgba(127,127,127,.15)}}
+ .lrn-item .grow{{flex:1}}
+ .lrn-item.lrn-new b{{border-left:3px solid currentColor;padding-left:8px}}
+ .lrn-row-click{{cursor:pointer}}
+ .lrn-row-click:hover b{{text-decoration:underline}}
+ .lrn-row-gap{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
+ .pill-live{{border:1px solid #3c9;color:#3c9;border-radius:999px;padding:1px 9px;font-size:.75em;vertical-align:middle}}
  .lrn-idcard{{border:1px solid rgba(127,127,127,.4);border-radius:14px;padding:20px;max-width:340px;text-align:center}}
  .lrn-idcard img{{width:220px;height:220px;background:#fff;padding:8px;border-radius:8px}}
  .lrn-lookup{{position:fixed;right:16px;bottom:84px;z-index:47;max-width:340px}}

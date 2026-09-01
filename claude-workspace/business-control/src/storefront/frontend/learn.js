@@ -52,20 +52,152 @@
     document.head.appendChild(s);
   });
 
-  /* ── the tab bar: Courses | People | Me ───────────────────────────────── */
+  /* ── the portal bar: six tabs and the bell ────────────────────────────── */
+  // The shape is lingua-portal's own: Check in, Courses, Quizzes, Live
+  // class, People, Profile — with notifications finally given a reader
+  // (the platform was already pushing them at learners; nobody listened).
   let VIEW = "courses";
+  let UNREAD = 0;
   function tabs() {
-    return `<div class="lrn-tabs">
-      <span class="lrn-tab ${VIEW === "courses" ? "on" : ""}" data-t="courses">Courses</span>
-      <span class="lrn-tab ${VIEW === "people" ? "on" : ""}" data-t="people">People</span>
-      <span class="lrn-tab ${VIEW === "me" ? "on" : ""}" data-t="me">Me</span>
+    const t = (id, label) => `<span class="lrn-tab ${VIEW === id ? "on" : ""}"
+      data-t="${id}">${label}</span>`;
+    return `<div class="lrn-bar">
+        <button class="lrn-btn sm" id="lrn-bell">Notifications${
+          UNREAD ? ` <span class="lrn-unread">${UNREAD}</span>` : ""}</button>
+      </div>
+      <div id="lrn-noti" hidden></div>
+      <div class="lrn-tabs">
+      ${t("checkin", "Check in")}${t("courses", "Courses")}
+      ${t("quizzes", "Quizzes")}${t("live", "Live class")}
+      ${t("people", "People")}${t("profile", "Profile")}
     </div>`;
   }
+  const VIEWS = () => ({ checkin, courses: home, quizzes: quizzesView,
+                         live: liveView, people, profile: profileView });
   function wireTabs() {
     root.querySelectorAll("[data-t]").forEach((el) => el.onclick = () => {
       VIEW = el.dataset.t;
-      VIEW === "people" ? people() : VIEW === "me" ? meView() : home();
+      (VIEWS()[VIEW] || home)();
     });
+    const bell = root.querySelector("#lrn-bell");
+    if (bell) bell.onclick = toggleNoti;
+    refreshBell();
+  }
+  async function refreshBell() {
+    try {
+      const d = await api("/api/learn/notifications");
+      UNREAD = d.unread;
+      const bell = root.querySelector("#lrn-bell");
+      if (bell) bell.innerHTML = "Notifications" + (UNREAD
+        ? ` <span class="lrn-unread">${UNREAD}</span>` : "");
+    } catch (e) { /* signed out, or the cap is off */ }
+  }
+  async function toggleNoti() {
+    const box = root.querySelector("#lrn-noti");
+    if (!box) return;
+    if (!box.hidden) { box.hidden = true; return; }
+    let d;
+    try { d = await api("/api/learn/notifications"); }
+    catch (err) { return; }
+    const when = (t) => new Date(t * 1000).toLocaleString(undefined,
+      { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    box.innerHTML = `<div class="lrn-noti-panel">
+      ${d.items.map((n) => `<div class="lrn-item ${n.is_read ? "" : "lrn-new"}">
+        <span class="grow"><b>${esc(n.title)}</b>
+          ${n.body ? `<span class="lrn-meta"> — ${esc(n.body)}</span>` : ""}
+        </span><span class="lrn-meta">${when(n.created_at)}</span>
+      </div>`).join("")
+        || "<p class='lrn-meta'>Nothing yet — grades, achievements and class starts land here.</p>"}
+    </div>`;
+    box.hidden = false;
+    if (d.unread) {
+      await api("/api/learn/notifications/read", {}).catch(() => {});
+      UNREAD = 0;
+      refreshBell();
+    }
+  }
+
+  /* ── Check in: every class in session across my courses ───────────────── */
+  async function checkin() {
+    const live = await api("/api/learn/live");
+    const when = (t) => new Date(t * 1000).toLocaleTimeString([],
+      { hour: "2-digit", minute: "2-digit" });
+    root.innerHTML = tabs() + (live.length ? live.map((s) => `
+      <div class="lrn-live" data-live="${s.id}">
+        <div><b>${esc(s.course)}</b> <span class="pill-live">live</span>
+          <div class="lrn-meta">${esc(s.teacher)}${s.language
+            ? " · " + esc(s.language) : ""} · started ${when(s.started_at)}</div>
+        </div>
+        <span style="flex:1"></span>
+        ${s.my_status
+          ? `<span class="lrn-meta">You're checked in — ${esc(s.my_status)}.</span>`
+          : `<button class="lrn-btn primary" data-here="${s.id}">I'm here — check me in</button>`}
+        ${s.room ? `<button class="lrn-btn" data-joincall="${s.id}">Join the class online</button>` : ""}
+      </div>
+      <p class="lrn-meta">Joining online checks you in too.</p>`).join("")
+      : `<p>No class is in session right now.</p>
+         <p class="lrn-meta">When a teacher starts one of your classes, it
+         appears here with one-tap check-in — and a notification lands on
+         the bell.</p>`);
+    wireTabs();
+    root.querySelectorAll("[data-here]").forEach((b) => b.onclick =
+      async () => {
+        try {
+          const r = await api(`/api/learn/sessions/${b.dataset.here}/checkin`, {});
+          alert("Checked in — " + r.status + (r.new_achievements.length
+            ? ". Achievement: " + r.new_achievements[0].name : ""));
+          checkin();
+        } catch (err) { alert(err.message); }
+      });
+    root.querySelectorAll("[data-joincall]").forEach((b) => b.onclick = () => {
+      const s = live.find((x) => x.id === +b.dataset.joincall);
+      // joining online IS attendance — check in quietly alongside
+      api(`/api/learn/sessions/${s.id}/checkin`, {}).catch(() => {});
+      openCall(s.room, s.course, (s.enrolled || 0) + 1);
+    });
+  }
+
+  /* ── Live class: the same sessions, framed as the call ────────────────── */
+  async function liveView() {
+    const live = await api("/api/learn/live");
+    root.innerHTML = tabs() + `
+      <p class="lrn-meta">Video runs peer-to-peer between browsers — the
+        server only passes the introductions along and never carries the
+        call. With a media server configured, big classes switch transport
+        by themselves.</p>
+      ${live.length ? live.map((s) => `
+        <div class="lrn-live">
+          <div><b>${esc(s.course)}</b> <span class="pill-live">live</span>
+            <div class="lrn-meta">${esc(s.teacher)} · ${s.enrolled} enrolled</div></div>
+          <span style="flex:1"></span>
+          ${s.room ? `<button class="lrn-btn primary" data-joincall="${s.id}">Join video</button>` : ""}
+        </div>`).join("")
+        : "<p>No class is live right now.</p>"}`;
+    wireTabs();
+    root.querySelectorAll("[data-joincall]").forEach((b) => b.onclick = () => {
+      const s = live.find((x) => x.id === +b.dataset.joincall);
+      api(`/api/learn/sessions/${s.id}/checkin`, {}).catch(() => {});
+      openCall(s.room, s.course, (s.enrolled || 0) + 1);
+    });
+  }
+
+  /* ── Quizzes: everything published across my courses ──────────────────── */
+  async function quizzesView() {
+    const qs = await api("/api/learn/quizzes");
+    root.innerHTML = tabs() + (qs.length ? qs.map((q) => `
+      <div class="lrn-item lrn-row-click" data-q="${q.id}" data-cq="${q.course_id}">
+        <span class="grow"><b>${esc(q.title)}</b>
+          <span class="lrn-meta"> · ${esc(q.course)} · pass ${q.pass_mark}%</span></span>
+        <span class="lrn-meta">${q.attempt
+          ? (q.attempt.state === "graded" ? "graded — open for your score"
+            : q.attempt.state) : "not started"}</span>
+      </div>`).join("")
+      : `<p>No quizzes yet.</p>
+         <p class="lrn-meta">Published quizzes from every course you're
+         enrolled in gather here.</p>`);
+    wireTabs();
+    root.querySelectorAll("[data-q]").forEach((el) => el.onclick = () =>
+      quiz(+el.dataset.q, +el.dataset.cq));
   }
 
   /* ── signed-out: the application form ─────────────────────────────────── */
@@ -114,10 +246,12 @@
     };
   }
 
-  /* ── courses ──────────────────────────────────────────────────────────── */
+  /* ── courses: mine, plus discovery of everything else ─────────────────── */
   async function home() {
     const d = await api("/api/learn/courses");
-    const card = (c) => `<div class="lrn-card" data-c="${c.id}">
+    const card = (c) => `<div class="lrn-card lrn-find" data-c="${c.id}"
+      data-find="${esc((c.name + " " + c.language + " " + c.level
+        + " " + (c.teacher || "")).toLowerCase())}">
       <h3>${esc(c.name)}</h3>
       <p class="lrn-meta">${esc([c.language, c.level].filter(Boolean).join(" · "))}${
         c.teacher ? " · " + esc(c.teacher) : ""}</p>
@@ -125,28 +259,60 @@
         <p class="lrn-meta">${c.progress.lessons_done}/${c.progress.lessons_total} lessons ·
          ${c.progress.quizzes_passed}/${c.progress.quizzes_total} quizzes · ${c.progress.percent}%</p>` : ""}
       </div>`;
-    const offer = (c) => `<div class="lrn-card" style="cursor:default">
+    const offer = (c) => `<div class="lrn-card lrn-find" style="cursor:default"
+      data-find="${esc((c.name + " " + c.language + " " + c.level)
+        .toLowerCase())}">
       <h3>${esc(c.name)}</h3>
       <p class="lrn-meta">${esc([c.language, c.level].filter(Boolean).join(" · "))}</p>
       ${c.blurb ? `<p>${esc(c.blurb)}</p>` : ""}
+      <p class="lrn-row-gap">
       ${c.product ? `<a class="lrn-btn" href="/product/${c.product.id}">Get this course —
-        $${(c.product.price_cents / 100).toFixed(2)}</a>`
-        : '<p class="lrn-meta">Ask us about joining this course.</p>'}</div>`;
+        $${(c.product.price_cents / 100).toFixed(2)}</a>` : ""}
+      ${c.requested
+        ? '<span class="lrn-meta">Asked to join — waiting on the office.</span>'
+        : `<button class="lrn-btn sm" data-ask="${c.id}">Ask to join</button>`}
+      </p></div>`;
     root.innerHTML = tabs()
+      + `<div class="lrn-search" style="margin-bottom:16px">
+          <input id="cf-q" placeholder="Search courses — yours and ones you
+            could join" autocomplete="off"></div>`
       + (d.enrolled.length
-        ? `<div class="lrn-grid">${d.enrolled.map(card).join("")}</div>`
-        : "<p>You aren't enrolled in a course yet.</p>")
+        ? `<h2 style="margin:0 0 10px">Your courses</h2>
+           <div class="lrn-grid">${d.enrolled.map(card).join("")}</div>`
+        : "<p>You aren't enrolled in a course yet — find one below and ask to join.</p>")
       + (d.achievements && d.achievements.length
         ? `<h2 style="margin-top:28px">Achievements</h2>
            <div class="lrn-badges">${d.achievements.map((a) =>
              `<span class="lrn-badge" title="you ${esc(a.what)}">${
                esc(a.name)}</span>`).join("")}</div>` : "")
       + (d.available.length
-        ? `<h2 style="margin-top:28px">More courses</h2>
+        ? `<h2 style="margin-top:28px">Discover</h2>
+           <p class="lrn-meta">Every open course at the school. Buy a seat
+             where one is sold, or ask to join and the office decides.</p>
            <div class="lrn-grid">${d.available.map(offer).join("")}</div>` : "");
     wireTabs();
     root.querySelectorAll("[data-c]").forEach((el) =>
       el.onclick = () => course(+el.dataset.c));
+    root.querySelectorAll("[data-ask]").forEach((b) => b.onclick =
+      async (e) => {
+        e.stopPropagation();
+        const note = prompt("Anything the office should know? (optional)")
+          || "";
+        try {
+          await api(`/api/learn/courses/${b.dataset.ask}/request`, { note });
+          alert("Asked — the office reviews every request, and approval "
+            + "opens your seat.");
+          home();
+        } catch (err) { alert(err.message); }
+      });
+    const q = root.querySelector("#cf-q");
+    if (q) q.oninput = () => {
+      const needle = q.value.trim().toLowerCase();
+      root.querySelectorAll(".lrn-find").forEach((el) => {
+        el.style.display = !needle
+          || el.dataset.find.includes(needle) ? "" : "none";
+      });
+    };
   }
 
   async function course(cid) {
@@ -595,13 +761,36 @@
     drawCal();
   }
 
-  /* ── Me: the ID card, my loans, my data ───────────────────────────────── */
-  async function meView() {
-    let card = null, loans = [];
+  /* ── Profile: who I am, my ID card, my loans, my data ─────────────────── */
+  async function profileView() {
+    let card = null, loans = [], me = null;
+    try { me = await api("/api/learn/me"); } catch (e) {}
     try { card = await api("/api/learn/me/card"); } catch (e) {}
     try { loans = await api("/api/learn/loans"); } catch (e) {}
     const day = (t) => t ? new Date(t * 1000).toLocaleDateString() : "";
     root.innerHTML = tabs() + `
+      ${me ? `<div class="lrn-live" style="align-items:flex-start">
+        <div><h2 style="margin:0">${esc(me.name)}
+            <span class="lrn-badge">${esc(me.role === "customer"
+              ? "student" : me.role)}</span></h2>
+          <p class="lrn-meta">${me.attended} class${me.attended === 1
+            ? "" : "es"} attended · ${me.has_password
+            ? "password set"
+            : "no password yet — add one next time you sign in"}</p>
+          <p class="lrn-row-gap"><input id="pr-email" type="email"
+            value="${esc(me.email)}" placeholder="your email"
+            style="max-width:260px">
+          <button class="lrn-btn sm" id="pr-save">Save email</button></p>
+        </div>
+        <span style="flex:1"></span>
+        <div style="text-align:right">
+          <button class="lrn-btn sm" id="pr-signout-all">Sign out
+            everywhere</button>
+          <p class="lrn-meta" style="max-width:240px">Ends every session on
+            every device, including this one — for when a phone goes
+            missing.</p>
+        </div>
+      </div>` : ""}
       ${card ? `<h3>My ID card</h3>
       <div class="lrn-idcard">
         <img src="/api/qr.svg?data=${encodeURIComponent(card.payload)}"
@@ -628,11 +817,27 @@
         Messages are not included: a conversation belongs to two people.</p>
       <button class="lrn-btn" id="me-export">Download my data</button>`;
     wireTabs();
+    const sv = document.getElementById("pr-save");
+    if (sv) sv.onclick = async () => {
+      try {
+        await api("/api/learn/me", {
+          email: document.getElementById("pr-email").value.trim() });
+        alert("Saved.");
+      } catch (err) { alert(err.message); }
+    };
+    const so = document.getElementById("pr-signout-all");
+    if (so) so.onclick = async () => {
+      if (!window.confirm("End every session on every device, including "
+        + "this one?")) return;
+      try { await api("/api/learn/me/signout-all", {}); } catch (err) {}
+      localStorage.removeItem("sf_support");
+      location.reload();
+    };
     const pr = document.getElementById("me-print");
     if (pr) pr.onclick = () => window.print();
     const re = document.getElementById("me-reissue");
     if (re) re.onclick = async () => {
-      try { await api("/api/learn/me/qr/reissue", {}); meView(); }
+      try { await api("/api/learn/me/qr/reissue", {}); profileView(); }
       catch (err) { alert(err.message); }
     };
     document.getElementById("me-export").onclick = async () => {
@@ -987,7 +1192,12 @@
   if (scanned) {
     try { history.replaceState({}, "", "/learn"); } catch (e) {}
   }
-  home().then(() => {
+  // Land on Check in when a class is live — the portal's own habit —
+  // otherwise on Courses.
+  api("/api/learn/live").then((live) => {
+    VIEW = live.length ? "checkin" : "courses";
+    return (VIEWS()[VIEW])();
+  }).then(() => {
     probeVoice();
     if (scanned) handleScan(scanned);
   }).catch((e) => {
