@@ -879,7 +879,16 @@ def list_engagements(archived: int = 0, u=Depends(admin_user),
                 warn.append("blocked")
         e["warnings"] = warn
         out.append(e)
+    # The package picker's options — the price book's own tiers, so the
+    # form and the bench can never quote different plans. Fail-safe to
+    # none: a book that won't parse should not take the client list down.
+    try:
+        from .pricebook import tiers as _tiers
+        tier_opts = _tiers()
+    except Exception:
+        tier_opts = []
     return {"engagements": out, "kit_available": KIT.is_dir(),
+            "tiers": tier_opts,
             "archived_count": con.execute(
                 "SELECT COUNT(*) n FROM engagements WHERE status='archived'"
             ).fetchone()["n"]}

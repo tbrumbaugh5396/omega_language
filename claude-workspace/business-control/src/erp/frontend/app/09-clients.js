@@ -563,10 +563,13 @@ async function binderEditMode(engId, e, anchor) {
   } catch (err) { toast(err.message); }
 }
 
+let ENG_TIERS = [];               // the price book's packaged plans
+
 async function renderClients() {
   if (S.engId) return renderEngagement(S.engId);
   const data = await api("/api/store/admin/engagements"
     + (S.engArchived ? "?archived=1" : ""));
+  ENG_TIERS = data.tiers || [];
   view().innerHTML = `
     <div class="page-head">
       <div><h2>Clients (B2B)</h2>
@@ -675,13 +678,40 @@ async function renderClients() {
   });
 }
 
-function engForm(e) {
+/* Legacy packages were lettered; the letters map onto the book's tiers
+   in order, so an old "B" client selects Pro instead of dangling. */
+function pkgMatches(stored, tierName) {
+  if (!stored) return false;
+  const legacy = { A: "Starter", B: "Pro", C: "Scale" };
+  const want = legacy[stored.trim().toUpperCase()] || stored.trim();
+  return want.toLowerCase() === tierName.toLowerCase();
+}
+
+async function engForm(e) {
+  if (!ENG_TIERS.length) {
+    // deep-linked straight to a client: the list (and its tiers) was
+    // never fetched — get the options before drawing the picker
+    try {
+      ENG_TIERS = (await api("/api/store/admin/engagements")).tiers || [];
+    } catch (err) { /* the picker degrades to custom-scope only */ }
+  }
   modal(`<h3>${e ? "Edit client" : "New client"}</h3>
     <label>Client name <span class="req">required</span></label>
     <input id="ef-name" value="${esc(e ? e.name : "")}">
     <div class="row2">
-      <div><label>Package (A / B / C)</label>
-        <input id="ef-pkg" value="${esc(e ? e.package : "")}"></div>
+      <div><label>Package</label>
+        <select id="ef-pkg">
+          <option value="">— custom scope, no packaged tier —</option>
+          ${ENG_TIERS.map((t) => `<option value="${esc(t.name)}"
+            ${pkgMatches(e && e.package, t.name) ? "selected" : ""}>
+            ${esc(t.name)} — \$${t.price}/mo · ${esc(t.locations)}
+            location${t.locations === "1" ? "" : "s"} ·
+            ${esc(t.seats)} seats</option>`).join("")}
+          ${e && e.package && !ENG_TIERS.some((t) =>
+              pkgMatches(e.package, t.name))
+            ? `<option value="${esc(e.package)}" selected>
+                ${esc(e.package)} (as recorded)</option>` : ""}
+        </select></div>
       <div><label>Value ($)</label>
         <input id="ef-val" type="number" min="0"
           value="${e && e.value_cents ? e.value_cents / 100 : ""}"></div>
@@ -735,6 +765,12 @@ function engForm(e) {
       <input type="file" id="ef-files" multiple
         accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.csv,.txt">`}
     <div class="modal-foot"><button class="btn" id="ef-save">Save</button></div>`);
+  $("#ef-pkg").onchange = () => {
+    // picking a plan suggests its price — into an EMPTY value only;
+    // a negotiated number someone already typed is never overwritten
+    const t = ENG_TIERS.find((x) => x.name === $("#ef-pkg").value);
+    if (t && !$("#ef-val").value) $("#ef-val").value = t.price;
+  };
   $("#ef-save").onclick = async () => {
     const body = {
       name: $("#ef-name").value.trim(),

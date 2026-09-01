@@ -404,6 +404,21 @@ _arl = lambda a=0: c.get("/api/store/admin/engagements", headers=A,
                          params={"archived": a}).json()
 ok(any(x["name"] == "Parked Smoke" for x in _arl()["engagements"]),
    "a new client is on the working list")
+
+# --- the package picker speaks the price book --------------------------------
+_tl = c.get("/api/store/admin/engagements", headers=A).json()["tiers"]
+ok([t["name"] for t in _tl] == ["Starter", "Pro", "Scale"]
+   and [t["price"] for t in _tl] == [199, 349, 699],
+   "the client form's package options ARE the book's tiers — names, "
+   "prices and scale from one parse, never a lettered mystery")
+_pj = (Path(__file__).parent.parent
+       / "src/erp/frontend/app/09-clients.js").read_text(encoding="utf-8")
+ok('<select id="ef-pkg">' in _pj and "custom scope, no packaged tier" in _pj
+   and 'A: "Starter", B: "Pro", C: "Scale"' in _pj
+   and "(as recorded)" in _pj,
+   "the picker offers the tiers descriptively, maps the legacy letters "
+   "onto them in order, and keeps an off-book value visible rather than "
+   "dropping it")
 c.post(f"/api/store/admin/engagements/{_ar['id']}/archive", headers=A,
        json={"archived": True})
 ok(all(x["name"] != "Parked Smoke" for x in _arl()["engagements"])
