@@ -1061,13 +1061,34 @@ const PARTNER_LINKS = [
 (function drawPartnerLinks() {
   const host = $("#menu-partners");
   if (!host) return;
+  // The stock/reorder/distribute story is the distribution capability's;
+  // a school without it should not offer trucks in its menu.
   host.innerHTML = PARTNER_LINKS.map(([slug, icn, label, sub]) =>
-    `<a class="menu-link" href="/partners/${slug}">${ico(icn)}
+    `<a class="menu-link" href="/partners/${slug}" data-cap="distribution">${ico(icn)}
       <span>${label}<small>${sub}</small></span></a>`).join("")
     // The affiliate programme is a way to work with us too, and it was
     // only reachable from a footer link.
-    + `<a class="menu-link" href="/affiliates">${ico("link")}
+    + `<a class="menu-link" href="/affiliates" data-cap="affiliates">${ico("link")}
       <span>Affiliates<small>Share your link, earn on every order</small></span></a>`;
+})();
+
+/* The menu follows the grant, same as the header nav: the shell stamps the
+   tenant's capability list onto <body data-caps>, and any menu entry tagged
+   data-cap disappears when its capability is off. An empty attribute (no
+   grant recorded) means everything — the same null rule as the server. A
+   fold whose links all vanish takes its heading with it. */
+(function pruneMenuByCaps() {
+  let caps = null;
+  try { caps = JSON.parse(document.body.dataset.caps || "null"); }
+  catch { caps = null; }
+  if (!Array.isArray(caps)) return;
+  document.querySelectorAll("[data-cap]").forEach((el) => {
+    if (!caps.includes(el.dataset.cap)) el.remove();
+  });
+  document.querySelectorAll(".menu-fold").forEach((fold) => {
+    const links = fold.querySelector(".menu-links");
+    if (links && !links.querySelector(".menu-link")) fold.remove();
+  });
 })();
 
 function openMenu() {
@@ -1114,6 +1135,9 @@ function signIn(intro, onDone) {
       autocomplete="name">
     <label>Email <span class="dim">(the one you ordered with)</span></label>
     <input id="si-email" type="email" autocomplete="email">
+    <label>Password <span class="dim">(optional — add one once and it's
+      required from then on)</span></label>
+    <input id="si-pass" type="password" autocomplete="current-password">
     <div class="modal-actions">
       <button class="btn-pill ghost sm" data-close-modal>Later</button>
       <button class="btn-pill ghost sm" id="si-scan">Scan a QR</button>
@@ -1121,8 +1145,10 @@ function signIn(intro, onDone) {
     </div>
     <p class="dim" id="si-msg"></p>
     <p class="dim" style="margin-top:14px;padding-top:12px;
-      border-top:1px solid var(--line)">On the team?
-      <a class="text-link" href="/admin">Back-office sign-in →</a></p>`);
+      border-top:1px solid var(--line)">On the team — teaching, coaching,
+      running the place?
+      <a class="text-link" href="/ops/">Team sign-in →</a> ·
+      <a class="text-link" href="/admin">Store admin →</a></p>`);
   on("#si-scan", async () => {
     const msg = $("#si-msg");
     if (msg) msg.textContent = "";
@@ -1132,11 +1158,18 @@ function signIn(intro, onDone) {
   const go = async () => {
     const name = $("#si-name").value.trim();
     if (!name) { $("#si-name").focus(); return; }
-    const out = await (await fetch("/api/login", { method: "POST",
+    const res = await fetch("/api/login", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, role: "customer",
-        email: $("#si-email").value.trim() }) })).json();
-    if (!out.token) { toast("Couldn't sign you in — try again"); return; }
+        email: $("#si-email").value.trim(),
+        password: $("#si-pass").value }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.token) {
+      const msg = $("#si-msg");
+      if (msg) msg.textContent = out.detail
+        || "Couldn't sign you in — try again";
+      return;
+    }
     localStorage.setItem("sf_support",
       JSON.stringify({ token: out.token, me: out.id }));
     SUPPORT.token = out.token; SUPPORT.me = out.id;
@@ -1145,6 +1178,7 @@ function signIn(intro, onDone) {
   $("#si-go").onclick = go;
   $("#si-name").onkeydown = (e) => { if (e.key === "Enter") go(); };
   $("#si-email").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  $("#si-pass").onkeydown = (e) => { if (e.key === "Enter") go(); };
   setTimeout(() => $("#si-name").focus(), 30);
 }
 
@@ -1159,7 +1193,13 @@ async function drawAccount() {
     (await fetch("/api/store/account/subscriptions", { headers: H })).json()]);
   const aff = await (await fetch("/api/store/affiliate/stats",
     { headers: H })).json().catch(() => ({ joined: false }));
-  const affBlock = aff.joined ? `
+  // the account panel follows the grant too: no affiliates capability,
+  // no programme to join (same data-caps the side menu reads)
+  let capsOn = null;
+  try { capsOn = JSON.parse(document.body.dataset.caps || "null"); }
+  catch { capsOn = null; }
+  const affOff = Array.isArray(capsOn) && !capsOn.includes("affiliates");
+  const affBlock = affOff ? "" : aff.joined ? `
     <h3 style="font-size:15px;margin-top:14px">Affiliate</h3>
     <div class="ship-opt"><b>${location.origin}/r/${aff.code}</b></div>
     <div class="ship-opt">

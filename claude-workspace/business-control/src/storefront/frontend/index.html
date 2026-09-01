@@ -15,7 +15,7 @@
   <link rel="icon" href="/ops/icons/icon-192.png">
   <link rel="stylesheet" href="/qr-scan.css">
 </head>
-<body>
+<body data-caps="<!--CAPS-->">
 
 <!--ICONS-->
 
@@ -56,15 +56,29 @@
     <div class="menu-grid">
       <div id="side-collections"></div>
       <div>
+        <details class="menu-fold" id="fold-learn" open>
+          <summary><span class="side-group">Learn with us</span>
+            <svg class="ico ico-sm fold-chev" aria-hidden="true">
+              <use href="#i-arrow"/></svg></summary>
+          <div class="menu-links">
+            <a class="menu-link" href="/learn" data-cap="learning">
+              <svg class="ico" aria-hidden="true"><use href="#i-star"/></svg>
+              <span>Learning<small>Your courses, lessons, quizzes and people</small></span></a>
+            <a class="menu-link" href="/nutrition" data-cap="nutrition">
+              <svg class="ico" aria-hidden="true"><use href="#i-leaf"/></svg>
+              <span>Nutrition<small>Plan, prep and track — coach optional</small></span></a>
+          </div>
+        </details>
+
         <details class="menu-fold" id="fold-find" open>
           <summary><span class="side-group">Come find us</span>
             <svg class="ico ico-sm fold-chev" aria-hidden="true">
               <use href="#i-arrow"/></svg></summary>
           <div class="menu-links">
-            <a class="menu-link locator-link" href="/find">
+            <a class="menu-link locator-link" href="/find" data-cap="distribution">
               <svg class="ico" aria-hidden="true"><use href="#i-pin"/></svg>
               <span>Find a store<small>Shops that carry the range</small></span></a>
-            <a class="menu-link" href="/events">
+            <a class="menu-link" href="/events" data-cap="events">
               <svg class="ico" aria-hidden="true"><use href="#i-sparkle"/></svg>
               <span>Events<small>Tastings, pop-ups and markets</small></span></a>
           </div>

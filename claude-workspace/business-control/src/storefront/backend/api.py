@@ -606,10 +606,19 @@ def render_shell(con, body_html: str, *, title=None, description=None,
         "<!--CART-NOTE-->": sect.esc(_ui.get("cart_note", "")),
         "<!--CONTACT-->": _footer_contact(con),
         "<!--HEAD-EXTRA-->": head_extra,
+        # the tenant's grant, stamped onto <body data-caps> so the side
+        # menu can follow it client-side; empty = null = everything on
+        "<!--CAPS-->": sect.esc(json.dumps(_tenant_caps()))
+                       if _tenant_caps() is not None else "",
     }
     for k, v in repl.items():
         shell = shell.replace(k, v)
     return shell
+
+
+def _tenant_caps():
+    from erp.backend import tenancy
+    return tenancy.caps_of(tenancy.CURRENT.get())
 
 
 def _footer_contact(con) -> str:

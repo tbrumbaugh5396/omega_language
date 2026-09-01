@@ -124,9 +124,14 @@ svg.can { display: block; width: 100%; height: auto; }
 .price .per { font-size: .68em; font-weight: 500; opacity: .62;
   margin-left: 1px; }
 .top-links { display: flex; gap: 24px; font-weight: 500; font-size: 14.5px;
-  margin-left: 14px; }
-.top-links a { padding: 4px 0; border-bottom: 1.5px solid transparent; }
+  margin-left: 14px; align-items: center; flex-wrap: wrap; row-gap: 0; }
+/* A link must never wrap inside itself: "Who teaches this" broken across
+   two lines throws the whole bar off its baseline. Whole links may move to
+   a second row; words may not. */
+.top-links a { padding: 4px 0; border-bottom: 1.5px solid transparent;
+  white-space: nowrap; line-height: 1.3; }
 .top-links a:hover { border-bottom-color: var(--purple); }
+@media (max-width: 1060px) { .top-links { display: none; } }
 .top-actions { margin-left: auto; display: flex; gap: 2px; align-items: center; }
 .icon-btn { border: none; background: none; cursor: pointer; color: var(--ink);
   padding: 9px; border-radius: var(--r-sm); display: flex;

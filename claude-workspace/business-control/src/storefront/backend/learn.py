@@ -705,7 +705,9 @@ def learn_page(con=Depends(get_con)):
  .lrn-cal .dot.absent{{background:#e66;opacity:1}}
  .lrn-idcard{{border:1px solid rgba(127,127,127,.4);border-radius:14px;padding:20px;max-width:340px;text-align:center}}
  .lrn-idcard img{{width:220px;height:220px;background:#fff;padding:8px;border-radius:8px}}
- .lrn-lookup{{position:fixed;right:16px;bottom:16px;z-index:150;max-width:340px}}
+ .lrn-lookup{{position:fixed;right:16px;bottom:84px;z-index:47;max-width:340px}}
+ /* bottom:84px + z-index below the buy-fab (48): the lookup stacks ABOVE
+    the floating Buy now instead of fighting it for the same corner */
  .lrn-lookup .panel{{background:var(--bg,#111);border:1px solid rgba(127,127,127,.4);border-radius:14px;padding:14px;box-shadow:0 12px 40px rgba(0,0,0,.4)}}
  .lrn-lookup input,.lrn-lookup select{{padding:6px 8px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:none;color:inherit}}
  .lrn-rec{{border:1px dashed rgba(127,127,127,.4);border-radius:10px;padding:10px;margin:8px 0}}
