@@ -35,7 +35,19 @@
         "--port",
         "8860"
       ],
-      "port": 8860
+      "port": 8860,
+      "autoPort": false
+    },
+    {
+      "name": "business-control-verify",
+      "runtimeExecutable": "business-control/.venv/bin/python3",
+      "runtimeArgs": [
+        "business-control/scripts/launch.py",
+        "--port",
+        "8861"
+      ],
+      "port": 8861,
+      "autoPort": false
     },
     {
       "name": "data-transfer",
