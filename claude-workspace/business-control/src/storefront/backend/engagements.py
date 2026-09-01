@@ -210,6 +210,107 @@ GATES = [
 ]
 GATE_KEYS = {g[0] for g in GATES}
 
+# How long the road to each gate usually takes, in calendar days from the
+# gate before it. Defaults, not commitments: the Dates table always wins,
+# and a passed gate's actual date wins over everything. These exist so a
+# schedule with no dates written yet still SAYS something — an estimated
+# duration is a plan you can argue with; a blank is not.
+GATE_EST_DAYS = {
+    "proposal_accepted": 7,
+    "contract_signed": 7,
+    "deposit_cleared": 3,
+    "requirements_signed": 10,
+    "art_direction_signed": 10,
+    "round1_signed_off": 14,
+    "round2_signed_off": 10,
+    "final_invoice_paid": 5,
+    "handover_accepted": 7,
+    "ongoing_support_agreed": 7,
+}
+
+# The tracks of work BETWEEN the gates — the gantt's rows. Server-side so
+# the chart in ops and the timeline in a Scope of Work read the same fact
+# and can never disagree about what runs in parallel.
+TRACKS = [
+    {"name": "Discovery & requirements", "from": "proposal_accepted",
+     "to": "requirements_signed", "lane": 0},
+    {"name": "Content & assets from the client", "from": "contract_signed",
+     "to": "round2_signed_off", "lane": 1,
+     "note": "starts at kickoff and runs to the end — the critical path"},
+    {"name": "Brand exploration", "from": "requirements_signed",
+     "to": "art_direction_signed", "lane": 2, "optional": True},
+    {"name": "Build", "from": "requirements_signed",
+     "to": "round2_signed_off", "lane": 2,
+     "note": "overlaps brand once the direction is signed"},
+    {"name": "Launch & handover", "from": "round2_signed_off",
+     "to": "handover_accepted", "lane": 0},
+    {"name": "Money", "from": "contract_signed", "to": "final_invoice_paid",
+     "lane": 3, "note": "deposit up front, final before launch"},
+    {"name": "Ongoing — security, monitoring, updates, support",
+     "from": "handover_accepted", "to": "ongoing_support_agreed", "lane": 1,
+     "note": "continuous work, carried by the care plan agreed in the "
+             "contract — it starts when handover ends and does not stop"},
+]
+
+
+def schedule_of(gates: list) -> list:
+    """A date for every active gate, each labelled with where it came from.
+
+    Three sources, in strength order: **actual** (the gate closed — its
+    stamped date, or the Dates table's actual), **planned** (the operator
+    wrote it in the Dates table), **estimate** (the previous gate's date
+    plus this gate's default duration; the chain starts from today). An
+    estimate is marked as one everywhere it is shown — a guessed date that
+    looks like a promise is how launch weeks are lost.
+    """
+    out = []
+    prev = time.time()
+    for g in gates:
+        if not g.get("active"):
+            continue
+        date, source = None, "estimate"
+        if g.get("passed_at"):
+            source = "actual"
+            date = _parse_day(g.get("actual_date")) or g["passed_at"]
+        elif _parse_day(g.get("planned")):
+            source = "planned"
+            date = _parse_day(g.get("planned"))
+        else:
+            date = prev + GATE_EST_DAYS.get(g["gate"], 7) * 86400
+        prev = max(prev, date)
+        out.append({"gate": g["gate"], "label": g["label"],
+                    "date": time.strftime("%Y-%m-%d", time.localtime(date)),
+                    "ts": date, "source": source,
+                    "est_days": GATE_EST_DAYS.get(g["gate"], 7)})
+    return out
+
+
+def _parse_day(s):
+    """A yyyy-mm-dd (or close) from the free-form Dates table, or None."""
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(s or ""))
+    if not m:
+        return None
+    try:
+        return time.mktime(time.strptime(m.group(0), "%Y-%m-%d"))
+    except ValueError:
+        return None
+
+
+def tracks_of(gates: list) -> list:
+    """The gantt rows with their spans resolved against the schedule.
+    A track whose either end rests on an estimate is itself an estimate,
+    and says so."""
+    sched = {s["gate"]: s for s in schedule_of(gates)}
+    out = []
+    for t in TRACKS:
+        a, z = sched.get(t["from"]), sched.get(t["to"])
+        if not a or not z:
+            continue
+        days = max(1, round((z["ts"] - a["ts"]) / 86400))
+        out.append({**t, "start": a["date"], "end": z["date"], "days": days,
+                    "estimated": "estimate" in (a["source"], z["source"])})
+    return out
+
 
 def match_gate_date(gate: dict, dates: list):
     """The dates table's row for this gate, if the operator wrote one.
@@ -1064,7 +1165,11 @@ def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         body = d.pop("body") or ""
         # A quote is a paper the bench produced; the row knows it, so the
         # UI can open the bench's own view of it instead of the plain paper.
-        d["quote"] = (d.pop("notes") or "").startswith(QUOTE_NOTE)
+        # Likewise a Scope of Work — the row knowing lets the UI offer a
+        # change order against it once it is signed.
+        _notes = d.pop("notes") or ""
+        d["quote"] = _notes.startswith(QUOTE_NOTE)
+        d["sow"] = _notes.startswith(SOW_NOTE)
         d["has_body"] = bool(body.strip())
         # How much of the template is still a bracket. Shown on the row, so
         # "finished" is a number going to zero, not a feeling.
@@ -1078,23 +1183,35 @@ def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
     ej["portal_url"] = (f"/engage/{e['portal_token']}"
                         if e["portal_token"] else "")
     ej.pop("portal_token", None)
+    gates, dates = _gates_with_dates(con, eid, gates)
+    return {"engagement": ej,
+            "dates": dates,
+            "docs": docs,
+            "gates": gates,
+            # the same schedule the SOW timeline prints: actual beats
+            # planned beats estimate, and estimates say they are estimates
+            "schedule": schedule_of(gates),
+            "tracks": tracks_of(gates),
+            "current_stage": current_stage(gates),
+            "stages": scan_templates(),
+            "log": [dict(r) for r in events]}
+
+
+def _gates_with_dates(con, eid: int, gates: list | None = None):
+    """The gates, with the Dates table's schedule matched on. One helper:
+    the detail view, the schedule and the SOW timeline all decorate gates
+    the same way, so a planned date shown on the gate row is the planned
+    date the SOW prints."""
+    gates = gates if gates is not None else resolve_gates(con, eid)
     dates = [dict(r) for r in con.execute(
         "SELECT label, planned, actual, moved_because FROM engagement_dates"
         " WHERE engagement_id=? ORDER BY ord", (eid,))]
-    # The schedule reaches the gates: a gate that has a row in the Dates
-    # table shows its planned (and actual) date wherever the gate appears.
     for g in gates:
         dr = match_gate_date(g, dates)
         if dr:
             g["planned"] = dr["planned"]
             g["actual_date"] = dr["actual"]
-    return {"engagement": ej,
-            "dates": dates,
-            "docs": docs,
-            "gates": gates,
-            "current_stage": current_stage(gates),
-            "stages": scan_templates(),
-            "log": [dict(r) for r in events]}
+    return gates, dates
 
 
 @router.get("/api/store/admin/engagements/{eid}/template")
@@ -1375,6 +1492,7 @@ def send_bundle(eid: int, body: SendDocBody, request: Request,
 BENCH = Path(__file__).resolve().parents[3] / "docs" / "product" \
     / "quote-bench.html"
 QUOTE_NOTE = "Quote bench state: "
+SOW_NOTE = "Scope of work: "         # + "sow" or "change-order:<doc_id>"
 
 
 @router.get("/api/store/admin/quote-bench")
@@ -1491,6 +1609,243 @@ def quote_state(eid: int, did: int = 0, u=Depends(admin_user),
         return {"doc_id": 0, "state": "", "signed": 0}
     return {"doc_id": r["id"], "title": r["title"], "signed": r["signed"],
             "state": r["notes"][len(QUOTE_NOTE):]}
+
+
+# ---------- the scope of work ----------
+#
+# A SOW here is GENERATED, not authored blank: deliverables come from the
+# quote, fees from the price book, the timeline from the same schedule the
+# gantt draws — so the paper cannot disagree with the record it rides on.
+# It stays editable in the vault until the signature request goes out, and
+# freezes there like every signed document. Scope changes afterwards are a
+# CHANGE ORDER referencing the signed SOW, never an edit of it.
+
+def _quote_facts(con, eid: int) -> dict | None:
+    """What the client is buying, from the quote — the signed one if there
+    is one, else the latest, saying which."""
+    rows = con.execute(
+        "SELECT d.id, d.title, d.notes,"
+        "  (SELECT COUNT(*) FROM document_signatures s"
+        "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
+        " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND d.notes LIKE ?"
+        "   AND d.status!='archived' ORDER BY d.created_at DESC",
+        (eid, QUOTE_NOTE + "%")).fetchall()
+    row = next((r for r in rows if r["signed"]), rows[0] if rows else None)
+    if row is None:
+        return None
+    import base64
+    try:
+        state = json.loads(base64.b64decode(
+            row["notes"][len(QUOTE_NOTE):]).decode("utf-8"))
+    except Exception:
+        return None
+    return {"cap_ids": [c for c in (state.get("on") or []) if c != "core"],
+            "locs": int(state.get("locs") or 1),
+            "seats": int(state.get("seats") or 5),
+            "dedicated": bool(state.get("dedicated")),
+            "doc_id": row["id"], "doc_title": row["title"],
+            "signed": bool(row["signed"])}
+
+
+def sow_body(con, e) -> str:
+    """The Scope of Work, composed from what the record already knows.
+    Identity facts stay as [TOKENS] — they read from the client record
+    until the signature freezes the text. The derived tables are baked at
+    drafting, which is the point: the draft is the record's view TODAY,
+    and signing is what turns that view into a commitment."""
+    q = _quote_facts(con, e["id"])
+    caps = {c["id"]: c for c in _cap_catalog()}
+    core = _core_price()
+    today = time.strftime("%B %d, %Y").replace(" 0", " ")
+    L = [
+        "# [BRAND]",
+        "",
+        "## Scope of Work — [CLIENT]",
+        "",
+        "| | |",
+        "|---|---|",
+        "| Client | [CLIENT] |",
+        "| Client approver | [CLIENT POC] |",
+        "| Our lead | [INTERNAL POC] |",
+        f"| Issued | {today} |",
+        "",
+        "### 1. Background & purpose",
+        "",
+        "[PURPOSE — one short paragraph: what the client is trying to "
+        "achieve, in their words]",
+        "",
+        "### 2. Deliverables",
+        "",
+    ]
+    if q:
+        L += [f"The platform, stood up and configured for [CLIENT] — "
+              f"{q['locs']} location{'s' if q['locs'] != 1 else ''}, "
+              f"{q['seats']} seat{'s' if q['seats'] != 1 else ''}"
+              + (", on dedicated infrastructure" if q["dedicated"] else "")
+              + " — carrying the capabilities below.", "",
+              "| Capability | Group | Monthly |", "|---|---|---|",
+              f"| Platform Core | — | ${core} |"]
+        for cid in q["cap_ids"]:
+            c = caps.get(cid)
+            if c:
+                L.append(f"| {c['name']} | {c['group'] or '—'} |"
+                         f" ${c['price']} |")
+        total = core + sum(caps[c]["price"] for c in q["cap_ids"]
+                           if c in caps)
+        L += [f"| **Software subtotal** | | **${total}/mo** |", "",
+              f"Per the {'signed ' if q['signed'] else ''}quote "
+              f"“{q['doc_title']}”, which governs pricing. "
+              "Metered lines move with real usage; pass-throughs on the "
+              "client's own vendor accounts are billed by those vendors "
+              "directly.", ""]
+    else:
+        L += ["[DELIVERABLES — no quote is filed on this engagement yet; "
+              "file one on the bench and regenerate, or write the "
+              "deliverables here]", ""]
+    L += ["### 3. Timeline", ""]
+    gates, _dates = _gates_with_dates(con, e["id"])
+    tracks = tracks_of(gates)
+    est_any = any(t["estimated"] for t in tracks)
+    if tracks:
+        L += ["| Phase | Begins | Ends | Duration |", "|---|---|---|---|"]
+        for t in tracks:
+            mark = " *(est.)*" if t["estimated"] else ""
+            wk = (f"{t['days']} days" if t["days"] < 10
+                  else f"~{round(t['days'] / 7)} weeks")
+            L.append(f"| {t['name']}"
+                     + (" *(optional)*" if t.get("optional") else "")
+                     + f" | {t['start']}{mark} | {t['end']}{mark}"
+                     + f" | {wk}{mark} |")
+        if est_any:
+            L += ["", "Dates marked *(est.)* are planning durations, not "
+                  "commitments — the engagement's Dates table is the "
+                  "governing schedule, and written dates replace these "
+                  "estimates wherever they appear."]
+        L.append("")
+    L += [
+        "### 4. Fees & payment",
+        "",
+        ("Monthly software fees as itemised in §2, from the published "
+         "price book. " if q else "[FEES — from the quote] ")
+        + "Build and one-time fees per the quote; deposit due at contract "
+          "signing, final invoice before launch, as the payment gates on "
+          "this engagement schedule them.",
+        "",
+        "### 5. Change control",
+        "",
+        "Work not described in §2 is out of scope. Changes are agreed in a "
+        "written **change order** referencing this Scope of Work — stating "
+        "what changes, the fee adjustment, and any effect on §3 — and "
+        "signed the way this document is signed. No changed work begins "
+        "before its change order is.",
+        "",
+        "### 6. Suspension & exit",
+        "",
+        "As the signed agreement provides: either party may end the "
+        "engagement per its notice terms; suspension for non-payment and "
+        "the return of client materials follow the agreement's clauses, "
+        "which this SOW does not amend.",
+        "",
+        "### 7. Acceptance",
+        "",
+        "Signed for the client by **[APPROVER]**, and for [BRAND] by "
+        "**[INTERNAL POC]**. Signature attests to this text as it stands.",
+    ]
+    return "\n".join(L)
+
+
+def change_order_body(e, sow) -> str:
+    when = time.strftime("%B %d, %Y").replace(" 0", " ")
+    return "\n".join([
+        "# [BRAND]",
+        "",
+        f"## Change order — [CLIENT]",
+        "",
+        f"Amends the signed Scope of Work “{sow['title']}” "
+        f"(document #{sow['id']}). That SOW stands except as changed "
+        "below; nothing here re-opens its signed text.",
+        "",
+        f"| | |", "|---|---|",
+        "| Client | [CLIENT] |",
+        f"| Issued | {when} |",
+        "",
+        "### What changes",
+        "",
+        "[CHANGES — what is added, removed or altered, precisely]",
+        "",
+        "### Fee adjustment",
+        "",
+        "[FEE ADJUSTMENT — the delta, one-time or monthly, or “none"
+        "”]",
+        "",
+        "### Effect on the timeline",
+        "",
+        "[TIMELINE EFFECT — which phases move, or “none”]",
+        "",
+        "### Acceptance",
+        "",
+        "Signed for the client by **[APPROVER]**, and for [BRAND] by "
+        "**[INTERNAL POC]**.",
+    ])
+
+
+def _file_composed(con, e, text: str, title: str, note: str,
+                   actor: str) -> int:
+    """A composed paper into the vault, linked to its engagement — the
+    same landing file_kit_doc gives a template, minus the template."""
+    remaining = placeholders(text)
+    cur = con.execute(
+        "INSERT INTO documents(title,category,party_kind,party_name,"
+        " party_email,body,notes,status,confidential,uploaded_by,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (title[:200], "contracts", "partner", e["name"][:120],
+         e["approver_email"], text, note,
+         "draft" if remaining else "active", 1, 0, time.time()))
+    doc_id = cur.lastrowid
+    con.execute(
+        "INSERT INTO engagement_docs(engagement_id,doc_id,stage,side,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (e["id"], doc_id, "04-agreement", "to_client", time.time()))
+    log(con, e["id"], actor,
+        f"drafted '{title}'"
+        + (f" ({len(remaining)} blanks left)" if remaining else ""))
+    con.commit()
+    return doc_id
+
+
+class SowBody(BaseModel):
+    change_order_for: int = 0
+
+
+@router.post("/api/store/admin/engagements/{eid}/sow")
+def draft_sow(eid: int, body: SowBody, u=Depends(admin_user),
+              con=Depends(get_con)):
+    e = _eng_or_404(con, eid)
+    if body.change_order_for:
+        sow = con.execute(
+            "SELECT d.id, d.title, d.notes,"
+            "  (SELECT COUNT(*) FROM document_signatures s"
+            "    WHERE s.document_id=d.id AND s.status='signed') AS signed"
+            " FROM engagement_docs ed JOIN documents d ON d.id=ed.doc_id"
+            " WHERE ed.engagement_id=? AND d.id=?",
+            (eid, body.change_order_for)).fetchone()
+        if sow is None or not sow["notes"].startswith(SOW_NOTE):
+            raise HTTPException(404, "that document is not this "
+                                     "engagement's Scope of Work")
+        if not sow["signed"]:
+            raise HTTPException(409, "a change order amends a SIGNED scope "
+                                     "of work — this one is still open to "
+                                     "ordinary edits")
+        text = change_order_body(e, dict(sow))
+        title = f"Change order — {e['name']}"
+        note = SOW_NOTE + f"change-order:{sow['id']}"
+    else:
+        text = sow_body(con, e)
+        title = f"Scope of Work — {e['name']}"
+        note = SOW_NOTE + "sow"
+    doc_id = _file_composed(con, e, text, title, note, u["name"])
+    return {"doc_id": doc_id, "title": title}
 
 
 def stand_up_suggestion(con, eid: int) -> dict | None:

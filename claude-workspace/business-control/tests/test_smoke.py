@@ -4349,6 +4349,73 @@ ok(c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A,
           json={"title": "x", "markdown": "  ", "state": ""}).status_code
    == 400, "an empty quote is refused")
 
+# --- the schedule speaks even when nobody wrote dates ------------------------
+_det0 = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+ok(_det0["schedule"] and all(
+       s["source"] in ("actual", "planned", "estimate")
+       for s in _det0["schedule"])
+   and _det0["tracks"]
+   and all({"start", "end", "days", "estimated"} <= set(t)
+           for t in _det0["tracks"]),
+   "every gate carries a date, and every date says whether it is fact, "
+   "plan or estimate — a blank schedule is not an option")
+c.put(f"/api/store/admin/engagements/{_eid}/dates", headers=A, json={
+    "dates": [{"label": "Requirements signed", "planned": "2027-03-01"}]})
+_det1 = c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()
+_reqs = [s for s in _det1["schedule"] if s["gate"] == "requirements_signed"]
+ok(_reqs and _reqs[0]["source"] == "planned"
+   and _reqs[0]["date"] == "2027-03-01",
+   "a written date replaces the estimate the moment it exists")
+ok(any(s["source"] == "estimate" for s in _det1["schedule"]),
+   "while the gates nobody dated still say something — a default "
+   "duration, marked as a guess")
+
+# --- the scope of work: generated, never blank -------------------------------
+_sw = c.post(f"/api/store/admin/engagements/{_eid}/sow", headers=A,
+             json={}).json()
+_swrow = next(d for d in c.get(f"/api/store/admin/engagements/{_eid}",
+                               headers=A).json()["docs"]
+              if d["id"] == _sw["doc_id"])
+ok(_swrow["sow"] is True and _swrow["stage"] == "04-agreement"
+   and _swrow["category"] == "contracts",
+   "the SOW files under the agreement stage, and the row knows what it "
+   "is — a change order can find it later")
+_swtxt = c.get(f"/api/store/admin/documents/{_sw['doc_id']}/preview",
+               headers=A).text
+ok("Scope of Work" in _swtxt and "Selling" in _swtxt
+   and "Platform Core" in _swtxt,
+   "deliverables and fees come from the SIGNED quote and the price book "
+   "— the paper cannot disagree with the record it rides on")
+ok("(est.)" in _swtxt and "2027-03-01" in _swtxt,
+   "the timeline is the gantt's own schedule: the written date verbatim, "
+   "the guessed ones marked as guesses")
+ok("change order" in _swtxt and "out of scope" in _swtxt,
+   "and change control is a clause, not a hope")
+
+ok(c.post(f"/api/store/admin/engagements/{_eid}/sow", headers=A,
+          json={"change_order_for": _sw["doc_id"]}).status_code == 409,
+   "a change order amends a SIGNED scope of work — an open draft just "
+   "gets edited")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/sow", headers=A,
+          json={"change_order_for": _qr["doc_id"]}).status_code == 404,
+   "and it refuses to amend a paper that is not a SOW at all")
+_swsig = c.post(f"/api/store/admin/documents/{_sw['doc_id']}"
+                "/request-signature", headers=A,
+                json={"signer_name": "Scope Signer",
+                      "signer_email": "s@s.test",
+                      "role": "signer", "in_person": True}).json()
+c.post("/sign/" + _swsig["link"].split("/sign/")[1],
+       json={"typed_name": "Scope Signer"})
+_co = c.post(f"/api/store/admin/engagements/{_eid}/sow", headers=A,
+             json={"change_order_for": _sw["doc_id"]}).json()
+_cotxt = c.get(f"/api/store/admin/documents/{_co['doc_id']}/preview",
+               headers=A).text
+ok("Change order" in _co["title"]
+   and "Amends the signed Scope of Work" in _cotxt
+   and _sw["title"] in _cotxt.replace("&#x27;", "'"),
+   "once signed, scope moves by change order — a paper that names the "
+   "SOW it amends and never re-opens its text")
+
 ok('id="eng-quote"' in _opsjs and "w.bcFile = async (d)" in _opsjs
    and "bc-init" not in _opsjs,
    "the client page opens the bench in a frame and hands it a function to "
@@ -4657,12 +4724,15 @@ ok("function gateState" in _ops
    and "g.kind === \"money\" && g.has_payment_link" in _ops,
    "'waiting on the client' is a real state: a request that is out or a "
    "payment link unpaid is time we cannot spend")
-ok("function ganttModal" in _ops and "PARALLEL" in _ops
+ok("function ganttModal" in _ops and "d.tracks" in _ops
    and "What can run in parallel" in _ops,
    "and a Gantt view shows which work overlaps — the gates are a chain, "
    "the work between them is not")
-ok("critical path" in _ops.split("PARALLEL")[1][:900],
-   "with content named as the thing that decides the launch date")
+ok("critical path" in (Path(__file__).parent.parent
+                       / "src/storefront/backend/engagements.py"
+                       ).read_text(encoding="utf-8"),
+   "with content named as the thing that decides the launch date — on the "
+   "server's TRACKS, where the SOW reads it too")
 
 for _cls in ("gate-line", "gl-acts", "doc-line", "dl-acts", "log-line"):
     ok(f'class="{_cls}' in _ops or f"'{_cls}'" in _ops,
@@ -5089,7 +5159,10 @@ ok('closest(".doc-line, .sig-row")' in _ops,
    "have — the stage rows became .doc-line and the lookup went stale")
 
 ok("ongoing_support_agreed" in _ops
-   and "Ongoing — security, monitoring, updates, support" in _ops,
+   and "Ongoing — security, monitoring, updates, support" in (
+       Path(__file__).parent.parent
+       / "src/storefront/backend/engagements.py").read_text(
+           encoding="utf-8"),
    "the ongoing gate is on the track and the Gantt — a lane that starts "
    "when handover ends and does not stop")
 c.delete(f"/api/store/admin/documents/{_scan2['id']}", headers=A)
@@ -8572,6 +8645,10 @@ ok('id="join-root"' in (
    ).read_text(encoding="utf-8")
    and "joinPage" in _sjs2,
    "the invitation link lands on a real page in the shop's own shell")
+ok('id="eng-sow"' in _ajs2 and "d.tracks" in _ajs2
+   and "PARALLEL" not in _ajs2,
+   "the SOW drafts from the engagement, and the gantt reads the server's "
+   "tracks — the chart and the paper share one schedule")
 ok('mode: key ? "" : "signin"' in (
        Path(__file__).parent.parent
        / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),

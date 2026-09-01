@@ -6569,62 +6569,65 @@ async function renderEngagement(id) {
      gathering, brand exploration and build overlap in every real project,
      which is exactly what a client asks when they ask "can we start X
      while Y finishes?" */
-  const PARALLEL = [
-    { name: "Discovery & requirements", from: "proposal_accepted",
-      to: "requirements_signed", lane: 0 },
-    { name: "Content & assets from the client", from: "contract_signed",
-      to: "round2_signed_off", lane: 1,
-      note: "starts at kickoff and runs to the end — the critical path" },
-    { name: "Brand exploration", from: "requirements_signed",
-      to: "art_direction_signed", lane: 2, optional: true },
-    { name: "Build", from: "requirements_signed", to: "round2_signed_off",
-      lane: 2, note: "overlaps brand once the direction is signed" },
-    { name: "Launch & handover", from: "round2_signed_off",
-      to: "handover_accepted", lane: 0 },
-    { name: "Money", from: "contract_signed", to: "final_invoice_paid",
-      lane: 3, note: "deposit up front, final before launch" },
-    { name: "Ongoing — security, monitoring, updates, support",
-      from: "handover_accepted", to: "ongoing_support_agreed", lane: 1,
-      note: "continuous work, carried by the care plan agreed in the "
-        + "contract — it starts when handover ends and does not stop" },
-  ];
-
   function ganttModal() {
+    /* The tracks and the schedule come from the server — the same facts
+       the Scope of Work prints, so the chart and the paper cannot
+       disagree. A gate with no written date gets an estimated one from
+       default durations, and the estimate SAYS it is one everywhere. */
     const live = d.gates.filter((g) => g.active);
+    const sched = {};
+    (d.schedule || []).forEach((s) => (sched[s.gate] = s));
     const idx = {};
     live.forEach((g, i) => (idx[g.gate] = i));
     const n = live.length || 1;
     const pct = (i) => (i / n) * 100;
-    const bars = PARALLEL.filter((b) => idx[b.from] !== undefined
+    const short = (iso) => {
+      const [, m, day] = (iso || "").split("-");
+      return m ? `${+m}/${+day}` : "";
+    };
+    const bars = (d.tracks || []).filter((b) => idx[b.from] !== undefined
       && idx[b.to] !== undefined).map((b) => {
       const a = idx[b.from], z = idx[b.to];
       const doneTo = live.filter((g) => g.passed_at).length;
       const state = z < doneTo ? "done" : a <= doneTo ? "now" : "later";
+      const dur = b.days < 10 ? `${b.days}d` : `~${Math.round(b.days / 7)}wk`;
       return `<div class="gt-row">
         <span class="gt-name">${esc(b.name)}${b.optional
           ? ' <span class="opt">optional</span>' : ""}</span>
         <span class="gt-track">
           <span class="gt-bar gt-${state}"
             style="left:${pct(a)}%;width:${Math.max(pct(z - a), 6)}%"
-            title="${esc(b.note || "")}"></span>
+            title="${esc([b.note || "", `${b.start} → ${b.end}`
+              + (b.estimated ? " (estimated)" : "")]
+              .filter(Boolean).join(" · "))}"><span class="gt-dur">${dur}${
+            b.estimated ? " est." : ""}</span></span>
         </span>
       </div>`;
     }).join("");
+    const anyEst = (d.tracks || []).some((b) => b.estimated
+      && idx[b.from] !== undefined && idx[b.to] !== undefined);
     modal(`<h3>What can run in parallel</h3>
       <p class="dim">The stages are a chain — each waits on the one before.
         The work between them is not: bars on different rows that overlap
         horizontally can be in flight at the same time.</p>
       <div class="gt">
         <div class="gt-row gt-head"><span class="gt-name"></span>
-          <span class="gt-track">${live.map((g, i) =>
-            `<span class="gt-tick" style="left:${pct(i)}%"
-               title="${esc(g.label)}">${g.passed_at ? "•" : "○"}</span>`)
-            .join("")}</span></div>
+          <span class="gt-track">${live.map((g, i) => {
+            const s = sched[g.gate] || {};
+            return `<span class="gt-tick" style="left:${pct(i)}%"
+               title="${esc(g.label)}${s.date ? " · " + s.date
+                 + (s.source === "estimate" ? " (est.)" : "") : ""}">${
+              g.passed_at ? "•" : "○"}<i class="gt-date">${short(s.date)}${
+              s.source === "estimate" ? "?" : ""}</i></span>`;
+          }).join("")}</span></div>
         ${bars}
       </div>
       <p class="dim" style="margin-top:14px">Content is the one that decides
         the launch date — it starts at kickoff and runs the whole way, so a
-        week lost there is a week lost at the end.</p>
+        week lost there is a week lost at the end.${anyEst
+        ? " Dates with a ? and bars marked est. are default durations, not"
+          + " commitments — write real dates in the Dates table and they"
+          + " take over." : ""}</p>
       <div class="modal-foot"><button class="btn" data-close>Close</button></div>`,
       "wide");
   }
@@ -6845,7 +6848,8 @@ async function renderEngagement(id) {
         .join("")}</div>` : ""}
     </div>`; })()}
     ${foldable("gates", "Stages",
-      `<button class="btn alt sm" id="eng-gantt">Gantt chart</button>`,
+      `<button class="btn alt sm" id="eng-sow">Draft SOW</button>
+       <button class="btn alt sm" id="eng-gantt">Gantt chart</button>`,
       `<p class="dim">Where the project is, is the first stage that hasn't
          closed — a stage that closes on a signature reads its state from
          the linked document, live.</p>
@@ -6909,6 +6913,42 @@ async function renderEngagement(id) {
   $("#eng-edit").onclick = () => engForm(e);
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
   $("#eng-gantt").onclick = ganttModal;
+  $("#eng-sow").onclick = () => {
+    /* Generated, not blank: deliverables from the quote, fees from the
+       price book, the timeline from the gantt's own schedule. Once a SOW
+       is SIGNED, the offer changes shape — scope moves by change order,
+       never by editing signed text. */
+    const signedSows = d.docs.filter((x) => x.sow && x.signed);
+    modal(`<h3>Draft a Scope of Work</h3>
+      <p class="dim">Deliverables come from the ${
+        d.docs.some((x) => x.quote) ? "filed quote" : "quote (none filed "
+        + "yet — the section will be left as a blank to write)"},
+        fees from the published price book, and the timeline from this
+        engagement's schedule — estimates marked as estimates. It stays
+        editable until it goes out for signature.</p>
+      ${signedSows.length ? `<label>What to draft</label>
+        <select id="sw-kind">
+          <option value="0">A fresh Scope of Work</option>
+          ${signedSows.map((s) => `<option value="${s.id}">Change order —
+            amending “${esc(s.title)}”</option>`).join("")}
+        </select>
+        <p class="dim">A signed SOW never re-opens; a change order says
+          what changes and is signed the same way.</p>` : ""}
+      <div class="modal-foot">
+        <button class="btn alt" data-close>Cancel</button>
+        <button class="btn" id="sw-go">Draft it</button>
+      </div>`);
+    $("#sw-go").onclick = async () => {
+      try {
+        const out = await api(`/api/store/admin/engagements/${id}/sow`,
+          { body: { change_order_for:
+              +(document.getElementById("sw-kind")?.value || 0) } });
+        toast(`“${out.title}” drafted — finish the blanks, then send it`);
+        closeModal();
+        renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    };
+  };
   const lb = $("#eng-launch");
   if (lb) lb.onclick = () =>
     launchSite(id, e.name, e.live_url, () => renderEngagement(id));

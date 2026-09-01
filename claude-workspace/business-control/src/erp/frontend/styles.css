@@ -631,6 +631,14 @@ button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
   background: var(--panel2); border: 1px solid var(--line); }
 .gt-bar.gt-done { background: rgba(63,189,130,.3); border-color: var(--good); }
 .gt-bar.gt-now { background: rgba(138,111,240,.32); border-color: var(--accent); }
+/* the duration riding its bar; the head's date under its tick — estimates
+   marked (est. / ?) so a default duration never reads as a promise */
+.gt-dur { position: absolute; left: 50%; top: -1px;
+  transform: translateX(-50%); font-size: 9.5px; white-space: nowrap;
+  color: var(--dim); pointer-events: none; }
+.gt-date { display: block; font-style: normal; font-size: 9px;
+  color: var(--dim); text-align: center; }
+.gt-head .gt-track { height: 26px; }
 
 @media (max-width: 900px) {
   .gt-row { grid-template-columns: 1fr; gap: 4px; }

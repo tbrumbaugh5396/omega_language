@@ -165,3 +165,29 @@ engagement_log(engagement_id, at, actor, what)
 - The template scan reads `docs/business-control-b2b-client/templates/` from
   the working tree. A deployed install without the docs folder gets an empty
   registry and a clear message, not an error.
+
+## The Scope of Work (added 2026-09-01)
+
+Generated, never blank. **Draft SOW** on an engagement composes the paper
+from what the record already knows: deliverables and scale from the quote
+(the signed one wins), fees from the published price book, and the
+timeline from the engagement's own schedule — so the SOW cannot disagree
+with the record it rides on. Identity facts stay as `[TOKENS]` and read
+live until signature; the derived tables are baked at drafting, because
+the draft is the record's view that day and signing is what turns the
+view into a commitment. It files under the agreement stage, edits like
+any vault paper, and freezes when signed.
+
+**The schedule speaks even when nobody wrote dates.** Every gate carries
+a date labelled with its source — *actual* (the gate closed), *planned*
+(the Dates table), or *estimate* (the previous gate's date plus a default
+duration, chained from today). The gantt's tracks moved server-side
+(`TRACKS` + `schedule_of`/`tracks_of` in engagements.py) so the chart in
+ops and the timeline in the SOW read the same fact; estimates are marked
+`(est.)` / `?` everywhere they appear, and a written date replaces them
+the moment it exists.
+
+**Change orders, not edits.** Once a SOW is signed, Draft SOW offers a
+change order instead: a short paper naming the signed SOW it amends
+(what changes, the fee delta, the timeline effect), signed the same way.
+Amending an unsigned SOW is refused — an open draft just gets edited.
