@@ -8382,6 +8382,19 @@ ok(c.post(f"/api/roles/requests/{_ben['id']}/decide", headers=AA,
           json={"approve": True}).status_code == 404,
    "a decided request is gone — no second bite")
 
+_kk = c.post("/api/login", headers=HA, json={
+    "name": "Keyed Kate", "mode": "create", "role": "teacher",
+    "admin_key": _acfg["admin_key"], "password": "with authority"}).json()
+ok(_kk["role"] == "teacher" and _kk["requested_role"] == ""
+   and not _kk["is_admin"],
+   "the admin key is the exception: a key-holder's create confers the "
+   "role directly — the role, not the admin flag")
+_kl = c.post("/api/login", headers=HA, json={
+    "name": "Keyless Kai", "mode": "create", "role": "teacher",
+    "admin_key": "not the key"}).json()
+ok(_kl["role"] == "customer" and _kl["requested_role"] == "teacher",
+   "a wrong key grants nothing — the claim is filed like anyone's")
+
 # --- my record: the whole standing, exportable -------------------------------
 _rec = c.get("/api/learn/record", headers=LN).json()
 _rc = [x for x in _rec["courses"] if x["id"] == _crs]
@@ -8433,5 +8446,13 @@ ok("data-roleok" in _ajs2 and "data-roleno" in _ajs2
    and '"teacher" && "learning"' in _ajs2,
    "Team & access carries the approve/decline queue, and a teacher lands "
    "on the Learning tab")
+ok('mode: door === "create" ? "create" : "signin"' in _ajs2,
+   "the ops door refuses to mint: sign-in is sign-in, and creating a team "
+   "account is a deliberate act behind the admin key")
+ok('mode: key ? "" : "signin"' in (
+       Path(__file__).parent.parent
+       / "src/storefront/frontend/admin.js").read_text(encoding="utf-8"),
+   "the store-admin door too — only the key-holder's first sign-in still "
+   "bootstraps an account")
 
 print(f"\nall {checks} checks passed")

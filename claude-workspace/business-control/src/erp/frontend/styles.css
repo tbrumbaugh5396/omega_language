@@ -939,6 +939,10 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
 .signin label .dim { font-size: 11.5px; }
 .signin input, .signin select { width: 100%; font-size: 15px; padding: 10px 12px; }
 .signin .btn { width: 100%; padding: 12px; font-size: 15px; }
+/* the two door buttons share one line — they pick a mode, they are not
+   the submit */
+.signin .row .btn { width: auto; flex: 1; padding: 8px 12px;
+  font-size: 13.5px; }
 .signin-two { display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .signin-qr { text-align: center; }

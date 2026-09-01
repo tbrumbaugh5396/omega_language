@@ -1348,6 +1348,14 @@ async function renderCapLocked(tab) {
 
 function renderLogin() {
   const regions = S.meta.regions.map((r) => `<option>${r}</option>`).join("");
+  /* Two explicit doors, like the storefront's. Signing in refuses to mint
+     an account from a typo — the old find-or-create quietly created a
+     customer under any name typed here, which is how "Boss" the founder on
+     one tenant became "boss" the shopper on another. Creating a team
+     account is a deliberate act that needs the admin key: the key IS the
+     authority the role-request queue exists to consult. Everyone else
+     creates their account on the storefront door, which files a claim. */
+  const door = S.loginDoor || "signin";
   /* Widths come from the grid, not from inline max-widths on each card. The
      old version pinned the form at 420px and the QR panel at 280px, so on a
      half-width window the two sat as narrow columns with the inputs at
@@ -1357,29 +1365,53 @@ function renderLogin() {
     <h2>Sign in</h2>
     <div class="signin">
       <div class="card signin-form">
+        <div class="row" style="margin-bottom:12px">
+          <button class="btn sm ${door === "signin" ? "" : "alt"}"
+            id="ld-in">Sign in</button>
+          <button class="btn sm ${door === "create" ? "" : "alt"}"
+            id="ld-new">New team account</button>
+        </div>
         <form id="login-form">
           <label>Name<input id="li-name" required autocomplete="name"></label>
+          ${door === "create" ? `
           <div class="signin-two">
-            <label>I am a
+            <label>Role
               <select id="li-role">
                 <option value="customer">customer</option>
                 <option value="distributor">distributor</option>
                 <option value="influencer">influencer</option>
-                <option value="employee">employee</option>
-                <option value="owner">founder / owner (needs admin key)</option>
+                <option value="employee">employee / office staff</option>
+                <option value="teacher">teacher</option>
+                <option value="volunteer">volunteer</option>
+                <option value="director">executive director</option>
+                <option value="board">board member</option>
+                <option value="donor">donor</option>
+                <option value="owner">founder / owner</option>
               </select></label>
             <label>Region
               <select id="li-region"><option value=""></option>${regions}</select></label>
           </div>
           <label>Email <span class="dim">for order updates &amp; offers</span>
             <input id="li-email" type="email" placeholder="optional"
-              autocomplete="email"></label>
+              autocomplete="email"></label>` : ""}
           <label>Password<input id="li-pass" type="password"
             autocomplete="current-password"
-            placeholder="sets on first sign-in, then required"></label>
-          <label>Admin key <span class="dim">optional</span>
+            placeholder="${door === "create"
+              ? "sets on first sign-in, then required"
+              : "required if the account has one"}"></label>
+          <label>Admin key <span class="dim">${door === "create"
+            ? "required — the key is what makes this a grant"
+            : "optional — also claims admin on this account"}</span>
             <input id="li-admin" type="password" autocomplete="off"></label>
-          <button class="btn">Sign in</button>
+          ${door === "create" ? `<p class="dim">No key? Create your account
+            on <a href="/">the storefront</a> instead — picking a role there
+            files a request the office confirms.</p>`
+          : `<p class="dim">No account yet? Team accounts are created with
+            the admin key (New team account), or from
+            <a href="/">the storefront</a> door, which files a role
+            request.</p>`}
+          <button class="btn">${door === "create"
+            ? "Create team account" : "Sign in"}</button>
         </form>
       </div>
 
@@ -1397,6 +1429,8 @@ function renderLogin() {
       </div>
     </div>`;
 
+  $("#ld-in").onclick = () => { S.loginDoor = "signin"; renderLogin(); };
+  $("#ld-new").onclick = () => { S.loginDoor = "create"; renderLogin(); };
   $("#li-scan").onclick = async () => {
     const msg = $("#li-scan-msg");
     msg.textContent = "";
@@ -1409,11 +1443,19 @@ function renderLogin() {
   }).catch(() => { $("#lan-qr").textContent = "unavailable"; });
   $("#login-form").onsubmit = async (e) => {
     e.preventDefault();
+    if (door === "create" && !$("#li-admin").value.trim()) {
+      toast("Creating a team account needs the admin key");
+      return;
+    }
     try {
       const u = await api("/api/login", { body: {
-        name: $("#li-name").value, role: $("#li-role").value,
-        region: $("#li-region").value, admin_key: $("#li-admin").value,
-        email: $("#li-email").value, password: $("#li-pass").value } });
+        name: $("#li-name").value,
+        role: door === "create" ? $("#li-role").value : "customer",
+        region: door === "create" ? $("#li-region").value : "",
+        admin_key: $("#li-admin").value,
+        email: door === "create" ? $("#li-email").value : "",
+        password: $("#li-pass").value,
+        mode: door === "create" ? "create" : "signin" } });
       S.user = u;
       localStorage.setItem("bc_user", JSON.stringify(u));
       // Somewhere in particular if they were sent here mid-task; otherwise

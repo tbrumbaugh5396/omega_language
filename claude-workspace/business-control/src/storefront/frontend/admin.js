@@ -47,11 +47,18 @@ async function tryBoot() {
 
 $("#li-go").onclick = async () => {
   try {
+    // Sign-in refuses to mint: typing a name that isn't an account is a
+    // 404, not a brand-new customer (that is how a founder on one tenant
+    // "became" a shopper on another). The one exception is the admin key —
+    // holding it is the authority, so a key-holder's first sign-in still
+    // creates the admin account on a fresh install.
+    const key = $("#li-key").value.trim();
     const out = await (await fetch("/api/login", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: $("#li-name").value.trim(),
         password: $("#li-pass").value,
-        admin_key: $("#li-key").value.trim() }) })).json();
+        mode: key ? "" : "signin",
+        admin_key: key }) })).json();
     if (!out.token) throw new Error(out.detail || "sign-in failed");
     TOKEN = out.token;
     localStorage.setItem("bc_user", JSON.stringify(out));

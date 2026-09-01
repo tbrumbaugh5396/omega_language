@@ -273,11 +273,15 @@ def login(body: LoginBody, con=Depends(get_con)):
     # The storefront door's role picker is a CLAIM, not a grant. Anything
     # beyond student files a request the office decides (roles.py rules);
     # the account is created as a plain customer meanwhile — so the door's
-    # promise, "confirmed before it opens anything", is finally true.
+    # promise, "confirmed before it opens anything", is finally true. The
+    # admin key is the exception on purpose: holding it IS the authority
+    # the queue exists to consult, so a key-holder's create is direct.
     from . import roles as R
     claim = ""
     role = body.role
-    if body.mode == "create" and body.role != "owner":
+    if (body.mode == "create" and body.role != "owner"
+            and not (body.admin_key
+                     and body.admin_key == CFG.get("admin_key"))):
         wanted = R.normalise(body.role)
         if R.claimable(wanted):
             claim, role = wanted, "customer"
@@ -293,6 +297,17 @@ def login(body: LoginBody, con=Depends(get_con)):
                     (body.email.strip(), u["id"]))
         con.commit()
         u = con.execute("SELECT * FROM users WHERE id=?", (u["id"],)).fetchone()
+    # A key-holder minting someone ELSE's account (mode create) confers the
+    # role, not the flag: presenting the key means "I have authority", not
+    # "make this new teacher an admin". The flag rides only the roles that
+    # are the admin surface. Mode-less key sign-ins keep their historic
+    # meaning — claiming admin for yourself.
+    if (body.mode == "create" and not existed and u["is_admin"]
+            and u["role"] not in ("owner", "director")):
+        con.execute("UPDATE users SET is_admin=0 WHERE id=?", (u["id"],))
+        con.commit()
+        u = con.execute("SELECT * FROM users WHERE id=?",
+                        (u["id"],)).fetchone()
     if claim and not existed:
         con.execute("UPDATE users SET requested_role=? WHERE id=?",
                     (claim, u["id"]))

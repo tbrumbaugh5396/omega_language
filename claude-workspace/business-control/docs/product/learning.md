@@ -28,8 +28,18 @@ flag confers staff, directors, board members and donors — and a director's
 approval carries the flag, because running the organisation is the admin
 surface. Views follow the role: volunteers share the learner portal,
 teachers land on the ops Learning tab, board members and donors get a
-profile-only rail — an account to be reached at, not a console. The ops
-Team sign-in stays the historic back-office door.
+profile-only rail — an account to be reached at, not a console.
+
+Every door refuses to mint. The four surfaces share one users table per
+tenant, and all their sign-ins are sign-ins: an unknown name is a 404,
+not a brand-new customer (that silent find-or-create is how a founder on
+one tenant "became" a shopper on another). Accounts are created in
+exactly two places — the storefront's create door (which files a role
+claim for anything beyond student) and the ops "New team account" door,
+which requires the admin key: the key IS the authority the claims queue
+exists to consult, so a key-holder's create confers the role directly
+(the role, not the admin flag — only owner and director carry that).
+The bare API's mode-less login keeps find-or-create for scripts and dev.
 
 ## What moved verbatim
 

@@ -142,7 +142,12 @@ def login(con, name: str, role: str, region: str, admin_key: str, cfg: dict,
         if not valid_key:
             role = "customer"
     elif role not in ("customer", "distributor", "influencer", "employee"):
-        role = "customer"
+        # The school roles (roles.py) are conferred, not claimed: only the
+        # key-holder mints them directly — everyone else's request rides
+        # the role-claims queue and lands here as a plain customer.
+        if not (valid_key and role in ("teacher", "volunteer", "director",
+                                       "board", "donor")):
+            role = "customer"
     is_admin = 1 if valid_key else 0
     row = con.execute(
         "SELECT * FROM users WHERE lower(name)=lower(?)", (name,)).fetchone()
