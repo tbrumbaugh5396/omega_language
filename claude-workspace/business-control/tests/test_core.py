@@ -2,6 +2,7 @@
 supply, integrations, the storefront face. Everything here ran first
 in the old one-file suite and builds all of its own state."""
 from _harness import (ROOT, c, ok, done, mint_admin, checks,  # noqa
+                      ops_app_js, ops_app_parts,  # noqa: F401
                       CFG, app)  # noqa: F401
 from _harness import json, os, re, sys, tempfile, Path  # noqa: F401
 
@@ -3294,5 +3295,32 @@ ok("sticky-shot" in _apisrc and "/media/product/" in
    _apisrc.split("sticky-shot")[1][:120],
    "and the bar shows the real product photo, not a drawn stand-in")
 
+
+# --- the ops app's file family: no name may mean two things ------------------
+# app.js became ordered part files served as one script. Concatenated
+# global scope means a duplicate definition is a silent overwrite — the
+# .doc-top/.lrn-bar failure mode, at file scale. So the family polices
+# itself: no function, top-level const, or element id may be DEFINED in
+# two different files.
+_pf = {p.name: p.read_text(encoding="utf-8") for p in ops_app_parts()}
+ok(len(_pf) >= 10, "the ops app is a family of part files")
+ok(c.get("/ops/app.js").text == "\n".join(
+       _pf[k] for k in sorted(_pf)),
+   "and the served script IS the parts, concatenated in name order — the "
+   "browser, the worker and the cache-buster never learn the layout "
+   "changed")
+_dups = {}
+for _kind, _rx in (("function", r"^(?:async )?function (\w+)\("),
+                   ("const", r"^const (\w+) ="),
+                   ("id", r'id="([a-zA-Z][\w-]*)"')):
+    _seen = {}
+    for _fn, _txt in _pf.items():
+        for _m in re.finditer(_rx, _txt, re.M):
+            _seen.setdefault(_m.group(1), set()).add(_fn)
+    for _nm, _files in _seen.items():
+        if len(_files) > 1:
+            _dups[f"{_kind} {_nm}"] = sorted(_files)
+ok(not _dups,
+   f"no function, const or id is defined in two part files ({_dups})")
 
 done("core")

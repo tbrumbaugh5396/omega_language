@@ -5,6 +5,7 @@ legacy state the split script needs (a founder, a product), then
 flips this data dir out of legacy mode — which is why it was the tail
 of the old file, and is its own process now."""
 from _harness import (ROOT, c, ok, done, mint_admin, checks,  # noqa
+                      ops_app_js, ops_app_parts,  # noqa: F401
                       CFG, app)  # noqa: F401
 from _harness import json, os, re, sys, tempfile, Path  # noqa: F401
 
@@ -692,7 +693,7 @@ ok(c.get(f"/api/store/admin/engagements/{_qeid}/stand-up",
    "and removing the install clears the engagement's pointer — a "
    "dangling tenant_id left the client page offering Launch for nothing "
    "while hiding the Stand up that could fix it")
-_appjs4 = Path("src/erp/frontend/app.js").read_text()
+_appjs4 = ops_app_js()
 ok("e.tenant_id ?" in _appjs4.replace("${e.tenant_id ? `", "e.tenant_id ?")
    or 'e.tenant_id ? `<span class="pill ok"' in _appjs4,
    "the clients list shows which clients RUN on the platform — the "
@@ -1249,7 +1250,7 @@ ok(c.get("/api/meta", headers=HB).json()["caps"] is None,
    "absence of a grant must never take features away from anyone who "
    "already had them all")
 
-_appjs = Path("src/erp/frontend/app.js").read_text()
+_appjs = ops_app_js()
 ok("TAB_CAP" in _appjs and "capLocked" in _appjs
    and "cap-locked" in _appjs and "renderCapLocked" in _appjs,
    "unsold tabs show LOCKED rather than vanish — the tab opens the ask "
@@ -1481,7 +1482,7 @@ ok(not c.request("DELETE", f"/api/store/admin/engagements/{_le}/gates/"
                   json={"note": "again"}).json().get("launch"),
    "once launched, the offer stops — a button that launches must vanish "
    "when the site is live")
-_ljs = Path("src/erp/frontend/app.js").read_text()
+_ljs = ops_app_js()
 ok("launchSite" in _ljs and "eng-launch" in _ljs and "out.launch" in _ljs
    and "gl-date" in _ljs,
    "the editor carries it — a Launch button on the client's page, the "
@@ -1859,7 +1860,7 @@ ok([x["group"] for x in _fbrd["cap_catalog"]].index("Revenue ops")
    > [x["group"] for x in _fbrd["cap_catalog"]].index("Operations"),
    "in the book's own group order, so the editor reads as the same "
    "document as the menu and the deck")
-_appjsC = Path("src/erp/frontend/app.js").read_text()
+_appjsC = ops_app_js()
 ok("cg-total" in _appjsC and "before volume" in " ".join(_appjsC.split())
    and "cap-price" in _appjsC and "cap-group" in _appjsC,
    "the modal groups by the book's sections, prices every box, and keeps "
@@ -1915,13 +1916,13 @@ c.request("DELETE", "/api/store/admin/fleet/tenants/growco?keep_data=0",
 ok("placeholder" in _jn.dumps(_lay.placeholder_home("X Co"))
    or "setting up shop" in _jn.dumps(_lay.placeholder_home("X Co")),
    "the placeholder layout exists as data like every other layout")
-_appjs3 = Path("src/erp/frontend/app.js").read_text()
+_appjs3 = ops_app_js()
 ok("data-tcaps" in _appjs3 and "cg-extend" in _appjs3
    and "cg-clear" in _appjs3,
    "the Platform tab carries the editor — per-tenant Capabilities button, "
    "the grow-the-site checkbox, and clear-grant as its own deliberate "
    "button")
-_appjs6 = Path("src/erp/frontend/app.js").read_text()
+_appjs6 = ops_app_js()
 ok("async function capsEditor" in _appjs6 and "eng-caps" in _appjs6
    and 'capsEditor(e.tenant_id' in _appjs6,
    "one grant editor, two doors — the Platform row AND the client's own "
@@ -1988,13 +1989,13 @@ ok(any("asked for a capability" in (i.get("title") or "")
    "for money does not wait to be found on a board")
 ok(next(i for i in _bitems if "asked for a capability"
         in (i.get("title") or ""))["kind"] == "lead"
-   and 'lead: "fleet"' in Path("src/erp/frontend/app.js").read_text(),
+   and 'lead: "fleet"' in ops_app_js(),
    "and CLICKING it lands on the Platform tab where the grant button is "
    "— a notification that names a place must go there")
 c.request("DELETE", "/api/store/admin/fleet/tenants/actasco?keep_data=0",
           headers=AA)
 
-_appjs5 = Path("src/erp/frontend/app.js").read_text()
+_appjs5 = ops_app_js()
 ok('q.get("actas")' in _appjs5 and "location.replace" in _appjs5,
    "the ops app trades ?actas for the account and drops the token from "
    "the URL — tokens do not belong in history")
@@ -2738,8 +2739,7 @@ _ljs = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
         ).read_text(encoding="utf-8")
 _mjs = (Path(__file__).parent.parent / "src/storefront/frontend/rtc-mesh.js"
         ).read_text(encoding="utf-8")
-_opsjs2 = (Path(__file__).parent.parent / "src/erp/frontend/app.js"
-           ).read_text(encoding="utf-8")
+_opsjs2 = ops_app_js()
 ok("LinguaMesh" in _mjs and "polite" in _mjs and "ignoreOffer" in _mjs
    and "meshBitrateFor" in _mjs,
    "the mesh client carries lingua's perfect-negotiation pattern and the "
@@ -2766,8 +2766,7 @@ ok(c.get("/learn", headers=_LH).status_code == 200,
    "granting Learning opens the door again")
 c.request("DELETE", "/api/store/admin/fleet/tenants/learnco?keep_data=0",
           headers=AA)
-_appjs_lrn = (Path(__file__).parent.parent / "src/erp/frontend/app.js"
-              ).read_text(encoding="utf-8")
+_appjs_lrn = ops_app_js()
 ok('id: "learning"' in _appjs_lrn
    and "learning: renderLearning" in _appjs_lrn
    and 'learning: "learning"' in _appjs_lrn,
@@ -3472,8 +3471,7 @@ ok('fetch("/api/roles")' in _sjs2,
 ok('MYROLE === "board" || MYROLE === "donor"' in _ljs2,
    "board members and donors get the profile-only rail — an account to be "
    "reached at, not a console")
-_ajs2 = (Path(__file__).parent.parent / "src/erp/frontend/app.js"
-         ).read_text(encoding="utf-8")
+_ajs2 = ops_app_js()
 ok("data-roleok" in _ajs2 and "data-roleno" in _ajs2
    and '"teacher" && "learning"' in _ajs2,
    "Team & access carries the approve/decline queue, and a teacher lands "

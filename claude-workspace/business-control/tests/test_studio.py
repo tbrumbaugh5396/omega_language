@@ -2,6 +2,7 @@
 gates, the vault and signatures, the portal, binders, quotes and the
 scope of work. A fresh database plus one founder is its whole world."""
 from _harness import (ROOT, c, ok, done, mint_admin, checks,  # noqa
+                      ops_app_js, ops_app_parts,  # noqa: F401
                       CFG, app)  # noqa: F401
 from _harness import json, os, re, sys, tempfile, Path  # noqa: F401
 
@@ -31,7 +32,7 @@ ok(_provs and not _unlisted,
    f"and every integration that actually exists (missing: {_unlisted})")
 
 _jobs = set(re.findall(r'"([^"]+)"',
-                       Path("src/erp/frontend/app.js").read_text()
+                       ops_app_js()
                        .split("JOB_LABEL = {")[1].split("}")[0]))
 _nojob = sorted(j for j in _jobs - {"general"} if j.lower() not in _consult.lower())
 ok(not _nojob, f"and every staff role that has its own view (missing: {_nojob})")

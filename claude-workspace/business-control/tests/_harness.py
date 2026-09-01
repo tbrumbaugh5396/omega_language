@@ -43,6 +43,18 @@ def mint_admin(name="Boss"):
     return u, {"Authorization": f"Bearer {u['token']}"}
 
 
+def ops_app_parts():
+    """The ops app's source files, in serve order."""
+    return sorted((ROOT / "src" / "erp" / "frontend" / "app").glob("*.js"))
+
+
+def ops_app_js():
+    """The ops app as the browser receives it — the parts, concatenated.
+    Tests that grep the app read THIS, so they hold whichever file a
+    section lives in."""
+    return "\n".join(p.read_text(encoding="utf-8") for p in ops_app_parts())
+
+
 def done(part):
     """Each part's closing line — the runner reads the number off it."""
     print(f"\npart {part}: {checks} checks passed")
