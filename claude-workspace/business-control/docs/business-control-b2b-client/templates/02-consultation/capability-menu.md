@@ -195,7 +195,7 @@ location on purpose — it buys headroom to grow into, not a discount.
 
 | | **Starter** | **Pro** | **Scale** |
 |---|---|---|---|
-| **Monthly — platform** | **$199** | **$349** | **$699** |
+| **Monthly — platform** | **$200** | **$400** | **$700** |
 | Locations | 1 | 3 | 10 |
 | Staff seats | 5 | 20 | 75 |
 | Capabilities | Selling, Payments, Workforce, Comms | + Inventory, Warehouse, CRM & Support, Marketing, Subscriptions & boxes | + Distribution, Production, Sourcing, Events, Affiliates, Intelligence, Automation, API |

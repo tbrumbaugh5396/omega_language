@@ -137,6 +137,13 @@ MIGRATIONS = (
     # The client's own tenant on this platform, when they run on it. Empty
     # = fall back to matching the slug against the registry.
     "ALTER TABLE engagements ADD COLUMN tenant_id TEXT DEFAULT ''",
+    # Two different prices lived in one column. `value_cents` is the
+    # ONE-TIME build: what the deposit is half of, what the proposal calls
+    # the project value. What the client pays every month for the platform
+    # and their care plan is a separate number that must not be confused
+    # with it — a package picker filling the build price with a monthly
+    # figure is how a $700/mo client gets a $350 deposit.
+    "ALTER TABLE engagements ADD COLUMN monthly_cents INTEGER DEFAULT 0",
 )
 
 
@@ -670,7 +677,11 @@ def suggested_fills(e) -> dict:
          "ORIGINATOR": g["originator"],
          "PACKAGE": e["package"] or "—",
          "VALUE": f"${e['value_cents'] / 100:,.2f}" if e["value_cents"]
-                  else "—"}
+                  else "—",
+         "PROJECT VALUE": f"${e['value_cents'] / 100:,.2f}"
+                          if e["value_cents"] else "—",
+         "MONTHLY": f"${e['monthly_cents'] / 100:,.2f}/mo"
+                    if e["monthly_cents"] else "—"}
     if e["package"]:
         s["A / B / C"] = e["package"]
     if e["value_cents"]:
@@ -701,7 +712,9 @@ def global_values(e) -> dict:
             "brand": CFG.get("brand_name", "Business Control"),
             "package": e["package"] or "—",
             "value": (f"${e['value_cents'] / 100:,.2f}"
-                      if e["value_cents"] else "—")}
+                      if e["value_cents"] else "—"),
+            "monthly": (f"${e['monthly_cents'] / 100:,.2f}/mo"
+                        if e["monthly_cents"] else "—")}
 
 
 def binder_body() -> str:
@@ -819,7 +832,8 @@ def _create_binder(con, eid: int, e, u) -> int:
 class EngBody(BaseModel):
     name: str = ""
     package: str = ""
-    value_cents: int = 0
+    value_cents: int = 0            # one-time build
+    monthly_cents: int = -1         # recurring; -1 = not sent, 0 clears
     approver_name: str = ""
     approver_email: str = ""
     launch_target: str = ""
@@ -993,11 +1007,13 @@ def create_engagement(body: EngBody, u=Depends(admin_user),
     originator = (body.originator or "").strip()[:120] or u["name"]
     poc_name, poc_uid, poc_status = _resolve_poc(con, body.internal_poc, u)
     cur = con.execute(
-        "INSERT INTO engagements(name,slug,package,value_cents,approver_name,"
+        "INSERT INTO engagements(name,slug,package,value_cents,monthly_cents,"
+        " approver_name,"
         " approver_email,launch_target,staging_url,live_url,notes,status,"
         " originator,internal_poc,internal_poc_user_id,internal_poc_status,"
-        " created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (name[:120], slug, body.package.strip()[:40], body.value_cents,
+         max(0, body.monthly_cents),
          body.approver_name.strip()[:120], body.approver_email.strip()[:200],
          body.launch_target.strip()[:40], body.staging_url.strip()[:300],
          body.live_url.strip()[:300], body.notes.strip()[:2000],
@@ -1058,6 +1074,8 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
                 fields["week_note_at"] = time.time()
     if body.value_cents and body.value_cents != e["value_cents"]:
         fields["value_cents"] = body.value_cents
+    if body.monthly_cents >= 0 and body.monthly_cents != e["monthly_cents"]:
+        fields["monthly_cents"] = body.monthly_cents
     if body.content_pct >= 0 and body.content_pct != e["content_pct"]:
         fields["content_pct"] = max(0, min(100, body.content_pct))
     if fields.get("status") not in (None, "active", "closed", "archived"):
@@ -2172,7 +2190,9 @@ def _status_readme(e, docs) -> str:
         by_stage.setdefault(d["stage"], []).append(d)
     lines = [f"# {e['name']}", "",
              f"**Slug:** `{e['slug']}` · **Package:** {e['package'] or '—'}"
-             f" · **Value:** ${e['value_cents'] / 100:,.2f}",
+             f" · **Build (one-time):** ${e['value_cents'] / 100:,.2f}"
+             + (f" · **Monthly:** ${e['monthly_cents'] / 100:,.2f}/mo"
+                if e["monthly_cents"] else ""),
              f"**Approver:** {e['approver_name'] or '—'}"
              f" · **Launch target:** {e['launch_target'] or '—'}", "",
              f"Exported from Business Control on"

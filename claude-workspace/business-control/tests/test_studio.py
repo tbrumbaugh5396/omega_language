@@ -408,7 +408,7 @@ ok(any(x["name"] == "Parked Smoke" for x in _arl()["engagements"]),
 # --- the package picker speaks the price book --------------------------------
 _tl = c.get("/api/store/admin/engagements", headers=A).json()["tiers"]
 ok([t["name"] for t in _tl] == ["Starter", "Pro", "Scale"]
-   and [t["price"] for t in _tl] == [199, 349, 699],
+   and [t["price"] for t in _tl] == [200, 400, 700],
    "the client form's package options ARE the book's tiers — names, "
    "prices and scale from one parse, never a lettered mystery")
 _pj = (Path(__file__).parent.parent
@@ -419,6 +419,33 @@ ok('<select id="ef-pkg">' in _pj and "custom scope, no packaged tier" in _pj
    "the picker offers the tiers descriptively, maps the legacy letters "
    "onto them in order, and keeps an off-book value visible rather than "
    "dropping it")
+ok(all(x % 100 == 0 for x in [t["price"] for t in _tl]),
+   "and every tier is a round number — a package price that ends in 99 "
+   "is a supermarket trick, not a plan a business signs")
+
+# --- two prices, two boxes ---------------------------------------------------
+# `value_cents` was doing duty as both the one-time build fee (the deposit
+# gate halves it) and, once the package picker started filling it, the
+# monthly plan price. Those are different money.
+_2p = c.post("/api/store/admin/engagements", headers=A, json={
+    "name": "Two Prices Co", "package": "Pro",
+    "value_cents": 600000, "monthly_cents": 40000}).json()
+_2r = c.get(f"/api/store/admin/engagements/{_2p['id']}",
+            headers=A).json()["engagement"]
+ok(_2r["value_cents"] == 600000 and _2r["monthly_cents"] == 40000,
+   "a client carries the build fee and the monthly separately — one "
+   "record, two prices, neither pretending to be the other")
+c.patch(f"/api/store/admin/engagements/{_2p['id']}",
+        headers=A, json={"monthly_cents": 70000})
+_2r = c.get(f"/api/store/admin/engagements/{_2p['id']}",
+            headers=A).json()["engagement"]
+ok(_2r["monthly_cents"] == 70000 and _2r["value_cents"] == 600000,
+   "moving them up a tier changes the monthly and leaves the build alone")
+ok('$("#ef-mon").value = t.price' in _pj
+   and "Build — one-time ($)" in _pj and "deposit stage" in _pj
+   and "Monthly — platform + care ($/mo)" in _pj,
+   "the form names them apart, and picking a package fills the MONTHLY "
+   "box — the build fee is never a plan price by accident")
 c.post(f"/api/store/admin/engagements/{_ar['id']}/archive", headers=A,
        json={"archived": True})
 ok(all(x["name"] != "Parked Smoke" for x in _arl()["engagements"])
@@ -1220,12 +1247,12 @@ for _fig in ("$335.00", "$288.00", "$183.75", "$192.50"):
 ok("$[X]" not in _menu,
    "nothing in the menu is left unpriced — the bands priced the nine that "
    "v1 could not sell")
-for _pair in ("**$199**", "**$349**", "**$699**", "**$150**", "**$350**",
+for _pair in ("**$200**", "**$400**", "**$700**", "**$150**", "**$350**",
               "**$750**"):
     ok(_pair in _book and _pair in _menu,
        f"tier and care figures agree between book and menu ({_pair})")
 ok("bands:{light:20,std:30,heavy:50}, corePrice:50" in _qb.text
-   and "tierPrice:{starter:199,pro:349,scale:699}" in _qb.text
+   and "tierPrice:{starter:200,pro:400,scale:700}" in _qb.text
    and "{n:'Essential — $150',p:150" in _qb.text,
    "and the bench runs on the same numbers — bands, core, tiers, care")
 
@@ -1252,11 +1279,11 @@ ok(not _doff,
    f"every capability carries the book's band price in the deck's price "
    f"book too (off: {_doff})")
 ok('nm:"Platform Core",price:50,' in _deck
-   and _deck.count("price:199,") >= 1 and "price:349," in _deck
-   and "price:699," in _deck and "mrr:199" in _deck and "mrr:349" in _deck
-   and "mrr:699" in _deck
-   and '"starter","Starter",199,' in _deck
-   and '"pro","Pro",349,' in _deck and '"scale","Scale",699,' in _deck,
+   and _deck.count("price:200,") >= 1 and "price:400," in _deck
+   and "price:700," in _deck and "mrr:200" in _deck and "mrr:400" in _deck
+   and "mrr:700" in _deck
+   and '"starter","Starter",200,' in _deck
+   and '"pro","Pro",400,' in _deck and '"scale","Scale",700,' in _deck,
    "core and the tier prices agree across all three of the deck's models — "
    "quote builder, cluster planner and tier cards")
 ok("price:49," not in _deck and "price:149," not in _deck
@@ -1670,6 +1697,14 @@ ok('id="ef-files"' in _ops and '"01-potential-customer"' in _ops
    and "bd-edit" in _ops,
    "the new-client form takes attachments, and the binder modal edits its "
    "own cover — the title page is a document like any other")
+ok("async function fileInto(" in _ops
+   and _ops.count("fileInto(") >= 4
+   and 'id="eng-files"' in _ops and "function addFilesModal(" in _ops
+   and 'id="af-stage"' in _ops and 'id="af-side"' in _ops,
+   "paperwork arrives after the client exists too: one upload path serves "
+   "the new-client form, the edit form and an Add files button in the "
+   "client's own header — which asks WHICH stage and WHICH side of the "
+   "internal wall, because those are decisions")
 
 # --- the whole binder, editable --------------------------------------------
 _bed = c.get(f"/api/store/admin/engagements/{_bt['id']}/binder/editable",

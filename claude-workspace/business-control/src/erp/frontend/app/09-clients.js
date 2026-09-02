@@ -596,7 +596,8 @@ async function renderClients() {
           <div class="doc-main"><b>${esc(e.name)}</b>
             <span class="dim">${esc(e.stage.replace(/^(\d\d)-/, "$1 · ").replace(/-/g, " "))} · ${
               e.package ? "package " + esc(e.package) + " · " : ""}${
-              e.value_cents ? money(e.value_cents) + " · " : ""}content ${
+              e.value_cents ? "build " + money(e.value_cents) + " · " : ""}${
+              e.monthly_cents ? money(e.monthly_cents) + "/mo · " : ""}content ${
               e.content_pct}% · ${e.docs} document${e.docs === 1 ? "" : "s"}, ${
               e.signed} signed${e.portal_seen_at
                 ? " · client looked " + fmtDate(e.portal_seen_at) : ""}</span></div>
@@ -687,6 +688,71 @@ function pkgMatches(stored, tierName) {
   return want.toLowerCase() === tierName.toLowerCase();
 }
 
+/* Files into a client, from wherever they were chosen — the new-client
+   form, the edit form, or the header button. Each upload becomes its own
+   vault document and is filed under a stage, so an attachment is a paper
+   in the binder like any other, not a blob hanging off a record. */
+async function fileInto(eid, clientName, files,
+                        stage = "01-potential-customer",
+                        side = "to_client") {
+  let filed = 0;
+  for (const f of files) {
+    try {
+      const doc = await api("/api/store/admin/documents", { body: {
+        title: f.name.slice(0, 190), category: "other",
+        party_kind: "partner", party_name: clientName,
+      } });
+      const fd = new FormData();
+      fd.append("file", f);
+      const up = await fetch(`/api/store/admin/documents/${doc.id}/file`,
+        { method: "POST", body: fd,
+          headers: { Authorization: "Bearer " + S.user.token } });
+      if (!up.ok) throw new Error((await up.json()).detail);
+      await api(`/api/store/admin/engagements/${eid}/attach`,
+        { body: { doc_id: doc.id, stage, side } });
+      filed++;
+    } catch (err) { toast(`${f.name}: ${err.message}`); }
+  }
+  if (filed) toast(`${filed} file${filed === 1 ? "" : "s"} filed`);
+  return filed;
+}
+
+/* The header's own door for paperwork that arrives after the client
+   exists — a countersigned PDF, their logo pack, a scan. Stage and side
+   are asked, because where a paper is filed and which side of the
+   internal wall it sits on are decisions, not defaults. */
+function addFilesModal(e, stages, after) {
+  modal(`<h3>Add files to ${esc(e.name)}</h3>
+    <p class="dim">Each file becomes a document in the vault, filed under
+      the stage you pick and listed in the binder.</p>
+    <label>Files</label>
+    <input type="file" id="af-files" multiple>
+    <div class="row2">
+      <div><label>File under</label>
+        <select id="af-stage">${stages.map((st) =>
+          `<option value="${esc(st.stage)}">${esc(
+            st.stage.replace(/^(\d\d)-/, "$1 · ").replace(/-/g, " "))}
+          </option>`).join("")}</select></div>
+      <div><label>Side</label>
+        <select id="af-side">
+          <option value="to_client">to client — they see it</option>
+          <option value="internal">internal — never leaves this office</option>
+        </select></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="af-save">File them</button></div>`);
+  $("#af-save").onclick = async () => {
+    const files = [...($("#af-files").files || [])];
+    if (!files.length) return toast("pick a file first");
+    $("#af-save").disabled = true;
+    await fileInto(e.id, e.name, files, $("#af-stage").value,
+                   $("#af-side").value);
+    closeModal();
+    if (after) after();
+  };
+}
+
 async function engForm(e) {
   if (!ENG_TIERS.length) {
     // deep-linked straight to a client: the list (and its tiers) was
@@ -712,9 +778,19 @@ async function engForm(e) {
             ? `<option value="${esc(e.package)}" selected>
                 ${esc(e.package)} (as recorded)</option>` : ""}
         </select></div>
-      <div><label>Value ($)</label>
-        <input id="ef-val" type="number" min="0"
+      <div><label>Build — one-time ($)
+          <span class="opt">the project fee; the deposit stage suggests
+            half of it</span></label>
+        <input id="ef-val" type="number" min="0" placeholder="e.g. 6000"
           value="${e && e.value_cents ? e.value_cents / 100 : ""}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Monthly — platform + care ($/mo)
+          <span class="opt">what the package above costs them every
+            month</span></label>
+        <input id="ef-mon" type="number" min="0" placeholder="e.g. 400"
+          value="${e && e.monthly_cents ? e.monthly_cents / 100 : ""}"></div>
+      <div></div>
     </div>
     <div class="row2">
       <div><label>Client POC name</label>
@@ -759,23 +835,28 @@ async function engForm(e) {
     <textarea id="ef-block" rows="2">${esc(e ? e.blockers : "")}</textarea>
     <label>Notes (internal)</label>
     <textarea id="ef-notes" rows="3">${esc(e ? e.notes : "")}</textarea>
-    ${e ? "" : `<label>Attachments
-        <span class="opt">filed with the client, listed in the binder</span>
-      </label>
-      <input type="file" id="ef-files" multiple
-        accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.csv,.txt">`}
+    <label>Attachments
+      <span class="opt">filed with the client, listed in the binder${
+        e ? " — added to what is already there, nothing is replaced" : ""}
+      </span></label>
+    <input type="file" id="ef-files" multiple
+      accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.csv,.txt">
     <div class="modal-foot"><button class="btn" id="ef-save">Save</button></div>`);
   $("#ef-pkg").onchange = () => {
-    // picking a plan suggests its price — into an EMPTY value only;
-    // a negotiated number someone already typed is never overwritten
+    // A tier's price is a MONTHLY price. It used to land in the build
+    // box, which is the field the deposit is halved from — the two
+    // numbers are different money and now have different boxes.
+    // Suggested into an EMPTY field only; a negotiated number someone
+    // already typed is never overwritten.
     const t = ENG_TIERS.find((x) => x.name === $("#ef-pkg").value);
-    if (t && !$("#ef-val").value) $("#ef-val").value = t.price;
+    if (t && !$("#ef-mon").value) $("#ef-mon").value = t.price;
   };
   $("#ef-save").onclick = async () => {
     const body = {
       name: $("#ef-name").value.trim(),
       package: $("#ef-pkg").value.trim(),
       value_cents: Math.round((+$("#ef-val").value || 0) * 100),
+      monthly_cents: Math.round((+$("#ef-mon").value || 0) * 100),
       approver_name: $("#ef-appr").value.trim(),
       approver_email: $("#ef-email").value.trim(),
       internal_poc: $("#ef-ipoc").value.trim(),
@@ -790,35 +871,19 @@ async function engForm(e) {
       blockers: $("#ef-block").value.trim(),
     };
     try {
-      if (e) await api(`/api/store/admin/engagements/${e.id}`,
-        { method: "PATCH", body });
-      else {
+      if (e) {
+        await api(`/api/store/admin/engagements/${e.id}`,
+          { method: "PATCH", body });
+        await fileInto(e.id, body.name,
+                       [...($("#ef-files")?.files || [])]);
+      } else {
         const out = await api("/api/store/admin/engagements",
           { method: "POST", body });
         S.engId = out.id;
         // attachments ride in with the client: each becomes its own vault
         // document, filed under the first stage, listed in the binder
-        const files = [...($("#ef-files")?.files || [])];
-        for (const f of files) {
-          try {
-            const doc = await api("/api/store/admin/documents", { body: {
-              title: f.name.slice(0, 190), category: "other",
-              party_kind: "partner", party_name: body.name,
-            } });
-            const fd = new FormData();
-            fd.append("file", f);
-            const up = await fetch(
-              `/api/store/admin/documents/${doc.id}/file`,
-              { method: "POST", body: fd,
-                headers: { Authorization: "Bearer " + S.user.token } });
-            if (!up.ok) throw new Error((await up.json()).detail);
-            await api(`/api/store/admin/engagements/${out.id}/attach`,
-              { body: { doc_id: doc.id, stage: "01-potential-customer",
-                        side: "to_client" } });
-          } catch (err) { toast(`${f.name}: ${err.message}`); }
-        }
-        if (files.length) toast(`${files.length} attachment${
-          files.length === 1 ? "" : "s"} filed`);
+        await fileInto(out.id, body.name,
+                       [...($("#ef-files")?.files || [])]);
       }
       closeModal(); render();
     } catch (err) { toast(err.message); }
@@ -1161,7 +1226,8 @@ async function renderEngagement(id) {
         <h2 style="display:inline;margin-left:8px">${esc(e.name)}</h2>
         <p class="dim"><span class="pill ok">stage: ${esc(stageName(d.current_stage))}</span>
           ${e.package ? " package " + esc(e.package) + " · " : ""}${
-          e.value_cents ? money(e.value_cents) + " · " : ""}${
+          e.value_cents ? "build " + money(e.value_cents) + " · " : ""}${
+          e.monthly_cents ? money(e.monthly_cents) + "/mo · " : ""}${
           e.approver_name ? "client POC " + esc(e.approver_name) + " · " : ""}${
           e.internal_poc ? "internal POC " + esc(e.internal_poc)
             + (e.internal_poc_status === "pending"
@@ -1174,6 +1240,9 @@ async function renderEngagement(id) {
       <div class="top-actions eng-actions">
         <button class="btn alt sm" id="eng-edit">Edit</button>
         <button class="btn alt sm" id="eng-dates">Dates</button>
+        <button class="btn alt sm" id="eng-files" title="file a PDF, scan
+          or asset into this client — it becomes a vault document under
+          the stage you pick">Add files</button>
         ${e.portal_url
           ? `<button class="btn alt sm" id="eng-portal-copy"
                title="the client's live roadmap — everything on it is the
@@ -1301,6 +1370,8 @@ async function renderEngagement(id) {
   $("#eng-edit").onclick = () => engForm(e);
   $("#eng-dates").onclick = () => engDatesForm(id, d.dates || []);
   $("#eng-gantt").onclick = ganttModal;
+  $("#eng-files").onclick =
+    () => addFilesModal(e, d.stages, () => renderEngagement(id));
   if ($("#eng-report")) $("#eng-report").onclick =
     () => clientDossier(e.tenant_id);
   $("#eng-sow").onclick = () => {
@@ -1846,7 +1917,9 @@ async function renderEngagement(id) {
   view().querySelectorAll("[data-gate-paylink]").forEach((b) => b.onclick = async () => {
     const suggested = b.dataset.gatePaylink === "deposit_cleared" && e.value_cents
       ? e.value_cents / 200 : "";
-    const amt = prompt("Amount ($):", suggested);
+    const amt = prompt(b.dataset.gatePaylink === "deposit_cleared"
+      ? "Deposit ($) — suggested: half the one-time build fee"
+      : "Amount ($):", suggested);   // prompt text: not page markup
     if (amt === null) return;
     try {
       const out = await api(`/api/store/admin/engagements/${id}/gates/${

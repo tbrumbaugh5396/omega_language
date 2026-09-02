@@ -22,7 +22,7 @@ time-sensitive when written.
 | Capability pricing | 18 individual prices, $9–$35 | Three bands: **$20 / $30 / $50** | §8 #15 (three data models) largely dissolves — one rule, not nineteen numbers |
 | Unpriced capabilities | 9 with no price, unsellable | All 9 banded | §8 #5 |
 | Platform Core | $49 | **$50** | Round arithmetic |
-| Packaged tiers | $49 / $149 / $399 | **$199 / $349 / $699** | Tiers undercut every bundle; the menu was pointless |
+| Packaged tiers | $49 / $149 / $399 | **$200 / $400 / $700** | Tiers undercut every bundle; the menu was pointless — and a tier is a round number, not a number pretending to be smaller |
 | Tier contents | "roughly Commerce Core + Workforce" | Explicit capability sets (§6) | The "quote the cheaper one" rule was uncomputable |
 | Care plan | Sold, but outside the price book | **Part 2 of the monthly bill** (§12) | The bill was one number for two different businesses |
 | White-labelling | Not offered | Four levels, $0–$199/mo (§8) | New revenue, zero cost to serve |
@@ -173,7 +173,7 @@ discount.
 
 | | **Starter** | **Pro** | **Scale** |
 |---|---|---|---|
-| **Monthly** | **$199** | **$349** | **$699** |
+| **Monthly** | **$200** | **$400** | **$700** |
 | Locations | 1 | 3 | 10 |
 | Staff seats | 5 | 20 | 75 |
 | Capabilities | Selling, Payments, Workforce, Comms | + Inventory, Warehouse, CRM, Marketing, Subscriptions | + Distribution, Production, Sourcing, Events, Affiliates, Intelligence, Automation, API |

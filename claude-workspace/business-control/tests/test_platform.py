@@ -221,7 +221,7 @@ ok(len(_caps_pb) == 29 and {c["price"] for c in _caps_pb} == {20, 30, 50},
    "the price book parses into code — 29 capabilities on three bands, one "
    "table read rather than a fourth copy typed out")
 ok(_pb.core_price() == 50
-   and [t["price"] for t in _pb.tiers()] == [199, 349, 699]
+   and [t["price"] for t in _pb.tiers()] == [200, 400, 700]
    and [c["price"] for c in _pb.care_plans()] == [150, 350, 750],
    "core, tiers and care plans come out of the same document the bench and "
    "the deck are held to")
@@ -242,7 +242,7 @@ ok('class="band band-light"' in _shop
    "the home page carries the whole capability menu — all 29, banded — "
    "because a buyer who can see the menu and add it up does not have to "
    "ask for a call first")
-for _fig in ("$50", "$199", "$150"):
+for _fig in ("$50", "$200", "$150"):
     ok(_fig in _shop, f"and the book's figures reach the shop ({_fig})")
 _leak = [w for w in ("L-theanine", "Zen", "flavors", "calm")
          if w in _shop]
@@ -252,7 +252,7 @@ ok(not _leak,
 
 _cat = c.get("/api/store/catalog", headers=HA).json()["products"]
 _names = {p["name"]: p for p in _cat}
-ok(_names["Starter plan"]["price_cents"] == 19900
+ok(_names["Starter plan"]["price_cents"] == 20000
    and _names["Priority care"]["price_cents"] == 75000,
    "the plans are buyable at the book's prices")
 ok(sum(1 for p in _cat if p["featured"]) == 1
@@ -330,7 +330,7 @@ ok(_st["ok"] and _st.get("invoiced"),
    "error state")
 _mine = c.get("/api/store/account/subscriptions", headers=CU).json()
 _row = _mine["subscriptions"][0]
-ok(_row["plan"] and _row["price_cents"] == 34900,
+ok(_row["plan"] and _row["price_cents"] == 40000,
    "the price is LOCKED on the row at signup — the price book says "
    "grandfather existing clients, and a column is the only way that "
    "survives a repricing")
@@ -394,12 +394,12 @@ _pay.httpx.post = _fake_post
 _pay.httpx.get = lambda url, auth=None, timeout=None: _FakeResp()
 try:
     _sess = _pay.create_subscription_checkout(
-        {"stripe_secret_key": "sk_test"}, "Pro plan", 34900, "sub:1",
+        {"stripe_secret_key": "sk_test"}, "Pro plan", 40000, "sub:1",
         "https://x.test/?subscribed=1")
     _url, _d = _calls[-1]
     ok(_d["mode"] == "subscription"
        and _d["line_items[0][price_data][recurring][interval]"] == "month"
-       and _d["line_items[0][price_data][unit_amount]"] == "34900",
+       and _d["line_items[0][price_data][unit_amount]"] == "40000",
        "the hosted checkout is opened in SUBSCRIPTION mode with a recurring "
        "monthly price — one-time mode would take a month's money and then "
        "never ask again")
