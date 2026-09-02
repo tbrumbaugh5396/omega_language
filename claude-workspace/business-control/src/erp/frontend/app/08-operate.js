@@ -4,17 +4,42 @@ async function renderInventory() {
   const isStaff = S.user && (S.user.is_admin ||
     ["employee", "owner"].includes(S.user.role));
   const isAdmin = S.user && S.user.is_admin;
-  const [inv, stores, picks] = await Promise.all([
+  const [inv, stores, picks, prods] = await Promise.all([
     api("/api/inventory"), api("/api/stores"),
-    isStaff ? api("/api/warehouse/picklist").catch(() => []) : []]);
+    isStaff ? api("/api/warehouse/picklist").catch(() => []) : [],
+    api("/api/products").catch(() => [])]);
   const byStore = {};
   inv.forEach((i) => {
     (byStore[i.store_id] = byStore[i.store_id] || { name: i.store_name,
       region: i.region, rows: [] }).rows.push(i);
   });
   const lows = inv.filter((i) => i.low);
+  /* What we sell that has no shelf. A plan, a care contract, a build or a
+     licence is carried by every location at once and has no count — but
+     leaving them out of the inventory means the only complete list of
+     what this business sells is on the shop page. So they are here,
+     grouped and tinted like everywhere else, and said plainly to be
+     unstocked rather than shown as a quantity of zero. */
+  const svc = kindGroups(prods.filter((p) => p.kind && p.kind !== "goods"))
+    .filter((g) => g.label);
   view().innerHTML = `
     <h2>Inventory — all stores</h2>
+    ${svc.length ? `<div class="card">
+      <b>Sold everywhere, stocked nowhere</b>
+      <p class="dim">Services carry no count: every location sells them,
+        none holds any. Prices are the shop's; what a client is actually
+        on lives on their own record.</p>
+      ${svc.map((g) => `
+        <h3 class="kind-head" style="--kind:${esc(g.colour)}">${esc(g.label)}
+          <small class="dim">${g.items.length}</small></h3>
+        <div class="tablewrap"><table><tbody>
+        ${g.items.map((p) => `<tr>
+          <td>${esc(p.name)}</td>
+          <td class="dim">${esc(p.sku)}</td>
+          <td>${money(p.price_cents)}${p.quote
+            ? ' <span class="dim">from — quoted</span>' : ""}</td>
+        </tr>`).join("")}</tbody></table></div>`).join("")}
+    </div>` : ""}
     ${picks.length ? `<div class="card">
       <h3 style="margin-top:0">Pick list — ${picks.length} order(s) to pack</h3>
       <div class="tablewrap"><table><thead><tr><th>#</th><th>kind</th><th>items</th>

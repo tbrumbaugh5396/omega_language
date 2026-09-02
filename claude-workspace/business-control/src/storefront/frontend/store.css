@@ -353,6 +353,19 @@ svg.can { display: block; width: 100%; height: auto; }
   line-height: 1; }
 .benefit span { font-size: 12.5px; color: var(--ink-2); letter-spacing: .01em; }
 
+/* A heading inside the grid, spanning it: the shelf is grouped by what
+   things ARE, and each group wears its own colour so the eye sorts them
+   before the words do. */
+.kind-head { grid-column: 1 / -1; margin: 26px 0 2px; font-family:
+  var(--display); font-size: 21px; font-weight: 600; letter-spacing: -.01em;
+  display: flex; align-items: baseline; gap: 10px; padding-left: 12px;
+  border-left: 4px solid var(--kind, var(--purple)); color: var(--ink); }
+.kind-head:first-child { margin-top: 4px; }
+.kind-head small { font-size: 12.5px; font-weight: 400; color: var(--ink-2);
+  letter-spacing: .01em; }
+@media (max-width: 560px) { .kind-head { font-size: 18px; }
+  .kind-head small { display: none; } }
+
 /* ---------- product cards ---------- */
 .product { background: var(--paper); border: 1px solid var(--line);
   border-radius: var(--r-lg); overflow: hidden; display: flex;

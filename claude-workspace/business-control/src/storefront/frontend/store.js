@@ -435,7 +435,12 @@ function drawGrid() {
      card — `n % c === 1` is the case being avoided. */
   layoutGrid(gridHost, prods.length);
 
-  gridHost.innerHTML = featureHtml + prods.map((p) => `
+  /* Grouped by what things ARE. A shelf carrying a $40,000 build beside a
+     $50 licence beside a case of drinks is five businesses on one page
+     unless the page says which is which. Only when there IS more than one
+     kind — a shop selling one kind of thing does not need a heading
+     telling it so. */
+  const card = (p) => `
     <div class="product" style="--flavour:${flavourOf(p)}">
       ${p.badge ? `<span class="badge">${p.badge}</span>` : ""}
       <a href="/product/${p.id}-${p.slug}" aria-label="${pname(p)}">${art(p)}</a>
@@ -463,9 +468,19 @@ function drawGrid() {
                  ${t("add_to_cart", "Add")}</button>`}
         </div>
       </div>
-    </div>`).join("") || (featureHtml ? "" :
+    </div>`;
+  const kinds = (CATALOG.kinds || []).filter(
+    (k) => prods.some((p) => p.kind === k.id));
+  gridHost.innerHTML = featureHtml + (kinds.length < 2
+    ? prods.map(card).join("")
+    : kinds.map((k) => `
+        <h3 class="kind-head" style="--kind:${k.colour}">${esc(k.label)}
+          <small>${esc(k.note || "")}</small></h3>
+        ${prods.filter((p) => p.kind === k.id).map(card).join("")}`).join(""))
+    || (featureHtml ? "" :
     `<p class="dim">${SEARCH != null ? "Nothing matched — try another word."
       : "No products yet — add some in the store admin."}</p>`);
+
   document.querySelectorAll("[data-varsel]").forEach((s) => s.onchange = () => {
     document.querySelector(`[data-price-for="${s.dataset.varsel}"]`)
       .textContent = money(+s.selectedOptions[0].dataset.price);

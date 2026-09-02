@@ -362,7 +362,7 @@ def products() -> list:
         lead = ("Everything in the plan below, plus " if t["adds"] else "")
         out.append({
             "sku": f"PLAN-{t['name'].upper()}", "name": f"{t['name']} plan",
-            "billing": "month",
+            "billing": "month", "kind": "plan",
             "category": "Plans", "price_cents": t["price"] * 100,
             "colour": TIER_COLOUR[t["name"]],
             "description":
@@ -374,7 +374,7 @@ def products() -> list:
     for c in pb.care_plans():
         out.append({
             "sku": f"CARE-{c['name'].upper()}", "name": f"{c['name']} care",
-            "billing": "month",
+            "billing": "month", "kind": "care",
             "category": "Care", "price_cents": c["price"] * 100,
             "colour": CARE_COLOUR[c["name"]],
             "description":
@@ -410,9 +410,13 @@ def products() -> list:
         quoted = b["name"] != "Guided setup"
         out.append({
             "sku": f"BUILD-{b['name'].split()[0].upper()}",
-            "name": b["name"], "category": "Website builds",
-            "price_cents": b["price"] * 100,
-            "colour": "#0d8f7a", "quote": quoted,
+            "name": b["name"],
+            # standing an install up is a different act from building a
+            # site, and a shop that files them together makes the cheap
+            # one look like the first rung of the expensive one
+            "kind": "build" if quoted else "setup",
+            "category": "Website builds" if quoted else "Setups",
+            "price_cents": b["price"] * 100, "quote": quoted,
             "description": BUILD_NOTE[b["name"]] + (
                 " Scoped and quoted after discovery — the figure here is "
                 "where this rung starts." if quoted else ""),
@@ -424,8 +428,8 @@ def products() -> list:
         out.append({
             "sku": f"WL-{w['name'].split()[0].upper()}",
             "name": f"White-label — {w['name']}", "billing": "month",
+            "kind": "label",
             "category": "White-labelling", "price_cents": w["price"] * 100,
-            "colour": "#7a4bd0",
             "description": w["gets"].rstrip(".") + "."
             + (f" One-time setup ${w['setup']:,}." if w["setup"] else ""),
         })
@@ -593,7 +597,7 @@ def seed(con, force: bool) -> dict:
             pid = cur.lastrowid
         con.execute("INSERT OR REPLACE INTO store_product_meta"
                     "(product_id,k,v) VALUES(?,'colour',?)",
-                    (pid, p["colour"]))
+                    (pid, p.get("colour", "")))
         # The hero puts one product on stage. Pro is the one most businesses
         # land on, so it is the one standing there.
         con.execute("INSERT OR REPLACE INTO store_product_meta"
@@ -612,6 +616,10 @@ def seed(con, force: bool) -> dict:
         con.execute("INSERT OR REPLACE INTO store_product_meta"
                     "(product_id,k,v) VALUES(?,'quote',?)",
                     (pid, "1" if p.get("quote") else ""))
+        # What it is, which is how every surface groups and tints it.
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,'kind',?)",
+                    (pid, p.get("kind", "goods")))
         n["products"] += 1
 
     # A tier renamed in the book leaves its old row behind — 'Starter plan'

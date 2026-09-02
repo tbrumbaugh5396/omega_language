@@ -272,6 +272,23 @@ ok(_names["Flagship"]["quote"] and not _names["Guided setup"]["quote"]
    "a forty-thousand-dollar build is priced but not bought blind: the "
    "card says where the rung starts and opens the conversation, while "
    "the things you really can buy keep their button")
+_kinds = {p["name"]: p["kind"] for p in _cat}
+ok(_kinds["Basic plan"] == "plan" and _kinds["Priority care"] == "care"
+   and _kinds["Flagship"] == "build" and _kinds["Guided setup"] == "setup"
+   and _kinds["White-label — Unbranded"] == "label",
+   "every product says what it IS — plans, care, builds, setups, "
+   "labelling — because a shelf carrying a $40,000 build beside a $50 "
+   "licence is five businesses on one page unless the page sorts them")
+_kl = c.get("/api/store/catalog", headers=HA).json()["kinds"]
+ok([k["id"] for k in _kl if k["id"] != "goods"]
+   == ["plan", "care", "build", "setup", "label"]
+   and len({k["colour"] for k in _kl}) == len(_kl),
+   "the shelf's kinds come back in one order with one colour each, from "
+   "the server — so the shop and the back office cannot group or tint the "
+   "same catalogue differently")
+ok(_names["Guided setup"]["colour"] != _names["Flagship"]["colour"],
+   "and standing an install up is not the first rung of a build ladder: "
+   "different kind, different colour")
 ok("Starter plan" not in _names,
    "and a tier renamed in the book does not leave its old row for sale "
    "beside the new one — the seed retires what it no longer writes")

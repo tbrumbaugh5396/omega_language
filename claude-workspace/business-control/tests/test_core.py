@@ -2047,6 +2047,12 @@ ok('{ updateViaCache: "none" }' in _ops
    and '{ updateViaCache: "none" }' in _store_js2,
    "and both registrations refuse the HTTP cache outright — the worker is "
    "what ships the fix, so it cannot be the thing that arrives stale")
+ok("kind-head" in _store_js2 and "CATALOG.kinds" in _store_js2
+   and "kinds.length < 2" in _store_js2,
+   "the shop groups its shelf by what things ARE, with each group's own "
+   "colour — and a shop selling one kind of thing gets no headings, "
+   "because a heading naming the only thing on the page says nothing")
+
 
 # Reading the worker is not the same as running it. The harness loads both
 # workers against a stubbed browser and puts them in the states that matter

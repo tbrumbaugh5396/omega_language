@@ -680,9 +680,33 @@ def qr_login(token: str, con=Depends(get_con)):
 
 @app.get("/api/products")
 def products(con=Depends(get_con)):
+    """Every live product, wearing what it IS. The back office groups and
+    tints by the same kinds the shop does — one table, so the two faces
+    of the catalogue cannot sort it differently."""
+    from storefront.backend.api import KIND_BY_ID, kind_of
     rows = con.execute(
-        "SELECT * FROM products WHERE active=1 ORDER BY category, name").fetchall()
-    return [dict(r) for r in rows]
+        "SELECT * FROM products WHERE active=1 ORDER BY category, name"
+    ).fetchall()
+    meta: dict = {}
+    for m in con.execute("SELECT product_id, k, v FROM store_product_meta"
+                         " WHERE k IN ('kind','colour','quote')").fetchall():
+        meta.setdefault(m["product_id"], {})[m["k"]] = m["v"]
+    out = []
+    for r in rows:
+        p = dict(r)
+        md = meta.get(p["id"], {})
+        p["kind"] = kind_of(md)
+        p["kind_label"] = KIND_BY_ID[p["kind"]]["label"]
+        p["colour"] = md.get("colour") or KIND_BY_ID[p["kind"]]["colour"]
+        p["quote"] = md.get("quote", "") == "1"
+        out.append(p)
+    # In the shelf's order, not the alphabet's: what you run on, what keeps
+    # it running, then the work that builds it. The shop reads the same
+    # table, so the two faces cannot disagree about where a thing belongs.
+    order = {k["id"]: i for i, k in enumerate(KIND_BY_ID.values())}
+    out.sort(key=lambda p: (order.get(p["kind"], 99), p["price_cents"],
+                            p["name"]))
+    return out
 
 
 class ProductBody(BaseModel):

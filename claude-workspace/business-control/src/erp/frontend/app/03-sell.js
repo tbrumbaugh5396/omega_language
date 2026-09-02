@@ -2,6 +2,27 @@
 
 
 
+/* Products, grouped by what they ARE and tinted by it — the same kinds
+   the shop groups by, carried on the row so the two faces of the
+   catalogue cannot sort it differently. Order comes from the server; a
+   catalogue of one kind is left ungrouped, because a heading that names
+   the only thing on the page tells nobody anything. */
+function kindGroups(prods) {
+  const seen = [];
+  prods.forEach((p) => {
+    let g = seen.find((x) => x.id === (p.kind || "goods"));
+    if (!g) {
+      g = { id: p.kind || "goods", label: p.kind_label || "Goods",
+            colour: p.colour || "#6b7280", items: [] };
+      seen.push(g);
+    }
+    g.items.push(p);
+  });
+  return seen.length < 2
+    ? [{ id: "", label: "", colour: "", items: prods, only: true }]
+    : seen;
+}
+
 function productArt(p) {
   if (p.image) return `<img src="/media/product/${p.id}" alt="" loading="lazy">`;
   return opsIcon("bag", "art-ic");
@@ -17,8 +38,12 @@ async function renderShop() {
         <button class="btn" id="hero-cta">${esc(hero.cta)}</button>
       </div>` : ""}
     <h2>Shop ${isDist ? '<span class="pill ok">wholesale — priced per case</span>' : ""}</h2>
-    <div class="grid">${S.products.map((p) => `
-      <div class="product" data-p="${p.id}">
+    ${kindGroups(S.products).map((g) => `
+      ${g.label ? `<h3 class="kind-head" style="--kind:${esc(g.colour)}">
+        ${esc(g.label)} <small class="dim">${g.items.length} line${
+          g.items.length === 1 ? "" : "s"}</small></h3>` : ""}
+      <div class="grid">${g.items.map((p) => `
+      <div class="product" data-p="${p.id}" style="--kind:${esc(g.colour)}">
         <div class="art">${productArt(p)}</div>
         <div class="body">
           <div class="name">${esc(p.name)}</div>
@@ -26,16 +51,18 @@ async function renderShop() {
           <div class="price">${isDist
             ? `${money(p.case_price_cents)} <span class="dim"
                 style="font-size:12px;font-weight:400">/ case of ${p.case_size}</span>`
-            : money(p.price_cents)}</div>
-          <div class="stepper" data-step="${p.id}">
+            : money(p.price_cents)}${p.quote
+            ? ' <span class="dim" style="font-size:12px;font-weight:400">'
+              + "from — quoted after discovery</span>" : ""}</div>
+          ${p.quote ? "" : `<div class="stepper" data-step="${p.id}">
             <button data-dec="${p.id}" aria-label="remove one">−</button>
             <span class="q" data-q="${p.id}">${S.cart[p.id] || 0}</span>
             <button data-inc="${p.id}" aria-label="add one">+</button>
-          </div>
+          </div>`}
           ${rowActions("product", p)}
         </div>
       </div>`).join("")}
-    </div>
+    </div>`).join("")}
     <div class="card" style="margin-top:14px" id="cart-card"></div>
     <div id="checkout-box"></div>`;
 

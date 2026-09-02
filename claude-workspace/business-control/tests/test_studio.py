@@ -1811,6 +1811,13 @@ ok("function occurrenceKeysProbe" not in _ops
    and 'data-fill="' in _ops and "the ${esc(nth)}" in _ops,
    "the fill form says WHICH one it is asking about — [X] and then 'the "
    "2nd one', so a person answering four prices can see they are four")
+ok("function kindGroups(" in _ops and 'class="kind-head"' in _ops
+   and "kind !== \"goods\"" in _ops
+   and "Sold everywhere, stocked nowhere" in _ops,
+   "the back office groups its catalogue by the same kinds the shop does, "
+   "and Inventory carries the ones with no shelf — a service is sold by "
+   "every location and stocked by none, which is a sentence, not a zero")
+
 ok('id="ef-files"' in _ops and '"01-potential-customer"' in _ops
    and "bd-edit" in _ops,
    "the new-client form takes attachments, and the binder modal edits its "

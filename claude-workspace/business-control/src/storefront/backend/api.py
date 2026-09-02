@@ -192,6 +192,35 @@ CREATE TABLE IF NOT EXISTS store_subscriptions (
 );
 """
 
+# What a product IS, before what it costs. A shop selling a $40,000 build
+# beside a $50 licence beside a case of drinks is five businesses on one
+# page unless the page says which is which — so a product carries a kind,
+# the kind carries its name and its colour, and every surface groups and
+# tints by the same table rather than each inventing one.
+PRODUCT_KINDS = (
+    {"id": "plan", "label": "Plans", "colour": "#4634d9",
+     "note": "the platform, billed every month"},
+    {"id": "care", "label": "Care", "colour": "#0d8f7a",
+     "note": "support and maintenance — the other half of the bill"},
+    {"id": "build", "label": "Builds", "colour": "#b8431f",
+     "note": "the one-time work, scoped before it is sold"},
+    {"id": "setup", "label": "Setups", "colour": "#a86a08",
+     "note": "getting you standing, once"},
+    {"id": "label", "label": "Labelling", "colour": "#7a4bd0",
+     "note": "our name off it — a licence, not a fork"},
+    {"id": "goods", "label": "Goods", "colour": "#6b7280",
+     "note": "things in boxes"},
+)
+KIND_BY_ID = {k["id"]: k for k in PRODUCT_KINDS}
+
+
+def kind_of(meta: dict) -> str:
+    """A product with no kind recorded is a thing in a box — which is what
+    every product was before there were services to tell apart."""
+    k = (meta or {}).get("kind", "")
+    return k if k in KIND_BY_ID else "goods"
+
+
 STORE_MIGRATIONS = (
     "ALTER TABLE product_reviews ADD COLUMN email TEXT DEFAULT ''",
     "ALTER TABLE product_reviews ADD COLUMN verified INTEGER DEFAULT 0",
@@ -960,6 +989,11 @@ def catalog(con=Depends(get_con)):
         # Priced, but scoped before it is sold: the card shows where the
         # rung starts and opens the conversation instead of a cart.
         p["quote"] = md.get("quote", "") == "1"
+        # what it IS: the group it sits in and the colour it wears
+        p["kind"] = kind_of(md)
+        p["kind_label"] = KIND_BY_ID[p["kind"]]["label"]
+        if not p["colour"]:
+            p["colour"] = KIND_BY_ID[p["kind"]]["colour"]
         p["note"] = md.get("note", "")
         p["ingredients"] = md.get("ingredients", "")
         p["badge"] = md.get("badge", "")
@@ -967,7 +1001,11 @@ def catalog(con=Depends(get_con)):
             p["nutrition"] = json.loads(md.get("nutrition") or "{}")
         except ValueError:
             p["nutrition"] = {}
-    return {"products": prods, "collections": cols}
+    # The kinds actually on this shelf, in the order a shop reads: what
+    # you run on, what keeps it running, then the work that builds it.
+    kinds = [dict(k) for k in PRODUCT_KINDS
+             if any(p["kind"] == k["id"] for p in prods)]
+    return {"products": prods, "collections": cols, "kinds": kinds}
 
 
 @router.get("/media/m/{mid}")
