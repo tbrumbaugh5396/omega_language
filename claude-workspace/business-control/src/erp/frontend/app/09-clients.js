@@ -687,7 +687,7 @@ async function renderClients() {
    in order, so an old "B" client selects Pro instead of dangling. */
 function pkgMatches(stored, tierName) {
   if (!stored) return false;
-  const legacy = { A: "Starter", B: "Pro", C: "Scale" };
+  const legacy = { A: "Basic", B: "Pro", C: "Scale" };
   const want = legacy[stored.trim().toUpperCase()] || stored.trim();
   return want.toLowerCase() === tierName.toLowerCase();
 }

@@ -419,6 +419,9 @@ function drawGrid() {
           ${isPlan(feature)
             ? `<button class="add-btn" data-plan="${feature.id}">
                  ${t("start_plan", "Start")}</button>`
+            : isQuoted(feature)
+            ? `<a class="add-btn" href="/p/build">
+                 ${t("get_a_quote", "Get a quote")}</a>`
             : `<button class="add-btn" data-add="${feature.id}">
                  ${t("add_to_cart", "Add")}</button>`}
         </div>
@@ -453,6 +456,9 @@ function drawGrid() {
           ${isPlan(p)
             ? `<button class="add-btn" data-plan="${p.id}">
                  ${t("start_plan", "Start")}</button>`
+            : isQuoted(p)
+            ? `<a class="add-btn" href="/p/build">
+                 ${t("get_a_quote", "Get a quote")}</a>`
             : `<button class="add-btn" data-add="${p.id}">
                  ${t("add_to_cart", "Add")}</button>`}
         </div>
@@ -1454,9 +1460,14 @@ $("#account-btn").onclick = openAccount;
    period attached, its button starts a subscription, and it needs a signed-in
    customer because somebody has to be the one being billed. */
 const isPlan = (p) => !!p.billing;
+/* Priced, but not bought blind. A build that starts at $18,000 is scoped
+   before anyone pays for it, so the card shows the figure and opens the
+   conversation rather than dropping it in a cart. */
+const isQuoted = (p) => !!p.quote;
 const planPrice = (p) => `${money(p.price_cents)}<small
   class="per">/${p.billing === "month" ? "mo" : p.billing}</small>`;
 const priceOf = (p) => isPlan(p) ? planPrice(p)
+  : isQuoted(p) ? `${t("price_from", "from")} ${money(p.price_cents)}`
   : money(p.variants.length ? p.variants[0].price_cents : p.price_cents);
 
 async function startPlan(pid) {

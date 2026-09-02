@@ -957,6 +957,9 @@ def catalog(con=Depends(get_con)):
         # which is a different button, a different price line, and a
         # different checkout.
         p["billing"] = md.get("billing", "")
+        # Priced, but scoped before it is sold: the card shows where the
+        # rung starts and opens the conversation instead of a cart.
+        p["quote"] = md.get("quote", "") == "1"
         p["note"] = md.get("note", "")
         p["ingredients"] = md.get("ingredients", "")
         p["badge"] = md.get("badge", "")

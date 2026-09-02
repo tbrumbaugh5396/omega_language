@@ -326,12 +326,12 @@ body.client .modebtn{cursor:default;opacity:.8}
     <h2>Packaged tiers <span>the upgrade, not the escape hatch</span></h2>
     <div class="body">
       <div class="row">
-        <label class="k">Starter · Pro · Scale</label>
+        <label class="k">Basic · Pro · Scale</label>
         <input type="number" id="tStarter" value="200" class="tiny">
         <input type="number" id="tPro" value="400" class="tiny">
         <input type="number" id="tScale" value="700" class="tiny">
       </div>
-      <p class="hint">A tier is only offered when it covers every selected capability. Starter carries Selling, Payments, Workforce and Comms; Pro adds Inventory, Warehouse, CRM, Marketing and Subscriptions; Scale adds Distribution, Production, Sourcing, Events, Affiliates, Intelligence, Automation and API. Learning, Fundraising and the Finance stack sit outside all three, so those clients buy boxes — which is the honest answer, not a gap.</p>
+      <p class="hint">A tier is only offered when it covers every selected capability. Basic carries Selling, Payments, Workforce and Comms; Pro adds Inventory, Warehouse, CRM, Marketing and Subscriptions; Scale adds Distribution, Production, Sourcing, Events, Affiliates, Intelligence, Automation and API. Learning, Fundraising and the Finance stack sit outside all three, so those clients buy boxes — which is the honest answer, not a gap.</p>
     </div>
   </div>
 
@@ -396,7 +396,7 @@ body.client .modebtn{cursor:default;opacity:.8}
         <label class="k" for="locRate" style="flex:none;min-width:0;color:var(--cost)">at</label><input type="number" id="locRate" value="29" class="tiny"></div>
       <div class="row"><label class="k" for="seats">Staff seats</label><input type="number" id="seats" min="1" value="5">
         <label class="k" for="seatRate" style="flex:none;min-width:0;color:var(--cost)">at</label><input type="number" id="seatRate" value="7" class="tiny"></div>
-      <p class="hint" data-internal>À la carte has no stated allowance in the price book. This bench assumes Starter's (1 location, 5 seats) and bills the overage rates above — an assumption, not a quote.</p>
+      <p class="hint" data-internal>À la carte has no stated allowance in the price book. This bench assumes Basic's (1 location, 5 seats) and bills the overage rates above — an assumption, not a quote.</p>
       <p class="hint" data-client>Your plan includes 1 location and 5 staff seats. Customers, students, donors and affiliates are always free — you're only counted for people who sign in to run the business.</p>
     </div>
   </div>
@@ -622,7 +622,7 @@ const INFRA_DEFAULTS=[
 ];
 
 const TIERS=[
- {id:'starter',n:'Starter',locs:1, seats:5, botTurns:0,    video:0,    voice:0,   email:10000, sms:0,   trans:0,
+ {id:'starter',n:'Basic',locs:1, seats:5, botTurns:0,    video:0,    voice:0,   email:10000, sms:0,   trans:0,
   covers:['selling','payments','workforce','comms']},
  {id:'pro',    n:'Pro',    locs:3, seats:20,botTurns:5000, video:0,    voice:0,   email:50000, sms:0,   trans:0,
   covers:['selling','payments','workforce','comms','inventory','warehouse','crm','marketing','subs']},

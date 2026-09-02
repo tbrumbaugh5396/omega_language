@@ -98,9 +98,9 @@ def _money(cell: str) -> int:
 def tiers() -> list:
     """The three packaged plans — §6, with what each covers."""
     src = _section("6. Packaged tiers", _text())
-    t = _column_table(src, ["Starter", "Pro", "Scale"])
+    t = _column_table(src, ["Basic", "Pro", "Scale"])
     out = []
-    for name in ("Starter", "Pro", "Scale"):
+    for name in ("Basic", "Pro", "Scale"):
         row = t[name]
         out.append({
             "name": name, "price": _money(row.get("Monthly", "")),
@@ -145,6 +145,26 @@ def builds() -> list:
                     "price": int(m.group(2).replace(",", ""))})
     if len(out) != 4:
         raise ValueError("price book: the build ladder did not parse")
+    return out
+
+
+def white_label() -> list:
+    """§8 — the four levels of taking our name off it. Parsed like every
+    other price, so the shop and the bench cannot quote a licence the book
+    does not sell."""
+    src = _section("8. White-labelling", _text())
+    out = []
+    for m in re.finditer(
+            r"^\| \*\*(None|Unbranded|Branded install|Full white-label)"
+            r"\*\* \| \*?\*?\$([\d,]+)\*?\*? \| (—|\$[\d,]+) \|"
+            r" ([^|]+) \|", src, re.M):
+        out.append({"name": m.group(1),
+                    "price": int(m.group(2).replace(",", "")),
+                    "setup": 0 if m.group(3) == "—"
+                    else int(m.group(3).lstrip("$").replace(",", "")),
+                    "gets": m.group(4).strip()})
+    if len(out) != 4:
+        raise ValueError("price book: the white-label ladder did not parse")
     return out
 
 

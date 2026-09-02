@@ -171,7 +171,7 @@ offered when it covers every capability the client needs**, and it is priced
 *above* the equivalent menu at a single location — it buys headroom, not a
 discount.
 
-| | **Starter** | **Pro** | **Scale** |
+| | **Basic** | **Pro** | **Scale** |
 |---|---|---|---|
 | **Monthly** | **$200** | **$400** | **$700** |
 | Locations | 1 | 3 | 10 |
@@ -264,7 +264,7 @@ students, donors and affiliates are always free — they are the point of the
 software, not a cost centre.
 
 The menu's included allowance is an **assumption**, not a recorded decision:
-v1 never stated one. Starter's figures are used. Write this down properly.
+v1 never stated one. Basic's figures are used. Write this down properly.
 
 ---
 

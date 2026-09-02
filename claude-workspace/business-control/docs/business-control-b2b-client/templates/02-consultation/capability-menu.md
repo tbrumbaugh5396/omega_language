@@ -193,7 +193,7 @@ If a configuration is more thought than you want to give it, three flat plans
 cover the commerce shapes. A plan is priced above the equivalent menu at one
 location on purpose — it buys headroom to grow into, not a discount.
 
-| | **Starter** | **Pro** | **Scale** |
+| | **Basic** | **Pro** | **Scale** |
 |---|---|---|---|
 | **Monthly — platform** | **$200** | **$400** | **$700** |
 | Locations | 1 | 3 | 10 |
@@ -210,7 +210,7 @@ any of those, build from the menu above — that is the honest answer, not a
 gap: a commerce plan that quietly included a learning platform would be a
 plan nobody could price.
 
-**Selected plan:** ☐ Starter ☐ Pro ☐ Scale ☐ None — I'll pick capabilities
+**Selected plan:** ☐ Basic ☐ Pro ☐ Scale ☐ None — I'll pick capabilities
 
 ---
 

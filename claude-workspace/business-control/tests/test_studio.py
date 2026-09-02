@@ -436,14 +436,14 @@ ok(any(x["name"] == "Parked Smoke" for x in _arl()["engagements"]),
 
 # --- the package picker speaks the price book --------------------------------
 _tl = c.get("/api/store/admin/engagements", headers=A).json()["tiers"]
-ok([t["name"] for t in _tl] == ["Starter", "Pro", "Scale"]
+ok([t["name"] for t in _tl] == ["Basic", "Pro", "Scale"]
    and [t["price"] for t in _tl] == [200, 400, 700],
    "the client form's package options ARE the book's tiers — names, "
    "prices and scale from one parse, never a lettered mystery")
 _pj = (Path(__file__).parent.parent
        / "src/erp/frontend/app/09-clients.js").read_text(encoding="utf-8")
 ok('<select id="ef-pkg">' in _pj and "custom scope, no packaged tier" in _pj
-   and 'A: "Starter", B: "Pro", C: "Scale"' in _pj
+   and 'A: "Basic", B: "Pro", C: "Scale"' in _pj
    and "(as recorded)" in _pj,
    "the picker offers the tiers descriptively, maps the legacy letters "
    "onto them in order, and keeps an off-book value visible rather than "
@@ -1311,7 +1311,7 @@ ok('nm:"Platform Core",price:50,' in _deck
    and _deck.count("price:200,") >= 1 and "price:400," in _deck
    and "price:700," in _deck and "mrr:200" in _deck and "mrr:400" in _deck
    and "mrr:700" in _deck
-   and '"starter","Starter",200,' in _deck
+   and '"starter","Basic",200,' in _deck
    and '"pro","Pro",400,' in _deck and '"scale","Scale",700,' in _deck,
    "core and the tier prices agree across all three of the deck's models — "
    "quote builder, cluster planner and tier cards")

@@ -49,7 +49,7 @@ THEME = {
 }
 
 # The plans, tinted so the stand-in art tells them apart at a glance.
-TIER_COLOUR = {"Starter": "#4634d9", "Pro": "#0d8f7a", "Scale": "#b8431f"}
+TIER_COLOUR = {"Basic": "#4634d9", "Pro": "#0d8f7a", "Scale": "#b8431f"}
 CARE_COLOUR = {"Essential": "#6b7280", "Standard": "#4634d9",
                "Priority": "#b8431f"}
 
@@ -386,16 +386,49 @@ def products() -> list:
                    if c["included"] not in ("—", "") else
                    "No included content-change hours."),
         })
-    setup = next(b for b in pb.builds() if b["name"] == "Guided setup")
-    out.append({
-        "sku": "BUILD-GUIDED", "name": setup["name"], "category": "Getting started",
-        "price_cents": setup["price"] * 100, "colour": "#0d8f7a",
-        "description":
+    # The whole build ladder, not just the bottom rung. A $40,000 build is
+    # not an add-to-cart — but leaving it off the menu entirely means the
+    # only way to learn what we do is to ask, which is the opposite of a
+    # price book. So every rung is listed, and the ones that need a
+    # conversation say so instead of showing a button.
+    BUILD_NOTE = {
+        "Guided setup":
             "We stand your install up, import what you have, configure the "
             "capabilities you picked and walk your team through it. One "
-            "time. The larger builds are quoted after discovery — they are "
-            "not something to buy blind.",
-    })
+            "time, about a week.",
+        "Launch build":
+            "Your theme and brand tokens, the sections your pages need, "
+            "and your data migrated in. About two weeks.",
+        "Custom build":
+            "Bespoke sections, motion, and the integrations your business "
+            "actually runs on. About six weeks.",
+        "Flagship":
+            "Brand and build together, motion system included — the whole "
+            "thing designed from scratch. About ten weeks.",
+    }
+    for b in pb.builds():
+        quoted = b["name"] != "Guided setup"
+        out.append({
+            "sku": f"BUILD-{b['name'].split()[0].upper()}",
+            "name": b["name"], "category": "Website builds",
+            "price_cents": b["price"] * 100,
+            "colour": "#0d8f7a", "quote": quoted,
+            "description": BUILD_NOTE[b["name"]] + (
+                " Scoped and quoted after discovery — the figure here is "
+                "where this rung starts." if quoted else ""),
+        })
+    # Taking our name off it is a licence, not a fork, and it is sold.
+    for w in pb.white_label():
+        if not w["price"]:
+            continue                      # 'None' is the default, not a sale
+        out.append({
+            "sku": f"WL-{w['name'].split()[0].upper()}",
+            "name": f"White-label — {w['name']}", "billing": "month",
+            "category": "White-labelling", "price_cents": w["price"] * 100,
+            "colour": "#7a4bd0",
+            "description": w["gets"].rstrip(".") + "."
+            + (f" One-time setup ${w['setup']:,}." if w["setup"] else ""),
+        })
     return out
 
 
@@ -539,7 +572,8 @@ def seed(con, force: bool) -> dict:
     con.execute("INSERT OR REPLACE INTO store_meta(k,v)"
                 " VALUES('partner_pages',?)", (json.dumps(PARTNER_PAGES),))
 
-    for p in products():
+    prods = products()
+    for p in prods:
         row = con.execute("SELECT id FROM products WHERE sku=?",
                           (p["sku"],)).fetchone()
         if row:
@@ -571,7 +605,28 @@ def seed(con, force: bool) -> dict:
         con.execute("INSERT OR REPLACE INTO store_product_meta"
                     "(product_id,k,v) VALUES(?,'billing',?)",
                     (pid, p.get("billing", "")))
+        # Some work is priced but not bought blind: the card shows where
+        # the rung starts and sends you to the conversation instead of a
+        # cart. Listed rather than hidden — a menu you cannot read is not
+        # a price book.
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,'quote',?)",
+                    (pid, "1" if p.get("quote") else ""))
         n["products"] += 1
+
+    # A tier renamed in the book leaves its old row behind — 'Starter plan'
+    # sitting in the shop beside 'Basic plan', both for sale, both real to
+    # a customer. What this script owns, it owns completely: the rows it
+    # would have written and no longer does are retired. Deactivated, not
+    # deleted, because somebody may already have bought one.
+    mine = tuple(p["sku"] for p in prods)
+    stale = [r[0] for r in con.execute(
+        "SELECT sku FROM products WHERE active=1 AND ("
+        " sku LIKE 'PLAN-%' OR sku LIKE 'CARE-%' OR sku LIKE 'BUILD-%'"
+        " OR sku LIKE 'WL-%')").fetchall() if r[0] not in mine]
+    for sku in stale:
+        con.execute("UPDATE products SET active=0 WHERE sku=?", (sku,))
+    n["retired"] = len(stale)
 
     for slug, secs in (("home", home_sections()),
                        ("pricing", pricing_sections()),
@@ -637,7 +692,9 @@ def main() -> int:
     finally:
         tenancy.CURRENT.reset(tok)
     print(f"seeded {tid}: {n['products']} products, {n['sections']} sections "
-          f"across {n['pages'] + 1} pages, {n['menus']} menu links")
+          f"across {n['pages'] + 1} pages, {n['menus']} menu links"
+          + (f", {n['retired']} renamed row(s) retired"
+             if n.get("retired") else ""))
     print("  the numbers came from docs/product/price-book.md — re-run after "
           "a price change")
     return 0

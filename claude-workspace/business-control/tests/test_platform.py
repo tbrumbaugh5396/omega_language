@@ -225,6 +225,11 @@ ok(_pb.core_price() == 50
    and [c["price"] for c in _pb.care_plans()] == [150, 350, 750],
    "core, tiers and care plans come out of the same document the bench and "
    "the deck are held to")
+_wl = {w["name"]: w for w in _pb.white_label()}
+ok(_wl["Unbranded"]["price"] == 50 and _wl["Branded install"]["setup"] == 500
+   and _wl["Full white-label"]["price"] == 200 and _wl["None"]["price"] == 0,
+   "the white-label ladder parses out of the book too — it is sold, so it "
+   "is priced from the same table as everything else")
 _bk = {b["name"]: b["price"] for b in _pb.builds()}
 ok(_bk["Guided setup"] == 500 and _bk["Flagship"] == 40000,
    "and the build ladder, so the shop cannot quietly reprice a build")
@@ -252,9 +257,24 @@ ok(not _leak,
 
 _cat = c.get("/api/store/catalog", headers=HA).json()["products"]
 _names = {p["name"]: p for p in _cat}
-ok(_names["Starter plan"]["price_cents"] == 20000
+ok(_names["Basic plan"]["price_cents"] == 20000
    and _names["Priority care"]["price_cents"] == 75000,
    "the plans are buyable at the book's prices")
+ok(all(n in _names for n in ("Guided setup", "Launch build", "Custom build",
+                             "Flagship")),
+   "and the WHOLE website ladder is on the shelf, not just the bottom "
+   "rung — a menu you cannot read is not a price book")
+ok(all(f"White-label — {n}" in _names
+       for n in ("Unbranded", "Branded install", "Full white-label")),
+   "so is taking our name off it, which is sold and was never listed")
+ok(_names["Flagship"]["quote"] and not _names["Guided setup"]["quote"]
+   and not _names["Basic plan"]["quote"],
+   "a forty-thousand-dollar build is priced but not bought blind: the "
+   "card says where the rung starts and opens the conversation, while "
+   "the things you really can buy keep their button")
+ok("Starter plan" not in _names,
+   "and a tier renamed in the book does not leave its old row for sale "
+   "beside the new one — the seed retires what it no longer writes")
 ok(sum(1 for p in _cat if p["featured"]) == 1
    and _names["Pro plan"]["featured"],
    "exactly one product stands in the hero, and it is the one chosen — the "

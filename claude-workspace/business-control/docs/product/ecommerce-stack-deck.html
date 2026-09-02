@@ -157,13 +157,13 @@ a{color:var(--ac2)}
  <tr><td>Email (SES / Postmark)</td><td>$1–15 /mo</td><td>~$0.10 per 1k sends on SES</td></tr>
  <tr><td>Push · QR · chat/video</td><td>$0</td><td>built-in (Web Push, WebRTC peer-to-peer)</td></tr>
  <tr><td>Offsite backups</td><td>$1–5 /mo</td><td>B2/S3 sync of data/backups</td></tr>
- <tr><td><b>Fixed floor</b></td><td><b>≈ $50–85 /mo</b></td><td>≈ one Starter seat covers infra for many tenants</td></tr></table>
+ <tr><td><b>Fixed floor</b></td><td><b>≈ $50–85 /mo</b></td><td>≈ one Basic seat covers infra for many tenants</td></tr></table>
  <p><b>How to structure pay:</b> <span class="dim">flat monthly tiers (ops
  software should be predictable — no % of GMV; the payment % already goes to
  Shopify/Stripe). Add-ons: +$29/mo per extra location, email/SMS volume at
  cost+margin. Annual = 2 months free. 14-day trial, card up front. Gross
  margin at Pro ≈ 97% once a VPS carries ~10 tenants.
- <b>Support ladder:</b> email (Starter) · priority chat (Pro) · dedicated +
+ <b>Support ladder:</b> email (Basic) · priority chat (Pro) · dedicated +
  onboarding call (Scale). <b>Services revenue:</b> paid setup & data migration
  $500 one-time (waived on annual) + custom integrations billed — services run
  10–20% of revenue in this category.</span></p>
@@ -399,7 +399,7 @@ a{color:var(--ac2)}
   <div class="card" style="border-color:#6c00bf"><b>Why it's a tier driver</b>
    <p class="dim" style="font-size:12.5px">Treasury only matters once there's
    money to manage — which makes it a natural <b>Scale-tier</b> unlock, sold
-   to the exact customers who have outgrown Starter pricing. It also brings
+   to the exact customers who have outgrown Basic pricing. It also brings
    the CFO into the account: the finance seat is the hardest one to displace
    and the least likely to churn. Depends on <code>Finance</code>, which
    depends on <code>Accounting</code> — so it drags two boxes with it.</p></div>
@@ -548,7 +548,7 @@ a{color:var(--ac2)}
    can do and theirs structurally cannot.</p></div>
   <div class="card" style="border-color:#6c00bf"><b>Why it drives tiers</b>
    <p class="dim" style="font-size:12.5px">Rule count and run volume are clean,
-   honest meters — Starter gets a handful of prebuilt rules, Pro authors its
+   honest meters — Basic gets a handful of prebuilt rules, Pro authors its
    own, Scale gets approval chains and unlimited runs. It's also the
    stickiest feature in the product: a business with forty rules encoding how
    it actually operates does not migrate. <b>Automation is the retention
@@ -953,7 +953,7 @@ a{color:var(--ac2)}
   <text x="495" y="154" text-anchor="middle" font-size="12" font-weight="700" fill="#282828">Tenant · brand B</text>
   <text x="495" y="172" text-anchor="middle" font-size="10.5" fill="#a86a08">tenants/B/app.db</text>
   <text x="495" y="190" text-anchor="middle" font-size="10" fill="#686058">separate legal entity</text>
-  <text x="495" y="206" text-anchor="middle" font-size="10" fill="#686058">Starter · 1 location · 5 seats</text>
+  <text x="495" y="206" text-anchor="middle" font-size="10" fill="#686058">Basic · 1 location · 5 seats</text>
   <rect x="625" y="80" width="220" height="86" rx="10" fill="#ffffff" stroke="#f0a020"
    stroke-width="2" stroke-dasharray="5 4"/>
   <text x="735" y="102" text-anchor="middle" font-size="12" font-weight="700" fill="#282828">Tenant · franchisee C</text>
@@ -999,7 +999,7 @@ a{color:var(--ac2)}
  suites below — badge-colored by tier — are what those tiers actually buy.</p>
  <div id="erp-map" style="overflow-x:auto"></div>
  <p class="dim">Module suites badge-colored by product tier
- (<span style="color:#a86a08;font-weight:700">Starter</span> ·
+ (<span style="color:#a86a08;font-weight:700">Basic</span> ·
  <span style="color:#c01060;font-weight:700">Pro</span> ·
  <span style="color:#6d5aa8;font-weight:700">Scale</span>) —
  the tier map, matching the Tiers slide.</p>
@@ -1059,7 +1059,7 @@ a{color:var(--ac2)}
  <h2>Feature costs — pick a tier, tune the volumes, read the quote</h2>
  <div class="presets" style="margin-bottom:6px">
   <button class="btn" id="qtb-starter" style="background:#fff;color:#282828;border:2px solid #f0a020"
-   onclick="qbTierSet('starter')">Starter $200</button>
+   onclick="qbTierSet('starter')">Basic $200</button>
   <button class="btn" id="qtb-pro" style="background:#fff;color:#282828;border:2px solid #e01878"
    onclick="qbTierSet('pro')">★ Pro $400</button>
   <button class="btn" id="qtb-scale" style="background:#fff;color:#282828;border:2px solid #9888c0"
@@ -1274,7 +1274,7 @@ a{color:var(--ac2)}
   const rows=[["Current volumes (builder above)",qSnap()],...qScenarios.map(s=>[s.name,s.snap])];
   cmpHost.innerHTML=editors+
    `<table><tr><th>scenario${qNp?' <span style="font-weight:400;font-size:10px">(nonprofit −30%)</span>':""}</th>
-    <th style="background:#f0a020;color:#282828">Starter $${npPrice(QTIERS.starter.price)}</th>
+    <th style="background:#f0a020;color:#282828">Basic $${npPrice(QTIERS.starter.price)}</th>
     <th style="background:#e01878;color:#ffffff">Pro $${npPrice(QTIERS.pro.price)}</th>
     <th style="background:#9888c0;color:#ffffff">Scale $${npPrice(QTIERS.scale.price)}</th>
     <th>best plan</th></tr>`+
@@ -1610,7 +1610,7 @@ a{color:var(--ac2)}
  const XQ_SCALE={loc:{nm:"Locations",incl:1,per:29,def:1},
   seat:{nm:"Staff seats",incl:5,per:7,def:5}};
  const XQ_TIERS=[
-  {id:"starter",nm:"Starter",price:200,loc:1,seat:5},
+  {id:"starter",nm:"Basic",price:200,loc:1,seat:5},
   {id:"pro",nm:"Pro",price:400,loc:3,seat:20},
   {id:"scale",nm:"Scale",price:700,loc:10,seat:75}];
  // Services: a one-time build, plus creative as a monthly subscription.
@@ -1964,7 +1964,7 @@ a{color:var(--ac2)}
  <table style="margin-top:6px">
   <tr><th>What one client paid for</th><th>What shipped to everyone</th><th>Who pays for it now</th></tr>
   <tr><td>A bespoke “ingredients &amp; sourcing” page</td>
-   <td><b>Feature-columns section</b> + rich-text section</td><td>every tenant on Starter+</td></tr>
+   <td><b>Feature-columns section</b> + rich-text section</td><td>every tenant on Basic+</td></tr>
   <tr><td>Scroll-triggered hero for a launch campaign</td>
    <td><b>Motion presets</b> on every section type</td><td>every tenant, every page</td></tr>
   <tr><td>A subscriber “skip this month” portal</td>
@@ -2844,10 +2844,10 @@ const SUITES=[
  ["Intelligence","SCALE","#9888c0",["Funnel · drop-off detection","P&L · regional analytics","HQ game view · playbook","Achievements · staffing"]],
 ];
 const TIERS_UI=[
- ["starter","Starter",200,"#f0a020","own","1 location · 5 staff seats",
+ ["starter","Basic",200,"#f0a020","own","1 location · 5 staff seats",
   "Commerce Core + Workforce: shop, orders, promos/QR, time clock & kiosk, jobs, timesheets. The corner-store tier. Includes 1 location and 5 staff seats; +$29/location, +$7/seat beyond."],
  ["pro","Pro",400,"#e01878","warn","3 locations · 20 seats",
-  "Everything in Starter + Operations & CRM: inventory, pick lists, routes & fleet, box cycles, outreach pipeline, live chat/video support, push. The growing-brand tier. Includes 3 locations and 20 staff seats."],
+  "Everything in Basic + Operations & CRM: inventory, pick lists, routes & fleet, box cycles, outreach pipeline, live chat/video support, push. The growing-brand tier. Includes 3 locations and 20 staff seats."],
  ["scale","Scale",700,"#9888c0","rent","10 locations · 75 seats · API",
   "Everything in Pro + Growth & Intelligence: email playbooks, A/B, pixels, affiliates, funnel/P&L/HQ, 1099 contractors, webhooks/API, white-label. Includes 10 locations and 75 staff seats."]];
 // Seats/locations are the expansion levers: included allowances per tier,
@@ -2966,7 +2966,7 @@ const roleState={};
 ROLES.forEach(r=>{if(r[2]==="roadmap")roleState[r[0]]=1;});
 function renderRoles(){
  const host=document.getElementById("role-board");if(!host)return;
- const cols=[["starter","Starter"],["pro","Pro"],["scale","Scale"],["roadmap","Roadmap"]];
+ const cols=[["starter","Basic"],["pro","Pro"],["scale","Scale"],["roadmap","Roadmap"]];
  const card=([id,nm,tier,ours,integ,vert])=>{
   const st=roleState[id]??0,tc=TCOL[tier]||"#a09888";
   const lbl=["ADOPT OURS","INTEGRATE YOURS","SKIPPED"][st];
