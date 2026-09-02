@@ -116,6 +116,21 @@ Copy `data/backups/` off the server periodically (rsync/rclone) — a backup on 
 - Re-print shelf/packaging QRs — they now encode the public URL.
 - The LAN start commands still work on your Mac for a local copy; keep the production `data/` and your local `data/` mentally separate (backups tell you which is which).
 
+**One-off repair, if you generated documents before 2026-09-02.** Client
+paperwork used to pre-fill the generic blanks `[X]` and `[NAME]` from the
+client record, which wrote the same number (and the same person) into
+every one of them — a proposal whose three options and every add-on all
+quoted one figure. Generating no longer does that. To reopen the blanks a
+stamp landed on, in unsigned documents only:
+
+```bash
+.venv/bin/python scripts/unstamp_generic_blanks.py           # look first
+.venv/bin/python scripts/unstamp_generic_blanks.py --apply
+```
+
+It never touches a signed document, and leaves alone any blank where a
+person typed something of their own.
+
 ## The fleet, publicly: a website from a form
 
 With one public box configured this way, standing up a client IS handing

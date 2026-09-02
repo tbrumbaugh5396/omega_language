@@ -223,14 +223,39 @@ def _matches(text: str):
         yield m
 
 
+def occurrence_keys(text: str) -> list:
+    """One key per blank, in source order.
+
+    A record token is the same fact wherever it appears — [CLIENT] is the
+    client on page one and on page nine, and answering it once answers it
+    everywhere. Everything else is a *blank*: a proposal that says $[X]
+    for option A, option B, a photography add-on and an hourly rate is
+    asking four different questions with one lazy label, and they must not
+    move together. So repeats of a non-record token are numbered — X,
+    X#2, X#3 — and each takes its own answer.
+    """
+    seen, out = {}, []
+    for m in _matches(text):
+        tok, _ = token_value(m)
+        base = tok.strip()
+        if base in GLOBAL_TOKENS:
+            out.append(tok)
+            continue
+        n = seen.get(base, 0) + 1
+        seen[base] = n
+        out.append(tok if n == 1 else f"{tok}#{n}")
+    return out
+
+
 def placeholders(text: str) -> list:
     """The blanks still to fill — a blank that has an answer is not one."""
     seen, out = set(), []
-    for m in _matches(text):
+    keys = occurrence_keys(text)
+    for k, m in zip(keys, _matches(text)):
         tok, val = token_value(m)
-        if val is None and tok not in seen:
-            seen.add(tok)
-            out.append(tok)
+        if val is None and k not in seen:
+            seen.add(k)
+            out.append(k)
     return out
 
 
@@ -240,13 +265,18 @@ def clean_value(v) -> str:
 
 
 def fill(text: str, fills: dict) -> str:
-    """Answer each named blank everywhere it appears, keeping the name
-    beside the answer so it stays a field: visible as one when reading, and
-    changeable again later."""
+    """Answer each blank, keeping the name beside the answer so it stays a
+    field: visible as one when reading, and changeable again later.
+
+    A record token is answered everywhere it appears; every other blank is
+    answered on its own, by occurrence key (see occurrence_keys) — four
+    $[X] blanks in one proposal are four prices, not one price repeated.
+    """
     out, last = [], 0
-    for m in _matches(text):
+    keys = occurrence_keys(text)
+    for k, m in zip(keys, _matches(text)):
         tok, _ = token_value(m)
-        val = clean_value((fills or {}).get(tok, ""))
+        val = clean_value((fills or {}).get(k, ""))
         if val:
             out.append(text[last:m.start()])
             out.append(f"[{tok}={val}]")
@@ -842,9 +872,14 @@ def marked_inner(title: str, body: str, field) -> str:
     region kind; meta is the token name or the region dict."""
     toks, regions = [], scan_regions(body)
     marks = []
-    for m in _matches(body):
+    # The blank's KEY, not just its label: a repeated non-record token is
+    # its own field each time it appears, so the editor must address them
+    # apart or typing a price into option A would rewrite option B.
+    keys = occurrence_keys(body)
+    for k, m in zip(keys, _matches(body)):
         marks.append(("T", len(toks), m.start(), m.end()))
-        toks.append(token_value(m))
+        tok, val = token_value(m)
+        toks.append((tok, val, k))
     for i, r in enumerate(regions):
         marks.append(("R", i, r["start"], r["end"]))
     for kind, i, a, z in sorted(marks, key=lambda x: -x[2]):
@@ -863,17 +898,19 @@ def editable_inner(title: str, body: str, suggestions: dict) -> str:
     """Every blank as something you type into."""
     def field(kind, i, meta):
         if kind == "token":
-            tok, have = meta
-            # what the document already says wins over what we'd suggest
+            tok, have, okey = meta
+            # what the document already says wins over what we'd suggest;
+            # a suggestion is offered to a blank ONCE — the repeats after
+            # it are different questions wearing the same label
             val = sect.esc(str(have if have is not None
-                               else suggestions.get(tok, "")))
+                               else suggestions.get(okey, "")))
             key = GLOBAL_TOKENS.get(tok.strip())
             # A record field, not a blank: the same everywhere it appears,
             # so it is marked and the editor keeps them all in step.
             g = f' data-global="{key}"' if key else ""
             return (f'<input class="ph{" filled" if val else ""}'
                     f'{" ph-global" if key else ""}"'
-                    f' data-tok="{sect.esc(tok)}"{g} value="{val}"'
+                    f' data-tok="{sect.esc(okey)}"{g} value="{val}"'
                     f' placeholder="{sect.esc(tok)}"'
                     f' size="{max(len(tok) + 2, 10)}">')
         if kind == "area":
@@ -941,7 +978,7 @@ def form_inner(title: str, body: str, gvals: dict | None = None) -> str:
     can tell the client's name from the sentence around it."""
     def field(kind, i, meta):
         if kind == "token":
-            tok, have = meta
+            tok, have = meta[0], meta[1]
             if have is None:
                 key = GLOBAL_TOKENS.get(tok.strip())
                 gv = str((gvals or {}).get(key or "", "")).strip()

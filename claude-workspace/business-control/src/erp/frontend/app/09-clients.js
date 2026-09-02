@@ -9,19 +9,27 @@ let DOCS = null;
 /* A token that lists its own values — [A / B / C], [Yes / No] — is a set
    of options, not a free blank; render it as a select. Everything else is
    optional by design: blank keeps the brackets. */
-function fillField(tok, suggestedVal) {
+function fillField(key, suggestedVal) {
+  // A blank's KEY may carry its occurrence — "X#3" is the third $[X] in
+  // the document, a different question from the first. Show the label a
+  // person recognises and say which one it is.
+  const hash = key.indexOf("#");
+  const tok = hash > 0 ? key.slice(0, hash) : key;
+  const nth = hash > 0 ? key.slice(hash + 1) : "";
   const parts = tok.split(" / ").map((x) => x.trim());
   const isChoice = parts.length >= 2 && parts.every(
     (x) => x && x.length <= 24 && !x.includes(":"));
-  const label = `<label>[${esc(tok)}]
+  const label = `<label>[${esc(tok)}]${nth
+    ? ` <span class="opt">the ${esc(nth)}${
+        nth === "2" ? "nd" : nth === "3" ? "rd" : "th"} one</span>` : ""}
     <span class="opt">optional</span></label>`;
   if (isChoice) {
-    return `${label}<select data-fill="${esc(tok)}">
+    return `${label}<select data-fill="${esc(key)}">
       <option value="">— leave the brackets —</option>
       ${parts.map((x) => `<option ${suggestedVal === x ? "selected" : ""}
         >${esc(x)}</option>`).join("")}</select>`;
   }
-  return `${label}<input data-fill="${esc(tok)}"
+  return `${label}<input data-fill="${esc(key)}"
     value="${esc(suggestedVal || "")}"
     placeholder="leave blank to keep the brackets">`;
 }
@@ -309,13 +317,15 @@ async function fillInDoc(did, title, after, anchor) {
           sizeTitle(e.target);
       });
       toks.forEach((inp) => inp.addEventListener("input", () => {
-        // a record field moves all of its twins, here as in the binder
-        toks.forEach((o) => {
-          const same = inp.dataset.global
-            ? o.dataset.global === inp.dataset.global
-            : (!o.dataset.global && o.dataset.tok === inp.dataset.tok);
-          if (o !== inp && same) o.value = inp.value;
-        });
+        // A RECORD field moves all of its twins, here as in the binder —
+        // the client is the client on every page. An ordinary blank does
+        // not: two $[X] boxes in one table are two prices, and typing
+        // into one used to overwrite the other.
+        if (inp.dataset.global)
+          toks.forEach((o) => {
+            if (o !== inp && o.dataset.global === inp.dataset.global)
+              o.value = inp.value;
+          });
         paint();
       }));
       areas.forEach((inp) => inp.addEventListener("input", paint));
@@ -451,14 +461,8 @@ async function binderEditMode(engId, e, anchor) {
           sign.onclick = () => signCard && signCard(card);
           card.insertBefore(sign, card.firstChild);
           card.addEventListener("input", (ev) => {
-            const inp = ev.target;
-            if (inp.dataset && inp.dataset.tok && !inp.dataset.global) {
-              card.querySelectorAll(
-                `input.ph[data-tok]`).forEach((o) => {
-                  if (o !== inp && o.dataset.tok === inp.dataset.tok)
-                    o.value = inp.value;
-                });
-            }
+            // record fields mirror across the whole binder (handled
+            // above); an ordinary blank answers only for itself
             paint(card);
           });
           paint(card);
@@ -1806,9 +1810,10 @@ async function renderEngagement(id) {
       const t = await api(`/api/store/admin/engagements/${id}/docs/${did}/blanks`);
       const field = (tok) => fillField(tok, t.suggested[tok]);
       modal(`<h3>Fill blanks — ${esc(t.title)}</h3>
-        <p class="dim">Each value fills its token everywhere it appears.
-          The document goes active on its own when the last bracket is
-          gone.</p>
+        <p class="dim">A record field fills everywhere it appears; every
+          other blank takes its own answer, even when two of them wear
+          the same label. The document goes active on its own when the
+          last bracket is gone.</p>
         ${t.placeholders.map(field).join("")}
         <div class="modal-foot">
           <button class="btn alt" id="fb-indoc" style="margin-right:auto"
@@ -1955,8 +1960,10 @@ async function engGenerate(id, path) {
     + encodeURIComponent(path));
   const field = (tok) => fillField(tok, t.suggested[tok]);
   modal(`<h3>Generate: ${esc(t.name)}</h3>
-    <p class="dim">Each value fills its token everywhere it appears. Blanks
-      stay bracketed — finish them in the document editor.</p>
+    <p class="dim">A record field — the client, the date — fills everywhere
+      it appears. Every other blank is its own: three prices under one
+      [X] label are three questions, asked separately. Blanks stay
+      bracketed — finish them in the document editor.</p>
     <label>Title</label><input id="gen-title" value="">
     <label>Side</label>
     <select id="gen-side">

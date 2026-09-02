@@ -684,12 +684,16 @@ def suggested_fills(e) -> dict:
                     if e["monthly_cents"] else "—"}
     if e["package"]:
         s["A / B / C"] = e["package"]
-    if e["value_cents"]:
-        s["X"] = f"{e['value_cents'] / 100:,.0f}"
     if e["approver_name"]:
-        s["NAME"] = e["approver_name"]
         s["APPROVER"] = e["approver_name"]
         s["NAME, EMAIL"] = f"{e['approver_name']}, {e['approver_email']}"
+    # [X] and [NAME] are NOT suggested. The kit uses them as generic
+    # blanks — [X] is a domain renewal on one page, an hourly rate on the
+    # next, an option price three times in one table; [NAME] is the client
+    # here and the person who requested a change order there. Stamping one
+    # record value into all of them fills a proposal with the same number
+    # in a dozen places, each of them wrong. A generic blank stays blank,
+    # and the person filling the form answers each one.
     if e["launch_target"]:
         s["LAUNCH DATE"] = e["launch_target"]
         s["LAUNCH TARGET"] = e["launch_target"]

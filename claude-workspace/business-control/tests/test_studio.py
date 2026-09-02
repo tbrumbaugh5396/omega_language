@@ -276,10 +276,39 @@ _td = c.get(f"/api/store/admin/engagements/{_eid}/template", headers=A,
             params={"path": "03-proposal/proposal-template.md"}).json()
 ok("CLIENT NAME" in _td["placeholders"] and "DATE" in _td["placeholders"],
    "placeholders are read out of the template's brackets")
-ok(_td["suggested"].get("CLIENT NAME") == "Smoke Test Client"
-   and _td["suggested"].get("X") == "12,000",
+ok(_td["suggested"].get("CLIENT NAME") == "Smoke Test Client",
    "and the engagement record pre-fills them — the proposal and the record "
-   "cannot disagree about the number, because both read the same row")
+   "cannot disagree about the client, because both read the same row")
+ok("X" not in _td["suggested"] and "NAME" not in _td["suggested"],
+   "but a GENERIC blank is never pre-filled from the record: the kit "
+   "writes $[X] for a domain renewal, an hourly rate and three option "
+   "prices, so stamping the client's figure into all of them filled a "
+   "proposal with one wrong number in a dozen places")
+ok(len([k for k in _td["placeholders"] if k == "X" or k.startswith("X#")])
+   > 1 and "X#2" in _td["placeholders"],
+   "and repeats of a generic blank are separate questions — X, X#2, X#3 — "
+   "because option A and option B are two prices, not one price twice")
+
+# each numbered blank takes its OWN answer
+_occ = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "03-proposal/proposal-template.md",
+    "title": "Occurrence Probe",
+    "fills": {"X": "5000", "X#2": "12000", "X#3": "22000"}}).json()
+_occl = c.get(f"/api/store/admin/engagements/{_eid}/docs/"
+              f"{_occ['doc_id']}/blanks", headers=A).json()["placeholders"]
+ok(not any(k in ("X", "X#2", "X#3") for k in _occl)
+   and "X#4" in _occl,
+   "three prices land in three boxes — the three answered are gone and the "
+   "fourth still waits, which is only possible if they are separate "
+   "fields rather than one label repeated")
+_one = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "03-proposal/proposal-template.md",
+    "title": "One Answer Probe", "fills": {"X": "5000"}}).json()
+_onel = c.get(f"/api/store/admin/engagements/{_eid}/docs/"
+              f"{_one['doc_id']}/blanks", headers=A).json()["placeholders"]
+ok("X" not in _onel and "X#2" in _onel,
+   "and answering the first one answers ONLY the first — the whole point: "
+   "typing option A's price must not rewrite option B's")
 
 _gen = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
     "template_path": "03-proposal/proposal-template.md",
@@ -1521,10 +1550,11 @@ ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
    "a signed document refuses the in-place editor for the same reason it "
    "refuses the form — its text is what was attested to")
 ok("function fillInDoc" in _ops and "fb-indoc" in _ops
-   and "dataset.tok === inp.dataset.tok" in _ops,
-   "the form offers the in-document road, and same-token fields type "
-   "together — the editor shows the one-value rule live instead of "
-   "surprising anyone at save")
+   and "dataset.tok === inp.dataset.tok" not in _ops
+   and 'o.dataset.global === inp.dataset.global' in _ops,
+   "the form offers the in-document road, and only RECORD fields type "
+   "together there — the client is the client on every page, while two "
+   "prices under one [X] label stay two prices as you type")
 
 # --- every kind of blank is fillable ---------------------------------------
 _g6 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
@@ -1693,6 +1723,10 @@ _bh2 = c.get(f"/api/store/admin/engagements/{_bt['id']}/binder.html",
 ok("site-photos.jpg" in _bh2 and "attachment, filed beside" in _bh2,
    "attachments are listed in the contents, filed beside the binder — a "
    "markdown PDF can't swallow a photograph, but it can say where it lives")
+ok("function occurrenceKeysProbe" not in _ops
+   and 'data-fill="' in _ops and "the ${esc(nth)}" in _ops,
+   "the fill form says WHICH one it is asking about — [X] and then 'the "
+   "2nd one', so a person answering four prices can see they are four")
 ok('id="ef-files"' in _ops and '"01-potential-customer"' in _ops
    and "bd-edit" in _ops,
    "the new-client form takes attachments, and the binder modal edits its "
