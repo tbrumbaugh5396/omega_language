@@ -2047,6 +2047,11 @@ ok('{ updateViaCache: "none" }' in _ops
    and '{ updateViaCache: "none" }' in _store_js2,
    "and both registrations refuse the HTTP cache outright — the worker is "
    "what ships the fix, so it cannot be the thing that arrives stale")
+ok("Every flavor" not in _store_js2 and "data-kindnav" in _store_js2
+   and '<div class="side-group">All products</div>' in _store_js2,
+   "the menu is the shop's own table of contents: All products, then one "
+   "lane per category, each its own section — not one wall of faces under "
+   "a heading inherited from a drinks brand")
 ok("kind-head" in _store_js2 and "CATALOG.kinds" in _store_js2
    and "kinds.length < 2" in _store_js2,
    "the shop groups its shelf by what things ARE, with each group's own "

@@ -340,7 +340,11 @@ function drawTabs() {
       flavs.push({ slug: p.flavour, name: pname(p), colour: flavourOf(p) });
     }
   }
-  const tabs = [{ slug: null, name: "All" },
+  const tabs = [{ slug: null, name: "All products" },
+    // What things ARE comes first: on a shelf selling plans, care, builds
+    // and licences, the kind is the filter a person reaches for.
+    ...(CATALOG.kinds || []).map((k) => ({ slug: "k:" + k.id, name: k.label,
+                                          colour: k.colour })),
     ...CATALOG.collections.map((c) => ({ slug: c.id, name: c.name })),
     ...flavs.map((f) => ({ slug: "f:" + f.slug, name: f.name, colour: f.colour }))];
   host.innerHTML = tabs.map((tb) =>
@@ -350,7 +354,8 @@ function drawTabs() {
       }${tb.name}</button>`).join("");
   host.querySelectorAll(".tab").forEach((b) => b.onclick = () => {
     const v = b.dataset.col;
-    activeCollection = v === "" ? null : (v.startsWith("f:") ? v : +v);
+    activeCollection = v === "" ? null
+      : (v.startsWith("f:") || v.startsWith("k:") ? v : +v);
     drawTabs(); drawGrid();
   });
 }
@@ -395,6 +400,10 @@ function drawGrid() {
            && activeCollection.startsWith("f:")) {
     const f = activeCollection.slice(2);
     prods = prods.filter((p) => p.flavour === f);
+  } else if (typeof activeCollection === "string"
+             && activeCollection.startsWith("k:")) {
+    const k = activeCollection.slice(2);
+    prods = prods.filter((p) => p.kind === k);
   } else {
     const col = CATALOG.collections.find(
       (c) => c.id === (activeCollection ?? pinned));
@@ -520,9 +529,16 @@ function drawSideMenu() {
   // Browse first: the shopper picks a lane, then sees the faces. Putting the
   // tiles above the filters made people scroll past the filters entirely.
   let html = `<div class="menu-headline">${t("shop_cta")}</div>` +
-    '<div class="side-group">Browse</div><div class="menu-cols">' +
-    `<a class="side-item" href="/#shop" data-close>${ico("bag", "ico ico-sm")}
-      All products</a>`;
+    '<div class="side-group">All products</div><div class="menu-cols">' +
+    `<a class="side-item" href="/#shop" data-close data-colnav="">${
+      ico("bag", "ico ico-sm")} Everything</a>`;
+  // Then the categories, each its own lane. A menu that lists what a shop
+  // sells is a menu you can shop from; one flat wall of faces is a wall.
+  for (const k of (CATALOG.kinds || [])) {
+    html += `<a class="side-item" href="/#shop" data-close
+      data-kindnav="${k.id}"><span class="swatch"
+      style="background:${k.colour}"></span> ${esc(k.label)}</a>`;
+  }
   for (const c of CATALOG.collections) {
     html += `<a class="side-item" href="/#shop" data-close
       data-colnav="${c.id}">${c.name}</a>`;
@@ -537,20 +553,39 @@ function drawSideMenu() {
         <div class="mt-copy"><b>${pname(kase)}</b>
         <span>${money(kase.price_cents)} · all four flavors</span></div></a>`;
   }
-  html += '<div class="side-group">Every flavor</div>' +
-    '<div class="menu-tiles">';
-  for (const p of CATALOG.products.filter((x) => !isCase(x))) {
-    html += `<a class="menu-tile" href="/product/${p.id}-${p.slug}"
-      style="--flavour:${flavourOf(p)}">
-      ${art(p, "art", false)}
-      <b>${pname(p)}</b>
-      <span>${money(p.variants.length
-        ? p.variants[0].price_cents : p.price_cents)}</span></a>`;
+  /* The faces, in their own sections. A shop with one kind of thing keeps
+     the single wall it always had — the heading is for telling groups
+     apart, and there is nothing to tell apart. */
+  const rest = CATALOG.products.filter((x) => !isCase(x));
+  const groups = (CATALOG.kinds || []).length > 1
+    ? CATALOG.kinds.map((k) => ({ ...k,
+        items: rest.filter((p) => p.kind === k.id) }))
+      .filter((g) => g.items.length)
+    : [{ id: "", label: "", colour: "", items: rest }];
+  for (const g of groups) {
+    if (g.label) {
+      html += `<div class="side-group" style="--kind:${g.colour}">
+        ${esc(g.label)}${g.note ? ` <small>${esc(g.note)}</small>` : ""}
+        </div>`;
+    }
+    html += '<div class="menu-tiles">';
+    for (const p of g.items) {
+      html += `<a class="menu-tile" href="/product/${p.id}-${p.slug}"
+        style="--flavour:${flavourOf(p)}">
+        ${art(p, "art", false)}
+        <b>${pname(p)}</b>
+        <span>${money(p.variants.length
+          ? p.variants[0].price_cents : p.price_cents)}</span></a>`;
+    }
+    html += "</div>";
   }
-  html += "</div>";
   host.innerHTML = html;
   host.querySelectorAll("[data-colnav]").forEach((a) => a.onclick = () => {
-    activeCollection = +a.dataset.colnav; drawTabs(); drawGrid();
+    activeCollection = a.dataset.colnav === "" ? null : +a.dataset.colnav;
+    drawTabs(); drawGrid();
+  });
+  host.querySelectorAll("[data-kindnav]").forEach((a) => a.onclick = () => {
+    activeCollection = "k:" + a.dataset.kindnav; drawTabs(); drawGrid();
   });
   host.querySelectorAll("[data-close]").forEach((a) =>
     a.addEventListener("click", closeMenus));

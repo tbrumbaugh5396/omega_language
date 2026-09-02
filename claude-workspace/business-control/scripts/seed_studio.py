@@ -48,10 +48,10 @@ THEME = {
     "art": "card",
 }
 
-# The plans, tinted so the stand-in art tells them apart at a glance.
-TIER_COLOUR = {"Basic": "#4634d9", "Pro": "#0d8f7a", "Scale": "#b8431f"}
-CARE_COLOUR = {"Essential": "#6b7280", "Standard": "#4634d9",
-               "Priority": "#b8431f"}
+# Colour says what a thing IS, not which rung it sits on. Tinting the
+# three plans apart from each other made Pro green and Care green — two
+# different answers in the same colour — so the kind's colour is the only
+# one now, and the price tells the rungs apart.
 
 
 def esc(v) -> str:
@@ -364,7 +364,6 @@ def products() -> list:
             "sku": f"PLAN-{t['name'].upper()}", "name": f"{t['name']} plan",
             "billing": "month", "kind": "plan",
             "category": "Plans", "price_cents": t["price"] * 100,
-            "colour": TIER_COLOUR[t["name"]],
             "description":
                 f"{t['locations']} location(s), {t['seats']} staff seats, "
                 f"{t['email']} emails a month. {lead}{covers}. Billed "
@@ -376,7 +375,6 @@ def products() -> list:
             "sku": f"CARE-{c['name'].upper()}", "name": f"{c['name']} care",
             "billing": "month", "kind": "care",
             "category": "Care", "price_cents": c["price"] * 100,
-            "colour": CARE_COLOUR[c["name"]],
             "description":
                 f"First response {c['response'].lower()}, defects to "
                 f"{c['defects']}, updates {c['updates'].lower()}. Managed "
@@ -656,21 +654,20 @@ def seed(con, force: bool) -> dict:
                 (slug, stype, json.dumps(settings), i))
             n["sections"] += 1
 
-    # Collections give the grid its tabs — a shop with plans, care and
-    # setup mixed into one wall makes the buyer do the sorting.
-    for pos, name in enumerate(("Plans", "Care", "Getting started")):
-        slug = name.lower().replace(" ", "-")
-        con.execute("INSERT OR IGNORE INTO collections(slug,name,position)"
-                    " VALUES(?,?,?)", (slug, name, pos))
-        cid = con.execute("SELECT id FROM collections WHERE slug=?",
-                          (slug,)).fetchone()[0]
-        con.execute("DELETE FROM collection_products WHERE collection_id=?",
-                    (cid,))
-        for r in con.execute("SELECT id FROM products WHERE category=?"
-                             " ORDER BY price_cents", (name,)).fetchall():
-            con.execute("INSERT INTO collection_products(collection_id,"
-                        "product_id) VALUES(?,?)", (cid, r[0]))
-        n["collections"] = n.get("collections", 0) + 1
+    # No seeded collections. Sorting the shelf is what a product's KIND
+    # does now — plans, care, builds, setups, labelling — and two category
+    # systems side by side means a chip row that says "Care" twice and a
+    # "Getting started" lane that empties itself the day a product moves.
+    # Collections stay a merchant's own tool for groupings the kinds do not
+    # express ("Black Friday"), so the ones seeded before are cleared here.
+    for slug in ("plans", "care", "getting-started"):
+        row = con.execute("SELECT id FROM collections WHERE slug=?",
+                          (slug,)).fetchone()
+        if row:
+            con.execute("DELETE FROM collection_products WHERE"
+                        " collection_id=?", (row[0],))
+            con.execute("DELETE FROM collections WHERE id=?", (row[0],))
+            n["collections"] = n.get("collections", 0) + 1
 
     con.execute("DELETE FROM store_menus")
     for loc, label, url, pos in MENUS:

@@ -213,7 +213,16 @@ svg.can { display: block; width: 100%; height: auto; }
   align-items: center; margin-bottom: 16px; }
 .side-head b { font-family: var(--display); font-size: 24px; font-weight: 600; }
 .side-group { margin: 22px 0 10px; font-size: 11.5px; letter-spacing: .14em;
-  text-transform: uppercase; color: var(--ink-3); font-weight: 700; }
+  text-transform: uppercase; color: var(--ink-3); font-weight: 700;
+  display: flex; align-items: baseline; gap: 8px; }
+/* A category heading wears its category's colour — the same one the shelf
+   and the back office use, so a lane is recognisable wherever it appears. */
+.side-group[style*="--kind"] { color: var(--ink); padding-left: 10px;
+  border-left: 3px solid var(--kind); }
+.side-group small { text-transform: none; letter-spacing: .01em;
+  font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
+.menu-cols .side-item .swatch { width: 9px; height: 9px; border-radius: 50%;
+  flex: none; }
 .side-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
   border-radius: var(--r-sm); font-weight: 500; font-size: 15px; }
 .side-item:hover { background: var(--lav-soft); }
