@@ -24,6 +24,7 @@ studio and platform found.
   PYTHONPATH=src .venv/bin/python tests/test_core.py             # same thing
 """
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -75,4 +76,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # The exit status is a gate: the pre-push hook refuses a push on it,
+    # and CI reads it. So it is decided HERE, from the results, and not
+    # left to interpreter shutdown — a failed flush at teardown exits 120
+    # of its own accord, which reads as "the suite failed" long after the
+    # suite has printed that every check passed. Flush what we wrote,
+    # then leave immediately with the status the run actually earned.
+    _code = main()
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except (BrokenPipeError, OSError):
+        pass
+    os._exit(_code)
