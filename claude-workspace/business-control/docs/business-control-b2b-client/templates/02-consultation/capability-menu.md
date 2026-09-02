@@ -181,9 +181,9 @@ branding reverts; nothing else does.
 | Level | Monthly | Setup | What it gets |
 |---|---|---|---|
 | **None** | $0 | — | Our mark stays in the footer and sign-in |
-| **Unbranded** | $49 | — | Our name removed; your logo and colours throughout; email from your address |
-| **Branded install** | $99 | $500 | + your own domain on all three surfaces; your icon on the installed app; authenticated sending domain; branded documents and portal |
-| **Full white-label** | $199 | $1,500 | + no reference to us anywhere reachable; support answered under your name; suitable for reselling onward |
+| **Unbranded** | $50 | — | Our name removed; your logo and colours throughout; email from your address |
+| **Branded install** | $100 | $500 | + your own domain on all three surfaces; your icon on the installed app; authenticated sending domain; branded documents and portal |
+| **Full white-label** | $200 | $1,500 | + no reference to us anywhere reachable; support answered under your name; suitable for reselling onward |
 
 ---
 
@@ -246,7 +246,7 @@ pages say it means.
 | Build | Once | What happens |
 |---|---|---|
 | **Self-serve** | $0 | You configure it yourself. The docs are good and we answer questions |
-| **Guided setup** | $499 | Your data imported, settings configured, launch checklist walked · [1] week |
+| **Guided setup** | $500 | Your data imported, settings configured, launch checklist walked · [1] week |
 | **Launch build** | $5,000 | Theme, brand tokens, sections, migration · [2] weeks |
 | **Custom build** | $18,000 | Bespoke sections, motion, integrations · [6] weeks |
 | **Flagship** | $40,000 | Brand and build together, motion system included · [10] weeks |

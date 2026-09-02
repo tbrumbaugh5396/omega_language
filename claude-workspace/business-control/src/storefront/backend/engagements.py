@@ -1201,6 +1201,11 @@ def engagement_detail(eid: int, u=Depends(admin_user), con=Depends(get_con)):
         _notes = d.pop("notes") or ""
         d["quote"] = _notes.startswith(QUOTE_NOTE)
         d["sow"] = _notes.startswith(SOW_NOTE)
+        # A document generated from a template can be read again from it:
+        # the row knowing lets the UI offer that, so a repriced menu can
+        # reach the copy this client actually holds.
+        d["kit"] = _notes[len(KIT_NOTE):] if _notes.startswith(KIT_NOTE) \
+            else ""
         d["has_body"] = bool(body.strip())
         # How much of the template is still a bracket. Shown on the row, so
         # "finished" is a number going to zero, not a feeling.
@@ -1834,6 +1839,64 @@ def doc_fill(eid: int, did: int, body: FillBody, u=Depends(admin_user),
         + (f" ({len(remaining)} left)" if remaining else " — complete"))
     con.commit()
     return {"unfilled": remaining}
+
+
+KIT_NOTE = "Generated from the kit: "
+
+
+@router.post("/api/store/admin/engagements/{eid}/docs/{did}/refresh-kit")
+def refresh_from_kit(eid: int, did: int, u=Depends(admin_user),
+                     con=Depends(get_con)):
+    """Re-render a generated document from today's template, keeping the
+    answers already on it.
+
+    A document generated from the kit is a SNAPSHOT: the client's copy of
+    the menu still quoted last month's plan prices long after the price
+    book was rounded, because nothing goes back and tells it. This does —
+    the template is read again, and every answer the document already
+    holds is put back in the blank it was in, so a repriced menu arrives
+    without losing a word anybody typed.
+
+    Refuses a signed document, because its text is what was attested to.
+    """
+    e = _eng_or_404(con, eid)
+    r = con.execute(
+        "SELECT d.id, d.title, d.body, d.notes FROM engagement_docs ed"
+        " JOIN documents d ON d.id=ed.doc_id"
+        " WHERE ed.engagement_id=? AND ed.doc_id=?", (eid, did)).fetchone()
+    if r is None:
+        raise HTTPException(404, "not filed under this client")
+    note = (r["notes"] or "")
+    if not note.startswith(KIT_NOTE):
+        raise HTTPException(400, "this document was not generated from a "
+                                 "template — there is nothing to re-read")
+    if con.execute("SELECT COUNT(*) n FROM document_signatures"
+                   " WHERE document_id=? AND status='signed'",
+                   (did,)).fetchone()["n"]:
+        raise HTTPException(400, "this document has been signed — its text "
+                                 "is what was attested to. Supersede it "
+                                 "rather than refreshing it")
+    rel = note[len(KIT_NOTE):].strip()
+    text = template_path(rel).read_text()
+
+    # The answers, by the key of the blank they sit in — so they land back
+    # where they were even though the template's words may have moved.
+    from .documents import occurrence_keys, _matches, token_value
+    kept = {}
+    for k, m in zip(occurrence_keys(r["body"] or ""),
+                    _matches(r["body"] or "")):
+        _, val = token_value(m)
+        if val is not None:
+            kept[k] = val
+    filled = fill(text, kept)
+    remaining = placeholders(filled)
+    con.execute("UPDATE documents SET body=?, status=? WHERE id=?",
+                (filled, "draft" if remaining else "active", did))
+    log(con, eid, u["name"],
+        f"refreshed '{r['title']}' from {rel}"
+        + (f" ({len(remaining)} blank(s) open)" if remaining else ""))
+    con.commit()
+    return {"ok": True, "kept": len(kept), "unfilled": remaining}
 
 
 class AttachBody(BaseModel):

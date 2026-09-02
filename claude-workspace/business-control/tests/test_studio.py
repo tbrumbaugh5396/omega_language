@@ -1549,6 +1549,40 @@ ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
          "/editable", headers=A).status_code == 400,
    "a signed document refuses the in-place editor for the same reason it "
    "refuses the form — its text is what was attested to")
+# --- a generated document can be read again from its template ----------------
+# The client's copy of the menu quoted last month's plan prices long after
+# the price book was rounded: a generated document is a snapshot, and
+# nothing went back to tell it.
+_kitd = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "02-consultation/capability-menu.md",
+    "title": "Menu Refresh Probe"}).json()
+_kitrow = [d for d in c.get(f"/api/store/admin/engagements/{_eid}",
+                            headers=A).json()["docs"]
+           if d["id"] == _kitd["doc_id"]][0]
+ok(_kitrow["kit"] == "02-consultation/capability-menu.md",
+   "a generated document remembers the template it came from, on the row")
+c.post(f"/api/store/admin/engagements/{_eid}/docs/{_kitd['doc_id']}/fill",
+       headers=A, json={"fills": {"YOUR NAME": "Dana Reed",
+                                  "WHAT YOU DO": "adult literacy"}})
+_kitref = c.post(f"/api/store/admin/engagements/{_eid}/docs/"
+                 f"{_kitd['doc_id']}/refresh-kit", headers=A,
+                 json={}).json()
+ok(_kitref["kept"] >= 2 and "YOUR NAME" not in _kitref["unfilled"],
+   "refreshing reads the template again and puts every answer already on "
+   "the paper back into the blank it was in — a repriced menu reaches the "
+   "client's copy without losing a word anybody typed")
+_kitup = c.post("/api/store/admin/documents", headers=A, json={
+    "title": "hand-written note.txt", "category": "other",
+    "party_kind": "partner", "party_name": "Smoke Test Client"}).json()
+c.post(f"/api/store/admin/engagements/{_eid}/attach", headers=A,
+       json={"doc_id": _kitup["id"], "stage": "01-potential-customer",
+             "side": "internal"})
+_kitbad = c.post(f"/api/store/admin/engagements/{_eid}/docs/"
+                 f"{_kitup['id']}/refresh-kit", headers=A, json={})
+ok(_kitbad.status_code == 400,
+   "and a document that was never generated from a template says so, "
+   "rather than inventing one")
+
 ok("function fillInDoc" in _ops and "fb-indoc" in _ops
    and "dataset.tok === inp.dataset.tok" not in _ops
    and 'o.dataset.global === inp.dataset.global' in _ops,

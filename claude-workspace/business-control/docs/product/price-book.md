@@ -25,7 +25,7 @@ time-sensitive when written.
 | Packaged tiers | $49 / $149 / $399 | **$200 / $400 / $700** | Tiers undercut every bundle; the menu was pointless — and a tier is a round number, not a number pretending to be smaller |
 | Tier contents | "roughly Commerce Core + Workforce" | Explicit capability sets (§6) | The "quote the cheaper one" rule was uncomputable |
 | Care plan | Sold, but outside the price book | **Part 2 of the monthly bill** (§12) | The bill was one number for two different businesses |
-| White-labelling | Not offered | Four levels, $0–$199/mo (§8) | New revenue, zero cost to serve |
+| White-labelling | Not offered | Four levels, $0–$200/mo (§8) | New revenue, zero cost to serve |
 | Build pricing | One figure | Optionally split by surface (§12) | Scope arguments |
 | Scale metric | None | Optional subscriber band (§7) | Revenue did not grow with the client |
 
@@ -223,9 +223,9 @@ close to pure margin.
 | Level | Monthly | Setup | What it gets |
 |---|---|---|---|
 | **None** | $0 | — | Our mark stays in the footer and sign-in |
-| **Unbranded** | **$49** | — | Our name and mark removed; client logo and colours throughout; transactional email from their address |
-| **Branded install** | **$99** | $500 | + own domain across all three surfaces; own icon and splash on the installed app; authenticated sending domain (SPF/DKIM/DMARC); branded documents, invoices and client portal; push under their name |
-| **Full white-label** | **$199** | $1,500 | + no reference to us anywhere reachable, including source comments, page titles and error pages; support answered under their name; their terms and cookie banner; rebadged documentation; suitable for reselling onward |
+| **Unbranded** | **$50** | — | Our name and mark removed; client logo and colours throughout; transactional email from their address |
+| **Branded install** | **$100** | $500 | + own domain across all three surfaces; own icon and splash on the installed app; authenticated sending domain (SPF/DKIM/DMARC); branded documents, invoices and client portal; push under their name |
+| **Full white-label** | **$200** | $1,500 | + no reference to us anywhere reachable, including source comments, page titles and error pages; support answered under their name; their terms and cookie banner; rebadged documentation; suitable for reselling onward |
 
 Monthly sits in Part 1. Setup joins the build.
 
@@ -318,7 +318,7 @@ make you poorer.
 
 | | Price |
 |---|---|
-| Guided setup | $499 |
+| Guided setup | $500 |
 | Launch build | $5,000 |
 | Custom build | $18,000 |
 | Flagship | $40,000 |

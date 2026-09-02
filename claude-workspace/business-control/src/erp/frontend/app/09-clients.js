@@ -935,7 +935,12 @@ async function renderEngagement(id) {
         ${x.blanks ? `<button class="btn alt sm"
           data-engfill="${x.id}" title="the brackets still unfilled — same
           form as generation, shorter each time">Fill (${x.blanks})</button>`
-          : ""}</span>
+          : ""}
+        ${x.kit && !x.signed ? `<button class="btn alt sm"
+          data-kitfresh="${x.id}" title="read the template again — a price
+          book that changed reaches this client's copy, and every answer
+          already on it is put back where it was">Refresh from
+          template</button>` : ""}</span>
         <button class="btn alt sm" data-engview="${x.id}"
           data-kind="${x.has_body ? "body" : "file"}" data-ext="${x.ext || ""}"
           data-signed="${x.signed || 0}"${x.quote ? ' data-quote="1"' : ""}
@@ -1793,6 +1798,16 @@ async function renderEngagement(id) {
       } catch (err) { toast(err.message); }
     };
   });
+  view().querySelectorAll("[data-kitfresh]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        const out = await api(`/api/store/admin/engagements/${id}/docs/`
+          + `${b.dataset.kitfresh}/refresh-kit`, { method: "POST", body: {} });
+        toast(`re-read from the template — ${out.kept} answer${
+          out.kept === 1 ? "" : "s"} put back`);
+        renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-sowfresh]").forEach((b) => b.onclick =
     async () => {
       try {

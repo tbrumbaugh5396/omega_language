@@ -226,7 +226,7 @@ ok(_pb.core_price() == 50
    "core, tiers and care plans come out of the same document the bench and "
    "the deck are held to")
 _bk = {b["name"]: b["price"] for b in _pb.builds()}
-ok(_bk["Guided setup"] == 499 and _bk["Flagship"] == 40000,
+ok(_bk["Guided setup"] == 500 and _bk["Flagship"] == 40000,
    "and the build ladder, so the shop cannot quietly reprice a build")
 
 _seed = _spm.run([sys.executable, str(ROOT / "scripts" / "seed_studio.py"),
