@@ -1598,11 +1598,14 @@ async function renderEngagement(id) {
           try {
             const out = await api(`/api/store/admin/engagements/${id}/quote`,
               { body: { title: d.title, markdown: d.markdown,
-                        state: d.state } });
+                        state: d.state, totals: d.totals || {} } });
             closeModal();
-            toast(out.refreshed
+            toast((out.refreshed
               ? "Quote refreshed — same paper, new numbers"
-              : "Quote filed under the proposal stage");
+              : "Quote filed under the proposal stage")
+              + (out.priced ? ` · the client record now says ${
+                  money(out.priced.value_cents)} build, ${
+                  money(out.priced.monthly_cents)}/mo` : ""));
             renderEngagement(id);
           } catch (err) { toast(err.message); }
         };

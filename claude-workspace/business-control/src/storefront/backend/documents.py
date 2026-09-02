@@ -191,7 +191,11 @@ GLOBAL_TOKENS = {
     "INTERNAL POC": "internal_poc",
     "ORIGINATOR": "originator",
     "DATE": "date",
-    "BRAND": "brand", "PACKAGE": "package", "VALUE": "value",
+    "BRAND": "brand", "PACKAGE": "package",
+    # The two prices, apart: the one-time build and the recurring bill.
+    # [VALUE] is kept as the older name for the build, because papers on
+    # the shelf already say it.
+    "VALUE": "value", "PROJECT VALUE": "value", "MONTHLY": "monthly",
 }
 
 

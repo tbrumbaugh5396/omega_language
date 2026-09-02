@@ -767,7 +767,8 @@ def binder_body() -> str:
         "| | |",
         "|---|---|",
         "| Package | [PACKAGE] |",
-        "| Value | [VALUE] |",
+        "| Build, one-time | [PROJECT VALUE] |",
+        "| Monthly | [MONTHLY] |",
         "| Payment | Per the schedule in the agreement |",
     ]
     return nl.join(parts) + nl
@@ -916,7 +917,24 @@ def list_engagements(archived: int = 0, u=Depends(admin_user),
 # columns — they are read from the clock and the config — so they are not
 # writable and simply never appear here.
 GLOBAL_COLUMN = {"client": "name", "client_poc": "approver_name",
-                 "internal_poc": "internal_poc", "originator": "originator"}
+                 "internal_poc": "internal_poc", "originator": "originator",
+                 "package": "package",
+                 # money, written back through a parser (see apply_globals)
+                 "value": "value_cents", "monthly": "monthly_cents"}
+
+_MONEY_COLS = {"value_cents", "monthly_cents"}
+
+
+def _money_cents(v) -> int | None:
+    """'$5,000.00/mo' -> 500000. None when there is no number in it, so a
+    dash or an empty box never zeroes a client's price by accident."""
+    m = re.search(r"-?[\d,]*\.?\d+", str(v).replace(",", ""))
+    if not m:
+        return None
+    try:
+        return max(0, int(round(float(m.group(0)) * 100)))
+    except ValueError:
+        return None
 
 
 def rename_client(con, eid: int, old: str, new: str) -> None:
@@ -967,8 +985,19 @@ def apply_globals(con, eid: int, gvals: dict, actor: str) -> list:
     fields, changed = {}, []
     for key, val in (gvals or {}).items():
         col = GLOBAL_COLUMN.get(key)
+        if not col:
+            continue
+        if col in _MONEY_COLS:
+            # A price typed on a paper is the price: the record takes it,
+            # so the header, the dossier and the next document agree with
+            # what the client is holding.
+            cents = _money_cents(val)
+            if cents is not None and cents != (e[col] or 0):
+                fields[col] = cents
+                changed.append(col)
+            continue
         v = str(val).strip()[:120]
-        if col and v and v != (e[col] or ""):
+        if v and v != (e[col] or ""):
             fields[col] = v
             changed.append(col)
     if not fields:
@@ -1620,6 +1649,46 @@ class QuoteBody(BaseModel):
     title: str = ""
     markdown: str
     state: str = ""          # the bench's serialized state, opaque to us
+    # What the bench worked out, in cents: the recurring bill and the
+    # one-time work. Not opaque — these two are the client record's own
+    # figures, and a quote that priced the client should BE the price.
+    totals: dict = {}
+
+
+def _price_from_quote(con, e, totals: dict, actor: str) -> dict | None:
+    """Put the quote's money on the client record.
+
+    A quote is the act of pricing a client; the two boxes on the client
+    form are what somebody guessed before there was one. So filing a
+    quote writes them — and says so on the record's own log, where the
+    figure it replaced can still be read.
+    """
+    if not totals:
+        return None
+    try:
+        monthly = max(0, int(totals.get("monthly") or 0))
+        build = max(0, int(totals.get("build") or 0))
+    except (TypeError, ValueError):
+        return None
+    fields = {}
+    if build and build != e["value_cents"]:
+        fields["value_cents"] = build
+    if monthly != e["monthly_cents"]:
+        fields["monthly_cents"] = monthly
+    if not fields:
+        return {"value_cents": e["value_cents"],
+                "monthly_cents": e["monthly_cents"]}
+    sets = ", ".join(f"{k}=?" for k in fields)
+    con.execute(f"UPDATE engagements SET {sets}, updated_at=? WHERE id=?",
+                (*fields.values(), time.time(), e["id"]))
+    was = (f"was ${e['value_cents'] / 100:,.0f} build,"
+           f" ${e['monthly_cents'] / 100:,.0f}/mo")
+    log(con, e["id"], actor,
+        f"priced from the quote: ${build / 100:,.0f} build,"
+        f" ${monthly / 100:,.0f}/mo ({was})")
+    return {"value_cents": fields.get("value_cents", e["value_cents"]),
+            "monthly_cents": fields.get("monthly_cents",
+                                        e["monthly_cents"])}
 
 
 @router.get("/api/store/admin/engagements/{eid}/quote")
@@ -1754,8 +1823,9 @@ def file_quote(eid: int, body: QuoteBody, u=Depends(admin_user),
                     " WHERE id=?",
                     (title[:200], body.markdown, notes, prev["id"]))
         log(con, eid, u["name"], f"refreshed the quote '{title}'")
+        priced = _price_from_quote(con, e, body.totals, u["name"])
         con.commit()
-        return {"doc_id": prev["id"], "refreshed": True}
+        return {"doc_id": prev["id"], "refreshed": True, "priced": priced}
 
     cur = con.execute(
         "INSERT INTO documents(title,category,party_kind,party_name,"
@@ -1770,8 +1840,9 @@ def file_quote(eid: int, body: QuoteBody, u=Depends(admin_user),
         " created_at) VALUES(?,?,?,?,?)",
         (eid, doc_id, "03-proposal", "to_client", time.time()))
     log(con, eid, u["name"], f"filed the quote '{title}' from the bench")
+    priced = _price_from_quote(con, e, body.totals, u["name"])
     con.commit()
-    return {"doc_id": doc_id, "refreshed": False}
+    return {"doc_id": doc_id, "refreshed": False, "priced": priced}
 
 
 @router.get("/api/store/admin/engagements/{eid}/docs/{did}/blanks")

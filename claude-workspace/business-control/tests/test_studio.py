@@ -1549,6 +1549,56 @@ ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
          "/editable", headers=A).status_code == 400,
    "a signed document refuses the in-place editor for the same reason it "
    "refuses the form — its text is what was attested to")
+# --- the quote prices the client, and a paper prices them back ---------------
+# A quote is the act of pricing a client. Before this, filing one left the
+# client record holding whatever somebody had guessed in the form — so the
+# header could say $200/mo beside a quote that said $50.
+_qf = c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A, json={
+    "title": "Priced Quote", "markdown": "# Quote\n\nBody.",
+    "state": "", "totals": {"monthly": 45000, "build": 850000}}).json()
+_qe = c.get(f"/api/store/admin/engagements/{_eid}",
+            headers=A).json()["engagement"]
+ok(_qe["monthly_cents"] == 45000 and _qe["value_cents"] == 850000
+   and _qf["priced"]["monthly_cents"] == 45000,
+   "filing a quote writes its two figures onto the client — the record, "
+   "the header and the next document now say what the client was quoted")
+ok(any("priced from the quote" in x["what"]
+       for x in c.get(f"/api/store/admin/engagements/{_eid}",
+                      headers=A).json()["log"]),
+   "and the figure it replaced is still readable on the client's own log, "
+   "because repricing somebody is a thing that happened")
+c.post(f"/api/store/admin/engagements/{_eid}/quote", headers=A, json={
+    "title": "Priced Quote", "markdown": "# Quote\n\nBody.", "state": ""})
+ok(c.get(f"/api/store/admin/engagements/{_eid}",
+         headers=A).json()["engagement"]["monthly_cents"] == 45000,
+   "a quote filed without totals leaves the price alone rather than "
+   "zeroing it")
+
+# ...and the other way: a price typed on a paper is the price
+_pdoc = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "08-build/project-plan-checklist.md",
+    "title": "Money Writeback Probe"}).json()
+c.post(f"/api/store/admin/documents/{_pdoc['doc_id']}/edit", headers=A,
+       json={"fills": {"MONTHLY": "$250.00/mo", "VALUE": "$9,000.00"}})
+_pe = c.get(f"/api/store/admin/engagements/{_eid}",
+            headers=A).json()["engagement"]
+ok(_pe["monthly_cents"] == 25000 and _pe["value_cents"] == 900000,
+   "typing a price into a document writes it to the CLIENT, not into that "
+   "one page — every other paper reads the record, so the binder cannot "
+   "quote two different numbers")
+c.post(f"/api/store/admin/documents/{_pdoc['doc_id']}/edit", headers=A,
+       json={"fills": {"MONTHLY": "—"}})
+ok(c.get(f"/api/store/admin/engagements/{_eid}",
+         headers=A).json()["engagement"]["monthly_cents"] == 25000,
+   "and a dash is not a price: clearing the box never quietly zeroes what "
+   "the client is paying")
+_bcov = c.get(f"/api/store/admin/engagements/{_eid}/binder.html",
+              headers=A).text
+ok("Build, one-time" in _bcov and "Monthly" in _bcov
+   and "$9,000.00" in _bcov and "$250.00/mo" in _bcov,
+   "and the binder's own cover shows the two prices apart, read from the "
+   "record — so the book a client holds says what the record says")
+
 # --- a generated document can be read again from its template ----------------
 # The client's copy of the menu quoted last month's plan prices long after
 # the price book was rounded: a generated document is a snapshot, and

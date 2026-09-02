@@ -1865,7 +1865,13 @@ document.getElementById('fileBtn').addEventListener('click',()=>{
   const payload={type:'bc-quote',
     title:'Quote — '+name,
     markdown:quoteMarkdown(r),
-    state};
+    state,
+    /* The two figures the client record keeps: what they pay every month
+       and what the one-time work comes to. The bench is the calculator —
+       it sends what it worked out rather than making the server do the
+       arithmetic a second time and disagree. */
+    totals:{monthly:Math.round(r.monthly*100),
+            build:Math.round(r.oneTime*100)}};
   if(window.bcFile) window.bcFile(payload);
   else if(embedded) window.parent.postMessage(payload,'*');
   else toast('Open this bench from a client\u2019s page to file the quote');
