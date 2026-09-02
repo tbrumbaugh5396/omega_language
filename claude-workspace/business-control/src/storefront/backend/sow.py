@@ -42,7 +42,7 @@ def _quote_facts(con, eid: int) -> dict | None:
         (eid, QUOTE_NOTE + "%")).fetchall()
     row = next((r for r in rows if r["signed"]), rows[0] if rows else None)
     if row is None:
-        return None
+        return _facts_from_record(con, eid)
     import base64
     try:
         state = json.loads(base64.b64decode(
@@ -55,6 +55,37 @@ def _quote_facts(con, eid: int) -> dict | None:
             "dedicated": bool(state.get("dedicated")),
             "doc_id": row["id"], "doc_title": row["title"],
             "signed": bool(row["signed"])}
+
+
+def _facts_from_record(con, eid: int) -> dict | None:
+    """No quote on file, but the client card says what they are buying.
+
+    The bench is one way to decide a line-up and the client form is the
+    other; a Scope of Work composed only from the first would go out
+    empty for every client sold across a table. So the record answers
+    when no quote does, in the same shape.
+    """
+    e = con.execute("SELECT * FROM engagements WHERE id=?", (eid,)).fetchone()
+    if e is None:
+        return None
+    caps = [c for c in (e["caps"] or "").split(",") if c]
+    if not (caps or e["package"]):
+        return None
+    if not caps and e["package"]:
+        # a packaged tier covers its own set; the book says which
+        from .pricebook import tiers as _tiers
+        try:
+            t = next(t for t in _tiers() if t["name"] == e["package"])
+        except (StopIteration, Exception):              # noqa: BLE001
+            t = None
+        if t:
+            names = {c["name"].lower(): c["id"] for c in _cap_catalog()}
+            caps = [names[n.strip().lower()] for n
+                    in t["capabilities"].split(",")
+                    if n.strip().lower() in names]
+    return {"cap_ids": caps, "locs": 1, "seats": 5, "dedicated": False,
+            "doc_id": 0, "doc_title": "the client record", "signed": False,
+            "from_record": True}
 
 
 def sow_body(con, e) -> str:

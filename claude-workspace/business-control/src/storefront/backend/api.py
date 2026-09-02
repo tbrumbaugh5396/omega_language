@@ -1005,6 +1005,12 @@ def catalog(con=Depends(get_con)):
     # you run on, what keeps it running, then the work that builds it.
     kinds = [dict(k) for k in PRODUCT_KINDS
              if any(p["kind"] == k["id"] for p in prods)]
+    # Cheapest first, within each lane. A row reading $150, $750, $350 is
+    # the alphabet pretending to be a price list; a shopper reads left to
+    # right and expects the ladder to climb.
+    korder = {k["id"]: i for i, k in enumerate(PRODUCT_KINDS)}
+    prods.sort(key=lambda p: (korder.get(p["kind"], 99), p["price_cents"],
+                              p["name"]))
     return {"products": prods, "collections": cols, "kinds": kinds}
 
 

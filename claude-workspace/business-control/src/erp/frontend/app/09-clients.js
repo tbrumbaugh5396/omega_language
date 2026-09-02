@@ -568,12 +568,14 @@ async function binderEditMode(engId, e, anchor) {
 }
 
 let ENG_TIERS = [];               // the price book's packaged plans
+let ENG_OFFER = null;             // everything a client can be sold
 
 async function renderClients() {
   if (S.engId) return renderEngagement(S.engId);
   const data = await api("/api/store/admin/engagements"
     + (S.engArchived ? "?archived=1" : ""));
   ENG_TIERS = data.tiers || [];
+  ENG_OFFER = data.offer || ENG_OFFER;
   view().innerHTML = `
     <div class="page-head">
       <div><h2>Clients (B2B)</h2>
@@ -692,6 +694,63 @@ function pkgMatches(stored, tierName) {
   return want.toLowerCase() === tierName.toLowerCase();
 }
 
+/* What a client is buying, on the client. Five answers — plan (or a set
+   of capabilities), care, build, setup, labelling — chosen from the price
+   book itself, so a client cannot be recorded as buying something the
+   business does not sell. The papers read the same five, and typing them
+   on a paper writes them back here. */
+function lineupHtml(e) {
+  const o = ENG_OFFER;
+  if (!o) return "";
+  const sel = (id, label, rows, cur, unit, none) => `
+    <div><label>${label}</label>
+      <select id="${id}"><option value="">${none}</option>
+        ${rows.map((r) => `<option value="${esc(r.name)}"
+          ${cur === r.name ? "selected" : ""}>${esc(r.name)} — \$${
+          r.price}${unit}${r.setup ? ` + \$${r.setup} setup` : ""}
+        </option>`).join("")}</select></div>`;
+  const caps = new Set(((e && e.caps) || "").split(",").filter(Boolean));
+  const groups = [];
+  (o.caps || []).forEach((c) => {
+    let g = groups.find((x) => x.name === c.group);
+    if (!g) { g = { name: c.group, items: [] }; groups.push(g); }
+    g.items.push(c);
+  });
+  return `
+    <h3 style="margin-bottom:2px">What they're buying</h3>
+    <p class="dim" style="margin-top:0">The plan or the capabilities, then
+      the rest of the bill. These fill the paperwork and, at stand-up, the
+      grant — so the proposal, the binder and the install all say one
+      thing.</p>
+    <div class="row2">
+      ${sel("ef-care", "Care plan", o.care || [], (e && e.care) || "",
+            "/mo", "— none —")}
+      ${sel("ef-label", "White-labelling", o.labels || [],
+            (e && e.label) || "", "/mo", "— none, our mark stays —")}
+    </div>
+    <div class="row2">
+      ${sel("ef-build", "Build", o.builds || [], (e && e.build) || "",
+            "", "— none —")}
+      ${sel("ef-setup", "Setup", o.setups || [], (e && e.setup) || "",
+            "", "— none —")}
+    </div>
+    <details class="sect" ${caps.size ? "open" : ""}>
+      <summary>Capabilities <span class="dim">${caps.size
+        ? caps.size + " picked" : "a packaged plan covers its own"}</span>
+      </summary>
+      <p class="dim">Pick these when the client is buying the menu rather
+        than a plan — a tier already covers its own set.</p>
+      ${groups.map((g) => `
+        <div class="cap-group">${esc(g.name || "Capabilities")}</div>
+        <div class="cap-grid">${g.items.map((c) => `
+          <label><input type="checkbox" data-efcap value="${esc(c.id)}"
+            data-price="${c.price}" ${caps.has(c.id) ? "checked" : ""}>
+            ${esc(c.name)} <span class="cap-price">\$${c.price}</span>
+          </label>`).join("")}</div>`).join("")}
+    </details>
+    <p id="ef-adds" class="dim" style="margin:8px 0"></p>`;
+}
+
 /* Files into a client, from wherever they were chosen — the new-client
    form, the edit form, or the header button. Each upload becomes its own
    vault document and is filed under a stage, so an attachment is a paper
@@ -762,7 +821,9 @@ async function engForm(e) {
     // deep-linked straight to a client: the list (and its tiers) was
     // never fetched — get the options before drawing the picker
     try {
-      ENG_TIERS = (await api("/api/store/admin/engagements")).tiers || [];
+      const _d = await api("/api/store/admin/engagements");
+      ENG_TIERS = _d.tiers || [];
+      ENG_OFFER = _d.offer || ENG_OFFER;
     } catch (err) { /* the picker degrades to custom-scope only */ }
   }
   modal(`<h3>${e ? "Edit client" : "New client"}</h3>
@@ -796,6 +857,7 @@ async function engForm(e) {
           value="${e && e.monthly_cents ? e.monthly_cents / 100 : ""}"></div>
       <div></div>
     </div>
+    ${lineupHtml(e)}
     <div class="row2">
       <div><label>Client POC name</label>
         <input id="ef-appr" value="${esc(e ? e.approver_name : "")}"></div>
@@ -846,6 +908,46 @@ async function engForm(e) {
     <input type="file" id="ef-files" multiple
       accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx,.csv,.txt">
     <div class="modal-foot"><button class="btn" id="ef-save">Save</button></div>`);
+  /* What the pieces come to, said out loud beside the two boxes — and
+     never typed into them behind anyone's back. A negotiated number is
+     somebody's decision; this is arithmetic offering itself. */
+  const adds = () => {
+    const o = ENG_OFFER;
+    if (!o || !$("#ef-adds")) return;
+    const pick = (id, rows) => rows.find(
+      (r) => r.name === ($("#" + id) || {}).value);
+    const tier = ENG_TIERS.find((t) => t.name === $("#ef-pkg").value);
+    const picked = [...document.querySelectorAll("[data-efcap]:checked")];
+    let mo = 0, once = 0;
+    if (tier) mo += tier.price;
+    else if (picked.length)
+      mo += (o.core_price || 0)
+        + picked.reduce((a, b) => a + (+b.dataset.price || 0), 0);
+    const care = pick("ef-care", o.care || []);
+    if (care) mo += care.price;
+    const lab = pick("ef-label", o.labels || []);
+    if (lab) { mo += lab.price; once += lab.setup || 0; }
+    const bld = pick("ef-build", o.builds || []);
+    if (bld) once += bld.price;
+    const stp = pick("ef-setup", o.setups || []);
+    if (stp) once += stp.price;
+    $("#ef-adds").innerHTML = (mo || once)
+      ? `That adds up to <b>\$${mo}/mo</b> and <b>\$${once}</b> one-time.
+         <button type="button" class="btn alt sm" id="ef-useadds">Use these
+         figures</button>`
+      : "";
+    if ($("#ef-useadds")) $("#ef-useadds").onclick = () => {
+      $("#ef-mon").value = mo || "";
+      $("#ef-val").value = once || "";
+    };
+  };
+  ["ef-care", "ef-label", "ef-build", "ef-setup"].forEach((id) => {
+    if ($("#" + id)) $("#" + id).onchange = adds;
+  });
+  document.querySelectorAll("[data-efcap]").forEach((b) =>
+    b.onchange = adds);
+  adds();
+
   $("#ef-pkg").onchange = () => {
     // A tier's price is a MONTHLY price. It used to land in the build
     // box, which is the field the deposit is halved from — the two
@@ -854,6 +956,7 @@ async function engForm(e) {
     // already typed is never overwritten.
     const t = ENG_TIERS.find((x) => x.name === $("#ef-pkg").value);
     if (t && !$("#ef-mon").value) $("#ef-mon").value = t.price;
+    adds();
   };
   $("#ef-save").onclick = async () => {
     const body = {
@@ -861,6 +964,12 @@ async function engForm(e) {
       package: $("#ef-pkg").value.trim(),
       value_cents: Math.round((+$("#ef-val").value || 0) * 100),
       monthly_cents: Math.round((+$("#ef-mon").value || 0) * 100),
+      caps: [...document.querySelectorAll("[data-efcap]:checked")]
+        .map((b) => b.value).join(","),
+      care: ($("#ef-care") || {}).value || "",
+      build: ($("#ef-build") || {}).value || "",
+      setup: ($("#ef-setup") || {}).value || "",
+      label: ($("#ef-label") || {}).value || "",
       approver_name: $("#ef-appr").value.trim(),
       approver_email: $("#ef-email").value.trim(),
       internal_poc: $("#ef-ipoc").value.trim(),

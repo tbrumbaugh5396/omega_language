@@ -196,6 +196,13 @@ GLOBAL_TOKENS = {
     # [VALUE] is kept as the older name for the build, because papers on
     # the shelf already say it.
     "VALUE": "value", "PROJECT VALUE": "value", "MONTHLY": "monthly",
+    # What they are buying — the same five answers the client form asks
+    # for. A paper saying "Care plan: [CARE]" reads it from the record and
+    # writes it back when somebody types there, so the binder and the
+    # client card can never name different plans.
+    "PLAN": "plan", "CARE": "care", "CARE PLAN": "care",
+    "BUILD": "build", "SETUP": "setup", "LABELLING": "label",
+    "WHITE-LABEL": "label", "CAPABILITIES": "caps",
 }
 
 

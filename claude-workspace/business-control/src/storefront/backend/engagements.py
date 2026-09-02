@@ -144,6 +144,16 @@ MIGRATIONS = (
     # with it — a package picker filling the build price with a monthly
     # figure is how a $700/mo client gets a $350 deposit.
     "ALTER TABLE engagements ADD COLUMN monthly_cents INTEGER DEFAULT 0",
+    # WHAT THEY ARE BUYING, on the record rather than only inside a quote.
+    # A client is a plan (or a set of capabilities), a care plan, maybe a
+    # build, maybe a setup, maybe our name taken off it. Those five answers
+    # decide the price, fill the paperwork and, at stand-up, the grant —
+    # so they belong on the client, where every one of those can read them.
+    "ALTER TABLE engagements ADD COLUMN caps TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN care TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN build TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN setup TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN label TEXT DEFAULT ''",
 )
 
 
@@ -664,6 +674,71 @@ from .documents import (PLACEHOLDER, RESERVED_MARKERS,  # noqa: F401
                         _matches, fill, placeholders)
 
 
+def offer_catalogue() -> dict:
+    """Everything a client can be sold, from the one book: the plans, the
+    care ladder, the builds, the setups, the white-label levels and the
+    capability menu. The client form and the quote bench pick from the
+    same list, so a client cannot be recorded as buying something the
+    business does not sell."""
+    out = {"tiers": [], "care": [], "builds": [], "setups": [],
+           "labels": [], "caps": [], "core_price": 0}
+    try:
+        from . import pricebook as pb
+        out["tiers"] = pb.tiers()
+        out["care"] = pb.care_plans()
+        allb = pb.builds()
+        # standing an install up is a setup, not the first rung of a build
+        out["setups"] = [b for b in allb if b["name"] == "Guided setup"]
+        out["builds"] = [b for b in allb if b["name"] != "Guided setup"]
+        out["labels"] = [w for w in pb.white_label() if w["price"]
+                         or w["setup"]]
+        out["caps"] = _cap_catalogue_lite()
+        out["core_price"] = _core_price()
+    except Exception:                                   # noqa: BLE001
+        pass          # a book that will not parse must not take the form down
+    return out
+
+
+def _cap_catalogue_lite() -> list:
+    return [{"id": c["id"], "name": c["name"], "price": c["price"],
+             "group": c.get("group", "")} for c in _cap_catalog()]
+
+
+def lineup_price(e) -> dict:
+    """What the recorded line-up adds up to, monthly and one-time.
+
+    Derived, never stored: the record keeps the two prices somebody
+    agreed to, and this says what the pieces come to — so an operator can
+    see the difference and decide, rather than having a form quietly
+    overwrite a negotiated number.
+    """
+    o = offer_catalogue()
+    monthly = one_time = 0
+    tier = next((t for t in o["tiers"] if t["name"] == (e["package"] or "")),
+                None)
+    caps = [c for c in (e["caps"] or "").split(",") if c]
+    if tier:
+        monthly += tier["price"]
+    elif caps:
+        by_id = {c["id"]: c for c in o["caps"]}
+        monthly += o["core_price"] + sum(
+            by_id[c]["price"] for c in caps if c in by_id)
+    care = next((c for c in o["care"] if c["name"] == (e["care"] or "")), None)
+    if care:
+        monthly += care["price"]
+    lab = next((w for w in o["labels"] if w["name"] == (e["label"] or "")),
+               None)
+    if lab:
+        monthly += lab["price"]
+        one_time += lab["setup"]
+    for key, rows in (("build", o["builds"]), ("setup", o["setups"])):
+        pick = next((b for b in rows if b["name"] == (e[key] or "")), None)
+        if pick:
+            one_time += pick["price"]
+    return {"monthly_cents": monthly * 100, "value_cents": one_time * 100,
+            "caps": caps}
+
+
 def suggested_fills(e) -> dict:
     """What the engagement record already knows. One source: the proposal and
     the status board cannot disagree about the number, because both read it
@@ -709,12 +784,19 @@ def global_values(e) -> dict:
     if e["approver_email"]:
         poc = f"{poc} ({e['approver_email']})" if poc else e["approver_email"]
     from erp.backend.main import CFG
+    caps = [c for c in (e["caps"] or "").split(",") if c]
+    names = {c["id"]: c["name"] for c in _cap_catalogue_lite()} if caps \
+        else {}
     return {"client": e["name"], "client_poc": poc or "—",
             "internal_poc": (e["internal_poc"] or "—"),
             "originator": (e["originator"] or "—"),
             "date": time.strftime("%B %d, %Y").replace(" 0", " "),
             "brand": CFG.get("brand_name", "Business Control"),
             "package": e["package"] or "—",
+            "plan": e["package"] or "—",
+            "care": e["care"] or "—", "build": e["build"] or "—",
+            "setup": e["setup"] or "—", "label": e["label"] or "None",
+            "caps": ", ".join(names.get(c, c) for c in caps) or "—",
             "value": (f"${e['value_cents'] / 100:,.2f}"
                       if e["value_cents"] else "—"),
             "monthly": (f"${e['monthly_cents'] / 100:,.2f}/mo"
@@ -766,7 +848,12 @@ def binder_body() -> str:
         "",
         "| | |",
         "|---|---|",
-        "| Package | [PACKAGE] |",
+        "| Plan | [PACKAGE] |",
+        "| Capabilities | [CAPABILITIES] |",
+        "| Care plan | [CARE] |",
+        "| Build | [BUILD] |",
+        "| Setup | [SETUP] |",
+        "| White-labelling | [LABELLING] |",
         "| Build, one-time | [PROJECT VALUE] |",
         "| Monthly | [MONTHLY] |",
         "| Payment | Per the schedule in the agreement |",
@@ -839,6 +926,12 @@ class EngBody(BaseModel):
     package: str = ""
     value_cents: int = 0            # one-time build
     monthly_cents: int = -1         # recurring; -1 = not sent, 0 clears
+    # the line-up: "\x00" = not sent, "" = cleared on purpose
+    caps: str = "\x00"
+    care: str = "\x00"
+    build: str = "\x00"
+    setup: str = "\x00"
+    label: str = "\x00"
     approver_name: str = ""
     approver_email: str = ""
     launch_target: str = ""
@@ -907,7 +1000,7 @@ def list_engagements(archived: int = 0, u=Depends(admin_user),
     except Exception:
         tier_opts = []
     return {"engagements": out, "kit_available": KIT.is_dir(),
-            "tiers": tier_opts,
+            "tiers": tier_opts, "offer": offer_catalogue(),
             "archived_count": con.execute(
                 "SELECT COUNT(*) n FROM engagements WHERE status='archived'"
             ).fetchone()["n"]}
@@ -918,9 +1011,15 @@ def list_engagements(archived: int = 0, u=Depends(admin_user),
 # writable and simply never appear here.
 GLOBAL_COLUMN = {"client": "name", "client_poc": "approver_name",
                  "internal_poc": "internal_poc", "originator": "originator",
-                 "package": "package",
+                 "package": "package", "plan": "package",
                  # money, written back through a parser (see apply_globals)
-                 "value": "value_cents", "monthly": "monthly_cents"}
+                 "value": "value_cents", "monthly": "monthly_cents",
+                 # the line-up, in the client's own words. Capabilities
+                 # are NOT here: the token renders their names for a
+                 # reader, and names are not the ids the column holds —
+                 # writing a rendered list back would corrupt the grant.
+                 "care": "care", "build": "build", "setup": "setup",
+                 "label": "label"}
 
 _MONEY_COLS = {"value_cents", "monthly_cents"}
 
@@ -1041,12 +1140,17 @@ def create_engagement(body: EngBody, u=Depends(admin_user),
     poc_name, poc_uid, poc_status = _resolve_poc(con, body.internal_poc, u)
     cur = con.execute(
         "INSERT INTO engagements(name,slug,package,value_cents,monthly_cents,"
+        " caps,care,build,setup,label,"
         " approver_name,"
         " approver_email,launch_target,staging_url,live_url,notes,status,"
         " originator,internal_poc,internal_poc_user_id,internal_poc_status,"
-        " created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " created_at,updated_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (name[:120], slug, body.package.strip()[:40], body.value_cents,
          max(0, body.monthly_cents),
+         *[("" if getattr(body, k) == "\x00"
+            else getattr(body, k).strip()[:600])
+           for k in ("caps", "care", "build", "setup", "label")],
          body.approver_name.strip()[:120], body.approver_email.strip()[:200],
          body.launch_target.strip()[:40], body.staging_url.strip()[:300],
          body.live_url.strip()[:300], body.notes.strip()[:2000],
@@ -1105,6 +1209,10 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
             fields[k] = v.strip()[:2000]
             if k == "week_note":
                 fields["week_note_at"] = time.time()
+    for k in ("caps", "care", "build", "setup", "label"):
+        v = getattr(body, k)
+        if v != "\x00" and v.strip() != (e[k] or ""):
+            fields[k] = v.strip()[:600]
     if body.value_cents and body.value_cents != e["value_cents"]:
         fields["value_cents"] = body.value_cents
     if body.monthly_cents >= 0 and body.monthly_cents != e["monthly_cents"]:
