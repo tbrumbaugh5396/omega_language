@@ -211,6 +211,10 @@ they describe. A module they didn't ask for is a module they won't open.
 | Canva | ☐ | ☐ | Designs listed alongside campaigns |
 | DocuSign | ☐ | ☐ | Signature requests routed through DocuSign, with verified identity if your plan enforces it |
 | LaceUp | ☐ | ☐ | DSD ordering and routes |
+| google_calendar | ☐ | ☐ | Published shifts, client milestones and ticket due dates in the calendar people already have open |
+| google_drive | ☐ | ☐ | Signed documents filed to Drive — scoped so it can only see what it put there |
+| gmail | ☐ | ☐ | Invoices and portal links sent from your own address, not a no-reply |
+| Your own | ☐ | ☐ | Any service with an https URL and a key: declared on the Integrations tab, joins the same event list and log |
 | Other: ______ | ☐ | ☐ | Assess separately — a new connector is a line item |
 
 > Anything not on this list is **not** "just an API call". Price a new

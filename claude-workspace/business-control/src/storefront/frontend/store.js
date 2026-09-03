@@ -2908,6 +2908,57 @@ async function joinPage() {
   };
 }
 
+/* ---------- side columns you can fold or drag ----------
+   A page with a panel beside it is two decisions in one: how much room
+   the panel deserves, and whether it deserves any right now. Both belong
+   to the person reading, not to this file — so any element marked
+   data-rail gets a handle and a fold, remembered by name. */
+function wireSideRail(el, key, minW, maxW) {
+  if (!el || el.dataset.railed) return;
+  el.dataset.railed = "1";
+  const host = el.parentElement;
+  const varName = "--" + key + "-w";
+  const saved = +localStorage.getItem("bc_" + key + "_w") || 0;
+  if (saved) host.style.setProperty(varName, saved + "px");
+  if (localStorage.getItem("bc_" + key + "_fold") === "1")
+    host.classList.add("rail-folded");
+
+  const fold = document.createElement("button");
+  fold.className = "rail-fold";
+  fold.type = "button";
+  fold.title = "fold this panel away, or bring it back";
+  fold.textContent = "\u00ab";
+  fold.onclick = () => {
+    const now = host.classList.toggle("rail-folded");
+    localStorage.setItem("bc_" + key + "_fold", now ? "1" : "");
+    fold.textContent = now ? "\u00bb" : "\u00ab";
+  };
+  if (host.classList.contains("rail-folded")) fold.textContent = "\u00bb";
+  el.prepend(fold);
+
+  const grip = document.createElement("div");
+  grip.className = "rail-grip";
+  el.appendChild(grip);
+  let on = false;
+  grip.addEventListener("pointerdown", (e) => {
+    on = true; grip.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = "none";
+  });
+  grip.addEventListener("pointermove", (e) => {
+    if (!on) return;
+    const right = host.getBoundingClientRect().right;
+    const px = Math.max(minW, Math.min(maxW, right - e.clientX));
+    host.style.setProperty(varName, px + "px");
+  });
+  grip.addEventListener("pointerup", () => {
+    if (!on) return;
+    on = false;
+    document.body.style.userSelect = "";
+    localStorage.setItem("bc_" + key + "_w",
+      parseInt(host.style.getPropertyValue(varName), 10) || 320);
+  });
+}
+
 /* ---------- the configurator ----------
    The capability menu you can act on. Every price shown here is the
    book's, and the total is re-computed on the server before anything is
@@ -2951,6 +3002,8 @@ async function planBuilder() {
       </div>
       <aside class="cfg-total" id="cfg-total"></aside>
     </div>`;
+
+  wireSideRail($("#cfg-total"), "cfg", 220, 460);
 
   const paint = async () => {
     const ids = [...picked];

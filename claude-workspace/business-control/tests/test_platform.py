@@ -582,6 +582,73 @@ ok("thin" in _pj and "history_days" in _pj,
    "and it says how much history is behind it, so a thin one reads as "
    "thin rather than as a confident line")
 
+# --- a rota over what people said they could do ------------------------------
+_av = c.post("/api/availability", headers=AA, json={
+    "user_id": _hw, "weekday": 0, "from_min": 9 * 60,
+    "to_min": 17 * 60}).json()
+ok(_av["ok"], "somebody's week is theirs to describe, and an office may "
+   "write one down on their behalf — because people always tell you in "
+   "person")
+_mon = _wks(_now) + 7 * 86400            # next Monday
+_in = c.post("/api/schedule", headers=AA, json={
+    "user_id": _hw, "starts": _mon + 10 * 3600,
+    "ends": _mon + 16 * 3600}).json()
+_out = c.post("/api/schedule", headers=AA, json={
+    "user_id": _hw, "starts": _mon + 19 * 3600,
+    "ends": _mon + 22 * 3600}).json()
+ok(_in["fits"] and not _out["fits"],
+   "a shift inside those hours fits and one outside them does not — said "
+   "out loud rather than refused, because a rota that will not let a "
+   "manager ask is a rota kept in a spreadsheet instead")
+_sc = c.get(f"/api/schedule?from_ts={_mon}&to_ts={_mon + 7 * 86400}",
+            headers=AA).json()
+ok(len(_sc["shifts"]) == 2 and all(not s["published"] for s in _sc["shifts"]),
+   "and it is drafted first — a rota half-built is not a promise anybody "
+   "should be arranging childcare around")
+c.post("/api/schedule/publish", headers=AA, json={
+    "from_ts": _mon, "to_ts": _mon + 7 * 86400})
+ok(all(s["published"] for s in c.get(
+    f"/api/schedule?from_ts={_mon}&to_ts={_mon + 7 * 86400}",
+    headers=AA).json()["shifts"]),
+   "publishing is the moment it becomes one")
+
+# --- inventory that can be built before it is shown --------------------------
+_kd = c.post("/api/admin/product-kinds", headers=AA, json={
+    "label": "Trays", "colour": "#8a5730",
+    "note": "baked this morning, gone by noon"}).json()
+ok(_kd["id"] == "trays",
+   "a business can add a kind the eight built in do not cover — a bakery "
+   "has trays and a studio has retainers, and neither is served by being "
+   "filed under Goods")
+_pid = [p for p in c.get("/api/products", headers=AA).json()
+        if p["name"] == "Basic plan"][0]["id"]
+c.post(f"/api/admin/products/{_pid}/shelf", headers=AA, json={"draft": True})
+ok(all(p["name"] != "Basic plan" for p in
+       c.get("/api/store/catalog", headers=HA).json()["products"])
+   and any(p["name"] == "Basic plan" and p["draft"]
+           for p in c.get("/api/products", headers=AA).json()),
+   "a draft is visible in the back office and nowhere else — a range had "
+   "to be built on the live shelf, so a shop was assembled in public")
+c.post(f"/api/admin/products/{_pid}/shelf", headers=AA, json={"draft": False})
+ok(any(p["name"] == "Basic plan" for p in
+       c.get("/api/store/catalog", headers=HA).json()["products"]),
+   "and publishing puts it out, which is the whole point of a draft")
+ok(c.delete("/api/admin/product-kinds/plan", headers=AA).status_code == 400,
+   "a kind with products filed under it cannot be removed out from under "
+   "them — they would land in Goods without anybody deciding that")
+
+# --- the rail folds and remembers --------------------------------------------
+_railjs = ops_app_js()
+_railcss = c.get("/ops/styles.css").text
+ok("function wireRail(" in _railjs and 'localStorage.setItem("bc_rail_w"'
+   in _railjs and "rail-folded" in _railcss,
+   "the side rail folds from the wordmark and drags from its own edge, "
+   "and remembers both — somebody who knows this app wants the screen "
+   "back and somebody learning it wants the words, and both are right")
+ok("wireSideRail" in c.get("/store.js").text
+   and "rail-grip" in c.get("/store.css").text,
+   "and a storefront panel beside a page folds the same way")
+
 # --- one product, one palette ------------------------------------------------
 _opsh = c.get("/ops", headers=HA).text
 ok("--brand:" in _opsh and "<style>:root{" in _opsh,

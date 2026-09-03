@@ -358,6 +358,65 @@ PROVIDERS = {
                 "the record - check a request to pull its status back. "
                 "Disconnect and requests go back to the built-in page.",
     },
+    # Google is one OAuth app and three consents. Kept as three cards
+    # because a person connects the ones they actually want: a business
+    # that files documents in Drive has no reason to hand over its mail.
+    "google_calendar": {
+        "label": "Google Calendar",
+        "blurb": "Put the rota, the events and what is due into the "
+                 "calendar people already have open.",
+        "auth": "oauth2",
+        "oauth": {
+            "authorize": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token": "https://oauth2.googleapis.com/token",
+            "scope": "https://www.googleapis.com/auth/calendar.events",
+            # Without these Google issues no refresh token and the
+            # connection dies the first time the hour is up.
+            "extra_auth": {"access_type": "offline", "prompt": "consent"},
+        },
+        "fields": [],
+        "events": ["gate.passed", "ticket.created"],
+        "does": "Creates an event for a published shift, a client "
+                "milestone or a ticket due date, so the calendar somebody "
+                "already lives in shows what this system knows.",
+    },
+    "google_drive": {
+        "label": "Google Drive",
+        "blurb": "File signed paperwork where the rest of the company "
+                 "already looks for it.",
+        "auth": "oauth2",
+        "oauth": {
+            "authorize": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token": "https://oauth2.googleapis.com/token",
+            "scope": "https://www.googleapis.com/auth/drive.file",
+            # Without these Google issues no refresh token and the
+            # connection dies the first time the hour is up.
+            "extra_auth": {"access_type": "offline", "prompt": "consent"},
+        },
+        "fields": [],
+        "events": ["document.signed"],
+        "does": "Uploads a document the moment it is signed. Scoped to "
+                "drive.file, which means it can only ever see the files it "
+                "put there — it cannot read your Drive.",
+    },
+    "gmail": {
+        "label": "Google Mail",
+        "blurb": "Send what this system sends from your own address.",
+        "auth": "oauth2",
+        "oauth": {
+            "authorize": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token": "https://oauth2.googleapis.com/token",
+            "scope": "https://www.googleapis.com/auth/gmail.send",
+            # Without these Google issues no refresh token and the
+            # connection dies the first time the hour is up.
+            "extra_auth": {"access_type": "offline", "prompt": "consent"},
+        },
+        "fields": [],
+        "events": [],
+        "does": "Sends invoices, portal links and receipts as you rather "
+                "than as a no-reply nobody recognises. Scoped to send "
+                "only: it cannot read a single message in the mailbox.",
+    },
     "laceup": {
         "label": "LaceUp",
         "blurb": "Take orders written on the van.",
@@ -633,6 +692,14 @@ def verify(con, name: str, cfg: dict) -> tuple:
         ok, d = _req("https://api.canva.com/rest/v1/users/me",
                      headers={"Authorization": f"Bearer {tok}"})
         return (True, "ok") if ok else (False, str(d))
+    if name.startswith("google") or name == "gmail":
+        ok, d = _json_req(
+            "https://www.googleapis.com/oauth2/v3/userinfo", "GET",
+            {"Authorization": f"Bearer {c.get('access_token','')}"})
+        if not ok:
+            return False, str(d)
+        return True, (d.get("email") or d.get("name") or "connected")
+
     if name == "quickbooks":
         realm = settings(con, name).get("realm_id", "")
         if not realm:
@@ -953,6 +1020,47 @@ def _deliver(con, name: str, event: str, d: dict, c: dict) -> tuple:
         return _json_req(base, "POST", {
             "Authorization": f"Bearer {c.get('access_token','')}",
             "Accept": "application/json"}, payload)
+
+    if name == "google_calendar":
+        # A real event, on the primary calendar. All-day when we only know
+        # a date, because inventing a time somebody then plans around is
+        # worse than saying we do not know one.
+        when = d.get("at") or d.get("due") or time.time()
+        end = when + 3600
+        payload = {
+            "summary": _line(event, d)[:200],
+            "description": f"Opened by Business Control ({event}).",
+            "start": {"dateTime": time.strftime(
+                "%Y-%m-%dT%H:%M:%S", time.localtime(when))},
+            "end": {"dateTime": time.strftime(
+                "%Y-%m-%dT%H:%M:%S", time.localtime(end))},
+        }
+        return _json_req(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            "POST", {"Authorization": f"Bearer {c.get('access_token','')}"},
+            payload)
+
+    if name == "google_drive":
+        blob, filename = _document_bytes(con, d.get("document_id"))
+        if not blob:
+            return False, "nothing to file — that document has no file"
+        # multipart/related, which is Drive's upload shape: the metadata
+        # and the bytes in one request so a half-uploaded file cannot
+        # exist with a name and no content.
+        boundary = "bc" + secrets.token_hex(12)
+        meta = json.dumps({"name": filename}).encode()
+        body = (b"--" + boundary.encode() + b"\r\n"
+                b"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                + meta + b"\r\n--" + boundary.encode() + b"\r\n"
+                b"Content-Type: application/octet-stream\r\n\r\n"
+                + blob + b"\r\n--" + boundary.encode() + b"--")
+        ok, out = _req(
+            "https://www.googleapis.com/upload/drive/v3/files"
+            "?uploadType=multipart", "POST",
+            {"Authorization": f"Bearer {c.get('access_token','')}",
+             "Content-Type": f"multipart/related; boundary={boundary}"},
+            body)
+        return ok, out
 
     if name == "dropbox":
         # Only documents are filed; an order is a row in a database and there

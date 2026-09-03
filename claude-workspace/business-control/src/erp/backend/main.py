@@ -687,32 +687,37 @@ def products(con=Depends(get_con)):
     """Every live product, wearing what it IS. The back office groups and
     tints by the same kinds the shop does — one table, so the two faces
     of the catalogue cannot sort it differently."""
-    from storefront.backend.api import KIND_BY_ID, kind_of
+    from storefront.backend.api import kind_map, kind_of
     rows = con.execute(
         "SELECT * FROM products WHERE active=1 ORDER BY category, name"
     ).fetchall()
+    _kinds = kind_map(con)
     meta: dict = {}
     for m in con.execute("SELECT product_id, k, v FROM store_product_meta"
-                         " WHERE k IN ('kind','colour','quote','caps','unlisted')"
+                         " WHERE k IN ('kind','colour','quote','caps','unlisted','draft')"
     ).fetchall():
         meta.setdefault(m["product_id"], {})[m["k"]] = m["v"]
     out = []
     for r in rows:
         p = dict(r)
         md = meta.get(p["id"], {})
-        p["kind"] = kind_of(md)
-        p["kind_label"] = KIND_BY_ID[p["kind"]]["label"]
-        p["colour"] = md.get("colour") or KIND_BY_ID[p["kind"]]["colour"]
+        p["kind"] = kind_of(md, _kinds)
+        p["kind_label"] = _kinds[p["kind"]]["label"]
+        p["colour"] = md.get("colour") or _kinds[p["kind"]]["colour"]
         p["quote"] = md.get("quote", "") == "1"
         p["caps"] = [x for x in (md.get("caps", "") or "").split(",") if x]
         # off the public shelf, but the back office must still see it —
         # somebody is paying for it and somebody will have to service it
         p["unlisted"] = md.get("unlisted", "") == "1"
+        # Being built. The back office sees it; the shop does not, until
+        # somebody says so — which is how a range gets set up before a
+        # launch instead of appearing on the shelf half-priced.
+        p["draft"] = md.get("draft", "") == "1"
         out.append(p)
     # In the shelf's order, not the alphabet's: what you run on, what keeps
     # it running, then the work that builds it. The shop reads the same
     # table, so the two faces cannot disagree about where a thing belongs.
-    order = {k["id"]: i for i, k in enumerate(KIND_BY_ID.values())}
+    order = {k["id"]: i for i, k in enumerate(_kinds.values())}
     out.sort(key=lambda p: (order.get(p["kind"], 99), p["price_cents"],
                             p["name"]))
     return out
@@ -735,6 +740,99 @@ def add_product(body: ProductBody, user=Depends(admin_user), con=Depends(get_con
         " case_size,case_price_cents) VALUES(?,?,?,?,?,?,?)",
         (body.sku, body.name, body.description, body.category,
          body.price_cents, body.case_size, body.case_price_cents))
+    con.commit()
+    return {"ok": True}
+
+
+class ProductMetaBody(BaseModel):
+    kind: str | None = None
+    draft: bool | None = None
+    colour: str | None = None
+
+
+@app.post("/api/admin/products/{pid}/shelf")
+def product_shelf(pid: int, body: ProductMetaBody, user=Depends(admin_user),
+                  con=Depends(get_con)):
+    """What a product IS, and whether the shop may show it yet.
+
+    Publishing is the half that was missing: a range had to be built on
+    the live shelf, so a shop was assembled in public and customers saw
+    half-priced placeholders. A draft is visible here and nowhere else.
+    """
+    from storefront.backend.api import kind_map
+    if con.execute("SELECT 1 FROM products WHERE id=?", (pid,)).fetchone() \
+            is None:
+        raise HTTPException(404, "no such product")
+    if body.kind is not None:
+        if body.kind not in kind_map(con):
+            raise HTTPException(400, "no such kind")
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,'kind',?)", (pid, body.kind))
+    if body.draft is not None:
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,'draft',?)",
+                    (pid, "1" if body.draft else ""))
+    if body.colour is not None:
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,'colour',?)",
+                    (pid, body.colour.strip()[:20]))
+    con.commit()
+    return {"ok": True}
+
+
+class KindBody(BaseModel):
+    id: str = ""
+    label: str
+    colour: str = "#6b7280"
+    note: str = ""
+    position: int = 100
+
+
+@app.get("/api/admin/product-kinds")
+def list_kinds(user=Depends(admin_user), con=Depends(get_con)):
+    from storefront.backend.api import all_kinds
+    return all_kinds(con)
+
+
+@app.post("/api/admin/product-kinds")
+def add_kind(body: KindBody, user=Depends(admin_user), con=Depends(get_con)):
+    """A kind this business needs and the eight built in do not cover.
+
+    A bakery has trays and a studio has retainers, and neither is served
+    by being filed under Goods — the lane it sits in on the shelf is how
+    a customer finds it.
+    """
+    import re as _re
+    label = body.label.strip()[:40]
+    if not label:
+        raise HTTPException(400, "a kind needs a name")
+    kid = (body.id or _re.sub(r"[^a-z0-9]+", "-",
+                              label.lower())).strip("-")[:24]
+    if not kid:
+        raise HTTPException(400, "that name has no letters in it")
+    from storefront.backend.api import KIND_BY_ID
+    if kid in KIND_BY_ID:
+        raise HTTPException(409, f"'{kid}' is one of the built-in kinds")
+    con.execute(
+        "INSERT INTO product_kinds(id,label,colour,note,position,created_at)"
+        " VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET"
+        " label=excluded.label, colour=excluded.colour, note=excluded.note,"
+        " position=excluded.position",
+        (kid, label, body.colour.strip()[:20] or "#6b7280",
+         body.note.strip()[:120], body.position, db.now()))
+    con.commit()
+    return {"ok": True, "id": kid}
+
+
+@app.delete("/api/admin/product-kinds/{kid}")
+def del_kind(kid: str, user=Depends(admin_user), con=Depends(get_con)):
+    n = con.execute("SELECT COUNT(*) c FROM store_product_meta"
+                    " WHERE k='kind' AND v=?", (kid,)).fetchone()["c"]
+    if n:
+        raise HTTPException(400, f"{n} product(s) are filed under that — "
+                                 f"move them first, or they land in Goods "
+                                 f"without anybody deciding that")
+    con.execute("DELETE FROM product_kinds WHERE id=?", (kid,))
     con.commit()
     return {"ok": True}
 

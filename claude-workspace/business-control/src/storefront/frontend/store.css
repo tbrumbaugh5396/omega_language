@@ -387,8 +387,22 @@ svg.can { display: block; width: 100%; height: auto; }
 .cfg-card-go { color: var(--flavour); font-weight: 600; font-size: 14px; }
 
 /* ---------- the configurator ---------- */
-.cfg-grid { display: grid; grid-template-columns: 1fr 320px; gap: 28px;
+.cfg-grid { display: grid;
+  grid-template-columns: 1fr var(--cfg-w, 320px); gap: 28px;
   align-items: start; }
+/* folded: the panel keeps a sliver so there is something to click back */
+.cfg-grid.rail-folded { grid-template-columns: 1fr 34px; }
+.cfg-grid.rail-folded .cfg-total > *:not(.rail-fold) { display: none; }
+.cfg-grid.rail-folded .cfg-total { padding: 8px 4px; }
+.rail-fold { position: absolute; top: 8px; left: -12px; width: 24px;
+  height: 24px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--paper); cursor: pointer; line-height: 1;
+  font-size: 13px; color: var(--ink-2); }
+.rail-fold:hover { border-color: var(--flavour, var(--purple)); }
+.rail-grip { position: absolute; top: 0; left: -5px; width: 10px;
+  height: 100%; cursor: col-resize; }
+.rail-grip:hover { background: color-mix(in srgb,
+  var(--purple) 22%, transparent); }
 .cfg-group { margin-bottom: 22px; }
 .cfg-ghead { display: flex; align-items: baseline; gap: 10px;
   padding-bottom: 6px; border-bottom: 1px solid var(--line);
@@ -404,6 +418,8 @@ svg.can { display: block; width: 100%; height: auto; }
   color: var(--ink-2); }
 .cfg-price { font-variant-numeric: tabular-nums; font-weight: 600;
   min-width: 46px; text-align: right; }
+/* sticky already makes this the containing block for the handle and the
+   grip, so they hang off its edge without a second positioned wrapper */
 .cfg-total { position: sticky; top: 88px; background: var(--paper);
   border: 1px solid var(--line); border-radius: var(--r-lg); padding: 18px; }
 .cfg-total h3 { margin: 0 0 10px; font-family: var(--display); }

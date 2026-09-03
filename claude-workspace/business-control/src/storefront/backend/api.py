@@ -219,12 +219,49 @@ PRODUCT_KINDS = (
 )
 KIND_BY_ID = {k["id"]: k for k in PRODUCT_KINDS}
 
+# A business sells things this file has never heard of. The eight kinds
+# below were chosen for one platform's own shop; a bakery has trays and a
+# studio has retainers, and neither is served by being filed under Goods.
+KIND_TABLE = """
+CREATE TABLE IF NOT EXISTS product_kinds (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  colour TEXT DEFAULT '#6b7280',
+  note TEXT DEFAULT '',
+  position INTEGER DEFAULT 100,
+  created_at REAL NOT NULL
+);
+"""
 
-def kind_of(meta: dict) -> str:
+
+def all_kinds(con) -> list:
+    """The built-in kinds and the ones this business added, in one order.
+    Custom kinds sort after the built-ins unless they say otherwise."""
+    out = [dict(k) for k in PRODUCT_KINDS]
+    try:
+        rows = con.execute("SELECT * FROM product_kinds"
+                           " ORDER BY position, label").fetchall()
+    except Exception:                                        # noqa: BLE001
+        return out
+    have = {k["id"] for k in out}
+    extra = [{"id": r["id"], "label": r["label"], "colour": r["colour"],
+              "note": r["note"], "custom": True}
+             for r in rows if r["id"] not in have]
+    # Goods last: it is the fallback, and a fallback below the specifics
+    # reads as "everything else" rather than as another category.
+    goods = [k for k in out if k["id"] == "goods"]
+    return [k for k in out if k["id"] != "goods"] + extra + goods
+
+
+def kind_map(con) -> dict:
+    return {k["id"]: k for k in all_kinds(con)}
+
+
+def kind_of(meta: dict, known: dict | None = None) -> str:
     """A product with no kind recorded is a thing in a box — which is what
     every product was before there were services to tell apart."""
     k = (meta or {}).get("kind", "")
-    return k if k in KIND_BY_ID else "goods"
+    return k if k in (known or KIND_BY_ID) else "goods"
 
 
 STORE_MIGRATIONS = (
@@ -744,6 +781,7 @@ def init_tables():
     con = db.connect()
     try:
         con.executescript(TABLES)
+        con.executescript(KIND_TABLE)
         for stmt in STORE_MIGRATIONS:
             try:
                 con.execute(stmt)
@@ -974,11 +1012,15 @@ def catalog(con=Depends(get_con)):
     meta: dict[int, dict] = {}
     for m in con.execute("SELECT * FROM store_product_meta").fetchall():
         meta.setdefault(m["product_id"], {})[m["k"]] = m["v"]
+    kinds_known = kind_map(con)
     # A plan somebody built for themselves is theirs, not stock: it keeps
     # its row so the subscription and the invoice have something to name,
-    # and stays off the shelf.
+    # and stays off the shelf. A DRAFT is the other reason a row is not on
+    # the shelf: it is being set up, and a shop being built in public is
+    # a shop nobody can be shown before it is ready.
     prods = [p for p in prods
-             if meta.get(p["id"], {}).get("unlisted", "") != "1"]
+             if meta.get(p["id"], {}).get("unlisted", "") != "1"
+             and meta.get(p["id"], {}).get("draft", "") != "1"]
     for p in prods:
         rv = reviews.get(p["id"])
         p["review_count"] = rv["n"] if rv else 0
@@ -1001,13 +1043,13 @@ def catalog(con=Depends(get_con)):
         # rung starts and opens the conversation instead of a cart.
         p["quote"] = md.get("quote", "") == "1"
         # what it IS: the group it sits in and the colour it wears
-        p["kind"] = kind_of(md)
+        p["kind"] = kind_of(md, kinds_known)
         # What a bundle IS: the capabilities it turns on. Ids, because a
         # grant is made of ids — the names are for reading.
         p["caps"] = [x for x in (md.get("caps", "") or "").split(",") if x]
-        p["kind_label"] = KIND_BY_ID[p["kind"]]["label"]
+        p["kind_label"] = kinds_known[p["kind"]]["label"]
         if not p["colour"]:
-            p["colour"] = KIND_BY_ID[p["kind"]]["colour"]
+            p["colour"] = kinds_known[p["kind"]]["colour"]
         p["note"] = md.get("note", "")
         p["ingredients"] = md.get("ingredients", "")
         p["badge"] = md.get("badge", "")
@@ -1017,12 +1059,12 @@ def catalog(con=Depends(get_con)):
             p["nutrition"] = {}
     # The kinds actually on this shelf, in the order a shop reads: what
     # you run on, what keeps it running, then the work that builds it.
-    kinds = [dict(k) for k in PRODUCT_KINDS
+    kinds = [dict(k) for k in all_kinds(con)
              if any(p["kind"] == k["id"] for p in prods)]
     # Cheapest first, within each lane. A row reading $150, $750, $350 is
     # the alphabet pretending to be a price list; a shopper reads left to
     # right and expects the ladder to climb.
-    korder = {k["id"]: i for i, k in enumerate(PRODUCT_KINDS)}
+    korder = {k["id"]: i for i, k in enumerate(all_kinds(con))}
     prods.sort(key=lambda p: (korder.get(p["kind"], 99), p["price_cents"],
                               p["name"]))
     return {"products": prods, "collections": cols, "kinds": kinds}

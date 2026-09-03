@@ -2,6 +2,65 @@
 
 
 
+/* Which lane a product sits in, and the lanes themselves. A bakery has
+   trays and a studio has retainers; neither is served by being filed
+   under Goods, because the lane is how a customer finds it. */
+async function kindPicker(pid, prod) {
+  let kinds = [];
+  try { kinds = await api("/api/admin/product-kinds"); }
+  catch (err) { return toast(err.message); }
+  modal(`<h3>${esc(prod ? prod.name : "Kind")}</h3>
+    <p class="dim">The lane it sits in on the shop's shelf, and the colour
+      it wears there.</p>
+    <label>Kind</label>
+    <select id="kp-kind">${kinds.map((k) => `<option value="${esc(k.id)}"
+      ${prod && prod.kind === k.id ? "selected" : ""}>${esc(k.label)}${
+      k.custom ? " (yours)" : ""}</option>`).join("")}</select>
+    <details class="sect" style="margin-top:12px">
+      <summary>A kind of your own</summary>
+      <div class="row2">
+        <div><label>Name</label><input id="kp-new" placeholder="Trays"></div>
+        <div><label>Colour</label>
+          <input id="kp-col" type="color" value="#6b7280"></div>
+      </div>
+      <label>One line about it <span class="opt">shown under the heading on
+        the shop</span></label>
+      <input id="kp-note" placeholder="baked this morning, gone by noon">
+      <button class="btn alt sm" id="kp-add">Add the kind</button>
+      ${kinds.filter((k) => k.custom).length ? `<p class="dim"
+        style="margin-top:8px">Yours: ${kinds.filter((k) => k.custom)
+        .map((k) => `${esc(k.label)} <button class="btn alt sm"
+          data-kpdel="${esc(k.id)}">remove</button>`).join(" · ")}</p>` : ""}
+    </details>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="kp-save">Save</button></div>`);
+  $("#kp-add").onclick = async () => {
+    const label = $("#kp-new").value.trim();
+    if (!label) return toast("a kind needs a name");
+    try {
+      await api("/api/admin/product-kinds", { body: {
+        label, colour: $("#kp-col").value, note: $("#kp-note").value.trim() } });
+      closeModal(); kindPicker(pid, prod);
+    } catch (err) { toast(err.message); }
+  };
+  document.querySelectorAll("[data-kpdel]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        await api(`/api/admin/product-kinds/${b.dataset.kpdel}`,
+                  { method: "DELETE" });
+        closeModal(); kindPicker(pid, prod);
+      } catch (err) { toast(err.message); }
+    });
+  $("#kp-save").onclick = async () => {
+    try {
+      await api(`/api/admin/products/${pid}/shelf`,
+                { body: { kind: $("#kp-kind").value } });
+      closeModal(); renderShop();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 /* Products, grouped by what they ARE and tinted by it — the same kinds
    the shop groups by, carried on the row so the two faces of the
    catalogue cannot sort it differently. Order comes from the server; a
@@ -53,7 +112,8 @@ async function renderShop() {
           <div class="name">${esc(p.name)}</div>
           <div class="dim" style="font-size:12px">${esc(p.category)} · ${esc(p.sku)}${
             p.unlisted ? ' · <span class="pill warn">not on the shelf</span>'
-              : ""}</div>
+              : ""}${p.draft
+            ? ' · <span class="pill warn">draft</span>' : ""}</div>
           <div class="price">${isDist
             ? `${money(p.case_price_cents)} <span class="dim"
                 style="font-size:12px;font-weight:400">/ case of ${p.case_size}</span>`
@@ -66,6 +126,15 @@ async function renderShop() {
             <button data-inc="${p.id}" aria-label="add one">+</button>
           </div>`}
           ${rowActions("product", p)}
+          ${p.unlisted ? "" : `<button class="btn alt sm"
+            data-shelf="${p.id}:${p.draft ? 0 : 1}"
+            title="${p.draft
+              ? "put it on the shop's shelf"
+              : "take it off the shelf while you work on it — the back "
+                + "office still sees it"}">${p.draft
+              ? "Publish" : "Unpublish"}</button>
+          <button class="btn alt sm" data-kind="${p.id}"
+            title="which lane it sits in on the shelf">Kind</button>`}
         </div>
       </div>`).join("")}
     </div>`).join("")}
@@ -350,6 +419,19 @@ async function renderShop() {
   };
 
   renderCartCard();
+  view().querySelectorAll("[data-shelf]").forEach((b) => b.onclick =
+    async () => {
+      const [pid, draft] = b.dataset.shelf.split(":");
+      try {
+        await api(`/api/admin/products/${pid}/shelf`,
+                  { body: { draft: draft === "1" } });
+        toast(draft === "1" ? "off the shelf — still here" : "on the shelf");
+        renderShop();
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-kind]").forEach((b) => b.onclick =
+    () => kindPicker(+b.dataset.kind, S.products.find(
+      (p) => p.id === +b.dataset.kind)));
   wireRows({ product: S.products }, renderShop);
 }
 
@@ -1037,6 +1119,186 @@ function timeOffForm() {
         hours: +$("#to-hours").value || 0,
         note: $("#to-note").value.trim() } });
       closeModal(); toast("asked — somebody will answer it"); renderHours();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+
+/* ---------- availability and the rota ----------
+   Two different facts, deliberately not one: what somebody says about
+   their own week, and what the business is asking of them. A rota that
+   confuses the two is how people get rostered onto their evening class. */
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+let ROTA_FROM = null;
+
+const hhmm = (mins) => `${String(Math.floor(mins / 60)).padStart(2, "0")}:`
+  + String(mins % 60).padStart(2, "0");
+
+async function renderSchedule() {
+  const from = ROTA_FROM || (() => {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return d.getTime() / 1000;
+  })();
+  const to = from + 14 * 86400;
+  const [sched, avail] = await Promise.all([
+    api(`/api/schedule?from_ts=${from}&to_ts=${to}`),
+    api("/api/availability")]);
+  const byDay = {};
+  sched.shifts.forEach((s) => {
+    const k = new Date(s.starts * 1000).toDateString();
+    (byDay[k] = byDay[k] || []).push(s);
+  });
+  const t = (ts) => new Date(ts * 1000).toLocaleTimeString(undefined,
+    { hour: "2-digit", minute: "2-digit" });
+  const cells = [];
+  for (let i = 0; i < 14; i++) {
+    const d = new Date((from + i * 86400) * 1000);
+    const list = byDay[d.toDateString()] || [];
+    cells.push(`<div class="rota-day">
+      <div class="rota-head">${DAYS[(d.getDay() + 6) % 7]}
+        <span class="dim">${d.getDate()}</span></div>
+      ${list.map((s) => `<div class="rota-shift${s.published
+        ? "" : " rota-draft"}${s.fits ? "" : " rota-clash"}"
+        title="${s.fits ? "inside what they said they could do"
+          : "outside the hours they gave — allowed, but worth a word"}">
+        <b>${esc(s.name)}</b>
+        <span class="dim">${t(s.starts)}–${t(s.ends)}${
+          s.store ? " · " + esc(s.store) : ""}</span>
+        ${sched.office ? `<button class="btn alt sm"
+          data-rotadel="${s.id}">×</button>` : ""}
+      </div>`).join("")
+        || '<span class="dim" style="font-size:11.5px">—</span>'}
+      ${sched.office ? `<button class="btn alt sm rota-add"
+        data-rotaadd="${from + i * 86400}">+</button>` : ""}
+    </div>`);
+  }
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Rota</h2>
+        <p class="dim">What the business is asking of people, over what
+          they said they could do. A shift outside somebody's hours is
+          allowed and marked — a rota that refuses to let a manager ask is
+          a rota that ends up in a spreadsheet.</p></div>
+      <div class="top-actions">
+        <button class="btn alt sm" id="rt-prev">&larr;</button>
+        <button class="btn alt sm" id="rt-next">&rarr;</button>
+        <button class="btn alt sm" id="rt-avail">My availability</button>
+        ${sched.office ? `<button class="btn sm" id="rt-pub">Publish these
+          two weeks</button>` : ""}
+      </div>
+    </div>
+    ${sched.shifts.some((s) => !s.published) && sched.office
+      ? `<div class="card alert"><b>Draft shifts on this rota.</b>
+         <span class="dim">Nobody but the office can see them until you
+           publish — a rota half-built is not a promise anybody should be
+           arranging childcare around.</span></div>` : ""}
+    <div class="rota">${cells.join("")}</div>
+    <h3>My week</h3>
+    <div class="card">
+      ${avail.slots.length ? avail.slots.map((s) => `<span class="pill">${
+        DAYS[s.weekday]} ${hhmm(s.from_min)}–${hhmm(s.to_min)}
+        <button class="btn alt sm" data-availdel="${s.id}">×</button>
+      </span> `).join("")
+        : '<span class="dim">You have not said when you can work. Nobody '
+          + 'can roster around hours they do not know about.</span>'}
+    </div>`;
+  $("#rt-prev").onclick = () => { ROTA_FROM = from - 14 * 86400;
+    renderSchedule(); };
+  $("#rt-next").onclick = () => { ROTA_FROM = from + 14 * 86400;
+    renderSchedule(); };
+  $("#rt-avail").onclick = () => availabilityForm();
+  if ($("#rt-pub")) $("#rt-pub").onclick = async () => {
+    try {
+      const r = await api("/api/schedule/publish", { body: {
+        from_ts: from, to_ts: to, published: true } });
+      toast(`${r.changed} shift(s) on the wall`);
+      renderSchedule();
+    } catch (err) { toast(err.message); }
+  };
+  view().querySelectorAll("[data-rotaadd]").forEach((b) => b.onclick = () =>
+    planShiftForm(+b.dataset.rotaadd, sched.people));
+  view().querySelectorAll("[data-rotadel]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        await api(`/api/schedule/${b.dataset.rotadel}`, { method: "DELETE" });
+        renderSchedule();
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-availdel]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        await api(`/api/availability/${b.dataset.availdel}`,
+                  { method: "DELETE" });
+        renderSchedule();
+      } catch (err) { toast(err.message); }
+    });
+}
+
+function planShiftForm(dayTs, people) {
+  const d = new Date(dayTs * 1000);
+  modal(`<h3>${d.toLocaleDateString(undefined,
+    { weekday: "long", month: "short", day: "numeric" })}</h3>
+    <label>Who</label>
+    <select id="ps-who">${people.map((p) =>
+      `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+    <div class="row2">
+      <div><label>From</label><input id="ps-from" type="time" value="09:00">
+      </div>
+      <div><label>To</label><input id="ps-to" type="time" value="17:00"></div>
+    </div>
+    <label>Note <span class="opt">what they are on</span></label>
+    <input id="ps-note" placeholder="counter, deliveries, the market">
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="ps-save">Draft it</button></div>`);
+  $("#ps-save").onclick = async () => {
+    const at = (v) => {
+      const [h, m] = v.split(":").map(Number);
+      return dayTs + h * 3600 + m * 60;
+    };
+    try {
+      const r = await api("/api/schedule", { body: {
+        user_id: +$("#ps-who").value,
+        starts: at($("#ps-from").value), ends: at($("#ps-to").value),
+        note: $("#ps-note").value.trim() } });
+      closeModal();
+      if (!r.fits) toast("drafted — that is outside the hours they gave");
+      renderSchedule();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+function availabilityForm() {
+  modal(`<h3>When you can work</h3>
+    <p class="dim">Nobody can roster around hours they do not know about.
+      This is yours to describe; the office reads it and does not edit
+      it.</p>
+    <div class="row2">
+      <div><label>Day</label><select id="av-day">${DAYS.map((d, i) =>
+        `<option value="${i}">${d}</option>`).join("")}</select></div>
+      <div><label>Note</label><input id="av-note" placeholder="optional">
+      </div>
+    </div>
+    <div class="row2">
+      <div><label>From</label><input id="av-from" type="time" value="09:00">
+      </div>
+      <div><label>To</label><input id="av-to" type="time" value="17:00"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="av-save">Add it</button></div>`);
+  $("#av-save").onclick = async () => {
+    const mins = (v) => {
+      const [h, m] = v.split(":").map(Number);
+      return h * 60 + m;
+    };
+    try {
+      await api("/api/availability", { body: {
+        weekday: +$("#av-day").value,
+        from_min: mins($("#av-from").value), to_min: mins($("#av-to").value),
+        note: $("#av-note").value.trim() } });
+      closeModal(); renderSchedule();
     } catch (err) { toast(err.message); }
   };
 }

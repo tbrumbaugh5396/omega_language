@@ -81,6 +81,8 @@ const TABS = [
   // Work and dates, where the work is. The board is what everyone is
   // doing; the calendar is everything this business has a date for, laid
   // over each other for once.
+  { id: "rota", label: "Rota", icon: "calendar", group: "Operate",
+    roles: ["admin", "employee", "teacher", "volunteer"] },
   { id: "hours", label: "Hours", icon: "clock", group: "Operate",
     roles: ["admin", "employee", "teacher"] },
   { id: "board", label: "Board", icon: "list", group: "Operate",
@@ -199,7 +201,8 @@ function renderChrome() {
   const btn = (t) =>
     `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}${
         capLocked(t) ? " cap-locked" : ""}">
-      <span class="ic">${opsIcon(t.icon)}</span><span>${t.label}</span>${
+      <span class="ic">${opsIcon(t.icon)}</span>
+      <span class="tab-label">${t.label}</span>${
         capLocked(t) ? `<span class="cap-lock-ic">${opsIcon("shield2")}</span>`
                      : ""}</button>`;
   /* Rewriting the nav resets its scroll to the top, so a tab picked from the
@@ -210,10 +213,12 @@ function renderChrome() {
   nav.innerHTML = NAV_GROUPS.map((g) => {
     const group = tabs.filter((t) => t.group === g);
     if (!group.length) return "";
-    return (tabs.length > 5 ? `<div class="nav-group">${g}</div>` : "") +
+    return (tabs.length > 5
+      ? `<div class="nav-group tab-group">${g}</div>` : "") +
       group.map(btn).join("");
   }).join("");
   nav.scrollTop = navScroll;
+  ensureRailGrip();          // the redraw above takes the grip with it
   // And remember it across reloads, so a refresh doesn't lose your place
   // either. Written on scroll rather than on navigation, because the nav can
   // be scrolled without anything being clicked.
@@ -347,6 +352,7 @@ async function render() {
     docs: renderDocs, clients: renderClients,
     staff: renderStaff, events: renderEvents, customers: renderCustomers,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
+    rota: renderSchedule,
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
@@ -693,5 +699,74 @@ function renderLogin() {
       connectWS();
       render();
     } catch (err) { toast(err.message); }
+  };
+}
+
+
+/* ---------- the rail ----------
+   Folded or wide, and any width in between. Somebody who knows this app
+   wants the screen back; somebody learning it wants the words. Both are
+   right, so it is remembered per person rather than decided for them —
+   and the brand is the switch, because that is where a hand already goes. */
+function wireRail() {
+  const brand = document.getElementById("brand");
+  const nav = document.getElementById("tabs");
+  if (!brand || !nav || brand.dataset.railed) return;
+  brand.dataset.railed = "1";
+
+  const applyWidth = (px) => {
+    document.documentElement.style.setProperty("--rail", px + "px");
+  };
+  const folded = localStorage.getItem("bc_rail_folded") === "1";
+  document.body.classList.toggle("rail-folded", folded);
+  const w = +localStorage.getItem("bc_rail_w") || 0;
+  if (w) applyWidth(w);
+
+  brand.title = "fold the menu away, or bring it back";
+  brand.onclick = () => {
+    const now = !document.body.classList.contains("rail-folded");
+    document.body.classList.toggle("rail-folded", now);
+    localStorage.setItem("bc_rail_folded", now ? "1" : "");
+  };
+
+  ensureRailGrip();
+}
+
+/* The nav is redrawn on every tab change, which takes the grip with it —
+   so it is put back after each draw rather than once at boot. */
+function ensureRailGrip() {
+  const nav = document.getElementById("tabs");
+  if (!nav || document.getElementById("rail-grip")) return;
+  const applyWidth = (px) => {
+    document.documentElement.style.setProperty("--rail", px + "px");
+  };
+  const grip = document.createElement("div");
+  grip.id = "rail-grip";
+  nav.style.position = "relative";
+  nav.appendChild(grip);
+  let dragging = false;
+  grip.onpointerdown = (e) => {
+    dragging = true;
+    grip.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = "none";
+  };
+  grip.onpointermove = (e) => {
+    if (!dragging) return;
+    // Clamped: a rail dragged to nothing is a rail somebody cannot find
+    // again, and one dragged across the screen is a screen with no room
+    // left to work in.
+    const px = Math.max(54, Math.min(340, e.clientX - nav.getBoundingClientRect().left));
+    applyWidth(px);
+    document.body.classList.toggle("rail-folded", px < 96);
+  };
+  grip.onpointerup = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = "";
+    const px = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue("--rail"), 10) || 176;
+    localStorage.setItem("bc_rail_w", px);
+    localStorage.setItem("bc_rail_folded",
+      document.body.classList.contains("rail-folded") ? "1" : "");
   };
 }
