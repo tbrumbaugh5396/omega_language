@@ -88,9 +88,10 @@ async function renderLearning() {
         : "An owner can create one and appoint you its teacher."}</span></div>`}
     ${S.user.is_admin ? `<div class="page-head" style="margin-top:16px">
       <h3>The team (${team.length})</h3>
-      <div style="display:flex;gap:8px">
-        <button class="btn alt sm" id="lt-invite">Invite by link</button>
-        <button class="btn sm" id="lt-add">Add person</button>
+      <div class="top-actions">
+        <button class="btn alt" id="lt-invite">Invite by link</button>
+        <button class="btn" id="lt-add">${opsIcon("users", "btn-ic")}
+          Add person</button>
       </div>
     </div>
     ${team.map((p) => `<div class="card${p.active ? "" : " dim-card"}">
@@ -153,9 +154,10 @@ async function learningLibrary() {
     <div class="page-head" style="margin-top:16px">
       <h3>Library (${d.items.length} item${d.items.length === 1 ? "" : "s"},
         ${d.loans.length} out)</h3>
-      <div style="display:flex;gap:8px">
-        <button class="btn alt sm" id="lib-scan">Scan item</button>
-        <button class="btn sm" id="lib-add">Add item</button>
+      <div class="top-actions">
+        <button class="btn alt" id="lib-scan">Scan item</button>
+        <button class="btn" id="lib-add">${opsIcon("box", "btn-ic")}
+          Add item</button>
       </div>
     </div>
     ${d.loans.length ? d.loans.map((l) => `<div class="card">
@@ -811,7 +813,7 @@ async function learningCourse(cid) {
         <p class="dim">${esc([d.language, d.level].filter(Boolean).join(" · ")
           || "course")}${d.product_id
           ? " · sold on the storefront (buying enrols)" : ""}</p></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div class="top-actions">
         <button class="btn alt" id="lc-back">All courses</button>
         <button class="btn alt" id="lc-edit">Edit course</button>
         ${S.user.is_admin ? `<button class="btn alt" id="lc-arch">
@@ -993,7 +995,7 @@ async function sessionRoster(sid, cid) {
           · late after ${d.session.late_after_min} min
           · ${sum.attended}/${sum.enrolled} attended
           (${Math.round(sum.rate * 100)}%)</p></div>
-      <div style="display:flex;gap:8px">
+      <div class="top-actions">
         <button class="btn alt" id="sr-back">Course</button>
         ${open && window.QRScan && QRScan.supported()
           ? '<button class="btn alt" id="sr-scan">Scan badge</button>' : ""}

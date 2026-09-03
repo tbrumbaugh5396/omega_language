@@ -3547,6 +3547,62 @@ ok('data-engname' in _ops and "/rename" in _ops,
    "a document filed under a client can be renamed from the client page")
 
 
+# --- the rest of the alignment pass ---------------------------------------
+# A date that wraps is a date in two columns. A launch date is short and
+# known; the track is sized for it and told not to break.
+_ew = _ocss.split(".eng-when {")[1][:160]
+ok("white-space: nowrap" in _ew and "text-align: right" in _ew,
+   "a client's launch date holds one line in its own column")
+
+# The fleet's capability count was a pill among pills, so it started
+# wherever the class pill happened to end.
+ok('class="fl-caps"' in _ops and ".fl-caps {" in _ocss,
+   "a tenant's capability count has a column of its own")
+ok("minmax(0, 1fr) minmax(0, 240px) 74px" in
+   _ocss.split(".doc-line.fleet-line {")[1][:160],
+   "sized and fixed, so it reads down the list rather than across each row")
+
+# Every kind of service drew its own table, and a table sizes its columns
+# to its own contents — so Plans, Bundles and Packs each put the SKU and
+# the price somewhere different.
+ok('class="svc-table"' in _ops and "table.svc-table { table-layout: fixed"
+   in _ocss,
+   "the inventory's service lines share one set of columns across every "
+   "kind, instead of each table sizing itself")
+ok('class="svc-price"' in _ops and 'class="dim svc-from"' in _ops,
+   "with the price and the 'from — quoted' in tracks of their own — a "
+   "suffix inside the price cell moves the price")
+
+# An inline form's submit is the page's action.
+ok("form.inline > button.btn:last-child { margin-left: auto; }" in _ocss,
+   "an inline form's action sits at the right-hand end of its row, where "
+   "every other page's action is, rather than wherever the last field "
+   "happens to leave off")
+for _id in ("lt-add", "lt-invite", "lib-add", "lib-scan"):
+    ok(f'id="{_id}"' in _ops, f"{_id} is still there")
+# A bare <div> in a page head takes the title block's flex:1 and lands in
+# the middle of the header — the bug the whole alignment pass was. Nothing
+# in a page head may hand-roll its own row.
+_rolled = [c[:70].replace("\n", " ") for c in _ops.split('class="page-head"')[1:]
+           if re.search(r"<div style=", c[:400])]
+ok(not _rolled,
+   f"no page head hand-rolls its own action row — it takes the title's "
+   f"flex and lands in the middle ({_rolled[:2]})")
+
+# The picture is the work: somebody is holding a phone over a code on a
+# case and reading the frame to know whether they have got it.
+ok(".scan-stage" in _ocss and 'class="scan-stage"' in _ops,
+   "the scanner has a stage of its own")
+_ss = _ocss.split(".scan-stage {")[1][:260]
+ok("width: 100%" in _ss and "aspect-ratio" not in _ss,
+   "as wide as the page — an aspect ratio caps the width to whatever the "
+   "height allows, which left a third of the card empty beside it")
+ok("clamp(" in _ss and "100vh" in _ss,
+   "and as tall as the window can give it")
+ok("object-fit: cover" in _ocss.split(".scan-stage video {")[1][:120],
+   "the stream fills that frame rather than sitting letterboxed in it")
+
+
 # --- a modifier may not depend on where it sits in the file ---------------
 # Twice in one afternoon a row variant collapsed because its rule was
 # written above the rule it was meant to override: same specificity, later

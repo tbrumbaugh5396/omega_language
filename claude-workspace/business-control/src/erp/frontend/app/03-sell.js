@@ -914,8 +914,10 @@ async function renderAffiliates() {
         <div class="card"><div class="dim">earned (${mine.rate_bps / 100}%)</div>
           <div class="big">${money(mine.earned_cents)}</div></div>
       </div>`
-    : `<div class="card">Share a personal link, earn a commission on every
-        order it brings in. <button class="btn" id="join">Get my link</button></div>`}
+    : `<div class="card"><div class="doc-top">
+        <div class="doc-main">Share a personal link, earn a commission on
+          every order it brings in.</div>
+        <button class="btn" id="join">Get my link</button></div></div>`}
     ${isAdmin ? `<h3>All influencers</h3>
       <div class="card"><table><thead><tr><th>who</th><th>code</th><th>rate</th>
       <th>clicks</th><th>orders</th><th>earned</th></tr></thead>

@@ -339,14 +339,15 @@ async function renderFleet() {
             ${t.provider ? `<span class="pill ok">runs the platform</span>`
               : ""}
             <span class="pill">${esc(t.class)} · ${t.units}u</span>
-            ${t.caps ? `<span class="pill" title="capabilities granted from
-              their quote">${t.caps} caps</span>` : ""}
             ${t.billing ? `<span class="pill bad" title="their ${esc(
               t.billing.plan)} subscription — the card processor says so">
               card ${esc(t.billing.status)}</span>` : ""}
             ${t.status === "suspended"
               ? `<span class="pill warn">suspended</span>` : ""}
           </span>
+          <span class="fl-caps">${t.caps ? `<span class="pill"
+            title="capabilities granted from their quote">${t.caps}
+            caps</span>` : ""}</span>
           <span class="fl-hosts dim">${(t.hosts || []).map(esc)
             .join(" · ")}</span>
           <span class="dl-acts fleet-acts">

@@ -39,12 +39,12 @@ async function renderInventory() {
       ${svc.map((g) => `
         <h3 class="kind-head" style="--kind:${esc(g.colour)}">${esc(g.label)}
           <small class="dim">${g.items.length}</small></h3>
-        <div class="tablewrap"><table><tbody>
+        <div class="tablewrap"><table class="svc-table"><tbody>
         ${g.items.map((p) => `<tr>
           <td>${esc(p.name)}</td>
           <td class="dim">${esc(p.sku)}</td>
-          <td>${money(p.price_cents)}${p.quote
-            ? ' <span class="dim">from — quoted</span>' : ""}</td>
+          <td class="svc-price">${money(p.price_cents)}</td>
+          <td class="dim svc-from">${p.quote ? "from — quoted" : ""}</td>
         </tr>`).join("")}</tbody></table></div>`).join("")}
     </div>` : ""}
     ${picks.length ? `<div class="card">

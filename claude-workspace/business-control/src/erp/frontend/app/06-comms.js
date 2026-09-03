@@ -505,13 +505,18 @@ function routeSummary(r) {
 // ---------- camera QR scanner ----------
 
 async function renderScan() {
+  /* The viewfinder takes the page. Somebody scanning is holding a phone
+     at arm's length over a code on a case, reading the picture to know
+     whether they have got it — a 520px card in the corner of a laptop
+     screen was a preview of a job rather than the job. */
   view().innerHTML = `
     <h2>Scan</h2>
-    <div class="card" style="max-width:520px">
-      <video id="scan-video" autoplay playsinline muted
-        style="width:100%;border-radius:8px;background:#000"></video>
-      <div id="scan-status" class="dim" style="margin:8px 0">starting camera…</div>
-      <form class="inline" id="scan-manual">
+    <div class="card scan-card">
+      <div class="scan-stage">
+        <video id="scan-video" autoplay playsinline muted></video>
+        <div id="scan-status" class="scan-status">starting camera…</div>
+      </div>
+      <form class="inline scan-manual" id="scan-manual">
         <input id="scan-code" style="flex:1"
           placeholder="or type a code / link (e.g. bc:truck:1)">
         <button class="btn alt">Go</button>

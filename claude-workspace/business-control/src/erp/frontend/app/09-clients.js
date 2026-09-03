@@ -581,7 +581,7 @@ async function renderClients() {
       <div><h2>Clients (B2B)</h2>
         <p class="dim">Studio engagements — the kit's stages, documents and
           signatures, run from one place.</p></div>
-      <div class="top-actions" style="display:flex;gap:8px">
+      <div class="top-actions">
         ${data.archived_count || S.engArchived ? `<button
           class="btn alt ${S.engArchived ? "on" : ""}" id="eng-arch-toggle"
           title="clients put away — everything they have is intact"
