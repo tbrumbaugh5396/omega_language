@@ -167,7 +167,8 @@ def whoami(u=Depends(admin_user)):
 @router.get("/api/store/admin/staff")
 def list_staff(u=Depends(admin_user), con=Depends(get_con)):
     rows = con.execute(
-        "SELECT id, name, role, is_admin, active, permissions FROM users"
+        "SELECT id, name, role, is_admin, active, permissions, email,"
+        " job, employment FROM users"
         " WHERE is_admin=1 OR role IN ('owner','employee')"
         " ORDER BY is_admin DESC, name").fetchall()
     return {"staff": [{**dict(r), "effective": granted(r)} for r in rows],

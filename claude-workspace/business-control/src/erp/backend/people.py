@@ -246,7 +246,7 @@ def customers_list(q: str = "", user=Depends(current_user),
     like = f"%{q.strip()}%"
     rows = con.execute(
         "SELECT u.id, u.name, u.email, u.region, u.active, u.created_at,"
-        " u.requested_role,"
+        " u.requested_role, u.role, u.job, u.employment, u.is_admin,"
         " COUNT(o.id) AS orders,"
         " COALESCE(SUM(CASE WHEN o.status!='cancelled'"
         "   THEN o.total_cents END),0) AS spent_cents,"

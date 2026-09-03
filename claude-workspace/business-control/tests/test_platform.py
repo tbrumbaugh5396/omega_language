@@ -362,6 +362,59 @@ ok(all(abs(_pb.price_selection(
    "and the rule the configurator prices with is the SAME one every "
    "bundle in the book was computed with — all five come out to the "
    "penny, which is what makes the page trustworthy")
+# --- people: added and corrected from the back office ------------------------
+# Every other door mints people as a side effect. Sometimes you just have
+# to add somebody, or fix a name typed wrong on a first morning.
+_nu = c.post("/api/admin/users", headers=AA, json={
+    "name": "Wanda Warehouse", "email": "wanda@alpha.test",
+    "role": "employee", "job": "warehouse", "pin": "4417"}).json()
+ok(_nu["ok"] and _nu["id"],
+   "an owner can open an account outright — a new hire on their first "
+   "morning, a customer who phoned an order in")
+ok(c.post("/api/admin/users", headers=AA,
+          json={"name": "Wanda Warehouse"}).status_code == 409,
+   "and not twice under one name")
+c.post(f"/api/admin/users/{_nu['id']}/update", headers=AA,
+       json={"name": "Wanda Warehouse-Smith", "email": "w@alpha.test"})
+_wu = [u for u in c.get("/api/admin/users", headers=AA).json()
+       if u["id"] == _nu["id"]][0]
+ok(_wu["name"] == "Wanda Warehouse-Smith",
+   "a name typed wrong is a name that can be fixed — and it changes "
+   "everywhere that account appears, because there is one row")
+ok(c.post("/api/admin/users", headers=AA,
+          json={"name": "Nope", "role": "wizard"}).status_code == 400,
+   "roles come from the list, not from the form")
+_cu = c.post("/api/admin/users", headers=AA, json={
+    "name": "Phoned It In", "role": "customer"}).json()
+ok(any(r["name"] == "Phoned It In"
+       for r in c.get("/api/customers", headers=AA).json()),
+   "a customer opened this way is on the customer book straight away")
+
+# --- the clock: yourself, and a tablet you can hand over ---------------------
+_cm = c.post("/api/clock/me", headers=AA, json={}).json()
+ok(_cm["action"] == "clock_in",
+   "somebody already signed in starts their own shift without a second "
+   "secret — a PIN is for a tablet that has no login, not a lock on the "
+   "inside of an open door")
+ok(c.post("/api/clock/me", headers=AA, json={})
+   .json()["action"] == "clock_out", "and the same button ends it")
+ok(c.post("/api/kiosk/unlock", headers=AA,
+          json={"secret": "definitely-not-it"}).status_code == 403
+   and c.post("/api/kiosk/unlock", headers=AA,
+              json={"secret": ""}).status_code == 400,
+   "and the way out of a locked kiosk is checked HERE: a tablet left on a "
+   "counter cannot be talked out of somebody's back office")
+_opsjs3 = ops_app_js()
+ok('localStorage.setItem("bc_kiosk"' in _opsjs3
+   and 'localStorage.getItem("bc_kiosk")' in _opsjs3
+   and "function kioskUnlock(" in _opsjs3,
+   "the lock survives a refresh, because otherwise the way out of it is "
+   "the reload button")
+ok('localStorage.removeItem("bc_user")' in _opsjs3.split(
+       "function kioskUnlock(")[1][:1400],
+   "and a wrong answer signs the session out rather than offering another "
+   "guess — the worst case for a lost tablet is a keypad nobody can pass")
+
 # --- one product, one palette ------------------------------------------------
 _opsh = c.get("/ops", headers=HA).text
 ok("--brand:" in _opsh and "<style>:root{" in _opsh,

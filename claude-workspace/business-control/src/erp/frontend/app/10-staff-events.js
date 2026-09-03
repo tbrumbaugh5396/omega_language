@@ -18,6 +18,11 @@ async function renderCustomers(q) {
         <p class="dim">Everyone who shops (or studies) here — with what
           they've bought and where they're enrolled. B2B relationships
           live under Clients.</p></div>
+      <div class="top-actions">
+        <button class="btn sm" id="cu-new" title="somebody who phoned an
+          order in, or walked up to the counter — they can sign in by name
+          afterwards">Add a customer</button>
+      </div>
     </div>
     <div class="card"><input id="cu-q" placeholder="Search name or email"
       value="${esc(q || "")}" style="max-width:340px"></div>
@@ -29,9 +34,15 @@ async function renderCustomers(q) {
             r.active ? "" : " · deactivated"}</span></div>
         <span class="dim">${r.orders} order${r.orders === 1 ? "" : "s"}
           · ${money(r.spent_cents)}</span>
+        <button class="btn alt sm" data-editcust="${r.id}">Edit</button>
         <button class="btn alt sm" data-cust="${r.id}">Open</button>
       </div></div>`).join("")
       || '<div class="card empty"><b>No customers yet</b><span class="dim">They appear here the moment somebody signs up or orders.</span></div>'}`;
+  $("#cu-new").onclick = () => personForm({ role: "customer", _new: true },
+    () => renderCustomers(q));
+  view().querySelectorAll("[data-editcust]").forEach((b) => b.onclick = () =>
+    personForm(rows.find((r) => r.id === +b.dataset.editcust),
+               () => renderCustomers(q)));
   let t = null;
   $("#cu-q").oninput = () => {
     clearTimeout(t);
@@ -125,6 +136,93 @@ function wireRoleRequests(rerender) {
     });
 }
 
+/* One form for adding somebody and for fixing what an account says.
+   Every other door here mints people as a side effect — a sign-in, an
+   invite, an approved application — and there was no way to simply add a
+   person, or to correct a name somebody typed wrong on their first day.
+   No password is set: the account adopts one when its owner first
+   supplies it, exactly like every other door. */
+const PERSON_ROLES = ["customer", "employee", "owner", "teacher",
+                      "volunteer", "director", "board", "donor",
+                      "distributor", "influencer"];
+const PERSON_JOBS = ["general", "driver", "dsd", "warehouse", "sales_rep",
+                     "ambassador", "event_staff"];
+
+function personForm(u, after) {
+  const isNew = !u || u._new;
+  if (isNew && u) { u = { ...u, id: 0 }; }
+  const opt = (list, cur) => list.map((x) =>
+    `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("");
+  modal(`<h3>${isNew ? (u && u.role === "customer" ? "Add a customer"
+      : "Add a person") : "Edit " + esc(u.name)}</h3>
+    <p class="dim">${!isNew
+      ? "What this account says about them. Changing a name changes it "
+        + "everywhere they appear."
+      : "They can sign in by name straight away; a password is adopted the "
+        + "first time they supply one."}</p>
+    <label>Name <span class="req">required</span></label>
+    <input id="pf-name" value="${esc(!isNew ? u.name : "")}">
+    <label>Email <span class="opt">where anything we send goes</span></label>
+    <input id="pf-email" type="email" value="${esc((u && u.email) || "")}">
+    <div class="row2">
+      <div><label>Role</label>
+        <select id="pf-role">${opt(PERSON_ROLES,
+          (u && u.role) || "employee")}
+        </select></div>
+      <div><label>Job <span class="opt">for staff</span></label>
+        <select id="pf-job">${opt(PERSON_JOBS, (u && u.job) || "general")}
+        </select></div>
+    </div>
+    <div class="row2">
+      <div><label>Employment</label>
+        <select id="pf-emp">${opt(["employee", "contractor"],
+          (u && u.employment) || "employee")}</select></div>
+      <div><label>Time-clock PIN
+          <span class="opt">${isNew ? "optional, 4-8 digits"
+            : "set from the PIN button"}</span></label>
+        <input id="pf-pin" inputmode="numeric" autocomplete="off"
+          ${isNew ? "" : "disabled"}></div>
+    </div>
+    <label class="perm" style="margin-top:8px"><input type="checkbox"
+      id="pf-admin" ${u && u.is_admin ? "checked" : ""}>
+      <span><b>Full access</b><small>every area of the back office —
+        owners always have it</small></span></label>
+    ${!isNew ? `<label class="perm"><input type="checkbox" id="pf-active"
+      ${u.active ? "checked" : ""}>
+      <span><b>Active</b><small>an inactive account cannot sign in, and is
+        signed out on the spot</small></span></label>
+    <label class="perm"><input type="checkbox" id="pf-clearpw">
+      <span><b>Forget their password</b><small>the next password they type
+        becomes the new one</small></span></label>` : ""}
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="pf-save">${isNew ? "Add" : "Save"}</button>
+    </div>`);
+  $("#pf-save").onclick = async () => {
+    const body = {
+      name: $("#pf-name").value.trim(),
+      email: $("#pf-email").value.trim(),
+      role: $("#pf-role").value, job: $("#pf-job").value,
+      employment: $("#pf-emp").value,
+      is_admin: $("#pf-admin").checked,
+    };
+    if (!body.name) return toast("a person needs a name");
+    try {
+      if (!isNew) {
+        body.active = $("#pf-active").checked;
+        body.clear_password = $("#pf-clearpw").checked;
+        await api(`/api/admin/users/${u.id}/update`, { body });
+      } else {
+        body.pin = $("#pf-pin").value.trim();
+        await api("/api/admin/users", { body });
+      }
+      closeModal();
+      toast(isNew ? `${body.name} has an account` : "saved");
+      if (after) after();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 async function renderStaff() {
   const data = await api("/api/store/admin/staff");
   const requests = await api("/api/roles/requests").catch(() => []);
@@ -135,6 +233,9 @@ async function renderStaff() {
         <p class="dim">Who can see what in the back office. Owners keep full
           access; everyone else gets exactly what's ticked. Changes are
           recorded in the audit log.</p></div>
+      <div class="top-actions">
+        <button class="btn sm" id="staff-new">Add a person</button>
+      </div>
     </div>
     ${roleRequestsCard(requests)}
     ${data.staff.map((u) => `
@@ -152,6 +253,7 @@ async function renderStaff() {
             >Time-clock PIN</button>
           <button class="btn alt sm" data-badge="${u.id}:${esc(u.name)}"
             >Badge</button>
+          <button class="btn alt sm" data-edituser="${u.id}">Edit</button>
         </div>
         ${u.is_admin ? '<p class="dim" style="margin-top:8px">Owner accounts always have every permission.</p>' : `
         <div class="perm-grid">
@@ -167,6 +269,10 @@ async function renderStaff() {
         </div>`}
       </div>`).join("")}`;
   wireRoleRequests(renderStaff);
+  $("#staff-new").onclick = () => personForm(null, renderStaff);
+  view().querySelectorAll("[data-edituser]").forEach((b) => b.onclick = () =>
+    personForm(data.staff.find((u) => u.id === +b.dataset.edituser),
+               renderStaff));
   view().querySelectorAll("[data-badge]").forEach((b) => b.onclick = async () => {
     const [uid, name] = b.dataset.badge.split(":");
     const { token } = await api(`/api/admin/users/${uid}/badge`,

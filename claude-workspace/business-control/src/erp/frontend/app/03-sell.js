@@ -452,6 +452,9 @@ async function renderOrders() {
 
 async function renderClock() {
   const mine = S.user ? await api("/api/shifts").catch(() => []) : [];
+  // an open shift is one with no clock_out: the button says the verb that
+  // is actually available rather than making somebody guess
+  const mineOpen = mine.some((sh) => !sh.clock_out);
   const isAdmin = S.user && S.user.is_admin;
   const all = isAdmin ? await api("/api/shifts?all=1") : [];
   const events = await api("/api/promos?kind=event").catch(() => []);
@@ -469,12 +472,20 @@ async function renderClock() {
           ev.city ? " (" + esc(ev.city) + ")" : ""}</option>`).join("")}
         </select>` : ""}
       <div class="punch-acts">
-        <button class="btn" id="punch">Punch</button>
+        ${S.user ? `<button class="btn" id="punch-me"
+          title="you are already signed in — starting your own shift does
+          not need a second secret">${mineOpen ? "Clock out" : "Clock in"}
+          as ${esc(S.user.name)}</button>` : ""}
+        <button class="btn${S.user ? " alt" : ""}" id="punch">Punch</button>
         <button class="btn alt" id="badge-btn"
           title="scan an employee badge instead of typing a PIN">${
           opsIcon("camera", "btn-ic")} Scan a badge</button>
         <button class="btn alt" id="kiosk-btn"
           title="full-screen keypad for the store tablet">Kiosk mode</button>
+        ${S.user ? `<button class="btn alt" id="kiosk-lock"
+          title="hand the tablet over: the keypad cannot be closed without
+          your PIN or password, and a wrong answer signs this session
+          out">Lock in kiosk mode</button>` : ""}
       </div>
       <div id="punch-msg"></div>
     </div>
@@ -532,15 +543,33 @@ async function renderClock() {
   $("#punch").onclick = punch;
   $("#pin").onkeydown = (e) => { if (e.key === "Enter") punch(); };
   $("#kiosk-btn").onclick = () => openKiosk(events);
+  if ($("#kiosk-lock")) $("#kiosk-lock").onclick = () => {
+    localStorage.setItem("bc_kiosk", "1");
+    openKiosk(events, true);
+  };
+  if ($("#punch-me")) $("#punch-me").onclick = async () => {
+    try {
+      const r = await api("/api/clock/me", { body: {} });
+      toast(r.action === "clock_in"
+        ? `On shift${r.event ? " — " + r.event : ""}`
+        : `Clocked out — ${r.hours}h logged`);
+      renderClock();
+    } catch (err) { toast(err.message); }
+  };
 }
 
-// Full-screen punch keypad for a store tablet. No sign-in involved.
-function openKiosk(events) {
+/* Full-screen punch keypad for a store tablet. No sign-in involved — and
+   when LOCKED, no way back out of it either: the tablet is sitting on a
+   counter with somebody's whole back office behind it, so the exit asks
+   for that person's own PIN or password, and anyone who does not know it
+   gets the session signed out rather than a second guess. */
+function openKiosk(events, locked) {
   const k = document.createElement("div");
   k.id = "kiosk";
   let pin = "";
   k.innerHTML = `
-    <button class="btn alt exit" id="k-exit">exit</button>
+    <button class="btn alt exit" id="k-exit">${locked
+      ? "unlock" : "exit"}</button>
     <div class="big">${esc(S.meta.brand || "Time Clock")}</div>
     <div class="dim">enter your PIN to clock in or out</div>
     ${events.length ? `<select id="k-event">
@@ -588,7 +617,58 @@ function openKiosk(events) {
       dots();
     };
   });
-  k.querySelector("#k-exit").onclick = () => k.remove();
+  k.querySelector("#k-exit").onclick = () => {
+    if (!locked) { k.remove(); return; }
+    kioskUnlock(k);
+  };
+}
+
+/* The way out of a locked kiosk. One question, asked of the server so a
+   tablet cannot answer it for itself, and one wrong answer ends the
+   session — the worst case for a tablet left on a counter is a keypad
+   nobody can get past, not a back office anybody can walk into. */
+function kioskUnlock(k) {
+  const box = document.createElement("div");
+  box.className = "k-unlock";
+  box.innerHTML = `
+    <div class="k-unlock-card">
+      <b>Your PIN or password</b>
+      <p class="dim">This tablet is signed in as ${esc(
+        (S.user && S.user.name) || "somebody")}. Getting out needs their
+        answer — a wrong one signs the session out and leaves the clock
+        running for everybody else.</p>
+      <input id="ku-secret" type="password" autocomplete="off"
+        inputmode="text">
+      <div class="k-unlock-acts">
+        <button class="btn alt" id="ku-cancel">Back to the keypad</button>
+        <button class="btn" id="ku-go">Unlock</button>
+      </div>
+      <button class="btn alt sm" id="ku-out">I don't know it — sign out</button>
+    </div>`;
+  k.appendChild(box);
+  const secret = box.querySelector("#ku-secret");
+  secret.focus();
+  const signOut = () => {
+    localStorage.removeItem("bc_kiosk");
+    localStorage.removeItem("bc_user");
+    location.href = "/ops";
+  };
+  box.querySelector("#ku-cancel").onclick = () => box.remove();
+  box.querySelector("#ku-out").onclick = signOut;
+  box.querySelector("#ku-go").onclick = async () => {
+    try {
+      await api("/api/kiosk/unlock", { body: { secret: secret.value } });
+      localStorage.removeItem("bc_kiosk");
+      k.remove();
+    } catch (err) {
+      // Not a retry loop: somebody who does not know it does not get to
+      // keep guessing at the owner's back office.
+      signOut();
+    }
+  };
+  secret.onkeydown = (e) => {
+    if (e.key === "Enter") box.querySelector("#ku-go").click();
+  };
 }
 
 // ---------- affiliates ----------

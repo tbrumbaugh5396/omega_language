@@ -1384,6 +1384,55 @@ def clock(body: ClockBody, con=Depends(get_con)):
     return _punch(con, emp, body.event_id)
 
 
+class ClockMeBody(BaseModel):
+    event_id: int | None = None      # no PIN: the session is the proof
+
+
+@app.post("/api/clock/me")
+def clock_me(body: ClockMeBody, user=Depends(current_user),
+             con=Depends(get_con)):
+    """Punch as the person already signed in.
+
+    A PIN exists so a tablet on the counter needs no login. Somebody who
+    has just signed in has already proved who they are — asking them for
+    a second secret to start their own shift is a lock on the inside of
+    an open door.
+    """
+    return _punch(con, user, body.event_id)
+
+
+class UnlockBody(BaseModel):
+    secret: str = ""
+
+
+@app.post("/api/kiosk/unlock")
+def kiosk_unlock(body: UnlockBody, user=Depends(current_user),
+                 con=Depends(get_con)):
+    """Is the person at the tablet the one who left it here?
+
+    Kiosk mode puts a keypad over somebody's signed-in back office. The
+    way out has to be theirs alone — their PIN or their password, checked
+    HERE so a tablet cannot be talked out of it — and a wrong answer is
+    not an error to retry forever: the caller signs the session out, so
+    the worst case for a lost tablet is a locked keypad and no session.
+    """
+    secret = (body.secret or "").strip()
+    if not secret:
+        raise HTTPException(400, "no answer given")
+    row = con.execute("SELECT pin_hash, password_hash FROM users WHERE id=?",
+                      (user["id"],)).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such account")
+    ok = False
+    if row["pin_hash"] and secret.isdigit():
+        ok = auth.hash_pin(secret, CFG["pin_pepper"]) == row["pin_hash"]
+    if not ok and row["password_hash"]:
+        ok = auth.verify_password(row["password_hash"], secret)
+    if not ok:
+        raise HTTPException(403, "that is not this account's PIN or password")
+    return {"ok": True}
+
+
 def _punch(con, emp, event_id):
     """Toggle a shift for this employee. Shared by the PIN keypad and the
     badge scanner, so the two can't drift into behaving differently."""
@@ -1564,7 +1613,68 @@ def all_users(user=Depends(admin_user), con=Depends(get_con)):
 
 
 
+ROLES_ALLOWED = ("customer", "distributor", "influencer", "employee",
+                 "owner", "teacher", "volunteer", "director", "board",
+                 "donor")
+
+
+class UserNewBody(BaseModel):
+    name: str
+    email: str = ""
+    role: str = "customer"
+    job: str = ""
+    employment: str = "employee"
+    is_admin: bool = False
+    pin: str = ""
+
+
+@app.post("/api/admin/users")
+def create_user(body: UserNewBody, user=Depends(admin_user),
+                con=Depends(get_con)):
+    """Open an account from the back office.
+
+    Every other door mints people as a side effect — a sign-in, an
+    invite, an approved application. Sometimes you just have to add
+    somebody: a new hire on their first morning, a customer who phoned
+    an order in. No password is set; the account adopts one the first
+    time its owner supplies it, exactly like every other door here.
+    """
+    name = body.name.strip()[:120]
+    if not name:
+        raise HTTPException(400, "a person needs a name")
+    if body.role not in ROLES_ALLOWED:
+        raise HTTPException(400, "bad role")
+    if body.job and body.job not in JOBS:
+        raise HTTPException(400, "bad job")
+    if body.employment not in ("employee", "contractor"):
+        raise HTTPException(400, "bad employment type")
+    if con.execute("SELECT 1 FROM users WHERE lower(name)=lower(?)",
+                   (name,)).fetchone():
+        raise HTTPException(409, f"'{name}' already has an account here")
+    is_admin = 1 if (body.is_admin or body.role == "owner") else 0
+    cur = con.execute(
+        "INSERT INTO users(name,email,role,job,employment,is_admin,active,"
+        " token,created_at) VALUES(?,?,?,?,?,?,1,?,?)",
+        (name, body.email.strip()[:200], body.role, body.job or "",
+         body.employment, is_admin, secrets.token_urlsafe(24), db.now()))
+    uid = cur.lastrowid
+    pin = body.pin.strip()
+    if pin:
+        if not pin.isdigit() or not 4 <= len(pin) <= 8:
+            raise HTTPException(400, "PIN must be 4-8 digits")
+        h = auth.hash_pin(pin, CFG["pin_pepper"])
+        if con.execute("SELECT 1 FROM users WHERE pin_hash=?", (h,)).fetchone():
+            raise HTTPException(400, "that PIN is already taken")
+        con.execute("UPDATE users SET pin_hash=? WHERE id=?", (h, uid))
+    if body.job == "ambassador":
+        _ensure_affiliate(con, con.execute(
+            "SELECT * FROM users WHERE id=?", (uid,)).fetchone())
+    con.commit()
+    return {"ok": True, "id": uid}
+
+
 class UserUpdateBody(BaseModel):
+    name: str | None = None
     role: str | None = None
     job: str | None = None
     employment: str | None = None
@@ -1584,9 +1694,7 @@ def update_user(uid: int, body: UserUpdateBody, user=Depends(admin_user),
         raise HTTPException(404, "no such user")
     role = target["role"]
     if body.role is not None:
-        if body.role not in ("customer", "distributor", "influencer",
-                             "employee", "owner", "teacher", "volunteer",
-                             "director", "board", "donor"):
+        if body.role not in ROLES_ALLOWED:
             raise HTTPException(400, "bad role")
         role = body.role
     is_admin = target["is_admin"] if body.is_admin is None else int(body.is_admin)
@@ -1604,9 +1712,16 @@ def update_user(uid: int, body: UserUpdateBody, user=Depends(admin_user),
         employment = body.employment
     active = target["active"] if body.active is None else int(body.active)
     email = target["email"] if body.email is None else body.email.strip()[:200]
-    con.execute("UPDATE users SET role=?, is_admin=?, active=?, job=?,"
-                " employment=?, email=? WHERE id=?",
-                (role, is_admin, active, job, employment, email, uid))
+    name = target["name"]
+    if body.name is not None and body.name.strip():
+        name = body.name.strip()[:120]
+        if name.lower() != target["name"].lower() and con.execute(
+                "SELECT 1 FROM users WHERE lower(name)=lower(?) AND id!=?",
+                (name, uid)).fetchone():
+            raise HTTPException(409, f"'{name}' already has an account here")
+    con.execute("UPDATE users SET name=?, role=?, is_admin=?, active=?,"
+                " job=?, employment=?, email=? WHERE id=?",
+                (name, role, is_admin, active, job, employment, email, uid))
     if job == "ambassador":
         _ensure_affiliate(con, target)
     if body.clear_password:

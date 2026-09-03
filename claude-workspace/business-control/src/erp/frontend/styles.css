@@ -339,6 +339,16 @@ details.sect > .inner { padding: 0 14px 14px; }
 /* ---------- confetti ---------- */
 #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 70; }
 
+/* the way out of a locked kiosk, over the keypad it locks */
+.k-unlock { position: absolute; inset: 0; display: flex; align-items: center;
+  justify-content: center; background: rgba(20,22,29,.92); z-index: 5; }
+.k-unlock-card { background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 20px; width: min(420px, 92vw);
+  display: flex; flex-direction: column; gap: 10px; }
+.k-unlock-card b { font-size: 17px; }
+.k-unlock-card input { font-size: 20px; padding: 10px 12px; }
+.k-unlock-acts { display: flex; gap: 8px; justify-content: flex-end; }
+
 /* ---------- responsive ---------- */
 @media (max-width: 720px) {
   #layout { flex-direction: column; }

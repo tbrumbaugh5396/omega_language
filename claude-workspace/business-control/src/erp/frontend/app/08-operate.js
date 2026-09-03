@@ -958,5 +958,11 @@ async function boot() {
   }
   applyRoute();          // a shared #/clients/3 link opens where it points
   render();
+  // A locked kiosk survives a refresh. Otherwise the way out of it is the
+  // reload button, which is no lock at all.
+  if (localStorage.getItem("bc_kiosk") === "1" && S.user) {
+    api("/api/promos?kind=event").catch(() => []).then((evs) =>
+      openKiosk(Array.isArray(evs) ? evs : [], true));
+  }
 }
 boot();
