@@ -344,10 +344,11 @@ async function renderExperiments() {
 // ---------- analytics ----------
 
 async function renderAnalytics() {
-  const [regions, funnel, engagement, pnl, proj] = await Promise.all([
+  const [regions, funnel, engagement, pnl, proj, mrr] = await Promise.all([
     api("/api/analytics/regions"), api("/api/analytics/funnel"),
     api("/api/analytics/engagement"), api("/api/analytics/pnl"),
-    api("/api/analytics/projection?months=6").catch(() => null)]);
+    api("/api/analytics/projection?months=6").catch(() => null),
+    api("/api/analytics/mrr?months=12").catch(() => null)]);
   const maxV = Math.max(...funnel.steps.map((s) => s.visitors), 1);
   const maxD = Math.max(...engagement.daily.map((d) => d.total), 1);
   view().innerHTML = `
@@ -356,6 +357,7 @@ async function renderAnalytics() {
       ${engagement.alerts.map((a) => `<div><span class="pill bad">engagement
         falling off</span> <b>${esc(a.scope)}</b>: ${a.last_7} events this week
         vs ${a.prior_7} last week</div>`).join("")}</div>` : ""}
+    ${mrr && mrr.months.length ? mrrSection(mrr) : ""}
     ${proj ? `<h3>Next six months</h3>
     <div class="card">
       <p class="dim">${esc(proj.note)}${proj.thin
@@ -421,6 +423,96 @@ async function renderAnalytics() {
       ${engagement.overall.falling_off
         ? '<span class="pill bad">falling off</span>'
         : '<span class="pill ok">healthy</span>'}</div></div>`;
+}
+
+/* Recurring revenue, and what moved it. The projection says what next
+   month looks like if nothing changes; this says what changed — and the
+   four movements add up to the change exactly, because a growth number
+   nobody can take apart is a number nobody acts on. */
+function mrrSection(d) {
+  const last = d.months[d.months.length - 1];
+  const bars = d.months.slice(-12);
+  const top = Math.max(...bars.map((m) => m.mrr_cents), 1);
+  const pct = (v) => (v === null || v === undefined ? "—" : v + "%");
+  const moved = (m) => [
+    ["new", m.new_cents], ["expansion", m.expansion_cents],
+    ["contraction", -m.contraction_cents], ["churn", -m.churn_cents],
+  ].filter(([, c]) => c);
+  return `
+    <h3>Recurring revenue</h3>
+    <div class="card">
+      <div class="mrr-heads">
+        <div class="mrr-fig"><span class="dim">MRR</span>
+          <b>${money(last.mrr_cents)}</b></div>
+        <div class="mrr-fig"><span class="dim">ARR</span>
+          <b>${money(last.arr_cents)}</b></div>
+        <div class="mrr-fig"><span class="dim">accounts</span>
+          <b>${last.accounts}</b></div>
+        <div class="mrr-fig"><span class="dim">ARPA</span>
+          <b>${money(last.arpa_cents)}</b></div>
+        <div class="mrr-fig" title="of the money that was already here a
+          month ago, how much is still here — new customers deliberately
+          left out, so it answers whether what you sell keeps being worth
+          its price">
+          <span class="dim">net revenue retention</span>
+          <b class="${last.nrr_pct === null ? ""
+            : last.nrr_pct >= 100 ? "good" : "low"}">${
+            pct(last.nrr_pct)}</b></div>
+      </div>
+      ${d.recorded_months < 2 ? `<p class="dim">${d.recorded_months} month
+        recorded so far. Movement needs two — the second one is where this
+        starts saying anything.</p>` : ""}
+      ${d.undated_cancellations ? `<p class="dim">${d.undated_cancellations}
+        cancelled plan${d.undated_cancellations === 1 ? " has" : "s have"} no
+        date on ${d.undated_cancellations === 1 ? "it" : "them"} — from
+        before that was recorded, so ${d.undated_cancellations === 1
+          ? "it is" : "they are"} left out of the past rather than guessed
+        at. Everything cancelled from now on is dated.</p>` : ""}
+      <div class="tablewrap"><table>
+        <thead><tr><th>month</th><th>MRR</th><th>new</th><th>expansion</th>
+          <th>contraction</th><th>churn</th><th>net new</th><th>NRR</th>
+          <th></th></tr></thead>
+        <tbody>${bars.map((m) => `<tr${m.seam ? ' class="dim"' : ""}>
+          <td>${esc(m.month)}${m.origin === "backfill"
+            ? ' <span class="pill" title="reconstructed from subscription '
+              + 'start and cancellation dates — invoiced clients are not in '
+              + 'it">reconstructed</span>' : ""}</td>
+          <td><b>${money(m.mrr_cents)}</b></td>
+          <td class="${m.new_cents ? "good" : "dim"}">${m.new_cents
+            ? "+" + money(m.new_cents) : "—"}</td>
+          <td class="${m.expansion_cents ? "good" : "dim"}">${m.expansion_cents
+            ? "+" + money(m.expansion_cents) : "—"}</td>
+          <td class="${m.contraction_cents ? "low" : "dim"}">${
+            m.contraction_cents ? "−" + money(m.contraction_cents) : "—"}</td>
+          <td class="${m.churn_cents ? "low" : "dim"}">${m.churn_cents
+            ? "−" + money(m.churn_cents) : "—"}</td>
+          <td>${m.seam ? '<span class="dim">—</span>'
+            : `<b class="${m.net_new_cents > 0 ? "good"
+              : m.net_new_cents < 0 ? "low" : ""}">${
+              m.net_new_cents > 0 ? "+" : ""}${money(m.net_new_cents)}</b>`}</td>
+          <td class="${m.nrr_pct === null ? "dim"
+            : m.nrr_pct >= 100 ? "good" : "low"}">${pct(m.nrr_pct)}</td>
+          <td style="min-width:120px"><div class="proj-bar">
+            <span class="proj-fixed" style="width:${
+              Math.round(100 * m.mrr_cents / top)}%"></span></div></td>
+        </tr>`).join("")}</tbody></table></div>
+      ${bars.some((m) => m.seam) ? `<p class="dim">A greyed row is the seam
+        between reconstructed months and recorded ones. The step across it
+        is what could not be reconstructed, not business that was won —
+        so it is not counted as any.</p>` : ""}
+      ${moved(last).length ? `<h4 class="mrr-h">What moved this month</h4>
+        <div class="sig-rows">${["new", "expansion", "contraction", "churn"]
+          .flatMap((k) => (last.movers[k] || []).map((x) => `
+            <div class="doc-line mrr-line">
+              <span class="dl-title"><b>${esc(x.label || x.account)}</b></span>
+              <span class="pill ${k === "new" || k === "expansion" ? "ok"
+                : "warn"}">${k}</span>
+              <span class="mrr-amt ${k === "new" || k === "expansion"
+                ? "good" : "low"}">${k === "new" || k === "expansion"
+                ? "+" : "−"}${money(x.cents)}</span>
+            </div>`)).join("")}</div>` : ""}
+      <p class="dim">${esc(d.note)}</p>
+    </div>`;
 }
 
 // ---------- admin ----------

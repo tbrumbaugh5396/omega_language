@@ -3498,6 +3498,96 @@ ok('style="grid-template-columns:74px 74px 70px"' not in _ops,
    "than an inline width that clipped 'Act as admin' mid-word")
 
 
+# --- recurring revenue, and what moved it -----------------------------------
+# A subscription table answers "what do we bill this month". It cannot
+# answer "did we grow", because growth is a difference between two months
+# and the table only ever holds today. So each month is recorded per
+# account, and the four movements are read off the difference.
+from erp.backend import db as _mdb, mrr as _mrr  # noqa: E402
+_mcon = _mdb.connect()
+_mcon.execute("DELETE FROM mrr_month")
+_mcon.commit()
+
+
+def _mrr_write(month, rows, origin="live"):
+    _mcon.executemany(
+        "INSERT OR REPLACE INTO mrr_month(month,account,cents,label,origin,"
+        " taken_at) VALUES(?,?,?,?,?,0)",
+        [(month, a, c, a, origin) for a, c in rows])
+    _mcon.commit()
+
+
+_mrr_write("2026-01", [("u1", 10000), ("u2", 20000)])
+_mrr_write("2026-02", [("u1", 15000), ("u2", 20000), ("u3", 5000)])
+_mrr_write("2026-03", [("u1", 15000), ("u3", 4000)])
+_mv = {m["month"]: m for m in
+       _mrr.movement(_mcon, 12, when=_t0.mktime((2026, 3, 15, 0, 0, 0, 0, 0, -1))
+                     )["months"]}
+_feb, _mar = _mv["2026-02"], _mv["2026-03"]
+ok(_feb["mrr_cents"] == 40000 and _feb["accounts"] == 3,
+   "a month's MRR is the sum of what every paying account is on")
+ok(_feb["new_cents"] == 5000 and _feb["expansion_cents"] == 5000
+   and _feb["contraction_cents"] == 0 and _feb["churn_cents"] == 0,
+   "an account that was not there is new; one paying more is expansion — "
+   "and they are different things, because one is sales and the other is "
+   "the product being worth more")
+ok(_mar["churn_cents"] == 20000 and _mar["contraction_cents"] == 1000,
+   "an account that stops is churn; one paying less is contraction")
+ok(_feb["net_new_cents"] == _feb["mrr_cents"] - 30000
+   and _mar["net_new_cents"] == _mar["mrr_cents"] - _feb["mrr_cents"],
+   "and the four add up to the change EXACTLY — a growth number nobody "
+   "can take apart is a number nobody acts on")
+ok(_feb["nrr_pct"] == 116.7,
+   "net revenue retention is what LAST month's accounts are worth this "
+   "month: 30k grew to 35k, so 116.7% — the new logo is deliberately not "
+   "in it, or it would hide the answer")
+ok(_mar["nrr_pct"] == 47.5 and _mar["grr_pct"] == 47.5,
+   "and when they leave it says so without the new business papering "
+   "over it")
+ok(_feb["quick_ratio"] is None and _mar["quick_ratio"] == 0.0,
+   "the quick ratio is growth over loss — undefined when nothing was "
+   "lost, rather than dressed up as infinity")
+ok(_mar["logo_churn_pct"] == 33.3,
+   "logo churn counts customers, not money — one of three left, and the "
+   "money says 50% because the one that left was the big one")
+ok([x["label"] for x in _mar["movers"]["churn"]] == ["u2"],
+   "and the months name who moved, because 'churn was 20k' is a fact "
+   "nobody can act on and 'u2 left' is a phone call")
+
+# The seam: a reconstructed month knows about subscriptions and nothing
+# about invoiced clients, so the step up to the first recorded month is an
+# artefact of what could be reconstructed, not business that was won.
+_mcon.execute("DELETE FROM mrr_month")
+_mcon.commit()
+_mrr_write("2026-01", [("u1", 10000)], origin="backfill")
+_mrr_write("2026-02", [("u1", 10000), ("e9", 40000)])
+_seam = {m["month"]: m for m in _mrr.movement(
+    _mcon, 12, when=_t0.mktime((2026, 2, 15, 0, 0, 0, 0, 0, -1)))["months"]}
+ok(_seam["2026-01"]["origin"] == "backfill",
+   "a reconstructed month says it is one")
+ok(_seam["2026-02"]["seam"] and _seam["2026-02"]["new_cents"] == 0
+   and _seam["2026-02"]["net_new_cents"] == 0,
+   "and the step across the seam is not counted as new business — a lie "
+   "with a chart around it is worse than a gap")
+ok(_seam["2026-02"]["mrr_cents"] == 50000,
+   "while the MRR itself is still the truth on both sides of it")
+
+# Two sources of recurring money, and a client on both is one account.
+_mcon.execute("DELETE FROM mrr_month")
+_mcon.commit()
+_live = {r["account"]: r["cents"] for r in _mrr.live(_mcon)}
+_mcon.close()                       # the endpoint below needs the write lock
+ok(isinstance(_live, dict),
+   "the live read walks subscriptions and invoiced clients together")
+_mrrapi = c.get("/api/analytics/mrr?months=6", headers=A).json()
+ok("months" in _mrrapi and "undated_cancellations" in _mrrapi,
+   "the endpoint says how many cancellations have no date on them — from "
+   "before that was recorded, and left out of the past rather than "
+   "guessed at")
+ok(c.get("/api/analytics/mrr").status_code in (401, 403),
+   "and it is the office's number")
+
+
 # --- a day you can step into, and a week you can carve up ------------------
 # A month grid can say a day has three things on it. It cannot say who is
 # working it, who could be, or what is in the way — which is the whole of

@@ -277,6 +277,14 @@ STORE_MIGRATIONS = (
     "ALTER TABLE store_subscriptions ADD COLUMN interval TEXT DEFAULT ''",
     "ALTER TABLE store_subscriptions ADD COLUMN price_cents INTEGER DEFAULT 0",
     "ALTER TABLE store_subscriptions ADD COLUMN payment_ref TEXT DEFAULT ''",
+    # WHEN it stopped, not just that it has. A status column that flips to
+    # 'cancelled' with no timestamp makes churn unknowable the moment it
+    # happens: you can see that eleven plans are cancelled and never which
+    # month you lost them in, which is the one thing the number is for.
+    # status_at covers the rest of the transitions — a pause is money that
+    # stopped arriving too, and it comes back.
+    "ALTER TABLE store_subscriptions ADD COLUMN cancelled_at REAL DEFAULT 0",
+    "ALTER TABLE store_subscriptions ADD COLUMN status_at REAL DEFAULT 0",
     "ALTER TABLE store_subscriptions ADD COLUMN payment_status TEXT"
     " DEFAULT ''",
     # Which library design a section was placed from, 0 = drawn by hand.
@@ -1438,8 +1446,8 @@ def plan_subscribe(body: PlanStartBody, request: Request,
     con.commit()
     if not payments.enabled(CFG):
         # No card rail configured: the plan stands, and somebody bills it.
-        con.execute("UPDATE store_subscriptions SET status='active'"
-                    " WHERE id=?", (sid,))
+        con.execute("UPDATE store_subscriptions SET status='active',"
+                    " status_at=? WHERE id=?", (db.now(), sid))
         con.commit()
         _plan_started(con, user, p, sid)
         return {"ok": True, "id": sid, "invoiced": True,
@@ -1667,8 +1675,8 @@ def plan_confirm(sid: int, body: PlanConfirmBody,
         return {"ok": False, "status": row["status"],
                 "detail": "the payment has not completed"}
     con.execute("UPDATE store_subscriptions SET status='active',"
-                " payment_ref=?, payment_status='paid' WHERE id=?",
-                (out["subscription"], sid))
+                " payment_ref=?, payment_status='paid', status_at=?"
+                " WHERE id=?", (out["subscription"], db.now(), sid))
     con.commit()
     p2 = con.execute("SELECT * FROM products WHERE id=?",
                      (row["product_id"],)).fetchone()
@@ -1767,8 +1775,12 @@ def sub_action(sid: int, body: SubActionBody, user=Depends(current_customer),
             raise HTTPException(
                 502, "the card processor did not accept that — nothing was "
                      "changed here either, so the two still agree")
-    con.execute("UPDATE store_subscriptions SET status=? WHERE id=?",
-                (transitions[body.action], sid))
+    now = transitions[body.action]
+    con.execute("UPDATE store_subscriptions SET status=?, status_at=?"
+                + (", cancelled_at=?" if now == "cancelled" else "")
+                + " WHERE id=?",
+                ((now, db.now(), db.now(), sid) if now == "cancelled"
+                 else (now, db.now(), sid)))
     con.commit()
     return {"ok": True, "status": transitions[body.action]}
 

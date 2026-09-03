@@ -183,6 +183,7 @@ button.btn[aria-busy="true"] { cursor: progress; }
   font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }
 .low { color: var(--bad); font-weight: 700; }
+.good { color: var(--good); font-weight: 700; }
 
 /* ---------- loading & empty states ---------- */
 .skel { border-radius: var(--r); height: 84px; margin-bottom: 14px;
@@ -1421,3 +1422,15 @@ form.inline > button.btn:last-child { margin-left: auto; }
   background: linear-gradient(transparent, rgba(0,0,0,.72)); }
 .scan-manual { padding: 12px 14px 0; }
 .scan-card > .dim { padding: 0 14px 14px; }
+
+
+/* ---------- recurring revenue ---------- */
+.mrr-heads { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 14px; }
+.mrr-fig { display: flex; flex-direction: column; gap: 2px; }
+.mrr-fig .dim { font-size: 11px; text-transform: uppercase;
+  letter-spacing: .07em; }
+.mrr-fig b { font-size: 21px; letter-spacing: -.02em; }
+.mrr-h { margin: 18px 0 6px; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--dim); }
+.doc-line.mrr-line { grid-template-columns: minmax(0, 1fr) 96px 110px; }
+.mrr-amt { text-align: right; font-variant-numeric: tabular-nums; }

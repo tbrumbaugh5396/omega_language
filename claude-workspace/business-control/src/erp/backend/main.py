@@ -53,6 +53,8 @@ def _init_core(tid=None):
         _tk.init_tables(con)
         from . import timesheet as _ts
         _ts.init_tables(con)
+        from . import mrr as _mrr
+        _mrr.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -4157,6 +4159,30 @@ def analytics_projection(months: int = 6, user=Depends(admin_user),
                     "of one-off sales, projected flat — not a seasonal "
                     "model, because there is not enough history here to fit "
                     "one honestly."}
+
+
+@app.get("/api/analytics/mrr")
+def analytics_mrr(months: int = 12, user=Depends(admin_user),
+                  con=Depends(get_con)):
+    """Recurring revenue, and what moved it.
+
+    The projection says what next month looks like if nothing changes.
+    This says what changed — which is the question a subscription table
+    cannot answer, because growth is a difference between two months and
+    the table only ever holds today. So each month is recorded per
+    account as it is lived, and new, expansion, contraction and churn are
+    read off the difference.
+
+    On first read it reconstructs what is honestly knowable about the
+    months before anybody was recording: a subscription's start, and its
+    cancellation where the date was kept. Cancellations that predate the
+    column have no date and are left out rather than guessed at — a gap
+    is visible, an invented churn month is not.
+    """
+    from . import mrr as _mrr
+    _mrr.backfill(con, months)
+    _mrr.snapshot(con)
+    return _mrr.movement(con, months)
 
 
 @app.get("/api/analytics/regions")
