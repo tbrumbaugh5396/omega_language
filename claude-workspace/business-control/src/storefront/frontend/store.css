@@ -375,6 +375,39 @@ svg.can { display: block; width: 100%; height: auto; }
 @media (max-width: 560px) { .kind-head { font-size: 18px; }
   .kind-head small { display: none; } }
 
+/* ---------- the configurator ---------- */
+.cfg-grid { display: grid; grid-template-columns: 1fr 320px; gap: 28px;
+  align-items: start; }
+.cfg-group { margin-bottom: 22px; }
+.cfg-ghead { display: flex; align-items: baseline; gap: 10px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line);
+  margin-bottom: 6px; flex-wrap: wrap; }
+.cfg-ghead b { font-family: var(--display); font-size: 18px; }
+.cfg-ghead .dim { font-size: 12.5px; flex: 1; }
+.cfg-cap { display: flex; align-items: center; gap: 10px; padding: 7px 8px;
+  border-radius: var(--r-sm); cursor: pointer; }
+.cfg-cap:hover { background: var(--lav-soft); }
+.cfg-name { flex: 1; font-size: 15px; }
+.cfg-band { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  padding: 2px 7px; border-radius: var(--r-pill); background: var(--line);
+  color: var(--ink-2); }
+.cfg-price { font-variant-numeric: tabular-nums; font-weight: 600;
+  min-width: 46px; text-align: right; }
+.cfg-total { position: sticky; top: 88px; background: var(--paper);
+  border: 1px solid var(--line); border-radius: var(--r-lg); padding: 18px; }
+.cfg-total h3 { margin: 0 0 10px; font-family: var(--display); }
+.cfg-line { display: flex; justify-content: space-between; gap: 12px;
+  padding: 5px 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.cfg-sum { border-top: 1px solid var(--line); margin-top: 6px;
+  padding-top: 10px; font-size: 17px; }
+.cfg-note { font-size: 13px; background: var(--lav-soft); padding: 10px 12px;
+  border-radius: var(--r-sm); margin: 10px 0; }
+.cfg-total .btn { width: 100%; margin-top: 8px; }
+@media (max-width: 820px) {
+  .cfg-grid { grid-template-columns: 1fr; }
+  .cfg-total { position: static; }
+}
+
 /* ---------- product cards ---------- */
 .product { background: var(--paper); border: 1px solid var(--line);
   border-radius: var(--r-lg); overflow: hidden; display: flex;

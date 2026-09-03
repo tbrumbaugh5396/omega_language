@@ -404,6 +404,33 @@ def products() -> list:
                 + f" — ${b['monthly']:,.2f} a month. Support and "
                   f"maintenance is the second half of the bill.",
         })
+    # A group of the menu, taken whole. The book already groups the 29
+    # into five departments; each one priced by the same rule as a bundle
+    # is a real thing to sell, and the cheapest honest way to say "we do
+    # your back office" without listing eight lines.
+    prices = {c["id"]: c["price"] for c in cap_by_id.values()}
+    for g in pb.groups():
+        ids = [i["id"] for i in cap_by_id.values()
+               if i["name"] in {x["name"] for x in g["items"]}]
+        if not ids:
+            continue
+        q = pb.price_selection(ids, prices)
+        out.append({
+            "sku": "PACK-" + g["name"].upper().replace(" & ", "-")
+                   .replace(" ", "-")[:16],
+            "name": g["name"] + " pack", "kind": "pack", "billing": "month",
+            "category": "Capability packs",
+            "price_cents": int(round(q["monthly"] * 100)),
+            "caps": ",".join(ids),
+            "description":
+                f"{g['note'] or g['name']} — all {q['count']} of them: "
+                + ", ".join(cap_by_id[i]["name"] for i in ids)
+                + f". ${q['sum']} at the menu"
+                + (f", {int(q['volume_rate'] * 100)}% off for taking "
+                   f"{q['count']}" if q["volume_rate"] else "")
+                + f", plus Platform Core ${q['core']}. Build a different "
+                  f"set at /plan-builder.",
+        })
     for c in pb.care_plans():
         out.append({
             "sku": f"CARE-{c['name'].upper()}", "name": f"{c['name']} care",
@@ -571,12 +598,14 @@ PARTNER_PAGES = {
 
 MENUS = [
     ("header", "Plans", "/#shop", 0),
-    ("header", "Pricing", "/p/pricing", 1),
-    ("header", "How a build runs", "/p/how-it-works", 2),
-    ("header", "Talk to us", "/partners/build", 3),
-    ("footer", "Pricing", "/p/pricing", 0),
-    ("footer", "How a build runs", "/p/how-it-works", 1),
-    ("footer", "Talk to us", "/partners/build", 2),
+    ("header", "Build your own", "/plan-builder", 1),
+    ("header", "Pricing", "/p/pricing", 2),
+    ("header", "How a build runs", "/p/how-it-works", 3),
+    ("header", "Talk to us", "/partners/build", 4),
+    ("footer", "Build your own", "/plan-builder", 0),
+    ("footer", "Pricing", "/p/pricing", 1),
+    ("footer", "How a build runs", "/p/how-it-works", 2),
+    ("footer", "Talk to us", "/partners/build", 3),
 ]
 
 
@@ -659,7 +688,7 @@ def seed(con, force: bool) -> dict:
         "SELECT sku FROM products WHERE active=1 AND ("
         " sku LIKE 'PLAN-%' OR sku LIKE 'CARE-%' OR sku LIKE 'BUILD-%'"
         " OR sku LIKE 'WL-%' OR sku LIKE 'WEB-%'"
-        " OR sku LIKE 'BUNDLE-%')").fetchall()
+        " OR sku LIKE 'BUNDLE-%' OR sku LIKE 'PACK-%')").fetchall()
         if r[0] not in mine]
     for sku in stale:
         con.execute("UPDATE products SET active=0 WHERE sku=?", (sku,))

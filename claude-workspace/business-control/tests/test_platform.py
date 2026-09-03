@@ -304,7 +304,8 @@ ok(_kinds["Basic plan"] == "plan" and _kinds["Priority care"] == "care"
    "licence is five businesses on one page unless the page sorts them")
 _kl = c.get("/api/store/catalog", headers=HA).json()["kinds"]
 ok([k["id"] for k in _kl if k["id"] != "goods"]
-   == ["plan", "bundle", "care", "build", "brand", "setup", "label"]
+   == ["plan", "bundle", "pack", "care", "build", "brand", "setup",
+       "label"]
    and len({k["colour"] for k in _kl}) == len(_kl),
    "the shelf's kinds come back in one order with one colour each, from "
    "the server — so the shop and the back office cannot group or tint the "
@@ -324,6 +325,47 @@ ok(_names["Food brand"]["billing"] == "month"
    and _names["Food brand"]["kind"] == "bundle",
    "each one bills monthly at the book's computed price and carries the "
    "capability set it IS, in ids — so what was sold is what gets granted")
+# --- the configurator: the menu, acted on ------------------------------------
+_pbld = c.get("/api/store/plan-builder", headers=HA).json()
+ok(_pbld["core"] == 50 and len(_pbld["groups"]) == 5
+   and sum(len(g["items"]) for g in _pbld["groups"]) == 29
+   and [v["rate"] for v in _pbld["volume"]] == [0.0, 0.08, 0.15, 0.25],
+   "the configurator is served the book: 29 capabilities in five groups, "
+   "Core, and the volume ladder — no number the page invented")
+ok([p["name"] for p in _pbld["packs"]]
+   == [g["name"] for g in _pbld["groups"]]
+   and all(p["monthly"] > 0 for p in _pbld["packs"]),
+   "and a price for each group taken whole, so a department is a thing "
+   "you can buy without reading eight lines")
+_pq = c.post("/api/store/plans/price", headers=HA,
+             json={"cap_ids": ["selling", "payments", "workforce", "comms"]}
+             ).json()
+ok(_pq["sum"] == 120 and _pq["volume_rate"] == 0.08
+   and _pq["monthly"] == 160.4,
+   "a selection is priced HERE, by the book's own rule — capabilities, "
+   "then the volume discount, then Core")
+ok(_pq["tier"] and _pq["tier"]["name"] == "Basic"
+   and _pq["tier"]["cheaper"] is False,
+   "and the smallest plan that covers the selection is named beside it — "
+   "not as a cheaper option, because a tier is priced ABOVE the menu on "
+   "purpose, but with the locations and seats it carries, which is what "
+   "the extra money actually buys")
+_pq2 = c.post("/api/store/plans/price", headers=HA,
+              json={"cap_ids": ["selling", "nope", "selling"]}).json()
+ok(_pq2["count"] == 1,
+   "a capability that does not exist, and one asked for twice, price as "
+   "the one real line they are — the page cannot invent a product")
+ok(all(abs(_pb.price_selection(
+    b["cap_ids"], {k["id"]: k["price"] for k in _cc()},
+    "nonprofit" in b["other"])["monthly"] - b["monthly"]) < 0.01
+    for b in _bun.values()),
+   "and the rule the configurator prices with is the SAME one every "
+   "bundle in the book was computed with — all five come out to the "
+   "penny, which is what makes the page trustworthy")
+_pbp = c.get("/plan-builder", headers=HA)
+ok(_pbp.status_code == 200 and 'id="cfg-root"' in _pbp.text,
+   "and it has a page of its own, linked from the nav")
+
 ok("Starter plan" not in _names,
    "and a tier renamed in the book does not leave its old row for sale "
    "beside the new one — the seed retires what it no longer writes")

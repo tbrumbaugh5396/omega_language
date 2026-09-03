@@ -68,6 +68,48 @@ def bands() -> dict:
     return out
 
 
+def volume_rates() -> list:
+    """§5 — the discount for taking several capabilities, as
+    (minimum count, rate). In book order, so a lookup walks down and
+    stops at the first band whose floor is met."""
+    src = _section("5. Volume discount", _text())
+    out = []
+    for m in re.finditer(r"^\| (\d+)(?:[-–](\d+)|\+)? \| (?:(\d+)%|—)",
+                         src, re.M):
+        out.append((int(m.group(1)),
+                    int(m.group(3)) / 100 if m.group(3) else 0.0))
+    if len(out) != 4:
+        raise ValueError("price book: the volume table did not parse")
+    return out
+
+
+def volume_rate(n: int) -> float:
+    for floor, rate in reversed(volume_rates()):
+        if n >= floor:
+            return rate
+    return 0.0
+
+
+def price_selection(cap_ids, prices: dict, nonprofit: bool = False) -> dict:
+    """Part 1 for a chosen set of capabilities, by the book's own rule.
+
+    PART 1 = (sum of the bands x volume discount) + Platform Core, then
+    the nonprofit cut off the subtotal. Every bundle in section 13 is
+    this arithmetic run on its own set, which is how it is checked.
+    """
+    ids = [c for c in dict.fromkeys(cap_ids) if c in prices]
+    sub = sum(prices[c] for c in ids)
+    rate = volume_rate(len(ids))
+    after = sub * (1 - rate)
+    core = core_price()
+    total = after + core
+    np_cut = total * 0.30 if nonprofit else 0.0
+    return {"cap_ids": ids, "count": len(ids), "sum": sub,
+            "volume_rate": rate, "after_volume": round(after, 2),
+            "core": core, "nonprofit": bool(nonprofit),
+            "monthly": round(total - np_cut, 2)}
+
+
 def core_price() -> int:
     m = re.search(r"^## 4\. Platform Core — \$(\d+)", _text(), re.M)
     if not m:

@@ -202,6 +202,8 @@ PRODUCT_KINDS = (
      "note": "the platform, billed every month"},
     {"id": "bundle", "label": "Bundles", "colour": "#0f766e",
      "note": "a business shape, priced as one"},
+    {"id": "pack", "label": "Capability packs", "colour": "#5b6ee1",
+     "note": "one department, whole — or build your own from the menu"},
     {"id": "care", "label": "Care", "colour": "#0d8f7a",
      "note": "support and maintenance — the other half of the bill"},
     {"id": "build", "label": "Builds", "colour": "#b8431f",
@@ -1262,6 +1264,33 @@ def page(slug: str, con=Depends(get_con)):
         js=row["content_js"], slug=slug))
 
 
+@router.get("/plan-builder")
+def plan_builder_page(con=Depends(get_con)):
+    """Build your own plan — the capability menu, with a running total.
+
+    The menu has always been on the home page as a table you could read
+    and not act on. This is the same table with tick boxes and the book's
+    arithmetic beside it, so the answer to "what would those six cost?"
+    stops being a phone call.
+    """
+    body = """
+<section class="section partner-head">
+ <span class="eyebrow">Build your own</span>
+ <h1>Pick what your business does.</h1>
+ <p class="lede">Every capability is priced on its own. Take several and
+   the volume discount applies itself; take a shape we have seen before
+   and the packaged price is offered instead, because the cheaper of the
+   two is the one you should be quoted.</p>
+</section>
+<section class="section"><div class="wrap" id="cfg-root">
+  <p class="dim">Loading the menu&hellip;</p>
+</div></section>"""
+    return HTMLResponse(render_shell(
+        con, body, title="Build your own plan",
+        description="Pick the capabilities your business needs and see "
+                    "what they cost, priced from the published book."))
+
+
 # ---------- customer account: orders + subscription self-service ----------
 
 def current_customer(authorization: str = Header(default=""),
@@ -1360,6 +1389,146 @@ def plan_subscribe(body: PlanStartBody, request: Request,
                 (sess["id"], sid))
     con.commit()
     return {"ok": True, "id": sid, "checkout_url": sess["url"]}
+
+
+# ---------- the configurator: buy the menu, not a plan ----------------
+# The bench does this for staff. A visitor could read the capability menu
+# on the home page and had no way to act on it — so the only route from
+# "I want those six things" to a running install went through a person.
+
+def _cap_prices() -> dict:
+    from erp.backend.main import CFG                          # noqa: F401
+    from .engagements import _cap_catalog
+    return {c["id"]: c for c in _cap_catalog()}
+
+
+@router.get("/api/store/plan-builder")
+def plan_builder(con=Depends(get_con)):
+    """Everything the configurator needs, from the book: the capabilities
+    in their groups, what a group costs whole, the volume ladder, Core,
+    and the packaged plans to check the answer against — because the book
+    says quote both and quote the cheaper one, and a page that hides the
+    cheaper one is a page that overcharges."""
+    from . import pricebook as pb
+    cat = _cap_prices()
+    try:
+        groups = [{"name": g["name"], "note": g["note"],
+                   "items": [{"id": i["id"], "name": i["name"],
+                              "price": i["price"], "band": i["band"]}
+                             for i in [cat[k] for k in cat
+                                       if cat[k]["name"] in
+                                       {x["name"] for x in g["items"]}]]}
+                  for g in pb.groups()]
+        prices = {k: v["price"] for k, v in cat.items()}
+        return {"core": pb.core_price(), "groups": groups,
+                "volume": [{"from": f, "rate": r}
+                           for f, r in pb.volume_rates()],
+                "tiers": pb.tiers(),
+                "bundles": [{**b, "monthly": b["monthly"]}
+                            for b in pb.bundles()],
+                "packs": [{"name": g["name"],
+                           "cap_ids": [i["id"] for i in g["items"]],
+                           **pb.price_selection([i["id"] for i in g["items"]],
+                                                prices)}
+                          for g in groups]}
+    except Exception as e:                                    # noqa: BLE001
+        raise HTTPException(503, f"the price book did not parse: {e}")
+
+
+class ConfigureBody(BaseModel):
+    cap_ids: list = []
+
+
+@router.post("/api/store/plans/price")
+def plan_price(body: ConfigureBody):
+    """What a selection costs — priced HERE, from the book. The page shows
+    its own arithmetic so a person can follow it; this is the number that
+    counts, and the two agreeing is the point."""
+    from . import pricebook as pb
+    prices = {k: v["price"] for k, v in _cap_prices().items()}
+    try:
+        out = pb.price_selection([str(c) for c in body.cap_ids][:60], prices)
+    except Exception as e:                                    # noqa: BLE001
+        raise HTTPException(503, f"the price book did not parse: {e}")
+    # The book's rule is "quote both and quote the cheaper one" — but a
+    # tier is priced ABOVE the equivalent menu at one location on purpose:
+    # it buys headroom, not a discount. So the honest comparison is not
+    # price alone. Name the smallest tier that covers the selection, say
+    # what it costs and what it carries, and let the reader decide whether
+    # more locations and seats are worth the difference.
+    tier = None
+    try:
+        for t in pb.tiers():
+            if set(_tier_cap_ids(t)) >= set(out["cap_ids"]):
+                tier = {"name": t["name"], "price": t["price"],
+                        "locations": t["locations"], "seats": t["seats"],
+                        "cheaper": t["price"] < out["monthly"]}
+                break
+    except Exception:                                         # noqa: BLE001
+        pass
+    return {**out, "tier": tier}
+
+
+def _tier_cap_ids(tier) -> list:
+    """The capability ids a packaged tier covers, by name, from the book."""
+    by_name = {v["name"].lower(): k for k, v in _cap_prices().items()}
+    out = []
+    for part in (tier.get("capabilities") or "").split(","):
+        key = part.strip().lower()
+        if key in by_name:
+            out.append(by_name[key])
+    return out
+
+
+@router.post("/api/store/plans/configure")
+def plan_configure(body: ConfigureBody, request: Request,
+                   user=Depends(current_customer), con=Depends(get_con)):
+    """Start a plan the customer built themselves.
+
+    The price is computed here from the book and the ids, never taken
+    from the page — a configurator that trusts a posted total is a
+    configurator that sells the platform for a dollar."""
+    from erp.backend import payments
+    from erp.backend.main import CFG, base_url
+    from . import pricebook as pb
+    cat = _cap_prices()
+    prices = {k: v["price"] for k, v in cat.items()}
+    picked = [c for c in dict.fromkeys(str(x) for x in body.cap_ids)
+              if c in prices]
+    if not picked:
+        raise HTTPException(400, "pick at least one capability")
+    quote = pb.price_selection(picked, prices)
+    cents = int(round(quote["monthly"] * 100))
+    name = ("Your plan — " + ", ".join(cat[c]["name"] for c in picked[:3])
+            + (f" +{len(picked) - 3} more" if len(picked) > 3 else ""))
+    # The configured plan is a real product row: it has to be, because a
+    # subscription points at one, an invoice names one, and the operator
+    # who picks this client up later needs to see what was sold.
+    sku = "CFG-" + "-".join(sorted(picked))[:40]
+    row = con.execute("SELECT id FROM products WHERE sku=?", (sku,)).fetchone()
+    if row:
+        pid = row["id"]
+        con.execute("UPDATE products SET name=?, price_cents=?, active=1"
+                    " WHERE id=?", (name[:200], cents, pid))
+    else:
+        cur = con.execute(
+            "INSERT INTO products(sku,name,description,category,price_cents,"
+            " case_size,case_price_cents,active) VALUES(?,?,?,?,?,1,?,1)",
+            (sku, name[:200],
+             "Built from the menu: "
+             + ", ".join(cat[c]["name"] for c in picked)
+             + f". {quote['count']} capabilities, "
+             + (f"{int(quote['volume_rate'] * 100)}% volume discount, "
+                if quote["volume_rate"] else "")
+             + f"plus Platform Core ${quote['core']}.",
+             "Plans", cents, cents))
+        pid = cur.lastrowid
+    for k, v in (("billing", "month"), ("kind", "plan"),
+                 ("caps", ",".join(picked)), ("colour", ""), ("quote", "")):
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,?,?)", (pid, k, v))
+    con.commit()
+    return plan_subscribe(PlanStartBody(product_id=pid), request, user, con)
 
 
 def _plan_started(con, user, product, sid: int) -> None:

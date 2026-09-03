@@ -2890,10 +2890,142 @@ async function joinPage() {
   };
 }
 
+/* ---------- the configurator ----------
+   The capability menu you can act on. Every price shown here is the
+   book's, and the total is re-computed on the server before anything is
+   charged — the page's arithmetic is for a person to follow, not for the
+   till to trust. */
+async function planBuilder() {
+  const host = $("#cfg-root");
+  if (!host) return;
+  let B;
+  try { B = await (await fetch("/api/store/plan-builder")).json(); }
+  catch { host.innerHTML = "<p class=\"dim\">The menu is unavailable.</p>";
+          return; }
+  if (B.detail) {
+    host.innerHTML = `<p class="dim">${esc(B.detail)}</p>`; return;
+  }
+  const picked = new Set();
+  const packOf = (g) => (B.packs || []).find((p) => p.name === g.name) || {};
+
+  host.innerHTML = `
+    <div class="cfg-grid">
+      <div class="cfg-menu">
+        ${(B.groups || []).map((g) => `
+          <div class="cfg-group">
+            <div class="cfg-ghead">
+              <b>${esc(g.name)}</b>
+              <span class="dim">${esc(g.note || "")}</span>
+              <button class="btn alt sm" data-pack="${esc(g.name)}"
+                title="take the whole group — ${packOf(g).count || 0}
+                capabilities for ${money((packOf(g).monthly || 0) * 100)} a
+                month, Core included">Take all ${g.items.length}</button>
+            </div>
+            ${g.items.map((c) => `
+              <label class="cfg-cap">
+                <input type="checkbox" data-cap="${esc(c.id)}"
+                  data-price="${c.price}">
+                <span class="cfg-name">${esc(c.name)}</span>
+                <span class="cfg-band band-${esc(c.band)}">${esc(c.band)}</span>
+                <span class="cfg-price">$${c.price}</span>
+              </label>`).join("")}
+          </div>`).join("")}
+      </div>
+      <aside class="cfg-total" id="cfg-total"></aside>
+    </div>`;
+
+  const paint = async () => {
+    const ids = [...picked];
+    const box = $("#cfg-total");
+    if (!ids.length) {
+      box.innerHTML = `<h3>Nothing picked yet</h3>
+        <p class="dim">Platform Core is $${B.core} a month on its own — the
+          storefront, the back office and the admin, with your data in one
+          place. Everything else is a line above.</p>
+        <p class="dim">Or take a shape we have seen before:</p>
+        ${(B.bundles || []).map((b) => `<button class="btn alt sm"
+          data-bundle="${esc(b.name)}">${esc(b.name)} —
+          $${b.monthly.toFixed(2)}/mo</button>`).join(" ")}`;
+      wireShapes();
+      return;
+    }
+    let q;
+    try {
+      q = await (await fetch("/api/store/plans/price", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cap_ids: ids }) })).json();
+    } catch { return; }
+    box.innerHTML = `
+      <h3>${q.count} capabilit${q.count === 1 ? "y" : "ies"}</h3>
+      <div class="cfg-line"><span>Capabilities</span><b>$${q.sum}</b></div>
+      ${q.volume_rate ? `<div class="cfg-line"><span>Volume discount
+        (${Math.round(q.volume_rate * 100)}% for taking ${q.count})</span>
+        <b>-$${(q.sum - q.after_volume).toFixed(2)}</b></div>` : ""}
+      <div class="cfg-line"><span>Platform Core</span><b>$${q.core}</b></div>
+      <div class="cfg-line cfg-sum"><span>Every month</span>
+        <b>$${q.monthly.toFixed(2)}</b></div>
+      ${q.tier ? `<p class="cfg-note">The <b>${esc(q.tier.name)}</b> plan
+        covers all of this for <b>$${q.tier.price}/mo</b>${q.tier.cheaper
+          ? " — less than the menu. Take that one instead; we would rather"
+            + " tell you than not."
+          : `, and carries ${esc(q.tier.locations)} location${
+              q.tier.locations === "1" ? "" : "s"} and ${esc(q.tier.seats)}
+             seats. Worth the difference if you are going to grow into it.`}
+        </p>` : ""}
+      <p class="dim">Support and maintenance is the second half of the
+        bill and is quoted separately. Nonprofits take 30% off this
+        figure — ask us and we will apply it.</p>
+      <button class="btn" id="cfg-go">Start this plan</button>`;
+    $("#cfg-go").onclick = startBuilt;
+  };
+
+  const setPicked = (ids) => {
+    picked.clear();
+    ids.forEach((i) => picked.add(i));
+    host.querySelectorAll("[data-cap]").forEach((b) => {
+      b.checked = picked.has(b.dataset.cap);
+    });
+    paint();
+  };
+  function wireShapes() {
+    host.querySelectorAll("[data-bundle]").forEach((b) => b.onclick = () => {
+      const bun = (B.bundles || []).find((x) => x.name === b.dataset.bundle);
+      if (bun) setPicked(bun.cap_ids);
+    });
+  }
+  host.querySelectorAll("[data-cap]").forEach((b) => b.onchange = () => {
+    if (b.checked) picked.add(b.dataset.cap);
+    else picked.delete(b.dataset.cap);
+    paint();
+  });
+  host.querySelectorAll("[data-pack]").forEach((b) => b.onclick = () => {
+    const g = (B.groups || []).find((x) => x.name === b.dataset.pack);
+    if (g) setPicked([...picked, ...g.items.map((c) => c.id)]);
+  });
+
+  async function startBuilt() {
+    signIn(`Starting your plan — a plan is billed to somebody, so we need
+      to know who.`, async () => {
+      const r = await fetch("/api/store/plans/configure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json",
+                   Authorization: "Bearer " + acctToken() },
+        body: JSON.stringify({ cap_ids: [...picked] }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(out.detail || "couldn't start that plan"); return; }
+      if (out.checkout_url) { location.href = out.checkout_url; return; }
+      closeModal();
+      toast(out.message || "Your plan is set up.");
+    });
+  }
+  paint();
+}
+
 // ---------- boot ----------
 buildPickers();
 saveCart();
 joinPage();
+planBuilder();
 loadCatalog().then(() => {
   loadPromos();
   confirmPaidReturn();
