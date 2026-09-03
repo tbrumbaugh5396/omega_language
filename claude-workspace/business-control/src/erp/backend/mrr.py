@@ -178,7 +178,62 @@ def backfill(con, months: int = 12, when: float = 0) -> int:
     return written
 
 
-def movement(con, months: int = 12, when: float = 0) -> dict:
+def lifetime(con, months: list, margin_pct: float = 0.0) -> dict:
+    """How long a customer stays, and what they are worth while they do.
+
+    Two answers, because they are found two different ways and a business
+    should see both:
+
+      * **implied** — 1 / the monthly churn rate. Fast, forward-looking,
+        and wrong in a specific way: it assumes today's churn is
+        everybody's future, so one bad month makes every customer look
+        doomed. On thin history it is arithmetic, not evidence.
+      * **observed** — the actual length of the subscriptions that have
+        actually ended. Slow to become meaningful and biased short (the
+        long-lived ones have not ended yet, so they are not in it), but
+        it is a measurement rather than a projection.
+
+    Value is ARPA times months times gross margin. Revenue is not value:
+    a customer paying $200 a month against 45% cost of sales is worth
+    $90 a month, and the difference is the whole of what is left to run
+    the business on. Where the margin is not known the value is left out
+    rather than reported at full price.
+    """
+    rated = [m for m in months if m["logo_churn_pct"] is not None]
+    recent = rated[-3:]
+    churn = (sum(m["logo_churn_pct"] for m in recent) / len(recent) / 100
+             if recent else None)
+    implied = (1 / churn) if churn else None
+    ended = con.execute(
+        "SELECT created_at, cancelled_at FROM store_subscriptions"
+        " WHERE COALESCE(cancelled_at,0) > 0 AND created_at > 0").fetchall()
+    spans = [(r["cancelled_at"] - r["created_at"]) / (30.44 * DAY)
+             for r in ended if r["cancelled_at"] > r["created_at"]]
+    observed = (sum(spans) / len(spans)) if spans else None
+    arpa = months[-1]["arpa_cents"] if months else 0
+    def _value(m):
+        if not m or not margin_pct:
+            return None
+        return int(arpa * m * margin_pct / 100)
+    return {
+        "implied_months": round(implied, 1) if implied else None,
+        "observed_months": round(observed, 1) if observed else None,
+        "observed_n": len(spans),
+        "churn_pct": round(churn * 100, 1) if churn is not None else None,
+        "months_of_churn": len(recent),
+        "arpa_cents": arpa,
+        "margin_pct": margin_pct or None,
+        "ltv_cents": _value(implied),
+        "ltv_observed_cents": _value(observed),
+        "note": "Implied lifetime is 1 divided by the churn rate, which "
+                "assumes this month repeats forever. Observed is the real "
+                "length of the plans that have ended — biased short, "
+                "because the ones that have lasted are not in it yet.",
+    }
+
+
+def movement(con, months: int = 12, when: float = 0,
+             margin_pct: float = 0.0) -> dict:
     """The series, and what moved between each pair of months.
 
     A pure read: taking this month's snapshot is the caller's business,
@@ -250,18 +305,28 @@ def movement(con, months: int = 12, when: float = 0) -> dict:
             "arpa_cents": int(total / len(cur)) if cur else 0,
             "nrr_pct": round(nrr, 1) if nrr is not None else None,
             "grr_pct": round(grr, 1) if grr is not None else None,
+            "new_logos": len(movers["new"]),
+            "lost_logos": len(movers["churn"]),
+            # The two rates people actually ask for, both measured against
+            # the month you started with rather than the one you ended
+            # with — a percentage of a number that already includes the
+            # arrivals cannot be compared to the one that lost them.
             "logo_churn_pct": round(
                 len(movers["churn"]) / len(prev) * 100, 1) if prev else None,
+            "logo_new_pct": round(
+                len(movers["new"]) / len(prev) * 100, 1) if prev else None,
             "quick_ratio": round((new + exp) / (con_ + churn), 2)
             if (con_ + churn) else None,
             "movers": movers,
         })
+    life = lifetime(con, out, margin_pct)
     first = con.execute("SELECT MIN(month) AS m FROM mrr_month").fetchone()
     unknown = con.execute(
         "SELECT COUNT(*) AS n FROM store_subscriptions"
         " WHERE status='cancelled' AND COALESCE(cancelled_at,0)=0"
     ).fetchone()["n"]
-    return {"months": out, "from": first["m"] if first else "",
+    return {"months": out, "lifetime": life,
+            "from": first["m"] if first else "",
             "recorded_months": len(by_month),
             "undated_cancellations": unknown,
             "note": "One row per paying account per month, so growth can be "

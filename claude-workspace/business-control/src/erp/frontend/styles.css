@@ -1434,3 +1434,26 @@ form.inline > button.btn:last-child { margin-left: auto; }
   letter-spacing: .08em; color: var(--dim); }
 .doc-line.mrr-line { grid-template-columns: minmax(0, 1fr) 96px 110px; }
 .mrr-amt { text-align: right; font-variant-numeric: tabular-nums; }
+
+
+/* ---------- the trading calendar ---------- */
+.mrr-life { margin: -6px 0 12px; }
+/* Ninety days at a glance. Bars, not a chart: the shape of a week and the
+   holes where the shop was shut are the whole of what this has to say. */
+.day-strip { display: flex; align-items: flex-end; gap: 1px; height: 74px;
+  margin: 6px 0 8px; }
+.day-bar { flex: 1; min-width: 2px; background: var(--accent2);
+  border-radius: 2px 2px 0 0; opacity: .85; }
+.day-bar:hover { opacity: 1; }
+.day-bar.day-hol { background: var(--warn); }
+.day-bar.day-shut { background: var(--line); }
+.wd-rows { display: flex; flex-direction: column; gap: 4px; }
+.wd-row { display: grid; grid-template-columns: 42px 1fr 88px 34px;
+  align-items: center; gap: 10px; font-size: 13px; }
+.wd-n { color: var(--dim); }
+.wd-bar { background: var(--panel2); border-radius: 4px; height: 12px;
+  overflow: hidden; }
+.wd-bar span { display: block; height: 100%; background: var(--accent);
+  border-radius: 4px; }
+.wd-v { text-align: right; font-variant-numeric: tabular-nums; }
+.cal-add { margin: 18px 0 0; align-items: center; }

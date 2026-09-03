@@ -3588,6 +3588,106 @@ ok(c.get("/api/analytics/mrr").status_code in (401, 403),
    "and it is the office's number")
 
 
+# --- the trading calendar ---------------------------------------------------
+# A month has four weekends or five, Easter moves, and a holiday closes
+# the shop or triples it. Comparing this month with the last without
+# knowing which days were trading days is reporting the calendar as
+# performance — and nobody notices, because the number always comes out.
+from erp.backend import daybook as _dbk  # noqa: E402
+ok(_dbk.easter(2025) == "2025-04-20" and _dbk.easter(2026) == "2026-04-05"
+   and _dbk.easter(2027) == "2027-03-28",
+   "Easter is computed, five weeks of range and all — two Aprils compared "
+   "without it are a holiday week against an ordinary one")
+_h26 = dict((d, n) for d, n in _dbk.public_holidays(2026))
+ok(_h26.get("2026-01-19") == "Martin Luther King Jr. Day"
+   and _h26.get("2026-05-25") == "Memorial Day"
+   and _h26.get("2026-11-26") == "Thanksgiving",
+   "the floating ones land on the right weekday: third Monday, last "
+   "Monday, fourth Thursday")
+ok(_h26.get("2026-07-03") == "Independence Day (observed)"
+   and "2026-07-04" not in _h26,
+   "and the observed rule moves a Saturday holiday to the Friday — the "
+   "day off is the day the doors are shut, which is the one a sales "
+   "chart feels")
+ok(not _dbk.public_holidays(2026, "XX"),
+   "a country whose rules are not in here returns nothing rather than "
+   "somebody else's holidays")
+
+_dcon = _mdb.connect()
+_dbk.fill_calendar(_dcon, [2026])
+ok(_dcon.execute("SELECT COUNT(*) n FROM calendar_days").fetchone()["n"] >= 12,
+   "a year of them is written once and left alone")
+_dbk.fill_calendar(_dcon, [2026])
+ok(_dcon.execute("SELECT COUNT(*) n FROM calendar_days WHERE day="
+                 "'2026-12-25'").fetchone()["n"] == 1,
+   "and filling it twice does not double it")
+_dcon.execute("INSERT OR REPLACE INTO calendar_days(day,name,kind,closed)"
+              " VALUES('2026-12-24','Stocktake','company',1)")
+_dcon.commit()
+
+_dbk.rebuild(_dcon, 90)
+_ds = _dbk.series(_dcon, 90)
+ok(len(_ds["days"]) == 90,
+   "every day in the window has a row, including the ones nothing "
+   "happened on — leaving those out turns every average into an average "
+   "of the days that went well")
+ok(_ds["trading_days"] + _ds["closed_days"] == len(_ds["days"]),
+   "and each is either a trading day or one the doors were shut")
+ok(all(0 <= d["weekday"] <= 6 for d in _ds["days"]),
+   "with the weekday on the row, so the shape of a week is a group-by "
+   "rather than a date library")
+ok(len(_ds["weekdays"]) <= 7 and all(w["days"] for w in _ds["weekdays"]),
+   "which is what the by-weekday average is read off")
+_dcon.close()
+
+_days = c.get("/api/analytics/days?days=60", headers=A).json()
+ok(_days["compare"]["this"]["days"] == _days["compare"]["last"]["days"],
+   "month against month compares the SAME stretch of each — three days "
+   "of September against the whole of August is not a comparison, it is "
+   "a subtraction, and it always says the business collapsed")
+ok("per_day_pct" in _days["compare"] and "raw_pct" in _days["compare"],
+   "and it reports the raw difference beside the per-trading-day one, "
+   "because where they disagree the calendar is the difference")
+ok(_days["holiday_lift_pct"] is None or _days["holidays_n"] >= 3,
+   "a holiday lift is not reported off one or two days — that is a quiet "
+   "Tuesday wearing a trend's clothes")
+ok(c.post("/api/analytics/calendar", headers=A, json={
+    "day": "2026-08-14", "name": "Summer close", "closed": True}
+    ).status_code == 200,
+   "a company's own day sits beside the public ones")
+ok(c.post("/api/analytics/calendar", headers=A, json={
+    "day": "next friday"}).status_code == 400, "dates are dates")
+ok(c.get("/api/analytics/days").status_code in (401, 403),
+   "the daily table is the office's")
+ok(all(k in _days["days"][0] for k in
+       ("temp_c", "precip_mm", "cloud_pct", "humidity_pct")),
+   "and the weather has a place on the row already — 'it rained' is not "
+   "a metric, and 'Saturday was down 18% and it rained' is the start of "
+   "one")
+
+# --- how long a customer stays, and what they are worth ---------------------
+_life = _mrr.lifetime(_mdb.connect(), [
+    {"logo_churn_pct": 10.0, "arpa_cents": 20000},
+    {"logo_churn_pct": 10.0, "arpa_cents": 20000}], margin_pct=60.0)
+ok(_life["implied_months"] == 10.0,
+   "average lifetime is 1 over the churn rate: lose a tenth a month and "
+   "the average customer stays ten months")
+ok(_life["ltv_cents"] == 120000,
+   "and lifetime VALUE is that at the margin, not at the price — $200 a "
+   "month for ten months at 60% is $1,200 of value, and the difference "
+   "is the whole of what runs the business")
+_none = _mrr.lifetime(_mdb.connect(), [{"logo_churn_pct": 0.0,
+                                        "arpa_cents": 20000}], 60.0)
+ok(_none["implied_months"] is None and _none["ltv_cents"] is None,
+   "nobody lost yet means the lifetime is unknown, not infinite — an "
+   "infinite lifetime is a number somebody will put in a business plan")
+_nomargin = _mrr.lifetime(_mdb.connect(), [{"logo_churn_pct": 10.0,
+                                            "arpa_cents": 20000}], 0.0)
+ok(_nomargin["implied_months"] == 10.0 and _nomargin["ltv_cents"] is None,
+   "and with no margin known the value is left out rather than reported "
+   "at full price")
+
+
 # --- a day you can step into, and a week you can carve up ------------------
 # A month grid can say a day has three things on it. It cannot say who is
 # working it, who could be, or what is in the way — which is the whole of

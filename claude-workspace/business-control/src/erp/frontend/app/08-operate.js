@@ -344,11 +344,13 @@ async function renderExperiments() {
 // ---------- analytics ----------
 
 async function renderAnalytics() {
-  const [regions, funnel, engagement, pnl, proj, mrr] = await Promise.all([
-    api("/api/analytics/regions"), api("/api/analytics/funnel"),
-    api("/api/analytics/engagement"), api("/api/analytics/pnl"),
-    api("/api/analytics/projection?months=6").catch(() => null),
-    api("/api/analytics/mrr?months=12").catch(() => null)]);
+  const [regions, funnel, engagement, pnl, proj, mrr, days] =
+    await Promise.all([
+      api("/api/analytics/regions"), api("/api/analytics/funnel"),
+      api("/api/analytics/engagement"), api("/api/analytics/pnl"),
+      api("/api/analytics/projection?months=6").catch(() => null),
+      api("/api/analytics/mrr?months=12").catch(() => null),
+      api("/api/analytics/days?days=90").catch(() => null)]);
   const maxV = Math.max(...funnel.steps.map((s) => s.visitors), 1);
   const maxD = Math.max(...engagement.daily.map((d) => d.total), 1);
   view().innerHTML = `
@@ -358,6 +360,7 @@ async function renderAnalytics() {
         falling off</span> <b>${esc(a.scope)}</b>: ${a.last_7} events this week
         vs ${a.prior_7} last week</div>`).join("")}</div>` : ""}
     ${mrr && mrr.months.length ? mrrSection(mrr) : ""}
+    ${days ? daysSection(days) : ""}
     ${proj ? `<h3>Next six months</h3>
     <div class="card">
       <p class="dim">${esc(proj.note)}${proj.thin
@@ -423,6 +426,112 @@ async function renderAnalytics() {
       ${engagement.overall.falling_off
         ? '<span class="pill bad">falling off</span>'
         : '<span class="pill ok">healthy</span>'}</div></div>`;
+  if ($("#cal-day")) $("#cal-day").onclick = () => markDayForm();
+}
+
+/* The trading calendar. A month has four weekends or five; Easter moves;
+   a holiday closes the shop or triples it. Comparing this month with the
+   last without knowing which days were trading days is reporting the
+   calendar as performance — and nobody notices, because the number
+   always comes out. */
+const WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function daysSection(d) {
+  const c = d.compare;
+  const top = Math.max(...d.days.map((x) => x.revenue_cents), 1);
+  const bestW = Math.max(...d.weekdays.map((w) => w.avg_cents), 1);
+  const arrow = (v) => v === null ? '<span class="dim">—</span>'
+    : `<b class="${v > 0 ? "good" : v < 0 ? "low" : ""}">${
+      v > 0 ? "+" : ""}${v}%</b>`;
+  return `
+    <h3>Trading days</h3>
+    <div class="card">
+      <div class="mrr-heads">
+        <div class="mrr-fig"><span class="dim">this month to date</span>
+          <b>${money(c.this.revenue_cents)}</b></div>
+        <div class="mrr-fig"><span class="dim">same days last month</span>
+          <b>${money(c.last.revenue_cents)}</b></div>
+        <div class="mrr-fig"><span class="dim">raw</span>
+          ${arrow(c.raw_pct)}</div>
+        <div class="mrr-fig" title="the same difference with the shape of
+          the month taken out — read this one when the two disagree">
+          <span class="dim">per trading day</span>
+          ${arrow(c.per_day_pct)}</div>
+        <div class="mrr-fig"><span class="dim">trading days</span>
+          <b>${c.this.trading_days} v ${c.last.trading_days}${
+          c.trading_day_gap ? ` (${c.trading_day_gap > 0 ? "+" : ""}${
+            c.trading_day_gap})` : ""}</b></div>
+      </div>
+      <p class="dim">${esc(c.note)}</p>
+      <div class="day-strip">${d.days.map((x) => `
+        <span class="day-bar${x.holiday ? " day-hol" : ""}${
+          x.closed ? " day-shut" : ""}"
+          style="height:${Math.max(2, Math.round(
+            100 * x.revenue_cents / top))}%"
+          title="${x.day} · ${WD[x.weekday]} · ${money(x.revenue_cents)} · ${
+            x.orders} order(s)${x.holiday ? " · " + esc(x.holiday) : ""}">
+        </span>`).join("")}</div>
+      <p class="dim">${d.days.length} days · ${d.trading_days} trading${
+        d.closed_days ? ` · ${d.closed_days} shut` : ""} ·
+        ${money(d.avg_cents)} on an average trading day${
+        d.holiday_lift_pct !== null
+          ? ` · holidays run ${d.holiday_lift_pct > 0 ? "+" : ""}${
+             d.holiday_lift_pct}% against an ordinary day`
+          : d.holidays_n ? ` · ${d.holidays_n} holiday${
+             d.holidays_n === 1 ? "" : "s"} in the window, too few to read a
+             lift from` : ""}</p>
+      <h4 class="mrr-h">By weekday</h4>
+      <div class="wd-rows">${d.weekdays.map((w) => `
+        <div class="wd-row">
+          <span class="wd-n">${WD[w.weekday]}</span>
+          <div class="wd-bar"><span style="width:${
+            Math.round(100 * w.avg_cents / bestW)}%"></span></div>
+          <span class="wd-v">${money(w.avg_cents)}</span>
+          <span class="dim">${w.days}d</span>
+        </div>`).join("")}</div>
+      ${d.holidays.length ? `<h4 class="mrr-h">Marked days in the window</h4>
+        <div class="chips">${d.holidays.map((h) => `<span class="pill">${
+          esc(h.day)} · ${esc(h.name)} · ${money(h.revenue_cents)}</span>`)
+          .join("")}</div>` : ""}
+      <div class="page-head cal-add">
+        <p class="dim">A closure, a stocktake, a day the doors were shut —
+          it belongs beside the public holidays, or every average quietly
+          includes a day nothing could have happened on.</p>
+        <div class="top-actions">
+          <button class="btn alt" id="cal-day">Mark a day</button>
+        </div>
+      </div>
+      ${d.weather ? "" : `<p class="dim">Weather has columns on these rows
+        and nothing in them yet — the join is here when you want it.</p>`}
+    </div>`;
+}
+
+function markDayForm() {
+  modal(`<h3>Mark a day</h3>
+    <p class="dim">A day of this company's own. Marking it shut takes it
+      out of the trading-day averages, which is the point: an average that
+      includes the days you were closed is an average of a different
+      business.</p>
+    <div class="row2">
+      <div><label>Day</label><input id="md-day" type="date"></div>
+      <div><label>What it is</label>
+        <input id="md-name" placeholder="stocktake, staff party"></div>
+    </div>
+    <label class="f" style="margin-top:10px">
+      <input type="checkbox" id="md-shut" checked> the doors were shut
+    </label>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="md-save">Mark it</button></div>`);
+  $("#md-save").onclick = async () => {
+    if (!$("#md-day").value) return toast("which day?");
+    try {
+      await api("/api/analytics/calendar", { body: {
+        day: $("#md-day").value, name: $("#md-name").value.trim(),
+        closed: $("#md-shut").checked, kind: "company" } });
+      closeModal(); renderAnalytics();
+    } catch (err) { toast(err.message); }
+  };
 }
 
 /* Recurring revenue, and what moved it. The projection says what next
@@ -458,7 +567,32 @@ function mrrSection(d) {
           <b class="${last.nrr_pct === null ? ""
             : last.nrr_pct >= 100 ? "good" : "low"}">${
             pct(last.nrr_pct)}</b></div>
+        <div class="mrr-fig" title="1 divided by the monthly churn rate —
+          how long the average customer stays if this month repeats">
+          <span class="dim">avg lifetime</span>
+          <b>${d.lifetime.implied_months
+            ? d.lifetime.implied_months + " mo" : "—"}</b></div>
+        <div class="mrr-fig" title="what one customer is worth over that
+          lifetime, at the gross margin the P&L reports — revenue is not
+          value, and the difference is what runs the business">
+          <span class="dim">lifetime value</span>
+          <b>${d.lifetime.ltv_cents
+            ? money(d.lifetime.ltv_cents) : "—"}</b></div>
       </div>
+      <p class="dim mrr-life">${d.lifetime.implied_months
+        ? `Lifetime is 1 ÷ ${d.lifetime.churn_pct}% churn, averaged over
+           ${d.lifetime.months_of_churn} month${
+           d.lifetime.months_of_churn === 1 ? "" : "s"}${
+           d.lifetime.margin_pct
+             ? `, valued at the ${d.lifetime.margin_pct}% gross margin the
+                P&amp;L reports` : ""}.`
+        : "Lifetime needs a churn rate, and a churn rate needs two months "
+          + "with a customer lost between them."}${
+        d.lifetime.observed_months
+          ? ` The plans that have actually ended lasted
+             ${d.lifetime.observed_months} months on average
+             (${d.lifetime.observed_n}) — biased short, because the ones
+             still running are not in it.` : ""}</p>
       ${d.recorded_months < 2 ? `<p class="dim">${d.recorded_months} month
         recorded so far. Movement needs two — the second one is where this
         starts saying anything.</p>` : ""}
@@ -471,7 +605,8 @@ function mrrSection(d) {
       <div class="tablewrap"><table>
         <thead><tr><th>month</th><th>MRR</th><th>new</th><th>expansion</th>
           <th>contraction</th><th>churn</th><th>net new</th><th>NRR</th>
-          <th></th></tr></thead>
+          <th title="customers gained and lost, as a share of the month you
+            started with">logos ±</th><th></th></tr></thead>
         <tbody>${bars.map((m) => `<tr${m.seam ? ' class="dim"' : ""}>
           <td>${esc(m.month)}${m.origin === "backfill"
             ? ' <span class="pill" title="reconstructed from subscription '
@@ -492,6 +627,9 @@ function mrrSection(d) {
               m.net_new_cents > 0 ? "+" : ""}${money(m.net_new_cents)}</b>`}</td>
           <td class="${m.nrr_pct === null ? "dim"
             : m.nrr_pct >= 100 ? "good" : "low"}">${pct(m.nrr_pct)}</td>
+          <td class="dim">${m.logo_new_pct === null ? "—"
+            : `<span class="good">+${m.logo_new_pct}%</span> /
+               <span class="low">−${m.logo_churn_pct}%</span>`}</td>
           <td style="min-width:120px"><div class="proj-bar">
             <span class="proj-fixed" style="width:${
               Math.round(100 * m.mrr_cents / top)}%"></span></div></td>

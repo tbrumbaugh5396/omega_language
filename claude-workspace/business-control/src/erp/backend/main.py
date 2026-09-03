@@ -55,6 +55,8 @@ def _init_core(tid=None):
         _ts.init_tables(con)
         from . import mrr as _mrr
         _mrr.init_tables(con)
+        from . import daybook as _dbk
+        _dbk.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -4182,7 +4184,68 @@ def analytics_mrr(months: int = 12, user=Depends(admin_user),
     from . import mrr as _mrr
     _mrr.backfill(con, months)
     _mrr.snapshot(con)
-    return _mrr.movement(con, months)
+    # Lifetime VALUE needs the margin, and the margin is the P&L's answer
+    # rather than a second assumption kept here: one number, computed in
+    # one place, or the two screens disagree about the same business.
+    gross = analytics.pnl(con, CFG, 90)
+    margin = (gross["gross_cents"] / gross["revenue_cents"] * 100
+              if gross["revenue_cents"] else 0.0)
+    return _mrr.movement(con, months, margin_pct=round(margin, 1))
+
+
+@app.get("/api/analytics/days")
+def analytics_days(days: int = 90, region: str = "", user=Depends(admin_user),
+                   con=Depends(get_con)):
+    """The daily series, with the calendar in the row.
+
+    Rebuilt on read rather than accumulated as things happen: a refund, a
+    cancelled order or a corrected shift changes a day that has already
+    gone, and a counter incremented at the time cannot hear about it.
+    """
+    from . import daybook
+    lt = time.localtime()
+    daybook.fill_calendar(con, [lt.tm_year - 1, lt.tm_year, lt.tm_year + 1],
+                          CFG.get("holiday_country") or "US")
+    daybook.rebuild(con, max(14, min(400, days)))
+    out = daybook.series(con, days, region)
+    out["compare"] = daybook.compare(con, region)
+    return out
+
+
+class CalendarDayBody(BaseModel):
+    day: str
+    name: str = ""
+    closed: bool = False
+    kind: str = "company"
+
+
+@app.post("/api/analytics/calendar")
+def analytics_add_day(body: CalendarDayBody, user=Depends(admin_user),
+                      con=Depends(get_con)):
+    """A day of this company's own: the closure, the stocktake, the party.
+    It sits beside the public holidays because a day the doors were shut
+    is a day the doors were shut, whoever decided it."""
+    import re as _re
+    if not _re.fullmatch(r"\d{4}-\d{2}-\d{2}", body.day.strip()):
+        raise HTTPException(400, "dates are YYYY-MM-DD")
+    name = body.name.strip()[:60] or "closed"
+    if body.kind not in ("company", "public", "school"):
+        raise HTTPException(400, "a day is company, public or school")
+    con.execute(
+        "INSERT OR REPLACE INTO calendar_days(day,name,kind,closed)"
+        " VALUES(?,?,?,?)",
+        (body.day.strip(), name, body.kind, 1 if body.closed else 0))
+    con.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/analytics/calendar/{day}/{name}")
+def analytics_drop_day(day: str, name: str, user=Depends(admin_user),
+                       con=Depends(get_con)):
+    con.execute("DELETE FROM calendar_days WHERE day=? AND name=?",
+                (day, name))
+    con.commit()
+    return {"ok": True}
 
 
 @app.get("/api/analytics/regions")
