@@ -26,7 +26,9 @@ async function renderInventory() {
     <div class="page-head">
       <div><h2>Inventory — all stores</h2></div>
       ${isAdmin ? `<div class="top-actions">
-        <button class="btn sm" id="inv-new">New product</button>
+        <button class="btn" id="inv-new" title="a new line, in draft — it
+          stays off the shop until you publish it">${
+          opsIcon("box", "btn-ic")} New product</button>
       </div>` : ""}
     </div>
     ${svc.length ? `<div class="card">

@@ -63,7 +63,13 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .surface-link:hover { border-color: var(--accent2); }
 #whoami { color: var(--dim); font-size: 13px; }
 #whoami a { color: var(--accent2); cursor: pointer; text-decoration: none; }
-#layout { display: flex; min-height: calc(100vh - 45px); }
+/* Everything that hangs off the bottom of the top bar measures it rather
+   than guessing. The bar is 45px only while its account line fits on one
+   row; on a narrower window it wraps to two, and every pixel the guess was
+   short was a pixel of the nav hanging below the fold — which is how the
+   last connection in the list became unreachable without scrolling the
+   page itself. --topbar is written by the chrome on every resize. */
+#layout { display: flex; min-height: calc(100vh - var(--topbar, 56px)); }
 /* The nav scrolls on its own rather than with the page. There are twenty-odd
    tabs now, so on a laptop the last group sat below the fold and reaching it
    meant scrolling the whole document — which moved whatever you were reading
@@ -76,8 +82,8 @@ body { margin: 0; background: var(--bg); color: var(--text);
    the width is remembered. */
 #tabs { width: var(--rail, 176px); flex-shrink: 0; padding: 10px 0 24px;
   border-right: 1px solid var(--line);
-  position: sticky; top: 45px; align-self: flex-start;
-  max-height: calc(100vh - 45px); overflow-y: auto;
+  position: sticky; top: var(--topbar, 56px); align-self: flex-start;
+  max-height: calc(100vh - var(--topbar, 56px)); overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 #tabs::-webkit-scrollbar { width: 8px; }
@@ -114,7 +120,11 @@ body.rail-folded #tabs button { justify-content: center; padding: 9px 0; }
   stroke-linejoin: round; }
 #tabs button.on .ic { color: var(--accent2); }
 #bottomnav { display: none; }
-#view { flex: 1; padding: 18px; max-width: 1080px;
+/* min-width:0 or a flex item is as wide as its widest child: the board's
+   five columns pushed the whole view past the window, taking the page's
+   own action buttons off the right-hand edge with them. Wide content
+   scrolls inside itself now, and the page does not scroll sideways. */
+#view { flex: 1; min-width: 0; padding: 18px; max-width: 1080px;
   animation: viewin .18s ease-out; }
 @keyframes viewin { from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; } }
@@ -359,7 +369,8 @@ details.sect > .inner { padding: 0 14px 14px; }
 
 /* ---------- the board ---------- */
 .board { display: grid; gap: 12px; align-items: start;
-  grid-template-columns: repeat(5, minmax(200px, 1fr)); }
+  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  overflow-x: auto; padding-bottom: 4px; }
 .board-col { background: var(--panel2); border: 1px solid var(--line);
   border-radius: var(--r); padding: 10px; min-height: 90px; }
 .board-head { font-weight: 600; font-size: 13px; letter-spacing: .02em;
@@ -511,6 +522,17 @@ details.sect > .inner { padding: 0 14px 14px; }
    flex row they pushed the label below the button's baseline. */
 .page-head > h3 { flex: 1; margin: 0; align-self: center; }
 .page-head p.dim { font-size: 13.5px; max-width: 62ch; margin: 0; }
+/* A page's actions, top right. Without this the action group was just
+   another div child of .page-head, so it took the same flex:1 as the
+   title block and landed in the middle of the header — which is why every
+   page but Stores wore its buttons in the wrong place. */
+.page-head .top-actions { flex: 0 0 auto; min-width: 0; margin-left: auto;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  justify-content: flex-end; }
+.page-head .top-actions .btn { flex: none; }
+/* A button whose whole label is an arrow does not need a label's padding,
+   but it does need every other button's height. */
+.btn.icon-btn { padding-left: 11px; padding-right: 11px; }
 .page-head .btn { flex: none; display: inline-flex; align-items: center;
   gap: 8px; }
 
@@ -560,11 +582,38 @@ tbody tr:hover { background: rgba(0,0,0,.028); }
 /* A client row is not a document row: it carries a variable number of
    warning pills, so it flows rather than sitting in the Documents grid —
    where the extras pushed its buttons onto a line of their own. */
-.eng-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.eng-top .doc-main { flex: 1 1 260px; min-width: 200px; }
+/* A client row reads down its columns, not across each name: where they
+   are hosted, what is wrong, when they launch, what you can do. Names are
+   different lengths, so a row of pills that starts wherever the name
+   happens to end cannot be scanned at all. */
+.eng-top { display: grid; align-items: center; gap: 10px;
+  grid-template-columns: 22px minmax(0, 1fr) 118px minmax(0, 200px) 104px auto; }
+.eng-top .doc-main { min-width: 0; }
 .eng-top .pill { flex: none; }
-.eng-top .btn { flex: none; margin-left: auto; }
-.eng-top .btn + .btn { margin-left: 0; }
+.eng-host, .eng-flags { display: flex; gap: 6px; flex-wrap: wrap; }
+.eng-when { font-size: 12.5px; text-align: right; }
+.dl-acts.eng-row-acts { grid-template-columns: 78px 68px; }
+@media (max-width: 1000px) {
+  .eng-top { grid-template-columns: 22px minmax(0, 1fr) auto; }
+  .eng-host, .eng-flags, .eng-when { grid-column: 2 / -1; }
+  .eng-when { text-align: left; }
+}
+
+/* The fleet's tenants, in the same spirit: who · what they are · where
+   they answer · what you can do to them. Six actions in three fixed
+   columns, wide enough for the longest label — "Act as admin" and
+   "Capabilities" were being clipped mid-word. */
+.doc-line.fleet-line { grid-template-columns:
+  minmax(0, 1fr) minmax(0, 300px) minmax(0, 1fr) auto; }
+.fl-who { min-width: 0; }
+.fl-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.fl-hosts { font-size: 12px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.dl-acts.fleet-acts { grid-template-columns: repeat(3, 98px); }
+@media (max-width: 1000px) {
+  .doc-line.fleet-line { grid-template-columns: minmax(0, 1fr) auto; }
+  .fl-tags, .fl-hosts { grid-column: 1 / -1; }
+}
 
 /* The generic list row: a title block on the left, pills and buttons
    trailing on the right, wrapping when the pane is narrow. Most .doc-top
@@ -920,19 +969,24 @@ button.btn[hidden], .btn[hidden] { display: none; }
 #store-rail { width: var(--srail, 240px); flex-shrink: 0;
   border-left: 1px solid var(--line);
   padding: 14px 12px 30px; display: flex; flex-direction: column; gap: 10px;
-  max-height: calc(100vh - 45px); position: sticky; top: 45px;
-  overflow-y: auto; }
+  max-height: calc(100vh - var(--topbar, 56px)); position: sticky;
+  top: var(--topbar, 56px); overflow-y: auto; }
 #store-rail[hidden] { display: none; }
 /* folded to a spine, with the way back on it: a panel that disappears
    completely is a panel somebody has to remember existed */
 body.srail-folded #store-rail { width: 26px; padding: 10px 2px;
   overflow: hidden; }
 body.srail-folded #store-rail > *:not(.srail-fold) { display: none; }
-.srail-fold { position: absolute; top: 10px; left: -12px; width: 24px;
-  height: 24px; border-radius: 50%; border: 1px solid var(--line);
-  background: var(--panel); color: var(--dim); cursor: pointer;
-  font-size: 12px; line-height: 1; z-index: 4; }
-.srail-fold:hover { border-color: var(--accent); color: var(--text); }
+/* The fold sits IN the rail, not half outside it: hung off the left edge
+   it was clipped by the rail's own scrolling, so the control for bringing
+   the panel back was itself half-hidden. */
+.srail-fold { align-self: flex-start; flex: none; width: 22px; height: 22px;
+  border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--dim); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 0; }
+.srail-fold:hover { border-color: var(--accent); color: var(--text);
+  background: var(--panel); }
+body.srail-folded .srail-fold { align-self: center; }
 #srail-grip { position: absolute; top: 0; left: -4px; width: 8px;
   height: 100%; cursor: col-resize; z-index: 3; }
 #srail-grip:hover { background: color-mix(in srgb, var(--accent) 30%,

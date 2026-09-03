@@ -812,12 +812,13 @@ async function renderOneIntegration(name, label) {
       <div><h2>${esc(p.label)}</h2>
         <p class="dim">${esc(p.blurb)}</p></div>
       <div class="top-actions">
-        ${bespoke[name] ? `<button class="btn alt sm" data-onefull
+        ${bespoke[name] ? `<button class="btn alt" data-onefull
           >Open ${esc(p.label)}</button>` : ""}
-        <button class="btn alt sm" data-oneall>All connections</button>
-        ${p.connected ? `<button class="btn alt sm" data-onetest
-          >Send a test</button>
-          <button class="btn alt sm" data-oneoff>Disconnect</button>` : ""}
+        ${p.connected ? `<button class="btn alt" data-oneoff
+          >Disconnect</button>
+          <button class="btn alt" data-onetest>Send a test</button>` : ""}
+        <button class="btn alt" data-oneall>${opsIcon("link", "btn-ic")}
+          All connections</button>
       </div>
     </div>
     <div class="card intg">

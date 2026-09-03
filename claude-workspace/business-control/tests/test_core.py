@@ -3431,6 +3431,73 @@ ok("Math.max(26, Math.min(460" in _wsr,
    "the drag is clamped: a rail dragged to nothing cannot be found again")
 
 
+# --- where a page's actions live ------------------------------------------
+# Every page's action buttons sat wherever .page-head's flex happened to
+# put them, because .top-actions had no rule in this stylesheet at all: it
+# was just another div child, so it took the same flex:1 as the title and
+# landed in the middle of the header. Stores looked right only because its
+# button is a direct child.
+ok(".page-head .top-actions {" in _ocss and "margin-left: auto"
+   in _ocss.split(".page-head .top-actions {")[1][:200],
+   "a page's actions are pinned to the top right corner")
+for _tab, _btn in (("renderShop", "sh-new"), ("renderInventory", "inv-new"),
+                   ("renderCustomers", "cu-new"), ("renderStaff", "staff-new"),
+                   ("renderBoard", "bd-new"), ("renderHours", "hr-off"),
+                   ("renderSchedule", "rt-pub"), ("renderCalendar", "cal-today"),
+                   ("renderClients", "eng-new")):
+    _body = _ops.split(f"function {_tab}(")[1][:5000]
+    _head = _body.split('class="top-actions"')[1][:900] \
+        if 'class="top-actions"' in _body else ""
+    ok(f'id="{_btn}"' in _head,
+       f"{_tab}'s {_btn} sits in the page's action corner")
+    ok(f'class="btn sm" id="{_btn}"' not in _head,
+       f"and at the size every other page's does — not the small one")
+
+# The board's five columns are wider than the pane. A flex item is as wide
+# as its widest child unless told otherwise, so the view stretched past the
+# window and took the page's own buttons off the right-hand edge with it.
+ok("min-width: 0" in _ocss.split("#view {")[1][:120],
+   "the view refuses to be stretched by what is inside it")
+ok("overflow-x: auto" in _ocss.split(".board {")[1][:200],
+   "and the board scrolls sideways inside its own box instead")
+
+# The nav is sticky so a long tab list scrolls on its own. Setting
+# position:relative on it — to hang the drag grip off — quietly undid that,
+# and the last connection in the list could only be reached by scrolling
+# the whole document.
+ok('nav.style.position = "relative"' not in _ops,
+   "nothing takes the nav out of sticky to hang a grip on it")
+ok("--topbar" in _ocss and "trackTopbar" in _ops,
+   "and what hangs off the top bar measures it rather than assuming 45px, "
+   "which is only true while its account line fits on one row")
+for _sel in ("#tabs {", "#store-rail {"):
+    ok("var(--topbar" in _ocss.split(_sel)[1][:340],
+       f"{_sel.strip(' {')} sticks to the bar's real height")
+
+# The fold control for the store rail was hung off the rail's left edge —
+# outside a box that scrolls its own contents, so the control for bringing
+# the panel back was itself half cut off.
+_fold = _ocss.split(".srail-fold {")[1][:300]
+ok("position: absolute" not in _fold and "align-self" in _fold,
+   "the store rail's fold control sits inside the rail, where it can be "
+   "seen and clicked")
+
+# Rows of pills that start wherever a name happens to end cannot be read
+# down a list. Both fleet-scale lists get real columns.
+ok("grid-template-columns: 22px minmax(0, 1fr)" in
+   _ocss.split(".eng-top {")[1][:220],
+   "a client row reads down its columns: host, flags, launch, actions")
+ok('class="eng-host"' in _ops and 'class="eng-flags"' in _ops
+   and 'class="eng-when dim"' in _ops,
+   "and every row carries every cell, empty ones included — a cell that "
+   "vanishes when it has nothing in it takes the alignment with it")
+ok(".doc-line.fleet-line {" in _ocss and ".dl-acts.fleet-acts {" in _ocss,
+   "the fleet's tenants line up the same way")
+ok('style="grid-template-columns:74px 74px 70px"' not in _ops,
+   "with the six actions in columns wide enough for their labels, rather "
+   "than an inline width that clipped 'Act as admin' mid-word")
+
+
 # --- the ops app's file family: no name may mean two things ------------------
 # app.js became ordered part files served as one script. Concatenated
 # global scope means a duplicate definition is a silent overwrite — the

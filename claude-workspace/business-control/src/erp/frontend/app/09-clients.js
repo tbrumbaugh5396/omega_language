@@ -607,21 +607,25 @@ async function renderClients() {
               e.content_pct}% · ${e.docs} document${e.docs === 1 ? "" : "s"}, ${
               e.signed} signed${e.portal_seen_at
                 ? " · client looked " + fmtDate(e.portal_seen_at) : ""}</span></div>
-          ${e.tenant_id ? `<span class="pill ok" title="this client runs
-            on the platform — their install answers at
-            ${esc(e.tenant_id)}.localhost">${opsIcon("shield2","btn-ic")}
-            ${esc(e.tenant_id)}</span>` : ""}
-          ${(e.warnings || []).map((w) =>
-            `<span class="pill warn">${esc(w)}</span>`).join("")}
-          ${e.status === "closed" ? '<span class="pill">closed</span>' : ""}
-          ${e.launch_target ? `<span class="dim">launch ${esc(e.launch_target)}</span>` : ""}
-          <button class="btn alt sm" data-engarch="${e.id}"
-            data-name="${esc(e.name)}"
-            data-on="${e.status === "archived" ? 1 : 0}">${
-            e.status === "archived" ? "Restore" : "Archive"}</button>
-          <button class="btn alt sm" data-engdel="${e.id}"
-            data-name="${esc(e.name)}" data-docs="${e.docs}"
-            data-signed="${e.signed}">Delete</button>
+          <span class="eng-host">${e.tenant_id ? `<span class="pill ok"
+            title="this client runs on the platform — their install answers
+            at ${esc(e.tenant_id)}.localhost">${opsIcon("shield2","btn-ic")}
+            ${esc(e.tenant_id)}</span>` : ""}</span>
+          <span class="eng-flags">${(e.warnings || []).map((w) =>
+            `<span class="pill warn">${esc(w)}</span>`).join("")}${
+            e.status === "closed" ? '<span class="pill">closed</span>'
+              : ""}</span>
+          <span class="eng-when dim">${e.launch_target
+            ? "launch " + esc(e.launch_target) : ""}</span>
+          <span class="dl-acts eng-row-acts">
+            <button class="btn alt sm" data-engarch="${e.id}"
+              data-name="${esc(e.name)}"
+              data-on="${e.status === "archived" ? 1 : 0}">${
+              e.status === "archived" ? "Restore" : "Archive"}</button>
+            <button class="btn alt sm" data-engdel="${e.id}"
+              data-name="${esc(e.name)}" data-docs="${e.docs}"
+              data-signed="${e.signed}">Delete</button>
+          </span>
         </div>
       </div>`).join("")
       || `<div class="card empty"><span class="e-ic">${opsIcon("handshake")}</span>
@@ -2623,7 +2627,6 @@ function signForm(did) {
    grip are put back after each draw rather than once — the same lesson
    the nav taught. */
 function wireStoreRail(rail) {
-  rail.style.position = "sticky";
   if (localStorage.getItem("bc_srail_fold") === "1")
     document.body.classList.add("srail-folded");
   const w = +localStorage.getItem("bc_srail_w") || 0;

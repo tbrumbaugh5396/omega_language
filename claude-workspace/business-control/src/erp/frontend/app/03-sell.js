@@ -163,13 +163,14 @@ async function renderShop() {
         ? '<span class="pill ok">wholesale — priced per case</span>' : ""}
         </h2></div>
       <div class="top-actions">
-        ${S.user && S.user.is_admin ? `<button class="btn sm" id="sh-new"
-          title="a new line, in draft — it stays off the shop until you
-          publish it">New product</button>` : ""}
         ${S.products.some((p) => ["pack", "bundle"].includes(p.kind))
-          ? `<a class="btn alt sm" href="/plan-builder" target="_blank"
+          ? `<a class="btn alt" href="/plan-builder" target="_blank"
                title="the capability menu with a running total — the page a
-               client can price themselves on">Plan builder</a>` : ""}
+               client can price themselves on">${opsIcon("tools", "btn-ic")}
+               Plan builder</a>` : ""}
+        ${S.user && S.user.is_admin ? `<button class="btn" id="sh-new"
+          title="a new line, in draft — it stays off the shop until you
+          publish it">${opsIcon("bag", "btn-ic")} New product</button>` : ""}
       </div>
     </div>
     ${kindGroups(S.products).map((g) => `
@@ -1064,9 +1065,10 @@ async function renderHours() {
           week. Approving a period stores the numbers WITH the signature:
           what was approved is what was seen.</p></div>
       <div class="top-actions">
-        <button class="btn alt sm" id="hr-prev">&larr; earlier</button>
-        <button class="btn alt sm" id="hr-next">later &rarr;</button>
-        <button class="btn sm" id="hr-off">Ask for time off</button>
+        <button class="btn alt" id="hr-prev">&larr; earlier</button>
+        <button class="btn alt" id="hr-next">later &rarr;</button>
+        <button class="btn" id="hr-off">${opsIcon("calendar", "btn-ic")}
+          Ask for time off</button>
       </div>
     </div>
     ${all ? `<div class="card">
@@ -1253,11 +1255,15 @@ async function renderSchedule() {
           allowed and marked — a rota that refuses to let a manager ask is
           a rota that ends up in a spreadsheet.</p></div>
       <div class="top-actions">
-        <button class="btn alt sm" id="rt-prev">&larr;</button>
-        <button class="btn alt sm" id="rt-next">&rarr;</button>
-        <button class="btn alt sm" id="rt-avail">My availability</button>
-        ${sched.office ? `<button class="btn sm" id="rt-pub">Publish these
-          two weeks</button>` : ""}
+        <button class="btn alt icon-btn" id="rt-prev"
+          title="the fortnight before">&larr;</button>
+        <button class="btn alt icon-btn" id="rt-next"
+          title="the fortnight after">&rarr;</button>
+        <button class="btn alt" id="rt-avail">${opsIcon("clock", "btn-ic")}
+          My availability</button>
+        ${sched.office ? `<button class="btn" id="rt-pub">${
+          opsIcon("calendar", "btn-ic")} Publish these two weeks</button>`
+          : ""}
       </div>
     </div>
     ${sched.shifts.some((s) => !s.published) && sched.office

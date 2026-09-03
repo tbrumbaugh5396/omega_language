@@ -241,6 +241,7 @@ function renderChrome() {
   }).join("");
   nav.scrollTop = navScroll;
   ensureRailGrip();          // the redraw above takes the grip with it
+  trackTopbar();
   // And remember it across reloads, so a refresh doesn't lose your place
   // either. Written on scroll rather than on navigation, because the nav can
   // be scrolled without anything being clicked.
@@ -759,6 +760,20 @@ function wireRail() {
 
 /* The nav is redrawn on every tab change, which takes the grip with it —
    so it is put back after each draw rather than once at boot. */
+/* The top bar's height is not a constant: its account line wraps on a
+   narrow window. Everything sticky hangs off the measured height rather
+   than a number in the stylesheet that is right at one width. */
+function trackTopbar() {
+  const bar = document.getElementById("topbar");
+  if (!bar || trackTopbar.watching) return;
+  trackTopbar.watching = true;
+  const set = () => document.documentElement.style.setProperty(
+    "--topbar", Math.round(bar.getBoundingClientRect().height) + "px");
+  set();
+  if (window.ResizeObserver) new ResizeObserver(set).observe(bar);
+  else addEventListener("resize", set);
+}
+
 function ensureRailGrip() {
   const nav = document.getElementById("tabs");
   if (!nav || document.getElementById("rail-grip")) return;
@@ -767,7 +782,11 @@ function ensureRailGrip() {
   };
   const grip = document.createElement("div");
   grip.id = "rail-grip";
-  nav.style.position = "relative";
+  // NOT position:relative here. The nav is sticky, which is already a
+  // positioned ancestor for the grip — and overwriting it with relative
+  // took the nav off the top bar, so a long list of tabs ran off the
+  // bottom of the page and the last of them could only be reached by
+  // scrolling the document.
   nav.appendChild(grip);
   let dragging = false;
   grip.onpointerdown = (e) => {

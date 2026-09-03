@@ -329,10 +329,13 @@ async function renderFleet() {
       </div>
       ${bar(n)}
       <div class="sig-rows">${n.tenants.length ? n.tenants.map((t) => `
-        <div class="doc-line${t.status === "suspended" ? " dl-awaiting" : ""}">
-          <span class="dl-title">
+        <div class="doc-line fleet-line${
+          t.status === "suspended" ? " dl-awaiting" : ""}">
+          <span class="dl-title fl-who">
             <b>${esc(t.client ? t.client.name : t.id)}</b>
             <span class="dim">${esc(t.id)}</span>
+          </span>
+          <span class="fl-tags">
             ${t.provider ? `<span class="pill ok">runs the platform</span>`
               : ""}
             <span class="pill">${esc(t.class)} · ${t.units}u</span>
@@ -343,9 +346,10 @@ async function renderFleet() {
               card ${esc(t.billing.status)}</span>` : ""}
             ${t.status === "suspended"
               ? `<span class="pill warn">suspended</span>` : ""}
-            <span class="dim">${(t.hosts || []).map(esc).join(" · ")}</span>
           </span>
-          <span class="dl-acts" style="grid-template-columns:74px 74px 70px">
+          <span class="fl-hosts dim">${(t.hosts || []).map(esc)
+            .join(" · ")}</span>
+          <span class="dl-acts fleet-acts">
             ${t.provider ? "<span></span><span></span><span></span>" : `
             <button class="btn alt sm" data-treport="${esc(t.id)}"
               title="the client dossier: scale, traffic, a live meter per

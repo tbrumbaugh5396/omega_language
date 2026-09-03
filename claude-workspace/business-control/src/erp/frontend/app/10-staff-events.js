@@ -19,9 +19,9 @@ async function renderCustomers(q) {
           they've bought and where they're enrolled. B2B relationships
           live under Clients.</p></div>
       <div class="top-actions">
-        <button class="btn sm" id="cu-new" title="somebody who phoned an
+        <button class="btn" id="cu-new" title="somebody who phoned an
           order in, or walked up to the counter — they can sign in by name
-          afterwards">Add a customer</button>
+          afterwards">${opsIcon("user", "btn-ic")} Add a customer</button>
       </div>
     </div>
     <div class="card"><input id="cu-q" placeholder="Search name or email"
@@ -234,7 +234,8 @@ async function renderStaff() {
           access; everyone else gets exactly what's ticked. Changes are
           recorded in the audit log.</p></div>
       <div class="top-actions">
-        <button class="btn sm" id="staff-new">Add a person</button>
+        <button class="btn" id="staff-new">${opsIcon("users", "btn-ic")}
+          Add a person</button>
       </div>
     </div>
     ${roleRequestsCard(requests)}
@@ -522,9 +523,10 @@ async function renderBoard() {
           is and when it is due — and its due date shows on the
           calendar.</p></div>
       <div class="top-actions">
-        <button class="btn alt sm" id="bd-mine">${BOARD_MINE
-          ? "Everyone's" : "Only mine"}</button>
-        <button class="btn sm" id="bd-new">New ticket</button>
+        <button class="btn alt${BOARD_MINE ? " on" : ""}" id="bd-mine">${
+          BOARD_MINE ? "Everyone's" : "Only mine"}</button>
+        <button class="btn" id="bd-new">${opsIcon("list", "btn-ic")}
+          New ticket</button>
       </div>
     </div>
     <div class="board">
@@ -653,9 +655,11 @@ async function renderCalendar() {
           the board, a client's milestones, and classes that were held.
           One month, four calendars' worth.</p></div>
       <div class="top-actions">
-        <button class="btn alt sm" id="cal-prev">&larr;</button>
-        <button class="btn alt sm" id="cal-today">Today</button>
-        <button class="btn alt sm" id="cal-next">&rarr;</button>
+        <button class="btn alt icon-btn" id="cal-prev"
+          title="the month before">&larr;</button>
+        <button class="btn alt" id="cal-today">Today</button>
+        <button class="btn alt icon-btn" id="cal-next"
+          title="the month after">&rarr;</button>
       </div>
     </div>
     <div class="cal-legend">
