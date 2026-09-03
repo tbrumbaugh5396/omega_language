@@ -552,6 +552,27 @@ ok(_ap["plans"] and _ap["plans"][0]["plan"] == "Pro plan"
    "the card rail's absence is stated rather than implied")
 ok(c.get("/api/store/admin/plans").status_code in (401, 403),
    "and who is paying what is not public")
+
+# a plan somebody built for themselves is theirs, not stock
+_cfgu = c.post("/api/login", headers=HA,
+               json={"name": "Configuring Customer"}).json()
+_cfgr = c.post("/api/store/plans/configure", headers={
+    "Authorization": f"Bearer {_cfgu['token']}", **HA},
+    json={"cap_ids": ["selling", "payments", "comms"]}).json()
+ok(_cfgr.get("ok") and _cfgr.get("id"),
+   "a configured selection starts a real plan — priced from the book, "
+   "not from anything the page posted")
+_cfgc = {p["name"] for p in
+         c.get("/api/store/catalog", headers=HA).json()["products"]}
+ok(not any(n.startswith("Your plan") for n in _cfgc),
+   "and the product it needs to exist against stays OFF the shelf: it is "
+   "one customer's own configuration, and listing it would clutter the "
+   "shop and tell every visitor what that customer bought")
+ok(any(p.get("unlisted") for p in
+       c.get("/api/products", headers=AA).json()),
+   "the back office still sees it, flagged — somebody is paying for it "
+   "and somebody will have to service it")
+
 ok('data-plan="' in _storejs and "startPlan" in _storejs
    and 'class="per"' in _storejs
    and "confirmPlanReturn()" in _storejs,

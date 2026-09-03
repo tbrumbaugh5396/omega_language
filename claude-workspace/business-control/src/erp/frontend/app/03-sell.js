@@ -37,7 +37,11 @@ async function renderShop() {
         <div class="h">${esc(hero.headline)}</div>
         <button class="btn" id="hero-cta">${esc(hero.cta)}</button>
       </div>` : ""}
-    <h2>Shop ${isDist ? '<span class="pill ok">wholesale — priced per case</span>' : ""}</h2>
+    <h2>Shop ${isDist ? '<span class="pill ok">wholesale — priced per case</span>' : ""}
+      ${S.products.some((p) => ["pack", "bundle", "plan"].includes(p.kind))
+        ? `<a class="btn alt sm" href="/plan-builder" target="_blank"
+             title="the capability menu with a running total — the page a
+             client can price themselves on">Plan builder</a>` : ""}</h2>
     ${kindGroups(S.products).map((g) => `
       ${g.label ? `<h3 class="kind-head" style="--kind:${esc(g.colour)}">
         ${esc(g.label)} <small class="dim">${g.items.length} line${
@@ -47,7 +51,9 @@ async function renderShop() {
         <div class="art">${productArt(p)}</div>
         <div class="body">
           <div class="name">${esc(p.name)}</div>
-          <div class="dim" style="font-size:12px">${esc(p.category)} · ${esc(p.sku)}</div>
+          <div class="dim" style="font-size:12px">${esc(p.category)} · ${esc(p.sku)}${
+            p.unlisted ? ' · <span class="pill warn">not on the shelf</span>'
+              : ""}</div>
           <div class="price">${isDist
             ? `${money(p.case_price_cents)} <span class="dim"
                 style="font-size:12px;font-weight:400">/ case of ${p.case_size}</span>`

@@ -1884,6 +1884,9 @@ ok("function occurrenceKeysProbe" not in _ops
    and 'data-fill="' in _ops and "the ${esc(nth)}" in _ops,
    "the fill form says WHICH one it is asking about — [X] and then 'the "
    "2nd one', so a person answering four prices can see they are four")
+ok('href="/plan-builder"' in _ops,
+   "the back office links the plan builder from its own shop, so an "
+   "operator can put the page in front of a client mid-call")
 ok("function kindGroups(" in _ops and 'class="kind-head"' in _ops
    and "kind !== \"goods\"" in _ops
    and "Sold everywhere, stocked nowhere" in _ops,

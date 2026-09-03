@@ -2052,6 +2052,11 @@ ok("Every flavor" not in _store_js2 and "data-kindnav" in _store_js2
    "the menu is the shop's own table of contents: All products, then one "
    "lane per category, each its own section — not one wall of faces under "
    "a heading inherited from a drinks brand")
+ok('href="/plan-builder"' in _store_js2 and "builderIn" in _store_js2
+   and 'cfg-card' in _store_js2,
+   "and the shelf carries the door to the configurator where the "
+   "capabilities are — a shop that sells them says so beside them, not "
+   "only in the nav, and a shop that does not sell them shows nothing")
 ok("kind-head" in _store_js2 and "CATALOG.kinds" in _store_js2
    and "kinds.length < 2" in _store_js2,
    "the shop groups its shelf by what things ARE, with each group's own "

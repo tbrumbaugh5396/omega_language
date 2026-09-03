@@ -480,12 +480,30 @@ function drawGrid() {
     </div>`;
   const kinds = (CATALOG.kinds || []).filter(
     (k) => prods.some((p) => p.kind === k.id));
+  /* A shop that sells capabilities should say so where the capabilities
+     are, not only in the nav: the lane of packs ends with the door to
+     the menu they were cut from. Only on a shop that sells them — a
+     drinks brand has no configurator to offer. */
+  const builderIn = ["pack", "bundle", "plan"].find(
+    (id) => kinds.some((k) => k.id === id));
+  const builderCard = (k) => k.id !== builderIn ? "" : `
+    <a class="product cfg-card" href="/plan-builder"
+       style="--flavour:${k.colour}">
+      <div class="body">
+        <b>Build your own</b>
+        <span class="note">Pick the capabilities your business actually
+          does and watch the price add itself up — the same menu these
+          are cut from, priced from the same book.</span>
+        <span class="cfg-card-go">Open the menu &rarr;</span>
+      </div>
+    </a>`;
   gridHost.innerHTML = featureHtml + (kinds.length < 2
     ? prods.map(card).join("")
     : kinds.map((k) => `
         <h3 class="kind-head" style="--kind:${k.colour}">${esc(k.label)}
           <small>${esc(k.note || "")}</small></h3>
-        ${prods.filter((p) => p.kind === k.id).map(card).join("")}`).join(""))
+        ${prods.filter((p) => p.kind === k.id).map(card).join("")}
+        ${builderCard(k)}`).join(""))
     || (featureHtml ? "" :
     `<p class="dim">${SEARCH != null ? "Nothing matched — try another word."
       : "No products yet — add some in the store admin."}</p>`);

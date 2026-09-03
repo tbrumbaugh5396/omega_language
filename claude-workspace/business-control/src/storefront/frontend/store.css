@@ -375,6 +375,17 @@ svg.can { display: block; width: 100%; height: auto; }
 @media (max-width: 560px) { .kind-head { font-size: 18px; }
   .kind-head small { display: none; } }
 
+/* The door to the configurator, standing in the grid where the packs it
+   cuts from are — a card, so it reads as one more thing on the shelf,
+   dashed, so nobody mistakes it for a price. */
+.cfg-card { border-style: dashed; border-color: color-mix(in srgb,
+  var(--flavour) 55%, var(--line)); justify-content: center;
+  text-decoration: none; min-height: 200px; }
+.cfg-card:hover { background: var(--lav-soft); }
+.cfg-card .body { gap: 8px; }
+.cfg-card b { font-family: var(--display); font-size: 19px; }
+.cfg-card-go { color: var(--flavour); font-weight: 600; font-size: 14px; }
+
 /* ---------- the configurator ---------- */
 .cfg-grid { display: grid; grid-template-columns: 1fr 320px; gap: 28px;
   align-items: start; }

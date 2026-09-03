@@ -974,6 +974,11 @@ def catalog(con=Depends(get_con)):
     meta: dict[int, dict] = {}
     for m in con.execute("SELECT * FROM store_product_meta").fetchall():
         meta.setdefault(m["product_id"], {})[m["k"]] = m["v"]
+    # A plan somebody built for themselves is theirs, not stock: it keeps
+    # its row so the subscription and the invoice have something to name,
+    # and stays off the shelf.
+    prods = [p for p in prods
+             if meta.get(p["id"], {}).get("unlisted", "") != "1"]
     for p in prods:
         rv = reviews.get(p["id"])
         p["review_count"] = rv["n"] if rv else 0
@@ -1523,8 +1528,13 @@ def plan_configure(body: ConfigureBody, request: Request,
              + f"plus Platform Core ${quote['core']}.",
              "Plans", cents, cents))
         pid = cur.lastrowid
+    # NOT on the shelf. This product exists so a subscription can point at
+    # something and an invoice can name it — it is one customer's own
+    # configuration, and listing it publicly both clutters the shop and
+    # tells every visitor what that customer bought.
     for k, v in (("billing", "month"), ("kind", "plan"),
-                 ("caps", ",".join(picked)), ("colour", ""), ("quote", "")):
+                 ("caps", ",".join(picked)), ("colour", ""), ("quote", ""),
+                 ("unlisted", "1")):
         con.execute("INSERT OR REPLACE INTO store_product_meta"
                     "(product_id,k,v) VALUES(?,?,?)", (pid, k, v))
     con.commit()
