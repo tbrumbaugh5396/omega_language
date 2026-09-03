@@ -370,10 +370,9 @@ ok("--brand:" in _opsh and "<style>:root{" in _opsh,
    "what somebody chose and ops wearing a violet baked into a stylesheet")
 _opsc = (Path(__file__).parent.parent
          / "src/erp/frontend/styles.css").read_text(encoding="utf-8")
-ok("var(--brand-2, var(--brand, #8a6ff0))" in _opsc
-   and "color-mix" in _opsc,
-   "and derives its accent from them onto the dark ramp, keeping the old "
-   "literal as the fallback so a tenant with no theme is untouched")
+ok("--accent: var(--brand, #4634d9)" in _opsc and "color-mix" in _opsc,
+   "and derives its accent and its warm tone from them, keeping literals "
+   "as the fallback so a tenant with no theme still has a palette")
 ok("--brand:" not in c.get("/ops", headers=HB).text
    or c.get("/ops", headers=HB).text.count("--brand:") <= 1,
    "each tenant gets its own, not the provider's")
