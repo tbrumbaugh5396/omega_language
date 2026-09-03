@@ -3666,7 +3666,12 @@ ok(all(k in _days["days"][0] for k in
    "one")
 
 # --- how long a customer stays, and what they are worth ---------------------
-_life = _mrr.lifetime(_mdb.connect(), [
+# One connection, closed at the end. Three opened inline and left to the
+# garbage collector is a lock held for however long that takes, which is
+# the kind of thing that fails one run in ten and never the one you are
+# watching.
+_lcon = _mdb.connect()
+_life = _mrr.lifetime(_lcon, [
     {"logo_churn_pct": 10.0, "arpa_cents": 20000},
     {"logo_churn_pct": 10.0, "arpa_cents": 20000}], margin_pct=60.0)
 ok(_life["implied_months"] == 10.0,
@@ -3676,16 +3681,17 @@ ok(_life["ltv_cents"] == 120000,
    "and lifetime VALUE is that at the margin, not at the price — $200 a "
    "month for ten months at 60% is $1,200 of value, and the difference "
    "is the whole of what runs the business")
-_none = _mrr.lifetime(_mdb.connect(), [{"logo_churn_pct": 0.0,
-                                        "arpa_cents": 20000}], 60.0)
+_none = _mrr.lifetime(_lcon, [{"logo_churn_pct": 0.0,
+                              "arpa_cents": 20000}], 60.0)
 ok(_none["implied_months"] is None and _none["ltv_cents"] is None,
    "nobody lost yet means the lifetime is unknown, not infinite — an "
    "infinite lifetime is a number somebody will put in a business plan")
-_nomargin = _mrr.lifetime(_mdb.connect(), [{"logo_churn_pct": 10.0,
-                                            "arpa_cents": 20000}], 0.0)
+_nomargin = _mrr.lifetime(_lcon, [{"logo_churn_pct": 10.0,
+                                  "arpa_cents": 20000}], 0.0)
 ok(_nomargin["implied_months"] == 10.0 and _nomargin["ltv_cents"] is None,
    "and with no margin known the value is left out rather than reported "
    "at full price")
+_lcon.close()
 
 
 # --- a day you can step into, and a week you can carve up ------------------
