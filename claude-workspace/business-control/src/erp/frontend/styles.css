@@ -779,7 +779,15 @@ button.tpl-line:hover { background: var(--bg); border-color: var(--accent); }
 .fold-caret { display: inline-block; font-size: 12px; opacity: .6;
   transition: transform .12s ease; }
 .foldable.folded > .fold-head .fold-caret { transform: rotate(-90deg); }
+/* The summary only shows while the section is shut, so hanging the
+   right-hand group off its margin-left:auto moved the buttons every time
+   somebody opened the section. The actions carry their own alignment. */
 .fold-sum { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.fold-acts { display: flex; align-items: center; gap: 8px; flex: none; }
+/* Shut, the summary carries the group to the right and the buttons follow
+   it; open, the summary is gone and the buttons carry themselves. Either
+   way they end up in the same place. */
+.foldable:not(.folded) > .fold-head .fold-acts { margin-left: auto; }
 .foldable:not(.folded) > .fold-head .fold-sum { display: none; }
 .doc-line:not(.folded) .dm-blanks { visibility: hidden; }
 /* An open row already shows the count on its Fill button, so below the
@@ -972,11 +980,16 @@ button.btn[hidden], .btn[hidden] { display: none; }
   max-height: calc(100vh - var(--topbar, 56px)); position: sticky;
   top: var(--topbar, 56px); overflow-y: auto; }
 #store-rail[hidden] { display: none; }
-/* folded to a spine, with the way back on it: a panel that disappears
-   completely is a panel somebody has to remember existed */
-body.srail-folded #store-rail { width: 26px; padding: 10px 2px;
-  overflow: hidden; }
+/* Folded means folded: no width, no border, no strip of empty panel down
+   the side of the page. The way back is a tab on the window's own edge —
+   a panel that vanishes completely, leaving nothing to press, is a panel
+   somebody has to remember existed. */
+body.srail-folded #store-rail { width: 0; padding: 0; border-left: none;
+  overflow: visible; }
 body.srail-folded #store-rail > *:not(.srail-fold) { display: none; }
+body.srail-folded .srail-fold { position: fixed; right: 0;
+  top: calc(var(--topbar, 56px) + 16px); width: 20px; height: 34px;
+  border-radius: 6px 0 0 6px; border-right: none; z-index: 4; }
 /* The fold sits IN the rail, not half outside it: hung off the left edge
    it was clipped by the rail's own scrolling, so the control for bringing
    the panel back was itself half-hidden. */
@@ -986,7 +999,7 @@ body.srail-folded #store-rail > *:not(.srail-fold) { display: none; }
   font-size: 13px; line-height: 1; padding: 0; }
 .srail-fold:hover { border-color: var(--accent); color: var(--text);
   background: var(--panel); }
-body.srail-folded .srail-fold { align-self: center; }
+
 #srail-grip { position: absolute; top: 0; left: -4px; width: 8px;
   height: 100%; cursor: col-resize; z-index: 3; }
 #srail-grip:hover { background: color-mix(in srgb, var(--accent) 30%,

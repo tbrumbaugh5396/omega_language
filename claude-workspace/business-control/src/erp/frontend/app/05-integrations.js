@@ -119,7 +119,7 @@ async function renderIntegrations() {
 
   view().innerHTML = `
     <div class="page-head">
-      <div><h2>Integrations</h2>
+      <div><h2>All connections</h2>
         <p class="dim">Each of these is connected once and then works on its
           own. Credentials are stored and never shown again — the screen can
           tell you what a connection reached, but not what it is.</p></div>
@@ -493,7 +493,7 @@ function drawForm(p, refresh) {
           other way: it posts orders to an address of ours, or you drop in a
           file. Lines are matched to products by SKU — the code printed on
           the case, not our internal ids.</p>
-        <button class="btn alt sm" id="lu-key">${p.inbound_ready
+        <button class="btn" id="lu-key">${p.inbound_ready
           ? "Show the endpoint" : "Set up the endpoint"}</button>
         <label class="f" style="margin-top:10px">Or import an order CSV
           <span class="dim">columns: reference, customer, email, city, sku,
@@ -547,7 +547,7 @@ function drawForm(p, refresh) {
         <label class="f">Client ID<input id="app-id-${p.name}"></label>
         <label class="f">Client secret
           <input id="app-secret-${p.name}" type="password"></label>
-        <button class="btn alt sm" data-appsave="${p.name}">Save app</button>`}
+        <button class="btn" data-appsave="${p.name}">Save app</button>`}
       ${p.app_ready ? `<button class="btn" data-auth="${p.name}"
         >Connect ${esc(p.label)}</button>` : ""}
       <p class="dim" id="app-msg-${p.name}"></p>`;

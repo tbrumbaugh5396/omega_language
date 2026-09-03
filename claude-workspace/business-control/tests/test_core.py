@@ -3477,7 +3477,7 @@ for _sel in ("#tabs {", "#store-rail {"):
 # The fold control for the store rail was hung off the rail's left edge —
 # outside a box that scrolls its own contents, so the control for bringing
 # the panel back was itself half cut off.
-_fold = _ocss.split(".srail-fold {")[1][:300]
+_fold = _ocss.split("\n.srail-fold {")[1][:300]
 ok("position: absolute" not in _fold and "align-self" in _fold,
    "the store rail's fold control sits inside the rail, where it can be "
    "seen and clicked")
@@ -3496,6 +3496,150 @@ ok(".doc-line.fleet-line {" in _ocss and ".dl-acts.fleet-acts {" in _ocss,
 ok('style="grid-template-columns:74px 74px 70px"' not in _ops,
    "with the six actions in columns wide enough for their labels, rather "
    "than an inline width that clipped 'Act as admin' mid-word")
+
+
+# --- a modifier may not depend on where it sits in the file ---------------
+# Twice in one afternoon a row variant collapsed because its rule was
+# written above the rule it was meant to override: same specificity, later
+# wins, and .fleet-line's four columns silently became .doc-line's two.
+# Nothing in the markup says which of two classes is the base, so the
+# stylesheet has to say it: a rule that overrides another for the same
+# element names both (.doc-line.fleet-line), which is true wherever in the
+# file it sits. This guard reads the markup for which classes actually
+# share an element, and refuses the pairs that would be decided by order.
+def _class_lists(js):
+    """Every class attribute in the ops markup, as its class tokens.
+
+    A class attribute is not a literal here: it carries ${...}, and the
+    classes inside those (" dl-awaiting") are as real as the ones outside.
+    Quoted pieces of an expression count; nested templates are skipped,
+    being markup of their own. One unparseable attribute costs itself and
+    nothing after it."""
+    out, i = [], 0
+    while True:
+        j = js.find('class="', i)
+        if j < 0:
+            return out
+        k, depth, buf, stop = j + 7, 0, [], min(len(js), j + 700)
+        while k < stop:
+            ch = js[k]
+            if depth == 0 and ch == '"':
+                break
+            if js.startswith("${", k):
+                depth += 1; k += 2; continue
+            if depth and ch == "{":
+                depth += 1; k += 1; continue
+            if depth and ch == "}":
+                depth -= 1; k += 1; continue
+            if depth and ch == "`":
+                e = js.find("`", k + 1)
+                if e < 0 or e > stop:
+                    break
+                k = e + 1; continue
+            if depth and ch in "\"'":
+                e = js.find(ch, k + 1)
+                if e < 0 or e > stop:
+                    break
+                lit = js[k + 1:e]
+                if re.fullmatch(r"[\sa-z0-9_-]*", lit):
+                    buf.append(" " + lit + " ")
+                k = e + 1; continue
+            if depth == 0:
+                buf.append(ch)
+            k += 1
+        out.append(" ".join("".join(buf).split()))
+        i = j + 7
+
+
+def _css_contexts(css):
+    """The stylesheet split into the contexts a rule can win inside: the
+    top level, and each @media block. A compound selector written inside a
+    media block does nothing at the width where the base rule applies."""
+    css = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+    out, top, i = [], [], 0
+    while i < len(css):
+        m = re.compile(r"@media[^{]*\{").search(css, i)
+        if not m:
+            top.append(css[i:])
+            break
+        top.append(css[i:m.start()])
+        depth, k = 1, m.end()
+        while k < len(css) and depth:
+            depth += (css[k] == "{") - (css[k] == "}")
+            k += 1
+        out.append((css[m.start():m.end()].strip(), css[m.end():k - 1]))
+        i = k
+    return [("top level", "".join(top))] + out
+
+
+_together = set()
+for _cl in _class_lists(_ops):
+    _toks = sorted({t for t in _cl.split() if re.fullmatch(r"[a-z][\w-]*", t)})
+    for _i, _a in enumerate(_toks):
+        for _b in _toks[_i + 1:]:
+            _together.add(frozenset((_a, _b)))
+ok(len(_together) > 150,
+   f"the guard can see which classes share an element ({len(_together)} pairs)")
+ok(frozenset(("doc-line", "fleet-line")) in _together
+   and frozenset(("dl-acts", "eng-row-acts")) in _together,
+   "including the pairs that broke — proof it is looking at the right thing")
+for _where, _chunk in _css_contexts(_ocss):
+    for _prop in ("grid-template-columns", "display", "position",
+                  "flex-direction", "width"):
+        _solo, _both = set(), set()
+        for _m in re.finditer(r"([^{}]+)\{([^{}]*)\}", _chunk):
+            if not re.search(rf"(^|;|\s){_prop}\s*:", _m.group(2)):
+                continue
+            for _one in (x.strip() for x in _m.group(1).split(",")):
+                if re.fullmatch(r"\.[\w-]+", _one):
+                    _solo.add(_one[1:])
+                for _c in re.findall(r"\.([\w-]+)\.([\w-]+)", _one):
+                    _both.add(frozenset(_c))
+        _clash = sorted(tuple(sorted(x)) for x in
+                        {frozenset((a, b)) for a in _solo for b in _solo
+                         if a != b and frozenset((a, b)) in _together} - _both)
+        ok(not _clash,
+           f"{_where[:34]}: no two classes on one element set {_prop} from "
+           f"bare selectors, where only the file order decides which wins — "
+           f"write the override as .base.modifier ({_clash})")
+
+# --- the rest of this pass -----------------------------------------------
+# A section's buttons moved every time somebody opened it, because they
+# were riding on the summary's margin — and the summary only shows while
+# the section is shut.
+ok('<span class="fold-acts">${right' in _ops,
+   "a foldable section's actions are a group of their own")
+ok(".foldable:not(.folded) > .fold-head .fold-acts" in _ocss,
+   "aligned right whether the section is open or shut, so opening one "
+   "does not move its buttons")
+
+# Folded should mean folded: 26px of empty panel down the side of the page
+# is not a fold, it is a stripe.
+_srf = _ocss.split("body.srail-folded #store-rail {")[1][:200]
+ok("width: 0" in _srf and "border-left: none" in _srf,
+   "a folded store rail takes no width at all")
+ok("position: fixed" in _ocss.split("body.srail-folded .srail-fold {")[1][:200],
+   "and the way back is a tab on the window's edge — a panel that leaves "
+   "nothing to press is a panel nobody reopens")
+
+# Connections are one group, not four in Company and eight below it.
+for _t in ("discord", "slack", "trello", "dropbox", "integrations"):
+    _row = re.search(rf'\{{ id: "{_t}",[^}}]*\}}', _ops).group(0)
+    ok('group: "Connections"' in _row,
+       f"{_t} sits with the other connections")
+ok('label: "All connections"' in _ops
+   and "<h2>All connections</h2>" in _ops,
+   "and the list of them is called the same thing in the rail and on the "
+   "page it opens")
+
+# Every connection's own screen offers the same button for the same step.
+ok('<button class="btn" data-appsave=' in _ops,
+   "registering an app is the primary action on the pages that need one")
+ok('<button class="btn" id="lu-key"' in _ops,
+   "and so is standing up the endpoint on the one that takes deliveries")
+ok('class="btn alt sm" data-appsave' not in _ops
+   and 'class="btn alt sm" id="lu-key"' not in _ops,
+   "neither is a quiet secondary next to another connection's Connect")
 
 
 # --- the ops app's file family: no name may mean two things ------------------

@@ -168,7 +168,7 @@ function foldable(key, title, right, body, summary) {
     <div class="card-head fold-head">
       <b><span class="fold-caret">\u25be</span> ${title}</b>
       <span class="fold-sum dim">${esc(summary || "")}</span>
-      ${right || ""}
+      <span class="fold-acts">${right || ""}</span>
     </div>
     <div class="fold-body">${body}</div>
   </div>`;

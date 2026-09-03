@@ -95,21 +95,23 @@ const TABS = [
     roles: ["admin", "employee"] },
   { id: "staff", label: "Team & access", icon: "users", group: "Company",
     roles: ["admin"] },
-  { id: "discord", label: "Discord", icon: "chat", group: "Company",
-    roles: ["admin"] },
-  { id: "slack", label: "Slack", icon: "megaphone", group: "Company",
-    roles: ["admin"] },
-  { id: "trello", label: "Trello", icon: "list", group: "Company",
-    roles: ["admin"] },
-  { id: "dropbox", label: "Dropbox", icon: "file", group: "Company",
-    roles: ["admin"] },
-  { id: "integrations", label: "Integrations", icon: "link", group: "Company",
-    roles: ["admin"] },
-  // The rest of the connections, each with a rail entry of its own. Four
-  // of them earned bespoke screens; these are the ones whose whole story
-  // is "is it connected, what has it carried, and can I test it" — which
+  // Every connection lives in one group. Four of them earned bespoke
+  // screens because they do more than connect — Slack reads channels,
+  // Trello syncs cards — and the rest share one screen whose whole story
+  // is "is it connected, what has it carried, and can I test it". Which
   // is a screen, and belongs where a person looks for it rather than
-  // three clicks inside a list.
+  // three clicks inside a list. The list itself leads, because that is
+  // where a connection is set up and where your own ones are declared.
+  { id: "integrations", label: "All connections", icon: "link",
+    group: "Connections", roles: ["admin"] },
+  { id: "discord", label: "Discord", icon: "chat", group: "Connections",
+    roles: ["admin"] },
+  { id: "slack", label: "Slack", icon: "megaphone", group: "Connections",
+    roles: ["admin"] },
+  { id: "trello", label: "Trello", icon: "list", group: "Connections",
+    roles: ["admin"] },
+  { id: "dropbox", label: "Dropbox", icon: "file", group: "Connections",
+    roles: ["admin"] },
   { id: "ig-quickbooks", label: "QuickBooks", icon: "chart",
     group: "Connections", roles: ["admin"] },
   { id: "ig-pipedrive", label: "Pipedrive", icon: "handshake",
