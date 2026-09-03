@@ -612,6 +612,88 @@ ok(all(s["published"] for s in c.get(
     headers=AA).json()["shifts"]),
    "publishing is the moment it becomes one")
 
+# --- a week, the exceptions to it, and the dates it is not true of ----------
+# A week that can only say yes or no to a whole day gets filled in wrong by
+# everybody whose life has an afternoon in it. Four things have an opinion
+# about Thursday at three, and they are read in order of how specific they
+# are.
+_thu = _wks(_now) + 7 * 86400 + 3 * 86400          # next Thursday
+c.post("/api/availability", headers=AA, json={
+    "user_id": _hw, "weekday": 3, "from_min": 9 * 60, "to_min": 17 * 60})
+_week = c.get(f"/api/availability?user_id={_hw}", headers=AA).json()
+ok([w for w in _week["week"] if w["day"] == 3][0]["windows"]
+   == [[9 * 60, 17 * 60]],
+   "the week reads back as the answer, not the ingredients")
+c.post("/api/availability", headers=AA, json={
+    "user_id": _hw, "weekday": 3, "kind": "shut", "from_min": 12 * 60,
+    "to_min": 13 * 60, "note": "school run"})
+_week = c.get(f"/api/availability?user_id={_hw}", headers=AA).json()
+ok([w for w in _week["week"] if w["day"] == 3][0]["windows"]
+   == [[9 * 60, 12 * 60], [13 * 60, 17 * 60]],
+   "an exception cuts the day in two rather than ending it — 'Thursdays, "
+   "but not the school run' is a sentence a rota has to be able to hear")
+ok(c.post("/api/availability", headers=AA, json={
+    "user_id": _hw, "weekday": 3, "kind": "sideways", "from_min": 60,
+    "to_min": 120}).status_code == 400,
+   "a window is open or shut, and nothing else")
+
+_day = _t0.strftime("%Y-%m-%d", _t0.localtime(_thu))
+_bl = c.post("/api/blackouts", headers=AA, json={
+    "user_id": _hw, "from_day": _day, "from_min": 10 * 60,
+    "to_min": 15 * 60, "note": "dentist"}).json()
+ok(_bl["ok"], "and a date can be blacked out on top of the week")
+ok(c.post("/api/blackouts", headers=AA, json={
+    "user_id": _hw, "from_day": "next tuesday"}).status_code == 400,
+   "dates are dates")
+
+
+def _state(ts, mins, uid=_hw):
+    r = c.get(f"/api/availability/who?at={ts}&mins={mins}", headers=AA).json()
+    return [p for p in r["people"] if p["user_id"] == uid][0]
+
+
+ok(_state(_thu + 11 * 3600, 120)["state"] == "away",
+   "eleven o'clock that Thursday is gone: the blackout beat the week")
+ok(_state(_thu + 11 * 3600, 120)["why"] == "dentist",
+   "and the reason is the specific one — leave beats a blackout beats "
+   "what is true every week, because 'away' is not what a manager needs "
+   "to know")
+ok(_state(_thu + 16 * 3600, 60)["state"] == "free",
+   "four o'clock the same day is not: a blackout takes hours, not days")
+ok(_state(_thu + 7 * 86400 + 11 * 3600, 60)["state"] == "free",
+   "and it takes them from ONE Thursday — the week goes on afterwards")
+ok(_state(_thu + 11 * 3600 + 3600, 30)["state"] == "away"
+   and _state(_thu + 9 * 3600, 60)["state"] == "free",
+   "the day is read window by window, not as a flag")
+
+_fri = _state(_thu + 86400, 60)
+ok(_fri["state"] == "outside" and "Friday" in _fri["why"],
+   "somebody who works Thursdays has not gone quiet about Fridays — "
+   "reading that as silence puts them on a chase-up list they do not "
+   "belong on")
+_never = [p for p in c.get(f"/api/availability/who?at={_thu}&mins=60",
+                           headers=AA).json()["people"]
+          if p["state"] == "unsaid"]
+ok(_never, "while somebody who has said nothing at all reads as nothing "
+   "at all")
+_at_work = _state(_mon + 11 * 3600, 60)
+ok(_at_work["state"] == "booked",
+   "and somebody already on a shift is not offered as free for it")
+
+_filled = c.get("/api/availability/filled", headers=AA).json()
+_row = [p for p in _filled["people"] if p["user_id"] == _hw][0]
+ok(_row["said"] and _row["days"] >= 2 and _row["hours"] > 0,
+   "the office can see who has filled their week in, with how much of a "
+   "week it adds up to")
+ok(_filled["said"] < _filled["of"],
+   "and who has not — a rota built on three people's hours and five "
+   "people's silence is not a rota, and the silence is invisible until "
+   "somebody is rostered wrongly")
+ok(c.get("/api/availability/filled").status_code in (401, 403),
+   "both lists are the office's")
+ok(c.get(f"/api/availability/who?at={_thu}&mins=60").status_code in (401, 403),
+   "so is the roster")
+
 # --- inventory that can be built before it is shown --------------------------
 _kd = c.post("/api/admin/product-kinds", headers=AA, json={
     "label": "Trays", "colour": "#8a5730",

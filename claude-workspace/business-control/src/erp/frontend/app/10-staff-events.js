@@ -615,6 +615,9 @@ function ticketForm(t, d) {
    could not be one answer. */
 const CAL_ICON = { event: "calendar", ticket: "list", milestone: "handshake",
                    class: "pen" };
+const MONTHS = ["January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November",
+                "December"];
 let CAL_MONTH = null;
 
 async function renderCalendar() {
@@ -640,7 +643,8 @@ async function renderCalendar() {
     const dt = new Date(base.getFullYear(), base.getMonth(), n);
     const items = byDay[dt.toDateString()] || [];
     cells.push(`<div class="cal-cell${
-      dt.toDateString() === today ? " cal-today" : ""}">
+      dt.toDateString() === today ? " cal-today" : ""}"
+      data-calday="${dt.getTime() / 1000}">
       <div class="cal-n">${n}</div>
       ${items.map((it) => `<a class="cal-it cal-${esc(it.kind)}"
         href="${esc(it.link || "#")}" title="${esc(it.note || "")}">
@@ -653,8 +657,21 @@ async function renderCalendar() {
         { month: "long", year: "numeric" })}</h2>
         <p class="dim">Everything with a date on it: events, what is due on
           the board, a client's milestones, and classes that were held.
-          One month, four calendars' worth.</p></div>
+          One month, four calendars' worth — and any day opens.</p></div>
       <div class="top-actions">
+        <select id="cal-mon" title="month">${MONTHS.map((m, i) =>
+          `<option value="${i}"${i === base.getMonth() ? " selected" : ""}
+            >${m}</option>`).join("")}</select>
+        <select id="cal-year" title="year">${(() => {
+          const y = base.getFullYear(); const out = [];
+          /* Five back and five on: far enough for last year's accounts and
+             next year's booked-in work, short enough to be one glance. A
+             year outside it is a step away with the arrows. */
+          for (let i = y - 5; i <= y + 5; i++)
+            out.push(`<option value="${i}"${i === y ? " selected" : ""}
+              >${i}</option>`);
+          return out.join("");
+        })()}</select>
         <button class="btn alt icon-btn" id="cal-prev"
           title="the month before">&larr;</button>
         <button class="btn alt" id="cal-today">Today</button>
@@ -681,4 +698,17 @@ async function renderCalendar() {
   $("#cal-prev").onclick = () => move(-1);
   $("#cal-next").onclick = () => move(1);
   $("#cal-today").onclick = () => { CAL_MONTH = null; renderCalendar(); };
+  const jump = () => {
+    CAL_MONTH = new Date(+$("#cal-year").value, +$("#cal-mon").value, 1)
+      .getTime();
+    renderCalendar();
+  };
+  $("#cal-mon").onchange = jump;
+  $("#cal-year").onchange = jump;
+  // A day is a thing with a shape of its own — who is on it, what is due,
+  // who could cover it. The grid can only ever say there are three.
+  view().querySelectorAll("[data-calday]").forEach((c) => c.onclick = (ev) => {
+    if (ev.target.closest("a")) return;      // an item is its own link
+    dayView(+c.dataset.calday, S.user && S.user.is_admin ? true : null);
+  });
 }

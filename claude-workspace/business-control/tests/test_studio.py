@@ -795,6 +795,30 @@ _sp2 = c.get(f"/sign/{_ipt}").text
 ok(">Signed<" in _sp2,
    "and the signer's own page carries it after signing")
 
+# A title comes from a template's file name, from whoever uploaded a scan,
+# or from a generator that had no better idea — and then it is what the
+# client reads on the binder's contents page. A wrong name on a right
+# document is a support call.
+_rn = c.post(f"/api/store/admin/engagements/{_eid}/docs/{_g3['doc_id']}"
+             "/rename", headers=A, json={"title": "  Email scripts  v2 "})
+ok(_rn.status_code == 200 and _rn.json()["title"] == "Email scripts v2",
+   "a document filed under a client can be renamed, and the name is "
+   "tidied on the way in")
+ok(any(d["id"] == _g3["doc_id"] and d["title"] == "Email scripts v2"
+       for d in c.get(f"/api/store/admin/engagements/{_eid}",
+                      headers=A).json()["docs"]),
+   "which is what the client's stages show from then on")
+ok(any("renamed" in x["what"] for x in c.get(
+       f"/api/store/admin/engagements/{_eid}", headers=A).json()["log"]),
+   "and the old name goes on the record — a document that changes its "
+   "name between two conversations needs the trail more than most")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/docs/{_g3['doc_id']}/rename",
+          headers=A, json={"title": "   "}).status_code == 400,
+   "a document needs a name")
+ok(c.post(f"/api/store/admin/engagements/{_eid}/docs/999999/rename",
+          headers=A, json={"title": "x"}).status_code == 404,
+   "and one that is not filed here is not renameable from here")
+
 _un = c.request("DELETE",
                 f"/api/store/admin/engagements/{_eid}/docs/{_g3['doc_id']}",
                 headers=A)

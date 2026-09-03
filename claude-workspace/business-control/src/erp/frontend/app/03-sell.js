@@ -1203,6 +1203,11 @@ function timeOffForm() {
    their own week, and what the business is asking of them. A rota that
    confuses the two is how people get rostered onto their evening class. */
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAYS_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                   "Friday", "Saturday", "Sunday"];
+/* Set by whatever drew the rota, so an edit made in a dialog on top
+   of it lands on the page underneath before the dialog closes. */
+let ROTA_REDRAW = null;
 let ROTA_FROM = null;
 
 const hhmm = (mins) => `${String(Math.floor(mins / 60)).padStart(2, "0")}:`
@@ -1230,8 +1235,10 @@ async function renderSchedule() {
     const d = new Date((from + i * 86400) * 1000);
     const list = byDay[d.toDateString()] || [];
     cells.push(`<div class="rota-day">
-      <div class="rota-head">${DAYS[(d.getDay() + 6) % 7]}
-        <span class="dim">${d.getDate()}</span></div>
+      <button class="rota-head" data-rotaday="${from + i * 86400}"
+        title="open this day: who is on it, who could be">${
+        DAYS[(d.getDay() + 6) % 7]}
+        <span class="dim">${d.getDate()}</span></button>
       ${list.map((s) => `<div class="rota-shift${s.published
         ? "" : " rota-draft"}${s.fits ? "" : " rota-clash"}"
         title="${s.fits ? "inside what they said they could do"
@@ -1259,6 +1266,12 @@ async function renderSchedule() {
           title="the fortnight before">&larr;</button>
         <button class="btn alt icon-btn" id="rt-next"
           title="the fortnight after">&rarr;</button>
+        ${sched.office ? `<button class="btn alt" id="rt-said"
+          title="who has told you when they can work, and who has not"
+          >${opsIcon("users", "btn-ic")} Who has said</button>
+        <button class="btn alt" id="rt-free"
+          title="a day and a time, and everybody measured against it"
+          >${opsIcon("clock", "btn-ic")} Who is free</button>` : ""}
         <button class="btn alt" id="rt-avail">${opsIcon("clock", "btn-ic")}
           My availability</button>
         ${sched.office ? `<button class="btn" id="rt-pub">${
@@ -1274,10 +1287,21 @@ async function renderSchedule() {
     <div class="rota">${cells.join("")}</div>
     <h3>My week</h3>
     <div class="card">
-      ${avail.slots.length ? avail.slots.map((s) => `<span class="pill">${
-        DAYS[s.weekday]} ${hhmm(s.from_min)}–${hhmm(s.to_min)}
-        <button class="btn alt sm" data-availdel="${s.id}">×</button>
-      </span> `).join("")
+      ${avail.week.some((w) => w.windows.length) || avail.slots.length
+        ? `<div class="av-week">${avail.week.map((w, i) => `
+            <button class="av-wday" data-myday="${i}">
+              <b>${DAYS[i]}</b>
+              ${w.windows.length
+                ? w.windows.map((x) => `<span class="pill ok">${hhmm(x[0])}–${
+                    hhmm(x[1])}</span>`).join("")
+                : `<span class="pill">${avail.slots.some((x) =>
+                    x.weekday === i) ? "off" : "—"}</span>`}
+              ${w.why.length ? `<span class="dim av-why">${w.why.length}
+                exception${w.why.length === 1 ? "" : "s"}</span>` : ""}
+            </button>`).join("")}</div>
+           ${avail.blackouts.length ? `<p class="dim">${
+             avail.blackouts.length} date${avail.blackouts.length === 1
+               ? "" : "s"} blacked out ahead.</p>` : ""}`
         : '<span class="dim">You have not said when you can work. Nobody '
           + 'can roster around hours they do not know about.</span>'}
     </div>`;
@@ -1285,7 +1309,13 @@ async function renderSchedule() {
     renderSchedule(); };
   $("#rt-next").onclick = () => { ROTA_FROM = from + 14 * 86400;
     renderSchedule(); };
+  ROTA_REDRAW = renderSchedule;
   $("#rt-avail").onclick = () => availabilityForm();
+  if ($("#rt-said")) $("#rt-said").onclick = () => whoHasSaid();
+  if ($("#rt-free")) $("#rt-free").onclick = () => whoIsFree(from
+    + 9 * 3600, 480);
+  view().querySelectorAll("[data-rotaday]").forEach((b) => b.onclick = () =>
+    dayView(+b.dataset.rotaday, sched.office ? sched.people : null));
   if ($("#rt-pub")) $("#rt-pub").onclick = async () => {
     try {
       const r = await api("/api/schedule/publish", { body: {
@@ -1296,6 +1326,9 @@ async function renderSchedule() {
   };
   view().querySelectorAll("[data-rotaadd]").forEach((b) => b.onclick = () =>
     planShiftForm(+b.dataset.rotaadd, sched.people));
+  view().querySelectorAll("[data-myday]").forEach((b) => b.onclick = () => {
+    AV_DAY = +b.dataset.myday; availabilityForm();
+  });
   view().querySelectorAll("[data-rotadel]").forEach((b) => b.onclick =
     async () => {
       try {
@@ -1347,36 +1380,397 @@ function planShiftForm(dayTs, people) {
   };
 }
 
-function availabilityForm() {
-  modal(`<h3>When you can work</h3>
-    <p class="dim">Nobody can roster around hours they do not know about.
-      This is yours to describe; the office reads it and does not edit
-      it.</p>
-    <div class="row2">
-      <div><label>Day</label><select id="av-day">${DAYS.map((d, i) =>
-        `<option value="${i}">${d}</option>`).join("")}</select></div>
-      <div><label>Note</label><input id="av-note" placeholder="optional">
+/* ---------- what a person can work ----------
+   One editor, three answers deep. The ordinary week is the top layer and
+   the one most people only ever touch. Underneath it, a weekday can be
+   stepped into and carved up — Tuesdays yes, but not between twelve and
+   one, and this Tuesday not at all. A week that can only say "yes" or
+   "no" to a whole day gets filled in wrong by everybody whose life has an
+   afternoon in it. */
+let AV_DAY = null;                 // the weekday being edited, 0 = Monday
+
+async function availabilityForm(uid) {
+  const d = await api("/api/availability" + (uid ? `?user_id=${uid}` : ""));
+  const who = uid ? ` — filling in for ${esc(d.name || "them")}` : "";
+  if (AV_DAY === null) AV_DAY = (new Date().getDay() + 6) % 7;
+  const draw = () => {
+    const day = d.week[AV_DAY] || { windows: [], why: [], said: false };
+    const slots = d.slots.filter((x) => x.weekday === AV_DAY);
+    const open = slots.filter((x) => (x.kind || "open") === "open");
+    const shut = slots.filter((x) => x.kind === "shut");
+    modalBody().innerHTML = `
+      <h3>When you can work${who}</h3>
+      <p class="dim">Nobody can roster around hours they do not know
+        about. The week is what an ordinary ${DAYS_LONG[AV_DAY]} looks
+        like; the dates below are the ones it is not true of.</p>
+      <div class="av-days">${DAYS.map((n, i) => {
+        const w = d.week[i] || { windows: [] };
+        const hrs = w.windows.reduce((t, x) =>
+          t + (x[1] - x[0]) / 60, 0);
+        return `<button class="chip${i === AV_DAY ? " on" : ""}"
+          data-avday="${i}">${n}
+          <span class="dim">${hrs ? hrs + "h" : "—"}</span></button>`;
+      }).join("")}</div>
+
+      <div class="card av-card">
+        <div class="doc-top">
+          <div class="doc-main"><b>${DAYS_LONG[AV_DAY]}</b>
+            <span class="dim">${day.windows.length
+              ? day.windows.map((w) => hhmm(w[0]) + "–" + hhmm(w[1]))
+                  .join(", ") + " free"
+              : slots.length ? "nothing left free — every hour is carved out"
+                : "nothing said yet"}</span></div>
+          <button class="btn alt sm" data-avoff>Mark the day off</button>
+        </div>
+        ${open.length ? `<p class="dim av-lbl">Can work</p>
+          <div class="chips">${open.map((x) => `<span class="pill ok">${
+            hhmm(x.from_min)}–${hhmm(x.to_min)}${x.note
+              ? " · " + esc(x.note) : ""}
+            <button class="btn alt sm" data-avdel="${x.id}">×</button>
+          </span>`).join("")}</div>` : ""}
+        ${shut.length ? `<p class="dim av-lbl">Except, every week</p>
+          <div class="chips">${shut.map((x) => `<span class="pill warn">${
+            x.from_min === 0 && x.to_min === 1440 ? "all day"
+              : hhmm(x.from_min) + "–" + hhmm(x.to_min)}${x.note
+              ? " · " + esc(x.note) : ""}
+            <button class="btn alt sm" data-avdel="${x.id}">×</button>
+          </span>`).join("")}</div>` : ""}
+        <div class="row3 av-add">
+          <div><label>From</label>
+            <input id="av-from" type="time" value="09:00"></div>
+          <div><label>To</label>
+            <input id="av-to" type="time" value="17:00"></div>
+          <div><label>Note <span class="opt">optional</span></label>
+            <input id="av-note" placeholder="school run, class"></div>
+        </div>
+        <div class="chips">
+          <button class="btn sm" data-avadd="open">I can work this</button>
+          <button class="btn alt sm" data-avadd="shut">Every week, not
+            this</button>
+        </div>
       </div>
-    </div>
-    <div class="row2">
-      <div><label>From</label><input id="av-from" type="time" value="09:00">
+
+      <h4 class="av-h">Dates the week is not true of</h4>
+      <p class="dim">A holiday, a fortnight away, an afternoon at the
+        dentist. A blackout beats the week it lands in.</p>
+      ${d.blackouts.length ? `<div class="chips av-bl">${d.blackouts.map((b) =>
+        `<span class="pill warn">${esc(b.from_day)}${
+          b.to_day !== b.from_day ? " → " + esc(b.to_day) : ""}${
+          b.from_min === 0 && b.to_min === 1440 ? ""
+            : " · " + hhmm(b.from_min) + "–" + hhmm(b.to_min)}${
+          b.note ? " · " + esc(b.note) : ""}
+        <button class="btn alt sm" data-bldel="${b.id}">×</button>
+        </span>`).join("")}</div>` : '<p class="dim">None coming up.</p>'}
+      <div class="row2">
+        <div><label>From</label><input id="bl-from" type="date"></div>
+        <div><label>To <span class="opt">same day if left empty</span></label>
+          <input id="bl-to" type="date"></div>
       </div>
-      <div><label>To</label><input id="av-to" type="time" value="17:00"></div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn alt" data-close>Cancel</button>
-      <button class="btn" id="av-save">Add it</button></div>`);
-  $("#av-save").onclick = async () => {
-    const mins = (v) => {
-      const [h, m] = v.split(":").map(Number);
-      return h * 60 + m;
-    };
-    try {
-      await api("/api/availability", { body: {
-        weekday: +$("#av-day").value,
-        from_min: mins($("#av-from").value), to_min: mins($("#av-to").value),
-        note: $("#av-note").value.trim() } });
-      closeModal(); renderSchedule();
-    } catch (err) { toast(err.message); }
+      <div class="row3">
+        <div><label>From <span class="opt">all day if left empty</span></label>
+          <input id="bl-fmin" type="time"></div>
+        <div><label>To</label><input id="bl-tmin" type="time"></div>
+        <div><label>Note</label><input id="bl-note" placeholder="away"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn alt" data-close>Done</button>
+        <button class="btn" id="bl-save">Add the dates</button></div>`;
+    wire();
   };
+
+  const mins = (v) => {
+    const [h, m] = String(v || "").split(":").map(Number);
+    return (h || 0) * 60 + (m || 0);
+  };
+  const again = async () => {
+    const fresh = await api("/api/availability"
+      + (uid ? `?user_id=${uid}` : ""));
+    d.slots = fresh.slots; d.week = fresh.week; d.blackouts = fresh.blackouts;
+    draw();
+    if (typeof ROTA_REDRAW === "function") ROTA_REDRAW();
+  };
+
+  function wire() {
+    modalBody().querySelectorAll("[data-avday]").forEach((b) =>
+      b.onclick = () => { AV_DAY = +b.dataset.avday; draw(); });
+    modalBody().querySelectorAll("[data-avadd]").forEach((b) =>
+      b.onclick = async () => {
+        try {
+          await api("/api/availability", { body: {
+            weekday: AV_DAY, kind: b.dataset.avadd,
+            from_min: mins($("#av-from").value),
+            to_min: mins($("#av-to").value),
+            note: $("#av-note").value.trim(), user_id: uid || 0 } });
+          again();
+        } catch (err) { toast(err.message); }
+      });
+    modalBody().querySelector("[data-avoff]").onclick = async () => {
+      try {
+        await api("/api/availability", { body: {
+          weekday: AV_DAY, kind: "shut", from_min: 0, to_min: 1440,
+          note: "", user_id: uid || 0 } });
+        again();
+      } catch (err) { toast(err.message); }
+    };
+    modalBody().querySelectorAll("[data-avdel]").forEach((b) =>
+      b.onclick = async () => {
+        try {
+          await api(`/api/availability/${b.dataset.avdel}`,
+                    { method: "DELETE" });
+          again();
+        } catch (err) { toast(err.message); }
+      });
+    modalBody().querySelectorAll("[data-bldel]").forEach((b) =>
+      b.onclick = async () => {
+        try {
+          await api(`/api/blackouts/${b.dataset.bldel}`,
+                    { method: "DELETE" });
+          again();
+        } catch (err) { toast(err.message); }
+      });
+    $("#bl-save").onclick = async () => {
+      const from = $("#bl-from").value;
+      if (!from) return toast("which day?");
+      const a = $("#bl-fmin").value, b = $("#bl-tmin").value;
+      try {
+        await api("/api/blackouts", { body: {
+          from_day: from, to_day: $("#bl-to").value || from,
+          from_min: a ? mins(a) : 0, to_min: b ? mins(b) : 1440,
+          note: $("#bl-note").value.trim(), user_id: uid || 0 } });
+        again();
+      } catch (err) { toast(err.message); }
+    };
+  }
+
+  modal("<h3>When you can work</h3>");
+  draw();
+}
+
+
+/* ---------- one day, in full ----------
+   A month grid says a day has three things on it; it cannot say who is
+   working it, who could be, or what is in the way. Stepping into a day
+   from either calendar lands here, and from here a manager can fill it. */
+async function dayView(dayTs, people) {
+  const d = new Date(dayTs * 1000);
+  const title = d.toLocaleDateString(undefined,
+    { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  modal(`<h3>${title}</h3><p class="dim">Reading the day…</p>`, "wide");
+  const t = (ts) => new Date(ts * 1000).toLocaleTimeString(undefined,
+    { hour: "2-digit", minute: "2-digit" });
+  const [cal, sched, free] = await Promise.all([
+    api(`/api/calendar?from_ts=${dayTs}&to_ts=${dayTs + 86400}`)
+      .catch(() => ({ items: [] })),
+    api(`/api/schedule?from_ts=${dayTs}&to_ts=${dayTs + 86400}`)
+      .catch(() => ({ shifts: [], office: false, people: [] })),
+    people ? api(`/api/availability/who?at=${dayTs + 9 * 3600}&mins=480`)
+      .catch(() => null) : null]);
+  const draw = () => {
+    modalBody().innerHTML = `
+      <div class="page-head">
+        <div><h3>${title}</h3></div>
+        <div class="top-actions">
+          <button class="btn alt sm" data-dayback>&larr;</button>
+          <button class="btn alt sm" data-dayfwd>&rarr;</button>
+          ${sched.office ? `<button class="btn sm" data-dayadd>Add a
+            shift</button>` : ""}
+          <button class="btn alt sm" data-close>Close</button>
+        </div>
+      </div>
+      <h4 class="av-h">On the rota</h4>
+      ${sched.shifts.length ? `<div class="sig-rows">${sched.shifts
+        .sort((a, b) => a.starts - b.starts).map((s) => `
+        <div class="doc-line dayline${s.published ? "" : " dl-awaiting"}">
+          <span class="dl-title"><b>${esc(s.name)}</b>
+            <span class="dim">${t(s.starts)}–${t(s.ends)}${
+              s.store ? " · " + esc(s.store) : ""}${
+              s.note ? " · " + esc(s.note) : ""}</span>
+            ${s.published ? "" : '<span class="pill warn">draft</span>'}
+            ${s.fits ? "" : '<span class="pill bad">outside their hours'
+              + "</span>"}</span>
+          <span class="dl-acts dayline-acts">
+            ${sched.office ? `<button class="btn alt sm" data-daycover="${
+              s.starts}" data-ends="${s.ends}" title="who else could take
+              this window">Who is free</button>
+            <button class="btn alt sm" data-daydel="${s.id}">Drop</button>`
+              : ""}</span>
+        </div>`).join("")}</div>`
+        : emptyState("clock", "Nobody is on this day",
+                     sched.office ? "Add a shift, or see who is free for it."
+                       : "Nothing published for this day.")}
+      ${cal.items.length ? `<h4 class="av-h">Also dated today</h4>
+        <div class="chips">${cal.items.map((it) => `<span class="pill">${
+          esc(it.kind)} · ${esc(it.title)}</span>`).join("")}</div>` : ""}
+      ${free ? `<h4 class="av-h">Who could work it
+        <span class="dim">${free.people.filter((p) => p.state === "free")
+          .length} free of ${free.people.length}</span></h4>
+        <p class="dim">Measured against ${hhmm(free.from_min)}–${
+          hhmm(free.to_min)}. Change the window with Who is free.</p>
+        ${freeRows(free, dayTs)}` : ""}`;
+    wire();
+  };
+  function wire() {
+    const step = (n) => { closeModal(); dayView(dayTs + n * 86400, people); };
+    modalBody().querySelector("[data-dayback]").onclick = () => step(-1);
+    modalBody().querySelector("[data-dayfwd]").onclick = () => step(1);
+    modalBody().querySelectorAll("[data-close]").forEach((b) =>
+      b.onclick = closeModal);
+    const add = modalBody().querySelector("[data-dayadd]");
+    if (add) add.onclick = () => { closeModal();
+      planShiftForm(dayTs, sched.people); };
+    modalBody().querySelectorAll("[data-daycover]").forEach((b) =>
+      b.onclick = () => { closeModal(); whoIsFree(+b.dataset.daycover,
+        Math.round((+b.dataset.ends - +b.dataset.daycover) / 60)); });
+    modalBody().querySelectorAll("[data-daydel]").forEach((b) =>
+      b.onclick = async () => {
+        try {
+          await api(`/api/schedule/${b.dataset.daydel}`, { method: "DELETE" });
+          closeModal(); dayView(dayTs, people);
+          if (typeof ROTA_REDRAW === "function") ROTA_REDRAW();
+        } catch (err) { toast(err.message); }
+      });
+    if (free) wireFreeRows(modalBody(), dayTs, free, () => { closeModal();
+      dayView(dayTs, people); });
+  }
+  draw();
+}
+
+
+/* The answer to "who can cover Saturday afternoon" — including the people
+   who cannot, with the reason, because a manager without the reason rings
+   round to find it out anyway. */
+const FREE_LABEL = { free: "free", part: "part of it", booked: "on a shift",
+                     away: "away", outside: "outside their hours",
+                     unsaid: "has not said" };
+const FREE_PILL = { free: "ok", part: "warn", booked: "", away: "warn",
+                    outside: "", unsaid: "" };
+
+function freeRows(free, dayTs) {
+  return `<div class="sig-rows">${free.people.map((p) => `
+    <div class="doc-line freeline">
+      <span class="dl-title"><b>${esc(p.name)}</b>
+        <span class="dim">${esc(p.job || p.role)}${p.windows.length
+          ? " · " + p.windows.map((w) => hhmm(w.from_min) + "–"
+              + hhmm(w.to_min)).join(", ") : ""}</span></span>
+      <span class="freeline-why dim">${esc(p.why)}</span>
+      <span class="pill ${FREE_PILL[p.state] || ""}">${
+        FREE_LABEL[p.state] || p.state}</span>
+      <span class="dl-acts freeline-acts">
+        <button class="btn alt sm" data-freeadd="${p.user_id}"
+          data-name="${esc(p.name)}" title="draft them onto ${hhmm(
+          free.from_min)}–${hhmm(free.to_min)} that day">Roster them</button>
+      </span>
+    </div>`).join("")}</div>`;
+}
+
+function wireFreeRows(scope, dayTs, win, done) {
+  scope.querySelectorAll("[data-freeadd]").forEach((b) =>
+    b.onclick = async () => {
+      // The window the list was measured against is the window the shift
+      // gets — rostering somebody into different hours than the ones they
+      // were just judged against is how a rota tells a lie.
+      const box = (sel, fb) => {
+        const el = scope.querySelector(sel);
+        if (!el || !el.value) return fb;
+        const [h, m] = el.value.split(":").map(Number);
+        return h * 60 + m;
+      };
+      const at = (mins) => dayTs + mins * 60;
+      try {
+        const r = await api("/api/schedule", { body: {
+          user_id: +b.dataset.freeadd,
+          starts: at(box("[data-freefrom]", win.from_min)),
+          ends: at(box("[data-freeto]", win.to_min)), note: "" } });
+        toast(r.fits ? `${b.dataset.name} is drafted on`
+          : `${b.dataset.name} is drafted on — outside the hours they gave`);
+        if (typeof ROTA_REDRAW === "function") ROTA_REDRAW();
+        if (done) done();
+      } catch (err) { toast(err.message); }
+    });
+}
+
+async function whoIsFree(at, mins) {
+  const day = new Date(at * 1000);
+  const midnight = new Date(day); midnight.setHours(0, 0, 0, 0);
+  const dayTs = midnight.getTime() / 1000;
+  const pad = (n) => String(n).padStart(2, "0");
+  const free = await api(`/api/availability/who?at=${at}&mins=${mins}`);
+  modal(`<div class="page-head">
+      <div><h3>Who is free</h3>
+        <p class="dim">Everybody measured against one window of one day —
+          the ones who cannot, with the reason, so nobody has to ring
+          round to find out.</p></div>
+      <div class="top-actions">
+        <button class="btn alt sm" data-close>Close</button></div>
+    </div>
+    <div class="row3">
+      <div><label>Day</label><input id="wf-day" type="date"
+        value="${day.getFullYear()}-${pad(day.getMonth() + 1)}-${
+        pad(day.getDate())}"></div>
+      <div><label>From</label><input id="wf-from" type="time"
+        data-freefrom value="${hhmm(free.from_min)}"></div>
+      <div><label>To</label><input id="wf-to" type="time"
+        data-freeto value="${hhmm(free.to_min)}"></div>
+    </div>
+    <p class="dim wf-count">${free.people.filter((p) =>
+      p.state === "free").length} free of ${free.people.length} ·
+      ${free.people.filter((p) => p.state === "unsaid").length} have not
+      said</p>
+    ${freeRows(free, dayTs)}`, "wide");
+  const reload = () => {
+    const [y, m, dd] = $("#wf-day").value.split("-").map(Number);
+    const [h, mi] = $("#wf-from").value.split(":").map(Number);
+    const [h2, mi2] = $("#wf-to").value.split(":").map(Number);
+    const start = new Date(y, m - 1, dd, h, mi).getTime() / 1000;
+    const len = (h2 * 60 + mi2) - (h * 60 + mi);
+    closeModal();
+    whoIsFree(start, Math.max(15, len));
+  };
+  ["#wf-day", "#wf-from", "#wf-to"].forEach((sel) => {
+    $(sel).onchange = reload;
+  });
+  wireFreeRows(modalBody(), dayTs, free, () => { closeModal();
+    whoIsFree(at, mins); });
+}
+
+
+/* A rota built on three people's stated hours and five people's silence
+   is not a rota, and the silence is invisible until somebody is rostered
+   wrongly. So the silence gets a list of its own. */
+async function whoHasSaid() {
+  const d = await api("/api/availability/filled");
+  const said = d.people.filter((p) => p.said);
+  const not = d.people.filter((p) => !p.said);
+  modal(`<div class="page-head">
+      <div><h3>Who has said when they can work</h3>
+        <p class="dim">${d.said} of ${d.of}. Anyone missing can be filled
+          in for — somebody always tells you in person.</p></div>
+      <div class="top-actions">
+        <button class="btn alt sm" data-close>Close</button></div>
+    </div>
+    ${not.length ? `<h4 class="av-h">Has not said</h4>
+      <div class="sig-rows">${not.map((p) => `
+        <div class="doc-line dl-awaiting">
+          <span class="dl-title"><b>${esc(p.name)}</b>
+            <span class="dim">${esc(p.role)}</span></span>
+          <span class="dl-acts saidline-acts">
+            <button class="btn alt sm" data-saidfor="${p.user_id}"
+              >Fill it in</button></span>
+        </div>`).join("")}</div>` : ""}
+    ${said.length ? `<h4 class="av-h">Has</h4>
+      <div class="sig-rows">${said.map((p) => `
+        <div class="doc-line">
+          <span class="dl-title"><b>${esc(p.name)}</b>
+            <span class="dim">${p.days} day${p.days === 1 ? "" : "s"} ·
+              ${p.hours}h a week${p.blackouts
+                ? " · " + p.blackouts + " blacked out" : ""}</span></span>
+          <span class="dim saidline-when">${p.updated_at
+            ? fmtDate(p.updated_at) : ""}</span>
+          <span class="dl-acts saidline-acts">
+            <button class="btn alt sm" data-saidfor="${p.user_id}"
+              >Open</button></span>
+        </div>`).join("")}</div>` : ""}`, "wide");
+  modalBody().querySelectorAll("[data-saidfor]").forEach((b) =>
+    b.onclick = () => { closeModal(); AV_DAY = null;
+      availabilityForm(+b.dataset.saidfor); });
 }

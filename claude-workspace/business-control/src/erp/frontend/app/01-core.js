@@ -273,6 +273,12 @@ function modal(html, cls) {
   if (first) setTimeout(() => first.focus(), 30);
   document.addEventListener("keydown", modalEsc);
 }
+/* The card itself, for a dialog that redraws in place: stepping between
+   the days of a week should not shut and reopen the thing you are in. */
+function modalBody() {
+  const o = $("#ops-modal");
+  return o && o.querySelector(".ops-modal-card");
+}
 function closeModal() {
   const o = $("#ops-modal");
   if (o) o.remove();

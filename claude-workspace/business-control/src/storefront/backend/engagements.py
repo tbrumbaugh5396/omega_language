@@ -2386,6 +2386,42 @@ def _dropbox_connected(con) -> bool:
     return bool(integrations.creds(con, "dropbox"))
 
 
+class RenameBody(BaseModel):
+    title: str = ""
+
+
+@router.post("/api/store/admin/engagements/{eid}/docs/{did}/rename")
+def rename_doc(eid: int, did: int, body: RenameBody, u=Depends(admin_user),
+               con=Depends(get_con)):
+    """Call a document what it is.
+
+    Titles come from a template's file name, from whoever uploaded a scan,
+    or from a generator that had no better idea — and then they are what
+    the client reads on the binder's contents page and in the folder we
+    export. A wrong name on a right document is a support call. Renaming
+    changes the label and nothing else: the same file, the same
+    signatures, the same stage. The old name goes on the client's record,
+    because a document that changes its name between two conversations
+    needs the trail more than most.
+    """
+    _eng_or_404(con, eid)
+    r = con.execute(
+        "SELECT d.title FROM engagement_docs ed JOIN documents d"
+        " ON d.id=ed.doc_id WHERE ed.engagement_id=? AND ed.doc_id=?",
+        (eid, did)).fetchone()
+    if r is None:
+        raise HTTPException(404, "not filed under this client")
+    title = " ".join(body.title.split())[:200]
+    if not title:
+        raise HTTPException(400, "a document needs a name")
+    if title == r["title"]:
+        return {"ok": True, "unchanged": True}
+    con.execute("UPDATE documents SET title=? WHERE id=?", (title, did))
+    log(con, eid, u["name"], f"renamed '{r['title']}' to '{title}'")
+    con.commit()
+    return {"ok": True, "title": title}
+
+
 @router.delete("/api/store/admin/engagements/{eid}/docs/{did}")
 def unfile_doc(eid: int, did: int, u=Depends(admin_user),
                con=Depends(get_con)):

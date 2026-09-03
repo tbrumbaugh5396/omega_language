@@ -397,8 +397,16 @@ details.sect > .inner { padding: 0 14px 14px; }
   margin-bottom: 16px; }
 .rota-day { background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--r-sm); padding: 6px; min-height: 84px; }
-.rota-head { font-size: 11.5px; font-weight: 600; color: var(--dim);
-  display: flex; justify-content: space-between; margin-bottom: 4px; }
+/* The day's name is the way into the day, so it reads as a control
+   rather than a caption — a label nobody knows is clickable is a feature
+   nobody uses. */
+button.rota-head { font-size: 11.5px; font-weight: 600; color: var(--dim);
+  display: flex; justify-content: space-between; margin-bottom: 4px;
+  width: 100%; background: none; border: none; padding: 2px 1px;
+  font-family: var(--ui); cursor: pointer; border-radius: 4px;
+  transition: color .12s, background .12s; }
+button.rota-head:hover { color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .rota-shift { font-size: 11.5px; line-height: 1.3; padding: 4px 6px;
   border-radius: 5px; margin-bottom: 4px; background: var(--panel2);
   border-left: 3px solid var(--accent); display: flex;
@@ -420,6 +428,8 @@ details.sect > .inner { padding: 0 14px 14px; }
 .cal-cell { background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--r-sm); min-height: 96px; padding: 6px; }
 .cal-cell.out { background: transparent; border-color: transparent; }
+.cal-cell[data-calday] { cursor: pointer; transition: border-color .14s; }
+.cal-cell[data-calday]:hover { border-color: var(--accent); }
 .cal-today { border-color: var(--accent); box-shadow: 0 0 0 2px
   color-mix(in srgb, var(--accent) 22%, transparent); }
 .cal-n { font-size: 12px; color: var(--dim); font-weight: 600; }
@@ -749,7 +759,7 @@ tbody tr:hover { background: rgba(0,0,0,.028); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dm-blanks { font-size: 12px; white-space: nowrap; text-align: right; }
 .dl-acts { display: grid; gap: 6px;
-  grid-template-columns: 82px 56px 50px 54px 56px 56px 76px; }
+  grid-template-columns: 82px 56px 50px 54px 56px 56px 68px 76px; }
 .dl-acts .btn { width: 100%; padding-left: 4px; padding-right: 4px;
   white-space: nowrap; }
 
@@ -914,6 +924,8 @@ button.btn[hidden], .btn[hidden] { display: none; }
   width: 100%; }
 .ops-modal-card .row2 { display: flex; gap: 12px; }
 .ops-modal-card .row2 > * { flex: 1; }
+.ops-modal-card .row3 { display: flex; gap: 12px; }
+.ops-modal-card .row3 > * { flex: 1; min-width: 0; }
 .modal-acts { display: flex; gap: 10px; justify-content: flex-end;
   margin-top: 22px; }
 
@@ -1320,3 +1332,45 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
    name is what a door check actually uses */
 .roster-face { width: 36px; height: 36px; border-radius: 50%;
   object-fit: cover; flex: none; }
+
+
+/* ---------- availability: a week, and the dates it is not true of -------- */
+.av-days { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
+.av-days .chip { display: flex; align-items: baseline; gap: 6px; }
+.av-card { margin-bottom: 6px; }
+.av-lbl { margin: 10px 0 4px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .08em; }
+.av-add { margin-top: 12px; }
+.av-h { margin: 20px 0 4px; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--dim); display: flex;
+  align-items: baseline; gap: 10px; }
+.av-bl { margin-bottom: 12px; }
+/* The week on the rota page: seven columns of what you actually said, so
+   a gap in it is visible without opening anything. */
+.av-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.av-wday { background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 8px 6px; text-align: left;
+  cursor: pointer; font-family: var(--ui); color: var(--text);
+  display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  transition: border-color .14s; }
+.av-wday:hover { border-color: var(--accent); }
+.av-wday b { font-size: 12px; }
+.av-wday .pill { font-size: 11px; }
+.av-why { font-size: 11px; }
+@media (max-width: 900px) { .av-week { grid-template-columns: 1fr 1fr; } }
+
+/* who is free, and who is on: the same row shape as everything else that
+   reads down a list */
+.doc-line.freeline { grid-template-columns:
+  minmax(0, 1fr) minmax(0, 220px) 108px auto; }
+.dl-acts.freeline-acts { grid-template-columns: 108px; }
+.freeline-why { font-size: 12px; }
+.doc-line.dayline { grid-template-columns: minmax(0, 1fr) auto; }
+.dl-acts.dayline-acts { grid-template-columns: 92px 62px; }
+.dl-acts.saidline-acts { grid-template-columns: 76px; }
+.saidline-when { font-size: 12px; }
+.wf-count { margin: 10px 0 6px; }
+@media (max-width: 900px) {
+  .doc-line.freeline { grid-template-columns: minmax(0, 1fr) auto; }
+  .freeline-why { grid-column: 1 / -1; }
+}

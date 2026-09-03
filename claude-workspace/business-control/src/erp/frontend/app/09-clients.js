@@ -1100,6 +1100,10 @@ async function renderEngagement(id) {
           data-stage="${x.stage}" data-side="${x.side}"
           data-title="${esc(x.title)}" title="file the signed paper's scan
           or photo beside this document">Scan</button>
+        <button class="btn alt sm" data-engname="${x.id}"
+          data-title="${esc(x.title)}" title="what it is called, here and
+          in the binder and the exported folder — the file, the signatures
+          and the stage are untouched">Rename</button>
         <button class="btn alt sm" data-engrm="${x.id}"
           data-title="${esc(x.title)}">Remove</button>
       </span>
@@ -1916,6 +1920,19 @@ async function renderEngagement(id) {
     };
     inp.click();
   });
+  view().querySelectorAll("[data-engname]").forEach((b) => b.onclick =
+    async (ev) => {
+      ev.stopPropagation();
+      const was = b.dataset.title;
+      const now = prompt("Call this document what?", was);
+      if (now === null || !now.trim() || now.trim() === was) return;
+      try {
+        await api(`/api/store/admin/engagements/${id}/docs/${
+          b.dataset.engname}/rename`, { body: { title: now.trim() } });
+        toast(`Now called "${now.trim()}"`);
+        renderEngagement(id);
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-engrm]").forEach((b) => b.onclick = () => {
     modal(`<h3>Remove — ${esc(b.dataset.title)}</h3>
       <p class="dim">Unfiling takes it out of this client's folder but keeps

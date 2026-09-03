@@ -3498,6 +3498,55 @@ ok('style="grid-template-columns:74px 74px 70px"' not in _ops,
    "than an inline width that clipped 'Act as admin' mid-word")
 
 
+# --- a day you can step into, and a week you can carve up ------------------
+# A month grid can say a day has three things on it. It cannot say who is
+# working it, who could be, or what is in the way — which is the whole of
+# what somebody opens a calendar to find out.
+ok("async function dayView(" in _ops,
+   "a day opens into a day: what is on it, who is on it, who could be")
+ok('data-calday' in _ops and 'data-rotaday' in _ops,
+   "reached from both calendars — the month grid and the rota's own days")
+ok('id="cal-mon"' in _ops and 'id="cal-year"' in _ops,
+   "and the month and the year are picked, not stepped to one arrow at a "
+   "time")
+_cy = _ops.split('id="cal-year"')[1][:400]
+ok("y - 5" in _cy and "y + 5" in _cy,
+   "eleven years wide: last year's accounts and next year's booked work")
+
+ok("function whoIsFree(" in _ops and "/api/availability/who" in _ops,
+   "a manager can ask who is free for a window of a day")
+ok("FREE_LABEL" in _ops and '"has not said"' in _ops,
+   "and the answer includes the people who are not, with the reason — "
+   "without it the manager rings round to find out anyway")
+ok("function whoHasSaid(" in _ops and "/api/availability/filled" in _ops,
+   "and who has filled their week in at all")
+_wfr = _ops.split("function wireFreeRows(")[1][:900]
+ok("win.from_min" in _wfr and "win.to_min" in _wfr,
+   "rostering somebody from that list uses the window they were just "
+   "measured against — a shift in different hours than the ones judged is "
+   "a rota telling a lie")
+
+_avf = _ops.split("async function availabilityForm(")[1][:8000]
+ok('data-avday' in _avf and "DAYS_LONG" in _avf,
+   "the week steps into one weekday at a time")
+ok('data-avoff' in _avf and 'to_min: 1440' in _avf,
+   "a whole weekday can be marked off from inside it")
+ok('data-avadd="open"' in _avf and 'data-avadd="shut"' in _avf,
+   "and a day carries both sentences: the hours somebody can work, and "
+   "the hours inside them they cannot")
+ok('id="bl-from"' in _avf and 'id="bl-fmin"' in _avf,
+   "with dates the week is not true of — a range of days, and a range of "
+   "hours inside them")
+ok("modalBody" in _ops and "function modalBody(" in _ops,
+   "the dialog redraws in place, so stepping between days does not shut "
+   "and reopen the thing you are in")
+
+# Renaming a document is a label change, and the client page is where the
+# label is wrong.
+ok('data-engname' in _ops and "/rename" in _ops,
+   "a document filed under a client can be renamed from the client page")
+
+
 # --- a modifier may not depend on where it sits in the file ---------------
 # Twice in one afternoon a row variant collapsed because its rule was
 # written above the rule it was meant to override: same specificity, later
