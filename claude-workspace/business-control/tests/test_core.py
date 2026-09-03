@@ -949,7 +949,11 @@ ok(not _re.search(r"[\U0001F300-\U0001FAFF]", _ops),
    "no emoji left in the ops app")
 ok("OPS_ICONS" in _ops, "ops app uses an inline icon set")
 _css = c.get("/ops/styles.css").text
-ok("--accent: #8a6ff0" in _css, "ops palette re-toned to the brand accent")
+ok("var(--brand-2, var(--brand, #8a6ff0))" in _css
+   and "--warn: color-mix(in srgb, var(--brand-warm" in _css,
+   "the ops palette takes its accent from THIS business's brand, with the "
+   "old literal kept as the fallback — one install should not have two "
+   "brands, and a tenant that never chose colours keeps the ones it had")
 _shell = c.get("/ops/").text
 ok("app.js?v=" in _shell and "styles.css?v=" in _shell,
    "ops shell stamps its assets, so a deploy can't strand stale JS")

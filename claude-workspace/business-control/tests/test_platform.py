@@ -362,9 +362,31 @@ ok(all(abs(_pb.price_selection(
    "and the rule the configurator prices with is the SAME one every "
    "bundle in the book was computed with — all five come out to the "
    "penny, which is what makes the page trustworthy")
+# --- one product, one palette ------------------------------------------------
+_opsh = c.get("/ops", headers=HA).text
+ok("--brand:" in _opsh and "<style>:root{" in _opsh,
+   "the back office is handed the shop's own brand colours — two faces of "
+   "one install used to be two different brands, the storefront wearing "
+   "what somebody chose and ops wearing a violet baked into a stylesheet")
+_opsc = (Path(__file__).parent.parent
+         / "src/erp/frontend/styles.css").read_text(encoding="utf-8")
+ok("var(--brand-2, var(--brand, #8a6ff0))" in _opsc
+   and "color-mix" in _opsc,
+   "and derives its accent from them onto the dark ramp, keeping the old "
+   "literal as the fallback so a tenant with no theme is untouched")
+ok("--brand:" not in c.get("/ops", headers=HB).text
+   or c.get("/ops", headers=HB).text.count("--brand:") <= 1,
+   "each tenant gets its own, not the provider's")
+
 _pbp = c.get("/plan-builder", headers=HA)
 ok(_pbp.status_code == 200 and 'id="cfg-root"' in _pbp.text,
    "and it has a page of its own, linked from the nav")
+ok(c.get("/plan-builder", headers=HB).status_code == 404
+   and c.post("/api/store/plans/price", headers=HB,
+              json={"cap_ids": ["selling"]}).status_code == 404,
+   "but only on a shop that sells the platform: on a client's own "
+   "storefront the configurator is somebody else's product on their "
+   "shelf, and the page is not theirs to serve")
 
 ok("Starter plan" not in _names,
    "and a tier renamed in the book does not leave its old row for sale "

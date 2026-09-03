@@ -37,8 +37,15 @@ THEME = {
                    "from a published book. Built for businesses that have "
                    "outgrown five subscriptions that do not talk to each "
                    "other.",
-    "purple": "#4634d9", "lavender": "#8b7cf0", "orange": "#ff6a3d",
-    "ink": "#15131c", "bg": "#f7f6f3",
+    # Its own palette, not the drinks brand's. This storefront was cloned
+    # from a wellness label whose look is violet and hot orange, and it
+    # kept both — so the platform's own shop read as that brand wearing a
+    # different name. Moved along the same axes rather than redrawn: the
+    # primary deepens and cools out of violet into indigo, the secondary
+    # follows it to periwinkle, and the accent drops from a signal orange
+    # to a worked amber. Same structure, different business.
+    "purple": "#3730a3", "lavender": "#7c8ae0", "orange": "#d9822b",
+    "ink": "#141620", "bg": "#f6f6f4",
     # The ops app's wordmark is a plain bold sans; the storefront should
     # not introduce a second, rounder version of the same name.
     "font": "Inter", "display_font": "Fraunces", "wordmark_font": "Inter",

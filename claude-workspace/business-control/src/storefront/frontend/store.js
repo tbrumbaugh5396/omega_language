@@ -484,7 +484,7 @@ function drawGrid() {
      are, not only in the nav: the lane of packs ends with the door to
      the menu they were cut from. Only on a shop that sells them — a
      drinks brand has no configurator to offer. */
-  const builderIn = ["pack", "bundle", "plan"].find(
+  const builderIn = ["pack", "bundle"].find(
     (id) => kinds.some((k) => k.id === id));
   const builderCard = (k) => k.id !== builderIn ? "" : `
     <a class="product cfg-card" href="/plan-builder"

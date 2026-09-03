@@ -38,7 +38,7 @@ async function renderShop() {
         <button class="btn" id="hero-cta">${esc(hero.cta)}</button>
       </div>` : ""}
     <h2>Shop ${isDist ? '<span class="pill ok">wholesale — priced per case</span>' : ""}
-      ${S.products.some((p) => ["pack", "bundle", "plan"].includes(p.kind))
+      ${S.products.some((p) => ["pack", "bundle"].includes(p.kind))
         ? `<a class="btn alt sm" href="/plan-builder" target="_blank"
              title="the capability menu with a running total — the page a
              client can price themselves on">Plan builder</a>` : ""}</h2>

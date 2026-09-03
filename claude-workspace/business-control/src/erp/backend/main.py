@@ -3960,7 +3960,40 @@ def ops_index():
     for asset in ("/ops/styles.css", "/ops/app.js", "/qr-scan.js",
                   "/qr-scan.css"):
         shell = shell.replace(f'"{asset}"', f'"{asset}?v={v}"')
+    shell = shell.replace("</head>", _ops_brand_style() + "</head>", 1)
     return HTMLResponse(shell)
+
+
+def _ops_brand_style() -> str:
+    """The back office in this business's own colours.
+
+    The two faces of one install were two different brands: the shop wore
+    the colours somebody chose and the ops app wore a violet baked into a
+    stylesheet. So the shell carries the tenant's brand hues in, and the
+    dark palette derives its accent from them — lightened, because a
+    colour picked to sit on paper is rarely readable on a dark panel.
+    A tenant with no theme keeps exactly what it had.
+    """
+    from storefront.backend import api as store_api
+    try:
+        con = db.connect()
+        try:
+            t = store_api.get_theme(con) or {}
+        finally:
+            con.close()
+    except Exception:                                        # noqa: BLE001
+        return ""
+    hue = str(t.get("purple") or "").strip()
+    second = str(t.get("lavender") or "").strip()
+    warm = str(t.get("orange") or "").strip()
+    if not (hue.startswith("#") and len(hue) in (4, 7)):
+        return ""
+    parts = [f"--brand:{hue}"]
+    if second.startswith("#"):
+        parts.append(f"--brand-2:{second}")
+    if warm.startswith("#"):
+        parts.append(f"--brand-warm:{warm}")
+    return "<style>:root{" + ";".join(parts) + "}</style>"
 
 
 def _worker_response(p):

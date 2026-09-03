@@ -8,9 +8,18 @@
   --bg: #0f1115; --panel: #171a21; --panel2: #1f242d; --line: #2a303a;
   --text: #e8eaf0; --dim: #98a0b0;
 
-  /* one accent, from the brand; lavender carries links and focus */
-  --accent: #8a6ff0; --accent2: #a99bf5;
-  --warn: #e0a132; --bad: #e0605a; --good: #3fbd82;
+  /* One accent, from THIS BUSINESS'S brand — the shell hands the shop's
+     own hues in as --brand / --brand-2 / --brand-warm, and they are
+     lightened onto the dark ramp, because a colour chosen to sit on paper
+     is rarely readable on a dark panel. The literals are the fallback: a
+     tenant with no theme, and every screenshot ever taken, keep what they
+     had. */
+  --accent: color-mix(in srgb, var(--brand-2, var(--brand, #8a6ff0)) 78%,
+    #ffffff);
+  --accent2: color-mix(in srgb, var(--brand-2, var(--brand, #a99bf5)) 55%,
+    #ffffff);
+  --warn: color-mix(in srgb, var(--brand-warm, #e0a132) 82%, #ffffff);
+  --bad: #e0605a; --good: #3fbd82;
 
   --r: 12px; --r-sm: 8px;
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px;

@@ -1269,6 +1269,28 @@ def page(slug: str, con=Depends(get_con)):
         js=row["content_js"], slug=slug))
 
 
+def _sells_capabilities(con) -> bool:
+    """Does THIS shop sell the platform itself?
+
+    The configurator sells business-control capabilities. On a client's
+    own storefront — a nutrition coach, a food brand — that is somebody
+    else's product on your shelf, so the page is not theirs to serve.
+    Asked of the catalogue rather than of the registry: a shop that
+    carries capability packs is a shop in this business, whoever it is.
+    """
+    row = con.execute(
+        "SELECT 1 FROM products p JOIN store_product_meta m"
+        " ON m.product_id=p.id AND m.k='kind'"
+        " WHERE p.active=1 AND m.v IN ('pack','bundle') LIMIT 1").fetchone()
+    return row is not None
+
+
+def _require_capability_shop(con) -> None:
+    if not _sells_capabilities(con):
+        raise HTTPException(404, "this page is not part of this "
+                                 "business's plan")
+
+
 @router.get("/plan-builder")
 def plan_builder_page(con=Depends(get_con)):
     """Build your own plan — the capability menu, with a running total.
@@ -1278,6 +1300,7 @@ def plan_builder_page(con=Depends(get_con)):
     arithmetic beside it, so the answer to "what would those six cost?"
     stops being a phone call.
     """
+    _require_capability_shop(con)
     body = """
 <section class="section partner-head">
  <span class="eyebrow">Build your own</span>
@@ -1414,6 +1437,7 @@ def plan_builder(con=Depends(get_con)):
     and the packaged plans to check the answer against — because the book
     says quote both and quote the cheaper one, and a page that hides the
     cheaper one is a page that overcharges."""
+    _require_capability_shop(con)
     from . import pricebook as pb
     cat = _cap_prices()
     try:
@@ -1445,10 +1469,11 @@ class ConfigureBody(BaseModel):
 
 
 @router.post("/api/store/plans/price")
-def plan_price(body: ConfigureBody):
+def plan_price(body: ConfigureBody, con=Depends(get_con)):
     """What a selection costs — priced HERE, from the book. The page shows
     its own arithmetic so a person can follow it; this is the number that
     counts, and the two agreeing is the point."""
+    _require_capability_shop(con)
     from . import pricebook as pb
     prices = {k: v["price"] for k, v in _cap_prices().items()}
     try:
@@ -1493,6 +1518,7 @@ def plan_configure(body: ConfigureBody, request: Request,
     The price is computed here from the book and the ids, never taken
     from the page — a configurator that trusts a posted total is a
     configurator that sells the platform for a dollar."""
+    _require_capability_shop(con)
     from erp.backend import payments
     from erp.backend.main import CFG, base_url
     from . import pricebook as pb
