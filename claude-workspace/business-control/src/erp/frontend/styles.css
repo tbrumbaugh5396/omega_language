@@ -917,11 +917,26 @@ button.btn[hidden], .btn[hidden] { display: none; }
   border-radius: 50%; margin-right: 5px; vertical-align: 0; }
 
 /* ---------- store rail ---------- */
-#store-rail { width: 240px; flex-shrink: 0; border-left: 1px solid var(--line);
+#store-rail { width: var(--srail, 240px); flex-shrink: 0;
+  border-left: 1px solid var(--line);
   padding: 14px 12px 30px; display: flex; flex-direction: column; gap: 10px;
   max-height: calc(100vh - 45px); position: sticky; top: 45px;
   overflow-y: auto; }
 #store-rail[hidden] { display: none; }
+/* folded to a spine, with the way back on it: a panel that disappears
+   completely is a panel somebody has to remember existed */
+body.srail-folded #store-rail { width: 26px; padding: 10px 2px;
+  overflow: hidden; }
+body.srail-folded #store-rail > *:not(.srail-fold) { display: none; }
+.srail-fold { position: absolute; top: 10px; left: -12px; width: 24px;
+  height: 24px; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--panel); color: var(--dim); cursor: pointer;
+  font-size: 12px; line-height: 1; z-index: 4; }
+.srail-fold:hover { border-color: var(--accent); color: var(--text); }
+#srail-grip { position: absolute; top: 0; left: -4px; width: 8px;
+  height: 100%; cursor: col-resize; z-index: 3; }
+#srail-grip:hover { background: color-mix(in srgb, var(--accent) 30%,
+  transparent); }
 .rail-head { display: flex; justify-content: space-between; align-items: baseline;
   font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
   color: var(--dim); font-weight: 700; }

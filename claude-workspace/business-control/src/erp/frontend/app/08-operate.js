@@ -23,7 +23,12 @@ async function renderInventory() {
   const svc = kindGroups(prods.filter((p) => p.kind && p.kind !== "goods"))
     .filter((g) => g.label);
   view().innerHTML = `
-    <h2>Inventory — all stores</h2>
+    <div class="page-head">
+      <div><h2>Inventory — all stores</h2></div>
+      ${isAdmin ? `<div class="top-actions">
+        <button class="btn sm" id="inv-new">New product</button>
+      </div>` : ""}
+    </div>
     ${svc.length ? `<div class="card">
       <b>Sold everywhere, stocked nowhere</b>
       <p class="dim">Services carry no count: every location sells them,
@@ -77,6 +82,7 @@ async function renderInventory() {
         </tbody></table></div>`;
     }).join("")}`;
 
+  if ($("#inv-new")) $("#inv-new").onclick = () => productForm();
   /* Stock is edited in place rather than through a dialog: correcting a
      count is something you do to a whole shelf at once, and a modal per row
      turns twenty corrections into sixty clicks. */

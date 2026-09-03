@@ -105,6 +105,27 @@ const TABS = [
     roles: ["admin"] },
   { id: "integrations", label: "Integrations", icon: "link", group: "Company",
     roles: ["admin"] },
+  // The rest of the connections, each with a rail entry of its own. Four
+  // of them earned bespoke screens; these are the ones whose whole story
+  // is "is it connected, what has it carried, and can I test it" — which
+  // is a screen, and belongs where a person looks for it rather than
+  // three clicks inside a list.
+  { id: "ig-quickbooks", label: "QuickBooks", icon: "chart",
+    group: "Connections", roles: ["admin"] },
+  { id: "ig-pipedrive", label: "Pipedrive", icon: "handshake",
+    group: "Connections", roles: ["admin"] },
+  { id: "ig-google_calendar", label: "Google Calendar", icon: "calendar",
+    group: "Connections", roles: ["admin"] },
+  { id: "ig-google_drive", label: "Google Drive", icon: "file",
+    group: "Connections", roles: ["admin"] },
+  { id: "ig-gmail", label: "Google Mail", icon: "megaphone",
+    group: "Connections", roles: ["admin"] },
+  { id: "ig-canva", label: "Canva", icon: "pen",
+    group: "Connections", roles: ["admin"] },
+  { id: "ig-docusign", label: "DocuSign", icon: "file",
+    group: "Connections", roles: ["admin"] },
+  { id: "ig-laceup", label: "LaceUp", icon: "truck",
+    group: "Connections", roles: ["admin"] },
   { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
     roles: ["admin"] },
   { id: "dbview", label: "Database", icon: "list", group: "Company",
@@ -149,7 +170,8 @@ const capLocked = (t) => {
   return !!(need && Array.isArray(caps) && !caps.includes(need));
 };
 
-const NAV_GROUPS = ["Sell", "Operate", "Grow", "Company"];
+const NAV_GROUPS = ["Sell", "Operate", "Grow", "Company",
+                    "Connections"];
 // Where each staff job lands after sign-in.
 const JOB_HOME = { driver: "routes", dsd: "routes", warehouse: "inventory",
   sales_rep: "outreach", ambassador: "feed", event_staff: "promos" };
@@ -357,6 +379,9 @@ async function render() {
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
     integrations: renderIntegrations, slack: renderSlack,
+    // every "ig:<name>" tab lands on the same screen, told which one
+    ...Object.fromEntries(TABS.filter((t) => t.id.startsWith("ig-"))
+      .map((t) => [t.id, () => renderOneIntegration(t.id.slice(3), t.label)])),
     trello: renderTrello, dropbox: renderDropbox,
     hq: renderHQ, fleet: renderFleet, admin: renderAdmin,
     learning: renderLearning,

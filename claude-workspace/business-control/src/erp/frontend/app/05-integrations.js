@@ -788,3 +788,86 @@ function confetti() {
     else cv.remove();
   })(t0);
 }
+
+
+/* ---------- one connection, on its own page ----------
+   Four connections earned bespoke screens because they do more than
+   connect — Slack reads channels, Trello syncs cards. The rest have one
+   story each: is it connected, what has it carried, and does it still
+   work. That is a screen, and it belongs where somebody looks for it
+   rather than three clicks inside a list. */
+async function renderOneIntegration(name, label) {
+  const d = await api("/api/admin/integrations");
+  const p = (d.providers || []).find((x) => x.name === name);
+  if (!p) {
+    view().innerHTML = `<h2>${esc(label)}</h2>
+      ${emptyState("link", "Not a connection this install knows",
+        "It may have been taken out of the registry.")}`;
+    return;
+  }
+  const log = (d.log || []).filter((l) => l.provider === name).slice(0, 25);
+  const bespoke = { slack: "slack", trello: "trello", dropbox: "dropbox" };
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>${esc(p.label)}</h2>
+        <p class="dim">${esc(p.blurb)}</p></div>
+      <div class="top-actions">
+        ${bespoke[name] ? `<button class="btn alt sm" data-onefull
+          >Open ${esc(p.label)}</button>` : ""}
+        <button class="btn alt sm" data-oneall>All connections</button>
+        ${p.connected ? `<button class="btn alt sm" data-onetest
+          >Send a test</button>
+          <button class="btn alt sm" data-oneoff>Disconnect</button>` : ""}
+      </div>
+    </div>
+    <div class="card intg">
+      <div class="doc-top">
+        <div class="doc-main"><b>${p.connected ? "Connected"
+          : p.inbound_ready ? "Listening" : "Not connected yet"}</b>
+          <span class="dim">${esc(p.does)}</span></div>
+        <span class="pill ${p.connected || p.inbound_ready ? "ok" : ""}">${
+          p.connected ? esc(p.account || "connected")
+            : p.inbound_ready ? "has a key" : "off"}</span>
+      </div>
+      ${p.events.length ? `<p class="dim intg-when">Fires when
+        ${p.events.map(esc).join(", ")}.</p>` : ""}
+      ${p.connected ? "" : `<div class="intg-form" id="f-${name}"></div>`}
+      ${name === "laceup"
+        ? `<div class="intg-form" id="f-${name}-extra"></div>` : ""}
+    </div>
+    <h3>What it has carried</h3>
+    ${log.length ? `<div class="card"><div class="tablewrap"><table>
+      <thead><tr><th>when</th><th>event</th><th>result</th></tr></thead>
+      <tbody>${log.map((l) => `<tr>
+        <td class="dim">${fmtDate(l.created_at)}</td>
+        <td>${esc(l.event)}</td>
+        <td>${l.ok ? '<span class="pill ok">ok</span>'
+          : `<span class="pill bad">failed</span>
+             <span class="dim">${esc(l.detail)}</span>`}</td>
+      </tr>`).join("")}</tbody></table></div></div>`
+      : emptyState("link", "Nothing yet", "A connection that has never "
+        + "carried anything is a guess. Send it a test.")}`;
+  drawForm(p, () => renderOneIntegration(name, label));
+  if ($("[data-oneall]")) $("[data-oneall]").onclick = () => {
+    S.tab = "integrations"; render();
+  };
+  if ($("[data-onefull]")) $("[data-onefull]").onclick = () => {
+    S.tab = bespoke[name]; render();
+  };
+  if ($("[data-onetest]")) $("[data-onetest]").onclick = async () => {
+    try {
+      const r = await api(`/api/admin/integrations/${name}/test`,
+                          { method: "POST" });
+      toast(r.detail || "it answered");
+    } catch (err) { toast(err.message); }
+    renderOneIntegration(name, label);
+  };
+  if ($("[data-oneoff]")) $("[data-oneoff]").onclick = async () => {
+    if (!confirm(`Disconnect ${label}?\n\nThe credential is forgotten. `
+      + "The record of what it carried stays.")) return;
+    try {
+      await api(`/api/admin/integrations/${name}`, { method: "DELETE" });
+    } catch (err) { toast(err.message); }
+    renderOneIntegration(name, label);
+  };
+}

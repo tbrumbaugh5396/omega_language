@@ -3385,6 +3385,52 @@ ok("sticky-shot" in _apisrc and "/media/product/" in
    "and the bar shows the real product photo, not a drawn stand-in")
 
 
+# --- three doors that were missing --------------------------------------
+# The shop and the inventory could edit every product on them and create
+# none: a new line had to be typed into the database. A shelf you cannot
+# add to is a catalogue somebody else built.
+_ocss = Path("src/erp/frontend/styles.css").read_text()
+ok('id="sh-new"' in _ops and 'id="inv-new"' in _ops,
+   "both product pages — the shop and the inventory — open a new product")
+ok("async function productForm(" in _ops,
+   "through one form, so the two doors cannot drift apart")
+_pfm = _ops.split("async function productForm(")[1][:2600]
+ok("/api/admin/product-kinds" in _pfm and 'id="npd-kind"' in _pfm,
+   "which asks which lane it sits in, from the kinds this install has")
+ok("draft: true" in _pfm and "/shelf" in _pfm,
+   "and a new line opens as a draft — priced and described in private, "
+   "invisible to the shop until somebody publishes it")
+
+# Eight connections lived behind one list. A person looking for QuickBooks
+# looks in the navigation, and four of the eight already had a page there.
+_prov = Path("src/erp/backend/integrations.py").read_text()
+_pnames = re.findall(r'^    "([a-z_]+)": \{', _prov, re.M)
+ok(len(_pnames) >= 11, f"the registry carries every provider ({len(_pnames)})")
+_navd = set(re.findall(r'\{ id: "([\w:-]+)"', _ops))
+_missing = [n for n in _pnames
+            if n not in _navd and f"ig-{n}" not in _navd]
+ok(not _missing,
+   f"every connection has a place in the navigation of its own ({_missing})")
+ok("renderOneIntegration" in _ops,
+   "and the ones without a bespoke screen share one: connected or not, "
+   "what it has carried, and a test")
+for _t in re.findall(r'\{ id: "(ig-[\w_]+)"', _ops):
+    ok(re.match(r"^ig-[\w]+$", _t) is not None,
+       f"{_t} is a tab id the hash router can carry")
+
+# The store rail was 240px of stores whether you were reading them or not.
+ok("wireStoreRail" in _ops and "srail-fold" in _ops and "srail-grip" in _ops,
+   "the store rail folds away and drags to a width")
+ok("body.srail-folded #store-rail" in _ocss and "--srail" in _ocss,
+   "with the width in a custom property, so nothing else has to be told")
+ok("bc_srail_w" in _ops and "bc_srail_fold" in _ops,
+   "and both are remembered — a rail re-folded every morning is a rail "
+   "nobody folds")
+_wsr = _ops.split("function wireStoreRail(")[1][:1600]
+ok("Math.max(26, Math.min(460" in _wsr,
+   "the drag is clamped: a rail dragged to nothing cannot be found again")
+
+
 # --- the ops app's file family: no name may mean two things ------------------
 # app.js became ordered part files served as one script. Concatenated
 # global scope means a duplicate definition is a silent overwrite — the

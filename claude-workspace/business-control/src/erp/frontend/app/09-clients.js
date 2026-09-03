@@ -2618,6 +2618,63 @@ function signForm(did) {
   };
 }
 
+/* The stores rail folds and resizes like the nav does, and remembers
+   both. It is redrawn on every filter keystroke, so the handle and the
+   grip are put back after each draw rather than once — the same lesson
+   the nav taught. */
+function wireStoreRail(rail) {
+  rail.style.position = "sticky";
+  if (localStorage.getItem("bc_srail_fold") === "1")
+    document.body.classList.add("srail-folded");
+  const w = +localStorage.getItem("bc_srail_w") || 0;
+  if (w) document.documentElement.style.setProperty("--srail", w + "px");
+
+  const fold = document.createElement("button");
+  fold.className = "srail-fold";
+  fold.type = "button";
+  fold.title = "fold this list away, or bring it back";
+  const face = () => {
+    fold.textContent = document.body.classList.contains("srail-folded")
+      ? "\u2039" : "\u203a";
+  };
+  face();
+  fold.onclick = () => {
+    const now = document.body.classList.toggle("srail-folded");
+    localStorage.setItem("bc_srail_fold", now ? "1" : "");
+    face();
+  };
+  rail.prepend(fold);
+
+  const grip = document.createElement("div");
+  grip.id = "srail-grip";
+  rail.appendChild(grip);
+  let on = false;
+  grip.onpointerdown = (e) => {
+    on = true; grip.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = "none";
+  };
+  grip.onpointermove = (e) => {
+    if (!on) return;
+    const right = rail.getBoundingClientRect().right;
+    // clamped: a rail dragged to nothing cannot be found again, and one
+    // dragged across the screen leaves no room to work in
+    const px = Math.max(26, Math.min(460, right - e.clientX));
+    document.documentElement.style.setProperty("--srail", px + "px");
+    document.body.classList.toggle("srail-folded", px < 70);
+    face();
+  };
+  grip.onpointerup = () => {
+    if (!on) return;
+    on = false;
+    document.body.style.userSelect = "";
+    localStorage.setItem("bc_srail_w",
+      parseInt(getComputedStyle(document.documentElement)
+        .getPropertyValue("--srail"), 10) || 240);
+    localStorage.setItem("bc_srail_fold",
+      document.body.classList.contains("srail-folded") ? "1" : "");
+  };
+}
+
 // ---------- stores rail ----------
 /* A persistent list of accounts beside the work. Field staff spend the day
    asking "which stores are in this region and what's low" — making them
@@ -2655,6 +2712,7 @@ async function drawStoreRail() {
         </div>`).join("") || '<p class="dim" style="padding:8px">No matches.</p>'}
     </div>`;
   let t;
+  wireStoreRail(rail);
   $("#rail-q").oninput = (e) => { clearTimeout(t);
     t = setTimeout(() => { S.railQ = e.target.value; drawStoreRail(); }, 200); };
   rail.querySelectorAll("[data-rail]").forEach((b) => b.onclick = async () => {

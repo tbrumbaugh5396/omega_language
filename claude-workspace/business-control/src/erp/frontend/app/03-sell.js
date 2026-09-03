@@ -2,6 +2,68 @@
 
 
 
+/* A new line. Opened in DRAFT on purpose: the reason this form did not
+   exist on the shop page was that adding a product put it straight in
+   front of customers, so the only safe place to do it was a settings
+   screen nobody thinks to look at. A draft is safe anywhere. */
+async function productForm() {
+  let kinds = [];
+  try { kinds = await api("/api/admin/product-kinds"); } catch (e) { }
+  modal(`<h3>New product</h3>
+    <p class="dim">It opens as a draft: yours to price and describe, and
+      invisible to the shop until you publish it.</p>
+    <div class="row2">
+      <div><label>Name <span class="req">required</span></label>
+        <input id="npd-name"></div>
+      <div><label>SKU <span class="opt">how you refer to it</span></label>
+        <input id="npd-sku"></div>
+    </div>
+    <div class="row2">
+      <div><label>Kind <span class="opt">the lane it sits in</span></label>
+        <select id="npd-kind">${kinds.map((k) => `<option value="${esc(k.id)}"
+          ${k.id === "goods" ? "selected" : ""}>${esc(k.label)}</option>`)
+          .join("")}</select></div>
+      <div><label>Category <span class="opt">free text, shown on the
+        card</span></label><input id="npd-cat"></div>
+    </div>
+    <div class="row2">
+      <div><label>Price <span class="req">required</span></label>
+        <input id="npd-price" type="number" min="0" step="0.01"></div>
+      <div><label>Case price <span class="opt">for distributors; blank
+        matches the unit price</span></label>
+        <input id="npd-case" type="number" min="0" step="0.01"></div>
+    </div>
+    <label>Description</label>
+    <textarea id="npd-desc" rows="3"></textarea>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="npd-save">Add as a draft</button></div>`);
+  $("#npd-save").onclick = async () => {
+    const name = $("#npd-name").value.trim();
+    const price = Math.round((+$("#npd-price").value || 0) * 100);
+    if (!name) return toast("a product needs a name");
+    if (!price) return toast("a product needs a price");
+    const sku = $("#npd-sku").value.trim()
+      || name.toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 24);
+    try {
+      await api("/api/admin/products", { body: {
+        sku, name, description: $("#npd-desc").value.trim(),
+        category: $("#npd-cat").value.trim() || "General",
+        price_cents: price, case_size: 12,
+        case_price_cents: Math.round((+$("#npd-case").value || 0) * 100)
+          || price } });
+      const made = (await api("/api/products")).find((p) => p.sku === sku);
+      if (made) {
+        await api(`/api/admin/products/${made.id}/shelf`, { body: {
+          kind: $("#npd-kind").value, draft: true } });
+      }
+      closeModal();
+      toast(`${name} is a draft — publish it when it is ready`);
+      renderShop();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 /* Which lane a product sits in, and the lanes themselves. A bakery has
    trays and a studio has retainers; neither is served by being filed
    under Goods, because the lane is how a customer finds it. */
@@ -96,11 +158,20 @@ async function renderShop() {
         <div class="h">${esc(hero.headline)}</div>
         <button class="btn" id="hero-cta">${esc(hero.cta)}</button>
       </div>` : ""}
-    <h2>Shop ${isDist ? '<span class="pill ok">wholesale — priced per case</span>' : ""}
-      ${S.products.some((p) => ["pack", "bundle"].includes(p.kind))
-        ? `<a class="btn alt sm" href="/plan-builder" target="_blank"
-             title="the capability menu with a running total — the page a
-             client can price themselves on">Plan builder</a>` : ""}</h2>
+    <div class="page-head">
+      <div><h2>Shop ${isDist
+        ? '<span class="pill ok">wholesale — priced per case</span>' : ""}
+        </h2></div>
+      <div class="top-actions">
+        ${S.user && S.user.is_admin ? `<button class="btn sm" id="sh-new"
+          title="a new line, in draft — it stays off the shop until you
+          publish it">New product</button>` : ""}
+        ${S.products.some((p) => ["pack", "bundle"].includes(p.kind))
+          ? `<a class="btn alt sm" href="/plan-builder" target="_blank"
+               title="the capability menu with a running total — the page a
+               client can price themselves on">Plan builder</a>` : ""}
+      </div>
+    </div>
     ${kindGroups(S.products).map((g) => `
       ${g.label ? `<h3 class="kind-head" style="--kind:${esc(g.colour)}">
         ${esc(g.label)} <small class="dim">${g.items.length} line${
@@ -419,6 +490,7 @@ async function renderShop() {
   };
 
   renderCartCard();
+  if ($("#sh-new")) $("#sh-new").onclick = () => productForm();
   view().querySelectorAll("[data-shelf]").forEach((b) => b.onclick =
     async () => {
       const [pid, draft] = b.dataset.shelf.split(":");
