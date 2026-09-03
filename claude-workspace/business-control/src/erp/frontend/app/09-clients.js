@@ -707,7 +707,9 @@ function lineupHtml(e) {
       <select id="${id}"><option value="">${none}</option>
         ${rows.map((r) => `<option value="${esc(r.name)}"
           ${cur === r.name ? "selected" : ""}>${esc(r.name)} — \$${
-          r.price}${unit}${r.setup ? ` + \$${r.setup} setup` : ""}
+          r.price}${r.ceiling ? `–\$${r.ceiling}` : unit}${
+          r.setup ? ` + \$${r.setup} setup` : ""}${
+          r.timeline ? ` · ${esc(r.timeline)}` : ""}
         </option>`).join("")}</select></div>`;
   const caps = new Set(((e && e.caps) || "").split(",").filter(Boolean));
   const groups = [];
@@ -729,8 +731,14 @@ function lineupHtml(e) {
             (e && e.label) || "", "/mo", "— none, our mark stays —")}
     </div>
     <div class="row2">
-      ${sel("ef-build", "Build", o.builds || [], (e && e.build) || "",
-            "", "— none —")}
+      ${sel("ef-web", "Website", o.web || [], (e && e.web) || "",
+            "+", "— none —")}
+      ${sel("ef-brand", "Branding", o.brand || [], (e && e.brand) || "",
+            "+", "— none —")}
+    </div>
+    <div class="row2">
+      ${sel("ef-build", "Platform build", o.builds || [],
+            (e && e.build) || "", "", "— none —")}
       ${sel("ef-setup", "Setup", o.setups || [], (e && e.setup) || "",
             "", "— none —")}
     </div>
@@ -931,6 +939,12 @@ async function engForm(e) {
     if (bld) once += bld.price;
     const stp = pick("ef-setup", o.setups || []);
     if (stp) once += stp.price;
+    // banded work counts at the bottom of its band — the figure a quote
+    // starts from, not one it promises
+    const web = pick("ef-web", o.web || []);
+    if (web) once += web.price;
+    const brd = pick("ef-brand", o.brand || []);
+    if (brd) once += brd.price;
     $("#ef-adds").innerHTML = (mo || once)
       ? `That adds up to <b>\$${mo}/mo</b> and <b>\$${once}</b> one-time.
          <button type="button" class="btn alt sm" id="ef-useadds">Use these
@@ -941,7 +955,8 @@ async function engForm(e) {
       $("#ef-val").value = once || "";
     };
   };
-  ["ef-care", "ef-label", "ef-build", "ef-setup"].forEach((id) => {
+  ["ef-care", "ef-label", "ef-build", "ef-setup", "ef-web",
+   "ef-brand"].forEach((id) => {
     if ($("#" + id)) $("#" + id).onchange = adds;
   });
   document.querySelectorAll("[data-efcap]").forEach((b) =>
@@ -970,6 +985,8 @@ async function engForm(e) {
       build: ($("#ef-build") || {}).value || "",
       setup: ($("#ef-setup") || {}).value || "",
       label: ($("#ef-label") || {}).value || "",
+      web: ($("#ef-web") || {}).value || "",
+      brand: ($("#ef-brand") || {}).value || "",
       approver_name: $("#ef-appr").value.trim(),
       approver_email: $("#ef-email").value.trim(),
       internal_poc: $("#ef-ipoc").value.trim(),

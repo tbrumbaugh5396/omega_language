@@ -337,6 +337,23 @@ Surfaces are the right unit for the **build** because they are a real boundary
 in the product. They are the wrong unit for the **subscription**, because
 capabilities cut across all three.
 
+### Website & brand — studio work
+
+The build ladder above stands a *platform* up. This is the other half of the
+studio: the site itself, and the identity around it. Priced as a band rather
+than a figure, because the shape of the work is known before the scope is —
+quote the tier, not the hours, and land inside the band after discovery.
+
+| Tier | From | To | Timeline | Revisions | What it is |
+|---|---|---|---|---|---|
+| **Week website** | **$1,500** | $4,000 | 5 working days | 1 round | Existing template, their content, up to 5 pages, no custom work |
+| **Partially custom** | **$5,000** | $15,000 | 4-6 weeks | 2 rounds | Template foundation, custom sections, custom design pass, 5-15 pages |
+| **Fully custom** | **$18,000** | $60,000 | 8-16 weeks | 2 rounds per phase | Designed from scratch, bespoke functionality, unlimited pages |
+| **Branding & creative** | **$6,000** | $40,000 | 4-10 weeks | 2 rounds per deliverable | Identity, art direction, motion, campaign assets |
+
+The client-facing rate card (`03-proposal/rate-card.md`) shows the same four
+and must agree with this table.
+
 ### Care plan — Part 2 of the monthly bill
 
 | | **Essential** | **Standard** | **Priority** |

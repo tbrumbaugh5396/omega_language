@@ -154,6 +154,12 @@ MIGRATIONS = (
     "ALTER TABLE engagements ADD COLUMN build TEXT DEFAULT ''",
     "ALTER TABLE engagements ADD COLUMN setup TEXT DEFAULT ''",
     "ALTER TABLE engagements ADD COLUMN label TEXT DEFAULT ''",
+    # The studio's own half: the site, and the identity around it. Kept
+    # apart from `build` because standing the platform up and designing
+    # the thing people look at are different work, often different weeks,
+    # and sometimes different people.
+    "ALTER TABLE engagements ADD COLUMN web TEXT DEFAULT ''",
+    "ALTER TABLE engagements ADD COLUMN brand TEXT DEFAULT ''",
 )
 
 
@@ -681,7 +687,8 @@ def offer_catalogue() -> dict:
     same list, so a client cannot be recorded as buying something the
     business does not sell."""
     out = {"tiers": [], "care": [], "builds": [], "setups": [],
-           "labels": [], "caps": [], "core_price": 0}
+           "labels": [], "caps": [], "core_price": 0,
+           "web": [], "brand": []}
     try:
         from . import pricebook as pb
         out["tiers"] = pb.tiers()
@@ -692,6 +699,10 @@ def offer_catalogue() -> dict:
         out["builds"] = [b for b in allb if b["name"] != "Guided setup"]
         out["labels"] = [w for w in pb.white_label() if w["price"]
                          or w["setup"]]
+        studio = pb.studio_tiers()
+        out["web"] = [t for t in studio
+                      if not t["name"].startswith("Branding")]
+        out["brand"] = [t for t in studio if t["name"].startswith("Branding")]
         out["caps"] = _cap_catalogue_lite()
         out["core_price"] = _core_price()
     except Exception:                                   # noqa: BLE001
@@ -731,7 +742,8 @@ def lineup_price(e) -> dict:
     if lab:
         monthly += lab["price"]
         one_time += lab["setup"]
-    for key, rows in (("build", o["builds"]), ("setup", o["setups"])):
+    for key, rows in (("build", o["builds"]), ("setup", o["setups"]),
+                      ("web", o["web"]), ("brand", o["brand"])):
         pick = next((b for b in rows if b["name"] == (e[key] or "")), None)
         if pick:
             one_time += pick["price"]
@@ -796,6 +808,7 @@ def global_values(e) -> dict:
             "plan": e["package"] or "—",
             "care": e["care"] or "—", "build": e["build"] or "—",
             "setup": e["setup"] or "—", "label": e["label"] or "None",
+            "web": e["web"] or "—", "branding": e["brand"] or "—",
             "caps": ", ".join(names.get(c, c) for c in caps) or "—",
             "value": (f"${e['value_cents'] / 100:,.2f}"
                       if e["value_cents"] else "—"),
@@ -851,7 +864,9 @@ def binder_body() -> str:
         "| Plan | [PACKAGE] |",
         "| Capabilities | [CAPABILITIES] |",
         "| Care plan | [CARE] |",
-        "| Build | [BUILD] |",
+        "| Website | [WEBSITE] |",
+        "| Branding | [BRANDING] |",
+        "| Platform build | [BUILD] |",
         "| Setup | [SETUP] |",
         "| White-labelling | [LABELLING] |",
         "| Build, one-time | [PROJECT VALUE] |",
@@ -932,6 +947,8 @@ class EngBody(BaseModel):
     build: str = "\x00"
     setup: str = "\x00"
     label: str = "\x00"
+    web: str = "\x00"
+    brand: str = "\x00"
     approver_name: str = ""
     approver_email: str = ""
     launch_target: str = ""
@@ -1019,7 +1036,7 @@ GLOBAL_COLUMN = {"client": "name", "client_poc": "approver_name",
                  # reader, and names are not the ids the column holds —
                  # writing a rendered list back would corrupt the grant.
                  "care": "care", "build": "build", "setup": "setup",
-                 "label": "label"}
+                 "label": "label", "web": "web", "branding": "brand"}
 
 _MONEY_COLS = {"value_cents", "monthly_cents"}
 
@@ -1140,17 +1157,18 @@ def create_engagement(body: EngBody, u=Depends(admin_user),
     poc_name, poc_uid, poc_status = _resolve_poc(con, body.internal_poc, u)
     cur = con.execute(
         "INSERT INTO engagements(name,slug,package,value_cents,monthly_cents,"
-        " caps,care,build,setup,label,"
+        " caps,care,build,setup,label,web,brand,"
         " approver_name,"
         " approver_email,launch_target,staging_url,live_url,notes,status,"
         " originator,internal_poc,internal_poc_user_id,internal_poc_status,"
         " created_at,updated_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (name[:120], slug, body.package.strip()[:40], body.value_cents,
          max(0, body.monthly_cents),
          *[("" if getattr(body, k) == "\x00"
             else getattr(body, k).strip()[:600])
-           for k in ("caps", "care", "build", "setup", "label")],
+           for k in ("caps", "care", "build", "setup", "label",
+                     "web", "brand")],
          body.approver_name.strip()[:120], body.approver_email.strip()[:200],
          body.launch_target.strip()[:40], body.staging_url.strip()[:300],
          body.live_url.strip()[:300], body.notes.strip()[:2000],
@@ -1209,7 +1227,8 @@ def edit_engagement(eid: int, body: EngBody, u=Depends(admin_user),
             fields[k] = v.strip()[:2000]
             if k == "week_note":
                 fields["week_note_at"] = time.time()
-    for k in ("caps", "care", "build", "setup", "label"):
+    for k in ("caps", "care", "build", "setup", "label", "web",
+              "brand"):
         v = getattr(body, k)
         if v != "\x00" and v.strip() != (e[k] or ""):
             fields[k] = v.strip()[:600]

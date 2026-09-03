@@ -419,6 +419,22 @@ def products() -> list:
                 " Scoped and quoted after discovery — the figure here is "
                 "where this rung starts." if quoted else ""),
         })
+    # The site itself, and the identity around it. Banded rather than
+    # priced to the dollar — the shop shows where a tier starts, and the
+    # quote lands inside the band once the scope is known.
+    for t in pb.studio_tiers():
+        brand = t["name"].startswith("Branding")
+        out.append({
+            "sku": "WEB-" + t["name"].split()[0].upper()[:8],
+            "name": t["name"], "kind": "brand" if brand else "web",
+            "category": "Branding" if brand else "Websites",
+            "price_cents": t["price"] * 100, "quote": True,
+            "description":
+                f"{t['what']}. {t['timeline']}, {t['revisions']}. "
+                f"Priced ${t['price']:,}-${t['ceiling']:,} — the band is "
+                f"the honest answer before discovery; the quote lands "
+                f"inside it.",
+        })
     # Taking our name off it is a licence, not a fork, and it is sold.
     for w in pb.white_label():
         if not w["price"]:
@@ -629,7 +645,8 @@ def seed(con, force: bool) -> dict:
     stale = [r[0] for r in con.execute(
         "SELECT sku FROM products WHERE active=1 AND ("
         " sku LIKE 'PLAN-%' OR sku LIKE 'CARE-%' OR sku LIKE 'BUILD-%'"
-        " OR sku LIKE 'WL-%')").fetchall() if r[0] not in mine]
+        " OR sku LIKE 'WL-%' OR sku LIKE 'WEB-%')").fetchall()
+        if r[0] not in mine]
     for sku in stale:
         con.execute("UPDATE products SET active=0 WHERE sku=?", (sku,))
     n["retired"] = len(stale)

@@ -261,7 +261,8 @@ ok(_names["Basic plan"]["price_cents"] == 20000
    and _names["Priority care"]["price_cents"] == 75000,
    "the plans are buyable at the book's prices")
 ok(all(n in _names for n in ("Guided setup", "Launch build", "Custom build",
-                             "Flagship")),
+                             "Flagship", "Week website", "Partially custom",
+                             "Fully custom", "Branding & creative")),
    "and the WHOLE website ladder is on the shelf, not just the bottom "
    "rung — a menu you cannot read is not a price book")
 ok(all(f"White-label — {n}" in _names
@@ -275,13 +276,15 @@ ok(_names["Flagship"]["quote"] and not _names["Guided setup"]["quote"]
 _kinds = {p["name"]: p["kind"] for p in _cat}
 ok(_kinds["Basic plan"] == "plan" and _kinds["Priority care"] == "care"
    and _kinds["Flagship"] == "build" and _kinds["Guided setup"] == "setup"
-   and _kinds["White-label — Unbranded"] == "label",
+   and _kinds["White-label — Unbranded"] == "label"
+   and _kinds["Week website"] == "web"
+   and _kinds["Branding & creative"] == "brand",
    "every product says what it IS — plans, care, builds, setups, "
    "labelling — because a shelf carrying a $40,000 build beside a $50 "
    "licence is five businesses on one page unless the page sorts them")
 _kl = c.get("/api/store/catalog", headers=HA).json()["kinds"]
 ok([k["id"] for k in _kl if k["id"] != "goods"]
-   == ["plan", "care", "build", "setup", "label"]
+   == ["plan", "care", "web", "brand", "build", "setup", "label"]
    and len({k["colour"] for k in _kl}) == len(_kl),
    "the shelf's kinds come back in one order with one colour each, from "
    "the server — so the shop and the back office cannot group or tint the "

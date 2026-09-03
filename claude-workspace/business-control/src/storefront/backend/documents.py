@@ -202,6 +202,10 @@ GLOBAL_TOKENS = {
     # client card can never name different plans.
     "PLAN": "plan", "CARE": "care", "CARE PLAN": "care",
     "BUILD": "build", "SETUP": "setup", "LABELLING": "label",
+    # NOT "brand" — that key is the COMPANY's name, and a token that
+    # renders the branding tier as the company name is one that renames
+    # the company when somebody types in it.
+    "WEBSITE": "web", "SITE": "web", "BRANDING": "branding",
     "WHITE-LABEL": "label", "CAPABILITIES": "caps",
 }
 

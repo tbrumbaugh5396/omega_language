@@ -148,6 +148,31 @@ def builds() -> list:
     return out
 
 
+def studio_tiers() -> list:
+    """§12 — the site itself and the identity around it, banded.
+
+    A band rather than a figure: the shape of this work is known before
+    the scope is, so the shop shows where a tier starts and the quote
+    lands inside the band after discovery.
+    """
+    src = _section("12. Services", _text())
+    out = []
+    for m in re.finditer(
+            r"^\| \*\*(Week website|Partially custom|Fully custom"
+            r"|Branding & creative)\*\* \| \*\*\$([\d,]+)\*\*"
+            r" \| \$([\d,]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|",
+            src, re.M):
+        out.append({"name": m.group(1),
+                    "price": int(m.group(2).replace(",", "")),
+                    "ceiling": int(m.group(3).replace(",", "")),
+                    "timeline": m.group(4).strip(),
+                    "revisions": m.group(5).strip(),
+                    "what": m.group(6).strip()})
+    if len(out) != 4:
+        raise ValueError("price book: the studio ladder did not parse")
+    return out
+
+
 def white_label() -> list:
     """§8 — the four levels of taking our name off it. Parsed like every
     other price, so the shop and the bench cannot quote a licence the book

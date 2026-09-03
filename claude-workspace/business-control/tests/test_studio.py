@@ -1273,6 +1273,20 @@ ok(not _off,
 for _fig in ("$335.00", "$288.00", "$183.75", "$192.50"):
     ok(_fig in _book and _fig in _menu,
        f"the {_fig} bundle figure agrees between book and menu")
+# The client-facing rate card and the book must name the same ladder at
+# the same figures — it is the one page a client reads the studio's own
+# prices from.
+_rc = (Path(__file__).parent.parent / "docs/business-control-b2b-client"
+       / "templates/03-proposal/rate-card.md").read_text(encoding="utf-8")
+for _t in ("Week website", "Partially custom", "Fully custom",
+           "Branding & creative"):
+    ok(_t in _rc and _t in _book,
+       f"the studio ladder agrees between the book and the rate card "
+       f"({_t})")
+for _fig in ("$1,500", "$5,000", "$18,000", "$6,000"):
+    ok(_fig in _rc and _fig in _book,
+       f"and so do its floors ({_fig}) — the shop shows where a tier "
+       f"starts, so the number a client reads twice must be one number")
 ok("$[X]" not in _menu,
    "nothing in the menu is left unpriced — the bands priced the nine that "
    "v1 could not sell")
@@ -1557,7 +1571,10 @@ ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
 _ofr = c.get("/api/store/admin/engagements", headers=A).json()["offer"]
 ok(len(_ofr["tiers"]) == 3 and len(_ofr["care"]) == 3
    and len(_ofr["builds"]) == 3 and len(_ofr["setups"]) == 1
-   and len(_ofr["labels"]) == 3 and len(_ofr["caps"]) == 29,
+   and len(_ofr["labels"]) == 3 and len(_ofr["caps"]) == 29
+   and [t["name"] for t in _ofr["web"]]
+   == ["Week website", "Partially custom", "Fully custom"]
+   and [t["name"] for t in _ofr["brand"]] == ["Branding & creative"],
    "the client form picks from the price book itself — plans, care, "
    "builds, setups, labelling and the capability menu — so a client "
    "cannot be recorded as buying something we do not sell")
