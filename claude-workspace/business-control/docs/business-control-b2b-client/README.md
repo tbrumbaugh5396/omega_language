@@ -132,8 +132,8 @@ cost that protects every project afterwards.
 | Tier | What it is | Typical range | Revisions |
 |------|-----------|---------------|-----------|
 | [Week website](templates/04-agreement/contracts/week-website.md) | Existing template, client's content, fixed scope, one week | $1,500 – $4,000 | 1 round |
-| [Partially custom](templates/04-agreement/contracts/partially-custom.md) | Template foundation, custom sections and design | $5,000 – $15,000 | 2 rounds |
-| [Fully custom](templates/04-agreement/contracts/fully-custom.md) | Designed and built from scratch, bespoke functionality | $18,000 – $60,000+ | 2 rounds per phase |
+| [Custom build](templates/04-agreement/contracts/partially-custom.md) | Template foundation, custom sections and design | $5,000 – $15,000 | 2 rounds |
+| [Custom build + Branding & creative](templates/04-agreement/contracts/fully-custom.md) | Designed from scratch with the identity made alongside it | $18,000 – $60,000 | 2 rounds per phase |
 | [Branding & creative](templates/04-agreement/contracts/branding-creative.md) | Identity, art direction, motion, campaign assets | $6,000 – $40,000 | 2 rounds per deliverable |
 
 All four share the same spine — see [common

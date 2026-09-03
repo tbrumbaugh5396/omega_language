@@ -314,17 +314,29 @@ Services are labour. They run at **30–50% margin** and scale with people, not
 with installs. This is the only part of the business where selling more can
 make you poorer.
 
-### Build — one-time
+### The one-time ladder
 
-| | Price |
-|---|---|
-| Guided setup | $500 |
-| Launch build | $5,000 |
-| Custom build | $18,000 |
-| Flagship | $40,000 |
+One ladder, not two. There used to be a platform build ladder and a studio
+website ladder side by side, at the same prices, describing the same work
+under different names — a client could be quoted $5,000 twice and asked to
+choose. Every rung below is priced as a band rather than a figure, because
+the shape of this work is known before the scope is: quote the tier, not the
+hours, and land inside the band after discovery.
 
-Optionally split by surface, which is how clients think and how scope
-arguments are avoided. A $5,000 launch build splits:
+| Tier | From | To | Timeline | Revisions | What it is |
+|---|---|---|---|---|---|
+| **Guided setup** | **$500** | $500 | 1 week | — | We stand your install up, import what you have, configure the capabilities you picked and walk your team through it |
+| **Week website** | **$1,500** | $4,000 | 5 working days | 1 round | Existing template, your content, up to 5 pages, no custom work |
+| **Custom build** | **$5,000** | $15,000 | 4-6 weeks | 2 rounds | Template foundation, custom sections, a custom design pass, 5-15 pages |
+| **Custom build + Branding & creative** | **$18,000** | $60,000 | 8-16 weeks | 2 rounds per phase | Designed from scratch with the identity made alongside it: bespoke functionality, unlimited pages, motion system |
+| **Branding & creative** | **$6,000** | $40,000 | 4-10 weeks | 2 rounds per deliverable | Identity, art direction, motion, campaign assets - sold alongside any rung, or on its own |
+
+**Guided setup is not a build.** It is the hour where an install becomes
+yours; it sits at the bottom of the ladder because it is the cheapest way in,
+not because it is a small website.
+
+A build may be split by surface, which is how clients think and how scope
+arguments are avoided. A $5,000 custom build splits:
 
 | Surface | Share |
 |---|---|
@@ -337,22 +349,8 @@ Surfaces are the right unit for the **build** because they are a real boundary
 in the product. They are the wrong unit for the **subscription**, because
 capabilities cut across all three.
 
-### Website & brand — studio work
-
-The build ladder above stands a *platform* up. This is the other half of the
-studio: the site itself, and the identity around it. Priced as a band rather
-than a figure, because the shape of the work is known before the scope is —
-quote the tier, not the hours, and land inside the band after discovery.
-
-| Tier | From | To | Timeline | Revisions | What it is |
-|---|---|---|---|---|---|
-| **Week website** | **$1,500** | $4,000 | 5 working days | 1 round | Existing template, their content, up to 5 pages, no custom work |
-| **Partially custom** | **$5,000** | $15,000 | 4-6 weeks | 2 rounds | Template foundation, custom sections, custom design pass, 5-15 pages |
-| **Fully custom** | **$18,000** | $60,000 | 8-16 weeks | 2 rounds per phase | Designed from scratch, bespoke functionality, unlimited pages |
-| **Branding & creative** | **$6,000** | $40,000 | 4-10 weeks | 2 rounds per deliverable | Identity, art direction, motion, campaign assets |
-
-The client-facing rate card (`03-proposal/rate-card.md`) shows the same four
-and must agree with this table.
+The client-facing rate card (`03-proposal/rate-card.md`) shows the same
+ladder and must agree with this table.
 
 ### Care plan — Part 2 of the monthly bill
 

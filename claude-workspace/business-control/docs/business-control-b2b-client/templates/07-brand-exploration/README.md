@@ -5,8 +5,8 @@
 | Tier | Run this stage? |
 |---|---|
 | Week website | No — they have a brand, you're applying it |
-| Partially custom | Only if the brand is thin or inconsistent |
-| Fully custom | Usually |
+| Custom build | Only if the brand is thin or inconsistent |
+| Custom build + Branding & creative | Always — the identity is the point |
 | Branding & creative | Always — this *is* the project |
 
 | Document | Goes to | When |

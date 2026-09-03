@@ -231,8 +231,12 @@ ok(_wl["Unbranded"]["price"] == 50 and _wl["Branded install"]["setup"] == 500
    "the white-label ladder parses out of the book too — it is sold, so it "
    "is priced from the same table as everything else")
 _bk = {b["name"]: b["price"] for b in _pb.builds()}
-ok(_bk["Guided setup"] == 500 and _bk["Flagship"] == 40000,
-   "and the build ladder, so the shop cannot quietly reprice a build")
+ok(_bk["Guided setup"] == 500 and _bk["Week website"] == 1500
+   and _bk["Custom build"] == 5000
+   and _bk["Custom build + Branding & creative"] == 18000
+   and _bk["Branding & creative"] == 6000 and len(_bk) == 5,
+   "and ONE one-time ladder, so a client is never quoted the same work "
+   "twice under two names at two prices")
 
 _seed = _spm.run([sys.executable, str(ROOT / "scripts" / "seed_studio.py"),
                   "--tenant", "alpha", "--force"], capture_output=True,
@@ -260,36 +264,38 @@ _names = {p["name"]: p for p in _cat}
 ok(_names["Basic plan"]["price_cents"] == 20000
    and _names["Priority care"]["price_cents"] == 75000,
    "the plans are buyable at the book's prices")
-ok(all(n in _names for n in ("Guided setup", "Launch build", "Custom build",
-                             "Flagship", "Week website", "Partially custom",
-                             "Fully custom", "Branding & creative")),
+ok(all(n in _names for n in ("Guided setup", "Week website",
+                             "Custom build",
+                             "Custom build + Branding & creative",
+                             "Branding & creative")),
    "and the WHOLE website ladder is on the shelf, not just the bottom "
    "rung — a menu you cannot read is not a price book")
 ok(all(f"White-label — {n}" in _names
        for n in ("Unbranded", "Branded install", "Full white-label")),
    "so is taking our name off it, which is sold and was never listed")
-ok(_names["Flagship"]["quote"] and not _names["Guided setup"]["quote"]
+ok(_names["Custom build"]["quote"] and not _names["Guided setup"]["quote"]
    and not _names["Basic plan"]["quote"],
    "a forty-thousand-dollar build is priced but not bought blind: the "
    "card says where the rung starts and opens the conversation, while "
    "the things you really can buy keep their button")
 _kinds = {p["name"]: p["kind"] for p in _cat}
 ok(_kinds["Basic plan"] == "plan" and _kinds["Priority care"] == "care"
-   and _kinds["Flagship"] == "build" and _kinds["Guided setup"] == "setup"
+   and _kinds["Custom build"] == "build"
+   and _kinds["Guided setup"] == "setup"
    and _kinds["White-label — Unbranded"] == "label"
-   and _kinds["Week website"] == "web"
+   and _kinds["Week website"] == "build"
    and _kinds["Branding & creative"] == "brand",
    "every product says what it IS — plans, care, builds, setups, "
    "labelling — because a shelf carrying a $40,000 build beside a $50 "
    "licence is five businesses on one page unless the page sorts them")
 _kl = c.get("/api/store/catalog", headers=HA).json()["kinds"]
 ok([k["id"] for k in _kl if k["id"] != "goods"]
-   == ["plan", "care", "web", "brand", "build", "setup", "label"]
+   == ["plan", "care", "build", "brand", "setup", "label"]
    and len({k["colour"] for k in _kl}) == len(_kl),
    "the shelf's kinds come back in one order with one colour each, from "
    "the server — so the shop and the back office cannot group or tint the "
    "same catalogue differently")
-ok(_names["Guided setup"]["colour"] != _names["Flagship"]["colour"],
+ok(_names["Guided setup"]["colour"] != _names["Custom build"]["colour"],
    "and standing an install up is not the first rung of a build ladder: "
    "different kind, different colour")
 ok("Starter plan" not in _names,

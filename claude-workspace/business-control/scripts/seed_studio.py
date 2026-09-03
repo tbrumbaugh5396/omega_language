@@ -384,56 +384,30 @@ def products() -> list:
                    if c["included"] not in ("—", "") else
                    "No included content-change hours."),
         })
-    # The whole build ladder, not just the bottom rung. A $40,000 build is
-    # not an add-to-cart — but leaving it off the menu entirely means the
-    # only way to learn what we do is to ask, which is the opposite of a
-    # price book. So every rung is listed, and the ones that need a
-    # conversation say so instead of showing a button.
-    BUILD_NOTE = {
-        "Guided setup":
-            "We stand your install up, import what you have, configure the "
-            "capabilities you picked and walk your team through it. One "
-            "time, about a week.",
-        "Launch build":
-            "Your theme and brand tokens, the sections your pages need, "
-            "and your data migrated in. About two weeks.",
-        "Custom build":
-            "Bespoke sections, motion, and the integrations your business "
-            "actually runs on. About six weeks.",
-        "Flagship":
-            "Brand and build together, motion system included — the whole "
-            "thing designed from scratch. About ten weeks.",
-    }
+    # ONE one-time ladder, every rung of it. Guided setup is the way in
+    # and is bought outright; the rest are banded, because the shape of
+    # that work is known before the scope is — so the shop shows where a
+    # rung starts and the quote lands inside the band after discovery.
+    SKU = {"Guided setup": "BUILD-GUIDED", "Week website": "BUILD-WEEK",
+           "Custom build": "BUILD-CUSTOM",
+           "Custom build + Branding & creative": "BUILD-CUSTOMBRAND",
+           "Branding & creative": "BUILD-BRANDING"}
     for b in pb.builds():
-        quoted = b["name"] != "Guided setup"
+        setup = b["name"] == "Guided setup"
+        brand = b["name"] == "Branding & creative"
+        band = b["ceiling"] > b["price"]
         out.append({
-            "sku": f"BUILD-{b['name'].split()[0].upper()}",
-            "name": b["name"],
-            # standing an install up is a different act from building a
-            # site, and a shop that files them together makes the cheap
-            # one look like the first rung of the expensive one
-            "kind": "build" if quoted else "setup",
-            "category": "Website builds" if quoted else "Setups",
-            "price_cents": b["price"] * 100, "quote": quoted,
-            "description": BUILD_NOTE[b["name"]] + (
-                " Scoped and quoted after discovery — the figure here is "
-                "where this rung starts." if quoted else ""),
-        })
-    # The site itself, and the identity around it. Banded rather than
-    # priced to the dollar — the shop shows where a tier starts, and the
-    # quote lands inside the band once the scope is known.
-    for t in pb.studio_tiers():
-        brand = t["name"].startswith("Branding")
-        out.append({
-            "sku": "WEB-" + t["name"].split()[0].upper()[:8],
-            "name": t["name"], "kind": "brand" if brand else "web",
-            "category": "Branding" if brand else "Websites",
-            "price_cents": t["price"] * 100, "quote": True,
+            "sku": SKU[b["name"]], "name": b["name"],
+            "kind": "setup" if setup else "brand" if brand else "build",
+            "category": "Setups" if setup
+                        else "Branding" if brand else "Builds",
+            "price_cents": b["price"] * 100, "quote": band,
             "description":
-                f"{t['what']}. {t['timeline']}, {t['revisions']}. "
-                f"Priced ${t['price']:,}-${t['ceiling']:,} — the band is "
-                f"the honest answer before discovery; the quote lands "
-                f"inside it.",
+                f"{b['what']}. {b['timeline']}"
+                + (f", {b['revisions']}" if b["revisions"] != "-" else "")
+                + (f". Priced ${b['price']:,}-${b['ceiling']:,} — the band "
+                   f"is the honest answer before discovery; the quote "
+                   f"lands inside it." if band else "."),
         })
     # Taking our name off it is a licence, not a fork, and it is sold.
     for w in pb.white_label():

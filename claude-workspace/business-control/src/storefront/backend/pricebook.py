@@ -136,40 +136,28 @@ def care_plans() -> list:
 
 
 def builds() -> list:
-    """The one-time build ladder — §12."""
-    src = _section("12. Services", _text())
-    out = []
-    for m in re.finditer(r"^\| (Guided setup|Launch build|Custom build"
-                         r"|Flagship) \| \$([\d,]+) \|", src, re.M):
-        out.append({"name": m.group(1),
-                    "price": int(m.group(2).replace(",", ""))})
-    if len(out) != 4:
-        raise ValueError("price book: the build ladder did not parse")
-    return out
+    """§12 — the one-time ladder, every rung, in the book's own order.
 
-
-def studio_tiers() -> list:
-    """§12 — the site itself and the identity around it, banded.
-
-    A band rather than a figure: the shape of this work is known before
-    the scope is, so the shop shows where a tier starts and the quote
-    lands inside the band after discovery.
+    One list because there is one ladder: the platform build ladder and
+    the studio's website ladder were the same work at the same prices
+    under different names, and a client could be quoted $5,000 twice.
     """
     src = _section("12. Services", _text())
     out = []
     for m in re.finditer(
-            r"^\| \*\*(Week website|Partially custom|Fully custom"
-            r"|Branding & creative)\*\* \| \*\*\$([\d,]+)\*\*"
-            r" \| \$([\d,]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|",
+            r"^\| \*\*([^|*]+)\*\* \| \*\*\$([\d,]+)\*\* \|"
+            r" \$([\d,]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|",
             src, re.M):
-        out.append({"name": m.group(1),
+        out.append({"name": m.group(1).strip(),
                     "price": int(m.group(2).replace(",", "")),
                     "ceiling": int(m.group(3).replace(",", "")),
                     "timeline": m.group(4).strip(),
                     "revisions": m.group(5).strip(),
                     "what": m.group(6).strip()})
-    if len(out) != 4:
-        raise ValueError("price book: the studio ladder did not parse")
+    if len(out) != 5:
+        raise ValueError("price book: the one-time ladder did not parse")
+    if [x["price"] for x in out[:4]] != sorted(x["price"] for x in out[:4]):
+        raise ValueError("price book: the ladder does not climb")
     return out
 
 

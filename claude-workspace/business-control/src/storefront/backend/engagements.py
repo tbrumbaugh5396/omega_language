@@ -687,22 +687,20 @@ def offer_catalogue() -> dict:
     same list, so a client cannot be recorded as buying something the
     business does not sell."""
     out = {"tiers": [], "care": [], "builds": [], "setups": [],
-           "labels": [], "caps": [], "core_price": 0,
-           "web": [], "brand": []}
+           "labels": [], "caps": [], "core_price": 0, "brand": []}
     try:
         from . import pricebook as pb
         out["tiers"] = pb.tiers()
         out["care"] = pb.care_plans()
         allb = pb.builds()
-        # standing an install up is a setup, not the first rung of a build
+        # one ladder: the way in, the rungs, and the identity work that
+        # sits alongside any of them rather than above them
         out["setups"] = [b for b in allb if b["name"] == "Guided setup"]
-        out["builds"] = [b for b in allb if b["name"] != "Guided setup"]
+        out["brand"] = [b for b in allb if b["name"] == "Branding & creative"]
+        out["builds"] = [b for b in allb if b["name"] not in
+                         ("Guided setup", "Branding & creative")]
         out["labels"] = [w for w in pb.white_label() if w["price"]
                          or w["setup"]]
-        studio = pb.studio_tiers()
-        out["web"] = [t for t in studio
-                      if not t["name"].startswith("Branding")]
-        out["brand"] = [t for t in studio if t["name"].startswith("Branding")]
         out["caps"] = _cap_catalogue_lite()
         out["core_price"] = _core_price()
     except Exception:                                   # noqa: BLE001
@@ -743,7 +741,7 @@ def lineup_price(e) -> dict:
         monthly += lab["price"]
         one_time += lab["setup"]
     for key, rows in (("build", o["builds"]), ("setup", o["setups"]),
-                      ("web", o["web"]), ("brand", o["brand"])):
+                      ("brand", o["brand"])):
         pick = next((b for b in rows if b["name"] == (e[key] or "")), None)
         if pick:
             one_time += pick["price"]
@@ -808,7 +806,7 @@ def global_values(e) -> dict:
             "plan": e["package"] or "—",
             "care": e["care"] or "—", "build": e["build"] or "—",
             "setup": e["setup"] or "—", "label": e["label"] or "None",
-            "web": e["web"] or "—", "branding": e["brand"] or "—",
+            "branding": e["brand"] or "—",
             "caps": ", ".join(names.get(c, c) for c in caps) or "—",
             "value": (f"${e['value_cents'] / 100:,.2f}"
                       if e["value_cents"] else "—"),
@@ -864,9 +862,8 @@ def binder_body() -> str:
         "| Plan | [PACKAGE] |",
         "| Capabilities | [CAPABILITIES] |",
         "| Care plan | [CARE] |",
-        "| Website | [WEBSITE] |",
+        "| Build | [BUILD] |",
         "| Branding | [BRANDING] |",
-        "| Platform build | [BUILD] |",
         "| Setup | [SETUP] |",
         "| White-labelling | [LABELLING] |",
         "| Build, one-time | [PROJECT VALUE] |",
@@ -1036,7 +1033,7 @@ GLOBAL_COLUMN = {"client": "name", "client_poc": "approver_name",
                  # reader, and names are not the ids the column holds —
                  # writing a rendered list back would corrupt the grant.
                  "care": "care", "build": "build", "setup": "setup",
-                 "label": "label", "web": "web", "branding": "brand"}
+                 "label": "label", "branding": "brand"}
 
 _MONEY_COLS = {"value_cents", "monthly_cents"}
 

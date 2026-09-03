@@ -12,10 +12,11 @@ figures.
 
 | Tier | What it is | Price | Timeline | Revisions |
 |---|---|---|---|---|
-| **Week website** | Existing template, their content, up to 5 pages, no custom work | $1,500 – $4,000 | 5 working days | 1 round |
-| **Partially custom** | Template foundation, custom sections, custom design pass, 5–15 pages | $5,000 – $15,000 | 4–6 weeks | 2 rounds |
-| **Fully custom** | Designed from scratch, bespoke functionality, unlimited pages | $18,000 – $60,000+ | 8–16 weeks | 2 rounds per phase |
-| **Branding & creative** | Identity, art direction, motion, campaign assets | $6,000 – $40,000 | 4–10 weeks | 2 rounds per deliverable |
+| **Guided setup** | We stand your install up, import what you have, configure the capabilities you picked and walk your team through it | $500 | 1 week | — |
+| **Week website** | Existing template, your content, up to 5 pages, no custom work | $1,500 – $4,000 | 5 working days | 1 round |
+| **Custom build** | Template foundation, custom sections, a custom design pass, 5–15 pages | $5,000 – $15,000 | 4–6 weeks | 2 rounds |
+| **Custom build + Branding & creative** | Designed from scratch with the identity made alongside it: bespoke functionality, unlimited pages, motion system | $18,000 – $60,000 | 8–16 weeks | 2 rounds per phase |
+| **Branding & creative** | Identity, art direction, motion, campaign assets — alongside any rung, or on its own | $6,000 – $40,000 | 4–10 weeks | 2 rounds per deliverable |
 
 **Pricing rule:** price the tier, not the hours. Hourly punishes you for
 getting faster and invites arguments about how long something "should" take.

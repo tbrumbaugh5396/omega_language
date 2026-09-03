@@ -246,10 +246,11 @@ pages say it means.
 | Build | Once | What happens |
 |---|---|---|
 | **Self-serve** | $0 | You configure it yourself. The docs are good and we answer questions |
-| **Guided setup** | $500 | Your data imported, settings configured, launch checklist walked · [1] week |
-| **Launch build** | $5,000 | Theme, brand tokens, sections, migration · [2] weeks |
-| **Custom build** | $18,000 | Bespoke sections, motion, integrations · [6] weeks |
-| **Flagship** | $40,000 | Brand and build together, motion system included · [10] weeks |
+| **Guided setup** | $500 | Your data imported, settings configured, launch checklist walked · 1 week |
+| **Week website** | $1,500 – $4,000 | Existing template, your content, up to 5 pages, no custom work · 5 working days |
+| **Custom build** | $5,000 – $15,000 | Template foundation, custom sections, a custom design pass, 5–15 pages · 4–6 weeks |
+| **Custom build + Branding & creative** | $18,000 – $60,000 | Designed from scratch with the identity made alongside it · 8–16 weeks |
+| **Branding & creative** | $6,000 – $40,000 | Identity, art direction, motion, campaign assets — alongside any rung, or on its own · 4–10 weeks |
 
 A build can be split by surface — customer storefront, store admin, back
 office, integrations — so what each part costs is on paper before work
@@ -260,10 +261,11 @@ starts.
 | **None** | $0 | — |
 | **Studio Lite** | $750 | One live request at a time · seasonal refreshes · templates |
 | **Studio** | $2,500 | Brand system · campaigns · motion · landing pages |
-| **Flagship** | project · $40k+ | Identity, motif system, film, art direction — ends in a retainer |
+| **Studio Plus** | project · $6k+ | Identity, motif system, film, art direction — ends in a retainer |
 
-**Selected:** build ☐ self-serve ☐ guided ☐ launch ☐ custom ☐ flagship ·
-studio ☐ none ☐ lite ☐ studio ☐ flagship
+**Selected:** build ☐ self-serve ☐ guided setup ☐ week website
+☐ custom build ☐ custom build + branding ☐ branding only ·
+studio ☐ none ☐ lite ☐ studio ☐ plus
 
 ---
 

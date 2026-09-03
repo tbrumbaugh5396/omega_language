@@ -1,4 +1,4 @@
-# Website Agreement — Fully Custom
+# Website Agreement — Custom Build + Branding & Creative
 
 > Starting point, not legal advice. See [common clauses](common-clauses.md).
 > At this value, having a lawyer review once is not optional.

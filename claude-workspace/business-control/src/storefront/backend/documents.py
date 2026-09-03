@@ -205,7 +205,8 @@ GLOBAL_TOKENS = {
     # NOT "brand" — that key is the COMPANY's name, and a token that
     # renders the branding tier as the company name is one that renames
     # the company when somebody types in it.
-    "WEBSITE": "web", "SITE": "web", "BRANDING": "branding",
+    # one ladder, so the site IS the build — the older words point there
+    "WEBSITE": "build", "SITE": "build", "BRANDING": "branding",
     "WHITE-LABEL": "label", "CAPABILITIES": "caps",
 }
 

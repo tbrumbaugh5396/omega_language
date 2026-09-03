@@ -1278,12 +1278,12 @@ for _fig in ("$335.00", "$288.00", "$183.75", "$192.50"):
 # prices from.
 _rc = (Path(__file__).parent.parent / "docs/business-control-b2b-client"
        / "templates/03-proposal/rate-card.md").read_text(encoding="utf-8")
-for _t in ("Week website", "Partially custom", "Fully custom",
-           "Branding & creative"):
+for _t in ("Guided setup", "Week website", "Custom build",
+           "Custom build + Branding & creative", "Branding & creative"):
     ok(_t in _rc and _t in _book,
        f"the studio ladder agrees between the book and the rate card "
        f"({_t})")
-for _fig in ("$1,500", "$5,000", "$18,000", "$6,000"):
+for _fig in ("$1,500", "$5,000", "$18,000", "$6,000", "$500"):
     ok(_fig in _rc and _fig in _book,
        f"and so do its floors ({_fig}) — the shop shows where a tier "
        f"starts, so the number a client reads twice must be one number")
@@ -1572,25 +1572,27 @@ _ofr = c.get("/api/store/admin/engagements", headers=A).json()["offer"]
 ok(len(_ofr["tiers"]) == 3 and len(_ofr["care"]) == 3
    and len(_ofr["builds"]) == 3 and len(_ofr["setups"]) == 1
    and len(_ofr["labels"]) == 3 and len(_ofr["caps"]) == 29
-   and [t["name"] for t in _ofr["web"]]
-   == ["Week website", "Partially custom", "Fully custom"]
-   and [t["name"] for t in _ofr["brand"]] == ["Branding & creative"],
+   and [t["name"] for t in _ofr["builds"]]
+   == ["Week website", "Custom build",
+       "Custom build + Branding & creative"]
+   and [t["name"] for t in _ofr["brand"]] == ["Branding & creative"]
+   and "web" not in _ofr,
    "the client form picks from the price book itself — plans, care, "
    "builds, setups, labelling and the capability menu — so a client "
    "cannot be recorded as buying something we do not sell")
 _lu = c.post("/api/store/admin/engagements", headers=A, json={
     "name": "Line-up Co", "package": "Pro", "care": "Standard",
-    "build": "Launch build", "setup": "Guided setup",
+    "build": "Custom build", "setup": "Guided setup",
     "label": "Branded install", "caps": "selling,learning"}).json()
 _lur = c.get(f"/api/store/admin/engagements/{_lu['id']}",
              headers=A).json()["engagement"]
-ok(_lur["care"] == "Standard" and _lur["build"] == "Launch build"
+ok(_lur["care"] == "Standard" and _lur["build"] == "Custom build"
    and _lur["setup"] == "Guided setup" and _lur["label"] == "Branded install"
    and _lur["caps"] == "selling,learning",
    "and the record keeps all five, beside the plan")
 _lub = c.get(f"/api/store/admin/engagements/{_lu['id']}/binder.html",
              headers=A).text
-ok(all(x in _lub for x in ("Standard", "Launch build", "Guided setup",
+ok(all(x in _lub for x in ("Standard", "Custom build", "Guided setup",
                            "Branded install", "Care plan")),
    "the binder's cover reads them from the record — the book a client "
    "holds and the client card cannot name different plans")
@@ -1599,10 +1601,10 @@ c.post(f"/api/store/admin/documents/{_lu['binder_doc']}/edit", headers=A,
 _lud = [d for d in c.get(f"/api/store/admin/engagements/{_lu['id']}",
                          headers=A).json()["docs"] if d["has_body"]]
 c.post(f"/api/store/admin/documents/{_lud[0]['id']}/edit", headers=A,
-       json={"fills": {"CARE": "Priority", "BUILD": "Custom build"}})
+       json={"fills": {"CARE": "Priority", "BUILD": "Week website"}})
 _lur2 = c.get(f"/api/store/admin/engagements/{_lu['id']}",
               headers=A).json()["engagement"]
-ok(_lur2["care"] == "Priority" and _lur2["build"] == "Custom build",
+ok(_lur2["care"] == "Priority" and _lur2["build"] == "Week website",
    "and moving a client up a care plan ON THE PAPER moves the record, so "
    "the next document generated already says the new one")
 _lus = c.post(f"/api/store/admin/engagements/{_lu['id']}/sow", headers=A,
@@ -1615,7 +1617,7 @@ _luj = (Path(__file__).parent.parent
         / "src/erp/frontend/app/09-clients.js").read_text(encoding="utf-8")
 ok("function lineupHtml(" in _luj and "data-efcap" in _luj
    and all(f'"{i}"' in _luj for i in ("ef-care", "ef-build", "ef-setup",
-                                      "ef-label"))
+                                      "ef-label", "ef-brand"))
    and "That adds up to" in _luj and 'id="ef-useadds"' in _luj,
    "the form asks for all five and says what they add up to — offering "
    "the arithmetic rather than typing it into a negotiated number")

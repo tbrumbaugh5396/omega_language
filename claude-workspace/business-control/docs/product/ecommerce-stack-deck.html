@@ -1617,9 +1617,10 @@ a{color:var(--ac2)}
  const XQ_BUILD=[
   {id:"none",nm:"No build — self-serve",once:0,note:"they configure it themselves"},
   {id:"setup",nm:"Guided setup",once:500,note:"import, config, launch checklist · 1 week"},
-  {id:"launch",nm:"Launch build",once:5000,note:"theme, brand tokens, sections, migration · 2 weeks"},
-  {id:"custom",nm:"Custom build",once:18000,note:"bespoke sections, motion, integrations · 6 weeks"},
-  {id:"flag",nm:"Flagship",once:40000,note:"brand + build + motion system · 10 weeks"}];
+  {id:"week",nm:"Week website",once:1500,note:"existing template, their content, up to 5 pages · 5 working days"},
+  {id:"custom",nm:"Custom build",once:5000,note:"template foundation, custom sections, a custom design pass · 4-6 weeks"},
+  {id:"custombrand",nm:"Custom build + Branding",once:18000,note:"from scratch, identity made alongside it · 8-16 weeks"},
+  {id:"brand",nm:"Branding & creative",once:6000,note:"identity, art direction, motion, campaign assets · 4-10 weeks"}];
  const XQ_STUDIO=[
   {id:"none",nm:"No Studio",mo:0,note:"—"},
   {id:"lite",nm:"Studio Lite",mo:750,note:"1 active request · refreshes · templates"},
@@ -2861,8 +2862,8 @@ const STUDIO_UI=[
   "Section customisation, seasonal refreshes, social and email templates, product photography treatment. For a brand that has an identity and needs it applied."],
  ["studio","Studio","$2,500/mo","#e01878","ONGOING",
   "Brand system, motion presets, campaign creative, landing pages, packaging support. The design team a growing brand can't yet hire."],
- ["flagship","Flagship","project · $40k+","#9888c0","PROJECT",
-  "Full brand build: identity, motif system, film, motion language, art direction — the Zenjoy-scale engagement. Ends in a Studio retainer."]];
+ ["brandcreative","Branding \u0026 creative","project · $6k-$40k","#9888c0","PROJECT",
+  "Identity, motif system, film, motion language, art direction — sold alongside any build rung, or on its own. Ends in a Studio retainer."]];
 let tierSel="pro";
 function renderTiers(){
  const host=document.getElementById("tier-board");if(!host)return;

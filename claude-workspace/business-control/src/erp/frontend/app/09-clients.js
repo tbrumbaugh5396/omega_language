@@ -731,16 +731,15 @@ function lineupHtml(e) {
             (e && e.label) || "", "/mo", "— none, our mark stays —")}
     </div>
     <div class="row2">
-      ${sel("ef-web", "Website", o.web || [], (e && e.web) || "",
+      ${sel("ef-build", "Build", o.builds || [], (e && e.build) || "",
             "+", "— none —")}
       ${sel("ef-brand", "Branding", o.brand || [], (e && e.brand) || "",
-            "+", "— none —")}
+            "+", "— none, or included in the rung above —")}
     </div>
     <div class="row2">
-      ${sel("ef-build", "Platform build", o.builds || [],
-            (e && e.build) || "", "", "— none —")}
       ${sel("ef-setup", "Setup", o.setups || [], (e && e.setup) || "",
             "", "— none —")}
+      <div></div>
     </div>
     <details class="sect" ${caps.size ? "open" : ""}>
       <summary>Capabilities <span class="dim">${caps.size
@@ -941,8 +940,6 @@ async function engForm(e) {
     if (stp) once += stp.price;
     // banded work counts at the bottom of its band — the figure a quote
     // starts from, not one it promises
-    const web = pick("ef-web", o.web || []);
-    if (web) once += web.price;
     const brd = pick("ef-brand", o.brand || []);
     if (brd) once += brd.price;
     $("#ef-adds").innerHTML = (mo || once)
@@ -955,7 +952,7 @@ async function engForm(e) {
       $("#ef-val").value = once || "";
     };
   };
-  ["ef-care", "ef-label", "ef-build", "ef-setup", "ef-web",
+  ["ef-care", "ef-label", "ef-build", "ef-setup",
    "ef-brand"].forEach((id) => {
     if ($("#" + id)) $("#" + id).onchange = adds;
   });
@@ -985,7 +982,6 @@ async function engForm(e) {
       build: ($("#ef-build") || {}).value || "",
       setup: ($("#ef-setup") || {}).value || "",
       label: ($("#ef-label") || {}).value || "",
-      web: ($("#ef-web") || {}).value || "",
       brand: ($("#ef-brand") || {}).value || "",
       approver_name: $("#ef-appr").value.trim(),
       approver_email: $("#ef-email").value.trim(),

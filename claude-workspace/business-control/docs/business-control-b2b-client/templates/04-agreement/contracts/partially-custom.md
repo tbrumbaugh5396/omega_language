@@ -1,4 +1,4 @@
-# Website Agreement — Partially Custom
+# Website Agreement — Custom Build
 
 > Starting point, not legal advice. See [common clauses](common-clauses.md).
 
