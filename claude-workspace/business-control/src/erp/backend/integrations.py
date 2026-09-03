@@ -104,9 +104,111 @@ CREATE TABLE IF NOT EXISTS integration_inbound (
 """
 
 
+CUSTOM_TABLE = """
+/* A connection this business declared for itself.
+
+   The registry below knows eight services because somebody sat down and
+   read eight sets of documentation. A business runs on more than eight,
+   and most of the rest are somebody's internal tool, a broker's portal, a
+   trends service — things with a URL and a key and no reason for us to
+   have heard of them. This table is that: the same connection card, the
+   same event list, the same log, declared by whoever needs it rather than
+   by whoever wrote this file. */
+CREATE TABLE IF NOT EXISTS custom_providers (
+  slug TEXT PRIMARY KEY,                   -- custom:<slug> in the log
+  label TEXT NOT NULL,
+  blurb TEXT DEFAULT '',
+  url TEXT DEFAULT '',                     -- where events are POSTed
+  auth_kind TEXT DEFAULT 'bearer',         -- bearer | header | query | none
+  auth_name TEXT DEFAULT '',               -- header or query parameter name
+  events TEXT DEFAULT '',                  -- comma separated, from EVENT_LABELS
+  inbound INTEGER DEFAULT 0,               -- may it push to us too?
+  created_at REAL NOT NULL
+);
+"""
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    con.executescript(CUSTOM_TABLE)
     con.commit()
+
+
+# Named starting points for connections we have not read the
+# documentation for. Neither publishes an API we can implement blind, and
+# guessing one is how an integration lies about what it sent — so these
+# are the generic connection with the name, the blurb and the events
+# already filled in, and a URL the business pastes from their own account.
+CUSTOM_SUGGESTIONS = [
+    {"slug": "glimpse", "label": "Glimpse",
+     "blurb": "Send what sells here into your trends workspace, so demand "
+              "you can see in the till meets demand somebody else can see "
+              "coming.",
+     "events": ["order.created", "order.paid"],
+     "hint": "Paste the webhook or ingest URL from your Glimpse workspace. "
+             "If they gave you a key, choose Bearer and paste it below."},
+    {"slug": "basemakers", "label": "Basemakers",
+     "blurb": "Tell the field team what the shelf is doing — low stock, "
+              "new orders — so a rep walks in already knowing.",
+     "events": ["order.created", "inventory.low"],
+     "hint": "Basemakers give you an endpoint per account. Paste it here, "
+             "and set the header name they told you to use."},
+]
+
+
+# ---------- connections a business declares for itself ----------
+
+def custom_all(con) -> list:
+    try:
+        rows = con.execute("SELECT * FROM custom_providers"
+                           " ORDER BY label").fetchall()
+    except Exception:                                        # noqa: BLE001
+        return []
+    return [dict(r) for r in rows]
+
+
+def custom_get(con, slug: str) -> dict | None:
+    r = con.execute("SELECT * FROM custom_providers WHERE slug=?",
+                    (slug,)).fetchone()
+    return dict(r) if r else None
+
+
+def custom_shape(con, row: dict) -> dict:
+    """A custom connection in the same shape the screen draws every other
+    one in, so one card renders both."""
+    name = "custom:" + row["slug"]
+    c = creds(con, name)
+    return {"name": name, "label": row["label"], "blurb": row["blurb"],
+            "custom": True, "auth": row["auth_kind"], "url": row["url"],
+            "connected": bool(c), "account": (c or {}).get("_account", ""),
+            "events": [e for e in (row["events"] or "").split(",") if e],
+            "inbound": bool(row["inbound"]),
+            "does": row["blurb"] or "Posts the events you tick to the URL "
+                                    "you gave, as JSON."}
+
+
+def custom_deliver(con, row: dict, event: str, d: dict) -> tuple:
+    """One shape for every declared connection: POST {event, at, data} to
+    the URL, authorised however the person said. No provider-specific
+    cleverness, because we have not read their documentation and pretending
+    otherwise is how an integration lies about what it sent."""
+    url = row["url"]
+    if not url.startswith("https://"):
+        return False, "the URL must be https"
+    c = creds(con, "custom:" + row["slug"]) or {}
+    secret = c.get("secret", "")
+    headers = {"Accept": "application/json"}
+    kind = row["auth_kind"]
+    if kind == "bearer" and secret:
+        headers["Authorization"] = f"Bearer {secret}"
+    elif kind == "header" and secret:
+        headers[row["auth_name"] or "X-API-Key"] = secret
+    elif kind == "query" and secret:
+        joiner = "&" if "?" in url else "?"
+        url = f"{url}{joiner}{row['auth_name'] or 'key'}=" \
+              f"{urllib.parse.quote(secret)}"
+    return _json_req(url, "POST", headers,
+                     {"event": event, "at": time.time(), "data": d})
 
 
 # ---------- the registry ----------
@@ -380,6 +482,10 @@ def log(con, name: str, event: str, ok: bool, detail: str = "") -> None:
         con.commit()
     except Exception:
         pass
+
+
+def custom_status(con) -> list:
+    return [custom_shape(con, r) for r in custom_all(con)]
 
 
 def status(con) -> dict:
@@ -706,6 +812,19 @@ def emit(event: str, payload: dict) -> None:
                 except Exception as e:                  # noqa: BLE001
                     ok, detail = False, str(e)[:200]
                 log(con, name, event, ok, detail)
+            # ...and the ones this business declared for itself, through
+            # the same loop and into the same log, because a connection
+            # nobody here wrote is still a connection that can be down.
+            for row in custom_all(con):
+                if event not in (row["events"] or "").split(","):
+                    continue
+                if not creds(con, "custom:" + row["slug"]):
+                    continue
+                try:
+                    ok, detail = custom_deliver(con, row, event, payload)
+                except Exception as e:                  # noqa: BLE001
+                    ok, detail = False, str(e)[:200]
+                log(con, "custom:" + row["slug"], event, ok, detail)
         except Exception:
             pass
         finally:

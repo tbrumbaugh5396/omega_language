@@ -81,6 +81,8 @@ const TABS = [
   // Work and dates, where the work is. The board is what everyone is
   // doing; the calendar is everything this business has a date for, laid
   // over each other for once.
+  { id: "hours", label: "Hours", icon: "clock", group: "Operate",
+    roles: ["admin", "employee", "teacher"] },
   { id: "board", label: "Board", icon: "list", group: "Operate",
     roles: ["admin", "employee", "teacher"] },
   { id: "calendar", label: "Calendar", icon: "calendar", group: "Operate",
@@ -344,7 +346,7 @@ async function render() {
     experiments: renderExperiments, analytics: renderAnalytics,
     docs: renderDocs, clients: renderClients,
     staff: renderStaff, events: renderEvents, customers: renderCustomers,
-    board: renderBoard, calendar: renderCalendar,
+    board: renderBoard, calendar: renderCalendar, hours: renderHours,
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,

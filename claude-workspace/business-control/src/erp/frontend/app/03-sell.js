@@ -576,6 +576,10 @@ function openKiosk(events, locked) {
       <option value="">regular shift</option>
       ${events.map((ev) => `<option value="${ev.id}">event: ${esc(ev.name)}</option>`).join("")}
     </select>` : ""}
+    <div class="k-ways">
+      <button class="btn alt sm" id="k-badge">Scan a badge</button>
+      <button class="btn alt sm" id="k-name">Name and password</button>
+    </div>
     <div class="pin-dots" id="k-dots"></div>
     <div class="pad">
       ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) =>
@@ -617,6 +621,68 @@ function openKiosk(events, locked) {
       dots();
     };
   });
+  /* Three ways in, because the people most likely to forget a PIN are the
+     people who work the fewest shifts. A badge is a scan, a name and
+     password is what they already have, and none of the three mints a
+     session — a tablet by the door records that somebody arrived and
+     nothing else. */
+  const kSay = (html) => { k.querySelector("#k-msg").innerHTML = html;
+    setTimeout(() => { const m = k.querySelector("#k-msg");
+      if (m) m.innerHTML = ""; }, 3600); };
+  const kSaid = (r) => kSay(r.action === "clock_in"
+    ? `<span class="pill ok" style="font-size:16px">Welcome, ${esc(r.name)}
+        ${r.event ? "— " + esc(r.event) : ""}</span>`
+    : `<span class="pill warn" style="font-size:16px">Bye ${esc(r.name)}
+        — ${r.hours}h logged</span>`);
+  const kEvent = () => {
+    const sel = k.querySelector("#k-event");
+    return sel && sel.value ? +sel.value : null;
+  };
+  k.querySelector("#k-badge").onclick = async () => {
+    try {
+      const code = await QRScan.scan({ title: "Scan your badge" });
+      if (!code) return;
+      kSaid(await api("/api/clock/badge",
+        { body: { token: code, event_id: kEvent() } }));
+    } catch (e) {
+      kSay(`<span class="pill bad" style="font-size:16px">${
+        esc(e.message)}</span>`);
+    }
+  };
+  k.querySelector("#k-name").onclick = () => {
+    const box = document.createElement("div");
+    box.className = "k-unlock";
+    box.innerHTML = `<div class="k-unlock-card">
+      <b>Clock in by name</b>
+      <p class="dim">The password you already use here. It starts your
+        shift and nothing else — no session is opened on this tablet.</p>
+      <input id="kn-name" placeholder="Your name" autocomplete="off">
+      <input id="kn-pw" type="password" placeholder="Password"
+        autocomplete="off">
+      <div class="k-unlock-acts">
+        <button class="btn alt" id="kn-cancel">Back</button>
+        <button class="btn" id="kn-go">Punch</button>
+      </div></div>`;
+    k.appendChild(box);
+    box.querySelector("#kn-name").focus();
+    box.querySelector("#kn-cancel").onclick = () => box.remove();
+    box.querySelector("#kn-go").onclick = async () => {
+      try {
+        const r = await api("/api/clock/name", { body: {
+          name: box.querySelector("#kn-name").value.trim(),
+          password: box.querySelector("#kn-pw").value,
+          event_id: kEvent() } });
+        box.remove();
+        kSaid(r);
+      } catch (e) {
+        box.querySelector(".dim").innerHTML =
+          `<span class="low">${esc(e.message)}</span>`;
+      }
+    };
+    box.querySelector("#kn-pw").onkeydown = (e) => {
+      if (e.key === "Enter") box.querySelector("#kn-go").click();
+    };
+  };
   k.querySelector("#k-exit").onclick = () => {
     if (!locked) { k.remove(); return; }
     kioskUnlock(k);
@@ -775,4 +841,202 @@ async function renderFeed() {
       btn.textContent = "Post"; }
   };
   wireRows({ post: posts }, renderFeed);
+}
+
+
+/* ---------- hours ----------
+   The clock records shifts; this is what payroll asks of them. One
+   fortnight, one person per row, with overtime split out and a signature
+   against the period rather than a flag on it. */
+let HRS_FROM = null;
+
+function fortnight(back) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));   // Monday
+  d.setDate(d.getDate() - 7 - 14 * (back || 0));     // last full fortnight
+  return d.getTime() / 1000;
+}
+
+async function renderHours() {
+  const from = HRS_FROM == null ? fortnight(0) : HRS_FROM;
+  const to = from + 14 * 86400;
+  const qs = `?from_ts=${from}&to_ts=${to}`;
+  const mine = await api(`/api/hours${qs}`);
+  const all = await api(`/api/hours/everyone${qs}`).catch(() => null);
+  const off = await api("/api/time-off").catch(() => null);
+  const day = (t) => new Date(t * 1000).toLocaleDateString(undefined,
+    { month: "short", day: "numeric" });
+  const clock = (t) => t ? new Date(t * 1000).toLocaleTimeString(undefined,
+    { hour: "2-digit", minute: "2-digit" }) : "—";
+  const person = (r) => `
+    <div class="card">
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(r.name)}</b>
+          <span class="dim">${esc(r.role)}${r.job ? " · " + esc(r.job) : ""}
+            · ${esc(r.employment || "employee")}</span></div>
+        <span class="dim">${r.regular_hours}h regular</span>
+        ${r.overtime_hours ? `<span class="pill warn">${r.overtime_hours}h
+          overtime</span>` : ""}
+        ${r.leave_hours ? `<span class="pill">${r.leave_hours}h leave</span>`
+          : ""}
+        <span class="pill ${r.approved ? "ok" : ""}">${r.approved
+          ? "approved by " + esc(r.approved.approved_by) : "not approved"}
+        </span>
+        <button class="btn ${r.approved ? "alt " : ""}sm"
+          data-hrappr="${r.user_id}:${r.approved ? 0 : 1}">${r.approved
+          ? "Reopen" : "Approve"}</button>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>day</th><th>in</th><th>out</th><th>hours</th>
+          <th>for</th><th></th></tr></thead>
+        <tbody>${r.shifts.map((sh) => `<tr${sh.open ? ' class="au-fail"' : ""}>
+          <td>${day(sh.clock_in)}</td><td>${clock(sh.clock_in)}</td>
+          <td>${sh.open ? '<span class="pill warn">still open</span>'
+            : clock(sh.clock_out)}</td>
+          <td>${sh.hours || "—"}</td>
+          <td class="dim">${esc(sh.event || "")}</td>
+          <td>${r.approved ? "" : `<button class="btn alt sm"
+            data-hrfix="${sh.id}:${sh.clock_in}:${sh.clock_out || 0}"
+            >Fix</button>`}</td>
+        </tr>`).join("") || '<tr><td colspan="6" class="dim">no shifts</td>'
+          + "</tr>"}</tbody></table></div>
+    </div>`;
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Hours</h2>
+        <p class="dim">${day(from)} – ${day(to - 1)}. Overtime is anything
+          past ${all ? all.overtime_after : mine.overtime_after} hours in a
+          week. Approving a period stores the numbers WITH the signature:
+          what was approved is what was seen.</p></div>
+      <div class="top-actions">
+        <button class="btn alt sm" id="hr-prev">&larr; earlier</button>
+        <button class="btn alt sm" id="hr-next">later &rarr;</button>
+        <button class="btn sm" id="hr-off">Ask for time off</button>
+      </div>
+    </div>
+    ${all ? `<div class="card">
+      <b>Everyone</b>
+      <span class="dim"> · ${all.totals.worked}h worked ·
+        ${all.totals.overtime}h overtime · ${all.totals.leave}h leave</span>
+    </div>
+    ${all.rows.map(person).join("")
+      || '<div class="card empty"><b>Nobody clocked in this period</b></div>'}`
+      : person({ ...mine, user_id: mine.user_id, name: mine.name,
+                 role: "you", approved: mine.approved })}
+    ${off ? `<h3>Time off</h3>
+      ${off.requests.length ? off.requests.map((r) => `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main"><b>${esc(r.who)} — ${esc(r.kind)}</b>
+            <span class="dim">${day(r.starts)} – ${day(r.ends)} ·
+              ${r.hours}h${r.note ? " · " + esc(r.note) : ""}</span></div>
+          <span class="pill ${r.state === "approved" ? "ok"
+            : r.state === "declined" ? "bad" : "warn"}">${esc(r.state)}${
+            r.decided_by ? " · " + esc(r.decided_by) : ""}</span>
+          ${off.office && r.state === "requested" ? `
+            <button class="btn sm" data-offok="${r.id}">Approve</button>
+            <button class="btn alt sm" data-offno="${r.id}">Decline</button>`
+            : ""}
+          ${r.user_id === off.me && r.state === "requested"
+            ? `<button class="btn alt sm" data-offcancel="${r.id}"
+                >Withdraw</button>` : ""}
+        </div></div>`).join("")
+        : '<div class="card empty"><b>Nothing booked</b><span class="dim">'
+          + 'Holiday, sick days and unpaid leave all land here, and approved '
+          + 'hours count toward the period.</span></div>'}` : ""}`;
+  $("#hr-prev").onclick = () => { HRS_FROM = from - 14 * 86400; renderHours(); };
+  $("#hr-next").onclick = () => { HRS_FROM = from + 14 * 86400; renderHours(); };
+  $("#hr-off").onclick = () => timeOffForm();
+  view().querySelectorAll("[data-hrappr]").forEach((b) => b.onclick =
+    async () => {
+      const [uid, on] = b.dataset.hrappr.split(":");
+      try {
+        await api("/api/hours/approve", { body: {
+          user_id: +uid, period_start: from, period_end: to,
+          approve: on === "1" } });
+        renderHours();
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-hrfix]").forEach((b) => b.onclick = () => {
+    const [sid, cin, cout] = b.dataset.hrfix.split(":");
+    shiftFixForm(+sid, +cin, +cout);
+  });
+  view().querySelectorAll("[data-offok],[data-offno],[data-offcancel]")
+    .forEach((b) => b.onclick = async () => {
+      const id = b.dataset.offok || b.dataset.offno || b.dataset.offcancel;
+      const state = b.dataset.offok ? "approved"
+        : b.dataset.offno ? "declined" : "cancelled";
+      try {
+        await api(`/api/time-off/${id}/decide`, { body: { state } });
+        renderHours();
+      } catch (err) { toast(err.message); }
+    });
+}
+
+/* Somebody forgets to clock out roughly once a week in any business with
+   a clock. A timesheet nobody can correct is one that gets corrected in a
+   spreadsheet instead, which is where payroll disputes come from. */
+function shiftFixForm(sid, cin, cout) {
+  const local = (t) => t ? new Date((t - new Date().getTimezoneOffset() * 60)
+    * 1000).toISOString().slice(0, 16) : "";
+  modal(`<h3>Correct this shift</h3>
+    <p class="dim">The change stands on the record. A period that has been
+      approved has to be reopened first, so a correction never happens
+      behind a signature.</p>
+    <div class="row2">
+      <div><label>Clocked in</label>
+        <input id="sf-in" type="datetime-local" value="${local(cin)}"></div>
+      <div><label>Clocked out <span class="opt">blank leaves it
+        open</span></label>
+        <input id="sf-out" type="datetime-local" value="${local(cout)}"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="sf-save">Save</button></div>`);
+  $("#sf-save").onclick = async () => {
+    const val = (id) => $(id).value
+      ? new Date($(id).value).getTime() / 1000 : 0;
+    try {
+      await api(`/api/hours/shift/${sid}`, { method: "PATCH", body: {
+        clock_in: val("#sf-in") || cin, clock_out: val("#sf-out") } });
+      closeModal(); renderHours();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+function timeOffForm() {
+  modal(`<h3>Ask for time off</h3>
+    <p class="dim">Approved hours count toward the period the same way
+      worked hours do — payroll pays both, and a screen that shows only one
+      is a screen that gets somebody underpaid.</p>
+    <div class="row2">
+      <div><label>What kind</label>
+        <select id="to-kind">
+          ${["holiday", "sick", "unpaid", "bereavement", "other"].map((k) =>
+            `<option>${k}</option>`).join("")}</select></div>
+      <div><label>Hours <span class="opt">blank counts 8 a day</span></label>
+        <input id="to-hours" type="number" min="0" step="0.5"></div>
+    </div>
+    <div class="row2">
+      <div><label>From</label><input id="to-from" type="date"></div>
+      <div><label>To</label><input id="to-to" type="date"></div>
+    </div>
+    <label>Anything they should know</label>
+    <input id="to-note" placeholder="optional">
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="to-save">Ask</button></div>`);
+  $("#to-save").onclick = async () => {
+    const d = (id) => $(id).value
+      ? new Date($(id).value + "T09:00").getTime() / 1000 : 0;
+    const starts = d("#to-from"), ends = d("#to-to") || starts;
+    if (!starts) return toast("pick the first day");
+    try {
+      await api("/api/time-off", { body: {
+        kind: $("#to-kind").value, starts, ends,
+        hours: +$("#to-hours").value || 0,
+        note: $("#to-note").value.trim() } });
+      closeModal(); toast("asked — somebody will answer it"); renderHours();
+    } catch (err) { toast(err.message); }
+  };
 }

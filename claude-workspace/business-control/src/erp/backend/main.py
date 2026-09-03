@@ -51,6 +51,8 @@ def _init_core(tid=None):
         _ak.init_tables(con)
         from . import tickets as _tk
         _tk.init_tables(con)
+        from . import timesheet as _ts
+        _ts.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -1478,6 +1480,43 @@ def clock_badge_punch(body: BadgeBody, con=Depends(get_con)):
     return _punch(con, emp, body.event_id)
 
 
+class ClockNameBody(BaseModel):
+    name: str
+    password: str = ""
+    event_id: int | None = None
+
+
+@app.post("/api/clock/name")
+def clock_by_name(body: ClockNameBody, con=Depends(get_con)):
+    """Punch with the name and password somebody already has.
+
+    A PIN is a second secret to remember, and the people most likely to
+    forget one are the people who work the fewest shifts. Their account
+    already has a password; on a shared tablet it should be enough to
+    start a shift with — it proves the same thing.
+
+    Unauthenticated for the same reason the keypad is, and it grants
+    nothing but the punch: no session is minted here, so a tablet by the
+    door cannot become a way into anybody's back office.
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "who is clocking in?")
+    emp = con.execute(
+        "SELECT * FROM users WHERE lower(name)=lower(?) AND active=1",
+        (name,)).fetchone()
+    if emp is None:
+        raise HTTPException(404, "no account with that name")
+    stored = emp["password_hash"] or ""
+    if stored:
+        if not auth.verify_password(stored, body.password or ""):
+            raise HTTPException(403, "that password does not match")
+    elif auth.passwords_required(CFG):
+        raise HTTPException(403, "that account has no password yet — set one "
+                                 "by signing in first, or use a PIN")
+    return _punch(con, emp, body.event_id)
+
+
 @app.post("/api/me/badge")
 def my_badge(reset: int = 0, user=Depends(current_user), con=Depends(get_con)):
     """Your own badge. Reset it if the old one is on a lanyard you lost."""
@@ -2757,7 +2796,93 @@ def integrations_status(user=Depends(admin_user), con=Depends(get_con)):
     apps = CFG.get("integration_apps") or {}
     for p in d["providers"]:
         p["app_ready"] = bool((apps.get(p["name"]) or {}).get("client_id"))
+    d["custom"] = integrations.custom_status(con)
+    d["event_labels"] = integrations.EVENT_LABELS
+    have = {x["name"] for x in d["custom"]}
+    d["suggestions"] = [x for x in integrations.CUSTOM_SUGGESTIONS
+                        if "custom:" + x["slug"] not in have]
     return d
+
+
+class CustomProviderBody(BaseModel):
+    slug: str = ""
+    label: str
+    blurb: str = ""
+    url: str = ""
+    auth_kind: str = "bearer"
+    auth_name: str = ""
+    events: list = []
+    inbound: bool = False
+    secret: str = ""
+
+
+@app.post("/api/admin/integrations/custom")
+def integrations_custom_save(body: CustomProviderBody,
+                             user=Depends(admin_user), con=Depends(get_con)):
+    """Declare a connection this business needs and we have never heard of.
+
+    Eight services are in the registry because somebody read eight sets of
+    documentation. A business runs on more than eight, and the rest are a
+    broker's portal, a trends service, somebody's internal tool. They all
+    have a URL and a key.
+    """
+    label = body.label.strip()[:60]
+    if not label:
+        raise HTTPException(400, "a connection needs a name")
+    import re as _re
+    slug = (body.slug or _re.sub(r"[^a-z0-9]+", "-",
+                                 label.lower())).strip("-")[:40]
+    if not slug:
+        raise HTTPException(400, "that name has no letters in it")
+    if body.url and not body.url.startswith("https://"):
+        raise HTTPException(400, "the URL must be https — a key sent over "
+                                 "plain http is a key you have given away")
+    if body.auth_kind not in ("bearer", "header", "query", "none"):
+        raise HTTPException(400, "unknown authorisation kind")
+    events = [e for e in body.events
+              if e in integrations.EVENT_LABELS][:20]
+    con.execute(
+        "INSERT INTO custom_providers(slug,label,blurb,url,auth_kind,"
+        " auth_name,events,inbound,created_at) VALUES(?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(slug) DO UPDATE SET label=excluded.label,"
+        " blurb=excluded.blurb, url=excluded.url,"
+        " auth_kind=excluded.auth_kind, auth_name=excluded.auth_name,"
+        " events=excluded.events, inbound=excluded.inbound",
+        (slug, label, body.blurb.strip()[:300], body.url.strip()[:400],
+         body.auth_kind, body.auth_name.strip()[:60], ",".join(events),
+         1 if body.inbound else 0, db.now()))
+    if body.secret.strip():
+        integrations.save(con, "custom:" + slug,
+                          {"secret": body.secret.strip()}, label)
+    con.commit()
+    return {"ok": True, "slug": slug}
+
+
+@app.delete("/api/admin/integrations/custom/{slug}")
+def integrations_custom_delete(slug: str, user=Depends(admin_user),
+                               con=Depends(get_con)):
+    con.execute("DELETE FROM custom_providers WHERE slug=?", (slug,))
+    integrations.disconnect(con, "custom:" + slug)
+    con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/integrations/custom/{slug}/test")
+def integrations_custom_test(slug: str, user=Depends(admin_user),
+                             con=Depends(get_con)):
+    """Send one real event to it. A connection that has never carried
+    anything is a guess, not a connection."""
+    row = integrations.custom_get(con, slug)
+    if row is None:
+        raise HTTPException(404, "no such connection")
+    ok, detail = integrations.custom_deliver(con, row, "test.ping", {
+        "message": "Business Control is connected.",
+        "business": CFG.get("brand_name", "Business Control")})
+    integrations.log(con, "custom:" + slug, "test.ping", ok, str(detail)[:200])
+    con.commit()
+    if not ok:
+        raise HTTPException(502, f"it did not accept that: {str(detail)[:160]}")
+    return {"ok": True}
 
 
 class ConnectBody(BaseModel):
@@ -3865,6 +3990,77 @@ def email_blast(body: BlastBody, user=Depends(admin_user),
 def game_view(user=Depends(admin_user), con=Depends(get_con)):
     return analytics.game(con, CFG)
 
+@app.get("/api/analytics/projection")
+def analytics_projection(months: int = 6, user=Depends(admin_user),
+                         con=Depends(get_con)):
+    """What the next few months look like if nothing changes.
+
+    Two different futures, added rather than blended, because they are
+    known with very different confidence:
+
+      * **Committed** — the monthly plans and care contracts already
+        signed. That money arrives unless somebody cancels, so it is not
+        a forecast at all; it is a subtraction from the unknown.
+      * **Trend** — one-off sales, projected from the last ninety days
+        with the recent weeks weighted heavier. Straight-line, and
+        labelled as such: a business with four months of history has no
+        seasonality to fit, and a curve drawn through noise is a curve
+        somebody will plan a hire around.
+
+    The number of months it is drawn from is returned with it, so a thin
+    history reads as thin rather than as a confident line.
+    """
+    months = max(1, min(24, months))
+    now = db.now()
+    day = 86400
+    # committed: what recurring rows say arrives every month
+    mrr = con.execute(
+        "SELECT COALESCE(SUM(price_cents),0) AS c FROM store_subscriptions"
+        " WHERE status='active' AND interval='month'").fetchone()["c"]
+    # trend: one-off order revenue, three 30-day windows, weighted
+    windows = []
+    for i in range(3):
+        a = now - (i + 1) * 30 * day
+        b = now - i * 30 * day
+        r = con.execute(
+            "SELECT COALESCE(SUM(total_cents),0) AS c, COUNT(*) AS n"
+            " FROM orders WHERE status!='cancelled'"
+            "  AND created_at>=? AND created_at<?", (a, b)).fetchone()
+        windows.append({"cents": r["c"], "orders": r["n"]})
+    weights = [3, 2, 1]
+    used = [(w, x) for w, x in zip(weights, windows) if x["orders"]]
+    one_off = (sum(w * x["cents"] for w, x in used) / sum(w for w, _ in used)
+               if used else 0)
+    first_order = con.execute(
+        "SELECT MIN(created_at) AS t FROM orders").fetchone()["t"] or now
+    history_days = max(0, int((now - first_order) / day))
+    # Calendar months, not thirty-day steps: stepping by 30 drifts, and a
+    # forecast table that prints December twice and skips February is one
+    # nobody will trust with the rest of its arithmetic.
+    lt = time.localtime(now)
+    y, mo = lt.tm_year, lt.tm_mon
+    rows = []
+    for _ in range(months):
+        mo += 1
+        if mo > 12:
+            mo, y = 1, y + 1
+        when = time.mktime((y, mo, 1, 0, 0, 0, 0, 0, -1))
+        rows.append({"month": f"{y:04d}-{mo:02d}", "at": when,
+                     "committed_cents": int(mrr),
+                     "trend_cents": int(one_off),
+                     "total_cents": int(mrr + one_off)})
+    return {"months": rows, "mrr_cents": int(mrr),
+            "one_off_cents": int(one_off),
+            "history_days": history_days,
+            "windows": windows,
+            "thin": history_days < 60 or not used,
+            "note": "Committed is what signed plans bill every month. Trend "
+                    "is a weighted average of the last three 30-day windows "
+                    "of one-off sales, projected flat — not a seasonal "
+                    "model, because there is not enough history here to fit "
+                    "one honestly."}
+
+
 @app.get("/api/analytics/regions")
 def region_analytics(days: int = 30, user=Depends(current_user),
                      con=Depends(get_con)):
@@ -4031,6 +4227,8 @@ from . import apikeys  # noqa: E402  (safe: included late)
 app.include_router(apikeys.router)
 from . import tickets  # noqa: E402  (safe: included late)
 app.include_router(tickets.router)
+from . import timesheet  # noqa: E402  (safe: included late)
+app.include_router(timesheet.router)
 
 
 @app.exception_handler(404)

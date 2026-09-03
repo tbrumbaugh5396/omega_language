@@ -336,9 +336,10 @@ async function renderExperiments() {
 // ---------- analytics ----------
 
 async function renderAnalytics() {
-  const [regions, funnel, engagement, pnl] = await Promise.all([
+  const [regions, funnel, engagement, pnl, proj] = await Promise.all([
     api("/api/analytics/regions"), api("/api/analytics/funnel"),
-    api("/api/analytics/engagement"), api("/api/analytics/pnl")]);
+    api("/api/analytics/engagement"), api("/api/analytics/pnl"),
+    api("/api/analytics/projection?months=6").catch(() => null)]);
   const maxV = Math.max(...funnel.steps.map((s) => s.visitors), 1);
   const maxD = Math.max(...engagement.daily.map((d) => d.total), 1);
   view().innerHTML = `
@@ -347,6 +348,36 @@ async function renderAnalytics() {
       ${engagement.alerts.map((a) => `<div><span class="pill bad">engagement
         falling off</span> <b>${esc(a.scope)}</b>: ${a.last_7} events this week
         vs ${a.prior_7} last week</div>`).join("")}</div>` : ""}
+    ${proj ? `<h3>Next six months</h3>
+    <div class="card">
+      <p class="dim">${esc(proj.note)}${proj.thin
+        ? " There are only " + proj.history_days + " days of orders behind "
+          + "this, so read the trend half as a placeholder rather than a "
+          + "forecast."
+        : ""}</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>month</th><th>committed</th><th>trend</th>
+          <th>total</th><th></th></tr></thead>
+        <tbody>${proj.months.map((m) => {
+          const top = Math.max(...proj.months.map((x) => x.total_cents), 1);
+          const w = (c) => Math.round(100 * c / top);
+          return `<tr>
+            <td>${esc(m.month)}</td>
+            <td>${money(m.committed_cents)}</td>
+            <td class="dim">${money(m.trend_cents)}</td>
+            <td><b>${money(m.total_cents)}</b></td>
+            <td style="min-width:140px">
+              <div class="proj-bar">
+                <span class="proj-fixed" style="width:${
+                  w(m.committed_cents)}%"></span>
+                <span class="proj-trend" style="width:${
+                  w(m.trend_cents)}%"></span>
+              </div></td></tr>`;
+        }).join("")}</tbody></table></div>
+      <p class="dim"><span class="proj-key proj-fixed"></span> committed —
+        signed plans and care <span class="proj-key proj-trend"></span>
+        trend — one-off sales, projected flat</p>
+    </div>` : ""}
     <h3>P&L</h3>
     <div class="card" style="max-width:520px">${pnlTable(pnl)}</div>
     <h3>By region</h3>

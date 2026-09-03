@@ -390,6 +390,19 @@ details.sect > .inner { padding: 0 14px 14px; }
   .cal-cell.out { display: none; }
 }
 
+/* two futures, added not blended: what is signed, and what is guessed */
+.proj-bar { display: flex; height: 10px; border-radius: 5px;
+  overflow: hidden; background: var(--panel2); }
+.proj-bar span { display: block; height: 10px; }
+.proj-fixed { background: var(--accent); }
+.proj-trend { background: color-mix(in srgb, var(--accent) 35%,
+  var(--panel2)); }
+.proj-key { display: inline-block; width: 10px; height: 10px;
+  border-radius: 3px; margin: 0 4px 0 10px; vertical-align: middle; }
+
+.k-ways { display: flex; gap: 8px; margin: 6px 0 2px; flex-wrap: wrap;
+  justify-content: center; }
+
 /* the way out of a locked kiosk, over the keypad it locks */
 .k-unlock { position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; background: rgba(20,22,29,.92); z-index: 5; }

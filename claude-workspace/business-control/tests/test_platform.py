@@ -468,6 +468,120 @@ ok(all(i["title"] != "Archive Probe Market" for i in
    "an archived event leaves the calendar too — putting something away "
    "that keeps turning up is not putting it away")
 
+# --- hours: what was worked, and who said so ---------------------------------
+_hw = c.post("/api/admin/users", headers=AA, json={
+    "name": "Hank Hours", "role": "employee", "pin": "5521"}).json()["id"]
+# Overtime is counted per WEEK, so the fixture has to sit inside one:
+# five nine-hour days from the Monday before last, which cannot straddle
+# a boundary whatever day the suite happens to run on.
+from erp.backend.timesheet import _week_start as _wks  # noqa: E402
+_wk = _wks(_now) - 7 * 86400
+import sqlite3 as _sq3
+_hcon = _sq3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+for _d in range(5):                                 # Mon-Fri, 45 hours
+    _st = _wk + _d * 86400 + 9 * 3600
+    _hcon.execute("INSERT INTO shifts(user_id, clock_in, clock_out)"
+                  " VALUES(?,?,?)", (_hw, _st, _st + 9 * 3600))
+_hcon.commit(); _hcon.close()
+_hr = c.get(f"/api/hours/everyone?from_ts={_wk}"
+            f"&to_ts={_wk + 14 * 86400}", headers=AA).json()
+_hrow = [r for r in _hr["rows"] if r["user_id"] == _hw][0]
+ok(_hrow["worked_hours"] == 45.0 and _hrow["overtime_hours"] == 5.0
+   and _hrow["regular_hours"] == 40.0,
+   "a week of nine-hour days is forty regular and five overtime — split "
+   "at the line the business sets, not at one baked into a payroll screen")
+_off = c.post("/api/time-off", headers=AA, json={
+    "kind": "holiday", "starts": _now + 86400, "ends": _now + 2 * 86400,
+    "user_id": _hw}).json()
+ok(_off["hours"] == 8, "a day of holiday is eight hours unless somebody "
+   "says otherwise")
+c.post(f"/api/time-off/{_off['id']}/decide", headers=AA,
+       json={"state": "approved"})
+_hr2 = c.get(f"/api/hours/everyone?from_ts={_wk}"
+             f"&to_ts={_wk + 14 * 86400}", headers=AA).json()
+_hrow2 = [r for r in _hr2["rows"] if r["user_id"] == _hw][0]
+ok(_hrow2["leave_hours"] == 8 and _hrow2["paid_hours"] == 53.0,
+   "and approved leave lands in the same total as worked hours, because "
+   "payroll pays both and a screen showing one gets somebody underpaid")
+_ap = c.post("/api/hours/approve", headers=AA, json={
+    "user_id": _hw, "period_start": _wk,
+    "period_end": _wk + 14 * 86400}).json()
+ok(_ap["approved"],
+   "a period can be signed off, and the numbers are stored WITH the "
+   "signature — what was approved is what was seen, not what the shifts "
+   "happen to say later")
+_shid = _hrow["shifts"][0]["id"]
+ok(c.patch(f"/api/hours/shift/{_shid}", headers=AA,
+           json={"clock_out": _now}).status_code == 400,
+   "and an approved period refuses a correction until it is reopened, so "
+   "nothing is changed behind a signature")
+c.post("/api/hours/approve", headers=AA, json={
+    "user_id": _hw, "period_start": _wk,
+    "period_end": _wk + 14 * 86400, "approve": False})
+ok(c.patch(f"/api/hours/shift/{_shid}", headers=AA,
+           json={"clock_out": _hrow["shifts"][0]["clock_in"] + 3600}
+           ).status_code == 200,
+   "reopened, it can be fixed — somebody forgets to clock out about once "
+   "a week, and a timesheet nobody can correct gets corrected in a "
+   "spreadsheet instead")
+_hcust = c.post("/api/login", headers=HA,
+                json={"name": "Hours Onlooker"}).json()
+_HO = {"Authorization": f"Bearer {_hcust['token']}", **HA}
+ok(c.get("/api/hours/everyone", headers=_HO).status_code == 403
+   and c.get("/api/hours", headers=_HO).status_code == 200,
+   "everybody sees their own; somebody else's hours need the office")
+
+# --- the kiosk takes three answers -------------------------------------------
+ok(c.post("/api/clock/name", headers=HA,
+          json={"name": "Hank Hours"}).status_code in (200, 403)
+   and c.post("/api/clock/name", headers=HA,
+              json={"name": "Nobody At All"}).status_code == 404,
+   "a tablet by the door takes a name and password as well as a PIN — the "
+   "people most likely to forget a PIN work the fewest shifts")
+_kjs = ops_app_js()
+ok('id="k-badge"' in _kjs and 'id="k-name"' in _kjs
+   and "/api/clock/name" in _kjs and "/api/clock/badge" in _kjs,
+   "and the kiosk offers all three: keypad, badge scan, name and password")
+
+# --- connections a business declares for itself ------------------------------
+_ig = c.post("/api/admin/integrations/custom", headers=AA, json={
+    "label": "Glimpse", "url": "https://ingest.glimpse.test/hook",
+    "auth_kind": "bearer", "secret": "sk-test",
+    "events": ["order.created", "order.paid"]}).json()
+ok(_ig["ok"] and _ig["slug"] == "glimpse",
+   "a business can declare a connection nobody here has heard of — eight "
+   "services are in the registry because somebody read eight sets of "
+   "documentation, and a business runs on more than eight")
+_igs = c.get("/api/admin/integrations", headers=AA).json()
+ok(any(x["name"] == "custom:glimpse" and x["connected"]
+       for x in _igs["custom"])
+   and all(s["slug"] != "glimpse" for s in _igs["suggestions"])
+   and any(s["slug"] == "basemakers" for s in _igs["suggestions"]),
+   "it joins the same screen, and stops being offered as a suggestion once "
+   "it exists")
+ok(c.post("/api/admin/integrations/custom", headers=AA, json={
+    "label": "Plain HTTP", "url": "http://not.secure.test"}
+    ).status_code == 400,
+   "and its URL must be https — a key sent over plain http is a key you "
+   "have given away")
+ok(any(p["name"] == "quickbooks" for p in _igs["providers"]),
+   "QuickBooks was already here, posting paid orders as sales receipts")
+
+# --- what the next six months look like --------------------------------------
+_pj = c.get("/api/analytics/projection?months=6", headers=AA).json()
+ok(len(_pj["months"]) == 6
+   and all(m["total_cents"] == m["committed_cents"] + m["trend_cents"]
+           for m in _pj["months"]),
+   "the projection adds two futures rather than blending them: what is "
+   "signed, and what is guessed")
+ok(len({m["month"] for m in _pj["months"]}) == 6,
+   "six DIFFERENT months — stepping by thirty days prints December twice "
+   "and skips February, and a forecast that cannot count months is one "
+   "nobody trusts with the rest of its arithmetic")
+ok("thin" in _pj and "history_days" in _pj,
+   "and it says how much history is behind it, so a thin one reads as "
+   "thin rather than as a confident line")
+
 # --- one product, one palette ------------------------------------------------
 _opsh = c.get("/ops", headers=HA).text
 ok("--brand:" in _opsh and "<style>:root{" in _opsh,

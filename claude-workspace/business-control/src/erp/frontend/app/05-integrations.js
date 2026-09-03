@@ -4,6 +4,74 @@
    this way a new integration appears here the day it's added to the
    registry, with the right form and the right explanation. */
 
+/* A connection this business declares for itself: a name, a URL, how the
+   key is carried, and which events go down it. No provider-specific
+   cleverness — we have not read their documentation, and pretending
+   otherwise is how an integration lies about what it sent. */
+function customIntegrationForm(cur, labels, seed) {
+  const on = new Set((cur && cur.events)
+    || (seed && seed.events) || []);
+  modal(`<h3>${cur ? "Edit " + esc(cur.label)
+    : seed ? esc(seed.label) : "A connection of your own"}</h3>
+    ${seed ? `<p class="dim">${esc(seed.hint)}</p>` : ""}
+    <label>Name <span class="req">required</span></label>
+    <input id="ic-label" value="${esc((cur && cur.label)
+      || (seed && seed.label) || "")}">
+    <label>What it is for</label>
+    <input id="ic-blurb" value="${esc((cur && cur.blurb)
+      || (seed && seed.blurb) || "")}">
+    <label>URL <span class="opt">https only — a key sent over plain http is
+      a key you have given away</span></label>
+    <input id="ic-url" placeholder="https://…" value="${esc((cur && cur.url)
+      || "")}">
+    <div class="row2">
+      <div><label>How the key travels</label>
+        <select id="ic-auth">
+          ${["bearer", "header", "query", "none"].map((k) =>
+            `<option value="${k}" ${cur && cur.auth === k ? "selected" : ""}>${
+              { bearer: "Authorization: Bearer …",
+                header: "a header of their choosing",
+                query: "a query parameter",
+                none: "no key at all" }[k]}</option>`).join("")}</select></div>
+      <div><label>Header or parameter name</label>
+        <input id="ic-authname" placeholder="X-API-Key"></div>
+    </div>
+    <label>Key <span class="opt">${cur && cur.connected
+      ? "stored — leave blank to keep it" : "stored, never shown again"}</span>
+    </label>
+    <input id="ic-secret" type="password" autocomplete="off">
+    <label>Send it these</label>
+    <div class="cap-grid">
+      ${Object.entries(labels || {}).map(([k, label]) => `
+        <label class="perm"><input type="checkbox" data-icev value="${esc(k)}"
+          ${on.has(k) ? "checked" : ""}>
+          <span><b>${esc(k)}</b><small>${esc(label)}</small></span></label>`)
+        .join("")}
+    </div>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="ic-save">Save</button>
+    </div>`);
+  $("#ic-save").onclick = async () => {
+    const body = {
+      slug: cur ? cur.name.slice(7) : (seed ? seed.slug : ""),
+      label: $("#ic-label").value.trim(),
+      blurb: $("#ic-blurb").value.trim(),
+      url: $("#ic-url").value.trim(),
+      auth_kind: $("#ic-auth").value,
+      auth_name: $("#ic-authname").value.trim(),
+      secret: $("#ic-secret").value,
+      events: [...document.querySelectorAll("[data-icev]:checked")]
+        .map((b) => b.value),
+    };
+    if (!body.label) return toast("a connection needs a name");
+    try {
+      await api("/api/admin/integrations/custom", { body });
+      closeModal(); renderIntegrations();
+    } catch (err) { toast(err.message); }
+  };
+}
+
 async function renderIntegrations() {
   const d = await api("/api/admin/integrations");
   const keys = await api("/api/admin/api-keys").catch(() => null);
@@ -82,6 +150,42 @@ async function renderIntegrations() {
       : '<p class="dim">No keys yet — mint one and hand your scripts a door of their own.</p>'}
     </div>` : ""}
     ${d.providers.map(card).join("")}
+
+    <div class="page-head" style="margin-top:18px">
+      <div><h3>Your own connections</h3>
+        <p class="dim">Eight services are here because somebody read eight
+          sets of documentation. A business runs on more than eight — a
+          broker's portal, a trends service, somebody's internal tool — and
+          they all have a URL and a key. Declare one and it joins the same
+          event list and the same log.</p></div>
+      <button class="btn sm" id="ig-custom-new">Add a connection</button>
+    </div>
+    ${(d.suggestions || []).length ? `<div class="card">
+      <b>Ready to fill in</b>
+      <p class="dim">We have not read their documentation, so these are
+        the ordinary connection with the name and the events already
+        chosen — paste the URL from your own account.</p>
+      <div class="chips">${d.suggestions.map((sg) =>
+        `<button class="btn alt sm" data-igsuggest="${esc(sg.slug)}">${
+          esc(sg.label)}</button>`).join("")}</div>
+    </div>` : ""}
+    ${(d.custom || []).map((p) => `<div class="card intg">
+      <div class="doc-top">
+        <div class="doc-main"><b>${esc(p.label)}</b>
+          <span class="dim">${esc(p.blurb)}</span></div>
+        <span class="pill ${p.connected ? "ok" : ""}">${p.connected
+          ? "connected" : "no key"}</span>
+        <button class="btn alt sm" data-igctest="${esc(p.name.slice(7))}"
+          >Send a test</button>
+        <button class="btn alt sm" data-igcedit="${esc(p.name.slice(7))}"
+          >Edit</button>
+        <button class="btn alt sm" data-igcdel="${esc(p.name.slice(7))}"
+          >Remove</button>
+      </div>
+      <p class="dim intg-does">${esc(p.url || "no URL yet")}</p>
+      ${p.events.length ? `<p class="dim intg-when">Fires when
+        ${p.events.map(esc).join(", ")}.</p>` : ""}
+    </div>`).join("")}
     ${d.log.length ? `<h3>Recent activity</h3>
       <div class="card"><div class="tablewrap"><table>
         <thead><tr><th>when</th><th>which</th><th>event</th><th>result</th>
@@ -173,6 +277,34 @@ async function renderIntegrations() {
     } catch (e) { toast(e.message); }
     finally { b.disabled = false; b.removeAttribute("aria-busy"); }
   });
+  if ($("#ig-custom-new"))
+    $("#ig-custom-new").onclick = () =>
+      customIntegrationForm(null, d.event_labels, null);
+  view().querySelectorAll("[data-igsuggest]").forEach((b) => b.onclick = () =>
+    customIntegrationForm(null, d.event_labels,
+      (d.suggestions || []).find((x) => x.slug === b.dataset.igsuggest)));
+  view().querySelectorAll("[data-igcedit]").forEach((b) => b.onclick = () =>
+    customIntegrationForm(
+      (d.custom || []).find((x) => x.name === "custom:" + b.dataset.igcedit),
+      d.event_labels, null));
+  view().querySelectorAll("[data-igctest]").forEach((b) => b.onclick =
+    async () => {
+      try {
+        await api(`/api/admin/integrations/custom/${b.dataset.igctest}/test`,
+                  { body: {} });
+        toast("it took the test event");
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-igcdel]").forEach((b) => b.onclick =
+    async () => {
+      if (!confirm("Remove this connection?\n\nIts key goes with it; the "
+        + "log of what it carried stays.")) return;
+      try {
+        await api(`/api/admin/integrations/custom/${b.dataset.igcdel}`,
+                  { method: "DELETE" });
+        renderIntegrations();
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-igtest]").forEach((b) => b.onclick = async () => {
     b.disabled = true; b.setAttribute("aria-busy", "true");
     try {
