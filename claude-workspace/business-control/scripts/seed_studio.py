@@ -352,6 +352,16 @@ def process_sections() -> list:
 
 # --- products -------------------------------------------------------------
 
+def _cap_ids() -> list:
+    """Capability ids with their names — the same map the ERP prices
+    grants from, so a bundle names its capabilities the way every other
+    surface does."""
+    import sys
+    sys.path.insert(0, str(ROOT / "src"))
+    from storefront.backend.engagements import _cap_catalog
+    return _cap_catalog()
+
+
 def products() -> list:
     """What is buyable. The plans and the care plans, priced from the book;
     the bigger builds are quoted, because pretending a $40,000 engagement is
@@ -369,6 +379,30 @@ def products() -> list:
                 f"{t['email']} emails a month. {lead}{covers}. Billed "
                 f"monthly, cancel monthly. Support and maintenance is "
                 f"quoted separately.",
+        })
+    # The worked examples, buyable. Each is a real capability set at a
+    # price the book already computes — the count, the sum, the volume
+    # discount and the nonprofit cut are all in §13. A shop that shows
+    # them in a table and cannot sell them is a menu with no waiter.
+    cap_by_id = {c["id"]: c for c in _cap_ids()}
+    for b in pb.bundles():
+        names = [cap_by_id[i]["name"] for i in b["cap_ids"] if i in cap_by_id]
+        out.append({
+            "sku": "BUNDLE-" + b["name"].upper().replace(" + ", "-")
+                   .replace(" ", "-")[:16],
+            "name": b["name"], "kind": "bundle", "billing": "month",
+            "category": "Bundles",
+            "price_cents": int(round(b["monthly"] * 100)),
+            "caps": ",".join(b["cap_ids"]),
+            "description":
+                f"{b['count']} capabilities for a business shaped like "
+                f"this one: {', '.join(names)}. "
+                f"${b['sum']} at the menu, {b['volume']} for taking "
+                f"{b['count']} of them"
+                + (f", {b['other']}" if b["other"] not in ("—", "-", "")
+                   else "")
+                + f" — ${b['monthly']:,.2f} a month. Support and "
+                  f"maintenance is the second half of the bill.",
         })
     for c in pb.care_plans():
         out.append({
@@ -608,6 +642,11 @@ def seed(con, force: bool) -> dict:
         con.execute("INSERT OR REPLACE INTO store_product_meta"
                     "(product_id,k,v) VALUES(?,'kind',?)",
                     (pid, p.get("kind", "goods")))
+        # A bundle IS its capability set — carried on the product so the
+        # shop can say what is in it and a stand-up can grant exactly it.
+        con.execute("INSERT OR REPLACE INTO store_product_meta"
+                    "(product_id,k,v) VALUES(?,'caps',?)",
+                    (pid, p.get("caps", "")))
         n["products"] += 1
 
     # A tier renamed in the book leaves its old row behind — 'Starter plan'
@@ -619,7 +658,8 @@ def seed(con, force: bool) -> dict:
     stale = [r[0] for r in con.execute(
         "SELECT sku FROM products WHERE active=1 AND ("
         " sku LIKE 'PLAN-%' OR sku LIKE 'CARE-%' OR sku LIKE 'BUILD-%'"
-        " OR sku LIKE 'WL-%' OR sku LIKE 'WEB-%')").fetchall()
+        " OR sku LIKE 'WL-%' OR sku LIKE 'WEB-%'"
+        " OR sku LIKE 'BUNDLE-%')").fetchall()
         if r[0] not in mine]
     for sku in stale:
         con.execute("UPDATE products SET active=0 WHERE sku=?", (sku,))

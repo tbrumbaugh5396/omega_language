@@ -200,6 +200,8 @@ CREATE TABLE IF NOT EXISTS store_subscriptions (
 PRODUCT_KINDS = (
     {"id": "plan", "label": "Plans", "colour": "#4634d9",
      "note": "the platform, billed every month"},
+    {"id": "bundle", "label": "Bundles", "colour": "#0f766e",
+     "note": "a business shape, priced as one"},
     {"id": "care", "label": "Care", "colour": "#0d8f7a",
      "note": "support and maintenance — the other half of the bill"},
     {"id": "build", "label": "Builds", "colour": "#b8431f",
@@ -993,6 +995,9 @@ def catalog(con=Depends(get_con)):
         p["quote"] = md.get("quote", "") == "1"
         # what it IS: the group it sits in and the colour it wears
         p["kind"] = kind_of(md)
+        # What a bundle IS: the capabilities it turns on. Ids, because a
+        # grant is made of ids — the names are for reading.
+        p["caps"] = [x for x in (md.get("caps", "") or "").split(",") if x]
         p["kind_label"] = KIND_BY_ID[p["kind"]]["label"]
         if not p["colour"]:
             p["colour"] = KIND_BY_ID[p["kind"]]["colour"]

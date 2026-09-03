@@ -845,6 +845,11 @@ async function engForm(e) {
             ${esc(t.name)} — \$${t.price}/mo · ${esc(t.locations)}
             location${t.locations === "1" ? "" : "s"} ·
             ${esc(t.seats)} seats</option>`).join("")}
+          ${(ENG_OFFER && ENG_OFFER.bundles || []).map((b) => `
+            <option value="${esc(b.name)}"
+              ${e && e.package === b.name ? "selected" : ""}>
+              ${esc(b.name)} — \$${b.monthly.toFixed(2)}/mo ·
+              ${b.count} capabilities</option>`).join("")}
           ${e && e.package && !ENG_TIERS.some((t) =>
               pkgMatches(e.package, t.name))
             ? `<option value="${esc(e.package)}" selected>
@@ -924,9 +929,12 @@ async function engForm(e) {
     const pick = (id, rows) => rows.find(
       (r) => r.name === ($("#" + id) || {}).value);
     const tier = ENG_TIERS.find((t) => t.name === $("#ef-pkg").value);
+    const bundle = (o.bundles || []).find(
+      (b) => b.name === $("#ef-pkg").value);
     const picked = [...document.querySelectorAll("[data-efcap]:checked")];
     let mo = 0, once = 0;
     if (tier) mo += tier.price;
+    else if (bundle) mo += bundle.monthly;
     else if (picked.length)
       mo += (o.core_price || 0)
         + picked.reduce((a, b) => a + (+b.dataset.price || 0), 0);
@@ -968,6 +976,16 @@ async function engForm(e) {
     // already typed is never overwritten.
     const t = ENG_TIERS.find((x) => x.name === $("#ef-pkg").value);
     if (t && !$("#ef-mon").value) $("#ef-mon").value = t.price;
+    // picking a bundle also ticks the capabilities it IS, so the grant
+    // at stand-up is the set that was sold rather than a re-guess
+    const b = (ENG_OFFER && ENG_OFFER.bundles || []).find(
+      (x) => x.name === $("#ef-pkg").value);
+    if (b) {
+      if (!$("#ef-mon").value) $("#ef-mon").value = b.monthly.toFixed(2);
+      document.querySelectorAll("[data-efcap]").forEach((c) => {
+        c.checked = b.cap_ids.includes(c.value);
+      });
+    }
     adds();
   };
   $("#ef-save").onclick = async () => {

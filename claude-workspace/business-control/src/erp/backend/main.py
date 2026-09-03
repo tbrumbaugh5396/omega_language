@@ -689,7 +689,7 @@ def products(con=Depends(get_con)):
     ).fetchall()
     meta: dict = {}
     for m in con.execute("SELECT product_id, k, v FROM store_product_meta"
-                         " WHERE k IN ('kind','colour','quote')").fetchall():
+                         " WHERE k IN ('kind','colour','quote','caps')").fetchall():
         meta.setdefault(m["product_id"], {})[m["k"]] = m["v"]
     out = []
     for r in rows:
@@ -699,6 +699,7 @@ def products(con=Depends(get_con)):
         p["kind_label"] = KIND_BY_ID[p["kind"]]["label"]
         p["colour"] = md.get("colour") or KIND_BY_ID[p["kind"]]["colour"]
         p["quote"] = md.get("quote", "") == "1"
+        p["caps"] = [x for x in (md.get("caps", "") or "").split(",") if x]
         out.append(p)
     # In the shelf's order, not the alphabet's: what you run on, what keeps
     # it running, then the work that builds it. The shop reads the same

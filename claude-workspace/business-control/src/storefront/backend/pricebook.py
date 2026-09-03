@@ -193,6 +193,19 @@ def bundles() -> list:
                     "monthly": float(m.group(6).replace(",", ""))})
     if not out:
         raise ValueError("price book: the bundle table did not parse")
+    # ...and which capabilities each one IS. A count is not a set: a
+    # bundle that says twelve without naming them cannot be bought,
+    # granted or checked against its own arithmetic.
+    ids = {}
+    for m in re.finditer(r"^\| ([A-Z][^|]+?) \| `([^`]+)` \|", src, re.M):
+        ids[m.group(1).strip()] = [x.strip() for x in
+                                   m.group(2).split(",") if x.strip()]
+    for b in out:
+        b["cap_ids"] = ids.get(b["name"], [])
+        if len(b["cap_ids"]) != b["count"]:
+            raise ValueError(
+                f"price book: bundle '{b['name']}' says {b['count']} "
+                f"capabilities and lists {len(b['cap_ids'])}")
     return out
 
 

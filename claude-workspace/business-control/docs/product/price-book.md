@@ -412,6 +412,22 @@ wrong, the band assignment is wrong, not the bundle.
 | Food bank | 10 | $300 | −25% | 30% nonprofit | **$192.50** |
 | Commerce + course | 10 | $340 | −25% | — | **$305.00** |
 
+And *which* capabilities, because a count is not a set. A bundle that says
+twelve without naming them cannot be bought, granted or checked — the shop
+would be selling a number.
+
+| Bundle | Capability ids |
+|---|---|
+| Food brand | `selling, payments, inventory, warehouse, distribution, workforce, events, comms, crm, marketing, intelligence, subs` |
+| Course business | `selling, payments, learning, workforce, comms, crm, marketing, intelligence` |
+| Language nonprofit | `learning, fundraising, payments, workforce, events, comms, crm, intelligence` |
+| Food bank | `inventory, warehouse, distribution, fundraising, payments, workforce, events, comms, crm, intelligence` |
+| Commerce + course | `selling, payments, learning, inventory, workforce, comms, crm, marketing, intelligence, subs` |
+
+Each set must reproduce its own row above: the count is the length of the
+list and the sum is the list priced at the bands. If they disagree the
+bundle is wrong, not the arithmetic.
+
 Add Part 2 on top. A commerce + course client on a Standard care plan bills
 **$655/month** — $305 platform, $350 support.
 

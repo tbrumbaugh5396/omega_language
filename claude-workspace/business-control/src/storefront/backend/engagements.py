@@ -686,11 +686,13 @@ def offer_catalogue() -> dict:
     capability menu. The client form and the quote bench pick from the
     same list, so a client cannot be recorded as buying something the
     business does not sell."""
-    out = {"tiers": [], "care": [], "builds": [], "setups": [],
-           "labels": [], "caps": [], "core_price": 0, "brand": []}
+    out = {"tiers": [], "bundles": [], "care": [], "builds": [],
+           "setups": [], "labels": [], "caps": [], "core_price": 0,
+           "brand": []}
     try:
         from . import pricebook as pb
         out["tiers"] = pb.tiers()
+        out["bundles"] = pb.bundles()
         out["care"] = pb.care_plans()
         allb = pb.builds()
         # one ladder: the way in, the rungs, and the identity work that
@@ -725,9 +727,15 @@ def lineup_price(e) -> dict:
     monthly = one_time = 0
     tier = next((t for t in o["tiers"] if t["name"] == (e["package"] or "")),
                 None)
+    bundle = next((b for b in o["bundles"]
+                   if b["name"] == (e["package"] or "")), None)
     caps = [c for c in (e["caps"] or "").split(",") if c]
     if tier:
         monthly += tier["price"]
+    elif bundle:
+        # a bundle is a price the book already computed — the volume
+        # discount and the nonprofit cut are inside it
+        monthly += bundle["monthly"]
     elif caps:
         by_id = {c["id"]: c for c in o["caps"]}
         monthly += o["core_price"] + sum(

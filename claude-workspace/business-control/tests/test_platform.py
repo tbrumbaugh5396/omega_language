@@ -231,6 +231,20 @@ ok(_wl["Unbranded"]["price"] == 50 and _wl["Branded install"]["setup"] == 500
    "the white-label ladder parses out of the book too — it is sold, so it "
    "is priced from the same table as everything else")
 _bk = {b["name"]: b["price"] for b in _pb.builds()}
+_bun = {b["name"]: b for b in _pb.bundles()}
+ok(all(len(b["cap_ids"]) == b["count"] for b in _bun.values())
+   and _bun["Food brand"]["cap_ids"][0] == "selling"
+   and len(_bun) == 5,
+   "a bundle names its capabilities, not just how many — a count cannot "
+   "be bought, granted or checked, and the parser refuses a set whose "
+   "length disagrees with its own row")
+from storefront.backend.engagements import _cap_catalog as _cc  # noqa: E402
+_capp = {c["id"]: c["price"] for c in _cc()}
+ok(all(sum(_capp[i] for i in b["cap_ids"]) == b["sum"]
+       for b in _bun.values()),
+   "and each set reproduces its own row: priced at the bands it comes to "
+   "exactly the sum the bundle claims, so a mis-set bundle is caught by "
+   "the book rather than by a client")
 ok(_bk["Guided setup"] == 500 and _bk["Week website"] == 1500
    and _bk["Custom build"] == 5000
    and _bk["Custom build + Branding & creative"] == 18000
@@ -290,7 +304,7 @@ ok(_kinds["Basic plan"] == "plan" and _kinds["Priority care"] == "care"
    "licence is five businesses on one page unless the page sorts them")
 _kl = c.get("/api/store/catalog", headers=HA).json()["kinds"]
 ok([k["id"] for k in _kl if k["id"] != "goods"]
-   == ["plan", "care", "build", "brand", "setup", "label"]
+   == ["plan", "bundle", "care", "build", "brand", "setup", "label"]
    and len({k["colour"] for k in _kl}) == len(_kl),
    "the shelf's kinds come back in one order with one colour each, from "
    "the server — so the shop and the back office cannot group or tint the "
@@ -298,6 +312,18 @@ ok([k["id"] for k in _kl if k["id"] != "goods"]
 ok(_names["Guided setup"]["colour"] != _names["Custom build"]["colour"],
    "and standing an install up is not the first rung of a build ladder: "
    "different kind, different colour")
+ok(all(f"{n}" in _names for n in ("Food brand", "Course business",
+                                  "Language nonprofit", "Food bank",
+                                  "Commerce + course")),
+   "and the five worked examples are BUYABLE — a shop that shows a "
+   "bundle in a table and cannot sell it is a menu with no waiter")
+ok(_names["Food brand"]["billing"] == "month"
+   and _names["Food brand"]["price_cents"] == 33500
+   and len(_names["Food brand"]["caps"]) == 12
+   and "selling" in _names["Food brand"]["caps"]
+   and _names["Food brand"]["kind"] == "bundle",
+   "each one bills monthly at the book's computed price and carries the "
+   "capability set it IS, in ids — so what was sold is what gets granted")
 ok("Starter plan" not in _names,
    "and a tier renamed in the book does not leave its old row for sale "
    "beside the new one — the seed retires what it no longer writes")
