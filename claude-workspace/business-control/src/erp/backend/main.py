@@ -49,6 +49,8 @@ def _init_core(tid=None):
         nutrition.init_tables(con)
         from . import apikeys as _ak
         _ak.init_tables(con)
+        from . import tickets as _tk
+        _tk.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -4027,6 +4029,8 @@ from . import people  # noqa: E402  (safe: included late)
 app.include_router(people.router)
 from . import apikeys  # noqa: E402  (safe: included late)
 app.include_router(apikeys.router)
+from . import tickets  # noqa: E402  (safe: included late)
+app.include_router(tickets.router)
 
 
 @app.exception_handler(404)

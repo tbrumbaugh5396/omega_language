@@ -339,6 +339,57 @@ details.sect > .inner { padding: 0 14px 14px; }
 /* ---------- confetti ---------- */
 #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 70; }
 
+/* ---------- the board ---------- */
+.board { display: grid; gap: 12px; align-items: start;
+  grid-template-columns: repeat(5, minmax(200px, 1fr)); }
+.board-col { background: var(--panel2); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 10px; min-height: 90px; }
+.board-head { font-weight: 600; font-size: 13px; letter-spacing: .02em;
+  display: flex; justify-content: space-between; margin-bottom: 8px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.tk { background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: var(--r-sm);
+  padding: 9px 10px; margin-bottom: 8px; cursor: pointer;
+  transition: border-color .15s, transform .12s; }
+.tk:hover { transform: translateY(-1px); border-color: var(--accent); }
+.tk-late { border-left-color: var(--bad); }
+.tk-title { font-weight: 600; font-size: 14px; line-height: 1.35; }
+.tk-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin-top: 6px; font-size: 11.5px; }
+@media (max-width: 900px) {
+  .board { grid-template-columns: 1fr; }
+}
+
+/* ---------- the calendar ---------- */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-w { font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--dim); padding: 4px 2px; }
+.cal-cell { background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-sm); min-height: 96px; padding: 6px; }
+.cal-cell.out { background: transparent; border-color: transparent; }
+.cal-today { border-color: var(--accent); box-shadow: 0 0 0 2px
+  color-mix(in srgb, var(--accent) 22%, transparent); }
+.cal-n { font-size: 12px; color: var(--dim); font-weight: 600; }
+.cal-it { display: block; font-size: 11.5px; line-height: 1.3;
+  padding: 3px 5px; border-radius: 5px; margin-top: 4px;
+  text-decoration: none; color: var(--text);
+  border-left: 3px solid var(--dim); background: var(--panel2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-legend { display: flex; gap: 10px; margin: 6px 0 12px;
+  flex-wrap: wrap; }
+.cal-key { font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+  border-left: 3px solid var(--dim); background: var(--panel2); }
+.cal-event, .cal-key.cal-event { border-left-color: var(--accent); }
+.cal-ticket, .cal-key.cal-ticket { border-left-color: var(--warn); }
+.cal-milestone, .cal-key.cal-milestone { border-left-color: var(--good); }
+.cal-class, .cal-key.cal-class { border-left-color: var(--accent2); }
+@media (max-width: 760px) {
+  .cal-grid { grid-template-columns: 1fr; }
+  .cal-w { display: none; }
+  .cal-cell { min-height: 0; }
+  .cal-cell.out { display: none; }
+}
+
 /* the way out of a locked kiosk, over the keypad it locks */
 .k-unlock { position: absolute; inset: 0; display: flex; align-items: center;
   justify-content: center; background: rgba(20,22,29,.92); z-index: 5; }

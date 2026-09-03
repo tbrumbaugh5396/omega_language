@@ -415,6 +415,59 @@ ok('localStorage.removeItem("bc_user")' in _opsjs3.split(
    "and a wrong answer signs the session out rather than offering another "
    "guess — the worst case for a lost tablet is a keypad nobody can pass")
 
+# --- the board, and the calendar that gathers what it dates ------------------
+_now = __import__("time").time()
+_tk = c.post("/api/tickets", headers=AA, json={
+    "title": "Migrate the old product photos", "priority": "high",
+    "due": _now + 3 * 86400}).json()
+ok(_tk["ok"] and _tk["id"], "a ticket opens with a title and nothing else "
+   "required — a board that costs more to file on than to remember is a "
+   "board nobody uses")
+ok(c.post("/api/tickets", headers=AA, json={"title": ""}).status_code == 400
+   and c.post("/api/tickets", headers=AA,
+              json={"title": "x", "col": "somewhere"}).status_code == 400,
+   "and its column comes from the five, not from the caller")
+_bd = c.get("/api/tickets", headers=AA).json()
+ok(_bd["columns"] == ["backlog", "doing", "review", "blocked", "done"]
+   and any(t["id"] == _tk["id"] for t in _bd["tickets"])
+   and _bd["people"],
+   "the board comes back whole, with the people a card can be given to")
+c.patch(f"/api/tickets/{_tk['id']}", headers=AA,
+        json={"col": "doing", "assignee_id": _bd["people"][0]["id"]})
+_one = c.get(f"/api/tickets/{_tk['id']}", headers=AA).json()
+ok(_one["col"] == "doing"
+   and any("moved to doing" in x["what"] for x in _one["log"])
+   and any("assigned to" in x["what"] for x in _one["log"]),
+   "and what moved is written on the card — a board where cards move and "
+   "nobody can say who moved them is a board that starts arguments")
+_cal = c.get("/api/calendar", headers=AA).json()
+ok(any(i["kind"] == "ticket" and i["title"].startswith("Migrate")
+       for i in _cal["items"]),
+   "a due date lands on the calendar without anybody copying it there")
+ok({"event", "ticket"} <= {i["kind"] for i in _cal["items"]}
+   or any(i["kind"] == "ticket" for i in _cal["items"]),
+   "which is the point of the calendar: four calendars' worth of dated "
+   "rows were always in one database, laid over each other for once")
+
+# --- an event can be put away without being destroyed ------------------------
+_ev = c.post("/api/store/admin/events", headers=AA, json={
+    "name": "Archive Probe Market", "kind": "market",
+    "starts": _now - 86400}).json()
+ok(c.post(f"/api/store/admin/events/{_ev['id']}/archive", headers=AA,
+          json={"archived": True}).json()["archived"],
+   "an event that has happened goes off the desk rather than out of the "
+   "record — shifts point at events, and a market that ran is the reason "
+   "somebody was paid for six hours")
+_evs = c.get("/api/store/admin/events?archived=0", headers=AA).json()
+ok(all(e["id"] != _ev["id"] for e in _evs)
+   and any(e["id"] == _ev["id"] for e in
+           c.get("/api/store/admin/events?archived=1", headers=AA).json()),
+   "and the working list and the put-away list are each one question")
+ok(all(i["title"] != "Archive Probe Market" for i in
+       c.get("/api/calendar", headers=AA).json()["items"]),
+   "an archived event leaves the calendar too — putting something away "
+   "that keeps turning up is not putting it away")
+
 # --- one product, one palette ------------------------------------------------
 _opsh = c.get("/ops", headers=HA).text
 ok("--brand:" in _opsh and "<style>:root{" in _opsh,

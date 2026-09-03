@@ -337,9 +337,26 @@ async function renderStaff() {
 }
 
 // ---------- events ----------
+/* Which events the desk is showing. Not a search — four answers a person
+   actually wants: what is coming, what already happened, what is hidden
+   from the public page, and what has been put away. */
+let EV_FILTER = "upcoming";
+const EV_FILTERS = [
+  ["upcoming", "Upcoming"], ["past", "Past"], ["hidden", "Hidden"],
+  ["archived", "Archived"], ["all", "Everything"],
+];
+
 async function renderEvents() {
-  const rows = await api("/api/store/admin/events");
+  const all = await api("/api/store/admin/events");
   const now = Date.now() / 1000;
+  const live = all.filter((e) => !e.archived);
+  const rows = {
+    upcoming: live.filter((e) => e.starts >= now),
+    past: live.filter((e) => e.starts < now),
+    hidden: live.filter((e) => !e.active),
+    archived: all.filter((e) => e.archived),
+    all,
+  }[EV_FILTER] || live;
   const upcoming = rows.filter((e) => e.starts >= now);
   const past = rows.filter((e) => e.starts < now);
   const card = (e) => `
@@ -355,7 +372,17 @@ async function renderEvents() {
             e.city ? " · " + esc(e.city) : ""}${
             e.region ? " · " + esc(e.region) : ""}</span>
         </div>
-        <span class="pill ${e.active ? "ok" : ""}">${e.active ? "live" : "hidden"}</span>
+        <span class="pill ${e.archived ? "" : e.active ? "ok" : "warn"}">${
+          e.archived ? "archived" : e.active ? "live" : "hidden"}</span>
+        <button class="btn alt sm" data-evshow="${e.id}:${e.active ? 0 : 1}"
+          title="${e.active ? "take it off the public events page — the "
+            + "record stays" : "put it back on the public page"}">${
+          e.active ? "Hide" : "Show"}</button>
+        <button class="btn alt sm" data-evarch="${e.id}:${e.archived ? 0 : 1}"
+          title="${e.archived ? "back to the working list"
+            : "off the desk, not deleted — shifts point at events, and a "
+              + "market that ran is why somebody was paid"}">${
+          e.archived ? "Restore" : "Archive"}</button>
         <button class="btn alt sm" data-evedit="${e.id}">Edit</button>
         <button class="btn alt sm" data-rowdel="event:${e.id}">Delete</button>
       </div>
@@ -369,11 +396,37 @@ async function renderEvents() {
           events drop off it automatically.</p></div>
       <button class="btn" id="ev-new">${opsIcon("calendar","btn-ic")} New event</button>
     </div>
+    <div class="chips">${EV_FILTERS.map(([k, label]) =>
+      `<button class="btn ${EV_FILTER === k ? "" : "alt "}sm"
+        data-evfilter="${k}">${label}</button>`).join("")}</div>
     <h3>Upcoming (${upcoming.length})</h3>
     ${upcoming.map(card).join("") || '<div class="card empty"><span class="e-ic">'
       + opsIcon("calendar") + '</span><b>Nothing scheduled</b></div>'}
     ${past.length ? `<h3>Past (${past.length})</h3>${past.map(card).join("")}` : ""}`;
   $("#ev-new").onclick = () => eventForm(null);
+  view().querySelectorAll("[data-evfilter]").forEach((b) => b.onclick = () => {
+    EV_FILTER = b.dataset.evfilter; renderEvents();
+  });
+  view().querySelectorAll("[data-evshow]").forEach((b) => b.onclick =
+    async () => {
+      const [id, on] = b.dataset.evshow.split(":");
+      const ev = all.find((x) => x.id === +id);
+      try {
+        await api(`/api/store/admin/events/${id}`,
+          { method: "PATCH", body: { ...ev, active: +on } });
+        renderEvents();
+      } catch (err) { toast(err.message); }
+    });
+  view().querySelectorAll("[data-evarch]").forEach((b) => b.onclick =
+    async () => {
+      const [id, on] = b.dataset.evarch.split(":");
+      try {
+        await api(`/api/store/admin/events/${id}/archive`,
+          { body: { archived: on === "1" } });
+        toast(on === "1" ? "archived — the record stays" : "back on the list");
+        renderEvents();
+      } catch (err) { toast(err.message); }
+    });
   view().querySelectorAll("[data-evedit]").forEach((b) => b.onclick = () =>
     eventForm(rows.find((x) => x.id === +b.dataset.evedit)));
   wireRows({}, renderEvents);
@@ -430,4 +483,198 @@ function eventForm(e) {
     await api(`/api/store/admin/events/${e.id}`, { method: "DELETE" });
     closeModal(); renderEvents();
   };
+}
+
+
+/* ---------- the board ----------
+   Work that is somebody's, in a state, with a date. Five columns, fixed:
+   every team that gets to invent its own ends up with eleven, three of
+   which mean "waiting", and no two people agreeing which. */
+const COL_LABEL = { backlog: "Backlog", doing: "Doing", review: "Review",
+                    blocked: "Blocked", done: "Done" };
+const PRI_PILL = { low: "", normal: "", high: "warn", urgent: "bad" };
+let BOARD_MINE = false;
+
+async function renderBoard() {
+  const d = await api(`/api/tickets${BOARD_MINE ? "?mine=1" : ""}`);
+  const byCol = {};
+  d.columns.forEach((c) => (byCol[c] = []));
+  d.tickets.forEach((t) => (byCol[t.col] || byCol.backlog).push(t));
+  const card = (t) => `
+    <div class="tk${t.overdue ? " tk-late" : ""}" data-tk="${t.id}">
+      <div class="tk-title">${esc(t.title)}</div>
+      <div class="tk-meta">
+        ${t.priority !== "normal" ? `<span class="pill ${
+          PRI_PILL[t.priority] || ""}">${esc(t.priority)}</span>` : ""}
+        ${t.assignee_name ? `<span class="dim">${esc(t.assignee_name)}</span>`
+          : '<span class="dim">unassigned</span>'}
+        ${t.due ? `<span class="${t.overdue ? "low" : "dim"}">${
+          fmtDate(t.due)}</span>` : ""}
+        ${t.client_name ? `<span class="pill">${esc(t.client_name)}</span>`
+          : ""}
+      </div>
+    </div>`;
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Board</h2>
+        <p class="dim">Everything somebody is meant to be doing, in one
+          list you can move. A card carries who it is for, how urgent it
+          is and when it is due — and its due date shows on the
+          calendar.</p></div>
+      <div class="top-actions">
+        <button class="btn alt sm" id="bd-mine">${BOARD_MINE
+          ? "Everyone's" : "Only mine"}</button>
+        <button class="btn sm" id="bd-new">New ticket</button>
+      </div>
+    </div>
+    <div class="board">
+      ${d.columns.map((c) => `
+        <div class="board-col" data-col="${c}">
+          <div class="board-head">${esc(COL_LABEL[c] || c)}
+            <span class="dim">${byCol[c].length}</span></div>
+          ${byCol[c].map(card).join("")
+            || '<p class="dim" style="padding:6px 2px">nothing here</p>'}
+        </div>`).join("")}
+    </div>`;
+  $("#bd-mine").onclick = () => { BOARD_MINE = !BOARD_MINE; renderBoard(); };
+  $("#bd-new").onclick = () => ticketForm(null, d);
+  view().querySelectorAll("[data-tk]").forEach((el) => el.onclick = () =>
+    ticketForm(d.tickets.find((t) => t.id === +el.dataset.tk), d));
+}
+
+/* One card, opened. Moving it is a select rather than a drag: a drag is
+   lovely on a desk and unusable on the phone somebody is holding in a
+   warehouse, and this has to work in both. */
+function ticketForm(t, d) {
+  const sel = (id, list, cur, label) => `
+    <div><label>${label}</label><select id="${id}">
+      ${list.map((x) => `<option value="${esc(x.v)}"
+        ${String(cur) === String(x.v) ? "selected" : ""}>${esc(x.n)}</option>`)
+        .join("")}</select></div>`;
+  const people = [{ v: 0, n: "— nobody yet —" },
+    ...d.people.map((p) => ({ v: p.id, n: p.name }))];
+  const due = t && t.due
+    ? new Date(t.due * 1000).toISOString().slice(0, 10) : "";
+  modal(`<h3>${t ? "Ticket" : "New ticket"}</h3>
+    <label>Title <span class="req">required</span></label>
+    <input id="tk-title" value="${esc(t ? t.title : "")}">
+    <label>Detail <span class="opt">what "done" means, if it isn't
+      obvious</span></label>
+    <textarea id="tk-body" rows="4">${esc((t && t.body) || "")}</textarea>
+    <div class="row2">
+      ${sel("tk-col", d.columns.map((c) => ({ v: c, n: COL_LABEL[c] || c })),
+            t ? t.col : "backlog", "Column")}
+      ${sel("tk-pri", d.priorities.map((x) => ({ v: x, n: x })),
+            t ? t.priority : "normal", "Priority")}
+    </div>
+    <div class="row2">
+      ${sel("tk-who", people, t ? t.assignee_id : 0, "Assigned to")}
+      <div><label>Due <span class="opt">shows on the calendar</span></label>
+        <input id="tk-due" type="date" value="${due}"></div>
+    </div>
+    <label>Labels <span class="opt">comma separated</span></label>
+    <input id="tk-labels" value="${esc(((t && t.labels) || []).join(", "))}">
+    <div class="modal-foot">
+      ${t ? `<button class="btn alt" id="tk-del"
+        style="margin-right:auto">Delete</button>` : ""}
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="tk-save">${t ? "Save" : "Open it"}</button>
+    </div>`);
+  $("#tk-save").onclick = async () => {
+    const body = {
+      title: $("#tk-title").value.trim(),
+      body: $("#tk-body").value.trim(),
+      col: $("#tk-col").value, priority: $("#tk-pri").value,
+      assignee_id: +$("#tk-who").value,
+      labels: $("#tk-labels").value.trim(),
+      due: $("#tk-due").value
+        ? new Date($("#tk-due").value + "T09:00").getTime() / 1000 : 0,
+    };
+    if (!body.title) return toast("a ticket needs a title");
+    try {
+      if (t) await api(`/api/tickets/${t.id}`, { method: "PATCH", body });
+      else await api("/api/tickets", { body });
+      closeModal(); renderBoard();
+    } catch (err) { toast(err.message); }
+  };
+  if ($("#tk-del")) $("#tk-del").onclick = async () => {
+    if (!confirm("Delete this ticket?\n\nIts history goes with it.")) return;
+    try {
+      await api(`/api/tickets/${t.id}`, { method: "DELETE" });
+      closeModal(); renderBoard();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+/* ---------- the calendar ----------
+   Every dated thing this business has, laid over each other for once:
+   events, ticket due dates, a client's milestones, classes held. They
+   were always dated rows in one database; there was never a reason they
+   could not be one answer. */
+const CAL_ICON = { event: "calendar", ticket: "list", milestone: "handshake",
+                   class: "pen" };
+let CAL_MONTH = null;
+
+async function renderCalendar() {
+  const base = CAL_MONTH ? new Date(CAL_MONTH) : new Date();
+  base.setDate(1); base.setHours(0, 0, 0, 0);
+  CAL_MONTH = base.getTime();
+  const end = new Date(base); end.setMonth(end.getMonth() + 1);
+  const d = await api(`/api/calendar?from_ts=${base.getTime() / 1000}`
+    + `&to_ts=${end.getTime() / 1000}`);
+  const byDay = {};
+  d.items.forEach((it) => {
+    const k = new Date(it.at * 1000).toDateString();
+    (byDay[k] = byDay[k] || []).push(it);
+  });
+  // A month starts on the weekday it starts on; the grid has to lead with
+  // that many blanks or every date lands under the wrong name.
+  const lead = base.getDay();
+  const days = new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push("<div class='cal-cell out'></div>");
+  const today = new Date().toDateString();
+  for (let n = 1; n <= days; n++) {
+    const dt = new Date(base.getFullYear(), base.getMonth(), n);
+    const items = byDay[dt.toDateString()] || [];
+    cells.push(`<div class="cal-cell${
+      dt.toDateString() === today ? " cal-today" : ""}">
+      <div class="cal-n">${n}</div>
+      ${items.map((it) => `<a class="cal-it cal-${esc(it.kind)}"
+        href="${esc(it.link || "#")}" title="${esc(it.note || "")}">
+        ${esc(it.title)}</a>`).join("")}
+    </div>`);
+  }
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>${base.toLocaleString(undefined,
+        { month: "long", year: "numeric" })}</h2>
+        <p class="dim">Everything with a date on it: events, what is due on
+          the board, a client's milestones, and classes that were held.
+          One month, four calendars' worth.</p></div>
+      <div class="top-actions">
+        <button class="btn alt sm" id="cal-prev">&larr;</button>
+        <button class="btn alt sm" id="cal-today">Today</button>
+        <button class="btn alt sm" id="cal-next">&rarr;</button>
+      </div>
+    </div>
+    <div class="cal-legend">
+      ${Object.keys(CAL_ICON).map((k) => `<span class="cal-key cal-${k}">
+        ${esc(k)}</span>`).join("")}
+    </div>
+    <div class="cal-grid">
+      ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) =>
+        `<div class="cal-w">${w}</div>`).join("")}
+      ${cells.join("")}
+    </div>
+    ${d.items.length ? "" : '<div class="card empty"><b>Nothing dated this '
+      + 'month</b><span class="dim">Events, ticket due dates and client '
+      + 'milestones all land here.</span></div>'}`;
+  const move = (n) => {
+    const x = new Date(CAL_MONTH); x.setMonth(x.getMonth() + n);
+    CAL_MONTH = x.getTime(); renderCalendar();
+  };
+  $("#cal-prev").onclick = () => move(-1);
+  $("#cal-next").onclick = () => move(1);
+  $("#cal-today").onclick = () => { CAL_MONTH = null; renderCalendar(); };
 }

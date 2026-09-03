@@ -251,8 +251,22 @@ def paths(con) -> dict:
     return own
 
 
+# What an event stops being without stopping having happened. `active` is
+# whether the public page shows it; ARCHIVED is whether the office still
+# wants to look at it. A market that ran last spring is neither live nor
+# deleted — deleting it would take its shifts' reason with it.
+EVENT_MIGRATIONS = (
+    "ALTER TABLE store_events ADD COLUMN archived INTEGER DEFAULT 0",
+)
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    for m in EVENT_MIGRATIONS:
+        try:
+            con.execute(m)
+        except Exception:                                    # noqa: BLE001
+            pass
     if not con.execute("SELECT 1 FROM store_events").fetchone():
         now = time.time()
         day = 86400
@@ -435,9 +449,39 @@ EVENT_KINDS = ("tasting", "popup", "market", "class")
 
 
 @router.get("/api/store/admin/events")
-def admin_events(u=Depends(admin_user), con=Depends(get_con)):
+def admin_events(archived: int = -1, u=Depends(admin_user),
+                 con=Depends(get_con)):
+    """Every event the office can still see. `archived` filters: -1 both,
+    0 the working list, 1 what has been put away."""
+    q = "SELECT * FROM store_events"
+    args: tuple = ()
+    if archived in (0, 1):
+        q += " WHERE COALESCE(archived,0)=?"
+        args = (archived,)
     return [dict(r) for r in con.execute(
-        "SELECT * FROM store_events ORDER BY starts DESC").fetchall()]
+        q + " ORDER BY starts DESC", args).fetchall()]
+
+
+class ArchiveBody(BaseModel):
+    archived: bool = True
+
+
+@router.post("/api/store/admin/events/{eid}/archive")
+def admin_archive_event(eid: int, body: ArchiveBody, u=Depends(admin_user),
+                        con=Depends(get_con)):
+    """Put an event away, or take it back out.
+
+    Not a delete: shifts point at events, and a market that ran last
+    spring is the reason somebody was paid for six hours. Archiving keeps
+    the record and clears the desk."""
+    if con.execute("SELECT 1 FROM store_events WHERE id=?",
+                   (eid,)).fetchone() is None:
+        raise HTTPException(404, "no such event")
+    con.execute("UPDATE store_events SET archived=?, active=CASE WHEN ?"
+                " THEN 0 ELSE active END WHERE id=?",
+                (1 if body.archived else 0, 1 if body.archived else 0, eid))
+    con.commit()
+    return {"ok": True, "archived": bool(body.archived)}
 
 
 @router.post("/api/store/admin/events")
