@@ -4692,6 +4692,74 @@ def field_start(vid: int, body: VisitMoveBody, user=Depends(current_user),
         "SELECT * FROM visits WHERE id=?", (vid,)).fetchone())
 
 
+class AddStepBody(BaseModel):
+    label: str = ""
+    material_id: int = 0
+    expected_qty: float | None = None
+    wants_photo: bool = True
+
+
+@app.post("/api/field/visits/{vid}/steps")
+def field_add_step(vid: int, body: AddStepBody, user=Depends(current_user),
+                   con=Depends(get_con)):
+    """Add a line to a visit that is already happening.
+
+    A delivery with no order behind it cannot have its checklist written
+    in advance, because nobody knows what is on the truck until it is
+    open. So the list grows at the door — and a line added there says
+    what it is, in the words of the material catalogue rather than a
+    free-text guess, or the stock it books lands on nothing.
+    """
+    v = con.execute("SELECT * FROM visits WHERE id=?", (vid,)).fetchone()
+    if v is None:
+        raise HTTPException(404, "no such visit")
+    if v["state"] == "done":
+        raise HTTPException(409, "that visit is finished")
+    label = body.label.strip()[:200]
+    if body.material_id:
+        m = con.execute("SELECT name, unit FROM materials WHERE id=?",
+                        (body.material_id,)).fetchone()
+        if m is None:
+            raise HTTPException(400, "no such material")
+        if not label:
+            unit = (" " + (m["unit"] or "")).rstrip()
+            label = (f"{m['name']} — {body.expected_qty:g}{unit} expected"
+                     if body.expected_qty else m["name"])
+    if not label:
+        raise HTTPException(400, "a step needs to say what it is")
+    seq = con.execute("SELECT COALESCE(MAX(seq),0)+1 AS n FROM visit_steps"
+                      " WHERE visit_id=?", (vid,)).fetchone()["n"]
+    cur = con.execute(
+        "INSERT INTO visit_steps(visit_id,seq,label,wants_photo,material_id,"
+        " expected_qty) VALUES(?,?,?,?,?,?)",
+        (vid, seq, label, 1 if body.wants_photo else 0, body.material_id,
+         body.expected_qty))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+@app.delete("/api/field/steps/{sid}")
+def field_drop_step(sid: int, user=Depends(current_user),
+                    con=Depends(get_con)):
+    """Take a line off — one added by mistake at the door. Only while the
+    visit is open, and only one nobody has answered yet: a step with a
+    count on it is a record of what was there."""
+    r = con.execute(
+        "SELECT s.*, v.state FROM visit_steps s JOIN visits v"
+        " ON v.id=s.visit_id WHERE s.id=?", (sid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such step")
+    if r["state"] == "done":
+        raise HTTPException(409, "that visit is finished")
+    if r["qty"] is not None:
+        raise HTTPException(409, "that line has been counted — a step with "
+                                 "a number on it is a record of what was "
+                                 "there")
+    con.execute("DELETE FROM visit_steps WHERE id=?", (sid,))
+    con.commit()
+    return {"ok": True}
+
+
 class StepBody(BaseModel):
     state: str = "done"
     note: str = ""
@@ -4754,8 +4822,27 @@ def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
     # a delivery entered line by line as somebody walks past it leaves
     # stock that is right for ten minutes and wrong afterwards.
     booked = None
-    if state == "done" and r["po_id"] and r["state"] != "done":
-        booked = fieldwork.book_in(con, vid, user["name"])
+    if state == "done" and r["state"] != "done":
+        counted = con.execute(
+            "SELECT COUNT(*) AS n FROM visit_steps WHERE visit_id=?"
+            " AND qty IS NOT NULL AND (line_id>0 OR material_id>0)",
+            (vid,)).fetchone()["n"]
+        # A delivery with no order behind it has no prior authority, so
+        # the authority is a person and a reason. Without the reason the
+        # stock arrives from nowhere, which is an adjustment wearing a
+        # receipt's clothes.
+        if counted and not r["po_id"] and not (body.note or "").strip():
+            unexplained = con.execute(
+                "SELECT COUNT(*) AS n FROM visit_steps WHERE visit_id=?"
+                " AND material_id>0 AND qty IS NOT NULL"
+                " AND COALESCE(note,'')=''", (vid,)).fetchone()["n"]
+            if unexplained:
+                raise HTTPException(
+                    400, "say where this came from — a delivery with no "
+                         "order behind it books stock on somebody's word, "
+                         "and the word has to be written down")
+        if counted:
+            booked = fieldwork.book_in(con, vid, user["name"])
     con.execute(
         "UPDATE visits SET state=?, finished_at=?, end_lat=?, end_lng=?,"
         " end_accuracy_m=?, end_odo_km=?, contact_name=?, contact_role=?,"

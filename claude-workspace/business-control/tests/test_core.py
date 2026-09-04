@@ -3773,6 +3773,64 @@ ok(not _row2 or _row2[0]["lines"][0]["promised"] is None,
    "and a promise already kept stops being reported as news — 'they "
    "promised 70' against 30 still owed reads as seventy more coming")
 
+# A truck that answers to no order. Replacement pallets, samples, a case
+# coming back — these arrive, and refusing to book them until somebody
+# raises a retrospective purchase order means they get booked as an
+# adjustment, or not at all, and the stock is wrong either way.
+_loose = c.post("/api/field/visits", headers=A, json={
+    "kind": "receiving", "title": "Replacement pallet",
+    "supplier_id": _sup.get("id", 1)}).json()["id"]
+ok(c.get(f"/api/field/visits/{_loose}", headers=A).json()["steps"] == [],
+   "a delivery with no order starts with no list — nobody knows what is "
+   "on a truck until it is open")
+c.post(f"/api/field/visits/{_loose}/start", headers=A, json={})
+_ln = c.post(f"/api/field/visits/{_loose}/steps", headers=A, json={
+    "material_id": _mat.get("id", 1), "expected_qty": 40}).json()
+ok(_ln["id"], "so the list is written at the door")
+ok(c.post(f"/api/field/visits/{_loose}/steps", headers=A,
+          json={"material_id": 999999}).status_code == 400,
+   "against the material catalogue, not free text — stock booked against "
+   "a typed phrase lands on nothing and turns up a month later as an "
+   "adjustment nobody can explain")
+ok(c.post(f"/api/field/visits/{_loose}/steps", headers=A,
+          json={}).status_code == 400, "and a step has to say what it is")
+_drop = c.post(f"/api/field/visits/{_loose}/steps", headers=A,
+               json={"label": "a line added by mistake"}).json()
+ok(c.request("DELETE", f"/api/field/steps/{_drop['id']}",
+             headers=A).status_code == 200,
+   "one added by mistake comes off again")
+
+_before = _mdb.connect()
+_had = _before.execute("SELECT on_hand FROM materials WHERE id=?",
+                       (_mat.get("id", 1),)).fetchone()["on_hand"]
+_before.close()
+c.post(f"/api/field/steps/{_ln['id']}", headers=A,
+       json={"state": "done", "qty": 40})
+_no = c.post(f"/api/field/visits/{_loose}/finish", headers=A, json={})
+ok(_no.status_code == 400 and "where this came from" in _no.json()["detail"],
+   "and it cannot be closed silently: a purchase order IS the authority "
+   "for a receipt, so without one the authority is a person and a written "
+   "reason")
+c.post(f"/api/field/steps/{_ln['id']}", headers=A, json={
+    "state": "done", "qty": 40, "note": "replacement for the split drums"})
+_got = c.post(f"/api/field/visits/{_loose}/finish", headers=A,
+              json={}).json()["received"]
+ok(_got["loose"] and _got["booked"] == 1,
+   "with the reason on it, the stock goes in")
+_after = _mdb.connect()
+ok(_after.execute("SELECT on_hand FROM materials WHERE id=?",
+                  (_mat.get("id", 1),)).fetchone()["on_hand"] == _had + 40,
+   "and it is the counted quantity that moves")
+_mv = _after.execute(
+    "SELECT reason, actor, note FROM material_moves ORDER BY id DESC"
+    " LIMIT 1").fetchone()
+_after.close()
+ok(_mv["reason"] == f"visit:{_loose}" and _mv["note"]
+   and _mv["actor"],
+   "the ledger carries the visit, the person and the reason — 'where did "
+   "forty litres come from' then has an answer that is not 'an "
+   "adjustment'")
+
 # --- clocking in where the work is ------------------------------------------
 # Somebody rostered at the Norristown shop punching in from home is a
 # payroll question. The fence answers it — but only on the way in.

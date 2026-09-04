@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS visit_steps (
   note TEXT DEFAULT '',
   qty REAL,                                -- counted, where a step counts
   line_id INTEGER DEFAULT 0,               -- the purchase order line, if any
+  material_id INTEGER DEFAULT 0,           -- what it is, when no order says
   expected_qty REAL,                       -- what is actually coming
   ordered_qty REAL,                        -- what we asked for, if different
   done_at REAL DEFAULT 0
@@ -117,7 +118,8 @@ def init_tables(con):
     cols = {r["name"] for r in con.execute("PRAGMA table_info(visit_steps)")}
     for name, decl in (("line_id", "INTEGER DEFAULT 0"),
                        ("expected_qty", "REAL"),
-                       ("ordered_qty", "REAL")):
+                       ("ordered_qty", "REAL"),
+                       ("material_id", "INTEGER DEFAULT 0")):
         if name not in cols:
             con.execute(f"ALTER TABLE visit_steps ADD COLUMN {name} {decl}")
     con.commit()
@@ -232,6 +234,43 @@ def open_visit(con, template_id: int, user_id: int, **kw) -> int:
     return vid
 
 
+def book_loose(con, visit_id: int, actor: str) -> dict:
+    """Post a delivery that answers to no order.
+
+    Replacement pallets, samples, a case coming back, a supplier turning
+    up on the strength of a phone call — these arrive, and refusing to
+    book them until somebody raises a retrospective purchase order means
+    they get booked as an adjustment, or not at all, and the stock is
+    wrong either way.
+
+    What a purchase order provides is authority: somebody agreed to this
+    before it happened. Without one the authority has to come from
+    somewhere, so it comes from a named person and a written reason, and
+    the movement carries both into the ledger. "Where did forty litres
+    come from" then has an answer that is not "an adjustment".
+    """
+    from . import supply
+    v = con.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
+    if v is None or v["po_id"]:
+        return {"booked": 0}
+    booked, took = 0, []
+    for st in con.execute(
+            "SELECT * FROM visit_steps WHERE visit_id=? AND material_id>0",
+            (visit_id,)):
+        if st["qty"] is None or st["state"] == "open" or float(st["qty"]) <= 0:
+            continue
+        why = (st["note"] or v["note"] or "").strip()
+        supply.move(con, st["material_id"], float(st["qty"]),
+                    f"visit:{visit_id}", actor,
+                    why[:200] or "received with no order")
+        booked += 1
+        took.append({"label": st["label"], "got": float(st["qty"]),
+                     "why": why})
+    if booked:
+        con.commit()
+    return {"booked": booked, "loose": True, "lines": took}
+
+
 def book_in(con, visit_id: int, actor: str) -> dict:
     """Post what was counted on a receiving visit against its order.
 
@@ -243,8 +282,10 @@ def book_in(con, visit_id: int, actor: str) -> dict:
     """
     from . import supply
     v = con.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
-    if v is None or not v["po_id"]:
+    if v is None:
         return {"booked": 0}
+    if not v["po_id"]:
+        return book_loose(con, visit_id, actor)
     lines, short, over, agreed = {}, [], [], []
     for st in con.execute(
             "SELECT * FROM visit_steps WHERE visit_id=? AND line_id>0",

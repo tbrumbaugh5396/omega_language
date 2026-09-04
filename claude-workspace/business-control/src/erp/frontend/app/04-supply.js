@@ -923,9 +923,11 @@ function inboundBox(d) {
 let FIELD_MINE = false;
 
 async function bookVisitForm() {
-  const [tpls, stores, people] = await Promise.all([
+  const [tpls, stores, people, sup] = await Promise.all([
     api("/api/field/templates"), api("/api/stores"),
-    api("/api/admin/users").catch(() => [])]);
+    api("/api/admin/users").catch(() => []),
+    api("/api/supply").catch(() => ({}))]);
+  const sups = sup.suppliers || [];
   modal(`<h3>Book a visit</h3>
     <label>Checklist</label>
     <select id="bv-tpl">${tpls.map((t) =>
@@ -941,15 +943,23 @@ async function bookVisitForm() {
         ${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`)
           .join("")}</select></div>
     </div>
+    ${sups.length ? `<label>From a supplier <span class="opt">for goods
+      coming in with no order behind them</span></label>
+      <select id="bv-sup"><option value="0">not a delivery</option>
+        ${sups.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`)
+          .join("")}</select>` : ""}
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="bv-go">Book it</button></div>`);
   $("#bv-go").onclick = async () => {
     try {
+      const supplier_id = $("#bv-sup") ? +$("#bv-sup").value || 0 : 0;
       await api("/api/field/visits", { body: {
         template_id: +$("#bv-tpl").value || 0,
         user_id: +$("#bv-who").value || 0,
-        store_id: +$("#bv-store").value || 0 } });
+        store_id: +$("#bv-store").value || 0,
+        supplier_id,
+        kind: supplier_id ? "receiving" : "" } });
       closeModal(); renderField();
     } catch (e) { toast(e.message); }
   };
@@ -1001,8 +1011,11 @@ Photo after *"></textarea>
 
 async function openVisit(vid) {
   const v = await api(`/api/field/visits/${vid}`);
-  const live = v.state === "started";
   const draw = () => {
+    // Read from the visit each time rather than once at the top: a visit
+    // that has just been started is a different screen, and a value
+    // captured before the click describes the screen you were on.
+    const live = v.state === "started";
     modalBody().innerHTML = `
       <div class="page-head">
         <div><h3>${esc(v.title || v.kind)}</h3>
@@ -1036,6 +1049,16 @@ async function openVisit(vid) {
               : ""}
           </span>
         </div>`).join("")}</div>` : ""}
+      ${live && v.kind === "receiving" ? `<div class="page-head cal-add">
+        <p class="dim">${v.po_id
+          ? "Anything else off the truck that was not on the order goes on "
+            + "here too."
+          : "This delivery answers to no order, so the list is written at "
+            + "the door — nobody knows what is on a truck until it is "
+            + "open."}</p>
+        <div class="top-actions">
+          <button class="btn alt" data-vline>Add a line</button>
+        </div></div>` : ""}
       ${live ? `<div class="page-head cal-add">
         <p class="dim">A picture of anything — the pallet, the paperwork,
           the shelf. It records where and when your phone says it was
@@ -1097,10 +1120,45 @@ async function openVisit(vid) {
       renderField(); });
     modalBody().querySelectorAll("[data-sdone]").forEach((b) =>
       b.onclick = async () => {
-        await api(`/api/field/steps/${b.dataset.sdone}`,
-                  { body: { state: "done" } }).catch((e) => toast(e.message));
+        const st = v.steps.find((x) => x.id === +b.dataset.sdone) || {};
+        const body = { state: "done" };
+        // A step that stands for goods is not answered by "done" — the
+        // whole reason it exists is the number, and a receiving screen
+        // that ticks a line without asking books the paperwork's
+        // quantity, which is the one that was never in the van.
+        if (st.line_id || st.material_id) {
+          const want = st.expected_qty;
+          const said = prompt(
+            `How many ${st.label.split(" — ")[0]} actually arrived?`,
+            want != null ? String(want) : "");
+          if (said === null) return;
+          const n = Number(said);
+          if (!isFinite(n) || n < 0) return toast("a count, please");
+          body.qty = n;
+          if (!st.line_id) {
+            // No order behind it: the authority is a person and a reason.
+            const why = prompt("Where did it come from? (a replacement, a "
+              + "return, a sample — it goes in the stock ledger)",
+              st.note || "");
+            if (!why || !why.trim()) return toast("say where it came from");
+            body.note = why.trim();
+          } else if (want != null && Math.abs(n - want) > 1e-9) {
+            const why = prompt(
+              `That is ${n > want ? "more" : "less"} than the ${want} `
+              + "expected. What happened?", st.note || "");
+            if (why && why.trim()) body.note = why.trim();
+          }
+        }
+        try {
+          await api(`/api/field/steps/${b.dataset.sdone}`, { body });
+        } catch (e) { toast(e.message); }
         again();
       });
+    const addLine = modalBody().querySelector("[data-vline]");
+    // The line dialog is a modal of its own, and opening one closes the
+    // last — so coming back means reopening the visit, not redrawing into
+    // a card that is no longer on the page.
+    if (addLine) addLine.onclick = () => lineForm(vid, () => openVisit(vid));
     const why = (id, state) => async () => {
       const note = prompt(state === "skipped" ? "Why skipped?" : "What failed?");
       if (!note || !note.trim()) return;
@@ -1121,6 +1179,49 @@ async function openVisit(vid) {
   }
   modal("<h3>…</h3>", "wide");
   draw();
+}
+
+/* A line written at the door. It names a material from the catalogue
+   rather than taking free text, because stock booked against a typed
+   phrase lands on nothing and shows up a month later as an adjustment
+   nobody can explain. */
+async function lineForm(vid, after) {
+  const mats = await api("/api/supply").then((d) => d.materials || [])
+    .catch(() => []);
+  modal(`<h3>What came off the truck?</h3>
+    ${mats.length ? `<label>Which material</label>
+      <select id="ln-mat">${mats.map((m) =>
+        `<option value="${m.id}">${esc(m.name)}${m.unit
+          ? " (" + esc(m.unit) + ")" : ""}</option>`).join("")}</select>
+      <div class="row2">
+        <div><label>How much is expected <span class="opt">if the note
+          says</span></label>
+          <input id="ln-qty" type="number" step="0.001" min="0"></div>
+        <div><label>Or call it something else</label>
+          <input id="ln-label" placeholder="optional"></div>
+      </div>`
+      : `<p class="dim">There are no materials on this install yet, so
+         there is nothing to book stock against. A line can still be added
+         as a plain check.</p>
+         <label>What is it</label><input id="ln-label">`}
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="ln-go">Add it</button></div>`);
+  $("#ln-go").onclick = async () => {
+    const body = { label: ($("#ln-label") || {}).value || "" };
+    if ($("#ln-mat")) {
+      body.material_id = +$("#ln-mat").value || 0;
+      const q = $("#ln-qty").value;
+      if (q) body.expected_qty = +q;
+    }
+    if (!body.material_id && !body.label.trim())
+      return toast("say what it is");
+    try {
+      await api(`/api/field/visits/${vid}/steps`, { body });
+      closeModal();
+      if (after) after();
+    } catch (e) { toast(e.message); }
+  };
 }
 
 function finishVisit(v, after) {
