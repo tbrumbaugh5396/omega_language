@@ -4349,6 +4349,24 @@ ok("wedgeOff" in _ops and "if (typeof wedgeOff" in _ops,
    "would swallow the Enter key everywhere else, which is the sort of "
    "bug that gets blamed on the keyboard")
 
+# A single-tenant install has no grant and must never acquire one: the
+# absence of an entitlement cannot take features from somebody who
+# already had them all.
+_e1 = c.get("/api/entitlements", headers=A).json()
+_reg = [x for x in _e1["lines"] if x["kind"] == "registers"][0]
+ok(_reg["each_cents"] == 1900,
+   "an install can see what another till would cost")
+ok(_reg["allowed"] > 1000,
+   "and an install nobody sold anything to is not limited — the same rule "
+   "capabilities follow, for the same reason")
+ok(c.post("/api/pos/session", headers=A, json={
+    "register": "second-lane", "float_cents": 0}).status_code == 200,
+   "so a second lane opens")
+c.post("/api/pos/session/close", headers=A, json={
+    "session_id": c.get("/api/pos/session?register=second-lane",
+                        headers=A).json()["session"]["id"],
+    "counted_cents": 0})
+
 # The same till, handed to the customer.
 _lane = c.post("/api/pos/session", headers=A, json={
     "register": "lane-smoke", "self_serve": True,

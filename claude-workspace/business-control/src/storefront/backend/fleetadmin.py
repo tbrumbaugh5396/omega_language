@@ -537,6 +537,44 @@ class GrantBody(BaseModel):
     extend_site: bool = True
 
 
+class LimitsBody(BaseModel):
+    locations: int | None = None
+    seats: int | None = None
+    registers: int | None = None
+    kiosks: int | None = None
+
+
+@router.post("/api/store/admin/fleet/tenants/{tid}/limits")
+def set_tenant_limits(tid: str, body: LimitsBody, u=Depends(admin_user),
+                      con=Depends(get_con)):
+    """How many of the countable things this client bought.
+
+    Capabilities say what the software may do; these say how much of it
+    they may have. A client who asks for five tills is asking a question
+    with a price attached, and the answer has to be recorded somewhere
+    the software will actually enforce — otherwise the fifth till appears
+    and the invoice does not.
+    """
+    _provider_only()
+    from erp.backend import fleet, tenancy
+    if tid not in tenancy.all_tenants():
+        raise HTTPException(404, f"no tenant '{tid}'")
+    want = {k: v for k, v in body.model_dump().items() if v is not None}
+    kept = tenancy.set_limits(tid, want)
+    fleet.push_entry(tid)
+    from . import pricebook
+    book = pricebook.allowances()
+    key = {"locations": "locations", "seats": "staff_seats",
+           "registers": "registers", "kiosks": "clock_kiosks"}
+    monthly = 0
+    for k, n in kept.items():
+        a2 = book.get(key[k], {})
+        monthly += max(0, n - a2.get("included", 0)) * a2.get("each_cents", 0)
+    return {"ok": True, "limits": kept, "monthly_cents": monthly,
+            "note": "What is beyond the plan's included allowance is what "
+                    "it adds to the bill each month."}
+
+
 @router.post("/api/store/admin/fleet/tenants/{tid}/caps")
 def set_tenant_caps(tid: str, body: GrantBody, u=Depends(admin_user),
                     con=Depends(get_con)):
@@ -859,7 +897,34 @@ def tenant_report(tid: str, u=Depends(admin_user), con=Depends(get_con)):
             **usage, "notes": notes,
             "node_info": _node_report(tid, reg),
             "billing": _billing_report(con, tid),
+            "allowance": _allowance_report(tid),
             "history": _maintenance_history(tid, reg)}
+
+
+def _allowance_report(tid: str) -> dict:
+    """What they bought of the countable things, and what it is worth.
+
+    Read from the provider's own registry rather than from the tenant's
+    database: the entitlement is a fact about the sale, not about what
+    the install happens to contain today.
+    """
+    from erp.backend import tenancy
+    from . import pricebook
+    book = pricebook.allowances()
+    key = {"locations": "locations", "seats": "staff_seats",
+           "registers": "registers", "kiosks": "clock_kiosks"}
+    granted = tenancy.limits_of(tid)
+    lines, monthly = [], 0
+    for k, bk in key.items():
+        a2 = book.get(bk, {})
+        n = granted.get(k)
+        beyond = max(0, (n or 0) - a2.get("included", 0)) if n else 0
+        cents = beyond * a2.get("each_cents", 0)
+        monthly += cents
+        lines.append({"kind": k, "granted": n, "default": a2.get("included"),
+                      "each_cents": a2.get("each_cents", 0),
+                      "beyond": beyond, "cents": cents})
+    return {"lines": lines, "monthly_cents": monthly, "granted": granted}
 
 
 def _node_report(tid: str, reg: dict) -> dict:

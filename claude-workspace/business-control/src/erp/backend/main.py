@@ -760,6 +760,54 @@ def add_product(body: ProductBody, user=Depends(admin_user), con=Depends(get_con
     return {"ok": True}
 
 
+# ---------- what a client is entitled to, of the things you count ----------
+
+def _allowance(kind: str) -> dict:
+    try:
+        from storefront.backend import pricebook
+        book = pricebook.allowances()
+    except Exception:                                        # noqa: BLE001
+        book = {}
+    key = {"registers": "registers", "kiosks": "clock_kiosks",
+           "locations": "locations", "seats": "staff_seats"}[kind]
+    return book.get(key, {"included": 1, "each": 0, "each_cents": 0})
+
+
+def entitled(kind: str) -> int:
+    """How many of `kind` this install may have.
+
+    The tenant's own grant first — that is what was sold. Otherwise the
+    allowance the price book includes with a plan. The provider's install
+    is not a customer of itself and is never limited.
+    """
+    tid = tenancy.CURRENT.get()
+    if not tid:
+        return 10 ** 6
+    lim = tenancy.limits_of(tid)
+    if kind in lim:
+        return lim[kind]
+    return _allowance(kind).get("included", 1)
+
+
+def _check_room(kind: str, in_use: int, what: str) -> None:
+    """Refuse the one past the line, with the number in the message.
+
+    A limit checked only at invoice time is a limit the client discovers a
+    month after they broke it, in an argument about money. This one is
+    checked at the door and says exactly what it would cost to raise.
+    """
+    cap = entitled(kind)
+    if in_use < cap:
+        return
+    each = _allowance(kind).get("each", 0)
+    raise HTTPException(
+        409,
+        f"this plan covers {cap} {what}{'' if cap == 1 else ''} and "
+        f"{in_use} {'is' if in_use == 1 else 'are'} already set up"
+        + (f" — another is ${each} a month" if each else "")
+        + ". An owner can raise it from the Platform board.")
+
+
 def _clean_code(raw: str) -> str:
     """A scanned code, as the scanner would read it back.
 
@@ -1625,6 +1673,12 @@ def kiosk_register(body: KioskBody, user=Depends(admin_user),
     id a browser can choose for itself is not a location, it is a claim.
     """
     kid = (body.kiosk_id or "").strip() or secrets.token_urlsafe(9)
+    known = con.execute("SELECT 1 FROM kiosks WHERE kiosk_id=?",
+                        (kid,)).fetchone()
+    if not known and body.active:
+        _check_room("kiosks", con.execute(
+            "SELECT COUNT(*) AS n FROM kiosks WHERE active=1"
+        ).fetchone()["n"], "clock kiosk(s)")
     con.execute(
         "INSERT INTO kiosks(kiosk_id,label,store_id,active,created_at)"
         " VALUES(?,?,?,?,?) ON CONFLICT(kiosk_id) DO UPDATE SET"
@@ -2407,6 +2461,9 @@ class StoreBody(BaseModel):
 
 @app.post("/api/admin/stores")
 def add_store(body: StoreBody, user=Depends(admin_user), con=Depends(get_con)):
+    _check_room("locations", con.execute(
+        "SELECT COUNT(*) AS n FROM stores WHERE active=1"
+    ).fetchone()["n"], "location(s)")
     con.execute(
         "INSERT INTO stores(name,kind,region,city,lat,lng,contact)"
         " VALUES(?,?,?,?,?,?,?)",
@@ -5198,6 +5255,14 @@ def pos_open(body: OpenTillBody, user=Depends(permitted("till")),
              con=Depends(get_con)):
     """Open a drawer with a counted float in it."""
     from . import pos
+    # A register is a lane that can be open at once — a shop with three
+    # running simultaneously is three, whatever the tablets are called.
+    # Counted here rather than at invoice time, because a limit nobody
+    # meets until the bill arrives is an argument about money.
+    if pos.session_of(con, body.register) is None:
+        _check_room("registers", con.execute(
+            "SELECT COUNT(*) AS n FROM register_sessions WHERE closed_at=0"
+        ).fetchone()["n"], "till(s) open at once")
     try:
         out = pos.open_session(con, user["id"], body.register,
                                body.float_cents, body.store_id,
@@ -5494,6 +5559,44 @@ def public_receipt(token: str, con=Depends(get_con)):
 <div class="dim noprint" style="text-align:center;margin-top:12px">
  <a href="#" onclick="print();return false">Print</a></div>
 </div></body></html>""")
+
+
+@app.get("/api/entitlements")
+def entitlements(user=Depends(current_user), con=Depends(get_con)):
+    """What this install may have, what it is using, and what more costs.
+
+    On one screen because the three are the same question asked from
+    three sides, and a client who can see all three does not have to ring
+    anybody to find out whether they can open another till.
+    """
+    counts = {
+        "locations": con.execute(
+            "SELECT COUNT(*) AS n FROM stores WHERE active=1").fetchone()["n"],
+        "registers": con.execute(
+            "SELECT COUNT(*) AS n FROM register_sessions WHERE closed_at=0"
+        ).fetchone()["n"],
+        "kiosks": con.execute(
+            "SELECT COUNT(*) AS n FROM kiosks WHERE active=1").fetchone()["n"],
+        "seats": con.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE active=1 AND"
+            " (is_admin=1 OR role IN ('owner','employee','cashier',"
+            " 'teacher','volunteer','director'))").fetchone()["n"],
+    }
+    out = []
+    for kind, used in counts.items():
+        cap = entitled(kind)
+        each = _allowance(kind)
+        out.append({"kind": kind, "used": used, "allowed": cap,
+                    "room": max(0, cap - used), "over": max(0, used - cap),
+                    "each_cents": each.get("each_cents", 0),
+                    "included": each.get("included", 0)})
+    tid = tenancy.CURRENT.get()
+    return {"tenant": tid or "", "lines": out,
+            "granted": tenancy.limits_of(tid) if tid else {},
+            "overage_cents": sum(x["over"] * x["each_cents"] for x in out),
+            "note": "A register is a till open at once, not a tablet in a "
+                    "drawer. What is granted here is what was sold; the "
+                    "rest is what a plan includes."}
 
 
 @app.get("/api/analytics/commerce")

@@ -252,16 +252,33 @@ else. Pick one unit. (§15 item 3.)
 
 ---
 
-## 10. Seats and locations
+## 10. Seats, locations and devices
 
 | | Included on the menu | Overage |
 |---|---|---|
 | Locations | 1 | +$29 each |
 | Staff seats | 5 | +$7 each |
+| Registers | 1 | +$19 each |
+| Clock kiosks | 1 | +$6 each |
 
 Billable seats are people who sign in to run the business. Customers,
 students, donors and affiliates are always free — they are the point of the
 software, not a cost centre.
+
+A **register** is a till that can be open at once: a shop with three lanes
+running simultaneously is three, whatever the tablets are called. It is priced
+per lane rather than per device because that is what the client counts when
+they picture the shop, and because a spare tablet in a drawer costs us
+nothing until somebody opens a drawer with it.
+
+A **clock kiosk** is a tablet bolted up for people to punch in on. Cheaper
+than a register because it does one thing, has no money in it, and is the
+device most likely to be a hand-me-down.
+
+Both are counted against what the client is entitled to, and the count is
+enforced rather than trusted: a fourth lane on a three-lane plan is refused
+with the number in the message, because a limit that is only checked at
+invoice time is a limit the client discovers a month after they broke it.
 
 The menu's included allowance is an **assumption**, not a recorded decision:
 v1 never stated one. Basic's figures are used. Write this down properly.

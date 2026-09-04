@@ -360,6 +360,9 @@ async function renderFleet() {
               title="open their ops app as an admin of THEIR install —
               minted in their own user directory, written to the fleet
               history and their file">Act as admin</button>
+            <button class="btn alt sm" data-tlim="${esc(t.id)}"
+              title="how many tills, kiosks, locations and seats they
+              bought — enforced on their install">Limits</button>
             <button class="btn alt sm" data-tcaps="${esc(t.id)}"
               title="what they're entitled to — grants fulfil capability
               asks, and the site grows the pieces new capabilities earn"
@@ -550,6 +553,8 @@ async function renderFleet() {
         toast(`opened as ${out.account} — logged on the fleet history`);
       } catch (err) { toast(err.message); }
     });
+  view().querySelectorAll("[data-tlim]").forEach((b) => b.onclick = () =>
+    limitsForm(b.dataset.tlim));
   view().querySelectorAll("[data-tcaps]").forEach((b) => b.onclick = () =>
     capsEditor(b.dataset.tcaps, { fleet: f }));
   view().querySelectorAll("[data-tmove]").forEach((b) => b.onclick = () => {

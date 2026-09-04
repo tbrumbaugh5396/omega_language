@@ -612,6 +612,75 @@ ok(all(s["published"] for s in c.get(
     headers=AA).json()["shifts"]),
    "publishing is the moment it becomes one")
 
+# --- how many of the countable things they bought ---------------------------
+# Capabilities say what the software may do. These say how much of it they
+# may have — and a client who asks for five tills is asking a question
+# with a price attached.
+from storefront.backend import pricebook as _pb  # noqa: E402
+_allow = _pb.allowances()
+ok(set(_allow) >= {"locations", "staff_seats", "registers", "clock_kiosks"},
+   "the price book is the source for what a plan includes and what more "
+   "costs, the same as everything else here")
+ok(_allow["registers"]["each_cents"] == 1900
+   and _allow["clock_kiosks"]["each_cents"] == 600,
+   "a register is priced above a clock kiosk — one has money in it and "
+   "one does one thing")
+
+_ent = c.get("/api/entitlements", headers=AA).json()
+_by = {x["kind"]: x for x in _ent["lines"]}
+ok(set(_by) == {"locations", "registers", "kiosks", "seats"},
+   "an install can see what it may have, what it is using, and what more "
+   "would cost — one screen, because it is the same question from three "
+   "sides")
+ok(_by["registers"]["allowed"] >= 1,
+   "with the plan's own allowance where nothing was sold explicitly")
+
+# The provider records what was sold; the tenant's install enforces it.
+_lim = c.post("/api/store/admin/fleet/tenants/alpha/limits", headers=AA,
+              json={"registers": 2, "kiosks": 1}).json()
+ok(_lim["limits"]["registers"] == 2,
+   "the provider records how many were bought")
+ok(_lim["monthly_cents"] == 1900,
+   "and prices what is beyond the plan: one register over the included "
+   "one is $19, the kiosk is the included one and is free")
+from erp.backend import tenancy as _tn  # noqa: E402
+ok(_tn.limits_of("alpha")["registers"] == 2,
+   "recorded where the software will actually read it")
+ok(_tn.limits_of("nobody-here") == {},
+   "and a tenant nobody sold anything to has no grant rather than an "
+   "invented one")
+# And the tenant's own install refuses the one past the line.
+_ah = {"host": "alpha.localhost", **AA}
+c.post("/api/store/admin/fleet/tenants/alpha/limits", headers=AA,
+       json={"registers": 1})
+_t1 = c.post("/api/pos/session", headers=_ah,
+             json={"register": "lane-a", "float_cents": 0})
+ok(_t1.status_code == 200, "the first till opens")
+_t2 = c.post("/api/pos/session", headers=_ah,
+             json={"register": "lane-b", "float_cents": 0})
+ok(_t2.status_code == 409 and "$19 a month" in _t2.json()["detail"],
+   "and the second is refused at the door with the price in the message, "
+   "not discovered on an invoice a month later")
+ok("Platform board" in _t2.json()["detail"],
+   "saying where it is raised, because a refusal that does not is a "
+   "support call")
+c.post("/api/pos/session/close", headers=_ah, json={
+    "session_id": _t1.json()["id"], "counted_cents": 0})
+ok(c.post("/api/pos/session", headers=_ah, json={
+    "register": "lane-c", "float_cents": 0}).status_code == 200,
+   "closing one frees the lane — the limit is on tills open at once, not "
+   "on tablets that have ever existed")
+c.post("/api/pos/session/close", headers=_ah, json={
+    "session_id": c.get("/api/pos/session?register=lane-c",
+                        headers=_ah).json()["session"]["id"],
+    "counted_cents": 0})
+
+_tn.set_limits("alpha", {})
+ok(_tn.limits_of("alpha") == {},
+   "clearing it falls back to the plan rather than to nothing — a missing "
+   "number that reads as unlimited is how a client ends up with eleven "
+   "tills on a one-till plan")
+
 # --- a week, the exceptions to it, and the dates it is not true of ----------
 # A week that can only say yes or no to a whole day gets filled in wrong by
 # everybody whose life has an afternoon in it. Four things have an opinion

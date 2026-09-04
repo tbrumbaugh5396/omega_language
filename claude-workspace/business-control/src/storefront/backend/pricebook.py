@@ -260,3 +260,30 @@ def groups() -> list:
             seen.append(c["group"])
     return [{"name": g, "note": GROUP_NOTE.get(g, ""),
              "items": [c for c in caps if c["group"] == g]} for g in seen]
+
+
+def allowances() -> dict:
+    """What a plan includes of the countable things, and what more costs.
+
+    Seats, locations, registers and clock kiosks are the four things a
+    client counts when they picture their own business — "we have three
+    shops and five tills" — so they are priced per unit and enforced per
+    unit rather than bundled into a tier nobody can check themselves
+    against.
+    """
+    src = _section("10.", _text())
+    out = {}
+    for line in src.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 3 or not cells[0] or cells[0].startswith("---"):
+            continue
+        key = cells[0].lower().replace(" ", "_")
+        if key.startswith("included") or key == "":
+            continue
+        inc = "".join(ch for ch in cells[1] if ch.isdigit())
+        each = _money(cells[2])          # whole dollars, as elsewhere here
+        if inc == "" and not each:
+            continue
+        out[key] = {"included": int(inc or 0), "each": each,
+                    "each_cents": each * 100}
+    return out

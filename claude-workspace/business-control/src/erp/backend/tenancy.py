@@ -245,6 +245,46 @@ def caps_of(tid) -> list | None:
     return list(caps) if caps else None
 
 
+# What a tenant is entitled to, of the things that are counted. Absent
+# means the class's own allowance, and a class nobody recognises means
+# the smallest — never "unlimited", because a missing number that reads
+# as infinity is how a client ends up with eleven tills on a one-till
+# plan and an invoice nobody can explain.
+LIMIT_KEYS = ("locations", "seats", "registers", "kiosks")
+
+
+def limits_of(tid) -> dict:
+    """The counts this tenant may use. The provider's own install has
+    none — it is not a customer of itself."""
+    reg = registry()
+    if not reg or not tid:
+        return {}
+    row = reg.get("tenants", {}).get(tid, {})
+    if row.get("provider"):
+        return {}
+    out = dict(row.get("limits") or {})
+    return {k: int(v) for k, v in out.items()
+            if k in LIMIT_KEYS and str(v).strip() != ""}
+
+
+def set_limits(tid: str, limits: dict) -> dict:
+    """Record what was sold. A value of 0 means none allowed; removing the
+    key means fall back to whatever the plan includes."""
+    reg = registry() or {"tenants": {}}
+    row = reg.setdefault("tenants", {}).setdefault(tid, {})
+    keep = {}
+    for k in LIMIT_KEYS:
+        if k in limits and str(limits[k]).strip() != "":
+            keep[k] = max(0, int(limits[k]))
+    if keep:
+        row["limits"] = keep
+    else:
+        row.pop("limits", None)
+    REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    bust_cache()
+    return keep
+
+
 def create(tid: str, hosts: list | None = None, default: bool = False,
            node: str = "", klass: str = "growing", brand: str = "",
            caps: list | None = None):

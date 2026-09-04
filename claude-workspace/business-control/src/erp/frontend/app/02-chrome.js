@@ -417,6 +417,59 @@ async function render() {
 }
 
 
+/* How many of the countable things a client bought. Capabilities say
+   what the software may do; these say how much of it they may have — and
+   a client who asks for five tills is asking a question with a price on
+   it, so the answer is recorded where the software will enforce it. */
+async function limitsForm(tid) {
+  const d = await api(`/api/store/admin/fleet/tenants/${tid}/report`)
+    .catch(() => null);
+  const now = (d && d.allowance) ? d.allowance : { lines: [] };
+  const row = (k) => now.lines.find((l) => l.kind === k) || {};
+  const f = (k, label, hint) => {
+    const l = row(k);
+    return `<div><label>${label}
+      <span class="opt">${hint} · plan includes ${l.default === undefined
+        ? 1 : l.default}${l.each_cents
+          ? `, ${money(l.each_cents)} each beyond` : ""}</span></label>
+      <input id="lim-${k}" type="number" min="0" placeholder="plan default"
+        value="${l.granted === null || l.granted === undefined
+          ? "" : l.granted}"></div>`;
+  };
+  modal(`<h3>What ${esc(tid)} bought</h3>
+    <p class="dim">Left blank means whatever the plan includes. A number
+      here is enforced on their install — the till past the line is
+      refused at the door with the price in the message, rather than
+      appearing and turning up on an invoice a month later.</p>
+    <div class="row2">
+      ${f("registers", "Registers", "tills open at once")}
+      ${f("kiosks", "Clock kiosks", "tablets by a door")}
+    </div>
+    <div class="row2">
+      ${f("locations", "Locations", "shops, depots")}
+      ${f("seats", "Staff seats", "people who sign in to run it")}
+    </div>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="lim-go">Save</button></div>`);
+  $("#lim-go").onclick = async () => {
+    const body = {};
+    ["registers", "kiosks", "locations", "seats"].forEach((k) => {
+      const v = $(`#lim-${k}`).value.trim();
+      if (v !== "") body[k] = +v;
+    });
+    try {
+      const r = await api(
+        `/api/store/admin/fleet/tenants/${tid}/limits`, { body });
+      closeModal();
+      toast(r.monthly_cents
+        ? `Saved — ${money(r.monthly_cents)} a month beyond the plan`
+        : "Saved — nothing beyond the plan's allowance");
+      render();
+    } catch (e) { toast(e.message); }
+  };
+}
+
 // ---------- the grant editor: what a tenant is entitled to ----------
 /* One editor, two doors: the Platform tab's row and the client's own
    page. It fetches the fleet board itself when not handed one, saves the
