@@ -231,7 +231,11 @@ function renderChrome() {
     $("#login-link").onclick = () => { S.tab = "login"; render(); };
   }
   const tabs = allowedTabs();
-  if (S.tab !== "login" && !tabs.find((t) => t.id === S.tab)) S.tab = tabs[0].id;
+  // "enrol" is a screen without a tab: a tablet arrives on it from a QR
+  // with nobody signed in, and bouncing it to the first allowed tab —
+  // which is what an unknown id does — silently threw the setup away.
+  if (S.tab !== "login" && S.tab !== "enrol"
+      && !tabs.find((t) => t.id === S.tab)) S.tab = tabs[0].id;
   const btn = (t) =>
     `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}${
         capLocked(t) ? " cap-locked" : ""}">
@@ -379,6 +383,11 @@ async function render() {
   clearInterval(S._dcTimer);        // stop polling Discord once you leave it
   clearInterval(S._slackTimer);     // and Slack
   if (S.promoLanding) return renderPromoLanding();
+  // Setting a tablet up is the one thing here that must work with no
+  // session at all: the whole point is that an owner does not have to
+  // walk to every door and sign in on it. The token in the URL is the
+  // authority, and it buys one thing once.
+  if (S.tab === "enrol" && S.deepKey) return renderEnrol();
   if (!S.user && S.tab === "login") return renderLogin();
   view().innerHTML = SKELETON;
   const fn = {
@@ -390,7 +399,7 @@ async function render() {
     experiments: renderExperiments, analytics: renderAnalytics,
     docs: renderDocs, clients: renderClients,
     staff: renderStaff, events: renderEvents, customers: renderCustomers,
-    kiosks: renderKiosks,
+    kiosks: renderKiosks, enrol: renderEnrol,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,
     profile: renderProfile, stores: renderStores,

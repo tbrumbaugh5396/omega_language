@@ -1218,9 +1218,10 @@ ok('localStorage.setItem(KIOSK_KEY' in _kjs,
    "and something in this app finally writes the id onto a device — the "
    "step between registering a kiosk and it existing anywhere but a "
    "table, which nothing had ever done")
-ok("qrImg(url" in _kjs and "/ops/#/kiosks/" in _kjs,
+ok("qrImg(link.url" in _kjs,
    "carried on a QR, because the tablet is across the room from the "
-   "computer that registered it")
+   "computer that registered it — and the URL is the one the server "
+   "minted, not one the page assembled around a kiosk id")
 ok('/^#\\/([\\w-]+)(?:\\/([\\w-]+))?$/' in _kjs,
    "and the route accepts a minted token, not only a row number — a "
    "kiosk is named by the id it was given, so a digits-only route could "
@@ -1231,6 +1232,54 @@ ok("never used" in _kjs and "settling" in _kjs,
 ok("cannot clock in at all" in _kjs,
    "and the empty state warns against the trap the feature shipped in: "
    "binding somebody to a kiosk that no tablet has claimed")
+
+# --- setting a tablet up without an owner standing at it -----------------
+# Enrolling needed an admin session ON the tablet, which means an owner
+# walking to every door — and in a shop that is exactly how a device ends
+# up permanently signed in as the manager. The authority is spent minting
+# a link instead; what walks to the door can do one thing, once, soon.
+_kall = c.get("/api/admin/kiosks", headers=A).json()
+_k1 = _kall[0]["kiosk_id"]
+_link = c.post(f"/api/admin/kiosks/{_k1}/enrol", headers=A, json={}).json()
+ok(_link["token"] and _link["expires_sec"] > 0,
+   "an owner mints a setup link at the screen, without going anywhere")
+ok(f"/ops/#/enrol/{_link['token']}" in _link["url"],
+   "and it carries the token rather than the kiosk's own id — a photo of "
+   "a QR that named the door would let anybody's phone claim to be it")
+_claim = c.post("/api/kiosk/claim", json={"token": _link["token"]})
+ok(_claim.status_code == 200 and _claim.json()["kiosk_id"] == _k1,
+   "whoever is standing at the tablet spends it with no session at all, "
+   "which is the whole point")
+ok(c.post("/api/kiosk/claim",
+          json={"token": _link["token"]}).status_code == 410,
+   "and it is gone the moment it is used: a link left live on somebody's "
+   "phone is a door they can pretend to be standing at")
+ok(c.post("/api/kiosk/claim", json={"token": "nonsense"}).status_code == 410,
+   "a token nobody minted gets the same answer as a spent one — a "
+   "different error would say which guesses were close")
+_stale = c.post(f"/api/admin/kiosks/{_k1}/enrol", headers=A, json={}).json()
+_kc2 = _db.connect()
+_kc2.execute("UPDATE kiosk_enrolments SET expires_at=? WHERE token=?",
+             (_t0.time() - 1, _stale["token"]))
+_kc2.commit(); _kc2.close()
+ok(c.post("/api/kiosk/claim",
+          json={"token": _stale["token"]}).status_code == 410,
+   "and one nobody spent dies on its own, so a link that never made it "
+   "to the door does not wait around for somebody else to find")
+ok(c.post("/api/admin/kiosks/nosuchkiosk/enrol",
+          headers=A, json={}).status_code == 404,
+   "there is no link for a kiosk that does not exist")
+_live = [k for k in c.get("/api/admin/kiosks", headers=A).json()
+         if k["kiosk_id"] == _k1][0]
+ok(_live["claimed_at"] > 0,
+   "the kiosk row records when a tablet last took its identity — a "
+   "device claimed a door and somebody should be able to see that later")
+_ejs = ops_app_js()
+ok('S.tab === "enrol" && S.deepKey' in _ejs
+   and 'S.tab !== "enrol"' in _ejs,
+   "and the screen renders with nobody signed in: the tab list would "
+   "otherwise bounce an unknown tab to the shop and throw the setup away "
+   "without a word")
 
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),

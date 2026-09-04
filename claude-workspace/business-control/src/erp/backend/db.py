@@ -450,6 +450,25 @@ CREATE INDEX IF NOT EXISTS stock_layers_line
   ON stock_layers(store_id, product_id, created_at);
 """
 
+ENROL_TABLE = """
+/* Handing a tablet its identity, without handing anybody an admin
+   session to do it with. An owner mints one of these at the screen and a
+   member of staff walks it to the door — single-use and short-lived, so
+   a photograph of the QR taken afterwards is worth nothing, and the
+   claim is stamped so there is a record of which device took it. */
+CREATE TABLE IF NOT EXISTS kiosk_enrolments (
+  token TEXT PRIMARY KEY,
+  kiosk_id TEXT NOT NULL,
+  made_by INTEGER DEFAULT 0,
+  made_at REAL NOT NULL,
+  expires_at REAL NOT NULL,
+  used INTEGER DEFAULT 0,
+  claimed_at REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS kiosk_enrolments_kiosk
+  ON kiosk_enrolments(kiosk_id);
+"""
+
 REFUSAL_TABLE = """
 /* Every time a metered limit turned somebody away. Written here rather
    than in metering.py's own module so that an install upgraded into this
@@ -670,6 +689,7 @@ def init() -> None:
         con.executescript(KIOSK_TABLE)
         con.executescript(STOCK_LEDGER)
         con.executescript(REFUSAL_TABLE)
+        con.executescript(ENROL_TABLE)
         for stmt in MIGRATIONS:
             try:
                 con.execute(stmt)

@@ -816,7 +816,13 @@ async function renderKiosks() {
           <td class="dim">${k.created_at ? fmtDate(k.created_at) : "—"}</td>
           <td><span class="pill ${word === "in use" ? "ok"
             : word.startsWith("idle") || word === "never used" ? "bad" : ""}"
-            title="${esc(why)}">${esc(word)}</span></td>
+            title="${esc(why)}">${esc(word)}</span>
+            ${k.link_out_sec ? `<span class="pill warn" title="somebody is
+              carrying a setup link for this tablet right now">link out
+              ${Math.max(1, Math.round(k.link_out_sec / 60))}m</span>` : ""}
+            ${k.claimed_at ? `<span class="dim"
+              title="when a tablet last took this kiosk's identity">set up
+              ${fmtAgo(k.claimed_at)}</span>` : ""}</td>
           <td class="row-acts">
             <button class="btn alt sm" data-ksetup="${esc(k.kiosk_id)}"
               title="the link to open ON the tablet — this is the step
@@ -869,31 +875,47 @@ async function renderKiosks() {
    deliberate moment where an owner hands one to a tablet — carried on a
    QR because the tablet is across the room from the computer that
    registered it. */
-function kioskSetup(k, arrived = false) {
+async function kioskSetup(k, arrived = false) {
   if (!k) return;
-  const url = location.origin + "/ops/#/kiosks/" + k.kiosk_id;
   const isHere = localStorage.getItem(KIOSK_KEY) === k.kiosk_id;
   modal(`<h3>Set up ${esc(k.label || k.kiosk_id)}</h3>
-    ${arrived ? `<p class="dim">You opened this kiosk's own link. If this
-      is the tablet by the door, make it official.</p>` : ""}
-    <p class="dim">Open this link on the tablet itself and press the
-      button there. Until something does that, the tablet does not know
-      it is a kiosk and punches from it carry no kiosk at all — which is
-      why anybody bound to this one cannot clock in yet.</p>
+    ${arrived ? `<p class="dim">You opened this kiosk's row from its own
+      link.</p>` : ""}
+    <p class="dim">Making a one-time setup link…</p>`);
+  let link;
+  try {
+    link = await api(`/api/admin/kiosks/${k.kiosk_id}/enrol`, { body: {} });
+  } catch (e) { closeModal(); toast(e.message); return; }
+  const mins = Math.max(1, Math.round(link.expires_sec / 60));
+  modal(`<h3>Set up ${esc(k.label || k.kiosk_id)}</h3>
+    <p class="dim">Scan this on the tablet by the door, or send the link
+      to whoever is standing next to it. They do not need an account and
+      they do not need us: nobody should have to sign an owner in on a
+      tablet that is going to sit in a doorway.</p>
     <div style="text-align:center;margin:10px 0">
-      ${qrImg(url, 150)}
-      <p class="dim" style="word-break:break-all">${esc(url)}</p></div>
+      ${qrImg(link.url, 150)}
+      <p class="dim" style="word-break:break-all">${esc(link.url)}</p>
+      <p class="dim"><b>Good once, for ${mins} minute${mins === 1 ? "" : "s"}
+        </b> — so a photograph of this code taken afterwards is worth
+        nothing.</p></div>
     <div class="modal-foot">
       <button class="btn alt" data-close>Close</button>
+      <button class="btn alt" id="k-copy">Copy link</button>
       <button class="btn" id="k-claim" ${isHere ? "disabled" : ""}>${isHere
         ? "this device already is" : "Make THIS device the kiosk"}</button>
     </div>`);
+  const cp = $("#k-copy");
+  if (cp) cp.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(link.url);
+      toast("link copied — it dies in " + mins + " minutes");
+    } catch { toast("could not copy — read it off the screen"); }
+  };
   const cb = $("#k-claim");
   if (cb) cb.onclick = () => {
-    localStorage.setItem(KIOSK_KEY, k.kiosk_id);
-    closeModal();
-    toast(`this device is now the ${k.label || k.kiosk_id} kiosk`);
-    renderKiosks();
+    // We are already an admin standing here, so spend the link on
+    // ourselves rather than making a second path to the same place.
+    location.hash = "#/enrol/" + link.token;
   };
 }
 
@@ -943,4 +965,38 @@ function kioskForm(k) {
       }
     } catch (e) { toast(e.message); }
   };
+}
+
+/* The tablet's own screen. Reached with no session, because an owner
+   walking to every door and signing in on it is how a shop ends up with
+   a till permanently logged in as the manager. The token is spent here
+   and is worth nothing afterwards. */
+async function renderEnrol() {
+  const token = S.deepKey;
+  view().innerHTML = `<div class="card"><b>Setting this tablet up…</b></div>`;
+  let k;
+  try {
+    k = await api("/api/kiosk/claim", { body: { token } });
+  } catch (e) {
+    view().innerHTML = `<div class="card empty">
+      <b>That setup link did not work</b>
+      <span class="dim">${esc(e.message)}</span>
+      <p class="dim">Links are good once and not for long, on purpose: a
+        photograph of the code taken afterwards is worth nothing.</p>
+    </div>`;
+    S.deepKey = null;
+    return;
+  }
+  S.deepKey = null;
+  localStorage.setItem(KIOSK_KEY, k.kiosk_id);
+  view().innerHTML = `<div class="card">
+    <b>This tablet is now the ${esc(k.label || k.kiosk_id)} kiosk</b>
+    <span class="dim">${k.store ? esc(k.store) + ". " : ""}Punches made
+      here carry that as their location, so anybody bound to this kiosk
+      can clock in on it now. Leave the tablet on this app.</span>
+    <div class="chips" style="margin-top:10px">
+      <button class="btn" id="en-clock">Open the time clock</button>
+    </div></div>`;
+  const b = $("#en-clock");
+  if (b) b.onclick = () => { S.tab = "clock"; render(); };
 }

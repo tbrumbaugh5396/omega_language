@@ -1666,9 +1666,24 @@ class KioskBody(BaseModel):
 
 @app.get("/api/admin/kiosks")
 def kiosks_list(user=Depends(admin_user), con=Depends(get_con)):
-    return [dict(r) for r in con.execute(
+    rows = [dict(r) for r in con.execute(
         "SELECT k.*, COALESCE(s.name,'') AS store FROM kiosks k"
         " LEFT JOIN stores s ON s.id=k.store_id ORDER BY k.label, k.kiosk_id")]
+    now = db.now()
+    for k in rows:
+        # A setup link already walking to the door, so nobody mints five
+        # of them and leaves four live.
+        live = con.execute(
+            "SELECT expires_at FROM kiosk_enrolments WHERE kiosk_id=?"
+            " AND used=0 AND expires_at>? ORDER BY expires_at DESC LIMIT 1",
+            (k["kiosk_id"], now)).fetchone()
+        k["link_out_sec"] = int(live["expires_at"] - now) if live else 0
+        last = con.execute(
+            "SELECT claimed_at FROM kiosk_enrolments WHERE kiosk_id=?"
+            " AND claimed_at>0 ORDER BY claimed_at DESC LIMIT 1",
+            (k["kiosk_id"],)).fetchone()
+        k["claimed_at"] = last["claimed_at"] if last else 0
+    return rows
 
 
 @app.post("/api/admin/kiosks")
@@ -1715,6 +1730,71 @@ def _touch_kiosk(con, kid: str) -> None:
         con.commit()
     except Exception:                                        # noqa: BLE001
         pass
+
+
+@app.post("/api/admin/kiosks/{kiosk_id}/enrol")
+def kiosk_enrol_link(kiosk_id: str, user=Depends(admin_user),
+                     con=Depends(get_con)):
+    """Mint a link that lets somebody set a tablet up without being us.
+
+    Setting a kiosk up meant signing in as an owner ON the tablet, which
+    means an owner walking to every door — and in a shop that is how a
+    till ends up permanently logged in as the manager. This is the other
+    way round: the authority is spent minting the link, and what walks to
+    the door is a code that can do exactly one thing, once, soon.
+    """
+    k = con.execute("SELECT * FROM kiosks WHERE kiosk_id=?",
+                    (kiosk_id,)).fetchone()
+    if k is None:
+        raise HTTPException(404, "no such kiosk")
+    token = secrets.token_urlsafe(24)
+    ttl = int(CFG.get("kiosk_enrol_ttl_sec", 900))
+    now = db.now()
+    con.execute(
+        "INSERT INTO kiosk_enrolments(token,kiosk_id,made_by,made_at,"
+        "expires_at) VALUES(?,?,?,?,?)",
+        (token, kiosk_id, user["id"], now, now + ttl))
+    con.commit()
+    audit.record(con, user, "POST", f"/api/admin/kiosks/{kiosk_id}/enrol",
+                 f"enrolment link for {k['label'] or kiosk_id}", 200)
+    return {"token": token, "expires_sec": ttl,
+            "url": f"{base_url()}/ops/#/enrol/{token}",
+            "label": k["label"] or kiosk_id}
+
+
+class ClaimBody(BaseModel):
+    token: str = ""
+
+
+@app.post("/api/kiosk/claim")
+def kiosk_claim(body: ClaimBody, con=Depends(get_con)):
+    """Spend an enrolment link. Deliberately open: whoever is standing at
+    the tablet does this, and requiring a session here would put us back
+    to needing an owner at every door.
+
+    The token is the whole of the authority, so it is burned on use and
+    dies on its own besides. What it buys is not access to anything — it
+    tells a browser which door it is standing at.
+    """
+    row = con.execute(
+        "SELECT * FROM kiosk_enrolments WHERE token=? AND used=0"
+        " AND expires_at>?", (body.token.strip(), db.now())).fetchone()
+    if row is None:
+        raise HTTPException(
+            410, "that setup link has been used already or has run out. "
+                 "Ask for a fresh one from Company \u2192 Clock kiosks.")
+    k = con.execute("SELECT k.*, COALESCE(s.name,'') AS store FROM kiosks k"
+                    " LEFT JOIN stores s ON s.id=k.store_id"
+                    " WHERE k.kiosk_id=? AND k.active=1",
+                    (row["kiosk_id"],)).fetchone()
+    if k is None:
+        raise HTTPException(410, "that kiosk has been removed or switched "
+                                 "off since the link was made")
+    con.execute("UPDATE kiosk_enrolments SET used=1, claimed_at=?"
+                " WHERE token=?", (db.now(), row["token"]))
+    con.commit()
+    return {"kiosk_id": k["kiosk_id"], "label": k["label"],
+            "store": k["store"]}
 
 
 @app.delete("/api/admin/kiosks/{kiosk_id}")
