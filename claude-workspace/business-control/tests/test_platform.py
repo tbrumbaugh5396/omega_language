@@ -617,6 +617,12 @@ ok(all(s["published"] for s in c.get(
 # may have — and a client who asks for five tills is asking a question
 # with a price attached.
 from storefront.backend import pricebook as _pb  # noqa: E402
+
+
+def _fleet_events():
+    from erp.backend import fleet as _fl
+    return _fl.events(20)
+
 _allow = _pb.allowances()
 ok(set(_allow) >= {"locations", "staff_seats", "registers", "clock_kiosks"},
    "the price book is the source for what a plan includes and what more "
@@ -661,9 +667,9 @@ _t2 = c.post("/api/pos/session", headers=_ah,
 ok(_t2.status_code == 409 and "$19 a month" in _t2.json()["detail"],
    "and the second is refused at the door with the price in the message, "
    "not discovered on an invoice a month later")
-ok("Platform board" in _t2.json()["detail"],
-   "saying where it is raised, because a refusal that does not is a "
-   "support call")
+ok("What you pay for" in _t2.json()["detail"],
+   "saying where it is raised — and now that is a screen they can act on "
+   "themselves, not a phone call to us")
 c.post("/api/pos/session/close", headers=_ah, json={
     "session_id": _t1.json()["id"], "counted_cents": 0})
 ok(c.post("/api/pos/session", headers=_ah, json={
@@ -674,6 +680,49 @@ c.post("/api/pos/session/close", headers=_ah, json={
     "session_id": c.get("/api/pos/session?register=lane-c",
                         headers=_ah).json()["session"]["id"],
     "counted_cents": 0})
+
+# Somebody refused a fourth lane is standing at a counter with a queue in
+# front of them. Ringing a supplier to say yes to a published price is not
+# caution, it is a business held up by its software.
+c.post("/api/store/admin/fleet/tenants/alpha/limits", headers=AA,
+       json={"registers": 1})
+_up = c.post("/api/entitlements/raise", headers=_ah,
+             json={"kind": "registers", "to": 3}).json()
+ok(_up["ok"] and _up["to"] == 3 and _up["monthly_cents"] == 3800,
+   "so within a ceiling they raise it themselves, at the price already on "
+   "the screen — two beyond the included one is $38")
+ok("next invoice" in _up["note"],
+   "and it says when the money happens: today it is a permission, not a "
+   "charge")
+_r1 = c.post("/api/pos/session", headers=_ah,
+             json={"register": "self-a", "float_cents": 0})
+ok(_r1.status_code == 200, "the till they were refused opens immediately")
+_big = c.post("/api/entitlements/raise", headers=_ah,
+              json={"kind": "registers", "to": 50,
+                    "why": "second site"}).json()
+ok(not _big["ok"] and _big["asked"] and _big["ceiling"],
+   "a jump past the ceiling becomes a request rather than a refusal — "
+   "fifty tills is either a new shop or a mistake, and both deserve a "
+   "person")
+ok(_tn.limits_of("alpha")["registers"] == 3,
+   "and nothing changed while it waits")
+ok(any("limit asked" in (e.get("what") or "")
+       for e in _fleet_events()[:8]),
+   "the ask reaches the provider's fleet history, which is where they "
+   "already look")
+_down = c.post("/api/entitlements/raise", headers=_ah,
+               json={"kind": "registers", "to": 0})
+ok(_down.status_code == 409 and "in use" in _down.json()["detail"],
+   "and it cannot be dropped below what is running — a limit under the "
+   "usage is a bill nobody can act on")
+c.post("/api/pos/session/close", headers=_ah, json={
+    "session_id": _r1.json()["id"], "counted_cents": 0})
+ok(c.post("/api/entitlements/raise", headers=_ah,
+          json={"kind": "registers", "to": 1}).json()["ok"],
+   "once they stop using them, the lower number sticks")
+ok(c.post("/api/entitlements/raise", headers=_ah,
+          json={"kind": "unicorns", "to": 3}).status_code == 400,
+   "and nothing is counted in units this software does not have")
 
 _tn.set_limits("alpha", {})
 ok(_tn.limits_of("alpha") == {},

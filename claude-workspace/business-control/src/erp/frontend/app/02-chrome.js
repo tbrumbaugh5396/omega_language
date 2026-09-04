@@ -134,6 +134,8 @@ const TABS = [
     group: "Connections", roles: ["admin"] },
   { id: "ig-laceup", label: "LaceUp", icon: "truck",
     group: "Connections", roles: ["admin"] },
+  { id: "plan", label: "What you pay for", icon: "card", group: "Company",
+    roles: ["admin"] },
   { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
     roles: ["admin"] },
   { id: "dbview", label: "Database", icon: "list", group: "Company",
@@ -392,6 +394,7 @@ async function render() {
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
     till: renderTill, field: renderField, website: renderWebsite,
+    plan: renderPlan,
     integrations: renderIntegrations, slack: renderSlack,
     // every "ig:<name>" tab lands on the same screen, told which one
     ...Object.fromEntries(TABS.filter((t) => t.id.startsWith("ig-"))

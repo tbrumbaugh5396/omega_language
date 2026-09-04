@@ -1619,3 +1619,9 @@ body.lane-on { overflow: hidden; }
 .inbound-eta { font-size: 12px; }
 .dl-acts.inbound-acts { grid-template-columns: 84px; }
 .dl-acts.fleet-acts { grid-template-columns: repeat(3, 98px); }
+.doc-line.planline { grid-template-columns:
+  minmax(0, 1fr) 118px minmax(0, 210px) 84px; }
+.plan-use { font-variant-numeric: tabular-nums; }
+.plan-use b { font-size: 17px; }
+.plan-each { font-size: 12px; }
+.dl-acts.planline-acts { grid-template-columns: 84px; }

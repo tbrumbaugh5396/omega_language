@@ -252,6 +252,38 @@ def caps_of(tid) -> list | None:
 # plan and an invoice nobody can explain.
 LIMIT_KEYS = ("locations", "seats", "registers", "kiosks")
 
+# How far a client may raise their own limits without asking. Small
+# increments are a decision they are entitled to make about their own
+# business at a published price; a jump to fifty tills is a conversation,
+# because it is either a new shop or a mistake and both deserve a person.
+SELF_SERVE_CEILING = {"locations": 5, "seats": 25, "registers": 6,
+                      "kiosks": 6}
+
+
+def ceiling_of(tid) -> dict:
+    """The most this tenant may grant themselves, per kind."""
+    reg = registry()
+    row = (reg or {}).get("tenants", {}).get(tid or "", {})
+    out = dict(SELF_SERVE_CEILING)
+    for k, v in (row.get("self_serve_max") or {}).items():
+        if k in LIMIT_KEYS and str(v).strip() != "":
+            out[k] = max(0, int(v))
+    return out
+
+
+def set_ceiling(tid: str, caps: dict) -> dict:
+    reg = registry() or {"tenants": {}}
+    row = reg.setdefault("tenants", {}).setdefault(tid, {})
+    keep = {k: max(0, int(v)) for k, v in caps.items()
+            if k in LIMIT_KEYS and str(v).strip() != ""}
+    if keep:
+        row["self_serve_max"] = keep
+    else:
+        row.pop("self_serve_max", None)
+    REGISTRY_PATH.write_text(json.dumps(reg, indent=2))
+    bust_cache()
+    return keep
+
 
 def limits_of(tid) -> dict:
     """The counts this tenant may use. The provider's own install has

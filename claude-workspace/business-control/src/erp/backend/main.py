@@ -805,7 +805,7 @@ def _check_room(kind: str, in_use: int, what: str) -> None:
         f"this plan covers {cap} {what}{'' if cap == 1 else ''} and "
         f"{in_use} {'is' if in_use == 1 else 'are'} already set up"
         + (f" — another is ${each} a month" if each else "")
-        + ". An owner can raise it from the Platform board.")
+        + ". An owner can add one under Company \u2192 What you pay for.")
 
 
 def _clean_code(raw: str) -> str:
@@ -5619,6 +5619,91 @@ def website_set(body: SiteBody, user=Depends(admin_user)):
             "external_site": CFG.get("external_site") or ""}
 
 
+class RaiseBody(BaseModel):
+    kind: str
+    to: int
+    why: str = ""
+
+
+def _in_use(con, kind: str) -> int:
+    return {
+        "locations": lambda: con.execute(
+            "SELECT COUNT(*) AS n FROM stores WHERE active=1").fetchone()["n"],
+        "registers": lambda: con.execute(
+            "SELECT COUNT(*) AS n FROM register_sessions WHERE closed_at=0"
+        ).fetchone()["n"],
+        "kiosks": lambda: con.execute(
+            "SELECT COUNT(*) AS n FROM kiosks WHERE active=1").fetchone()["n"],
+        "seats": lambda: con.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE active=1 AND"
+            " (is_admin=1 OR role IN ('owner','employee','cashier',"
+            " 'teacher','volunteer','director'))").fetchone()["n"],
+    }[kind]()
+
+
+@app.post("/api/entitlements/raise")
+def entitlements_raise(body: RaiseBody, user=Depends(admin_user),
+                       con=Depends(get_con)):
+    """Let the business decide it needs another till.
+
+    Somebody who has just been refused a fourth lane is standing at a
+    counter with a queue in front of them. Making them ring their supplier
+    to say yes to a published price is not caution, it is a business held
+    up by its software — so within a ceiling they say yes themselves, at
+    the price already on the screen, with their name on the decision.
+
+    Beyond the ceiling it becomes a request rather than a refusal: a jump
+    to fifty tills is either a new shop or a mistake, and both deserve a
+    person. The ask reaches the provider's fleet history, which is where
+    they already look.
+    """
+    from . import fleet
+    kind = body.kind
+    if kind not in tenancy.LIMIT_KEYS:
+        raise HTTPException(400, f"nothing here is counted in {kind}")
+    tid = tenancy.CURRENT.get()
+    if not tid:
+        raise HTTPException(
+            409, "this install has no plan behind it, so nothing is counted "
+                 "and nothing needs raising")
+    want = max(0, int(body.to))
+    now = entitled(kind)
+    in_use = _in_use(con, kind)
+    if want < in_use:
+        raise HTTPException(
+            409, f"{in_use} are in use, so it cannot go to {want} — stop "
+                 "using them first and the lower number will stick")
+    ceiling = tenancy.ceiling_of(tid).get(kind, 0)
+    each = _allowance(kind)
+    if want > ceiling:
+        fleet.log("limit asked",
+                  f"{tid}: {kind} {now} \u2192 {want}"
+                  + (f" — {body.why[:120]}" if body.why else ""),
+                  user["name"])
+        return {"ok": False, "asked": True, "kind": kind, "to": want,
+                "ceiling": ceiling,
+                "note": f"That is above the {ceiling} you can set yourself, "
+                        "so it has gone to your account manager rather than "
+                        f"being refused. Anything up to {ceiling} takes "
+                        "effect immediately."}
+    lim = dict(tenancy.limits_of(tid))
+    lim[kind] = want
+    tenancy.set_limits(tid, lim)
+    beyond = max(0, want - each.get("included", 0))
+    monthly = beyond * each.get("each_cents", 0)
+    fleet.log("limit raised" if want > now else "limit lowered",
+              f"{tid}: {kind} {now} \u2192 {want} "
+              f"(${monthly / 100:.0f}/mo)", user["name"])
+    audit.record(con, user, "POST", "/api/entitlements/raise",
+                 f"{kind} {now} to {want}", 200)
+    return {"ok": True, "kind": kind, "from": now, "to": want,
+            "monthly_cents": monthly,
+            "each_cents": each.get("each_cents", 0),
+            "note": "In effect now. It joins the next invoice — nothing is "
+                    "charged today, and dropping it back before then costs "
+                    "nothing."}
+
+
 @app.get("/api/entitlements")
 def entitlements(user=Depends(current_user), con=Depends(get_con)):
     """What this install may have, what it is using, and what more costs.
@@ -5640,6 +5725,8 @@ def entitlements(user=Depends(current_user), con=Depends(get_con)):
             " (is_admin=1 OR role IN ('owner','employee','cashier',"
             " 'teacher','volunteer','director'))").fetchone()["n"],
     }
+    tid = tenancy.CURRENT.get()
+    ceiling = tenancy.ceiling_of(tid) if tid else {}
     out = []
     for kind, used in counts.items():
         cap = entitled(kind)
@@ -5647,8 +5734,9 @@ def entitlements(user=Depends(current_user), con=Depends(get_con)):
         out.append({"kind": kind, "used": used, "allowed": cap,
                     "room": max(0, cap - used), "over": max(0, used - cap),
                     "each_cents": each.get("each_cents", 0),
-                    "included": each.get("included", 0)})
-    tid = tenancy.CURRENT.get()
+                    "included": each.get("included", 0),
+                    "self_serve_max": ceiling.get(kind, 0),
+                    "can_raise": bool(tid) and cap < ceiling.get(kind, 0)})
     return {"tenant": tid or "", "lines": out,
             "granted": tenancy.limits_of(tid) if tid else {},
             "overage_cents": sum(x["over"] * x["each_cents"] for x in out),

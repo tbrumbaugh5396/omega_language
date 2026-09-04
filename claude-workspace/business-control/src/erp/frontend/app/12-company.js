@@ -616,3 +616,102 @@ async function loadDiscordMsgs() {
     el.innerHTML = `<p class="dim">${esc(e.message)}</p>`;
   }
 }
+
+
+/* ---------- what you pay for ----------
+   Somebody refused a fourth till is standing at a counter with a queue in
+   front of them. Making them ring their supplier to say yes to a
+   published price is not caution, it is a business held up by its
+   software — so within a ceiling they say yes here, and above it the ask
+   goes to a person instead of being refused. */
+const LIMIT_WORDS = {
+  registers: ["Tills", "open at the same time"],
+  kiosks: ["Clock kiosks", "tablets people punch in on"],
+  locations: ["Locations", "shops, depots, kitchens"],
+  seats: ["Staff seats", "people who sign in to run the business"],
+};
+
+async function renderPlan() {
+  const d = await api("/api/entitlements");
+  const money2 = (c) => money(c);
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>What you pay for</h2>
+        <p class="dim">${d.tenant
+          ? "What your plan covers, what you are using, and what another "
+            + "one costs. Anything inside your own ceiling takes effect "
+            + "the moment you set it."
+          : "This install is not on a metered plan — nothing here is "
+            + "counted or capped."}</p></div>
+    </div>
+    <div class="sig-rows">${d.lines.map((l) => {
+      const w = LIMIT_WORDS[l.kind] || [l.kind, ""];
+      const tight = l.room === 0;
+      return `<div class="doc-line planline${
+        l.over ? " dl-awaiting" : tight ? " dl-signed" : ""}">
+        <span class="dl-title"><b>${w[0]}</b>
+          <span class="dim">${w[1]}</span></span>
+        <span class="plan-use ${tight ? "low" : ""}">
+          <b>${l.used}</b> of ${l.allowed}</span>
+        <span class="dim plan-each">${l.each_cents
+          ? money2(l.each_cents) + " each beyond " + l.included : "included"}
+        </span>
+        <span class="dl-acts planline-acts">${d.tenant
+          ? `<button class="btn alt sm" data-plan="${l.kind}"
+               data-now="${l.allowed}" data-max="${l.self_serve_max}"
+               data-each="${l.each_cents}">Change</button>` : ""}</span>
+      </div>`;
+    }).join("")}</div>
+    ${d.overage_cents ? `<div class="card alert">
+      <b>${money2(d.overage_cents)} a month over what you are covered
+        for</b>
+      <span class="dim">More is in use than the plan allows. Nothing has
+        been switched off — raise the number and it stops being an
+        overage, or stop using them and it stops being a bill.</span>
+    </div>` : ""}
+    <p class="dim">${esc(d.note)}</p>`;
+  view().querySelectorAll("[data-plan]").forEach((b) =>
+    b.onclick = () => planChange(b.dataset.plan, +b.dataset.now,
+                                +b.dataset.max, +b.dataset.each));
+}
+
+function planChange(kind, now, ceiling, each) {
+  const w = LIMIT_WORDS[kind] || [kind, ""];
+  modal(`<h3>${w[0]}</h3>
+    <p class="dim">You have ${now}. ${each
+      ? `Each one beyond what the plan includes is ${money(each)} a month.`
+      : ""} You can set up to ${ceiling} yourself; past that it goes to
+      your account manager rather than being refused.</p>
+    <label>How many</label>
+    <input id="pl-n" type="number" min="0" value="${now}">
+    <label>Why <span class="opt">only needed above ${ceiling}</span></label>
+    <input id="pl-why" placeholder="opening a second site">
+    <p class="dim" id="pl-cost"></p>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="pl-go">Set it</button></div>`);
+  const cost = () => {
+    const n = +$("#pl-n").value || 0;
+    $("#pl-cost").textContent = n > ceiling
+      ? `Above ${ceiling} — this becomes a request, not a change.`
+      : n === now ? ""
+        : n > now
+          ? `${n - now} more · about ${money((n - now) * each)} a month more.`
+          : `${now - n} fewer · about ${money((now - n) * each)} a month less.`;
+  };
+  $("#pl-n").oninput = cost;
+  cost();
+  $("#pl-go").onclick = async () => {
+    try {
+      const r = await api("/api/entitlements/raise", { body: {
+        kind, to: +$("#pl-n").value || 0, why: $("#pl-why").value.trim() } });
+      closeModal();
+      toast(r.asked
+        ? "Asked — your account manager has it"
+        : r.to > now
+          ? `Done — ${r.to} now, ${money(r.monthly_cents)} a month`
+          : `Done — ${r.to} now`);
+      renderPlan();
+    } catch (e) { toast(e.message); }
+  };
+}
