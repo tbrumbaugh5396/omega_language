@@ -1541,6 +1541,74 @@ ok(_sides == {"materials", "goods"},
 ok(any(m["reason"] == f"run:{_run['id']}" for m in _tr["moves"]
        if m["side"] == "goods"),
    "with the run itself as the reason on the shelf side")
+
+# --- what it cost, carried through ------------------------------------
+# The list price on a material is what we expect to pay. The average is
+# what we did. They are the same number until a supplier reprices, and
+# then a margin computed from the first is a margin about a purchase
+# nobody made.
+_cm = c.post("/api/supply/materials", headers=A, json={
+    "name": "Costed syrup", "unit": "L", "unit_cost_cents": 100,
+    "supplier_id": _sup["id"]}).json()
+_cmid = [m for m in c.get("/api/supply", headers=A).json()["materials"]
+         if m["name"] == "Costed syrup"][0]["id"]
+_cpo = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _sup["id"],
+    "lines": [{"material_id": _cmid, "qty": 10, "unit_cost_cents": 100}]}
+    ).json()
+_cl = _db.connect()
+_cline = _cl.execute("SELECT id FROM purchase_order_lines WHERE po_id=?"
+                     " ORDER BY id DESC LIMIT 1",
+                     (_cpo["id"],)).fetchone()["id"]
+_cl.close()
+c.post(f"/api/supply/purchase-orders/{_cpo['id']}/receive", headers=A,
+       json={"lines": {str(_cline): 10}})
+_after1 = [m for m in c.get("/api/supply", headers=A).json()["materials"]
+           if m["id"] == _cmid][0]
+ok(round(_after1["avg_cost_cents"]) == 100,
+   "a receipt at a price is what the stock on hand cost")
+_cpo2 = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _sup["id"],
+    "lines": [{"material_id": _cmid, "qty": 10, "unit_cost_cents": 300}]}
+    ).json()
+_cl = _db.connect()
+_cline2 = _cl.execute("SELECT id FROM purchase_order_lines WHERE po_id=?"
+                      " ORDER BY id DESC LIMIT 1",
+                      (_cpo2["id"],)).fetchone()["id"]
+_cl.close()
+c.post(f"/api/supply/purchase-orders/{_cpo2['id']}/receive", headers=A,
+       json={"lines": {str(_cline2): 10}})
+_after2 = [m for m in c.get("/api/supply", headers=A).json()["materials"]
+           if m["id"] == _cmid][0]
+ok(round(_after2["avg_cost_cents"]) == 200,
+   "and a second at a different price moves the average, weighted by what "
+   "was already on the shelf — ten at 100 and ten at 300 is 200, not 300")
+# Its own product, so the recipe under test is the only one on it.
+c.post("/api/admin/products", headers=A, json={
+    "sku": "COST-TEST", "name": "Costed line", "price_cents": 500,
+    "case_size": 1, "case_price_cents": 500})
+_cprod = [x for x in c.get("/api/products", headers=A).json()
+          if x["sku"] == "COST-TEST"][0]["id"]
+c.post(f"/api/supply/bom/{_cprod}", headers=A,
+       json={"material_id": _cmid, "qty_per_case": 2})
+_crun = c.post("/api/supply/runs", headers=A,
+               json={"product_id": _cprod, "planned_cases": 5}).json()
+_cfin = c.post(f"/api/supply/runs/{_crun['id']}/finish", headers=A,
+               json={"actual_cases": 5}).json()
+ok(_cfin["cost_cents"] == 2000,
+   "a run values what it consumed at what that stock actually cost — ten "
+   "litres at the 200 average, not at the 300 the last delivery happened "
+   "to be")
+ok(_cfin["made"]["per_case_cents"] == 400,
+   "which divides into a real cost per case")
+ok(_cfin["made"]["per_unit_cents"] > 0,
+   "and per unit, carried onto the goods themselves so a shelf knows what "
+   "its stock cost on the day it was made rather than what the recipe "
+   "would cost to buy today")
+_cmoves = c.get(f"/api/inventory/moves?product_id={_cprod}", headers=A).json()
+ok(any(m["unit_cost_cents"] > 0 for m in _cmoves["moves"]),
+   "the movement carries it, so a repricing months later cannot restate "
+   "the margin on stock already made and already sold")
 ok(c.post(f"/api/supply/runs/{_run['id']}/finish", headers=A,
           json={"actual_cases": 1}).status_code == 400,
    "a finished run can't be finished twice")

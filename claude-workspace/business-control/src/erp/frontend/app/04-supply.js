@@ -549,7 +549,8 @@ async function finishForm(rid, refresh) {
         ? `Done — but ${r.went_negative.join(", ")} went negative, so the `
           + "recipe or the counts need a look"
         : r.made
-          ? `Done — ${r.cases} cases, ${r.made.units} units onto the shelf`
+          ? `Done — ${r.cases} cases at ${money(r.made.per_case_cents)} each, `
+          + `${r.made.units} units onto the shelf`
           : `Done — ${r.cases} cases, materials consumed`);
       refresh();
     } catch (e) { toast(e.message); }
@@ -562,12 +563,25 @@ async function finishForm(rid, refresh) {
 async function trailFor(pid, name) {
   const d = await api(`/api/supply/trail/${pid}?days=180`);
   modal(`<h3>${esc(name)}</h3>
-    <p class="dim">${d.runs} run${d.runs === 1 ? "" : "s"} ·
-      ${d.materials_used} of materials consumed · ${d.made_units} units
-      made. ${esc(d.note)}</p>
+    <div class="mrr-heads">
+      <div class="mrr-fig"><span class="dim">runs</span>
+        <b>${d.runs}</b></div>
+      <div class="mrr-fig"><span class="dim">materials consumed</span>
+        <b>${d.materials_used}</b></div>
+      <div class="mrr-fig"><span class="dim">units made</span>
+        <b>${d.made_units}</b></div>
+      <div class="mrr-fig" title="what the materials actually cost on the
+        days they were consumed — not the recipe at today's prices, which
+        changes the moment a supplier reprices and would restate the
+        margin on stock made months ago">
+        <span class="dim">cost to make</span>
+        <b>${d.cost_per_unit_cents !== null
+          ? money(d.cost_per_unit_cents) + "/unit" : "—"}</b></div>
+    </div>
+    <p class="dim">${esc(d.note)}</p>
     ${d.moves.length ? `<div class="tablewrap"><table>
-      <thead><tr><th>when</th><th>side</th><th>change</th><th>what</th>
-        <th>why</th></tr></thead>
+      <thead><tr><th>when</th><th>side</th><th>change</th>
+        <th>what · valued at</th><th>why</th></tr></thead>
       <tbody>${d.moves.map((m) => `<tr>
         <td class="dim">${fmtDate(m.at)}</td>
         <td>${m.side === "goods"
@@ -575,7 +589,9 @@ async function trailFor(pid, name) {
           : '<span class="pill">materials</span>'}</td>
         <td class="${m.qty > 0 ? "good" : "low"}">${m.qty > 0 ? "+" : ""}${
           m.qty} ${esc(m.unit)}</td>
-        <td>${esc(m.what)}</td>
+        <td>${esc(m.what)}${m.unit_cost_cents
+          ? `<br><span class="dim">${money(m.unit_cost_cents)} each · ${
+            money(Math.abs(m.qty) * m.unit_cost_cents)}</span>` : ""}</td>
         <td>${esc(m.reason)}${m.counted
           ? ' <span class="pill ok">counted</span>' : ""}
           ${m.note ? `<br><span class="dim">${esc(m.note)}</span>` : ""}</td>

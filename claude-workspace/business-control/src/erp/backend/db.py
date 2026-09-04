@@ -405,6 +405,7 @@ CREATE TABLE IF NOT EXISTS inventory_moves (
   product_id INTEGER NOT NULL,
   qty REAL NOT NULL,                       -- signed: + in, - out
   balance REAL NOT NULL DEFAULT 0,         -- what it read afterwards
+  unit_cost_cents REAL DEFAULT 0,          -- what these units cost to make
   reason TEXT NOT NULL,                    -- order:12, visit:4, par, count
   counted INTEGER DEFAULT 0,               -- 1 = somebody actually looked
   actor TEXT DEFAULT '',
@@ -433,7 +434,8 @@ CREATE TABLE IF NOT EXISTS kiosks (
 
 def stock_move(con, store_id: int, product_id: int, delta: float,
                reason: str, actor: str = "", note: str = "",
-               counted: bool = False) -> float:
+               counted: bool = False,
+               unit_cost_cents: float = 0.0) -> float:
     """The only way a store's stock changes.
 
     Writes the movement and applies it in one place, so the ledger and
@@ -457,10 +459,11 @@ def stock_move(con, store_id: int, product_id: int, delta: float,
         (delta, now(), store_id, product_id))
     after = current_qty(con, store_id, product_id)
     con.execute(
-        "INSERT INTO inventory_moves(store_id,product_id,qty,balance,reason,"
-        " counted,actor,note,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-        (store_id, product_id, delta, after, reason[:60],
-         1 if counted else 0, actor[:80], note[:200], now()))
+        "INSERT INTO inventory_moves(store_id,product_id,qty,balance,"
+        " unit_cost_cents,reason,counted,actor,note,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (store_id, product_id, delta, after, float(unit_cost_cents or 0),
+         reason[:60], 1 if counted else 0, actor[:80], note[:200], now()))
     return after
 
 
@@ -503,6 +506,7 @@ MIGRATIONS = (
     # from wherever you are.
     "ALTER TABLE users ADD COLUMN clock_store_id INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN clock_kiosk_only INTEGER DEFAULT 0",
+    "ALTER TABLE inventory_moves ADD COLUMN unit_cost_cents REAL DEFAULT 0",
     # The number printed on the thing itself. Separate from the SKU: a SKU
     # is what WE call it and we chose it, a barcode is what the
     # manufacturer stamped on the tin and the scanner reads. For own-brand

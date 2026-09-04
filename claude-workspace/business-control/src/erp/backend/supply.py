@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS materials (
   kind TEXT DEFAULT 'ingredient',
   unit TEXT DEFAULT 'kg',
   supplier_id INTEGER,
-  unit_cost_cents INTEGER DEFAULT 0,
+  unit_cost_cents INTEGER DEFAULT 0,  -- the list price we expect to pay
+  avg_cost_cents REAL DEFAULT 0,      -- what the stock on hand actually cost
   on_hand REAL DEFAULT 0,             -- moved by receipts and runs only
   reorder_point REAL DEFAULT 0,
   active INTEGER DEFAULT 1,
@@ -149,6 +150,7 @@ CREATE TABLE IF NOT EXISTS material_moves (
   id INTEGER PRIMARY KEY,
   material_id INTEGER NOT NULL,
   qty REAL NOT NULL,                  -- signed: + received, - consumed
+  unit_cost_cents REAL DEFAULT 0,     -- what this movement was worth per unit
   reason TEXT NOT NULL,               -- po:12, run:4, adjust
   actor TEXT DEFAULT '',
   note TEXT DEFAULT '',
@@ -173,6 +175,9 @@ MIGRATIONS = (
     "ALTER TABLE purchase_orders ADD COLUMN portal_token TEXT DEFAULT ''",
     "ALTER TABLE purchase_orders ADD COLUMN confirmed_at REAL DEFAULT 0",
     "ALTER TABLE production_runs ADD COLUMN store_id INTEGER DEFAULT 0",
+    "ALTER TABLE materials ADD COLUMN avg_cost_cents REAL DEFAULT 0",
+    "ALTER TABLE material_moves ADD COLUMN unit_cost_cents REAL DEFAULT 0",
+    "ALTER TABLE production_runs ADD COLUMN cost_cents INTEGER DEFAULT 0",
 )
 
 
@@ -187,15 +192,44 @@ def init_tables(con):
 
 
 def move(con, material_id: int, qty: float, reason: str, actor: str,
-         note: str = "") -> None:
+         note: str = "", unit_cost_cents: float | None = None) -> float:
     """The only way stock changes. Writes the movement and applies it in one
-    place, so the ledger and the running total can't disagree."""
+    place, so the ledger and the running total can't disagree.
+
+    Every movement is valued. Stock going OUT is valued at what the stock
+    on hand actually cost — not at today's list price, which is a
+    different number the moment a supplier reprices and would silently
+    restate the margin on everything already sold. Stock coming IN at a
+    known price moves that average.
+
+    Weighted average rather than FIFO layers: a business that buys the
+    same concentrate from the same supplier every month does not track
+    which drum went into which batch, and pretending otherwise produces a
+    precise number nobody can reconcile against a real drum.
+    """
+    m = con.execute("SELECT on_hand, avg_cost_cents, unit_cost_cents"
+                    " FROM materials WHERE id=?", (material_id,)).fetchone()
+    have = float(m["on_hand"]) if m else 0.0
+    avg = float((m["avg_cost_cents"] if m else 0) or 0)
+    if not avg and m:
+        avg = float(m["unit_cost_cents"] or 0)   # never priced: fall back
+    valued = avg if unit_cost_cents is None else float(unit_cost_cents)
+    if qty > 0 and unit_cost_cents is not None:
+        # A receipt at a price moves the average, weighted by what is
+        # already on the shelf. Negative stock cannot weight anything, so
+        # a shelf in the red takes the new price outright.
+        base = max(0.0, have)
+        avg = ((base * avg + qty * valued) / (base + qty)
+               if (base + qty) else valued)
+        con.execute("UPDATE materials SET avg_cost_cents=? WHERE id=?",
+                    (avg, material_id))
     con.execute(
-        "INSERT INTO material_moves(material_id,qty,reason,actor,note,"
-        " created_at) VALUES(?,?,?,?,?,?)",
-        (material_id, qty, reason, actor, note, time.time()))
+        "INSERT INTO material_moves(material_id,qty,unit_cost_cents,reason,"
+        " actor,note,created_at) VALUES(?,?,?,?,?,?,?)",
+        (material_id, qty, valued, reason, actor, note, time.time()))
     con.execute("UPDATE materials SET on_hand=on_hand+? WHERE id=?",
                 (qty, material_id))
+    return valued
 
 
 # ---------- bodies ----------
@@ -262,6 +296,7 @@ def trail(con, product_id: int, days: int = 180) -> dict:
         out.append({"side": "materials", "at": r["created_at"],
                     "what": r["name"], "unit": r["unit"] or "",
                     "qty": r["qty"], "reason": r["reason"],
+                    "unit_cost_cents": float(r["unit_cost_cents"] or 0),
                     "actor": r["actor"] or "", "note": r["note"] or "",
                     "counted": False})
     try:
@@ -273,6 +308,7 @@ def trail(con, product_id: int, days: int = 180) -> dict:
             out.append({"side": "goods", "at": r["created_at"],
                         "what": r["store"] or f"store {r['store_id']}",
                         "unit": "units", "qty": r["qty"],
+                        "unit_cost_cents": float(r["unit_cost_cents"] or 0),
                         "balance": r["balance"], "reason": r["reason"],
                         "actor": r["actor"] or "", "note": r["note"] or "",
                         "counted": bool(r["counted"])})
@@ -282,8 +318,12 @@ def trail(con, product_id: int, days: int = 180) -> dict:
     made = sum(x["qty"] for x in out
                if x["side"] == "goods" and str(x["reason"]).startswith("run:"))
     used = sum(-x["qty"] for x in out if x["side"] == "materials")
+    spend = sum(-x["qty"] * x.get("unit_cost_cents", 0)
+                for x in out if x["side"] == "materials")
     return {"product_id": product_id, "days": days, "moves": out[:250],
             "made_units": round(made, 3), "materials_used": round(used, 3),
+            "spent_cents": int(round(spend)),
+            "cost_per_unit_cents": round(spend / made, 2) if made else None,
             "runs": len(runs),
             "note": "Both sides of the same product: the materials a run "
                     "consumed and the cases it put on a shelf. They meet at "
@@ -432,9 +472,20 @@ def unit_costs(con) -> dict:
     conversion. Products with no recipe are absent rather than zero — the
     difference between "costs nothing" and "we haven't said" matters when
     this feeds a margin, and a zero would quietly flatter it.
+
+    Valued at what the stock on hand actually cost rather than at the list
+    price on the material. Those are the same number until a supplier
+    reprices, and then they are not: a margin computed from the list price
+    is a margin about a purchase nobody made.
     """
+    # What the stock on hand actually cost, falling back to the list price
+    # where nothing has been received yet. The list price is what we
+    # expect to pay; the average is what we did. A margin computed from
+    # the first is a margin about a hypothetical purchase.
     rows = con.execute(
-        "SELECT b.product_id, SUM(b.qty_per_case * m.unit_cost_cents) cents,"
+        "SELECT b.product_id, SUM(b.qty_per_case *"
+        "   CASE WHEN COALESCE(m.avg_cost_cents,0) > 0"
+        "        THEN m.avg_cost_cents ELSE m.unit_cost_cents END) cents,"
         " p.case_size FROM bill_of_materials b"
         " JOIN materials m ON m.id=b.material_id"
         " JOIN products p ON p.id=b.product_id"
@@ -552,7 +603,11 @@ def receive_po(con, po_id: int, lines: dict, actor: str) -> dict:
                      "still outstanding")
         con.execute("UPDATE purchase_order_lines SET received=received+?"
                     " WHERE id=?", (got, r["id"]))
-        move(con, r["material_id"], got, f"po:{po_id}", actor)
+        # The price on the order line is what we actually agreed to pay
+        # for THIS delivery, which is the only number that has any right
+        # to move the average.
+        move(con, r["material_id"], got, f"po:{po_id}", actor,
+             unit_cost_cents=r["unit_cost_cents"] or None)
         booked += 1
     if not booked:
         raise HTTPException(400, "nothing was received")
@@ -592,7 +647,7 @@ def finish_run(con, run_id: int, actual_cases: int, actor: str,
     if actual_cases < 0:
         raise HTTPException(400, "cases can't be negative")
 
-    used = []
+    used, spent = [], 0.0
     for b in con.execute(
             "SELECT b.material_id, b.qty_per_case, m.name, m.on_hand"
             " FROM bill_of_materials b JOIN materials m ON m.id=b.material_id"
@@ -600,8 +655,11 @@ def finish_run(con, run_id: int, actual_cases: int, actor: str,
         qty = b["qty_per_case"] * actual_cases
         if qty <= 0:
             continue
-        move(con, b["material_id"], -qty, f"run:{run_id}", actor)
+        at = move(con, b["material_id"], -qty, f"run:{run_id}", actor)
+        spent += qty * at
         used.append({"name": b["name"], "qty": round(qty, 2),
+                     "unit_cost_cents": round(at, 2),
+                     "cost_cents": int(round(qty * at)),
                      "negative": b["on_hand"] - qty < 0})
     # Where the cases go. The run's own store if it has one, else the one
     # named on the way in, else the best-stocked store — the same
@@ -622,20 +680,31 @@ def finish_run(con, run_id: int, actual_cases: int, actor: str,
         # run counts cases. Two units of measure meeting unconverted is
         # the oldest way for stock to be wrong by a factor of twelve.
         units = actual_cases * ((p["case_size"] or 1) if p else 1)
+        # What the batch actually cost, carried onto the goods. Not the
+        # recipe at today's prices: that number changes the moment a
+        # supplier reprices, and it would restate the margin on stock made
+        # months ago. This one is what these cases cost to make on the day
+        # they were made.
+        per_unit = (spent / units) if units else 0.0
         _db.stock_move(con, landed, r["product_id"], units,
                        f"run:{run_id}", actor,
-                       f"{actual_cases} case(s) made")
+                       f"{actual_cases} case(s) made",
+                       unit_cost_cents=per_unit)
         made = {"store_id": landed, "units": units,
-                "product": p["name"] if p else ""}
+                "product": p["name"] if p else "",
+                "cost_cents": int(round(spent)),
+                "per_case_cents": int(round(spent / actual_cases))
+                if actual_cases else 0,
+                "per_unit_cents": round(per_unit, 2)}
     con.execute(
         "UPDATE production_runs SET status='done', actual_cases=?,"
-        " store_id=?, finished_at=? WHERE id=?",
-        (actual_cases, landed, time.time(), run_id))
+        " store_id=?, cost_cents=?, finished_at=? WHERE id=?",
+        (actual_cases, landed, int(round(spent)), time.time(), run_id))
     con.commit()
     # A negative stock level is left visible rather than clamped: it means
     # the recipe or the counts are wrong, and hiding it hides the problem.
     return {"ok": True, "cases": actual_cases, "materials": used,
-            "made": made,
+            "made": made, "cost_cents": int(round(spent)),
             "went_negative": [u["name"] for u in used if u["negative"]]}
 
 
