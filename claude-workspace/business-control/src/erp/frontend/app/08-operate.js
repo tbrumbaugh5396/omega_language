@@ -344,14 +344,15 @@ async function renderExperiments() {
 // ---------- analytics ----------
 
 async function renderAnalytics() {
-  const [regions, funnel, engagement, pnl, proj, mrr, days, pipe] =
+  const [regions, funnel, engagement, pnl, proj, mrr, days, pipe, shop] =
     await Promise.all([
       api("/api/analytics/regions"), api("/api/analytics/funnel"),
       api("/api/analytics/engagement"), api("/api/analytics/pnl"),
       api("/api/analytics/projection?months=6").catch(() => null),
       api("/api/analytics/mrr?months=12").catch(() => null),
       api("/api/analytics/days?days=90").catch(() => null),
-      api("/api/store/admin/pipeline").catch(() => null)]);
+      api("/api/store/admin/pipeline").catch(() => null),
+      api("/api/analytics/commerce?days=90").catch(() => null)]);
   const maxV = Math.max(...funnel.steps.map((s) => s.visitors), 1);
   const maxD = Math.max(...engagement.daily.map((d) => d.total), 1);
   view().innerHTML = `
@@ -362,6 +363,7 @@ async function renderAnalytics() {
         vs ${a.prior_7} last week</div>`).join("")}</div>` : ""}
     ${mrr && mrr.months.length ? mrrSection(mrr) : ""}
     ${days ? daysSection(days) : ""}
+    ${shop && shop.basket.orders ? shopSection(shop) : ""}
     ${pipe && pipe.engagements ? pipeSection(pipe) : ""}
     ${proj ? `<h3>Next six months</h3>
     <div class="card">
@@ -442,6 +444,91 @@ async function renderAnalytics() {
       ev.target.textContent = "Fetch the weather";
     }
   };
+}
+
+/* What a basket is worth, and whether anybody comes back. The median
+   sits beside every average on purpose: one wholesale order in a month of
+   tea tins moves the mean past every real basket in the list, and a shop
+   that reprices off that number reprices off one customer. */
+function shopSection(d) {
+  const b = d.basket, r = d.repeat, co = d.cohorts;
+  const wide = Math.max(...co.cohorts.map((c) => c.cells.length), 0);
+  const heat = (p) => `background:color-mix(in srgb, var(--accent) ${
+    Math.round(Math.min(100, p) * 0.55)}%, transparent)`;
+  return `
+    <h3>Baskets and returns</h3>
+    <div class="card">
+      <div class="mrr-heads">
+        <div class="mrr-fig" title="the mean — one big order moves it">
+          <span class="dim">average order</span>
+          <b>${money(b.aov_cents)}</b></div>
+        <div class="mrr-fig" title="the middle order, which is what most
+          customers actually spend"><span class="dim">median order</span>
+          <b>${money(b.median_cents)}</b></div>
+        <div class="mrr-fig"><span class="dim">items per order</span>
+          <b>${b.units_per_order === null ? "—" : b.units_per_order}</b></div>
+        <div class="mrr-fig" title="of everybody who has ever bought, the
+          share who bought more than once">
+          <span class="dim">buy again</span>
+          <b class="${r.repeat_ever_pct >= 30 ? "good" : ""}">${
+            r.repeat_ever_pct === null ? "—"
+              : r.repeat_ever_pct + "%"}</b></div>
+        <div class="mrr-fig"><span class="dim">orders each</span>
+          <b>${r.orders_per_customer === null ? "—"
+            : r.orders_per_customer}</b></div>
+      </div>
+      <p class="dim">${b.orders} order${b.orders === 1 ? "" : "s"} in
+        ${b.days} days${b.spread
+          ? `; the middle half fall between ${money(b.spread.p25)} and
+             ${money(b.spread.p75)}` : ""}.
+        ${b.aov_cents > b.median_cents * 1.6
+          ? "The average is well above the middle order, so a few large "
+            + "ones are carrying it — price off the median."
+          : ""}</p>
+      ${b.by_kind.length > 1 ? `<div class="wd-rows">${b.by_kind.map((k) => `
+        <div class="wd-row kind-row">
+          <span class="wd-n pipe-n">${esc(k.kind)}</span>
+          <span class="dim">${k.orders} orders</span>
+          <span class="wd-v">${money(k.aov_cents)} avg</span>
+          <span class="wd-v">${money(k.median_cents)} mid</span>
+        </div>`).join("")}</div>
+        <p class="dim">Kept apart because a case going to a distributor and
+          a tin going to somebody's kitchen are not the same
+          transaction — one average over both describes neither.</p>` : ""}
+      <h4 class="mrr-h">Coming back</h4>
+      <p class="dim">${r.repeat_ever_pct}% of ${r.customers_ever} customers
+        have bought more than once${r.median_gap_days !== null
+          ? `, taking a median ${r.median_gap_days} days over the second
+             one` : ""}. ${r.returning_pct !== null
+          ? `${r.returning_pct}% of the last ${r.days} days' revenue came
+             from people who had bought before` : ""}${
+        r.returning_pct !== null && r.returning_pct < 40
+          ? " — a business growing on strangers is growing the most "
+            + "expensive way there is." : "."}</p>
+      ${co.cohorts.length ? `<h4 class="mrr-h">Cohorts</h4>
+        <div class="tablewrap"><table class="cohort">
+          <thead><tr><th>first bought</th><th>customers</th>
+            ${Array.from({ length: wide }, (_, i) =>
+              `<th>+${i + 1}</th>`).join("")}</tr></thead>
+          <tbody>${co.cohorts.map((c) => `<tr>
+            <td>${esc(c.cohort)}${c.partial
+              ? ' <span class="pill">this month</span>' : ""}</td>
+            <td>${c.size}</td>
+            ${Array.from({ length: wide }, (_, i) => {
+              const cell = c.cells[i];
+              if (!cell) return '<td class="dim"></td>';
+              return `<td class="${cell.partial ? "dim coh-part" : ""}"
+                style="${cell.partial ? "" : heat(cell.pct)}"
+                title="${cell.n} of ${c.size} bought again in ${
+                  esc(cell.tag)}">${cell.pct}%${cell.partial
+                    ? "<sup>*</sup>" : ""}</td>`;
+            }).join("")}</tr>`).join("")}</tbody>
+        </table></div>
+        <p class="dim">${esc(co.note)}${co.cohorts.some((c) =>
+          c.cells.some((x) => x.partial))
+            ? " Cells marked * are in the month that is still running."
+            : ""}</p>` : ""}
+    </div>`;
 }
 
 /* The studio's own numbers. Nothing here is measured on purpose: the

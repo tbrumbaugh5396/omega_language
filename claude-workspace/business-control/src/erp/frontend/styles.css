@@ -1463,3 +1463,9 @@ form.inline > button.btn:last-child { margin-left: auto; }
 .pipe-n { color: var(--text); font-size: 12.5px; }
 .wd-row.sky-row { grid-template-columns: 78px 1fr 78px 1fr 62px; }
 .wd-row.sky-row b { text-align: right; }
+.wd-row.kind-row { grid-template-columns: 110px 1fr 116px 116px; }
+table.cohort td { text-align: center; font-variant-numeric: tabular-nums; }
+table.cohort td:first-child, table.cohort td:nth-child(2) { text-align: left; }
+table.cohort th { text-align: center; }
+table.cohort th:first-child, table.cohort th:nth-child(2) { text-align: left; }
+.coh-part { font-style: italic; }

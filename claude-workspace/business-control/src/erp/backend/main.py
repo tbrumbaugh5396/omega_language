@@ -4280,6 +4280,21 @@ def analytics_drop_day(day: str, name: str, user=Depends(admin_user),
     return {"ok": True}
 
 
+@app.get("/api/analytics/commerce")
+def analytics_commerce(days: int = 90, kind: str = "", months: int = 12,
+                       user=Depends(admin_user), con=Depends(get_con)):
+    """What a basket is worth, and whether anybody comes back.
+
+    Acquisition was measured here five ways and what happened after
+    somebody bought was measured in none — which for a business that
+    sells anything twice is the half where the money is.
+    """
+    from . import commerce
+    return {"basket": commerce.basket(con, days, kind),
+            "repeat": commerce.repeat(con, max(days, 365), kind),
+            "cohorts": commerce.cohorts(con, months, kind)}
+
+
 @app.get("/api/analytics/regions")
 def region_analytics(days: int = 30, user=Depends(current_user),
                      con=Depends(get_con)):

@@ -3588,6 +3588,102 @@ ok(c.get("/api/analytics/mrr").status_code in (401, 403),
    "and it is the office's number")
 
 
+# --- baskets, and whether anybody comes back --------------------------------
+# Acquisition was measured five ways here and what happened after somebody
+# bought was measured in none, which for a business that sells anything
+# twice is the half the money is in.
+#
+# On a scratch database rather than the suite's: these are arithmetic, and
+# arithmetic is checked against numbers you chose, not against whatever
+# every test before this one happened to leave in the orders table.
+from erp.backend import commerce as _com  # noqa: E402
+_ccon = _sq3.connect(":memory:")
+_ccon.row_factory = _sq3.Row
+_ccon.executescript(
+    "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INT, kind TEXT,"
+    " status TEXT, region TEXT, subtotal_cents INT, total_cents INT,"
+    " created_at REAL);"
+    "CREATE TABLE order_items (order_id INT, product_id INT, qty INT,"
+    " unit_price_cents INT);")
+_c_now = _t0.time()
+
+
+def _buy(uid, when, cents, kind="customer", qty=2):
+    cur = _ccon.execute(
+        "INSERT INTO orders(user_id,kind,status,region,subtotal_cents,"
+        " total_cents,created_at) VALUES(?,?,'paid','Northeast',?,?,?)",
+        (uid, kind, cents, cents, when))
+    _ccon.execute("INSERT INTO order_items(order_id,product_id,qty,"
+                  " unit_price_cents) VALUES(?,1,?,?)",
+                  (cur.lastrowid, qty, cents // max(1, qty)))
+    _ccon.commit()
+
+
+for _i in range(6):                       # six little baskets
+    _buy(900 + _i, _c_now - 40 * 86400, 1000 + _i * 100)
+_buy(999, _c_now - 39 * 86400, 500000, "distributor")   # and one whale
+_bk = _com.basket(_ccon, 90, when=_c_now)
+ok(_bk["orders"] == 7 and _bk["aov_cents"] == 72500
+   and _bk["median_cents"] == 1300,
+   "the median sits beside the average, because one wholesale order in a "
+   "month of small ones moves the mean past every real basket in the "
+   "list — $725 average, $13 middle")
+ok(_bk["units_per_order"] == 2.0,
+   "items per order comes off the lines, not the order count")
+ok([k["kind"] for k in _bk["by_kind"]] == ["customer", "distributor"]
+   and _bk["by_kind"][0]["aov_cents"] == 1250,
+   "and the kinds are kept apart — a case to a distributor and a tin to "
+   "somebody's kitchen are not the same transaction, and one average over "
+   "both describes neither")
+ok(_com.basket(_ccon, 90, kind="distributor",
+               when=_c_now)["orders"] == 1, "either can be asked for alone")
+
+_rp = _com.repeat(_ccon, 365, when=_c_now)
+ok(_rp["repeat_ever_pct"] == 0.0 and _rp["customers_ever"] == 7,
+   "nobody who bought once is a repeat customer, and the rate says 0 "
+   "rather than nothing")
+_buy(900, _c_now - 10 * 86400, 1500)
+_rp = _com.repeat(_ccon, 365, when=_c_now)
+ok(_rp["repeat_ever"] == 1 and _rp["median_gap_days"] == 30.0,
+   "one comes back after thirty days, and both the count and the gap say "
+   "so")
+ok(_rp["returning_revenue_cents"] == 1500
+   and _rp["new_revenue_cents"] == 507500,
+   "money from somebody who had bought before is counted apart from money "
+   "from a stranger — a month that grew entirely on strangers grew the "
+   "most expensive way there is")
+_narrow = _com.repeat(_ccon, 5, when=_c_now)
+ok(_narrow["repeat_pct"] is None and _narrow["customers_in_window"] == 0
+   and _com.repeat(_ccon, 365, when=_c_now)["repeat_ever_pct"] > 0,
+   "the in-window rate moves with the window, which is a fact about the "
+   "window rather than the business — so the two are reported apart, and "
+   "a window nobody bought in has no rate rather than a rate of zero")
+
+# Two months back, so there is a row with a month after it to follow.
+_old = _c_now - 70 * 86400
+for _i in range(4):
+    _buy(800 + _i, _old, 2000)
+_buy(800, _old + 35 * 86400, 2000)        # one of them returns a month on
+_co = _com.cohorts(_ccon, 12, when=_c_now)
+_row = next(x for x in _co["cohorts"] if x["size"] == 4)
+ok(all(cell["month"] >= 1 for cell in _row["cells"]),
+   "month zero is everybody by definition, so the triangle does not draw "
+   "a column of 100% as though it meant something")
+ok(_row["cells"][0]["pct"] == 25.0 and _row["cells"][0]["n"] == 1,
+   "and a cell is how many of THAT month's customers came back in the "
+   "month after it — one of four is 25%")
+ok(any(cell["partial"] for x in _co["cohorts"] for cell in x["cells"]),
+   "a cell inside the month still running is marked: three days is not a "
+   "month, and drawing it as one turns an ordinary week into a crisis "
+   "meeting")
+_ccon.close()
+_capi = c.get("/api/analytics/commerce?days=90", headers=A).json()
+ok(all(k in _capi for k in ("basket", "repeat", "cohorts")),
+   "and the three arrive together, because they are one question asked "
+   "three ways")
+ok(c.get("/api/analytics/commerce").status_code in (401, 403),
+   "the shop's numbers are the office's")
+
 # --- the trading calendar ---------------------------------------------------
 # A month has four weekends or five, Easter moves, and a holiday closes
 # the shop or triples it. Comparing this month with the last without
