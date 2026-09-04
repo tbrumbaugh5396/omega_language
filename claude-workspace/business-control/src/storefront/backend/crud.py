@@ -390,3 +390,124 @@ def page_funnel(days: int = 30, u=Depends(admin_user), con=Depends(get_con)):
             for (a, b), n in sorted(edges.items(), key=lambda kv: -kv[1])[:25]]
     return {"days": days, "sessions": len(paths), "pages": page_rows,
             "flow": flow}
+
+
+@router.get("/api/store/admin/page-graph")
+def page_graph(days: int = 30, top: int = 14, u=Depends(admin_user),
+               con=Depends(get_con)):
+    """The site as a Markov chain, and the pages ranked by it.
+
+    A step funnel says how many reached checkout. A list of transitions
+    says which page leaks. Neither says which page MATTERS — and that is a
+    question about the shape of the whole graph, not about any one edge:
+    a page nobody links onward from is a dead end however many people see
+    it, and a page every path runs through is load-bearing even if its own
+    numbers are small.
+
+    So the transitions are row-normalised into probabilities and the
+    ranking is a damped random surfer over them — PageRank, with two
+    honest departures from the web version:
+
+      * **Leaving is a state.** A real visitor closes the tab. Ignoring
+        that renormalises the exit away and makes every page look stickier
+        than it is, so `leave` is an absorbing state with its own
+        probability on every row, and the row sums to one WITH it.
+      * **The surfer teleports to where visitors actually arrive**, not to
+        a uniform page. People land on the pages that are linked to and
+        advertised; pretending they start anywhere flatters the pages
+        nobody arrives at.
+
+    Also returned is each page's mean position in a path, which is what
+    lets a drawing of this lay left to right in the order people walk it
+    rather than in whatever order the dictionary happened to be in.
+    """
+    since = time.time() - max(1, min(365, days)) * 86400
+    rows = con.execute(
+        "SELECT visitor_id, page, created_at FROM store_pageviews"
+        " WHERE created_at > ? ORDER BY visitor_id, created_at",
+        (since,)).fetchall()
+    paths: dict[str, list] = {}
+    for r in rows:
+        paths.setdefault(r["visitor_id"], []).append(r["page"])
+
+    views, entries, exits, edges = {}, {}, {}, {}
+    steps: dict[str, list] = {}
+    for pages in paths.values():
+        seq = [p for i, p in enumerate(pages) if i == 0 or p != pages[i - 1]]
+        if not seq:
+            continue
+        entries[seq[0]] = entries.get(seq[0], 0) + 1
+        exits[seq[-1]] = exits.get(seq[-1], 0) + 1
+        for i, p in enumerate(seq):
+            views[p] = views.get(p, 0) + 1
+            steps.setdefault(p, []).append(i)
+            if i + 1 < len(seq):
+                edges[(p, seq[i + 1])] = edges.get((p, seq[i + 1]), 0) + 1
+    if not views:
+        return {"days": days, "sessions": 0, "nodes": [], "edges": [],
+                "note": "No pageviews in this window."}
+
+    keep = [p for p, _ in sorted(views.items(), key=lambda kv: -kv[1])[:top]]
+    keepset = set(keep)
+    out_n = {p: 0 for p in keep}
+    for (a, b), n in edges.items():
+        if a in keepset and b in keepset:
+            out_n[a] += n
+
+    # Row-normalised, WITH leaving. Each row sums to one because the tab
+    # closing is a thing that happens, not a rounding error.
+    trans = {}
+    leave = {}
+    for p in keep:
+        total = out_n[p] + exits.get(p, 0)
+        if not total:
+            leave[p] = 1.0
+            continue
+        for (a, b), n in edges.items():
+            if a == p and b in keepset:
+                trans[(a, b)] = n / total
+        leave[p] = exits.get(p, 0) / total
+
+    # Personalised PageRank: the surfer teleports to where people land.
+    ent_total = sum(entries.get(p, 0) for p in keep) or 1
+    tele = {p: entries.get(p, 0) / ent_total for p in keep}
+    if not any(tele.values()):
+        tele = {p: 1 / len(keep) for p in keep}
+    rank = {p: 1 / len(keep) for p in keep}
+    damping = 0.85
+    for _ in range(60):
+        nxt = {p: 0.0 for p in keep}
+        # Rank that lands on `leave` re-enters at the teleport
+        # distribution — a surfer who closes the tab opens a new one.
+        spill = sum(rank[p] * leave[p] for p in keep)
+        for (a, b), pr in trans.items():
+            nxt[b] += damping * rank[a] * pr
+        for p in keep:
+            nxt[p] += damping * spill * tele[p] + (1 - damping) * tele[p]
+        moved = sum(abs(nxt[p] - rank[p]) for p in keep)
+        rank = nxt
+        if moved < 1e-9:
+            break
+    tot = sum(rank.values()) or 1
+    nodes = [{
+        "page": p, "views": views[p],
+        "entries": entries.get(p, 0), "exits": exits.get(p, 0),
+        "exit_rate": round(100 * exits.get(p, 0) / views[p]) if views[p] else 0,
+        "leave_p": round(leave.get(p, 0), 3),
+        "rank": round(rank[p] / tot, 4),
+        "mean_step": round(sum(steps[p]) / len(steps[p]), 2),
+    } for p in keep]
+    nodes.sort(key=lambda n: (n["mean_step"], -n["rank"]))
+    out_edges = sorted(
+        ({"from": a, "to": b, "n": edges[(a, b)], "p": round(pr, 3)}
+         for (a, b), pr in trans.items()),
+        key=lambda e: -e["n"])[:40]
+    return {"days": days, "sessions": len(paths), "nodes": nodes,
+            "edges": out_edges, "damping": damping,
+            "note": "Arrows carry the chance of that step being taken next, "
+                    "out of everything that can happen on the page — "
+                    "including closing the tab, which is why a page's "
+                    "arrows do not add to one. Rank is a damped random "
+                    "surfer who arrives where visitors actually arrive: it "
+                    "says which pages the traffic runs THROUGH, which is "
+                    "not the same as which are most viewed."}

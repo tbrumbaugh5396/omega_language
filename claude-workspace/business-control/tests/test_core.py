@@ -3588,6 +3588,33 @@ ok(c.get("/api/analytics/mrr").status_code in (401, 403),
    "and it is the office's number")
 
 
+# --- the site as a chain ----------------------------------------------------
+# A step funnel says how many reached checkout; a transition list says
+# which page leaks. Neither says which page the traffic runs THROUGH.
+_pg = c.get("/api/store/admin/page-graph?days=90", headers=A).json()
+ok(_pg["nodes"] and _pg["edges"],
+   "the pageview log is already a chain of transitions — it only needed "
+   "normalising")
+ok(abs(sum(n["rank"] for n in _pg["nodes"]) - 1) < 0.01,
+   "rank is a distribution: it sums to one, because it is the share of a "
+   "wandering visitor's time each page holds")
+ok(all(0 <= e["p"] <= 1 for e in _pg["edges"]),
+   "and an arrow carries the chance of that step, not a raw count")
+for _n in _pg["nodes"]:
+    _out = sum(e["p"] for e in _pg["edges"] if e["from"] == _n["page"])
+    ok(_out + _n["leave_p"] <= 1.02,
+       f"what can happen on {_n['page']} adds to one WITH leaving — "
+       "renormalising the exit away makes every page look stickier than "
+       "it is")
+ok(all("mean_step" in n for n in _pg["nodes"]),
+   "each page knows where in a path it usually appears, which is what "
+   "lets a drawing of this run left to right in the order people walk it")
+ok(_pg["nodes"] == sorted(_pg["nodes"],
+                          key=lambda n: (n["mean_step"], -n["rank"])),
+   "and they arrive in that order")
+ok(c.get("/api/store/admin/page-graph").status_code in (401, 403),
+   "the chain is the office's")
+
 # --- baskets, and whether anybody comes back --------------------------------
 # Acquisition was measured five ways here and what happened after somebody
 # bought was measured in none, which for a business that sells anything

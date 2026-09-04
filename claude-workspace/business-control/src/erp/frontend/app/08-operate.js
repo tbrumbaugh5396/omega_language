@@ -344,15 +344,16 @@ async function renderExperiments() {
 // ---------- analytics ----------
 
 async function renderAnalytics() {
-  const [regions, funnel, engagement, pnl, proj, mrr, days, pipe, shop] =
-    await Promise.all([
+  const [regions, funnel, engagement, pnl, proj, mrr, days, pipe, shop,
+         graph] = await Promise.all([
       api("/api/analytics/regions"), api("/api/analytics/funnel"),
       api("/api/analytics/engagement"), api("/api/analytics/pnl"),
       api("/api/analytics/projection?months=6").catch(() => null),
       api("/api/analytics/mrr?months=12").catch(() => null),
       api("/api/analytics/days?days=90").catch(() => null),
       api("/api/store/admin/pipeline").catch(() => null),
-      api("/api/analytics/commerce?days=90").catch(() => null)]);
+      api("/api/analytics/commerce?days=90").catch(() => null),
+      api("/api/store/admin/page-graph?days=90").catch(() => null)]);
   const maxV = Math.max(...funnel.steps.map((s) => s.visitors), 1);
   const maxD = Math.max(...engagement.daily.map((d) => d.total), 1);
   view().innerHTML = `
@@ -411,14 +412,15 @@ async function renderAnalytics() {
         <span class="lbl">${s.step}</span>
         <span class="n">${s.visitors}</span>
         <div class="bar" style="width:${(s.visitors / maxV) * 100}%"></div>
-        ${s.drop_rate !== undefined && s.drop_rate > 0
-          ? `<span class="dim">−${(s.drop_rate * 100).toFixed(0)}%</span>` : ""}
+        <span class="dim">${s.drop_rate !== undefined && s.drop_rate > 0
+          ? "−" + (s.drop_rate * 100).toFixed(0) + "%" : ""}</span>
       </div>`).join("")}
       ${funnel.worst_dropoff ? `<div style="margin-top:8px">Biggest drop-off:
         <b>${esc(funnel.worst_dropoff.from)} → ${esc(funnel.worst_dropoff.to)}</b>
         loses ${(funnel.worst_dropoff.drop_rate * 100).toFixed(0)}% —
         focus fixes here.</div>` : ""}
     </div>
+    ${graph ? graphSection(graph) : ""}
     <h3>Engagement (events/day, 28d)</h3>
     <div class="card"><div style="display:flex;align-items:flex-end;gap:2px;height:90px">
       ${engagement.daily.map((d) => `<div title="day ${d.day}: ${d.total}"
@@ -444,6 +446,85 @@ async function renderAnalytics() {
       ev.target.textContent = "Fetch the weather";
     }
   };
+}
+
+/* The site drawn as the chain it is. A step funnel says how many reached
+   checkout and a transition list says which page leaks; neither says
+   which page the traffic RUNS THROUGH, which is a question about the
+   shape of the whole graph. Laid left to right by where in a path each
+   page typically appears, so the drawing reads in the order people walk
+   it rather than in dictionary order. */
+function graphSection(g) {
+  if (!g.nodes.length) return "";
+  const COLS = Math.min(5, Math.max(2, Math.ceil(g.nodes.length / 3)));
+  const per = Math.ceil(g.nodes.length / COLS);
+  const W = 150, H = 96, PAD = 70;
+  const pos = {};
+  g.nodes.forEach((n, i) => {
+    const col = Math.min(COLS - 1, Math.floor(i / per));
+    const inCol = g.nodes.filter((_, j) =>
+      Math.min(COLS - 1, Math.floor(j / per)) === col).length;
+    const row = i - col * per;
+    pos[n.page] = { x: PAD + col * W,
+                    y: 46 + row * H + (inCol < per ? (per - inCol) * H / 2 : 0),
+                    n };
+  });
+  const maxRank = Math.max(...g.nodes.map((n) => n.rank), 0.01);
+  const width = PAD * 2 + (COLS - 1) * W;
+  const height = 46 + per * H;
+  const r = (n) => 9 + 17 * Math.sqrt(n.rank / maxRank);
+  const short = (p) => p.length > 20 ? p.slice(0, 19) + "…" : p;
+  const edges = g.edges.map((e) => {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) return "";
+    const mid = (a.x + b.x) / 2;
+    // A curve rather than a line: two pages that link both ways would
+    // draw one arrow on top of the other, and the return trip is usually
+    // the more interesting half.
+    const bow = a.x === b.x ? 46 : 0;
+    return `<path class="pg-edge" d="M${a.x} ${a.y} C${mid + bow} ${a.y},
+      ${mid + bow} ${b.y}, ${b.x} ${b.y}"
+      stroke-width="${(0.6 + 5 * e.p).toFixed(2)}"
+      marker-end="url(#pg-arrow)">
+      <title>${esc(e.from)} → ${esc(e.to)} · ${e.n} time${
+        e.n === 1 ? "" : "s"} · ${Math.round(e.p * 100)}% of what happens
+        next on ${esc(e.from)}</title></path>`;
+  }).join("");
+  return `
+    <h3>How the pages connect</h3>
+    <div class="card">
+      <p class="dim">${esc(g.note)}</p>
+      <div class="graph-wrap">
+      <svg viewBox="0 0 ${width} ${height}" width="${width}"
+        height="${height}" role="img"
+        aria-label="pages as a chain of transitions">
+        <defs><marker id="pg-arrow" viewBox="0 0 8 8" refX="7" refY="4"
+          markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L8 4 L0 8 z" fill="currentColor" opacity=".55"/>
+        </marker></defs>
+        ${edges}
+        ${g.nodes.map((n) => {
+          const p = pos[n.page];
+          return `<g class="pg-node${n.exit_rate >= 50 ? " pg-leaky" : ""}">
+            <circle cx="${p.x}" cy="${p.y}" r="${r(n).toFixed(1)}"></circle>
+            <text x="${p.x}" y="${p.y + r(n) + 13}" text-anchor="middle"
+              >${esc(short(n.page))}</text>
+            <text class="pg-sub" x="${p.x}" y="${p.y + r(n) + 25}"
+              text-anchor="middle">${n.views} · ${Math.round(
+                n.rank * 100)}% rank</text>
+            <title>${esc(n.page)} — ${n.views} views, ${n.entries} arrived
+              here first, ${n.exit_rate}% left from here. Rank ${
+              (n.rank * 100).toFixed(1)}%: the share of a wandering
+              visitor's time this page holds.</title>
+          </g>`;
+        }).join("")}
+      </svg>
+      </div>
+      <p class="dim">Circle size is rank, not views — the two disagree
+        whenever a quiet page sits on everybody's way through. Amber is a
+        page more than half of visits end on. ${g.sessions} session${
+        g.sessions === 1 ? "" : "s"} over ${g.days} days.</p>
+    </div>`;
 }
 
 /* What a basket is worth, and whether anybody comes back. The median

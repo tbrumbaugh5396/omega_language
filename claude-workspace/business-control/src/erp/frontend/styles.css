@@ -258,10 +258,29 @@ button.btn[aria-busy="true"] { cursor: progress; }
 /* ---------- charts / funnel ---------- */
 .bar { height: 22px; background: var(--accent2); border-radius: 4px;
   min-width: 2px; }
-.funnel-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
-.funnel-row .lbl { width: 110px; color: var(--dim); font-size: 13px; }
-.funnel-row .n { width: 55px; text-align: right;
-  font-variant-numeric: tabular-nums; }
+/* Every row starts its bar at the same x. A label column that sizes
+   itself to each word puts five bars at five different left edges, and a
+   funnel whose bars do not share a baseline cannot be read as one. */
+.funnel-row { display: grid; align-items: center; gap: 10px; margin: 6px 0;
+  grid-template-columns: 132px 46px minmax(0, 1fr) 52px; }
+.funnel-row .lbl { color: var(--dim); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.funnel-row .n { text-align: right; font-variant-numeric: tabular-nums; }
+.funnel-row .bar { min-width: 2px; }
+
+/* ---------- the site as a chain ---------- */
+.graph-wrap { overflow-x: auto; padding: 4px 0 8px; }
+.pg-node { cursor: default; }
+.pg-node circle { fill: color-mix(in srgb, var(--accent) 70%, transparent);
+  stroke: var(--accent); stroke-width: 1.5; transition: fill .15s; }
+.pg-node.pg-leaky circle { fill: color-mix(in srgb, var(--warn) 60%,
+  transparent); stroke: var(--warn); }
+.pg-node:hover circle { fill: var(--accent); }
+.pg-node text { font-size: 10.5px; fill: var(--text); font-family: var(--ui); }
+.pg-node text.pg-sub { fill: var(--dim); font-size: 9.5px; }
+.pg-edge { fill: none; stroke: var(--dim); opacity: .45; }
+.pg-edge:hover { opacity: 1; stroke: var(--accent); }
+.pg-leave { stroke: var(--bad); stroke-dasharray: 3 3; opacity: .5; }
 
 /* ---------- kanban / outreach ---------- */
 .kanban { display: flex; gap: 10px; overflow-x: auto; }
