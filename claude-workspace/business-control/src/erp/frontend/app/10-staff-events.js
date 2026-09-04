@@ -148,8 +148,16 @@ const PERSON_ROLES = ["customer", "employee", "cashier", "owner", "teacher",
 const PERSON_JOBS = ["general", "driver", "dsd", "warehouse", "sales_rep",
                      "ambassador", "event_staff"];
 
-function personForm(u, after) {
+async function personForm(u, after) {
   const isNew = !u || u._new;
+  // Where they may punch from. Loaded here so the form can offer real
+  // places rather than an id to type — nobody knows their store's id.
+  let places = [], kiosks = [];
+  if (!isNew && S.user && S.user.is_admin) {
+    [places, kiosks] = await Promise.all([
+      api("/api/stores").catch(() => []),
+      api("/api/admin/kiosks").catch(() => [])]);
+  }
   if (isNew && u) { u = { ...u, id: 0 }; }
   const opt = (list, cur) => list.map((x) =>
     `<option ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("");
@@ -193,7 +201,26 @@ function personForm(u, after) {
         signed out on the spot</small></span></label>
     <label class="perm"><input type="checkbox" id="pf-clearpw">
       <span><b>Forget their password</b><small>the next password they type
-        becomes the new one</small></span></label>` : ""}
+        becomes the new one</small></span></label>
+    <h4 class="av-h">Where they clock in</h4>
+    <p class="dim">Left alone, from wherever they are. A shop that asks
+      everybody for their location to start a shift is a shop whose staff
+      learn to say no on principle — so this is per person.</p>
+    <div class="row2">
+      <div><label>Must be near</label>
+        <select id="pf-cstore">
+          <option value="0">anywhere</option>
+          ${places.map((p) => `<option value="${p.id}"${
+            u.clock_store_id === p.id ? " selected" : ""}>${esc(p.name)}${
+            p.lat || p.lng ? "" : " — no coordinates"}</option>`).join("")}
+        </select></div>
+      <div><label>&nbsp;</label>
+        <label class="perm"><input type="checkbox" id="pf-ckiosk"
+          ${u.clock_kiosk_only ? "checked" : ""}>
+          <span><b>Kiosk only</b><small>${kiosks.length
+            ? kiosks.length + " tablet(s) registered"
+            : "no kiosk registered yet"}</small></span></label></div>
+    </div>` : ""}
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="pf-save">${isNew ? "Add" : "Save"}</button>
@@ -211,6 +238,8 @@ function personForm(u, after) {
       if (!isNew) {
         body.active = $("#pf-active").checked;
         body.clear_password = $("#pf-clearpw").checked;
+        body.clock_store_id = +$("#pf-cstore").value || 0;
+        body.clock_kiosk_only = $("#pf-ckiosk").checked;
         await api(`/api/admin/users/${u.id}/update`, { body });
       } else {
         body.pin = $("#pf-pin").value.trim();

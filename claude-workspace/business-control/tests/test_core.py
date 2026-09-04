@@ -3588,6 +3588,72 @@ ok(c.get("/api/analytics/mrr").status_code in (401, 403),
    "and it is the office's number")
 
 
+# --- clocking in where the work is ------------------------------------------
+# Somebody rostered at the Norristown shop punching in from home is a
+# payroll question. The fence answers it — but only on the way in.
+c.post("/api/admin/users", headers=A, json={
+    "name": "Fenced Fran", "role": "employee", "pin": "4791"})
+_fuid = [u for u in c.get("/api/admin/users", headers=A).json()
+         if u["name"] == "Fenced Fran"][0]["id"]
+c.post("/api/admin/stores", headers=A, json={
+    "name": "Fence Test Shop", "kind": "retail", "region": "Northeast",
+    "city": "Norristown", "lat": 40.1215, "lng": -75.3399})
+_fsid = [s2 for s2 in c.get("/api/stores", headers=A).json()
+         if s2["name"] == "Fence Test Shop"][0]["id"]
+c.post(f"/api/admin/users/{_fuid}/update", headers=A,
+       json={"clock_store_id": _fsid})
+# The PIN door carries the same rules, and needs no session.
+_far = c.post("/api/clock", json={"pin": "4791", "lat": 40.20, "lng": -75.40,
+                                  "accuracy_m": 10})
+ok(_far.status_code == 403 and " m from " in _far.json()["detail"],
+   "a punch from the wrong place is refused, and the refusal says how far "
+   "away it was rather than just no")
+_blind = c.post("/api/clock", json={"pin": "4791"})
+ok(_blind.status_code == 403,
+   "and a punch with no location at all cannot prove anything — a refusal "
+   "to share it is a refusal, not a pass")
+_vague = c.post("/api/clock", json={"pin": "4791", "lat": 40.1215,
+                                    "lng": -75.3399, "accuracy_m": 900})
+ok(_vague.status_code == 403 and "accurate" in _vague.json()["detail"],
+   "a fix that says 'somewhere within 900 metres' cannot show somebody is "
+   "inside a 150 metre fence — treating it as though it can is how a "
+   "geofence becomes theatre everybody knows about")
+_near = c.post("/api/clock", json={"pin": "4791", "lat": 40.12155,
+                                   "lng": -75.33995, "accuracy_m": 12})
+ok(_near.status_code == 200 and _near.json()["action"] == "clock_in",
+   "and at the shop, they are on shift")
+_out = c.post("/api/clock", json={"pin": "4791"})
+ok(_out.status_code == 200 and _out.json()["action"] == "clock_out",
+   "the fence gates going ON shift and never coming off it — refusing a "
+   "clock-out because a phone has no fix leaves somebody being paid for "
+   "a car park")
+
+_k = c.post("/api/admin/kiosks", headers=A, json={
+    "label": "Front door tablet", "store_id": _fsid}).json()
+ok(_k["kiosk_id"] and len(_k["kiosk_id"]) > 6,
+   "a kiosk id is minted here, not accepted from the device — an id a "
+   "browser can choose for itself is not a location, it is a claim")
+c.post(f"/api/admin/users/{_fuid}/update", headers=A,
+       json={"clock_store_id": 0, "clock_kiosk_only": True})
+ok(c.post("/api/clock", json={"pin": "4791", "lat": 40.1215,
+                              "lng": -75.3399}).status_code == 403,
+   "somebody bound to a kiosk is not let in by coordinates — the tablet "
+   "is the location, and it cannot be changed by a setting")
+ok(c.post("/api/clock", json={"pin": "4791",
+                              "kiosk": "made-up"}).status_code == 403,
+   "nor by naming a tablet that was never registered")
+_kin = c.post("/api/clock", json={"pin": "4791", "kiosk": _k["kiosk_id"]})
+ok(_kin.status_code == 200,
+   "at the registered tablet by the door, they are on shift")
+c.post("/api/clock", json={"pin": "4791"})           # off again
+_sh = _mdb.connect()
+_row = _sh.execute("SELECT in_kiosk, in_lat FROM shifts WHERE user_id=?"
+                   " ORDER BY id DESC LIMIT 1", (_fuid,)).fetchone()
+_sh.close()
+ok(_row["in_kiosk"] == _k["kiosk_id"],
+   "and where the punch happened is written on the shift — 'the fence "
+   "said yes' is not evidence six weeks later when an hour is disputed")
+
 # --- the counter ------------------------------------------------------------
 # A till is not a checkout with bigger buttons. The differences are all
 # about cash: a drawer with a counted float, tenders that can be more than

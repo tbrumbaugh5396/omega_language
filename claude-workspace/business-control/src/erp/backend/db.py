@@ -385,6 +385,20 @@ def connect() -> sqlite3.Connection:
 
 
 # Columns added after first release; applied to pre-existing databases.
+KIOSK_TABLE = """
+/* A tablet by the door, registered once. For staff who clock in on it,
+   the tablet IS the location — and a better one than a browser's guess,
+   because it cannot be changed by a setting and it is bolted to a wall. */
+CREATE TABLE IF NOT EXISTS kiosks (
+  kiosk_id TEXT PRIMARY KEY,
+  label TEXT DEFAULT '',
+  store_id INTEGER DEFAULT 0,
+  active INTEGER DEFAULT 1,
+  created_at REAL NOT NULL,
+  last_seen REAL DEFAULT 0
+);
+"""
+
 MIGRATIONS = (
     # Who an email actually went to. The log joined users for the address,
     # which is fine for a customer and useless for a client's point of
@@ -392,6 +406,18 @@ MIGRATIONS = (
     "ALTER TABLE email_log ADD COLUMN to_addr TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN email_verified_at REAL DEFAULT 0",
     "ALTER TABLE shifts ADD COLUMN event_id INTEGER",
+    # Where a punch happened. Recorded on the shift rather than checked and
+    # thrown away: "the fence said yes" is not evidence six weeks later
+    # when somebody disputes an hour, and the coordinates are.
+    "ALTER TABLE shifts ADD COLUMN in_lat REAL",
+    "ALTER TABLE shifts ADD COLUMN in_lng REAL",
+    "ALTER TABLE shifts ADD COLUMN in_accuracy_m REAL",
+    "ALTER TABLE shifts ADD COLUMN in_kiosk TEXT DEFAULT ''",
+    "ALTER TABLE shifts ADD COLUMN in_store_id INTEGER DEFAULT 0",
+    # Who is bound to where. Empty means what it has always meant: punch
+    # from wherever you are.
+    "ALTER TABLE users ADD COLUMN clock_store_id INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN clock_kiosk_only INTEGER DEFAULT 0",
     "ALTER TABLE trucks ADD COLUMN driver_user_id INTEGER",
     "ALTER TABLE routes ADD COLUMN total_min REAL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT ''",
@@ -440,6 +466,7 @@ def init() -> None:
     con = connect()
     try:
         con.executescript(SCHEMA)
+        con.executescript(KIOSK_TABLE)
         for stmt in MIGRATIONS:
             try:
                 con.execute(stmt)

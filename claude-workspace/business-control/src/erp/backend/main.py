@@ -1480,7 +1480,14 @@ def _consume_stock(con, o) -> None:
 
 # ---------- time clock ----------
 
-class ClockBody(BaseModel):
+class Where(BaseModel):
+    lat: float | None = None
+    lng: float | None = None
+    accuracy_m: float | None = None
+    kiosk: str = ""                  # the tablet's registered id, if any
+
+
+class ClockBody(Where):
     pin: str
     event_id: int | None = None      # promo event being worked, if any
 
@@ -1491,10 +1498,10 @@ def clock(body: ClockBody, con=Depends(get_con)):
     emp = auth.check_pin(con, body.pin, CFG["pin_pepper"])
     if emp is None:
         raise HTTPException(404, "no employee with that PIN")
-    return _punch(con, emp, body.event_id)
+    return _punch(con, emp, body.event_id, body.model_dump())
 
 
-class ClockMeBody(BaseModel):
+class ClockMeBody(Where):
     event_id: int | None = None      # no PIN: the session is the proof
 
 
@@ -1508,7 +1515,48 @@ def clock_me(body: ClockMeBody, user=Depends(current_user),
     a second secret to start their own shift is a lock on the inside of
     an open door.
     """
-    return _punch(con, user, body.event_id)
+    return _punch(con, user, body.event_id, body.model_dump())
+
+
+class KioskBody(BaseModel):
+    kiosk_id: str = ""
+    label: str = ""
+    store_id: int = 0
+    active: bool = True
+
+
+@app.get("/api/admin/kiosks")
+def kiosks_list(user=Depends(admin_user), con=Depends(get_con)):
+    return [dict(r) for r in con.execute(
+        "SELECT k.*, COALESCE(s.name,'') AS store FROM kiosks k"
+        " LEFT JOIN stores s ON s.id=k.store_id ORDER BY k.label, k.kiosk_id")]
+
+
+@app.post("/api/admin/kiosks")
+def kiosk_register(body: KioskBody, user=Depends(admin_user),
+                   con=Depends(get_con)):
+    """Register the tablet by the door.
+
+    The id is minted here rather than accepted from the device: a kiosk
+    id a browser can choose for itself is not a location, it is a claim.
+    """
+    kid = (body.kiosk_id or "").strip() or secrets.token_urlsafe(9)
+    con.execute(
+        "INSERT INTO kiosks(kiosk_id,label,store_id,active,created_at)"
+        " VALUES(?,?,?,?,?) ON CONFLICT(kiosk_id) DO UPDATE SET"
+        " label=excluded.label, store_id=excluded.store_id,"
+        " active=excluded.active",
+        (kid, body.label.strip()[:60], body.store_id,
+         1 if body.active else 0, db.now()))
+    con.commit()
+    return {"ok": True, "kiosk_id": kid}
+
+
+@app.delete("/api/admin/kiosks/{kiosk_id}")
+def kiosk_drop(kiosk_id: str, user=Depends(admin_user), con=Depends(get_con)):
+    con.execute("DELETE FROM kiosks WHERE kiosk_id=?", (kiosk_id,))
+    con.commit()
+    return {"ok": True}
 
 
 class UnlockBody(BaseModel):
@@ -1543,12 +1591,106 @@ def kiosk_unlock(body: UnlockBody, user=Depends(current_user),
     return {"ok": True}
 
 
-def _punch(con, emp, event_id):
+EARTH_M = 6371000.0
+
+
+def _metres(a_lat, a_lng, b_lat, b_lng) -> float:
+    """Great-circle metres between two points. Haversine, because at the
+    scale of "is this person at the shop" the flat approximation is off
+    by enough to matter at the edge of a geofence, which is the only
+    place the answer is ever close."""
+    import math
+    p1, p2 = math.radians(a_lat), math.radians(b_lat)
+    dp = math.radians(b_lat - a_lat)
+    dl = math.radians(b_lng - a_lng)
+    h = (math.sin(dp / 2) ** 2
+         + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2)
+    return 2 * EARTH_M * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _where_check(con, emp, at: dict) -> dict:
+    """May this person start a shift from here?
+
+    Two separate rules, because they answer different worries:
+
+      * **A store to be near.** Somebody rostered at the Norristown shop
+        punching in from home is a payroll question. The check is against
+        the store's own coordinates and a radius, and it needs the phone
+        to say where it is — a refusal to share location is a refusal,
+        not a pass.
+      * **A kiosk to be at.** For staff who clock in on the tablet by the
+        door, the tablet IS the location, and it is a better one than a
+        browser's guess: it cannot be spoofed by a setting, and it is
+        already bolted to the wall.
+
+    Accuracy is honoured. A fix that says "somewhere within 900 metres"
+    cannot prove somebody is inside a 100-metre fence, and treating it as
+    though it can is how a geofence becomes a formality everybody knows
+    is theatre.
+    """
+    need_store = emp["clock_store_id"] if "clock_store_id" in emp.keys() else 0
+    need_kiosk = (emp["clock_kiosk_only"]
+                  if "clock_kiosk_only" in emp.keys() else 0)
+    out = {"lat": at.get("lat"), "lng": at.get("lng"),
+           "accuracy_m": at.get("accuracy_m"), "kiosk": at.get("kiosk", "")[:60],
+           "store_id": 0, "metres": None}
+    if need_kiosk:
+        kid = (at.get("kiosk") or "").strip()
+        if not kid:
+            raise HTTPException(
+                403, "this account clocks in at a kiosk. Open the time "
+                     "clock on the tablet at the door and try there.")
+        k = con.execute("SELECT * FROM kiosks WHERE kiosk_id=? AND active=1",
+                        (kid,)).fetchone()
+        if k is None:
+            raise HTTPException(
+                403, "that tablet is not a registered kiosk — an owner "
+                     "registers it once from Team & access")
+        out["store_id"] = k["store_id"] or 0
+        return out
+    if not need_store:
+        return out
+    st = con.execute("SELECT id, name, lat, lng FROM stores WHERE id=?",
+                     (need_store,)).fetchone()
+    if st is None or not (st["lat"] or st["lng"]):
+        # Bound to a place that has no coordinates: let the punch through
+        # and say so. Refusing here punishes the employee for a setting
+        # somebody else did not finish.
+        out["note"] = "no coordinates on that location — not checked"
+        return out
+    lat, lng = at.get("lat"), at.get("lng")
+    if lat is None or lng is None:
+        raise HTTPException(
+            403, f"this account clocks in at {st['name']}, so the app needs "
+                 "your location. Allow it and try again.")
+    radius = float(CFG.get("clock_radius_m") or 150)
+    got = _metres(float(lat), float(lng), st["lat"], st["lng"])
+    acc = float(at.get("accuracy_m") or 0)
+    out.update({"store_id": st["id"], "metres": round(got)})
+    if got > radius + acc:
+        raise HTTPException(
+            403, f"that is {round(got)} m from {st['name']}, and the fence "
+                 f"is {round(radius)} m. Clocking in has to happen there.")
+    if acc > radius * 3:
+        raise HTTPException(
+            403, "your location is only accurate to about "
+                 f"{round(acc)} m, which cannot show you are inside a "
+                 f"{round(radius)} m fence. Try outdoors or on wifi.")
+    return out
+
+
+def _punch(con, emp, event_id, at: dict | None = None):
     """Toggle a shift for this employee. Shared by the PIN keypad and the
     badge scanner, so the two can't drift into behaving differently."""
+    at = at or {}
     open_shift = con.execute(
         "SELECT * FROM shifts WHERE user_id=? AND clock_out IS NULL",
         (emp["id"],)).fetchone()
+    # The fence gates going ON shift, never coming off it. Refusing a
+    # clock-out because a phone cannot get a fix leaves somebody on the
+    # clock being paid for a car park, and the argument afterwards is
+    # about the software rather than the hours.
+    where = {} if open_shift else _where_check(con, emp, at)
     if open_shift:
         con.execute("UPDATE shifts SET clock_out=? WHERE id=?",
                     (db.now(), open_shift["id"]))
@@ -1563,14 +1705,21 @@ def _punch(con, emp, event_id):
         if ev is None:
             raise HTTPException(400, "no such active event")
         event_name = ev["name"]
-    cur = con.execute("INSERT INTO shifts(user_id, clock_in, event_id)"
-                      " VALUES(?,?,?)", (emp["id"], db.now(), event_id))
+    cur = con.execute(
+        "INSERT INTO shifts(user_id, clock_in, event_id, in_lat, in_lng,"
+        " in_accuracy_m, in_kiosk, in_store_id) VALUES(?,?,?,?,?,?,?,?)",
+        (emp["id"], db.now(), event_id, where.get("lat"), where.get("lng"),
+         where.get("accuracy_m"), where.get("kiosk", ""),
+         where.get("store_id", 0)))
     con.commit()
     return {"name": emp["name"], "action": "clock_in",
-            "shift_id": cur.lastrowid, "event": event_name}
+            "shift_id": cur.lastrowid, "event": event_name,
+            "where": where.get("note") or (
+                f"{where['metres']} m from the shop"
+                if where.get("metres") is not None else "")}
 
 
-class BadgeBody(BaseModel):
+class BadgeBody(Where):
     token: str
     event_id: int | None = None
 
@@ -1583,10 +1732,10 @@ def clock_badge_punch(body: BadgeBody, con=Depends(get_con)):
     emp = auth.user_for_badge(con, body.token)
     if emp is None:
         raise HTTPException(404, "that badge isn't recognised")
-    return _punch(con, emp, body.event_id)
+    return _punch(con, emp, body.event_id, body.model_dump())
 
 
-class ClockNameBody(BaseModel):
+class ClockNameBody(Where):
     name: str
     password: str = ""
     event_id: int | None = None
@@ -1620,7 +1769,7 @@ def clock_by_name(body: ClockNameBody, con=Depends(get_con)):
     elif auth.passwords_required(CFG):
         raise HTTPException(403, "that account has no password yet — set one "
                                  "by signing in first, or use a PIN")
-    return _punch(con, emp, body.event_id)
+    return _punch(con, emp, body.event_id, body.model_dump())
 
 
 @app.post("/api/me/badge")
@@ -1760,7 +1909,7 @@ def all_users(user=Depends(admin_user), con=Depends(get_con)):
 
 
 
-ROLES_ALLOWED = ("customer", "distributor", "influencer", "employee",
+ROLES_ALLOWED = ("customer", "distributor", "influencer", "cashier", "employee",
                  "owner", "teacher", "volunteer", "director", "board",
                  "donor")
 
@@ -1829,6 +1978,8 @@ class UserUpdateBody(BaseModel):
     is_admin: bool | None = None
     active: bool | None = None
     clear_password: bool = False
+    clock_store_id: int | None = None      # must punch near this location
+    clock_kiosk_only: bool | None = None   # must punch at a kiosk
 
 
 @app.post("/api/admin/users/{uid}/update")
@@ -1866,6 +2017,12 @@ def update_user(uid: int, body: UserUpdateBody, user=Depends(admin_user),
                 "SELECT 1 FROM users WHERE lower(name)=lower(?) AND id!=?",
                 (name, uid)).fetchone():
             raise HTTPException(409, f"'{name}' already has an account here")
+    if body.clock_store_id is not None:
+        con.execute("UPDATE users SET clock_store_id=? WHERE id=?",
+                    (max(0, body.clock_store_id), uid))
+    if body.clock_kiosk_only is not None:
+        con.execute("UPDATE users SET clock_kiosk_only=? WHERE id=?",
+                    (1 if body.clock_kiosk_only else 0, uid))
     con.execute("UPDATE users SET name=?, role=?, is_admin=?, active=?,"
                 " job=?, employment=?, email=? WHERE id=?",
                 (name, role, is_admin, active, job, employment, email, uid))

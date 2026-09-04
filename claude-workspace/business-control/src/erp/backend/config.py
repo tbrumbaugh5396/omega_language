@@ -76,6 +76,11 @@ DEFAULTS = {
     # country's average — and one point is the honest version of that
     # until there are coordinates per region to fetch.
     "holiday_country": "US",
+    # How close to the shop a geofenced punch has to be. Generous by
+    # default: a phone indoors behind a metal roof is regularly ninety
+    # metres out, and a fence that fails honest people is a fence that
+    # gets turned off.
+    "clock_radius_m": 150,
     "weather_lat": 0.0,
     "weather_lon": 0.0,
     # Private Shopify subscription app. Empty shop_domain = mock mode (a fake

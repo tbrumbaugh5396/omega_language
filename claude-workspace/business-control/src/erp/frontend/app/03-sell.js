@@ -685,7 +685,8 @@ async function renderClock() {
     try {
       const evSel = $("#clock-event");
       const r = await api("/api/clock", { body: { pin: $("#pin").value,
-        event_id: evSel && evSel.value ? +evSel.value : null } });
+        event_id: evSel && evSel.value ? +evSel.value : null,
+        ...(await punchWhere()) } });
       $("#punch-msg").innerHTML = r.action === "clock_in"
         ? `<span class="pill ok">Welcome, ${esc(r.name)} — clocked in
             ${r.event ? "at " + esc(r.event) : ""}</span>`
@@ -704,7 +705,7 @@ async function renderClock() {
   };
   if ($("#punch-me")) $("#punch-me").onclick = async () => {
     try {
-      const r = await api("/api/clock/me", { body: {} });
+      const r = await api("/api/clock/me", { body: await punchWhere() });
       toast(r.action === "clock_in"
         ? `On shift${r.event ? " — " + r.event : ""}`
         : `Clocked out — ${r.hours}h logged`);
@@ -752,7 +753,8 @@ function openKiosk(events, locked) {
     const evSel = k.querySelector("#k-event");
     try {
       const r = await api("/api/clock", { body: { pin,
-        event_id: evSel && evSel.value ? +evSel.value : null } });
+        event_id: evSel && evSel.value ? +evSel.value : null,
+        ...(await punchWhere()) } });
       k.querySelector("#k-msg").innerHTML = r.action === "clock_in"
         ? `<span class="pill ok" style="font-size:16px">Welcome, ${esc(r.name)}
             ${r.event ? "— " + esc(r.event) : ""}</span>`
@@ -826,7 +828,7 @@ function openKiosk(events, locked) {
         const r = await api("/api/clock/name", { body: {
           name: box.querySelector("#kn-name").value.trim(),
           password: box.querySelector("#kn-pw").value,
-          event_id: kEvent() } });
+          event_id: kEvent(), ...(await punchWhere()) } });
         box.remove();
         kSaid(r);
       } catch (e) {
@@ -1204,6 +1206,31 @@ function timeOffForm() {
    Two different facts, deliberately not one: what somebody says about
    their own week, and what the business is asking of them. A rota that
    confuses the two is how people get rostered onto their evening class. */
+/* Where the punch is happening, when the account is bound to a place.
+   Asked for rather than demanded: an account with no binding never sees
+   a permission prompt, because a shop that asks everybody for their
+   location to clock in is a shop whose staff say no on principle. The
+   kiosk id is the tablet's, registered once by an owner and kept here —
+   for staff bound to a kiosk it IS the location, and a better one than
+   a browser's guess. */
+async function punchWhere() {
+  const kiosk = localStorage.getItem("bc_kiosk_id") || "";
+  const out = { kiosk };
+  if (!navigator.geolocation) return out;
+  try {
+    const pos = await new Promise((yes, no) =>
+      navigator.geolocation.getCurrentPosition(yes, no,
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }));
+    out.lat = pos.coords.latitude;
+    out.lng = pos.coords.longitude;
+    out.accuracy_m = pos.coords.accuracy;
+  } catch (e) {
+    // Denied, or no fix. The server decides whether that matters — it is
+    // the only side that knows whether this account is fenced.
+  }
+  return out;
+}
+
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAYS_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday",
                    "Friday", "Saturday", "Sunday"];
