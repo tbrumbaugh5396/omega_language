@@ -5561,6 +5561,64 @@ def public_receipt(token: str, con=Depends(get_con)):
 </div></body></html>""")
 
 
+@app.get("/api/website")
+def website_wiring(user=Depends(admin_user), con=Depends(get_con)):
+    """Everything a client's own website needs to talk to this install.
+
+    Back-office-only clients keep the site they have and wire it in. The
+    calls are the ones that already exist — this is not a second API, it
+    is the same one with a page that says where it is, because an API
+    nobody can find the address of is an API nobody uses.
+    """
+    base = base_url()
+    live = con.execute(
+        "SELECT COUNT(*) AS n FROM api_keys WHERE revoked_at IS NULL"
+        " OR revoked_at=0").fetchone()["n"]
+    return {
+        "base": base,
+        "storefront_off": bool(CFG.get("storefront_off")),
+        "external_site": CFG.get("external_site") or "",
+        "keys": live,
+        "calls": [
+            {"what": "Show what is for sale", "method": "GET",
+             "path": "/api/store/catalog", "auth": False,
+             "note": "public — the same list the shop draws from"},
+            {"what": "Place an order", "method": "POST", "path": "/api/orders",
+             "auth": True,
+             "note": "items: [{product_id, qty}] plus the delivery details"},
+            {"what": "Read orders back", "method": "GET", "path": "/api/orders",
+             "auth": True, "note": "the key's own account sees its own"},
+            {"what": "Look up a product", "method": "GET",
+             "path": "/api/products", "auth": True,
+             "note": "ids, SKUs, barcodes and prices"},
+        ],
+        "note": "A key acts AS the account it is bound to, through every "
+                "permission this software already enforces — so a website "
+                "key is a customer-shaped key, and cannot be talked into "
+                "doing admin things.",
+    }
+
+
+class SiteBody(BaseModel):
+    storefront_off: bool | None = None
+    external_site: str | None = None
+
+
+@app.post("/api/website")
+def website_set(body: SiteBody, user=Depends(admin_user)):
+    """Turn the shop off and say where the real one is."""
+    if body.external_site is not None:
+        where = body.external_site.strip()
+        if where and not where.startswith(("http://", "https://")):
+            raise HTTPException(400, "the address needs its https://")
+        CFG["external_site"] = where[:200]
+    if body.storefront_off is not None:
+        CFG["storefront_off"] = bool(body.storefront_off)
+    config.save(CFG)
+    return {"ok": True, "storefront_off": bool(CFG.get("storefront_off")),
+            "external_site": CFG.get("external_site") or ""}
+
+
 @app.get("/api/entitlements")
 def entitlements(user=Depends(current_user), con=Depends(get_con)):
     """What this install may have, what it is using, and what more costs.
@@ -6148,6 +6206,27 @@ app.mount("/ops", StaticFiles(directory=config.FRONTEND_DIR, html=True),
 
 @app.get("/")
 def index(con=Depends(get_con)):
+    """The front door — theirs or ours.
+
+    A client running back-office-only already has a website, and serving
+    a storefront nobody maintains on a real domain is worse than serving
+    none: it is a second shop with old prices on it, findable by search,
+    and the client's customers cannot tell which one is real. So the door
+    points at the site they actually keep.
+    """
+    if CFG.get("storefront_off"):
+        where = (CFG.get("external_site") or "").strip()
+        if where:
+            return RedirectResponse(where, status_code=307)
+        return HTMLResponse(
+            f"<!doctype html><meta charset=utf-8>"
+            f"<title>{_html.escape(CFG['brand_name'])}</title>"
+            "<style>body{font:16px/1.6 system-ui;margin:0;display:grid;"
+            "place-items:center;height:100vh;color:#14161d;background:#f4f4f6}"
+            "div{max-width:32rem;padding:0 1.5rem;text-align:center}</style>"
+            f"<div><h1>{_html.escape(CFG['brand_name'])}</h1>"
+            "<p>This address runs the back office. The public site lives "
+            "elsewhere.</p></div>", 200)
     # The storefront home is composed from merchant-editable sections.
     return HTMLResponse(store_api.render_home(con))
 

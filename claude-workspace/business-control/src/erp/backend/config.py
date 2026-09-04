@@ -81,6 +81,12 @@ DEFAULTS = {
     # metres out, and a fence that fails honest people is a fence that
     # gets turned off.
     "clock_radius_m": 150,
+    # Back office only: the client keeps the website they already have.
+    # The shop's front door then belongs to them, so it points there
+    # rather than serving a storefront nobody maintains — an unmaintained
+    # shop on a real domain is worse than no shop.
+    "storefront_off": False,
+    "external_site": "",
     "weather_lat": 0.0,
     "weather_lon": 0.0,
     # Private Shopify subscription app. Empty shop_domain = mock mode (a fake

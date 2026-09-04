@@ -214,6 +214,51 @@ and annual discounts apply to it.
 
 ---
 
+## 7b. Back office only — keep your website
+
+Not every client wants us to build their site. Plenty already have one they
+like, or one their marketing agency owns, or a Shopify they are not leaving.
+Telling them the back office comes with a shop they have to ignore is how a
+good fit is talked out of a sale.
+
+**Back office only** is the same platform, the same capabilities, the same
+price — with the storefront switched off and the door pointed at the site
+they already have.
+
+| | Back office only | Full install |
+|---|---|---|
+| Platform core | **$50** | $50 |
+| Capabilities | as chosen | as chosen |
+| Storefront | off — visitors go to their site | ours |
+| Build | none, or a **$500** wiring setup | §12's ladder |
+| Their website talks to it | scoped API key | not needed |
+
+The monthly is identical because the cost to serve is identical: it is the
+same install. What they save is the build, which is the honest saving and the
+one worth naming — a client who hears "cheaper" and then sees the same monthly
+figure stops believing the rest of the page.
+
+**Wiring setup — $500.** Mint the key, point their developer at the four
+calls that matter, and stay on the line while the first real order arrives.
+Skippable: a client with a competent developer needs a key and an afternoon,
+and charging them for a phone call they did not need is how the number stops
+being trusted.
+
+What their site does with it:
+
+| It wants to | Call |
+|---|---|
+| Show what is for sale | `GET /api/store/catalog` |
+| Place an order | `POST /api/orders` |
+| Read their orders back | `GET /api/orders` |
+| Hear about changes | Integrations → your own connection |
+
+Everything else — stock, tills, rota, documents, analytics — is the back
+office, and is used the same way it always is. The website is a customer of
+the platform, not a part of it.
+
+---
+
 ## 8. White-labelling
 
 A licence, not a fork. Same code, same upgrades, same day — only marks,

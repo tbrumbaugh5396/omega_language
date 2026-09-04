@@ -872,3 +872,97 @@ async function renderOneIntegration(name, label) {
     renderOneIntegration(name, label);
   };
 }
+
+
+/* ---------- the website they already have ----------
+   Not every client wants us to build their site, and telling them the
+   back office comes with a shop they have to ignore is how a good fit is
+   talked out of a sale. This is the other way round: the platform, and a
+   page that says where their own site plugs into it. */
+async function renderWebsite() {
+  const [d, keys] = await Promise.all([
+    api("/api/website"),
+    api("/api/admin/api-keys").catch(() => [])]);
+  const live = (keys || []).filter((k) => !k.revoked_at);
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Your website</h2>
+        <p class="dim">If you already have a site you like, keep it. The
+          back office runs here and your site talks to it — the calls
+          below are the ones this software already answers, not a second
+          API bolted on for the purpose.</p></div>
+    </div>
+    <div class="card">
+      <div class="doc-top">
+        <div class="doc-main"><b>The front door of ${esc(location.host)}</b>
+          <span class="dim">${d.storefront_off
+            ? d.external_site
+              ? "sends visitors to " + esc(d.external_site)
+              : "tells visitors the public site is elsewhere"
+            : "serves the storefront we built"}</span></div>
+        <span class="pill ${d.storefront_off ? "warn" : "ok"}">${
+          d.storefront_off ? "shop off" : "shop on"}</span>
+      </div>
+      <label class="perm"><input type="checkbox" id="ws-off"
+        ${d.storefront_off ? "checked" : ""}>
+        <span><b>Keep my own website</b><small>turns the storefront off. An
+          unmaintained shop on a real domain is worse than none — it is a
+          second shop with old prices, findable by search, and your
+          customers cannot tell which one is real.</small></span></label>
+      <label>Where your site lives</label>
+      <input id="ws-url" placeholder="https://example.com"
+        value="${esc(d.external_site || "")}">
+      <div class="chips" style="margin-top:10px">
+        <button class="btn" id="ws-save">Save</button>
+      </div>
+    </div>
+    <h3>What your site calls</h3>
+    <div class="card">
+      <p class="dim">Base address: <code>${esc(d.base)}</code>. Anything
+        marked needing a key sends it as
+        <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>to</th><th>call</th><th>key</th><th></th>
+          </tr></thead>
+        <tbody>${d.calls.map((c2) => `<tr>
+          <td>${esc(c2.what)}<br><span class="dim">${esc(c2.note)}</span></td>
+          <td><code>${esc(c2.method)} ${esc(c2.path)}</code></td>
+          <td>${c2.auth ? '<span class="pill">needs one</span>'
+            : '<span class="pill ok">public</span>'}</td>
+          <td><button class="btn alt sm" data-wscopy="${esc(c2.method)} ${
+            esc(c2.path)}">Copy</button></td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+      <p class="dim">${esc(d.note)}</p>
+    </div>
+    <div class="page-head cal-add">
+      <p class="dim">${live.length
+        ? `${live.length} key${live.length === 1 ? "" : "s"} in use. A
+           website's key should be bound to a customer-shaped account, not
+           to an owner.`
+        : "No keys yet. Your site needs one to place an order."}</p>
+      <div class="top-actions">
+        <button class="btn alt" id="ws-keys">Keys and access</button>
+      </div>
+    </div>`;
+  $("#ws-save").onclick = async () => {
+    try {
+      await api("/api/website", { body: {
+        storefront_off: $("#ws-off").checked,
+        external_site: $("#ws-url").value.trim() } });
+      toast("saved");
+      renderWebsite();
+    } catch (e) { toast(e.message); }
+  };
+  $("#ws-keys").onclick = () => { S.tab = "integrations"; render(); };
+  view().querySelectorAll("[data-wscopy]").forEach((b) => b.onclick = () => {
+    const [m, path] = b.dataset.wscopy.split(" ");
+    const cmd = m === "GET"
+      ? `curl -H "Authorization: Bearer KEY" ${d.base}${path}`
+      : `curl -X ${m} -H "Authorization: Bearer KEY" `
+        + `-H "Content-Type: application/json" `
+        + `-d '{"items":[{"product_id":1,"qty":1}]}' ${d.base}${path}`;
+    navigator.clipboard.writeText(cmd).then(
+      () => toast("copied"), () => toast(cmd));
+  });
+}

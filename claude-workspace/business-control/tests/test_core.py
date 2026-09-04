@@ -4349,6 +4349,44 @@ ok("wedgeOff" in _ops and "if (typeof wedgeOff" in _ops,
    "would swallow the Enter key everywhere else, which is the sort of "
    "bug that gets blamed on the keyboard")
 
+# --- the client who keeps their own website ---------------------------
+# Not every client wants us to build their site, and telling them the back
+# office comes with a shop they have to ignore is how a good fit is talked
+# out of a sale.
+_ws = c.get("/api/website", headers=A).json()
+ok(_ws["base"] and len(_ws["calls"]) >= 3,
+   "an install says where it is and what an outside website calls")
+ok({x["path"] for x in _ws["calls"]} <= {
+    "/api/store/catalog", "/api/orders", "/api/products"},
+   "and every one of them is a call this software already answers — not a "
+   "second API bolted on for the purpose, which would be a second thing "
+   "to keep true")
+ok(not _ws["storefront_off"], "the shop is on until somebody turns it off")
+ok(c.get("/").status_code == 200, "and the front door serves it")
+ok(c.post("/api/website", headers=A,
+          json={"external_site": "example.com"}).status_code == 400,
+   "an address without its scheme is refused rather than guessed at")
+c.post("/api/website", headers=A, json={
+    "storefront_off": True, "external_site": "https://elsewhere.test"})
+_door = c.get("/", follow_redirects=False)
+ok(_door.status_code == 307
+   and _door.headers["location"] == "https://elsewhere.test",
+   "with the shop off, the door points at the site they actually keep — "
+   "an unmaintained storefront on a real domain is worse than none, "
+   "because it is a second shop with old prices that customers cannot "
+   "tell from the real one")
+c.post("/api/website", headers=A, json={"external_site": ""})
+_bare = c.get("/")
+ok(_bare.status_code == 200 and "back office" in _bare.text,
+   "and with nowhere to point, it says what the address is rather than "
+   "serving a shop nobody maintains")
+ok(c.get("/ops/app.js").status_code == 200,
+   "the back office itself is untouched — it is the product they bought")
+c.post("/api/website", headers=A, json={"storefront_off": False})
+ok(c.get("/").status_code == 200, "and it comes back")
+ok(c.get("/api/website").status_code in (401, 403),
+   "the wiring page is the owner's")
+
 # A single-tenant install has no grant and must never acquire one: the
 # absence of an entitlement cannot take features from somebody who
 # already had them all.

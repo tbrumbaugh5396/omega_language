@@ -108,6 +108,8 @@ const TABS = [
   // where a connection is set up and where your own ones are declared.
   { id: "integrations", label: "All connections", icon: "link",
     group: "Connections", roles: ["admin"] },
+  { id: "website", label: "Your website", icon: "link",
+    group: "Connections", roles: ["admin"] },
   { id: "discord", label: "Discord", icon: "chat", group: "Connections",
     roles: ["admin"] },
   { id: "slack", label: "Slack", icon: "megaphone", group: "Connections",
@@ -389,7 +391,7 @@ async function render() {
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
-    till: renderTill, field: renderField,
+    till: renderTill, field: renderField, website: renderWebsite,
     integrations: renderIntegrations, slack: renderSlack,
     // every "ig:<name>" tab lands on the same screen, told which one
     ...Object.fromEntries(TABS.filter((t) => t.id.startsWith("ig-"))
