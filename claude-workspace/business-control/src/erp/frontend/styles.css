@@ -1614,3 +1614,7 @@ body.lane-on { overflow: hidden; }
 .lane-scan .btn { flex: none; padding: 0 20px; }
 .lane-said { grid-column: 1 / -1; min-height: 22px; font-size: 17px;
   font-weight: 600; margin: -4px 0 0; }
+.doc-line.inbound { grid-template-columns:
+  minmax(0, 1fr) minmax(0, 190px) 124px 84px; }
+.inbound-eta { font-size: 12px; }
+.dl-acts.inbound-acts { grid-template-columns: 84px; }

@@ -87,7 +87,8 @@ CREATE TABLE IF NOT EXISTS visit_steps (
   note TEXT DEFAULT '',
   qty REAL,                                -- counted, where a step counts
   line_id INTEGER DEFAULT 0,               -- the purchase order line, if any
-  expected_qty REAL,                       -- what the paperwork says is coming
+  expected_qty REAL,                       -- what is actually coming
+  ordered_qty REAL,                        -- what we asked for, if different
   done_at REAL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS visit_steps_v ON visit_steps(visit_id, seq);
@@ -115,7 +116,8 @@ def init_tables(con):
     con.executescript(TABLES)
     cols = {r["name"] for r in con.execute("PRAGMA table_info(visit_steps)")}
     for name, decl in (("line_id", "INTEGER DEFAULT 0"),
-                       ("expected_qty", "REAL")):
+                       ("expected_qty", "REAL"),
+                       ("ordered_qty", "REAL")):
         if name not in cols:
             con.execute(f"ALTER TABLE visit_steps ADD COLUMN {name} {decl}")
     con.commit()
@@ -183,28 +185,41 @@ def open_visit(con, template_id: int, user_id: int, **kw) -> int:
         except Exception:                                    # noqa: BLE001
             steps = []
     # Goods coming in: the list IS the paperwork. A receiving checklist
-    # somebody types out by hand is a checklist that says what they
-    # remember was ordered, which is the number least worth checking
-    # against — so the lines still outstanding on the order become the
-    # steps, each carrying what is expected so a short pallet is visible
-    # while the driver is still there rather than at the month end.
+    # somebody types out by hand says what they remember was ordered,
+    # which is the number least worth checking against.
+    #
+    # Three numbers meet on a loading bay and they are all different:
+    # what we ORDERED, what the supplier PROMISED when they confirmed,
+    # and what actually ARRIVED. Counting against the order alone flags
+    # a delivery short when the supplier already told us it would be —
+    # which trains everybody to ignore the flag. So the step is measured
+    # against the promise where there is one, and carries the order
+    # beside it so the two arguments stay separate: one is with the
+    # driver at the door, the other is with the buyer next week.
     po_id = kw.get("po_id", 0)
     if po_id:
+        promised = _promised(con, po_id)
         for ln in con.execute(
                 "SELECT l.id, l.qty, l.received, COALESCE(m.name,'material')"
                 "  AS name, COALESCE(m.unit,'') AS unit"
                 " FROM purchase_order_lines l"
                 " LEFT JOIN materials m ON m.id=l.material_id"
                 " WHERE l.po_id=? ORDER BY l.id", (po_id,)):
-            left = round(ln["qty"] - (ln["received"] or 0), 3)
-            if left <= 0:
+            ordered_left = round(ln["qty"] - (ln["received"] or 0), 3)
+            said = promised.get(str(ln["id"]))
+            coming = ordered_left if said is None else round(
+                min(said, ordered_left) if said <= ln["qty"] else said, 3)
+            if coming <= 0 and ordered_left <= 0:
                 continue
+            unit = (" " + ln["unit"]).rstrip()
+            label = f"{ln['name']} — {coming:g}{unit} expected"
+            if said is not None and abs(coming - ordered_left) > 1e-9:
+                label += f" (we ordered {ordered_left:g}{unit})"
             con.execute(
                 "INSERT INTO visit_steps(visit_id,seq,label,wants_photo,"
-                " line_id,expected_qty) VALUES(?,?,?,1,?,?)",
-                (vid, 1000 + ln["id"],
-                 f"{ln['name']} — {left:g}{(' ' + ln['unit']).rstrip()}"
-                 " expected", ln["id"], left))
+                " line_id,expected_qty,ordered_qty) VALUES(?,?,?,1,?,?,?)",
+                (vid, 1000 + ln["id"], label, ln["id"], coming,
+                 ordered_left))
     for i, st in enumerate(steps or []):
         if isinstance(st, str):
             st = {"label": st}
@@ -230,7 +245,7 @@ def book_in(con, visit_id: int, actor: str) -> dict:
     v = con.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
     if v is None or not v["po_id"]:
         return {"booked": 0}
-    lines, short, over = {}, [], []
+    lines, short, over, agreed = {}, [], [], []
     for st in con.execute(
             "SELECT * FROM visit_steps WHERE visit_id=? AND line_id>0",
             (visit_id,)):
@@ -240,15 +255,115 @@ def book_in(con, visit_id: int, actor: str) -> dict:
         if got > 0:
             lines[str(st["line_id"])] = got
         want = float(st["expected_qty"] or 0)
+        ordered = float(st["ordered_qty"] or 0)
+        row = {"label": st["label"], "expected": want, "ordered": ordered,
+               "got": got}
         if want and got < want:
-            short.append({"label": st["label"], "expected": want, "got": got})
+            # Short against what they promised: an argument with the
+            # driver, now, while the pallet is still on the tail lift.
+            short.append(row)
         elif want and got > want:
-            over.append({"label": st["label"], "expected": want, "got": got})
+            over.append(row)
+        elif ordered and want and want < ordered - 1e-9:
+            # Exactly what they promised, and less than we ordered. Not a
+            # delivery problem at all — a buying one, and filing it with
+            # the short deliveries is how everybody learns to ignore the
+            # short deliveries.
+            agreed.append(row)
     if not lines:
-        return {"booked": 0, "short": short, "over": over}
+        return {"booked": 0, "short": short, "over": over,
+                "short_of_order": agreed}
     out = supply.receive_po(con, v["po_id"], lines, actor)
     return {"booked": out["lines"], "complete": out["complete"],
-            "short": short, "over": over}
+            "short": short, "over": over, "short_of_order": agreed}
+
+
+def _promised(con, po_id: int) -> dict:
+    """What the supplier said they would actually ship, line by line.
+
+    The latest confirmation wins: a supplier who writes twice has changed
+    their mind, and the second message is the one the driver is bringing.
+    """
+    import json as _json
+    r = con.execute(
+        "SELECT lines FROM po_confirmations WHERE po_id=?"
+        " ORDER BY id DESC LIMIT 1", (po_id,)).fetchone()
+    if r is None:
+        return {}
+    try:
+        said = _json.loads(r["lines"] or "{}")
+    except Exception:                                        # noqa: BLE001
+        return {}
+    return {str(k): float(v) for k, v in said.items()
+            if str(v).strip() != ""}
+
+
+def inbound(con, days: int = 30, when: float = 0) -> dict:
+    """What is on its way in, and whether anybody is expecting it.
+
+    An order that has been confirmed is a delivery with a date on it. The
+    gap this closes is the ordinary one: a truck arrives, nobody knew it
+    was coming, and it is counted by whoever happened to be near the
+    door — which is the receiving that goes wrong.
+    """
+    when = when or time.time()
+    out = []
+    for po in con.execute(
+            "SELECT p.*, COALESCE(s.name,'supplier') AS supplier"
+            " FROM purchase_orders p"
+            " LEFT JOIN suppliers s ON s.id=p.supplier_id"
+            " WHERE p.status IN ('sent','part','confirmed')"
+            " ORDER BY p.id DESC LIMIT 60"):
+        conf = con.execute(
+            "SELECT confirmed_by, confirmed_eta, created_at FROM"
+            " po_confirmations WHERE po_id=? ORDER BY id DESC LIMIT 1",
+            (po["id"],)).fetchone()
+        promised = _promised(con, po["id"])
+        lines, outstanding = [], 0.0
+        for ln in con.execute(
+                "SELECT l.id, l.qty, l.received, COALESCE(m.name,'material')"
+                "  AS name, COALESCE(m.unit,'') AS unit"
+                " FROM purchase_order_lines l"
+                " LEFT JOIN materials m ON m.id=l.material_id"
+                " WHERE l.po_id=?", (po["id"],)):
+            left = round(ln["qty"] - (ln["received"] or 0), 3)
+            if left <= 0:
+                continue
+            outstanding += left
+            # A promise is only worth showing while it is smaller than
+            # what is still owed. Once part of the line has arrived, "they
+            # promised 60" against 15 outstanding reads as sixty more
+            # coming — which is a promise that was already kept.
+            said = promised.get(str(ln["id"]))
+            lines.append({"id": ln["id"], "name": ln["name"],
+                          "unit": ln["unit"], "outstanding": left,
+                          "promised": said if (said is not None
+                                               and said < left) else None})
+        if not lines:
+            continue
+        v = con.execute(
+            "SELECT id, state, finished_at FROM visits WHERE po_id=?"
+            " ORDER BY id DESC LIMIT 1", (po["id"],)).fetchone()
+        eta = conf["confirmed_eta"] if conf else 0
+        out.append({
+            "po_id": po["id"], "reference": po["reference"],
+            "supplier": po["supplier"], "status": po["status"],
+            "confirmed": bool(conf),
+            "confirmed_by": conf["confirmed_by"] if conf else "",
+            "eta": eta or 0,
+            "overdue": bool(eta and eta < when),
+            "lines": lines, "outstanding": round(outstanding, 3),
+            "visit": dict(v) if v else None,
+        })
+    out.sort(key=lambda x: (x["eta"] or 9e12))
+    return {"deliveries": out,
+            "unexpected": sum(1 for x in out if not x["confirmed"]),
+            "overdue": sum(1 for x in out if x["overdue"]),
+            "unbooked": sum(1 for x in out if not x["visit"]),
+            "note": "An order the supplier has confirmed is a delivery with "
+                    "a date on it. The ones with nobody booked to meet them "
+                    "are the ones counted by whoever happens to be near the "
+                    "door, which is the receiving that goes wrong."}
 
 
 def new_token() -> str:

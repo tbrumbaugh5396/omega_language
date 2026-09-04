@@ -3710,6 +3710,69 @@ _again = c.post(f"/api/field/visits/{_rv}/finish", headers=A, json={}).json()
 ok("received" not in _again,
    "and finishing a finished visit does not book the pallet in twice")
 
+# Three numbers meet on a loading bay and they are all different: what we
+# ORDERED, what the supplier PROMISED, and what ARRIVED.
+_po2 = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _sup.get("id", 1),
+    "lines": [{"material_id": _mat.get("id", 1), "qty": 100,
+               "unit_cost_cents": 900}]}).json()
+_po2id = _po2.get("id") or 2
+_pcon = _mdb.connect()
+_line2 = _pcon.execute("SELECT id FROM purchase_order_lines WHERE po_id=?"
+                       " ORDER BY id DESC LIMIT 1", (_po2id,)).fetchone()["id"]
+_pcon.execute(
+    "INSERT INTO po_confirmations(po_id,confirmed_by,confirmed_eta,message,"
+    " lines,created_at) VALUES(?,?,?,'',?,?)",
+    (_po2id, "Marta", _t0.time() + 2 * 86400,
+     _json_dumps := __import__("json").dumps({str(_line2): 70}), _t0.time()))
+_pcon.execute("UPDATE purchase_orders SET status='sent' WHERE id=?",
+              (_po2id,))
+_pcon.commit()
+_pcon.close()
+
+_inb = c.get("/api/field/inbound", headers=A).json()
+_row = [x for x in _inb["deliveries"] if x["po_id"] == _po2id][0]
+ok(_row["confirmed"] and _row["eta"] and _row["lines"][0]["promised"] == 70.0,
+   "an order the supplier has confirmed is a delivery with a date on it "
+   "and a quantity beside the one we asked for")
+ok(_row["visit"] is None and _inb["unbooked"] >= 1,
+   "and one with nobody booked to meet it is named — a truck nobody knew "
+   "was coming gets counted by whoever happens to be near the door, which "
+   "is the receiving that goes wrong")
+_meet = c.post("/api/field/inbound/meet", headers=A,
+               json={"po_id": _po2id}).json()
+_mv = c.get(f"/api/field/visits/{_meet['id']}", headers=A).json()
+ok(abs(_mv["planned_for"] - _row["eta"]) < 2,
+   "meeting it books the visit for the SUPPLIER'S date — one booked for a "
+   "date we invented is a delivery somebody waits for on the wrong day")
+_step = _mv["steps"][0]
+ok(_step["expected_qty"] == 70.0 and _step["ordered_qty"] == 100.0,
+   "the step counts against what was promised and carries what was "
+   "ordered beside it — counting against the order alone flags a "
+   "delivery short when the supplier already told us it would be, which "
+   "trains everybody to ignore the flag")
+ok("we ordered 100" in _step["label"],
+   "and says both numbers out loud on the label")
+ok(c.post("/api/field/inbound/meet", headers=A,
+          json={"po_id": _po2id}).status_code == 409,
+   "two people are not booked onto one delivery")
+c.post(f"/api/field/visits/{_meet['id']}/start", headers=A, json={})
+c.post(f"/api/field/steps/{_step['id']}", headers=A,
+       json={"state": "done", "qty": 70})
+_got = c.post(f"/api/field/visits/{_meet['id']}/finish", headers=A,
+              json={}).json()["received"]
+ok(not _got["short"] and _got["short_of_order"],
+   "seventy against a seventy promise is not a short delivery — it is a "
+   "short ORDER, and filing the two together is how everybody learns to "
+   "ignore the short deliveries")
+ok(_got["short_of_order"][0]["ordered"] == 100.0,
+   "the buyer's conversation keeps the number the buyer needs")
+_inb2 = c.get("/api/field/inbound", headers=A).json()
+_row2 = [x for x in _inb2["deliveries"] if x["po_id"] == _po2id]
+ok(not _row2 or _row2[0]["lines"][0]["promised"] is None,
+   "and a promise already kept stops being reported as news — 'they "
+   "promised 70' against 30 still owed reads as seventy more coming")
+
 # --- clocking in where the work is ------------------------------------------
 # Somebody rostered at the Norristown shop punching in from home is a
 # payroll question. The fence answers it — but only on the way in.

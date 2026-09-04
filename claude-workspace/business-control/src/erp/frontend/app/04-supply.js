@@ -797,8 +797,9 @@ const VISIT_ICON = { delivery: "truck", merchandising: "store",
                      receiving: "box", production: "tools", visit: "pin" };
 
 async function renderField() {
-  const d = await api(`/api/field/visits?days=30${
-    FIELD_MINE ? "&mine=1" : ""}`);
+  const [d, inb] = await Promise.all([
+    api(`/api/field/visits?days=30${FIELD_MINE ? "&mine=1" : ""}`),
+    api("/api/field/inbound").catch(() => null)]);
   const isAdmin = S.user && S.user.is_admin;
   view().innerHTML = `
     <div class="page-head">
@@ -831,6 +832,7 @@ async function renderField() {
       <div class="mrr-fig"><span class="dim">pictures</span>
         <b>${d.photos}</b></div>
     </div>
+    ${inb && inb.deliveries.length ? inboundBox(inb) : ""}
     ${d.failed.length ? `<div class="card alert">
       <b>${d.failed.length} visit${d.failed.length === 1 ? "" : "s"} came
         back with something failed</b>
@@ -867,6 +869,56 @@ async function renderField() {
   if ($("#fd-tpl")) $("#fd-tpl").onclick = () => templateForm();
   view().querySelectorAll("[data-visit]").forEach((el) =>
     el.onclick = () => openVisit(+el.dataset.visit));
+  view().querySelectorAll("[data-meet]").forEach((b) => b.onclick =
+    async (ev) => {
+      ev.stopPropagation();
+      try {
+        const r = await api("/api/field/inbound/meet",
+                            { body: { po_id: +b.dataset.meet } });
+        toast("booked — it is on the field list");
+        openVisit(r.id);
+      } catch (e) { toast(e.message); }
+    });
+}
+
+/* What is on its way in. An order the supplier has confirmed is a
+   delivery with a date on it; the ones with nobody booked to meet them
+   are the ones counted by whoever happens to be near the door, which is
+   the receiving that goes wrong. */
+function inboundBox(d) {
+  return `
+    <h3>Coming in</h3>
+    ${d.unbooked || d.overdue ? `<p class="dim">${d.unbooked
+      ? `${d.unbooked} with nobody booked to meet ${d.unbooked === 1
+        ? "it" : "them"}` : ""}${d.unbooked && d.overdue ? " · " : ""}${
+      d.overdue ? `${d.overdue} past the date the supplier gave` : ""}.</p>`
+      : ""}
+    <div class="sig-rows">${d.deliveries.map((x) => `
+      <div class="doc-line inbound${x.overdue ? " dl-awaiting" : ""}">
+        <span class="dl-title">
+          <b>${esc(x.supplier)}</b>
+          <span class="dim">${esc(x.reference || "PO " + x.po_id)} ·
+            ${x.lines.map((l) => `${l.name} ${
+              l.promised !== null && l.promised !== l.outstanding
+                ? `${l.promised}${l.unit ? " " + l.unit : ""} of ${
+                  l.outstanding}` : l.outstanding + (l.unit
+                    ? " " + l.unit : "")}`).join(", ")}</span></span>
+        <span class="fl-tags">
+          ${x.confirmed
+            ? `<span class="pill ok">confirmed${x.confirmed_by
+              ? " by " + esc(x.confirmed_by.split(" ")[0]) : ""}</span>`
+            : '<span class="pill warn" title="the supplier has not said '
+              + 'what is coming or when — this is an order, not yet a '
+              + 'delivery">not confirmed</span>'}
+        </span>
+        <span class="dim inbound-eta">${x.eta
+          ? fmtDate(x.eta) : "no date given"}</span>
+        <span class="dl-acts inbound-acts">${x.visit
+          ? `<button class="btn alt sm" data-visit="${x.visit.id}">${
+            x.visit.state === "done" ? "Received" : "Open"}</button>`
+          : '<button class="btn alt sm" data-meet="' + x.po_id
+            + '">Meet it</button>'}</span>
+      </div>`).join("")}</div>`;
 }
 let FIELD_MINE = false;
 
@@ -1109,8 +1161,19 @@ function finishVisit(v, after) {
       body.abandon_because = why.trim();
     }
     try {
-      await api(`/api/field/visits/${v.id}/finish`, { body });
+      const out = await api(`/api/field/visits/${v.id}/finish`, { body });
       closeModal();
+      const r = out.received;
+      if (r && r.short && r.short.length) {
+        toast(`${r.short.length} line${r.short.length === 1 ? "" : "s"} short `
+          + "of what the supplier promised — worth saying so now, while the "
+          + "driver is here");
+      } else if (r && r.short_of_order && r.short_of_order.length) {
+        toast(`Booked in. ${r.short_of_order.length} line${
+          r.short_of_order.length === 1 ? " is" : "s are"} short of what we `
+          + "ordered — but the supplier told us that, so it is the buyer's "
+          + "conversation, not the driver's");
+      }
       if (after) after();
     } catch (e) { toast(e.message); }
   };

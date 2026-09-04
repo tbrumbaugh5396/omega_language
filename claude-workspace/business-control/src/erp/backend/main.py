@@ -4579,6 +4579,56 @@ class VisitBody(BaseModel):
     steps: list | None = None
 
 
+@app.get("/api/field/inbound")
+def field_inbound(user=Depends(current_user), con=Depends(get_con)):
+    """What is on its way in from suppliers, and who is meeting it."""
+    from . import fieldwork
+    return fieldwork.inbound(con)
+
+
+class MeetBody(BaseModel):
+    po_id: int
+    user_id: int = 0
+    template_id: int = 0
+
+
+@app.post("/api/field/inbound/meet")
+def field_meet(body: MeetBody, user=Depends(current_user),
+               con=Depends(get_con)):
+    """Put somebody on the door for this delivery.
+
+    The visit is planned for the supplier's own ETA where they gave one:
+    a delivery booked for a date we invented is a delivery somebody is
+    waiting for on the wrong day.
+    """
+    from . import fieldwork
+    po = con.execute(
+        "SELECT p.*, COALESCE(s.name,'supplier') AS supplier"
+        " FROM purchase_orders p LEFT JOIN suppliers s ON s.id=p.supplier_id"
+        " WHERE p.id=?", (body.po_id,)).fetchone()
+    if po is None:
+        raise HTTPException(404, "no such purchase order")
+    if po["status"] in ("received", "cancelled"):
+        raise HTTPException(409, f"that order is already {po['status']}")
+    open_one = con.execute(
+        "SELECT id FROM visits WHERE po_id=? AND state IN"
+        " ('planned','started')", (body.po_id,)).fetchone()
+    if open_one:
+        raise HTTPException(
+            409, f"somebody is already booked to meet it (visit "
+                 f"{open_one['id']})")
+    conf = con.execute(
+        "SELECT confirmed_eta FROM po_confirmations WHERE po_id=?"
+        " ORDER BY id DESC LIMIT 1", (body.po_id,)).fetchone()
+    vid = fieldwork.open_visit(
+        con, body.template_id, body.user_id or user["id"],
+        kind="receiving", po_id=body.po_id,
+        supplier_id=po["supplier_id"] or 0,
+        title=f"{po['supplier']} — {po['reference'] or 'PO ' + str(po['id'])}",
+        planned_for=(conf["confirmed_eta"] if conf else 0) or 0)
+    return {"ok": True, "id": vid}
+
+
 @app.get("/api/field/visits")
 def field_visits(days: int = 30, mine: int = 0, state: str = "",
                  user=Depends(current_user), con=Depends(get_con)):
