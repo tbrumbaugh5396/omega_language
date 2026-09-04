@@ -742,3 +742,205 @@ async function renderCalendar() {
     dayView(+c.dataset.calday, S.user && S.user.is_admin ? true : null);
   });
 }
+
+/* ---------- the tablets by the door ----------
+   A kiosk was registerable, enforceable and billable before it was ever
+   visible: the id was minted, staff could be bound to one, the limit
+   charged for them — and no screen listed them. Worse, nothing in the
+   app ever wrote the id onto a tablet, so `bc_kiosk_id` was read on
+   every punch and set by nobody. A person bound to a kiosk could not
+   clock in at all: their own door refused them.
+
+   So this screen is two things. It lists the tablets and says which are
+   being used, and it hands one its identity — the step that was missing
+   between registering a kiosk and it existing anywhere but the table. */
+const KIOSK_KEY = "bc_kiosk_id";
+
+function kioskState(k) {
+  const now = Date.now() / 1000;
+  const seen = +k.last_seen || 0;
+  if (!seen) {
+    return (now - (+k.created_at || 0)) < 7 * 86400
+      ? ["settling", "registered this week, not used yet — being set up"]
+      : ["never used", "registered and never once punched on: either "
+         + "nobody has been given the link, or it is not the tablet "
+         + "people actually walk to"];
+  }
+  if (now - seen < 30 * 86400) return ["in use", "punched on recently"];
+  return [`idle ${Math.round((now - seen) / 86400)}d`,
+          "nobody has clocked in on this in over a month"];
+}
+
+async function renderKiosks() {
+  const ks = await api("/api/admin/kiosks").catch(() => []);
+  const here = localStorage.getItem(KIOSK_KEY) || "";
+  const mine = ks.find((k) => k.kiosk_id === here);
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Clock kiosks</h2>
+        <p class="dim">A tablet bolted by a door. For staff who clock in
+          on one, the tablet IS the location — better than a browser's
+          guess, because it cannot be changed by a setting. Registering
+          one here is half the job; the other half is opening its link on
+          the tablet itself, which is what tells the tablet who it is.
+        </p></div>
+      <span class="chips">
+        <button class="btn" id="k-new">${opsIcon("clock", "btn-ic")}
+          Register a tablet</button></span>
+    </div>
+    <div class="card ${mine ? "" : "empty"}">
+      <b>This device</b>
+      <span class="dim">${mine
+        ? `is the <b>${esc(mine.label || mine.kiosk_id)}</b> kiosk${
+            mine.store ? " at " + esc(mine.store) : ""}. Punches made here
+          carry that as their location.`
+        : here
+          ? `claims to be kiosk <b>${esc(here)}</b>, which is not
+             registered any more — punches from here will be refused.`
+          : "is not a kiosk. It is an ordinary browser, and punches from "
+            + "it carry whatever location it is willing to give."}</span>
+      ${here ? `<button class="btn alt sm" id="k-forget">Stop being a
+        kiosk</button>` : ""}
+    </div>
+    ${ks.length ? `<div class="tablewrap"><table>
+      <thead><tr><th>tablet</th><th>where</th><th>registered</th>
+        <th>last used</th><th></th></tr></thead>
+      <tbody>${ks.map((k) => {
+        const [word, why] = kioskState(k);
+        return `<tr${k.active ? "" : ' class="dim"'}>
+          <td><b>${esc(k.label || "(no label)")}</b>
+            ${k.kiosk_id === here
+              ? '<span class="pill ok">this device</span>' : ""}
+            ${k.active ? "" : '<span class="pill">off</span>'}</td>
+          <td class="dim">${esc(k.store || "no location set")}</td>
+          <td class="dim">${k.created_at ? fmtDate(k.created_at) : "—"}</td>
+          <td><span class="pill ${word === "in use" ? "ok"
+            : word.startsWith("idle") || word === "never used" ? "bad" : ""}"
+            title="${esc(why)}">${esc(word)}</span></td>
+          <td class="row-acts">
+            <button class="btn alt sm" data-ksetup="${esc(k.kiosk_id)}"
+              title="the link to open ON the tablet — this is the step
+              that makes a registered kiosk a real one">Set up</button>
+            <button class="btn alt sm" data-kedit="${esc(k.kiosk_id)}"
+              >Edit</button>
+            <button class="btn alt sm" data-kdrop="${esc(k.kiosk_id)}"
+              data-name="${esc(k.label || k.kiosk_id)}">Remove</button>
+          </td></tr>`;
+      }).join("")}</tbody></table></div>`
+      : `<div class="card empty"><b>No tablets registered</b>
+         <span class="dim">Staff clock in from their own browser until
+           one is. Bind somebody to a kiosk in Team & access only after a
+           tablet here has been set up — an account bound to a kiosk that
+           does not exist cannot clock in at all.</span></div>`}`;
+  const nb = $("#k-new");
+  if (nb) nb.onclick = () => kioskForm(null);
+  const fb = $("#k-forget");
+  if (fb) fb.onclick = () => {
+    localStorage.removeItem(KIOSK_KEY);
+    toast("this device is no longer a kiosk");
+    renderKiosks();
+  };
+  view().querySelectorAll("[data-ksetup]").forEach((b) =>
+    b.onclick = () => kioskSetup(ks.find((k) => k.kiosk_id
+      === b.dataset.ksetup)));
+  view().querySelectorAll("[data-kedit]").forEach((b) =>
+    b.onclick = () => kioskForm(ks.find((k) => k.kiosk_id
+      === b.dataset.kedit)));
+  view().querySelectorAll("[data-kdrop]").forEach((b) =>
+    b.onclick = async () => {
+      if (!confirm(`Remove ${b.dataset.name}? Anybody bound to it stops `
+        + "being able to clock in until they are moved.")) return;
+      try {
+        await api(`/api/admin/kiosks/${b.dataset.kdrop}`,
+                  { method: "DELETE" });
+        toast("removed"); renderKiosks();
+      } catch (e) { toast(e.message); }
+    });
+  if (S.deepKey) {
+    const k = ks.find((x) => x.kiosk_id === S.deepKey);
+    S.deepKey = null;
+    if (k) kioskSetup(k, true);
+    else toast("no kiosk with that id — it may have been removed");
+  }
+}
+
+/* The link is the point. A kiosk id is minted on the server precisely so
+   a browser cannot choose one for itself, which means there has to be a
+   deliberate moment where an owner hands one to a tablet — carried on a
+   QR because the tablet is across the room from the computer that
+   registered it. */
+function kioskSetup(k, arrived = false) {
+  if (!k) return;
+  const url = location.origin + "/ops/#/kiosks/" + k.kiosk_id;
+  const isHere = localStorage.getItem(KIOSK_KEY) === k.kiosk_id;
+  modal(`<h3>Set up ${esc(k.label || k.kiosk_id)}</h3>
+    ${arrived ? `<p class="dim">You opened this kiosk's own link. If this
+      is the tablet by the door, make it official.</p>` : ""}
+    <p class="dim">Open this link on the tablet itself and press the
+      button there. Until something does that, the tablet does not know
+      it is a kiosk and punches from it carry no kiosk at all — which is
+      why anybody bound to this one cannot clock in yet.</p>
+    <div style="text-align:center;margin:10px 0">
+      ${qrImg(url, 150)}
+      <p class="dim" style="word-break:break-all">${esc(url)}</p></div>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Close</button>
+      <button class="btn" id="k-claim" ${isHere ? "disabled" : ""}>${isHere
+        ? "this device already is" : "Make THIS device the kiosk"}</button>
+    </div>`);
+  const cb = $("#k-claim");
+  if (cb) cb.onclick = () => {
+    localStorage.setItem(KIOSK_KEY, k.kiosk_id);
+    closeModal();
+    toast(`this device is now the ${k.label || k.kiosk_id} kiosk`);
+    renderKiosks();
+  };
+}
+
+function kioskForm(k) {
+  modal(`<h3>${k ? "Edit" : "Register"} a tablet</h3>
+    <p class="dim">The id is minted here rather than taken from the
+      device: an id a browser can choose for itself is not a location,
+      it is a claim.</p>
+    <label>Label <span class="opt">what somebody would call it</span>
+    </label>
+    <input id="k-label" placeholder="Front door"
+      value="${k ? esc(k.label || "") : ""}">
+    <label>Location <span class="opt">which shop it stands in</span></label>
+    <select id="k-store"><option value="0">not set</option></select>
+    <label class="perm" style="margin-top:8px">
+      <input type="checkbox" id="k-active" ${!k || k.active ? "checked" : ""}>
+      <span><b>Active</b><small>an inactive tablet is refused, but keeps
+        its history</small></span></label>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="k-save">${k ? "Save" : "Register"}</button>
+    </div>`);
+  api("/api/stores").then((ss) => {
+    const sel = $("#k-store");
+    if (!sel) return;
+    (ss.stores || ss || []).forEach((st) => {
+      const o = document.createElement("option");
+      o.value = st.id; o.textContent = st.name;
+      if (k && k.store_id === st.id) o.selected = true;
+      sel.appendChild(o);
+    });
+  }).catch(() => {});
+  $("#k-save").onclick = async () => {
+    const body = { label: $("#k-label").value.trim(),
+                   store_id: +$("#k-store").value || 0,
+                   active: $("#k-active").checked };
+    if (k) body.kiosk_id = k.kiosk_id;
+    try {
+      const r = await api("/api/admin/kiosks", { body });
+      closeModal();
+      await renderKiosks();
+      // Registering is only half of it, so the other half is offered in
+      // the same breath rather than left for somebody to know about.
+      if (!k && r.kiosk_id) {
+        const ks = await api("/api/admin/kiosks").catch(() => []);
+        kioskSetup(ks.find((x) => x.kiosk_id === r.kiosk_id));
+      }
+    } catch (e) { toast(e.message); }
+  };
+}

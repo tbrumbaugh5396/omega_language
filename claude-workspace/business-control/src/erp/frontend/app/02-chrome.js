@@ -99,6 +99,8 @@ const TABS = [
     roles: ["admin", "employee"] },
   { id: "staff", label: "Team & access", icon: "users", group: "Company",
     roles: ["admin"] },
+  { id: "kiosks", label: "Clock kiosks", icon: "clock", group: "Company",
+    roles: ["admin"] },
   // Every connection lives in one group. Four of them earned bespoke
   // screens because they do more than connect — Slack reads channels,
   // Trello syncs cards — and the rest share one screen whose whole story
@@ -388,6 +390,7 @@ async function render() {
     experiments: renderExperiments, analytics: renderAnalytics,
     docs: renderDocs, clients: renderClients,
     staff: renderStaff, events: renderEvents, customers: renderCustomers,
+    kiosks: renderKiosks,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,
     profile: renderProfile, stores: renderStores,

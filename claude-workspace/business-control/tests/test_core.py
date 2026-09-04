@@ -1203,6 +1203,35 @@ ok("temp_c" in _ojs and "humidity_pct" in _ojs and "cloud_pct" in _ojs,
    "and the weather fetched for every trading day reaches the day it "
    "belongs to — it was being stored, returned, and shown nowhere")
 
+# --- the tablets by the door ---------------------------------------------
+# A kiosk was registerable, enforceable and billable before it was ever
+# visible, and worse: nothing in the app ever wrote the id onto a tablet.
+# bc_kiosk_id was read on every punch and set by nobody, so a person
+# bound to a kiosk could not clock in at all — their own door refused
+# them, and the only way to reach the feature was to forge the field by
+# hand, which is exactly what my own earlier check had done.
+_kjs = ops_app_js()
+ok('id: "kiosks"' in _kjs and "async function renderKiosks" in _kjs,
+   "the tablets have a screen: they could be registered, bound to staff, "
+   "counted against a limit and charged for without one")
+ok('localStorage.setItem(KIOSK_KEY' in _kjs,
+   "and something in this app finally writes the id onto a device — the "
+   "step between registering a kiosk and it existing anywhere but a "
+   "table, which nothing had ever done")
+ok("qrImg(url" in _kjs and "/ops/#/kiosks/" in _kjs,
+   "carried on a QR, because the tablet is across the room from the "
+   "computer that registered it")
+ok('/^#\\/([\\w-]+)(?:\\/([\\w-]+))?$/' in _kjs,
+   "and the route accepts a minted token, not only a row number — a "
+   "kiosk is named by the id it was given, so a digits-only route could "
+   "not link to one at all")
+ok("never used" in _kjs and "settling" in _kjs,
+   "the list says which tablets are actually punched on, and holds a "
+   "new one back from being called idle on its second day")
+ok("cannot clock in at all" in _kjs,
+   "and the empty state warns against the trap the feature shipped in: "
+   "binding somebody to a kiosk that no tablet has claimed")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

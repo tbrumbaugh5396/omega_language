@@ -35,19 +35,26 @@ const $ = (sel) => document.querySelector(sel);
    to bookmark, share, and use the back button; the hash is read on load and
    written on every render, so the address bar and the app can't disagree. */
 function applyRoute() {
-  const m = location.hash.match(/^#\/([\w-]+)(?:\/(\d+))?$/);
+  // The second segment is usually a row id, but not always: a kiosk is
+  // named by the token it was minted with, and a route that only accepts
+  // digits cannot link to one at all.
+  const m = location.hash.match(/^#\/([\w-]+)(?:\/([\w-]+))?$/);
   if (!m) return false;
+  const num = m[2] && /^\d+$/.test(m[2]);
   S.tab = m[1];
-  S.engId = (m[1] === "clients" && m[2]) ? +m[2] : null;
+  S.deepKey = (m[2] && !num) ? m[2] : null;
+  S.engId = (m[1] === "clients" && num) ? +m[2] : null;
   // Deep views beyond clients: #/learning/5 opens the course, and
   // #/customers/12 opens the card — consumed once by that tab's
   // renderer, so a later click on the tab lands on its list.
-  S.deepId = (m[1] !== "clients" && m[2]) ? +m[2] : null;
+  S.deepId = (m[1] !== "clients" && num) ? +m[2] : null;
   return true;
 }
 function syncRoute() {
   const want = (S.tab === "clients" && S.engId)
-    ? `#/clients/${S.engId}` : `#/${S.tab || "shop"}`;
+    ? `#/clients/${S.engId}`
+    : (S.tab === "kiosks" && S.deepKey) ? `#/kiosks/${S.deepKey}`
+      : `#/${S.tab || "shop"}`;
   if (location.hash !== want) history.pushState(null, "", want);
 }
 addEventListener("hashchange", () => { if (applyRoute()) render(); });
