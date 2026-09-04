@@ -1154,6 +1154,21 @@ ok(len(c.get("/api/store/blog/test-post/comments").json()["comments"]) == 1,
 ok("Post comment" in c.get("/blog/test-post").text,
    "the comment form renders on a post with comments on")
 
+# The journal knew when every post went up and told nobody: the column
+# ordered the list and never appeared on it. A blog whose posts carry no
+# date reads as one nobody has touched in years.
+_post = c.get("/blog/test-post").text
+_yr = _t0.strftime("%Y", _t0.localtime(_t0.time()))
+ok(_yr in _post.split('<div class="post-content">')[0],
+   "a post says the day it went up, above its own body")
+ok('"datePublished"' in _post,
+   "and tells a search engine the same thing — without it a BlogPosting "
+   "is undated in a result page, which is the one thing a journal cannot "
+   "afford to look")
+ok(_yr in c.get("/blog").text,
+   "and the index dates its cards, so the newest-first order it is "
+   "already sorted in can actually be seen")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

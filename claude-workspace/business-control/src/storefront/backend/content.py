@@ -7,6 +7,7 @@ more than one market.
 """
 import html as _html
 import json
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -190,6 +191,28 @@ def post_json(r) -> dict:
     return d
 
 
+def _day(ts: float) -> str:
+    """The day a post went up, as a reader would say it.
+
+    The column has been ordering the journal since it was made and was
+    never once shown: a blog whose posts carry no date reads as a blog
+    nobody has touched in years, which is the opposite of what an
+    up-to-date one is for.
+    """
+    try:
+        return time.strftime("%-d %B %Y", time.localtime(float(ts)))
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def _iso(ts: float) -> str:
+    """The same moment for machines."""
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(float(ts)))
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
 @router.get("/api/store/blog")
 def list_posts(limit: int = 20, con=Depends(get_con)):
     return [post_json(r) for r in con.execute(
@@ -211,7 +234,9 @@ def blog_index(request: Request, con=Depends(get_con)):
                f' alt="" loading="lazy"></div>' if p["media_id"] else "")
             + f'<div class="post-body"><b>{sect.esc(p["title"])}</b>'
             f'<p class="dim">{sect.esc(p["excerpt"])}</p>'
-            f'<span class="dim">{sect.esc(p["author"])}</span></div></a>'
+            f'<span class="dim">{sect.esc(p["author"])}'
+            f'{" · " + _day(p["published_at"]) if p["published_at"] else ""}'
+            f'</span></div></a>'
             for p in posts)
     else:
         cards = ('<p class="dim">No posts yet — write the first one in '
@@ -237,6 +262,11 @@ def blog_post(slug: str, request: Request, con=Depends(get_con)):
           "headline": p["title"], "description": p["excerpt"],
           "author": {"@type": "Person", "name": p["author"] or "Team"},
           "mainEntityOfPage": f"{base}/blog/{slug}"}
+    if p["published_at"]:
+        # datePublished is what a search engine needs to show this as
+        # anything other than undated, and the column has been sat on
+        # since the table was made — sorted by, never said.
+        ld["datePublished"] = _iso(p["published_at"])
     if img:
         ld["image"] = img
     hero = (f'<div class="post-hero"><img src="/media/m/{p["media_id"]}"'
@@ -244,7 +274,9 @@ def blog_post(slug: str, request: Request, con=Depends(get_con)):
     body = (f'<article class="section post">'
             f'<a class="dim" href="/blog">← Journal</a>'
             f'<h2>{sect.esc(p["title"])}</h2>'
-            f'<p class="dim">{sect.esc(p["author"])}</p>{hero}'
+            f'<p class="dim">{sect.esc(p["author"])}'
+            f'{" · " + _day(p["published_at"]) if p["published_at"] else ""}'
+            f'</p>{hero}'
             f'<div class="post-content">{p["body"]}</div></article>'
             f'<script type="application/ld+json">{json.dumps(ld)}</script>')
     if p["comments_on"]:
