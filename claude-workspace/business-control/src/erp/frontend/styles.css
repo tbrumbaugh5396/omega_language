@@ -1688,3 +1688,15 @@ body.lane-on { overflow: hidden; }
 .press-lines p { margin: 3px 0; font-size: .88em; }
 .press-lines b { color: var(--ink, #e8ecf3); font-weight: 600;
   text-transform: uppercase; font-size: .82em; letter-spacing: .04em; }
+
+/* Where inside a business the pressure is, under the install it belongs
+   to. Its own line because the verdict cell is one line with an ellipsis
+   on it, and a breakdown appended there is never read. */
+.press-where {
+  display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline;
+  margin: -6px 0 8px; padding: 0 12px 6px; font-size: .8em;
+  color: var(--dim);
+}
+.press-where span { white-space: nowrap; }
+.press-where b { color: var(--ink, #e8ecf3); font-weight: 600; }
+.press-where span.busiest b { color: #f0a08a; }

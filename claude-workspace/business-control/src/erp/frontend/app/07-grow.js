@@ -305,6 +305,36 @@ const PRESSURE_WORDS = {
   unreachable: ["unreachable", "their node did not answer"],
 };
 
+/* Where inside the business the pressure actually is. A row that says
+   "peaked at four" sends somebody into a call with a number the shop
+   manager cannot act on; four in Camden and one everywhere else is a
+   decision about a particular counter.
+
+   It gets its own line rather than a clause on the end of the verdict,
+   because the verdict cell is one line with an ellipsis on it — a
+   breakdown appended there is written, truncated, and never read. */
+function pressWhere(r) {
+  const out = [];
+  for (const l of r.lines || []) {
+    // Real shops only: "another lane belongs at not-tied-to-a-location"
+    // is not a thing anybody can go and do.
+    const w = (l.by_store || []).filter((x) => x.peak && x.store_id);
+    if (w.length < 2) continue;
+    const top = w[0].peak;
+    out.push(`<div class="press-where">
+      <span class="dim">${esc(LIMIT_WORDS[l.kind]
+        ? LIMIT_WORDS[l.kind][0] : l.kind)} by location</span>
+      ${w.slice(0, 6).map((x) => `<span class="${
+        x.peak === top ? "busiest" : ""}" title="${x.self_serve
+          ? `${x.staffed} staffed, ${x.self_serve} self-serve`
+          : `${x.sessions} session${x.sessions === 1 ? "" : "s"}`}"
+        ><b>${x.peak}</b> ${esc(x.store)}</span>`).join("")}
+      ${w.length > 6 ? `<span class="dim">+${w.length - 6} more</span>` : ""}
+    </div>`);
+  }
+  return out.join("");
+}
+
 async function fleetPressure() {
   const box = $("#fleet-pressure");
   if (!box) return;
@@ -342,10 +372,8 @@ async function fleetPressure() {
             ? PRESSURE_WORDS[r.worst][1] : ""}">${PRESSURE_WORDS[r.worst]
             ? PRESSURE_WORDS[r.worst][0] : esc(r.worst)}</span></span>
         <span class="press-why dim">${r.why ? esc(r.why)
-          : r.lines.map((l) => `${esc(l.kind)}: ${esc(l.verdict)}${
-              (l.by_store || []).length > 1
-                ? " (" + l.by_store.slice(0, 3).map((w) =>
-                    `${esc(w.store)} ${w.peak}`).join(", ") + ")" : ""}`)
+          : r.lines.map((l) => `${esc(LIMIT_WORDS[l.kind]
+              ? LIMIT_WORDS[l.kind][0] : l.kind)}: ${esc(l.verdict)}`)
               .join(" \u00b7 ")}</span>
         <span class="press-money ${r.at_stake_cents < 0 ? "dim" : ""}">${
           r.at_stake_cents
@@ -357,7 +385,7 @@ async function fleetPressure() {
             >Limits</button>
           <button class="btn alt sm" data-prep="${esc(r.tenant)}"
             >Report</button></span>
-      </div>`).join("")}</div>`
+      </div>${pressWhere(r)}`).join("")}</div>`
     : `<p class="dim">Nobody is pressed against a limit and nobody is
        paying for room they never use. This is the quiet answer, not a
        missing one.</p>`}

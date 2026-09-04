@@ -1021,6 +1021,24 @@ ok(_fp3["idle"] >= 1,
    "having them, not by the installs whose worst problem they are — the "
    "same suppression as an elif, one level up")
 
+_bjs = ops_app_js()
+_css = c.get("/ops/styles.css").text
+ok("function pressWhere" in _bjs and "press-where" in _bjs,
+   "the fleet row carries where inside the business the pressure is: "
+   "'peaked at four' sends somebody into a call with a number the shop "
+   "manager cannot act on")
+_whycell = _bjs.split('class="press-why', 1)[1].split("</span>", 1)[0]
+ok("by_store" not in _whycell,
+   "on its own line rather than inside the verdict cell — that cell is "
+   "one line with an ellipsis on it, so a breakdown written there is "
+   "rendered, clipped, and never read by anybody")
+ok("text-overflow: ellipsis" in _css.split(".press-why")[1][:200],
+   "which is only worth saying because that cell really does clip: the "
+   "check is against the CSS, not against my memory of it")
+ok("x.peak && x.store_id" in _bjs,
+   "and it names real shops only — another lane cannot belong at "
+   "not-tied-to-a-location")
+
 ok(c.get("/api/store/admin/fleet/pressure",
          headers=BB).status_code in (403, 404),
    "and the board is the provider's alone — who else is pressed against a "
