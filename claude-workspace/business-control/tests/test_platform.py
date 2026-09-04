@@ -1021,7 +1021,39 @@ ok(_fp3["idle"] >= 1,
    "having them, not by the installs whose worst problem they are — the "
    "same suppression as an elif, one level up")
 
+# Every field the limits screens compute has to reach a reader. Four
+# separate times in this feature a fact was measured, stored, returned
+# over the wire, and shown to nobody — three by a ranking that chose one
+# fact over another, one by a stylesheet three files away. A payload key
+# nothing in the app ever names is the fifth of those waiting to happen,
+# so the suite names them and this list is the argument for each.
 _bjs = ops_app_js()
+_SILENT_OK = {
+    # used to compute what IS shown, never shown itself
+    "headroom", "idle_count", "in_use", "last_seen", "answered_at",
+    "peak_at", "refused_on_days", "open_now", "counted",
+    # the by_day map's own keys are dates, not fields
+}
+_ent = c.get("/api/entitlements", headers=_ah).json()
+
+
+def _leaves(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            yield k
+            yield from _leaves(v)
+    elif isinstance(o, list):
+        for x in o[:3]:
+            yield from _leaves(x)
+
+
+_silent = sorted({k for k in _leaves(_ent)
+                  if not k[:4].isdigit() and k not in _bjs
+                  and k not in _SILENT_OK})
+ok(not _silent,
+   "nothing the limits screen computes goes unread: every field either "
+   f"reaches the reader or is on the list of workings ({_silent} is "
+   "neither)")
 _css = c.get("/ops/styles.css").text
 ok("function pressWhere" in _bjs and "press-where" in _bjs,
    "the fleet row carries where inside the business the pressure is: "
@@ -1032,9 +1064,20 @@ ok("by_store" not in _whycell,
    "on its own line rather than inside the verdict cell — that cell is "
    "one line with an ellipsis on it, so a breakdown written there is "
    "rendered, clipped, and never read by anybody")
-ok("text-overflow: ellipsis" in _css.split(".press-why")[1][:200],
-   "which is only worth saying because that cell really does clip: the "
-   "check is against the CSS, not against my memory of it")
+_whyrule = _css.split(".press-why", 1)[1].split("}", 1)[0]
+ok("line-clamp" in _whyrule or "ellipsis" in _whyrule,
+   "which is only worth saying because that cell really does clip — the "
+   "check reads the stylesheet rather than my memory of it")
+ok('class="press-why dim" title=' in _bjs,
+   "so everything it clips stays reachable on the element itself: a cell "
+   "that cuts a sentence at two lines and offers no way to the rest is "
+   "the truncation bug again wearing a tidier layout")
+ok('${pressMore(r)}</span>' in _bjs
+   and "press-more" not in _bjs.split("press-why", 1)[1].split("</span>",
+                                                               1)[0],
+   "and the count of what is not shown sits beside the state pill, never "
+   "inside the cell it describes — appended to the end of a clipped line "
+   "it was the first thing cut, a signpost lost inside its own fog")
 ok("x.peak && x.store_id" in _bjs,
    "and it names real shops only — another lane cannot belong at "
    "not-tied-to-a-location")

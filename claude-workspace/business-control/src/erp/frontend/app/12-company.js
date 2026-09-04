@@ -656,10 +656,30 @@ function planVerdict(pr) {
   const bits = [];
   if (pr.peak_known) bits.push(`busiest moment <b>${pr.peak}</b> of
     ${pr.cap}${pr.busiest_day ? ` (${pr.busiest_day.slice(5)})` : ""}`);
-  if (pr.refused) bits.push(`<b class="bad">turned away ${pr.refused}
-    time${pr.refused === 1 ? "" : "s"}</b> in 30 days`);
-  else if (pr.at_cap_days) bits.push(`at the limit on ${pr.at_cap_days}
-    day${pr.at_cap_days === 1 ? "" : "s"}`);
+  // Said out loud rather than left as an absence somebody has to notice
+  // and then explain to themselves — a missing number reads as nought.
+  else if (pr.why_no_peak) bits.push(`<span title="${esc(pr.why_no_peak)}"
+    class="hint">counted as it stands</span>`);
+  if (pr.refused) {
+    bits.push(`<b class="bad">turned away ${pr.refused}
+      time${pr.refused === 1 ? "" : "s"}</b> in 30 days`);
+    // Refused-and-fixed and refused-and-still-stuck are opposite
+    // outcomes, and until now only the total reached this screen.
+    if (pr.unanswered) bits.push(`<b class="bad">${pr.unanswered} still
+      unanswered</b>`);
+    else bits.push("since resolved");
+    if (pr.refused_last) bits.push(`last ${fmtAgo(pr.refused_last)}`);
+  } else if (pr.at_cap_days) {
+    bits.push(`at the limit on ${pr.at_cap_days}
+      day${pr.at_cap_days === 1 ? "" : "s"}`);
+  }
+  const kk = pr.kiosks || {};
+  if (kk.settling) bits.push(`${kk.settling} just registered`);
+  if (kk.known && kk.total && !kk.ever_seen) {
+    bits.push(`<span class="hint" title="a tablet is only knowably idle
+      if every use marks it, and none has been marked yet">no use
+      recorded yet</span>`);
+  }
   const where = (pr.by_store || []).filter((w) => w.sessions);
   const tablets = (pr.kiosks || {}).idle || [];
   if (!bits.length && !where.length && !tablets.length) return "";
@@ -706,6 +726,11 @@ async function renderPlan() {
         </span>
         <span class="dl-acts planline-acts">${d.tenant
           ? `<button class="btn alt sm" data-plan="${l.kind}"
+               title="${l.can_raise
+                 ? `up to ${l.self_serve_max} takes effect the moment you
+                    set it`
+                 : `you are at the most you can set yourself — more
+                    becomes a request, and less takes effect at once`}"
                data-now="${l.allowed}" data-max="${l.self_serve_max}"
                data-each="${l.each_cents}"
                data-peak="${(l.pressure || {}).peak || 0}">Change</button>`
@@ -731,10 +756,12 @@ async function renderPlan() {
   view().querySelectorAll("[data-plan]").forEach((b) =>
     b.onclick = () => planChange(b.dataset.plan, +b.dataset.now,
                                 +b.dataset.max, +b.dataset.each,
-                                +b.dataset.peak));
+                                +b.dataset.peak,
+                                (d.lines.find((l) => l.kind
+                                  === b.dataset.plan) || {}).pressure));
 }
 
-function planChange(kind, now, ceiling, each, peak) {
+function planChange(kind, now, ceiling, each, peak, pr) {
   const w = LIMIT_WORDS[kind] || [kind, ""];
   modal(`<h3>${w[0]}</h3>
     ${peak ? `<p class="dim">Your busiest moment in the last 30 days used
@@ -744,6 +771,13 @@ function planChange(kind, now, ceiling, each, peak) {
       ? `Each one beyond what the plan includes is ${money(each)} a month.`
       : ""} You can set up to ${ceiling} yourself; past that it goes to
       your account manager rather than being refused.</p>
+    ${(pr && pr.recent && pr.recent.length) ? `<div class="ref-list">
+      <p class="dim">Turned away, most recent first:</p>
+      ${pr.recent.slice(0, 5).map((x) => `<p class="dim">·
+        ${esc(x.who || "somebody")} — ${fmtAgo(x.at)}, with
+        ${x.in_use} of ${x.cap} in use${x.answered_at
+          ? "" : `, <b class="bad">still unanswered</b>`}</p>`).join("")}
+    </div>` : ""}
     <label>How many</label>
     <input id="pl-n" type="number" min="0" value="${now}">
     <label>Why <span class="opt">only needed above ${ceiling}</span></label>

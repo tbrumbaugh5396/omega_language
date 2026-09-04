@@ -305,6 +305,31 @@ const PRESSURE_WORDS = {
   unreachable: ["unreachable", "their node did not answer"],
 };
 
+/* One line, and it knows it is one line.
+   Four verdicts joined with dots into a cell that clips lost 447
+   characters on the widest install here — three whole findings, silently,
+   including the two tablets nobody has touched. A cell that cannot fit
+   what it is given must say how much it is not showing, so this leads
+   with the worst one and counts the rest by name. */
+function pressSummary(r) {
+  const ls = r.lines || [];
+  if (!ls.length) return "";
+  const word = (l) => LIMIT_WORDS[l.kind] ? LIMIT_WORDS[l.kind][0] : l.kind;
+  return `${esc(word(ls[0]))}: ${esc(ls[0].verdict)}`;
+}
+
+/* The count of what the line cannot fit, put where it cannot itself be
+   cut off. Appended to the end of the clipped cell it was the first
+   thing to vanish — a signpost inside the fog it is warning about. */
+function pressMore(r) {
+  const ls = r.lines || [];
+  if (ls.length < 2) return "";
+  const word = (l) => LIMIT_WORDS[l.kind] ? LIMIT_WORDS[l.kind][0] : l.kind;
+  return `<span class="press-more" title="${esc(ls.slice(1)
+    .map((l) => `${word(l)}: ${l.verdict}`).join("\n"))}">+${ls.length - 1}
+    </span>`;
+}
+
 /* Where inside the business the pressure actually is. A row that says
    "peaked at four" sends somebody into a call with a number the shop
    manager cannot act on; four in Camden and one everywhere else is a
@@ -370,11 +395,12 @@ async function fleetPressure() {
           : r.worst === "unreachable" ? "warn" : ""}"
           title="${PRESSURE_WORDS[r.worst]
             ? PRESSURE_WORDS[r.worst][1] : ""}">${PRESSURE_WORDS[r.worst]
-            ? PRESSURE_WORDS[r.worst][0] : esc(r.worst)}</span></span>
-        <span class="press-why dim">${r.why ? esc(r.why)
-          : r.lines.map((l) => `${esc(LIMIT_WORDS[l.kind]
-              ? LIMIT_WORDS[l.kind][0] : l.kind)}: ${esc(l.verdict)}`)
-              .join(" \u00b7 ")}</span>
+            ? PRESSURE_WORDS[r.worst][0]
+            : esc(r.worst)}</span>${pressMore(r)}</span>
+        <span class="press-why dim" title="${esc(r.why ? r.why
+          : (r.lines || []).map((l) => `${LIMIT_WORDS[l.kind]
+              ? LIMIT_WORDS[l.kind][0] : l.kind}: ${l.verdict}`)
+              .join("\n"))}">${r.why ? esc(r.why) : pressSummary(r)}</span>
         <span class="press-money ${r.at_stake_cents < 0 ? "dim" : ""}">${
           r.at_stake_cents
             ? (r.at_stake_cents > 0 ? "+" : "\u2212")
