@@ -58,9 +58,15 @@ def main() -> int:
         m = re.search(rf"^part {p}: (\d+) checks passed$", out, re.M)
         if procs[p].returncode != 0 or not m:
             failed.append(p)
-            tail = "\n".join(out.rstrip().split("\n")[-30:])
-            print(f"\n==== {p}: FAILED "
-                  f"(exit {procs[p].returncode}) ====\n{tail}")
+            # Everything, not the last thirty lines. A passing part prints
+            # in full and a failing one printed less, which is backwards:
+            # the failure is the run you need all of. An intermittent one
+            # you cannot reproduce by hand is diagnosable exactly once —
+            # when it happens — and only from what it printed.
+            why = ("exited non-zero" if procs[p].returncode
+                   else "never printed its count, so it stopped early")
+            print(f"\n==== {p}: FAILED (exit {procs[p].returncode} — {why})"
+                  f" ====\n{out.rstrip()}\n==== {p}: end of output ====")
         else:
             total += int(m.group(1))
             print(out.rstrip())
