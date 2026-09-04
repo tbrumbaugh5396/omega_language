@@ -1609,6 +1609,60 @@ _cmoves = c.get(f"/api/inventory/moves?product_id={_cprod}", headers=A).json()
 ok(any(m["unit_cost_cents"] > 0 for m in _cmoves["moves"]),
    "the movement carries it, so a repricing months later cannot restate "
    "the margin on stock already made and already sold")
+
+# --- parcels, and the sale that eats them -----------------------------
+# A shelf is not a number, it is a pile of deliveries. Two cases of the
+# same product made three months apart genuinely cost different amounts,
+# and which one went out decides what the sale cost.
+_lstore = [x for x in c.get("/api/stores", headers=A).json()][0]["id"]
+_lcon = _db.connect()
+_lcon.execute("DELETE FROM stock_layers WHERE product_id=?", (_cprod,))
+_lcon.execute("DELETE FROM inventory_moves WHERE product_id=?", (_cprod,))
+_lcon.execute("UPDATE inventory SET qty=0 WHERE product_id=?", (_cprod,))
+_lcon.commit()
+_db.stock_move(_lcon, _lstore, _cprod, 10, "run:a", "t", "",
+               unit_cost_cents=100)
+_db.stock_move(_lcon, _lstore, _cprod, 10, "run:b", "t", "",
+               unit_cost_cents=500)
+_lcon.commit()
+_lay = c.get(f"/api/inventory/layers?store_id={_lstore}"
+             f"&product_id={_cprod}", headers=A).json()
+ok(len(_lay["layers"]) == 2 and _lay["value_cents"] == 6000,
+   "two deliveries at different costs are two parcels, not one average — "
+   "an average describes neither of them")
+_db.stock_move(_lcon, _lstore, _cprod, -12, "order:999", "t", "")
+_lcon.commit()
+_mv = _lcon.execute(
+    "SELECT cost_cents, unknown_qty FROM inventory_moves"
+    " WHERE product_id=? ORDER BY id DESC LIMIT 1", (_cprod,)).fetchone()
+ok(_mv["cost_cents"] == -(10 * 100 + 2 * 500),
+   "and a sale eats the oldest first: ten at 100 then two at 500, which "
+   "is what a shop does because that is what a date code is for")
+ok(_mv["cost_cents"] < 0,
+   "signed the way the quantity is — value leaving is negative, and a "
+   "ledger with one column signed and the next not is summed wrongly by "
+   "whoever reads it next")
+_lay2 = c.get(f"/api/inventory/layers?store_id={_lstore}"
+              f"&product_id={_cprod}", headers=A).json()
+ok(_lay2["units"] == 8 and _lay2["layers"][0]["unit_cost_cents"] == 500,
+   "what is left is the newer parcel, at its own cost")
+
+# Stock that predates any of this cannot be costed, and saying so is the
+# whole point — a cost of nothing flatters a margin exactly the way an
+# assumed one does.
+_lcon.execute("UPDATE inventory SET qty=50 WHERE store_id=? AND"
+              " product_id=?", (_lstore, _cprod))
+_lcon.execute("DELETE FROM stock_layers WHERE product_id=?", (_cprod,))
+_lcon.commit()
+_db.stock_move(_lcon, _lstore, _cprod, -5, "order:998", "t", "")
+_lcon.commit()
+_un = _lcon.execute(
+    "SELECT cost_cents, unknown_qty FROM inventory_moves"
+    " WHERE product_id=? ORDER BY id DESC LIMIT 1", (_cprod,)).fetchone()
+ok(_un["unknown_qty"] == 5.0 and _un["cost_cents"] == 0,
+   "so stock nobody ever priced leaves as five units that cannot be "
+   "costed, reported rather than valued at zero")
+_lcon.close()
 ok(c.post(f"/api/supply/runs/{_run['id']}/finish", headers=A,
           json={"actual_cases": 1}).status_code == 400,
    "a finished run can't be finished twice")

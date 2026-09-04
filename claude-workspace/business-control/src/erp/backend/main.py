@@ -2480,6 +2480,32 @@ def inventory_moves(store_id: int = 0, product_id: int = 0, days: int = 90,
                     "inferred from an order or an assumption."}
 
 
+@app.get("/api/inventory/layers")
+def inventory_layers(store_id: int, product_id: int,
+                     user=Depends(current_user), con=Depends(get_con)):
+    """The parcels of stock on one shelf, oldest first.
+
+    A shelf is not a number, it is a pile of deliveries. What the next
+    sale costs depends on which parcel it comes off, which is why they
+    are kept apart rather than averaged into one figure that describes
+    none of them.
+    """
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM stock_layers WHERE store_id=? AND product_id=?"
+        " AND qty > 0 ORDER BY created_at, id", (store_id, product_id))]
+    value = sum(r["qty"] * (r["unit_cost_cents"] or 0)
+                for r in rows if r["known"])
+    return {"layers": rows,
+            "units": round(sum(r["qty"] for r in rows), 3),
+            "value_cents": int(round(value)),
+            "unknown_units": round(sum(r["qty"] for r in rows
+                                       if not r["known"]), 3),
+            "note": "Oldest first, because a shop sells the oldest first "
+                    "and a date code exists to make that possible. Units on "
+                    "a parcel nobody priced are counted apart rather than "
+                    "valued at nothing."}
+
+
 @app.get("/api/inventory")
 def inventory(store_id: int = 0, user=Depends(current_user),
               con=Depends(get_con)):

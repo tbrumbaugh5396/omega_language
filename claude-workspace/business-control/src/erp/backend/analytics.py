@@ -103,6 +103,19 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
     # estimated where it doesn't. Reporting the split rather than one number
     # matters: a flat percentage of revenue is an assumption wearing a
     # result's clothes, and it can't tell you a product is sold at a loss.
+    # What the stock that actually left cost. Not the recipe priced
+    # today, and not an average over everything the product has ever
+    # cost — the parcels that shipped, at what those parcels cost. Where
+    # the ledger has it, it is the real number rather than the best
+    # available guess, and the two are told apart below.
+    shipped = con.execute(
+        "SELECT COALESCE(SUM(-m.cost_cents),0) AS cents,"
+        " COALESCE(SUM(m.unknown_qty),0) AS unknown"
+        " FROM inventory_moves m WHERE m.created_at>=? AND m.qty<0"
+        "  AND m.reason LIKE 'order:%'", (since,)).fetchone()
+    ledger_cogs = int(shipped["cents"] or 0)
+    ledger_unknown = float(shipped["unknown"] or 0)
+
     measured_cogs, measured_rev = 0, 0
     costs = supply.unit_costs(con)
     if costs:
@@ -120,6 +133,12 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
             measured_rev += r["rev"]
     est_rev = max(0, revenue - measured_rev)
     cogs = measured_cogs + est_rev * cfg.get("cogs_bps", 4500) // 10000
+    # The ledger wins where it has an answer. It is the only one of the
+    # three that describes a thing that happened rather than a rule about
+    # what things usually cost.
+    if ledger_cogs > 0:
+        cogs = ledger_cogs + (est_rev * cfg.get("cogs_bps", 4500) // 10000
+                              if ledger_unknown else 0)
     labor = int(hours * cfg.get("hourly_wage_cents", 1800))
     logistics_cost = int(km * cfg.get("cost_per_km_cents", 85))
     gross = revenue - cogs
@@ -129,6 +148,10 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
         " FROM orders WHERE created_at>=? AND status!='cancelled'"
         " GROUP BY region ORDER BY revenue_cents DESC", (since,)).fetchall()
     return {"days": days, "revenue_cents": revenue, "cogs_cents": cogs,
+            "cogs_shipped_cents": ledger_cogs,
+            "cogs_unknown_units": round(ledger_unknown, 2),
+            "cogs_basis": ("shipped" if ledger_cogs > 0
+                           else "recipe" if measured_cogs else "assumed"),
             "cogs_measured_cents": measured_cogs,
             "cogs_estimated_cents": cogs - measured_cogs,
             "cogs_measured_pct": round(measured_rev / revenue * 100)

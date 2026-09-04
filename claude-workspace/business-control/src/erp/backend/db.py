@@ -406,6 +406,8 @@ CREATE TABLE IF NOT EXISTS inventory_moves (
   qty REAL NOT NULL,                       -- signed: + in, - out
   balance REAL NOT NULL DEFAULT 0,         -- what it read afterwards
   unit_cost_cents REAL DEFAULT 0,          -- what these units cost to make
+  cost_cents INTEGER DEFAULT 0,            -- value moved, signed like qty
+  unknown_qty REAL DEFAULT 0,              -- of it, what nobody ever priced
   reason TEXT NOT NULL,                    -- order:12, visit:4, par, count
   counted INTEGER DEFAULT 0,               -- 1 = somebody actually looked
   actor TEXT DEFAULT '',
@@ -416,6 +418,36 @@ CREATE INDEX IF NOT EXISTS inventory_moves_line
   ON inventory_moves(store_id, product_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS inventory_moves_when
   ON inventory_moves(created_at DESC);
+
+/* What each parcel of stock on a shelf cost, oldest first.
+
+   Materials are averaged: litres of concentrate poured into the same
+   tank are fungible, nobody tracks which drum went into which batch, and
+   a business that pretended to would produce a precise number it could
+   not check against a real drum.
+
+   Finished goods are not that. A case has a date code, a shop sells the
+   oldest first because that is what the code is for, and two cases of
+   the same product made three months apart genuinely cost different
+   amounts. So they are layers, consumed in the order they arrived, and a
+   sale takes its cost from the parcel it actually shipped rather than
+   from an average of everything that ever existed.
+
+   The two methods differ because the two things differ. Using one method
+   everywhere would be tidier and wrong in one of the two places. */
+CREATE TABLE IF NOT EXISTS stock_layers (
+  id INTEGER PRIMARY KEY,
+  store_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  qty REAL NOT NULL,                       -- what is left of this parcel
+  qty_in REAL NOT NULL,                    -- what it was when it arrived
+  unit_cost_cents REAL DEFAULT 0,
+  known INTEGER DEFAULT 1,                 -- 0 = it arrived before we asked
+  source TEXT DEFAULT '',                  -- run:4, po:12, count, opening
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS stock_layers_line
+  ON stock_layers(store_id, product_id, created_at);
 """
 
 KIOSK_TABLE = """
@@ -458,13 +490,67 @@ def stock_move(con, store_id: int, product_id: int, delta: float,
         " WHERE store_id=? AND product_id=?",
         (delta, now(), store_id, product_id))
     after = current_qty(con, store_id, product_id)
+    # The parcels. Stock arriving is a layer; stock leaving eats the
+    # oldest layers first and takes their cost with it, which is the whole
+    # point — a sale should be costed at what the units on that pallet
+    # cost, not at an average of everything the product has ever cost.
+    cost, unknown = _layer(con, store_id, product_id, delta,
+                           float(unit_cost_cents or 0), reason, counted)
     con.execute(
         "INSERT INTO inventory_moves(store_id,product_id,qty,balance,"
-        " unit_cost_cents,reason,counted,actor,note,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        " unit_cost_cents,cost_cents,unknown_qty,reason,counted,actor,note,"
+        " created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         (store_id, product_id, delta, after, float(unit_cost_cents or 0),
-         reason[:60], 1 if counted else 0, actor[:80], note[:200], now()))
+         cost, unknown, reason[:60], 1 if counted else 0, actor[:80],
+         note[:200], now()))
     return after
+
+
+def _layer(con, store_id: int, product_id: int, delta: float,
+           unit_cost_cents: float, source: str, counted: bool):
+    """Push a parcel on, or eat parcels off. Returns (cost, unknown qty).
+
+    `unknown` is the part that came off stock nobody ever priced —
+    inherited from before any of this existed, or added by a stocktake
+    that found more than the paperwork said. It is reported rather than
+    valued at zero: a cost of nothing flatters a margin exactly the way an
+    assumed one does, and the whole reason for layers is to stop that.
+    """
+    if delta > 0:
+        con.execute(
+            "INSERT INTO stock_layers(store_id,product_id,qty,qty_in,"
+            " unit_cost_cents,known,source,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (store_id, product_id, delta, delta, unit_cost_cents,
+             1 if unit_cost_cents > 0 else 0, source[:40], now()))
+        return int(round(delta * unit_cost_cents)), 0.0
+
+    want = -delta
+    cost, unknown = 0.0, 0.0
+    for lay in con.execute(
+            "SELECT * FROM stock_layers WHERE store_id=? AND product_id=?"
+            " AND qty > 0 ORDER BY created_at, id", (store_id, product_id)):
+        if want <= 1e-9:
+            break
+        take = min(want, float(lay["qty"]))
+        con.execute("UPDATE stock_layers SET qty=qty-? WHERE id=?",
+                    (take, lay["id"]))
+        if lay["known"]:
+            cost += take * float(lay["unit_cost_cents"] or 0)
+        else:
+            unknown += take
+        want -= take
+    # More went out than any parcel accounts for: stock that was on the
+    # shelf before anybody was writing parcels down, or a count that was
+    # wrong. Either way it left, and saying how much of it we cannot cost
+    # is the honest answer.
+    if want > 1e-9:
+        unknown += want
+    # Signed the same way the quantity is: value leaving is negative, the
+    # way value arriving is positive. A ledger where one column is signed
+    # and the one beside it is not is a ledger that gets summed wrongly
+    # by whoever reads it next.
+    return -int(round(cost)), round(unknown, 3)
 
 
 def current_qty(con, store_id: int, product_id: int) -> float:
@@ -507,6 +593,8 @@ MIGRATIONS = (
     "ALTER TABLE users ADD COLUMN clock_store_id INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN clock_kiosk_only INTEGER DEFAULT 0",
     "ALTER TABLE inventory_moves ADD COLUMN unit_cost_cents REAL DEFAULT 0",
+    "ALTER TABLE inventory_moves ADD COLUMN cost_cents INTEGER DEFAULT 0",
+    "ALTER TABLE inventory_moves ADD COLUMN unknown_qty REAL DEFAULT 0",
     # The number printed on the thing itself. Separate from the SKU: a SKU
     # is what WE call it and we chose it, a barcode is what the
     # manufacturer stamped on the tin and the scanner reads. For own-brand
