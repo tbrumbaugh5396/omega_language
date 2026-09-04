@@ -43,6 +43,8 @@ const opsIcon = (n, cls = "") =>
 
 const TABS = [
   { id: "shop", label: "Shop", icon: "cart", group: "Sell", roles: "*" },
+  { id: "till", label: "Till", icon: "card", group: "Sell",
+    roles: ["admin", "employee", "cashier"], perm: "till" },
   { id: "orders", label: "Orders", icon: "box", group: "Sell", roles: "*" },
   { id: "customers", label: "Customers", icon: "users", group: "Sell",
     roles: ["admin", "employee"] },
@@ -381,6 +383,7 @@ async function render() {
     profile: renderProfile, stores: renderStores,
     email: renderEmail, discord: renderDiscord,
     supply: renderSupply, audit: renderAudit, dbview: renderDb,
+    till: renderTill,
     integrations: renderIntegrations, slack: renderSlack,
     // every "ig:<name>" tab lands on the same screen, told which one
     ...Object.fromEntries(TABS.filter((t) => t.id.startsWith("ig-"))

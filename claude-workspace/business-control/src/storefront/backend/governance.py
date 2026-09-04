@@ -41,12 +41,21 @@ PERMISSIONS = {
     "marketing": "Campaigns and ad creatives",
     "documents": "Contracts, policies and signatures",
     "supply": "Suppliers, materials, purchase orders and production",
+    # The counter. Kept apart from `orders` because they are different
+    # jobs: taking money at a till is not the same trust as refunding an
+    # order placed last week, and a shop that can only grant both grants
+    # both to the Saturday staff.
+    "till": "The register: open a drawer, take a sale, print a receipt",
 }
 
 # What each role gets when no explicit grant is recorded.
 ROLE_DEFAULTS = {
     "owner": ["*"],
     "employee": ["products", "orders", "analytics"],
+    # Somebody hired to stand at a till. The till and nothing else — not
+    # because they are not trusted, but because a role that quietly
+    # carries the customer list is a role nobody can hand out quickly.
+    "cashier": ["till"],
     "influencer": [],
     "distributor": [],
     "customer": [],
@@ -94,6 +103,7 @@ PATH_RULES = [
     # lead couldn't book in a delivery without being made an owner — the
     # blunt kind of permission that gets granted once and never revoked.
     ("/api/supply", "supply"),
+    ("/api/pos", "till"),
 ]
 
 

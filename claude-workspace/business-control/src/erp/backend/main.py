@@ -1,11 +1,13 @@
 """Business Control — FastAPI backend. Serves the API and the PWA frontend."""
 import csv
 import time
+import html as _html
 import io
 import json
 import os
 import secrets
 import socket
+import urllib.parse as _url
 
 from fastapi import (Depends, FastAPI, File, Header, HTTPException, Request,
                      UploadFile, WebSocket, WebSocketDisconnect)
@@ -55,6 +57,8 @@ def _init_core(tid=None):
         _ts.init_tables(con)
         from . import mrr as _mrr
         _mrr.init_tables(con)
+        from . import pos as _pos
+        _pos.init_tables(con)
         from . import daybook as _dbk
         _dbk.init_tables(con)
         con.commit()
@@ -4278,6 +4282,308 @@ def analytics_drop_day(day: str, name: str, user=Depends(admin_user),
                 (day, name))
     con.commit()
     return {"ok": True}
+
+
+# ---------- the counter ----------
+
+class OpenTillBody(BaseModel):
+    register: str = "counter"
+    float_cents: int = 0
+    store_id: int = 0
+
+
+@app.post("/api/pos/session")
+def pos_open(body: OpenTillBody, user=Depends(permitted("till")),
+             con=Depends(get_con)):
+    """Open a drawer with a counted float in it."""
+    from . import pos
+    try:
+        out = pos.open_session(con, user["id"], body.register,
+                               body.float_cents, body.store_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    audit.record(con, user, "POST", "/api/pos/session",
+                 f"opened {body.register} with {body.float_cents}c", 200)
+    return out
+
+
+@app.get("/api/pos/session")
+def pos_session(register: str = "counter", user=Depends(permitted("till")),
+                con=Depends(get_con)):
+    from . import pos
+    s = pos.session_of(con, register)
+    if s is None:
+        return {"open": False, "register": register}
+    return {"open": True, **pos.drawer(con, s["id"])}
+
+
+class CloseTillBody(BaseModel):
+    session_id: int
+    counted_cents: int = 0
+    note: str = ""
+
+
+@app.post("/api/pos/session/close")
+def pos_close(body: CloseTillBody, user=Depends(permitted("till")),
+              con=Depends(get_con)):
+    """Count the drawer and state the difference.
+
+    The variance is recorded whatever it is. A till that silently balances
+    is a till nobody can trust, and one that is eleven cents short every
+    Tuesday is telling you something you cannot hear if it is rounded
+    away.
+    """
+    from . import pos
+    try:
+        out = pos.close_session(con, body.session_id, body.counted_cents,
+                                user["id"], body.note)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    audit.record(con, user, "POST", "/api/pos/session/close",
+                 f"counted {body.counted_cents}c, variance "
+                 f"{out['variance_cents']}c", 200)
+    return out
+
+
+class TenderIn(BaseModel):
+    kind: str
+    cents: int
+    ref: str = ""
+
+
+class SaleLine(BaseModel):
+    product_id: int
+    qty: int = 1
+    unit_price_cents: int | None = None
+
+
+class SaleBody(BaseModel):
+    register: str = "counter"
+    items: list[SaleLine] = []
+    tenders: list[TenderIn] = []
+    user_id: int = 0                  # a named customer, if there is one
+    note: str = ""
+    email_to: str = ""
+
+
+@app.post("/api/pos/sale")
+def pos_sale(body: SaleBody, user=Depends(permitted("till")),
+             con=Depends(get_con)):
+    """Ring a sale through an open drawer.
+
+    A sale is an ordinary order with kind 'pos', because the day book, the
+    P&L, per-product margin and stock all read orders already — a second
+    sales table would have meant teaching every one of them a second
+    answer, and one of them would have been missed.
+    """
+    from . import pos
+    if not body.items:
+        raise HTTPException(400, "a sale needs something in it")
+    s = pos.session_of(con, body.register)
+    if s is None:
+        raise HTTPException(409, "no drawer is open on that register")
+    lines, subtotal = [], 0
+    for it in body.items:
+        p = con.execute("SELECT id, price_cents FROM products WHERE id=?",
+                        (it.product_id,)).fetchone()
+        if p is None:
+            raise HTTPException(400, f"no product {it.product_id}")
+        qty = max(1, it.qty)
+        price = (it.unit_price_cents if it.unit_price_cents is not None
+                 else p["price_cents"])
+        lines.append((p["id"], qty, price))
+        subtotal += qty * price
+    paid = sum(t.cents for t in body.tenders)
+    for t in body.tenders:
+        if t.kind not in pos.TENDERS:
+            raise HTTPException(400, f"tender must be one of {pos.TENDERS}")
+    if body.tenders and paid < subtotal:
+        raise HTTPException(
+            400, f"the tenders come to {paid}c against a {subtotal}c sale — "
+                 "a sale is not part-paid at a counter, it is unfinished")
+    now = db.now()
+    cur = con.execute(
+        "INSERT INTO orders(user_id,kind,status,region,store_id,"
+        " subtotal_cents,total_cents,payment_status,created_at)"
+        " VALUES(?,'pos','paid',?,?,?,?,'paid',?)",
+        (body.user_id or user["id"], CFG.get("regions", [""])[0] or "",
+         s["store_id"] or 0, subtotal, subtotal, now))
+    oid = cur.lastrowid
+    for pid, qty, price in lines:
+        con.execute("INSERT INTO order_items(order_id,product_id,qty,"
+                    " unit_price_cents) VALUES(?,?,?,?)",
+                    (oid, pid, qty, price))
+    for t in body.tenders:
+        con.execute("INSERT INTO order_tenders(order_id,session_id,kind,"
+                    " cents,ref,at) VALUES(?,?,?,?,?,?)",
+                    (oid, s["id"], t.kind, t.cents, t.ref[:60], now))
+    # Change is a negative cash tender, so the drawer nets out on its own.
+    change = paid - subtotal
+    if change > 0:
+        con.execute("INSERT INTO order_tenders(order_id,session_id,kind,"
+                    " cents,ref,at) VALUES(?,?,?,?,'change',?)",
+                    (oid, s["id"], "cash", -change, now))
+    con.commit()
+    o = con.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+    _consume_stock(con, o)
+    con.commit()
+    rec = pos.receipt(con, oid)
+    if body.email_to.strip():
+        _email_receipt(con, rec, body.email_to.strip())
+    return {"ok": True, "order_id": oid, "change_cents": change,
+            "receipt": rec}
+
+
+def _email_receipt(con, rec: dict, to: str) -> bool:
+    lines = "\n".join(
+        f"  {i['qty']} x {i['name']} — {i['qty'] * i['unit_price_cents']/100:.2f}"
+        for i in rec["items"])
+    body = (f"Thanks — here is your receipt.\n\n{lines}\n\n"
+            f"Total {rec['total_cents']/100:.2f}\n\n"
+            f"Keep it here: {base_url()}/rc/{rec['token']}\n")
+    try:
+        sent = mailer.send_logged(con, CFG, to,
+                                  f"Your receipt · {CFG['brand_name']}", body,
+                                  "receipt")
+        # "dry" means no SMTP is configured — the receipt did not go, and
+        # saying it did is how a customer waits for an email nobody sent.
+        ok_sent = str(sent) == "sent"
+    except Exception:                                        # noqa: BLE001
+        ok_sent = False
+    if ok_sent:
+        con.execute("UPDATE receipts SET emailed_to=?, emailed_at=?"
+                    " WHERE order_id=?", (to, db.now(), rec["order_id"]))
+        con.commit()
+    return bool(ok_sent)
+
+
+class EmailReceiptBody(BaseModel):
+    order_id: int
+    to: str
+
+
+@app.post("/api/pos/receipt/email")
+def pos_email_receipt(body: EmailReceiptBody, user=Depends(permitted("till")),
+                      con=Depends(get_con)):
+    from . import pos
+    rec = pos.receipt(con, body.order_id)
+    if not _email_receipt(con, rec, body.to.strip()):
+        raise HTTPException(
+            502, "the mail did not go — no SMTP is configured, or it "
+                 "refused. The receipt's own link still works: "
+                 f"/rc/{rec['token']}")
+    return {"ok": True}
+
+
+@app.get("/api/pos/receipt/{order_id}")
+def pos_receipt(order_id: int, user=Depends(permitted("till")),
+                con=Depends(get_con)):
+    from . import pos
+    try:
+        return pos.receipt(con, order_id)
+    except ValueError:
+        raise HTTPException(404, "no such sale")
+
+
+@app.get("/api/pos/day")
+def pos_day(days: int = 1, user=Depends(permitted("till")),
+            con=Depends(get_con)):
+    """Takings at the counter, by tender and by till."""
+    since = db.now() - max(1, days) * 86400
+    rows = [dict(r) for r in con.execute(
+        "SELECT t.kind, COUNT(DISTINCT t.order_id) AS sales,"
+        " COALESCE(SUM(t.cents),0) AS cents FROM order_tenders t"
+        " WHERE t.at>=? GROUP BY t.kind ORDER BY cents DESC", (since,))]
+    sess = [dict(r) for r in con.execute(
+        "SELECT * FROM register_sessions WHERE opened_at>=?"
+        " ORDER BY id DESC LIMIT 20", (since,))]
+    return {"days": days, "by_tender": rows, "sessions": sess,
+            "total_cents": sum(r["cents"] for r in rows)}
+
+
+# /r/ belongs to affiliate referral codes and has since before this
+# existed. Receipts get /rc/ — still short enough that the QR stays
+# coarse and scans off thermal paper at arm's length.
+@app.get("/rc/{token}", response_class=HTMLResponse)
+def public_receipt(token: str, con=Depends(get_con)):
+    """The customer's copy, at an address they can keep.
+
+    Reached by the QR printed on the paper, so the phone in somebody's
+    hand holds the same record the shop does. That is the whole point: a
+    receipt only the shop can find is a returns argument waiting to
+    happen, and a paper one is a receipt with a half-life of one wash.
+
+    Token-addressed and not listed anywhere: it carries what was bought
+    and where, so the order id — which is guessable by counting — is not
+    good enough to protect it.
+    """
+    r = con.execute("SELECT order_id FROM receipts WHERE token=?",
+                    (token,)).fetchone()
+    if r is None:
+        return HTMLResponse("<h3>No receipt at this address.</h3>", 404)
+    from . import pos
+    rec = pos.receipt(con, r["order_id"])
+    con.execute("UPDATE receipts SET printed_at=COALESCE(NULLIF(printed_at,0),?)"
+                " WHERE token=?", (db.now(), token))
+    con.commit()
+    money = lambda c: f"${c / 100:,.2f}"                     # noqa: E731
+    esc = _html.escape
+    when = time.strftime("%d %b %Y, %H:%M", time.localtime(rec["at"]))
+    lines = "".join(
+        f"<tr><td>{esc(i['name'])}"
+        f"{'<br><small>' + esc(i['variant_name']) + '</small>' if i.get('variant_name') else ''}"
+        f"</td><td class=q>{i['qty']}</td>"
+        f"<td class=m>{money(i['qty'] * i['unit_price_cents'])}</td></tr>"
+        for i in rec["items"])
+    tends = "".join(
+        f"<tr><td>{esc(t['kind'])}{' (change)' if t['cents'] < 0 else ''}</td>"
+        f"<td></td><td class=m>{money(t['cents'])}</td></tr>"
+        for t in rec["tenders"])
+    here = f"{base_url()}/rc/{token}"
+    return HTMLResponse(f"""<!doctype html><html><head>
+<meta charset="utf-8"><meta name="viewport"
+ content="width=device-width,initial-scale=1">
+<title>Receipt · {esc(CFG['brand_name'])}</title>
+<style>
+ body {{ font: 14px/1.5 ui-monospace, Menlo, monospace; margin: 0;
+   background: #f4f4f6; color: #14161d; }}
+ .paper {{ max-width: 380px; margin: 18px auto; background: #fff;
+   padding: 22px 20px 26px; box-shadow: 0 1px 3px rgba(0,0,0,.14); }}
+ h1 {{ font-size: 16px; margin: 0 0 2px; }}
+ .dim {{ color: #6b7280; font-size: 12px; }}
+ table {{ width: 100%; border-collapse: collapse; margin: 14px 0 6px; }}
+ td {{ padding: 3px 0; vertical-align: top; }}
+ .q {{ width: 34px; text-align: right; color: #6b7280; }}
+ .m {{ width: 84px; text-align: right; font-variant-numeric: tabular-nums; }}
+ .rule {{ border-top: 1px dashed #c9ccd4; margin: 8px 0; }}
+ .tot td {{ font-weight: 700; padding-top: 6px; }}
+ .qr {{ text-align: center; margin: 18px 0 6px; }}
+ .qr img {{ width: 132px; height: 132px; }}
+ @media print {{ body {{ background: #fff; }}
+   .paper {{ box-shadow: none; margin: 0; max-width: none; }}
+   .noprint {{ display: none; }} }}
+</style></head><body><div class="paper">
+<h1>{esc(CFG['brand_name'])}</h1>
+<div class="dim">{esc((rec['store'] or {}).get('name', '')) if rec['store'] else ''}
+ {esc((rec['store'] or {}).get('city', '')) if rec['store'] else ''}</div>
+<div class="dim">{when} · sale #{rec['order_id']}</div>
+<table>{lines}</table>
+<div class="rule"></div>
+<table>
+ <tr><td>subtotal</td><td></td><td class=m>{money(rec['subtotal_cents'])}</td></tr>
+ {f'<tr><td>tax</td><td></td><td class=m>{money(rec["tax_cents"])}</td></tr>'
+   if rec['tax_cents'] else ''}
+ <tr class="tot"><td>total</td><td></td>
+   <td class=m>{money(rec['total_cents'])}</td></tr>
+</table>
+{f'<div class="rule"></div><table>{tends}</table>' if tends else ''}
+<div class="qr">
+ <img alt="this receipt" src="/api/qr.svg?data={_url.quote(here, safe='')}">
+ <div class="dim">Keep this receipt: scan, or visit<br>{esc(here)}</div>
+</div>
+<div class="dim noprint" style="text-align:center;margin-top:12px">
+ <a href="#" onclick="print();return false">Print</a></div>
+</div></body></html>""")
 
 
 @app.get("/api/analytics/commerce")

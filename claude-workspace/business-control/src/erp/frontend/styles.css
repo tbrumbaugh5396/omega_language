@@ -1489,3 +1489,46 @@ table.cohort th { text-align: center; }
 table.cohort th:first-child, table.cohort th:nth-child(2) { text-align: left; }
 .coh-part { font-style: italic; }
 .wd-row.cat-row { grid-template-columns: 120px 1fr 96px 48px 104px; }
+
+
+/* ---------- the counter ---------- */
+.till { display: grid; grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px; align-items: start; }
+.till-grid { display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+.till-item { background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 12px 10px; text-align: left;
+  cursor: pointer; font-family: var(--ui); color: var(--text);
+  display: flex; flex-direction: column; gap: 3px; min-height: 68px;
+  transition: border-color .12s, transform .06s; }
+.till-item:hover { border-color: var(--accent); }
+.till-item:active { transform: scale(.98); }
+.till-item b { font-size: 13px; line-height: 1.25; }
+.till-basket { background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 14px; position: sticky;
+  top: calc(var(--topbar, 56px) + 12px); }
+.till-basket h3 { margin: 0 0 8px; }
+.till-lines { display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 8px; }
+.till-line { display: grid; grid-template-columns: 1fr 28px 24px 28px 72px;
+  align-items: center; gap: 6px; font-size: 13px; }
+.till-line .btn { padding: 2px 0; }
+.tl-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-q { text-align: center; font-variant-numeric: tabular-nums; }
+.tl-m { text-align: right; font-variant-numeric: tabular-nums; }
+.till-total { display: flex; justify-content: space-between;
+  align-items: baseline; border-top: 1px solid var(--line);
+  padding-top: 8px; margin: 8px 0 10px; }
+.till-total b { font-size: 22px; letter-spacing: -.02em; }
+.till-quick { margin: 6px 0 10px; }
+.till-go { display: flex; gap: 8px; margin-top: 12px; }
+.till-go .btn { flex: 1; }
+.till-open { max-width: 460px; }
+.till-change { font-size: 20px; margin: 4px 0 12px; }
+.till-change b { color: var(--good); font-size: 26px; }
+.till-qr { text-align: center; margin: 6px 0 14px; }
+.till-qr img { width: 148px; height: 148px; }
+@media (max-width: 900px) {
+  .till { grid-template-columns: 1fr; }
+  .till-basket { position: static; }
+}

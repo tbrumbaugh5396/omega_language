@@ -1776,3 +1776,246 @@ async function whoHasSaid() {
     b.onclick = () => { closeModal(); AV_DAY = null;
       availabilityForm(+b.dataset.saidfor); });
 }
+
+
+/* ---------- the counter ----------
+   A till is not a checkout with bigger buttons. The differences that
+   matter are all about cash: a drawer that opens with a counted float,
+   tenders that can be more than one, change that comes back, and a count
+   at the end whose difference is stated rather than absorbed. */
+let TILL = { lines: [], register: "counter" };
+
+async function renderTill() {
+  const [prods, sess] = await Promise.all([
+    api("/api/products"),
+    api(`/api/pos/session?register=${encodeURIComponent(TILL.register)}`)
+      .catch(() => ({ open: false }))]);
+  const sellable = prods.filter((p) => p.active !== 0);
+  if (!sess.open) {
+    view().innerHTML = `
+      <div class="page-head"><div><h2>Till</h2>
+        <p class="dim">A drawer opens with a counted float in it. Cash is
+          the only tender that can go missing between the sale and the
+          bank, so it is counted at both ends and the difference is
+          stated.</p></div></div>
+      <div class="card till-open">
+        <div class="row2">
+          <div><label>Register</label>
+            <input id="tl-reg" value="${esc(TILL.register)}"></div>
+          <div><label>Float in the drawer</label>
+            <input id="tl-float" type="number" min="0" step="0.01"
+              value="100.00"></div>
+        </div>
+        <button class="btn" id="tl-open">Open the drawer</button>
+      </div>`;
+    $("#tl-open").onclick = async () => {
+      TILL.register = $("#tl-reg").value.trim() || "counter";
+      try {
+        await api("/api/pos/session", { body: {
+          register: TILL.register,
+          float_cents: Math.round((+$("#tl-float").value || 0) * 100) } });
+        renderTill();
+      } catch (e) { toast(e.message); }
+    };
+    return;
+  }
+  const total = TILL.lines.reduce((t, l) => t + l.qty * l.price, 0);
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Till <span class="dim">${esc(sess.session.register)}</span></h2>
+        <p class="dim">${sess.sales} sale${sess.sales === 1 ? "" : "s"} this
+          session · ${money(sess.sales_cents)} taken ·
+          ${money(sess.expected_cents)} should be in the drawer</p></div>
+      <div class="top-actions">
+        <button class="btn alt" id="tl-day">Today's takings</button>
+        <button class="btn alt" id="tl-close">Cash up</button>
+      </div>
+    </div>
+    <div class="till">
+      <div class="till-grid">
+        ${sellable.map((p) => `<button class="till-item" data-add="${p.id}"
+          data-price="${p.price_cents}" data-name="${esc(p.name)}">
+          <b>${esc(p.name)}</b>
+          <span class="dim">${money(p.price_cents)}</span></button>`).join("")}
+      </div>
+      <div class="till-basket">
+        <h3>Sale</h3>
+        ${TILL.lines.length ? `<div class="till-lines">${TILL.lines.map((l, i) => `
+          <div class="till-line">
+            <span class="tl-n">${esc(l.name)}</span>
+            <button class="btn alt sm" data-less="${i}">−</button>
+            <span class="tl-q">${l.qty}</span>
+            <button class="btn alt sm" data-more="${i}">+</button>
+            <span class="tl-m">${money(l.qty * l.price)}</span>
+          </div>`).join("")}</div>`
+          : '<p class="dim">Tap a product to start.</p>'}
+        <div class="till-total"><span>Total</span>
+          <b>${money(total)}</b></div>
+        <label>Cash tendered <span class="opt">leave blank for exact</span>
+        </label>
+        <input id="tl-cash" type="number" min="0" step="0.01"
+          placeholder="${(total / 100).toFixed(2)}">
+        <div class="chips till-quick">
+          ${[500, 1000, 2000, 5000].map((c) =>
+            `<button class="btn alt sm" data-cash="${c}">${money(c)}</button>`)
+            .join("")}
+          <button class="btn alt sm" data-cash="${total}">exact</button>
+        </div>
+        <label>Card <span class="opt">for a split, or the whole of it</span>
+        </label>
+        <input id="tl-card" type="number" min="0" step="0.01" placeholder="0">
+        <label>Email the receipt <span class="opt">optional</span></label>
+        <input id="tl-email" type="email" placeholder="them@example.com">
+        <div class="till-go">
+          <button class="btn alt" id="tl-clear"
+            ${TILL.lines.length ? "" : "disabled"}>Clear</button>
+          <button class="btn" id="tl-take"
+            ${TILL.lines.length ? "" : "disabled"}>Take the money</button>
+        </div>
+      </div>
+    </div>`;
+  const add = (id, name, price, by) => {
+    const at = TILL.lines.findIndex((l) => l.id === id);
+    if (at < 0) TILL.lines.push({ id, name, price, qty: 1 });
+    else {
+      TILL.lines[at].qty += by;
+      if (TILL.lines[at].qty < 1) TILL.lines.splice(at, 1);
+    }
+    renderTill();
+  };
+  view().querySelectorAll("[data-add]").forEach((b) => b.onclick = () =>
+    add(+b.dataset.add, b.dataset.name, +b.dataset.price, 1));
+  view().querySelectorAll("[data-more]").forEach((b) => b.onclick = () => {
+    TILL.lines[+b.dataset.more].qty += 1; renderTill();
+  });
+  view().querySelectorAll("[data-less]").forEach((b) => b.onclick = () => {
+    const l = TILL.lines[+b.dataset.less];
+    l.qty -= 1;
+    if (l.qty < 1) TILL.lines.splice(+b.dataset.less, 1);
+    renderTill();
+  });
+  view().querySelectorAll("[data-cash]").forEach((b) => b.onclick = () => {
+    $("#tl-cash").value = (+b.dataset.cash / 100).toFixed(2);
+  });
+  $("#tl-clear").onclick = () => { TILL.lines = []; renderTill(); };
+  $("#tl-day").onclick = () => tillDay();
+  $("#tl-close").onclick = () => cashUp(sess);
+  $("#tl-take").onclick = async () => {
+    const card = Math.round((+$("#tl-card").value || 0) * 100);
+    const cashIn = $("#tl-cash").value
+      ? Math.round(+$("#tl-cash").value * 100)
+      : Math.max(0, total - card);
+    const tenders = [];
+    if (cashIn) tenders.push({ kind: "cash", cents: cashIn });
+    if (card) tenders.push({ kind: "card", cents: card });
+    if (!tenders.length) return toast("nothing tendered");
+    try {
+      const r = await api("/api/pos/sale", { body: {
+        register: TILL.register,
+        items: TILL.lines.map((l) => ({ product_id: l.id, qty: l.qty,
+                                        unit_price_cents: l.price })),
+        tenders, email_to: $("#tl-email").value.trim() } });
+      TILL.lines = [];
+      soldModal(r);
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function soldModal(r) {
+  const rec = r.receipt;
+  modal(`<h3>${money(rec.total_cents)} taken</h3>
+    ${r.change_cents
+      ? `<p class="till-change">Change <b>${money(r.change_cents)}</b></p>`
+      : '<p class="dim">Exact — no change.</p>'}
+    <div class="till-qr">
+      <img alt="receipt" src="/api/qr.svg?data=${
+        encodeURIComponent(location.origin + "/rc/" + rec.token)}">
+      <p class="dim">Their copy. The paper can be lost; this cannot.</p>
+    </div>
+    <div class="row2">
+      <div><label>Email it</label>
+        <input id="sold-email" type="email" placeholder="them@example.com">
+      </div>
+      <div><label>&nbsp;</label>
+        <button class="btn alt" id="sold-send">Send</button></div>
+    </div>
+    <div class="modal-foot">
+      <a class="btn alt" href="/rc/${rec.token}" target="_blank">Print</a>
+      <button class="btn" data-close id="sold-next">Next sale</button></div>`);
+  $("#sold-send").onclick = async () => {
+    const to = $("#sold-email").value.trim();
+    if (!to) return toast("who to?");
+    try {
+      await api("/api/pos/receipt/email", { body: {
+        order_id: rec.order_id, to } });
+      toast("sent");
+    } catch (e) { toast(e.message); }
+  };
+  $("#sold-next").onclick = () => { closeModal(); renderTill(); };
+}
+
+function cashUp(sess) {
+  modal(`<h3>Cash up ${esc(sess.session.register)}</h3>
+    <p class="dim">Count what is in the drawer and put the number in. The
+      difference is recorded whatever it is — a till that silently
+      balances is a till nobody can trust, and one that is eleven cents
+      short every Tuesday is telling you something.</p>
+    <div class="card">
+      <div class="doc-top"><div class="doc-main">Float</div>
+        <b>${money(sess.session.float_cents)}</b></div>
+      <div class="doc-top"><div class="doc-main">Cash taken, net of change
+        </div><b>${money(sess.cash_cents)}</b></div>
+      <div class="doc-top"><div class="doc-main"><b>Should be there</b></div>
+        <b>${money(sess.expected_cents)}</b></div>
+      ${Object.entries(sess.by_tender).filter(([k]) => k !== "cash")
+        .map(([k, v]) => `<div class="doc-top dim"><div class="doc-main">${
+          esc(k)} — never touched the drawer</div>
+          <span>${money(v.cents)}</span></div>`).join("")}
+    </div>
+    <label>Counted</label>
+    <input id="cu-counted" type="number" min="0" step="0.01" autofocus>
+    <label>Note <span class="opt">optional</span></label>
+    <input id="cu-note" placeholder="a fiver stuck to a twenty">
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Not yet</button>
+      <button class="btn" id="cu-go">Close the drawer</button></div>`);
+  $("#cu-go").onclick = async () => {
+    try {
+      const r = await api("/api/pos/session/close", { body: {
+        session_id: sess.session.id,
+        counted_cents: Math.round((+$("#cu-counted").value || 0) * 100),
+        note: $("#cu-note").value.trim() } });
+      closeModal();
+      toast(r.variance_cents === 0 ? "dead on"
+        : r.short ? `${money(-r.variance_cents)} short`
+          : `${money(r.variance_cents)} over`);
+      renderTill();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+async function tillDay() {
+  const d = await api("/api/pos/day?days=1");
+  modal(`<h3>Today at the counter</h3>
+    <div class="mrr-heads">
+      <div class="mrr-fig"><span class="dim">taken</span>
+        <b>${money(d.total_cents)}</b></div>
+      ${d.by_tender.map((t) => `<div class="mrr-fig">
+        <span class="dim">${esc(t.kind)}</span>
+        <b>${money(t.cents)}</b></div>`).join("")}
+    </div>
+    ${d.sessions.length ? `<div class="tablewrap"><table>
+      <thead><tr><th>register</th><th>opened</th><th>float</th>
+        <th>counted</th><th>out by</th></tr></thead>
+      <tbody>${d.sessions.map((s) => `<tr>
+        <td>${esc(s.register)}</td>
+        <td class="dim">${fmtDate(s.opened_at)}</td>
+        <td>${money(s.float_cents)}</td>
+        <td>${s.closed_at ? money(s.counted_cents)
+          : '<span class="pill ok">open</span>'}</td>
+        <td class="${s.variance_cents ? "low" : "dim"}">${s.closed_at
+          ? (s.variance_cents ? money(s.variance_cents) : "dead on") : ""}</td>
+      </tr>`).join("")}</tbody></table></div>` : ""}
+    <div class="modal-foot">
+      <button class="btn" data-close>Close</button></div>`, "wide");
+}

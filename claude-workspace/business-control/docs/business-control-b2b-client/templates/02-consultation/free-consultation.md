@@ -162,6 +162,7 @@ needed here?
 | `marketing` | Campaigns and ad creatives | ☐ |
 | `documents` | Contracts, policies, signatures | ☐ |
 | `supply` | Suppliers, materials, POs, production | ☐ |
+| `till` | The register: open a drawer, take a sale, print a receipt | ☐ |
 
 ---
 

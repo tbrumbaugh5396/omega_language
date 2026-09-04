@@ -1036,7 +1036,8 @@ function mrrSection(d) {
 
 // ---------- admin ----------
 
-const ROLES = ["customer", "distributor", "influencer", "employee", "owner"];
+const ROLES = ["customer", "distributor", "influencer", "cashier",
+               "employee", "owner"];
 
 async function renderAdmin() {
   const [products, stores, employees, users, emailCfg, emailLog, cyclesList,

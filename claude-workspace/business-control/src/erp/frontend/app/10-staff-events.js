@@ -142,7 +142,7 @@ function wireRoleRequests(rerender) {
    person, or to correct a name somebody typed wrong on their first day.
    No password is set: the account adopts one when its owner first
    supplies it, exactly like every other door. */
-const PERSON_ROLES = ["customer", "employee", "owner", "teacher",
+const PERSON_ROLES = ["customer", "employee", "cashier", "owner", "teacher",
                       "volunteer", "director", "board", "donor",
                       "distributor", "influencer"];
 const PERSON_JOBS = ["general", "driver", "dsd", "warehouse", "sales_rep",

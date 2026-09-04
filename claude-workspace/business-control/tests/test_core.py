@@ -3588,6 +3588,84 @@ ok(c.get("/api/analytics/mrr").status_code in (401, 403),
    "and it is the office's number")
 
 
+# --- the counter ------------------------------------------------------------
+# A till is not a checkout with bigger buttons. The differences are all
+# about cash: a drawer with a counted float, tenders that can be more than
+# one, change that comes back, and a count at the end whose difference is
+# stated rather than absorbed.
+_till = c.post("/api/pos/session", headers=A,
+               json={"register": "smoke", "float_cents": 10000}).json()
+ok(_till["id"], "a drawer opens with a counted float in it")
+ok(c.post("/api/pos/session", headers=A,
+          json={"register": "smoke"}).status_code == 409,
+   "and only one drawer is open on a register at a time — two tills "
+   "against one float is a variance nobody can attribute")
+_prod = c.get("/api/products", headers=A).json()[0]
+_sale = c.post("/api/pos/sale", headers=A, json={
+    "register": "smoke",
+    "items": [{"product_id": _prod["id"], "qty": 2,
+               "unit_price_cents": 500}],
+    "tenders": [{"kind": "cash", "cents": 2000}]}).json()
+ok(_sale["change_cents"] == 1000,
+   "a sale takes the money and gives the change back")
+_kinds = [(t["kind"], t["cents"]) for t in _sale["receipt"]["tenders"]]
+ok(("cash", 2000) in _kinds and ("cash", -1000) in _kinds,
+   "and change is a NEGATIVE cash tender rather than a field on the sale, "
+   "so the drawer nets out of what went in and out of it")
+_split = c.post("/api/pos/sale", headers=A, json={
+    "register": "smoke",
+    "items": [{"product_id": _prod["id"], "qty": 1,
+               "unit_price_cents": 1000}],
+    "tenders": [{"kind": "cash", "cents": 400},
+                {"kind": "card", "cents": 600, "ref": "4242"}]}).json()
+ok(_split["change_cents"] == 0 and len(_split["receipt"]["tenders"]) == 2,
+   "one sale can be part cash and part card — recording a total and a "
+   "payment method loses the half a drawer is counted against")
+ok(c.post("/api/pos/sale", headers=A, json={
+    "register": "smoke",
+    "items": [{"product_id": _prod["id"], "qty": 1,
+               "unit_price_cents": 1000}],
+    "tenders": [{"kind": "cash", "cents": 400}]}).status_code == 400,
+   "a sale is not part-paid at a counter, it is unfinished")
+ok(c.post("/api/pos/sale", headers=A, json={
+    "register": "nowhere", "items": [{"product_id": _prod["id"]}]}
+    ).status_code == 409,
+   "and nothing rings through a register with no drawer open")
+
+_dr = c.get("/api/pos/session?register=smoke", headers=A).json()
+ok(_dr["expected_cents"] == 10000 + 1000 + 400,
+   "the drawer expects the float plus the CASH only — a card sale never "
+   "touched it, and counting it in is how a till reads hundreds short "
+   "every evening and everybody learns to ignore the variance")
+_shut = c.post("/api/pos/session/close", headers=A, json={
+    "session_id": _till["id"], "counted_cents": _dr["expected_cents"] - 250,
+    "note": "a fiver stuck to a twenty"}).json()
+ok(_shut["variance_cents"] == -250 and _shut["short"],
+   "and the count states the difference — a till that silently balances "
+   "is a till nobody can trust")
+
+_rec = c.get(f"/api/pos/receipt/{_sale['order_id']}", headers=A).json()
+ok(_rec["token"] and _rec["change_cents"] == 1000,
+   "every sale has a receipt at an address of its own")
+_page = c.get(f"/rc/{_rec['token']}")
+ok(_page.status_code == 200 and "qr.svg" in _page.text,
+   "which the customer can open from the QR on the paper — a receipt only "
+   "the shop can find is a returns argument waiting to happen")
+ok(c.get("/rc/not-a-real-token").status_code == 404,
+   "and the token is the address, because an order id is guessable by "
+   "counting and a receipt carries what somebody bought")
+_ords = c.get("/api/orders", headers=A).json()
+ok(any(o["kind"] == "pos" for o in (_ords if isinstance(_ords, list)
+                                    else _ords.get("orders", []))),
+   "a counter sale is an ordinary order — the day book, the P&L, margin "
+   "and stock all read orders already, and a second sales table would "
+   "have meant teaching every one of them a second answer")
+
+from storefront.backend import governance as _gov  # noqa: E402
+ok("till" in _gov.PERMISSIONS and _gov.ROLE_DEFAULTS["cashier"] == ["till"],
+   "a cashier gets the till and nothing else — a role that quietly "
+   "carries the customer list is a role nobody can hand out quickly")
+
 # --- the site as a chain ----------------------------------------------------
 # A step funnel says how many reached checkout; a transition list says
 # which page leaks. Neither says which page the traffic runs THROUGH.
