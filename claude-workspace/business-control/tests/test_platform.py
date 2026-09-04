@@ -816,6 +816,76 @@ ok(_met.peak_registers(_hd, 30)["peak"] == 1,
    "needed")
 _sw.close(); _hd.close()
 
+# --- which shop, and which tablet ----------------------------------------
+# "You peaked at four tills" is true and useless to a manager deciding
+# whether to open a fifth lane in one particular shop.
+_ws = sqlite3.connect(":memory:"); _ws.row_factory = sqlite3.Row
+_ws.executescript(
+    "CREATE TABLE register_sessions(store_id INT, opened_at REAL,"
+    " closed_at REAL, self_serve INT);"
+    "CREATE TABLE stores(id INTEGER PRIMARY KEY, name TEXT);"
+    "INSERT INTO stores VALUES (1,'Camden'),(2,'Soho');")
+_wb = _t0.time() - 2 * 86400
+for _sid, _o, _c3, _ss in ((1, _wb, _wb + 7200, 0),
+                           (1, _wb + 1800, _wb + 5400, 0),
+                           (1, _wb + 3600, _wb + 4000, 1),
+                           (2, _wb, _wb + 3600, 0),
+                           (2, _wb + 7200, _wb + 9000, 0),
+                           (0, _wb, _wb + 600, 0)):
+    _ws.execute("INSERT INTO register_sessions VALUES(?,?,?,?)",
+                (_sid, _o, _c3, _ss))
+_byst = {w["store"]: w for w in _met.by_store(_ws, 30)}
+ok(_byst["Camden"]["peak"] == 3 and _byst["Soho"]["peak"] == 1,
+   "three at once in Camden and never more than one in Soho is a "
+   "different business from three at once across the two, and only one "
+   "of those two readings tells a manager where to put the next lane")
+ok(_byst["Camden"]["staffed"] == 2
+   and _byst["Camden"]["self_serve"] == 1,
+   "staffed and self-serve are counted apart: one is a wage and one is a "
+   "machine, and they cost the same $19 while meaning opposite things")
+ok("not tied to a location" in _byst,
+   "and a lane nobody attached to a shop is named as that rather than "
+   "filed under a store id the reader cannot look up")
+ok([w["store"] for w in _met.by_store(_ws, 30)][0] == "Camden",
+   "busiest first, because the shop with the queue is the one the reader "
+   "came to find")
+_ws.close()
+
+_ks = sqlite3.connect(":memory:"); _ks.row_factory = sqlite3.Row
+_ks.executescript(
+    "CREATE TABLE kiosks(kiosk_id TEXT, label TEXT, store_id INT,"
+    " active INT, created_at REAL, last_seen REAL);"
+    "CREATE TABLE stores(id INTEGER PRIMARY KEY, name TEXT);")
+_kn = _t0.time()
+for _kid, _lab, _cr, _sn in (("a", "door", _kn - 90 * 86400, _kn - 2 * 86400),
+                             ("b", "back", _kn - 90 * 86400, _kn - 60 * 86400),
+                             ("c", "spare", _kn - 90 * 86400, 0),
+                             ("d", "new", _kn - 2 * 86400, 0)):
+    _ks.execute("INSERT INTO kiosks VALUES(?,?,?,?,?,?)",
+                (_kid, _lab, 1, 1, _cr, _sn))
+_ki = _met.kiosks_idle(_ks, 30)
+ok(_ki["live"] == 1 and len(_ki["idle"]) == 2,
+   "a tablet switched on, billed, and untouched for a month is money "
+   "standing in a room — and it took stamping last_seen on every punch "
+   "to be able to say so, because the column had never been written to")
+ok(_ki["settling"] == 1
+   and "new" not in [k["label"] for k in _ki["idle"]],
+   "but one registered this week is being set up, not wasted. Calling it "
+   "waste on day two is how a report teaches people to ignore it")
+ok(any(k["never"] for k in _ki["idle"])
+   and any(k["days_idle"] == 60 for k in _ki["idle"]),
+   "never once and idle since June are different conversations, so they "
+   "are different facts rather than one count")
+_ks.close()
+
+_vk = _met._verdict("kiosks", 4, 3,
+                    {"count": 2, "unanswered": 0, "days": 30},
+                    {"known": False, "peak": 3, "at_cap_days": 0}, 1, _ki)
+ok("turned away" in _vk and "not used" in _vk,
+   "and asking for a fourth tablet while two of three sit untouched says "
+   "BOTH: the refusal ranks higher, but letting it hide the idle ones "
+   "would suppress that fact exactly when it is most worth hearing")
+
 # --- one board: who is waiting on us, and who is paying for nothing -----
 # The dossier answers this one install at a time, which is the wrong
 # shape for the question it actually gets asked in: not "how is alpha

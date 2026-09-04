@@ -897,11 +897,16 @@ def tenant_pressure(tid: str) -> dict:
 #             a shorter board otherwise reads as better news
 #   spare   — paying for room they have never used. The same conversation
 #             from the other end, and the one nobody ever has.
+#   idle    — switched on, billed, and not touched in a month. Named
+#             apart from "spare" because the fix is different: spare room
+#             is a number to lower, an idle tablet is a thing in a room
+#             that somebody has to go and look at.
 _PRESSURE_RANK = {"asking": 0, "over": 1, "pinned": 2, "unreachable": 3,
-                  "spare": 4, "settled": 5, "quiet": 6}
+                  "idle": 4, "spare": 5, "settled": 6, "quiet": 7}
 
 
-def _classify(kind: str, pr: dict, each_cents: int) -> dict:
+def _classify(kind: str, pr: dict, each_cents: int,
+              included: int = 0) -> dict:
     """One line about one metered unit on one install.
 
     `at_stake_cents` is a month of money, signed by direction: positive is
@@ -915,6 +920,13 @@ def _classify(kind: str, pr: dict, each_cents: int) -> dict:
         state, stake = "asking", each_cents
     elif used > cap:
         state, stake = "over", (used - cap) * each_cents
+    elif pr.get("idle_count"):
+        # Only the ones past the plan's own allowance are money. Two idle
+        # tablets when the plan includes two is a habit worth mentioning
+        # and nothing worth refunding, and quoting a saving that is not
+        # there is how a helpful call becomes an awkward one.
+        state = "idle"
+        stake = -(min(pr["idle_count"], max(0, cap - included)) * each_cents)
     elif pr.get("refused"):
         state, stake = "settled", 0
     elif cap and pr.get("at_cap_days"):
@@ -931,6 +943,8 @@ def _classify(kind: str, pr: dict, each_cents: int) -> dict:
             "refused": pr.get("refused", 0),
             "unanswered": pr.get("unanswered", 0),
             "at_cap_days": pr.get("at_cap_days", 0),
+            "idle_count": pr.get("idle_count", 0),
+            "by_store": pr.get("by_store", []),
             "at_stake_cents": stake, "verdict": pr.get("verdict", "")}
 
 
@@ -967,7 +981,8 @@ def fleet_pressure(u=Depends(admin_user), con=Depends(get_con)):
                          "lines": [], "why": str(e)[:120]})
             continue
         lines = [_classify(k, pressure[k],
-                           book.get(key[k], {}).get("each_cents", 0))
+                           book.get(key[k], {}).get("each_cents", 0),
+                           book.get(key[k], {}).get("included", 0))
                  for k in key if k in pressure]
         lines = [ln for ln in lines if ln["state"] != "quiet"]
         lines.sort(key=lambda ln: _PRESSURE_RANK.get(ln["state"], 9))
@@ -986,6 +1001,7 @@ def fleet_pressure(u=Depends(admin_user), con=Depends(get_con)):
         "over": len([r for r in rows if r["worst"] == "over"]),
         "pinned": len([r for r in rows if r["worst"] == "pinned"]),
         "spare": len([r for r in rows if r["worst"] == "spare"]),
+        "idle": len([r for r in rows if r["worst"] == "idle"]),
         "unreachable": len([r for r in rows if r["worst"] == "unreachable"]),
         "upside_cents": sum(max(0, r["at_stake_cents"]) for r in rows),
         "unused_cents": sum(-min(0, r["at_stake_cents"]) for r in rows),

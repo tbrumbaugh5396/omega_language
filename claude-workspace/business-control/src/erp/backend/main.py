@@ -1697,6 +1697,26 @@ def kiosk_register(body: KioskBody, user=Depends(admin_user),
     return {"ok": True, "kiosk_id": kid}
 
 
+def _touch_kiosk(con, kid: str) -> None:
+    """Mark that a tablet answered a punch.
+
+    The column has existed since kiosks did and nothing ever wrote to it,
+    which made "billed for and never touched" a question the software
+    could not answer about its own hardware. Stamped for any recognised
+    kiosk rather than only for the staff bound to one: whoever was
+    standing at it, the tablet was in use, and a kiosk is only knowably
+    idle if every use marks it.
+    """
+    if not kid:
+        return
+    try:
+        con.execute("UPDATE kiosks SET last_seen=? WHERE kiosk_id=?"
+                    " AND active=1", (db.now(), kid))
+        con.commit()
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 @app.delete("/api/admin/kiosks/{kiosk_id}")
 def kiosk_drop(kiosk_id: str, user=Depends(admin_user), con=Depends(get_con)):
     con.execute("DELETE FROM kiosks WHERE kiosk_id=?", (kiosk_id,))
@@ -1779,6 +1799,7 @@ def _where_check(con, emp, at: dict) -> dict:
     out = {"lat": at.get("lat"), "lng": at.get("lng"),
            "accuracy_m": at.get("accuracy_m"), "kiosk": at.get("kiosk", "")[:60],
            "store_id": 0, "metres": None}
+    _touch_kiosk(con, out["kiosk"])
     if need_kiosk:
         kid = (at.get("kiosk") or "").strip()
         if not kid:

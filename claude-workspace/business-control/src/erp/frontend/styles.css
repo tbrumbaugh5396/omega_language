@@ -1668,3 +1668,14 @@ body.lane-on { overflow: hidden; }
   white-space: nowrap; color: #7fd6a8; font-weight: 600; }
 .press-money.dim { color: var(--dim); font-weight: 400; }
 .press-state { white-space: nowrap; }
+
+/* The breakdown under a metered row: which shop, or which tablet. A
+   business-wide peak is true and useless to the manager deciding whether
+   to open a fifth lane in one particular shop. */
+.plan-where {
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  margin: -6px 0 10px; padding: 0 12px 8px; font-size: .82em;
+}
+.plan-where span { white-space: nowrap; }
+.plan-where b { color: var(--ink, #e8ecf3); font-weight: 600; }
+.plan-where.idle-list b { color: #f0a08a; }

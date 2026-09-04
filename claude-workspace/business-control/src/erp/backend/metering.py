@@ -167,6 +167,102 @@ def peak_registers(con, days: int = 30, cap: int = 0) -> dict:
                            if by_day else ""}
 
 
+def by_store(con, days: int = 30) -> list:
+    """The peak, per location.
+
+    The limit is counted across the business, but the queue is at one
+    shop. "You peaked at four tills" is true and useless to a manager
+    deciding whether to open a fifth lane in Camden; four at once across
+    three shops is a different business from four at once in one.
+
+    Staffed and self-serve are counted apart because they are bought for
+    different reasons — one is a wage and one is a machine — and a lane
+    of each costs the same $19 while meaning opposite things.
+    """
+    now = time.time()
+    since = now - days * DAY
+    try:
+        rows = con.execute(
+            "SELECT r.store_id, r.opened_at, r.closed_at, r.self_serve,"
+            " COALESCE(s.name,'') AS store FROM register_sessions r"
+            " LEFT JOIN stores s ON s.id=r.store_id"
+            " WHERE r.opened_at>? OR r.closed_at=0 OR r.closed_at>?",
+            (since, since)).fetchall()
+    except Exception:                                        # noqa: BLE001
+        return []
+    groups: dict = {}
+    for r in rows:
+        groups.setdefault((r["store_id"] or 0, r["store"] or ""), []).append(r)
+    out = []
+    for (sid, name), rs in groups.items():
+        events, staffed, selfserve, open_now = [], 0, 0, 0
+        for r in rs:
+            events.append((float(r["opened_at"]), 1))
+            events.append((float(r["closed_at"]) or now, -1))
+            if not r["closed_at"]:
+                open_now += 1
+            if float(r["opened_at"]) >= since:
+                if r["self_serve"]:
+                    selfserve += 1
+                else:
+                    staffed += 1
+        events.sort(key=lambda e: (e[0], e[1]))
+        live, peak = 0, 0
+        for when, delta in events:
+            live += delta
+            if when >= since and live > peak:
+                peak = live
+        out.append({"store_id": sid, "store": name or (
+            "not tied to a location" if not sid else f"store {sid}"),
+            "peak": peak, "open_now": open_now, "sessions": staffed + selfserve,
+            "staffed": staffed, "self_serve": selfserve})
+    out.sort(key=lambda x: (-x["peak"], -x["sessions"]))
+    return out
+
+
+# A tablet registered this week and not yet used is being set up, not
+# wasted. Calling it waste on day two is how a report teaches people to
+# ignore it.
+SETTLING_DAYS = 7
+
+
+def kiosks_idle(con, days: int = 30) -> dict:
+    """Tablets that are active, billed, and have not been touched.
+
+    `last_seen` was declared when kiosks were and never written to, so
+    until now every kiosk looked equally unused. It is stamped on each
+    punch that names one. That means this report is only as old as the
+    stamping: a kiosk in daily use since long before still reads as never
+    seen until somebody clocks in on it, so a fleet with no history says
+    "not known yet" rather than accusing every tablet of being idle.
+    """
+    now = time.time()
+    cut = now - days * DAY
+    try:
+        rows = [dict(r) for r in con.execute(
+            "SELECT k.kiosk_id, k.label, k.created_at, k.last_seen,"
+            " COALESCE(s.name,'') AS store FROM kiosks k"
+            " LEFT JOIN stores s ON s.id=k.store_id"
+            " WHERE k.active=1 ORDER BY k.last_seen")]
+    except Exception:                                        # noqa: BLE001
+        return {"known": False, "idle": [], "live": 0, "settling": 0}
+    idle, live, settling = [], 0, 0
+    for r in rows:
+        seen = float(r["last_seen"] or 0)
+        if seen >= cut:
+            live += 1
+            continue
+        if (now - float(r["created_at"] or 0)) < SETTLING_DAYS * DAY:
+            settling += 1
+            continue
+        r["never"] = not seen
+        r["days_idle"] = 0 if not seen else int((now - seen) / DAY)
+        idle.append(r)
+    return {"known": True, "idle": idle, "live": live, "settling": settling,
+            "total": len(rows), "days": days,
+            "ever_seen": any(float(r["last_seen"] or 0) for r in rows)}
+
+
 def pressure(con, kind: str, cap: int, used: int, days: int = 30) -> dict:
     """One reading per metered unit: how tight is this, really.
 
@@ -185,7 +281,10 @@ def pressure(con, kind: str, cap: int, used: int, days: int = 30) -> dict:
                      "not a thing that runs at once, so there is no busier "
                      "moment to find"}
     head = max(0, cap - pk["peak"])
+    where = by_store(con, days) if kind == "registers" else []
+    tablets = kiosks_idle(con, days) if kind == "kiosks" else {}
     return {
+        "by_store": where, "kiosks": tablets,
         "kind": kind, "cap": cap, "used": used,
         "peak": pk["peak"], "peak_known": pk["known"],
         "peak_at": pk.get("peak_at", 0),
@@ -196,35 +295,53 @@ def pressure(con, kind: str, cap: int, used: int, days: int = 30) -> dict:
         "refused_last": ref["last"], "unanswered": ref["unanswered"],
         "recent": ref["recent"], "why_no_peak": pk.get("why", ""),
         "headroom": head,
-        "verdict": _verdict(kind, cap, used, ref, pk, head),
+        "verdict": _verdict(kind, cap, used, ref, pk, head, tablets),
+        "idle_count": len(tablets.get("idle", [])),
     }
 
 
 def _verdict(kind: str, cap: int, used: int, ref: dict, pk: dict,
-             head: int) -> str:
+             head: int, tablets: dict | None = None) -> str:
     """Say the thing the numbers mean, in the words somebody would use.
 
     A dashboard that shows a client six figures and leaves them to infer
     the sentence has moved the work rather than done it.
+
+    The idle-tablet clause is appended to whatever else is true rather
+    than competing with it. Somebody asking for a fourth tablet while two
+    of the three they have sit untouched is the single most useful
+    sentence this can produce, and letting a refusal outrank it would
+    suppress it exactly when it matters most.
     """
+    idle = (tablets or {}).get("idle", [])
+    note = ""
+    if idle:
+        never = sum(1 for k in idle if k["never"])
+        note = (f"{len(idle)} of {tablets['total']} tablets not used in "
+                f"{tablets['days']} days"
+                + (f", {never} never at all" if never else ""))
+    tail = f" \u00b7 {note}" if note else ""
+
     if used > cap:
         return (f"{used} in use against {cap} covered — over by "
                 f"{used - cap}, which is a bill rather than a refusal: "
-                f"these were already here when the limit was set")
+                f"these were already here when the limit was set" + tail)
+    if note and not ref["count"]:
+        return note + " — paid for and switched on, standing there"
     if ref["count"] and ref["unanswered"]:
         return (f"turned away {ref['count']} time"
                 f"{'' if ref['count'] == 1 else 's'} in {ref['days']} days"
-                f" — {ref['unanswered']} of those still unanswered")
+                f" — {ref['unanswered']} of those still unanswered" + tail)
     if ref["count"]:
         return (f"turned away {ref['count']} time"
-                f"{'' if ref['count'] == 1 else 's'}, since resolved")
+                f"{'' if ref['count'] == 1 else 's'}, since resolved" + tail)
     if pk["known"] and pk.get("at_cap_days"):
         return (f"at the limit on {pk['at_cap_days']} day"
                 f"{'' if pk['at_cap_days'] == 1 else 's'} without being "
-                f"refused — the next busy one will be refused")
+                f"refused — the next busy one will be refused" + tail)
     if pk["known"] and cap and pk["peak"] and head >= max(2, cap // 2):
         return (f"busiest moment used {pk['peak']} of {cap} — there is "
-                f"room here that is being paid for")
+                f"room here that is being paid for" + tail)
     if not head and cap:
-        return "full: the next one asked for will be refused"
-    return "comfortable"
+        return "full: the next one asked for will be refused" + tail
+    return ("comfortable" + tail) if tail else "comfortable"

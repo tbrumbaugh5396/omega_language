@@ -300,6 +300,7 @@ const PRESSURE_WORDS = {
   over: ["over", "using more than they are covered for"],
   pinned: ["full", "at the limit; the next busy day is a refusal"],
   spare: ["spare room", "paying for what they have never used"],
+  idle: ["idle tablets", "kiosks switched on, billed, and not touched"],
   settled: ["settled", "was turned away, since resolved"],
   unreachable: ["unreachable", "their node did not answer"],
 };
@@ -322,8 +323,8 @@ async function fleetPressure() {
   box.innerHTML = `
     <div class="card-head"><b>Limits across the fleet</b>
       <span class="chips">${chip(d.asking, "asking")}${chip(d.over, "over")}
-        ${chip(d.pinned, "pinned")}${chip(d.spare, "spare")}
-        ${chip(d.unreachable, "unreachable")}</span>
+        ${chip(d.pinned, "pinned")}${chip(d.idle, "idle")}
+        ${chip(d.spare, "spare")}${chip(d.unreachable, "unreachable")}</span>
       <span class="dim">${d.upside_cents
         ? "+" + money(d.upside_cents) + " a month if they bought what they "
           + "keep reaching for" : ""}${d.unused_cents
@@ -341,8 +342,11 @@ async function fleetPressure() {
             ? PRESSURE_WORDS[r.worst][1] : ""}">${PRESSURE_WORDS[r.worst]
             ? PRESSURE_WORDS[r.worst][0] : esc(r.worst)}</span></span>
         <span class="press-why dim">${r.why ? esc(r.why)
-          : r.lines.map((l) => `${esc(l.kind)}: ${esc(l.verdict)}`)
-              .join(" · ")}</span>
+          : r.lines.map((l) => `${esc(l.kind)}: ${esc(l.verdict)}${
+              (l.by_store || []).length > 1
+                ? " (" + l.by_store.slice(0, 3).map((w) =>
+                    `${esc(w.store)} ${w.peak}`).join(", ") + ")" : ""}`)
+              .join(" \u00b7 ")}</span>
         <span class="press-money ${r.at_stake_cents < 0 ? "dim" : ""}">${
           r.at_stake_cents
             ? (r.at_stake_cents > 0 ? "+" : "\u2212")

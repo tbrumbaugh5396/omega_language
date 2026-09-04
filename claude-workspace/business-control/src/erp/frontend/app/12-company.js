@@ -660,10 +660,23 @@ function planVerdict(pr) {
     time${pr.refused === 1 ? "" : "s"}</b> in 30 days`);
   else if (pr.at_cap_days) bits.push(`at the limit on ${pr.at_cap_days}
     day${pr.at_cap_days === 1 ? "" : "s"}`);
-  if (!bits.length) return "";
+  const where = (pr.by_store || []).filter((w) => w.sessions);
+  const tablets = (pr.kiosks || {}).idle || [];
+  if (!bits.length && !where.length && !tablets.length) return "";
   return `<div class="plan-pressure${pr.refused ? " pressed" : ""}">
     ${planSpark(pr.by_day || {}, pr.cap)}
-    <span>${bits.join(" · ")}</span></div>`;
+    <span>${bits.join(" · ")}</span></div>
+    ${where.length > 1 ? `<div class="plan-where">${where.map((w) => `
+      <span><b>${w.peak}</b> at once · ${esc(w.store)}
+        <span class="dim">${w.self_serve
+          ? `${w.staffed} staffed, ${w.self_serve} self-serve`
+          : `${w.sessions} session${w.sessions === 1 ? "" : "s"}`}</span>
+      </span>`).join("")}</div>` : ""}
+    ${tablets.length ? `<div class="plan-where idle-list">${tablets
+      .map((k) => `<span><b>${esc(k.label || k.kiosk_id)}</b>
+        <span class="dim">${k.store ? esc(k.store) + " · " : ""}${k.never
+          ? "never used" : k.days_idle + " days idle"}</span></span>`)
+      .join("")}</div>` : ""}`;
 }
 
 async function renderPlan() {
