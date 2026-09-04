@@ -4292,7 +4292,8 @@ def analytics_commerce(days: int = 90, kind: str = "", months: int = 12,
     from . import commerce
     return {"basket": commerce.basket(con, days, kind),
             "repeat": commerce.repeat(con, max(days, 365), kind),
-            "cohorts": commerce.cohorts(con, months, kind)}
+            "cohorts": commerce.cohorts(con, months, kind),
+            "lines": commerce.lines(con, days)}
 
 
 @app.get("/api/analytics/regions")

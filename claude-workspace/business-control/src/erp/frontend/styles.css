@@ -1488,3 +1488,4 @@ table.cohort td:first-child, table.cohort td:nth-child(2) { text-align: left; }
 table.cohort th { text-align: center; }
 table.cohort th:first-child, table.cohort th:nth-child(2) { text-align: left; }
 .coh-part { font-style: italic; }
+.wd-row.cat-row { grid-template-columns: 120px 1fr 96px 48px 104px; }

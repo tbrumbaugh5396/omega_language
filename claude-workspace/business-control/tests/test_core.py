@@ -3703,8 +3703,34 @@ ok(any(cell["partial"] for x in _co["cohorts"] for cell in x["cells"]),
    "a cell inside the month still running is marked: three days is not a "
    "month, and drawing it as one turns an ordinary week into a crisis "
    "meeting")
+# Per line and per category. An overall margin is an average of things
+# that are not alike.
+_ccon.execute("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT,"
+              " category TEXT, case_size INT)")
+_ccon.executemany("INSERT INTO products(id,name,category,case_size)"
+                  " VALUES(?,?,?,12)",
+                  [(1, "Hot Sauce", "sauces"), (2, "Rub", "spices")])
+_ccon.execute("UPDATE order_items SET product_id=2 WHERE order_id IN"
+              " (SELECT id FROM orders WHERE kind='distributor')")
+_ln = _com.lines(_ccon, 90, when=_c_now)
+ok(len(_ln["lines"]) == 2 and {x["category"] for x in _ln["lines"]}
+   == {"sauces", "spices"},
+   "every line reports on its own, with the category it sits in")
+ok(all(x["margin_pct"] is None and not x["priced"] for x in _ln["lines"]),
+   "and a line with no recipe behind it says so rather than borrowing the "
+   "shop's average margin and calling itself profitable")
+ok(sum(c["share_pct"] for c in _ln["categories"]) > 99,
+   "categories carve the revenue up between them")
+ok(_ln["top_fifth_pct"] is not None and _ln["losing"] == [],
+   "with the concentration of the range beside them, and any line sold "
+   "under cost named")
+ok(all(x["attach_pct"] is not None for x in _ln["lines"]),
+   "attach rate is on every line — it is the argument for keeping a "
+   "thin-margin one")
 _ccon.close()
 _capi = c.get("/api/analytics/commerce?days=90", headers=A).json()
+ok("lines" in _capi and "categories" in _capi["lines"],
+   "and the shelf arrives with the baskets")
 ok(all(k in _capi for k in ("basket", "repeat", "cohorts")),
    "and the three arrive together, because they are one question asked "
    "three ways")

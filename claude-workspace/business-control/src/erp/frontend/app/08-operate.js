@@ -586,6 +586,7 @@ function shopSection(d) {
         r.returning_pct !== null && r.returning_pct < 40
           ? " — a business growing on strangers is growing the most "
             + "expensive way there is." : "."}</p>
+      ${d.lines && d.lines.lines.length ? linesBox(d.lines) : ""}
       ${co.cohorts.length ? `<h4 class="mrr-h">Cohorts</h4>
         <div class="tablewrap"><table class="cohort">
           <thead><tr><th>first bought</th><th>customers</th>
@@ -610,6 +611,55 @@ function shopSection(d) {
             ? " Cells marked * are in the month that is still running."
             : ""}</p>` : ""}
     </div>`;
+}
+
+/* The shelf, line by line. An overall margin is an average of things that
+   are not alike: it can read healthy while a third of the range is sold
+   at a loss, and the only way to find that out is to ask each line. */
+function linesBox(d) {
+  const top = Math.max(...d.categories.map((c) => c.revenue_cents), 1);
+  return `<h4 class="mrr-h">By category</h4>
+    <div class="wd-rows">${d.categories.map((c) => `
+      <div class="wd-row cat-row">
+        <span class="wd-n pipe-n">${esc(c.category)}</span>
+        <div class="wd-bar"><span style="width:${
+          Math.round(100 * c.revenue_cents / top)}%"></span></div>
+        <span class="wd-v">${money(c.revenue_cents)}</span>
+        <span class="dim">${c.share_pct}%</span>
+        <span class="wd-v ${c.margin_pct === null ? "dim"
+          : c.margin_pct < 0 ? "low" : ""}">${c.margin_pct === null
+            ? "no recipe" : c.margin_pct + "% margin"}</span>
+      </div>`).join("")}</div>
+    <h4 class="mrr-h">By line</h4>
+    <div class="tablewrap"><table>
+      <thead><tr><th>product</th><th>units</th><th>revenue</th>
+        <th>avg price</th><th>margin</th>
+        <th title="how often it is in a basket with something else rather
+          than alone on the receipt">attach</th>
+        <th>buyers</th></tr></thead>
+      <tbody>${d.lines.slice(0, 20).map((x) => `<tr${
+        x.margin_pct !== null && x.margin_pct < 0 ? ' class="dl-awaiting"'
+          : ""}>
+        <td>${esc(x.name)}<span class="dim"> · ${esc(x.category)}</span></td>
+        <td>${x.units}</td>
+        <td>${money(x.revenue_cents)}</td>
+        <td class="dim">${money(x.avg_price_cents)}</td>
+        <td class="${x.margin_pct === null ? "dim"
+          : x.margin_pct < 0 ? "low" : "good"}">${x.margin_pct === null
+            ? "—" : x.margin_pct + "%"}</td>
+        <td class="dim">${x.attach_pct === null ? "—"
+          : x.attach_pct + "%"}</td>
+        <td class="dim">${x.buyers}</td>
+      </tr>`).join("")}</tbody></table></div>
+    <p class="dim">${esc(d.note)} ${d.priced_pct}% of revenue is on lines
+      with a recipe behind them${d.top_fifth_pct !== null
+        ? `; the best fifth of the range carries ${d.top_fifth_pct}% of it`
+        : ""}.${d.losing.length
+        ? ` <b class="low">${d.losing.length} line${
+          d.losing.length === 1 ? " is" : "s are"} sold under cost.</b>` : ""}
+      Attach rate is the argument for keeping a thin-margin line: one
+      mostly bought alone earns its shelf on its own margin, one almost
+      always in company earns it on the basket's.</p>`;
 }
 
 /* The studio's own numbers. Nothing here is measured on purpose: the

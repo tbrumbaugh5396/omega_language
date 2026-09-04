@@ -181,3 +181,113 @@ def cohorts(con, months: int = 12, kind: str = "", when: float = 0) -> dict:
                 "and reading a part-month as a full one turns an ordinary "
                 "week into a crisis meeting.",
     }
+
+
+# ---------- the shelf, line by line ----------
+
+def lines(con, days: int = 90, when: float = 0, group: str = "product") -> dict:
+    """Revenue, units and margin per product — or per category.
+
+    An overall margin is an average of things that are not alike. It can
+    be healthy while a third of the range is sold at a loss, and the only
+    way to find that out is to ask each line separately. Where a recipe
+    prices a product the margin is measured; where it does not, the line
+    says so rather than borrowing the shop's average and calling itself
+    profitable.
+
+    Attach rate is here because it is the number that argues for keeping a
+    thin-margin line: a product that is mostly bought alone earns its
+    shelf on its own margin, and one that is almost always in a basket
+    with something else earns it on the basket's.
+    """
+    when = when or time.time()
+    since = when - days * DAY
+    costs = supply_costs(con)
+    rows = con.execute(
+        "SELECT oi.product_id, p.name, COALESCE(p.category,'') AS category,"
+        " SUM(oi.qty) AS units,"
+        " SUM(oi.qty * oi.unit_price_cents) AS cents,"
+        " COUNT(DISTINCT oi.order_id) AS orders,"
+        " COUNT(DISTINCT o.user_id) AS buyers"
+        " FROM order_items oi JOIN orders o ON o.id=oi.order_id"
+        " LEFT JOIN products p ON p.id=oi.product_id"
+        " WHERE o.status!='cancelled' AND o.created_at>=?"
+        " GROUP BY oi.product_id", (since,)).fetchall()
+    if not rows:
+        return {"days": days, "lines": [], "group": group}
+    # How often a line is the whole order, which is what attach rate is
+    # really asking: alone on the receipt, or in company.
+    sizes = {r["order_id"]: r["n"] for r in con.execute(
+        "SELECT order_id, COUNT(*) AS n FROM order_items GROUP BY order_id")}
+    alone = {}
+    for r in con.execute(
+            "SELECT oi.product_id, oi.order_id FROM order_items oi"
+            " JOIN orders o ON o.id=oi.order_id"
+            " WHERE o.status!='cancelled' AND o.created_at>=?", (since,)):
+        if sizes.get(r["order_id"], 1) == 1:
+            alone[r["product_id"]] = alone.get(r["product_id"], 0) + 1
+    out = []
+    for r in rows:
+        c = costs.get(r["product_id"])
+        cogs = int(c["per_unit_cents"] * r["units"]) if c else None
+        out.append({
+            "product_id": r["product_id"],
+            "name": r["name"] or f"product {r['product_id']}",
+            "category": r["category"] or "uncategorised",
+            "units": r["units"], "orders": r["orders"], "buyers": r["buyers"],
+            "revenue_cents": r["cents"],
+            "avg_price_cents": int(r["cents"] / r["units"]) if r["units"]
+            else 0,
+            "cogs_cents": cogs,
+            "margin_cents": (r["cents"] - cogs) if cogs is not None else None,
+            "margin_pct": round((r["cents"] - cogs) / r["cents"] * 100, 1)
+            if cogs is not None and r["cents"] else None,
+            "priced": c is not None,
+            "attach_pct": round(
+                (1 - alone.get(r["product_id"], 0) / r["orders"]) * 100, 1)
+            if r["orders"] else None,
+        })
+    out.sort(key=lambda x: -x["revenue_cents"])
+    rev = sum(x["revenue_cents"] for x in out)
+    # The share of revenue the top fifth of the range carries. Not a law of
+    # nature, but a shelf where it is 95% is a shelf with a long tail
+    # nobody is paying for.
+    cut = max(1, len(out) // 5)
+    cats = {}
+    for x in out:
+        k = cats.setdefault(x["category"], {
+            "category": x["category"], "lines": 0, "units": 0,
+            "revenue_cents": 0, "margin_cents": 0, "priced_revenue": 0})
+        k["lines"] += 1
+        k["units"] += x["units"]
+        k["revenue_cents"] += x["revenue_cents"]
+        if x["margin_cents"] is not None:
+            k["margin_cents"] += x["margin_cents"]
+            k["priced_revenue"] += x["revenue_cents"]
+    cat_rows = sorted(cats.values(), key=lambda k: -k["revenue_cents"])
+    for k in cat_rows:
+        k["margin_pct"] = (round(k["margin_cents"] / k["priced_revenue"] * 100,
+                                 1) if k["priced_revenue"] else None)
+        k["share_pct"] = round(k["revenue_cents"] / rev * 100, 1) if rev else 0
+    return {
+        "days": days, "group": group, "lines": out, "categories": cat_rows,
+        "revenue_cents": rev,
+        "priced_pct": round(sum(x["revenue_cents"] for x in out if x["priced"])
+                            / rev * 100) if rev else 0,
+        "top_fifth_pct": round(sum(x["revenue_cents"] for x in out[:cut])
+                               / rev * 100, 1) if rev else None,
+        "losing": [x for x in out
+                   if x["margin_pct"] is not None and x["margin_pct"] < 0],
+        "note": "Margin is measured where a recipe prices the product and "
+                "left blank where it does not — an overall margin is an "
+                "average of things that are not alike, and it can look "
+                "healthy while a third of the range is sold at a loss.",
+    }
+
+
+def supply_costs(con) -> dict:
+    from . import supply
+    try:
+        return supply.unit_costs(con)
+    except Exception:                                        # noqa: BLE001
+        return {}
