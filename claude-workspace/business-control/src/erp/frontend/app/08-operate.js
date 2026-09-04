@@ -182,12 +182,26 @@ async function renderRoutes() {
         </span>
         ${routeMap(r.stops)}
         <table><thead><tr><th>#</th><th>store</th><th>city</th><th>leg</th>
-          <th>drive</th><th>ETA</th><th>delivered</th></tr></thead><tbody>
+          <th>drive</th><th>ETA</th><th>done</th><th>proof</th>
+          </tr></thead><tbody>
         ${r.stops.map((s) => `<tr><td>${s.seq + 1}</td><td>${esc(s.name)}</td>
           <td class="dim">${esc(s.city)}</td><td>${s.leg_km} km</td>
           <td>${fmtMin(s.drive_min)}</td><td>+${fmtMin(s.eta_min)}</td>
           <td><input type="checkbox" data-stop="${r.id}:${s.seq}"
-            ${s.delivered ? "checked" : ""}></td></tr>`).join("")}
+            ${s.delivered ? "checked" : ""}
+            title="marking it here is somebody's word for it; taking the
+              stop records who took it and what they photographed"></td>
+          <td>${s.visit
+            ? `<button class="btn alt sm" data-svisit="${s.visit.id}"
+                 title="${s.proved
+                   ? "signed by " + esc(s.visit.contact_name
+                       || s.visit.signature) + ", " + s.visit.photos
+                       + " photo(s)"
+                   : "in progress"}">${s.proved
+                 ? "signed · " + esc((s.visit.who || "").split(" ")[0])
+                 : esc(s.visit.state)}</button>`
+            : `<button class="btn alt sm" data-take-stop="${r.id}:${s.seq}"
+                 >Take it</button>`}</td></tr>`).join("")}
         </tbody></table>
       </div>`).join("")}`;
   if ($("#auto-cover")) $("#auto-cover").onclick = async () => {
@@ -213,6 +227,25 @@ async function renderRoutes() {
       await api(`/api/routes/${rid}/status`, { body: { status } });
       render();
     };
+  });
+  document.querySelectorAll("[data-take-stop]").forEach((b) => {
+    b.onclick = async () => {
+      const [rid, seq] = b.dataset.takeStop.split(":");
+      try {
+        const r = await api(`/api/field/route/${rid}/stop/${seq}/take`,
+                            { body: {} });
+        toast(r.lines
+          ? `${r.lines} line(s) owed at that door`
+          : "nothing outstanding there — it is a call, not a drop");
+        S.tab = "field";
+        render();
+        setTimeout(() => openVisit(r.id), 400);
+      } catch (e) { toast(e.message); }
+    };
+  });
+  document.querySelectorAll("[data-svisit]").forEach((b) => {
+    b.onclick = () => { S.tab = "field"; render();
+      setTimeout(() => openVisit(+b.dataset.svisit), 400); };
   });
   document.querySelectorAll("[data-stop]").forEach((cb) => {
     cb.onchange = async () => {

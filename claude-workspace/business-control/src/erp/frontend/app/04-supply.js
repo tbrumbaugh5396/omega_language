@@ -1069,6 +1069,7 @@ async function openVisit(vid) {
         <div><h3>${esc(v.title || v.kind)}</h3>
           <p class="dim">${esc(v.who)}${v.store
             ? " · " + esc(v.store.name) : ""} · ${esc(v.state)}${
+            v.route_id ? ` · stop ${v.route_seq + 1} of a route` : ""}${
             v.metres_from_store !== null
               ? ` · started ${v.metres_from_store} m from the pin` : ""}</p>
         </div>
@@ -1314,6 +1315,9 @@ function finishVisit(v, after) {
       const out = await api(`/api/field/visits/${v.id}/finish`, { body });
       closeModal();
       const h = out.handed;
+      if (out.stop && out.stop.route_done) {
+        toast("Last stop — the route is done");
+      }
       if (h && h.refused && h.refused.length) {
         toast(`${h.refused.length} line${h.refused.length === 1 ? "" : "s"} `
           + `refused — ${h.returned_units} unit(s) back on the van and back `

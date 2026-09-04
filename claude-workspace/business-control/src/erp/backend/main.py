@@ -3797,6 +3797,19 @@ def route_json(con, rid: int) -> dict:
         (rid,)).fetchall()
     d = dict(r)
     d["stops"] = [dict(s) for s in stops]
+    # What closed each stop. A stop marked delivered by a checkbox and one
+    # closed by a signed visit read the same in the database and are not
+    # the same fact, so the screen can tell them apart.
+    for st in d["stops"]:
+        v = con.execute(
+            "SELECT v.id, v.state, v.signature, v.contact_name,"
+            " v.finished_at, v.user_id, COALESCE(u.name,'') AS who,"
+            " (SELECT COUNT(*) FROM visit_media m WHERE m.visit_id=v.id)"
+            "  AS photos FROM visits v LEFT JOIN users u ON u.id=v.user_id"
+            " WHERE v.route_id=? AND v.route_seq=? ORDER BY v.id DESC"
+            " LIMIT 1", (rid, st["seq"])).fetchone()
+        st["visit"] = dict(v) if v else None
+        st["proved"] = bool(v and v["signature"])
     d["total_min"] = logistics.add_times(
         d["stops"], CFG.get("route_avg_kmh", 55),
         CFG.get("stop_service_min", 20))
@@ -3832,6 +3845,10 @@ def mark_stop(rid: int, body: StopBody, user=Depends(current_user),
         (rid, body.seq)).fetchone()
     if stop is None:
         raise HTTPException(404, "no such stop")
+    # The manual mark stays: a driver without a phone still has to be able
+    # to close a stop, and a system that only accepts proof is a system
+    # that gets worked around with a paper list. What it cannot do is
+    # look like the proved kind — route_json says which is which.
     con.execute("UPDATE route_stops SET delivered=? WHERE route_id=? AND seq=?",
                 (1 if body.delivered else 0, rid, body.seq))
     # Coverage trucks restock to par: delivering a stop tops the store up.
@@ -4583,6 +4600,63 @@ class VisitBody(BaseModel):
     steps: list | None = None
 
 
+class StopTakeBody(BaseModel):
+    user_id: int = 0
+    template_id: int = 0
+
+
+@app.post("/api/field/route/{rid}/stop/{seq}/take")
+def field_take_stop(rid: int, seq: int, body: StopTakeBody,
+                    user=Depends(current_user), con=Depends(get_con)):
+    """Turn one stop on a route into a visit somebody is on.
+
+    A stop is a store, and what is delivered there is whichever orders
+    are outstanding for it — often several on one pallet. Built from the
+    stop rather than from a single order, which is the difference between
+    a driver with one docket and a driver with the day's work for that
+    door.
+    """
+    from . import fieldwork
+    stop = con.execute(
+        "SELECT rs.*, s.name AS store, r.route_date, r.name AS route"
+        " FROM route_stops rs JOIN stores s ON s.id=rs.store_id"
+        " JOIN routes r ON r.id=rs.route_id"
+        " WHERE rs.route_id=? AND rs.seq=?", (rid, seq)).fetchone()
+    if stop is None:
+        raise HTTPException(404, "no such stop")
+    live = con.execute(
+        "SELECT id FROM visits WHERE route_id=? AND route_seq=? AND state IN"
+        " ('planned','started')", (rid, seq)).fetchone()
+    if live:
+        raise HTTPException(
+            409, f"somebody is already on that stop (visit {live['id']})")
+    when = 0.0
+    if stop["route_date"]:
+        try:
+            when = time.mktime(time.strptime(stop["route_date"][:10],
+                                             "%Y-%m-%d"))
+        except ValueError:
+            when = 0.0
+    vid = fieldwork.open_visit(
+        con, body.template_id, body.user_id or user["id"],
+        kind="delivery", route_id=rid, route_seq=seq,
+        store_id=stop["store_id"], planned_for=when,
+        title=f"{stop['store']} — stop {seq}",
+        steps=[])
+    for ln in fieldwork.stop_lines(con, stop["store_id"]):
+        con.execute(
+            "INSERT INTO visit_steps(visit_id,seq,label,wants_photo,"
+            " product_id,expected_qty,ordered_qty) VALUES(?,?,?,1,?,?,?)",
+            (vid, 2000 + ln["product_id"],
+             f"{ln['name']} — {ln['qty']:g} to hand over"
+             + (f" (order {ln['orders']})" if ln["orders"] else ""),
+             ln["product_id"], ln["qty"], ln["qty"]))
+    con.commit()
+    return {"ok": True, "id": vid, "lines": len(
+        con.execute("SELECT 1 FROM visit_steps WHERE visit_id=?",
+                    (vid,)).fetchall())}
+
+
 @app.get("/api/field/outbound")
 def field_outbound(user=Depends(current_user), con=Depends(get_con)):
     """What is going out, and who is taking it."""
@@ -4892,6 +4966,9 @@ def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
     # Going out settles against the order it was carrying, and the
     # signature is the point of it — a delivery dispute is never about
     # our count, it is about whether they got it.
+    stopped = None
+    if state == "done" and r["route_id"] and r["state"] != "done":
+        stopped = fieldwork.close_stop(con, vid)
     handed = None
     if state == "done" and r["order_id"] and r["state"] != "done":
         tpl2 = con.execute("SELECT needs_signature FROM visit_templates"
@@ -4918,6 +4995,8 @@ def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
         out["received"] = booked
     if handed is not None:
         out["handed"] = handed
+    if stopped is not None:
+        out["stop"] = stopped
     return out
 
 

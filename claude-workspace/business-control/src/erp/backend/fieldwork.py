@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS visits (
   order_id INTEGER DEFAULT 0,              -- the delivery this proves
   po_id INTEGER DEFAULT 0,                 -- the purchase order received
   route_id INTEGER DEFAULT 0,
+  route_seq INTEGER DEFAULT -1,            -- which stop on it
   state TEXT NOT NULL DEFAULT 'planned',
   planned_for REAL DEFAULT 0,
   started_at REAL DEFAULT 0,
@@ -116,6 +117,10 @@ CREATE INDEX IF NOT EXISTS visit_media_v ON visit_media(visit_id);
 
 def init_tables(con):
     con.executescript(TABLES)
+    vcols = {r["name"] for r in con.execute("PRAGMA table_info(visits)")}
+    if "route_seq" not in vcols:
+        con.execute("ALTER TABLE visits ADD COLUMN route_seq INTEGER"
+                    " DEFAULT -1")
     cols = {r["name"] for r in con.execute("PRAGMA table_info(visit_steps)")}
     for name, decl in (("line_id", "INTEGER DEFAULT 0"),
                        ("expected_qty", "REAL"),
@@ -175,12 +180,12 @@ def open_visit(con, template_id: int, user_id: int, **kw) -> int:
     kind = kw.get("kind") or (tpl["kind"] if tpl else "visit")
     cur = con.execute(
         "INSERT INTO visits(template_id,kind,title,user_id,store_id,"
-        " supplier_id,order_id,po_id,route_id,state,planned_for,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,'planned',?,?)",
+        " supplier_id,order_id,po_id,route_id,route_seq,state,planned_for,"
+        " created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'planned',?,?)",
         (template_id, kind, (kw.get("title") or (tpl["name"] if tpl else ""))
          [:120], user_id, kw.get("store_id", 0), kw.get("supplier_id", 0),
          kw.get("order_id", 0), kw.get("po_id", 0), kw.get("route_id", 0),
-         kw.get("planned_for", 0), db.now()))
+         kw.get("route_seq", -1), kw.get("planned_for", 0), db.now()))
     vid = cur.lastrowid
     steps = kw.get("steps")
     if steps is None and tpl:
@@ -424,6 +429,57 @@ def _promised(con, po_id: int) -> dict:
         return {}
     return {str(k): float(v) for k, v in said.items()
             if str(v).strip() != ""}
+
+
+def stop_lines(con, store_id: int) -> list:
+    """Everything owed to one shop, as lines to hand over.
+
+    A stop is a store, and what is being delivered there is whichever
+    orders are outstanding for it — often more than one, arriving on the
+    same pallet. Building the list from the stop rather than from a
+    single order is the difference between a driver with one docket and a
+    driver with the day's work for that door.
+    """
+    out = []
+    for it in con.execute(
+            "SELECT oi.product_id, SUM(oi.qty) AS qty,"
+            " COALESCE(p.name,'item') AS name,"
+            " GROUP_CONCAT(DISTINCT o.id) AS orders"
+            " FROM order_items oi JOIN orders o ON o.id=oi.order_id"
+            " LEFT JOIN products p ON p.id=oi.product_id"
+            " WHERE o.store_id=? AND o.status IN"
+            "  ('paid','confirmed','shipped','part_delivered')"
+            " GROUP BY oi.product_id", (store_id,)):
+        out.append({"product_id": it["product_id"], "qty": float(it["qty"]),
+                    "name": it["name"], "orders": it["orders"]})
+    return out
+
+
+def close_stop(con, visit_id: int) -> dict:
+    """A finished visit closes the stop it was for.
+
+    Until now a stop was marked delivered by a checkbox, which is a claim.
+    A stop closed by a visit carries the name of whoever took it, the
+    photographs, and the coordinates the phone gave — the same delivery,
+    with the difference between saying so and showing it.
+    """
+    v = con.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
+    if v is None or not v["route_id"] or v["route_seq"] is None \
+            or v["route_seq"] < 0:
+        return {"stop": None}
+    con.execute(
+        "UPDATE route_stops SET delivered=1 WHERE route_id=? AND seq=?",
+        (v["route_id"], v["route_seq"]))
+    # A route whose every stop is closed is a route that is over.
+    left = con.execute(
+        "SELECT COUNT(*) AS n FROM route_stops WHERE route_id=?"
+        " AND delivered=0", (v["route_id"],)).fetchone()["n"]
+    if not left:
+        con.execute("UPDATE routes SET status='done' WHERE id=?",
+                    (v["route_id"],))
+    con.commit()
+    return {"stop": v["route_seq"], "route": v["route_id"],
+            "stops_left": left, "route_done": not left}
 
 
 def outbound(con, days: int = 14, when: float = 0) -> dict:

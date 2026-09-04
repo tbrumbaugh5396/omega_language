@@ -3843,6 +3843,68 @@ ok(_icon.execute("SELECT status FROM orders WHERE id=?",
    "it so is how a credit note goes unwritten")
 _icon.close()
 
+# A stop on a route is a store, and until now it was closed by a
+# checkbox — which is a claim.
+_rt = c.get("/api/routes", headers=A).json()
+_route = next((r for r in _rt if len(r["stops"]) >= 2), None)
+if _route:
+    _sseq = _route["stops"][1]["seq"]
+    _sstore = _route["stops"][1]["store_id"]
+    _scon = _mdb.connect()
+    _so = _scon.execute(
+        "INSERT INTO orders(user_id,kind,status,region,store_id,"
+        " fulfilled_store_id,subtotal_cents,total_cents,created_at)"
+        " VALUES(1,'distributor','shipped','Northeast',?,?,5000,5000,?)",
+        (_sstore, _sstore, _t0.time())).lastrowid
+    _scon.execute("INSERT INTO order_items(order_id,product_id,qty,"
+                  " unit_price_cents) VALUES(?,?,6,800)", (_so, _dpid))
+    _scon.commit()
+    _scon.close()
+    _st = c.post(f"/api/field/route/{_route['id']}/stop/{_sseq}/take",
+                 headers=A, json={}).json()
+    ok(_st["lines"] >= 1,
+       "taking a stop builds the list from the orders outstanding for that "
+       "STORE — often several on one pallet, which is the difference "
+       "between a driver with one docket and a driver with the day's work "
+       "for that door")
+    ok(c.post(f"/api/field/route/{_route['id']}/stop/{_sseq}/take",
+              headers=A, json={}).status_code == 409,
+       "and two people are not sent to one door")
+    _sv = c.get(f"/api/field/visits/{_st['id']}", headers=A).json()
+    ok(_sv["route_id"] == _route["id"] and _sv["route_seq"] == _sseq,
+       "the visit knows which stop it is")
+    c.post(f"/api/field/visits/{_st['id']}/start", headers=A, json={})
+    for _step in _sv["steps"]:
+        c.post(f"/api/field/steps/{_step['id']}", headers=A,
+               json={"state": "done", "qty": _step["ordered_qty"]})
+    _sfin = c.post(f"/api/field/visits/{_st['id']}/finish", headers=A,
+                   json={"signature": "P. Nowak",
+                         "contact_name": "Piotr Nowak"}).json()
+    ok(_sfin["stop"]["stop"] == _sseq,
+       "finishing it closes the stop")
+    _rt2 = [r for r in c.get("/api/routes", headers=A).json()
+            if r["id"] == _route["id"]][0]
+    _row = [x for x in _rt2["stops"] if x["seq"] == _sseq][0]
+    ok(_row["delivered"] == 1 and _row["proved"],
+       "which is delivered AND proved — the same word in the database as a "
+       "ticked checkbox, and not the same fact")
+    ok(_row["visit"]["who"] and _row["visit"]["contact_name"],
+       "carrying who took it and who signed for it")
+    _unproved = [x for x in _rt2["stops"] if x["seq"] != _sseq]
+    ok(all(not x["proved"] for x in _unproved),
+       "and a stop nobody has been to is not dressed up as one that "
+       "somebody has")
+    c.post(f"/api/routes/{_route['id']}/stop", headers=A,
+           json={"seq": _unproved[0]["seq"], "delivered": True})
+    _rt3 = [r for r in c.get("/api/routes", headers=A).json()
+            if r["id"] == _route["id"]][0]
+    _hand = [x for x in _rt3["stops"] if x["seq"] == _unproved[0]["seq"]][0]
+    ok(_hand["delivered"] == 1 and not _hand["proved"],
+       "the checkbox still works — a driver without a phone has to be able "
+       "to close a stop, and a system that only accepts proof is one that "
+       "gets worked around with a paper list — but it does not look like "
+       "the proved kind")
+
 # A truck that answers to no order. Replacement pallets, samples, a case
 # coming back — these arrive, and refusing to book them until somebody
 # raises a retrospective purchase order means they get booked as an
