@@ -1169,6 +1169,40 @@ ok(_yr in c.get("/blog").text,
    "and the index dates its cards, so the newest-first order it is "
    "already sorted in can actually be seen")
 
+# --- what the screens were measuring and not saying ----------------------
+# A geofence exists so somebody can check. The check was written on every
+# shift, returned by /api/shifts, and rendered on no screen at all — while
+# the screen that shows shifts asked an endpoint that never selected it.
+# Proof nobody can look at is the same as no proof.
+_kk = c.post("/api/admin/kiosks", headers=A,
+             json={"label": "Front door", "store_id": 1, "active": True})
+_kid = _kk.json().get("kiosk_id", "") if _kk.status_code == 200 else ""
+# In and straight out again: the punch is what this needs, and leaving
+# somebody on the clock changes what every later test sees.
+c.post("/api/clock/me", headers=A, json={"kiosk": _kid})
+c.post("/api/clock/me", headers=A, json={"kiosk": _kid})
+_hrs = c.get("/api/hours/everyone", headers=A).json()
+_allsh = [sh for r in _hrs["rows"] for sh in r["shifts"]]
+ok(all("where" in sh for sh in _allsh),
+   "every shift the hours screen shows says where the punch happened, or "
+   "says it was not checked")
+ok(any(sh["where"] for sh in _allsh),
+   "and a punch made at a registered kiosk names the tablet: 'kiosk: "
+   "Front door' is a thing a manager can go and stand next to")
+_ojs = ops_app_js()
+ok("sh.where" in _ojs and "not checked" in _ojs,
+   "a punch with no location says so rather than leaving a blank cell — "
+   "an empty column reads as 'fine' when it means 'we never asked'")
+ok("paid_hours" in _ojs,
+   "and the row shows what the week actually costs, rather than leaving "
+   "the reader to add regular, overtime and leave themselves")
+ok("last_order_at" in _ojs,
+   "a customer row says when they last bought: the number that decides "
+   "whether they are a customer or someone who used to be")
+ok("temp_c" in _ojs and "humidity_pct" in _ojs and "cloud_pct" in _ojs,
+   "and the weather fetched for every trading day reaches the day it "
+   "belongs to — it was being stored, returned, and shown nowhere")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

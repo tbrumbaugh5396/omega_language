@@ -33,7 +33,8 @@ async function renderCustomers(q) {
             .map(esc).join(" · ") || "no contact on file"}${
             r.active ? "" : " · deactivated"}</span></div>
         <span class="dim">${r.orders} order${r.orders === 1 ? "" : "s"}
-          · ${money(r.spent_cents)}</span>
+          · ${money(r.spent_cents)}${r.last_order_at
+            ? ` · last ${fmtAgo(r.last_order_at)}` : ""}</span>
         <button class="btn alt sm" data-editcust="${r.id}">Edit</button>
         <button class="btn alt sm" data-cust="${r.id}">Open</button>
       </div></div>`).join("")

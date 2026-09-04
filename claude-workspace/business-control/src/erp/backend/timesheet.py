@@ -178,12 +178,38 @@ def _require_office(user) -> None:
                                  "read")
 
 
+def _where_said(sh: dict) -> str:
+    """Where somebody clocked in, in a phrase a manager can act on.
+
+    A tablet by a door is the strongest answer and needs no coordinates.
+    A location with a fix is next. Bare coordinates are last, and no
+    answer at all says so — a blank cell reads as "fine" when what it
+    means is "we did not ask".
+    """
+    if sh.get("in_kiosk"):
+        return f"kiosk: {sh.get('kiosk_label') or sh['in_kiosk']}"
+    if sh.get("in_store"):
+        acc = sh.get("in_accuracy_m") or 0
+        return sh["in_store"] + (f" (±{int(acc)}m)" if acc else "")
+    if sh.get("in_lat") is not None and sh.get("in_lng") is not None:
+        return f"{float(sh['in_lat']):.4f}, {float(sh['in_lng']):.4f}"
+    return ""
+
+
 def hours_for(con, uid: int, a: float, b: float) -> dict:
     """One person, one period: worked, overtime, leave, and the shifts
     themselves so a manager can see what the number is made of."""
+    # Where the punch happened comes back with it. A geofence exists so
+    # somebody can check, and until now the check was recorded on the
+    # shift, returned by a different endpoint, and rendered on no screen
+    # at all — proof nobody could look at, which is the same as none.
     shifts = [dict(r) for r in con.execute(
-        "SELECT s.id, s.clock_in, s.clock_out, s.event_id, p.name AS event"
+        "SELECT s.id, s.clock_in, s.clock_out, s.event_id, p.name AS event,"
+        " s.in_kiosk, s.in_lat, s.in_lng, s.in_accuracy_m, s.in_store_id,"
+        " st.name AS in_store, k.label AS kiosk_label"
         " FROM shifts s LEFT JOIN promos p ON p.id=s.event_id"
+        " LEFT JOIN stores st ON st.id=s.in_store_id"
+        " LEFT JOIN kiosks k ON k.kiosk_id=s.in_kiosk"
         " WHERE s.user_id=? AND s.clock_in>=? AND s.clock_in<?"
         " ORDER BY s.clock_in", (uid, a, b))]
     by_week: dict = {}
@@ -193,6 +219,7 @@ def hours_for(con, uid: int, a: float, b: float) -> dict:
         sh["hours"] = round(max(0.0, (out - sh["clock_in"]) / 3600), 2) \
             if out else 0.0
         sh["open"] = not out
+        sh["where"] = _where_said(sh)
         worked += sh["hours"]
         wk = _week_start(sh["clock_in"])
         by_week[wk] = by_week.get(wk, 0.0) + sh["hours"]

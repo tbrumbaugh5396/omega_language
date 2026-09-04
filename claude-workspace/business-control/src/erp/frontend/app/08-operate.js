@@ -885,8 +885,27 @@ function daysSection(d) {
           style="height:${Math.max(2, Math.round(
             100 * x.revenue_cents / top))}%"
           title="${x.day} · ${WD[x.weekday]} · ${money(x.revenue_cents)} · ${
-            x.orders} order(s)${x.holiday ? " · " + esc(x.holiday) : ""}">
+            x.orders} order(s)${x.holiday ? " · " + esc(x.holiday) : ""}${
+            x.new_customers ? ` · ${x.new_customers} new` : ""}${
+            x.labour_minutes ? ` · ${Math.round(x.labour_minutes / 60)}h on`
+              : ""}${x.temp_c !== null && x.temp_c !== undefined
+              ? ` · ${Math.round(x.temp_c)}\u00b0C` : ""}${
+            x.cloud_pct !== null && x.cloud_pct !== undefined
+              ? `, ${x.cloud_pct}% cloud` : ""}${
+            x.humidity_pct !== null && x.humidity_pct !== undefined
+              ? `, ${x.humidity_pct}% humid` : ""}${
+            x.precip_mm ? `, ${x.precip_mm}mm rain` : ""}">
         </span>`).join("")}</div>
+      ${(() => {
+        // best_weekday is an index into weekdays, not a row: reading it
+        // as an object printed "undefined" where a day name belongs.
+        const bw = (d.weekdays || []).find(
+          (w) => w.weekday === d.best_weekday);
+        return bw ? `<p class="dim">Best day of the week:
+          <b>${esc(WD[bw.weekday])}</b> at ${money(bw.avg_cents)} on an
+          average one, across ${bw.days} of them — which is a rota
+          question, not trivia.</p>` : "";
+      })()}
       <p class="dim">${d.days.length} days · ${d.trading_days} trading${
         d.closed_days ? ` · ${d.closed_days} shut` : ""} ·
         ${money(d.avg_cents)} on an average trading day${

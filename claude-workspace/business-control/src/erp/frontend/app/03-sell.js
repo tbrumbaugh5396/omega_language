@@ -1050,6 +1050,8 @@ async function renderHours() {
           <span class="dim">${esc(r.role)}${r.job ? " · " + esc(r.job) : ""}
             · ${esc(r.employment || "employee")}</span></div>
         <span class="dim">${r.regular_hours}h regular</span>
+        <span class="pill" title="regular, overtime and leave together —
+          what the week costs">${r.paid_hours}h paid</span>
         ${r.overtime_hours ? `<span class="pill warn">${r.overtime_hours}h
           overtime</span>` : ""}
         ${r.leave_hours ? `<span class="pill">${r.leave_hours}h leave</span>`
@@ -1063,17 +1065,21 @@ async function renderHours() {
       </div>
       <div class="tablewrap"><table>
         <thead><tr><th>day</th><th>in</th><th>out</th><th>hours</th>
-          <th>for</th><th></th></tr></thead>
+          <th>where</th><th>for</th><th></th></tr></thead>
         <tbody>${r.shifts.map((sh) => `<tr${sh.open ? ' class="au-fail"' : ""}>
           <td>${day(sh.clock_in)}</td><td>${clock(sh.clock_in)}</td>
           <td>${sh.open ? '<span class="pill warn">still open</span>'
             : clock(sh.clock_out)}</td>
           <td>${sh.hours || "—"}</td>
+          <td class="dim">${sh.where ? esc(sh.where)
+            : `<span class="hint" title="no location came with this punch:
+               either the account is not bound to a place, or the browser
+               was not asked">not checked</span>`}</td>
           <td class="dim">${esc(sh.event || "")}</td>
           <td>${r.approved ? "" : `<button class="btn alt sm"
             data-hrfix="${sh.id}:${sh.clock_in}:${sh.clock_out || 0}"
             >Fix</button>`}</td>
-        </tr>`).join("") || '<tr><td colspan="6" class="dim">no shifts</td>'
+        </tr>`).join("") || '<tr><td colspan="7" class="dim">no shifts</td>'
           + "</tr>"}</tbody></table></div>
     </div>`;
   view().innerHTML = `
