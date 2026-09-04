@@ -691,9 +691,14 @@ _up = c.post("/api/entitlements/raise", headers=_ah,
 ok(_up["ok"] and _up["to"] == 3 and _up["monthly_cents"] == 3800,
    "so within a ceiling they raise it themselves, at the price already on "
    "the screen — two beyond the included one is $38")
-ok("next invoice" in _up["note"],
-   "and it says when the money happens: today it is a permission, not a "
-   "charge")
+ok("in effect now" in _up["note"].lower()
+   and "invoice match" in _up["note"],
+   "and it says what happened to the money, which here is nothing yet: "
+   "this install has no card on file, so the note names a person who will "
+   "make the invoice agree rather than implying the bill moved itself")
+ok(not _up["billing"].startswith("the subscription"),
+   "the billing line is the processor's own answer, not our hope for it — "
+   "the screen can only be honest about the bill if it is told the truth")
 _r1 = c.post("/api/pos/session", headers=_ah,
              json={"register": "self-a", "float_cents": 0})
 ok(_r1.status_code == 200, "the till they were refused opens immediately")
@@ -723,6 +728,65 @@ ok(c.post("/api/entitlements/raise", headers=_ah,
 ok(c.post("/api/entitlements/raise", headers=_ah,
           json={"kind": "unicorns", "to": 3}).status_code == 400,
    "and nothing is counted in units this software does not have")
+
+# --- and the bill has to move with it, or the number is a fiction -------
+# A limit raised on our side and not on theirs is a till we gave away. A
+# bill raised and the limit not applied is a client paying for a till they
+# cannot open. Both are silent, so the raise does the money FIRST and only
+# writes the limit once the money took.
+from erp.backend import payments as _pay2, main as _mn2  # noqa: E402
+
+ok(not _pay2.set_addon_quantity({}, "sub_x", "registers", 2, 1900)["ok"],
+   "with no processor configured, asking to change a bill says plainly "
+   "that it did not — a billing call that quietly returns success is how "
+   "a month of add-ons goes uncharged")
+ok(_pay2.set_addon_quantity({"stripe_secret_key": "sk_t"}, "", "registers",
+                            2, 1900)["reason"] == "this plan is not billed "
+   "by card",
+   "and an invoiced client is told which kind of client they are rather "
+   "than handed a failure")
+ok(_pay2.set_addon_quantity({"stripe_secret_key": "sk_t"}, "sub_x",
+                            "registers", 2, 0)["ok"],
+   "something the plan gives away free needs no line on the card at all")
+ok(_pay2.addon_quantities({}, "sub_x") == {},
+   "and what the card bills is unknowable without a processor — an empty "
+   "answer here means 'could not ask', which the reader is warned about "
+   "rather than left to assume means zero")
+
+_was = _mn2._bill_addon
+_mn2._bill_addon = lambda *a2, **k2: {
+    "ok": False, "charged": False, "blocking": True,
+    "reason": "Stripe refused: card_declined"}
+c.post("/api/store/admin/fleet/tenants/alpha/limits", headers=AA,
+       json={"registers": 1})
+_stuck = c.post("/api/entitlements/raise", headers=_ah,
+                json={"kind": "registers", "to": 3})
+ok(_stuck.status_code == 502 and "card processor" in _stuck.json()["detail"],
+   "when the processor will not take the change, the raise fails in front "
+   "of the person asking for it, at the moment they asked")
+ok(_tn.limits_of("alpha")["registers"] == 1,
+   "and the limit did not move — a bill and a limit that disagree is the "
+   "one outcome worth failing to avoid")
+_g1 = c.post("/api/pos/session", headers=_ah,
+             json={"register": "ghost", "float_cents": 0})
+ok(_g1.status_code == 200 and c.post(
+       "/api/pos/session", headers=_ah,
+       json={"register": "ghost-2", "float_cents": 0}).status_code == 409,
+   "so the one till they are billed for still opens and the one they are "
+   "not is still shut — the failed raise left them exactly where they "
+   "were, which is the only safe place for it to leave them")
+c.post("/api/pos/session/close", headers=_ah,
+       json={"session_id": _g1.json()["id"], "counted_cents": 0})
+_giveback = c.post("/api/entitlements/raise", headers=_ah,
+                   json={"kind": "registers", "to": 0})
+ok(_giveback.status_code == 200 and not _giveback.json()["billed"],
+   "but giving one back goes through anyway: holding somebody's own money "
+   "hostage to our processor's uptime is not prudence, it is a hostage")
+ok("not" in (_giveback.json().get("billing") or "").lower()
+   or _giveback.json().get("billing"),
+   "and it says out loud that the credit has not reached the card yet, so "
+   "somebody chases it rather than assuming")
+_mn2._bill_addon = _was
 
 _tn.set_limits("alpha", {})
 ok(_tn.limits_of("alpha") == {},

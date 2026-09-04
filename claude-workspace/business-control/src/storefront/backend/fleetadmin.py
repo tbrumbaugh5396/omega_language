@@ -914,6 +914,29 @@ def _allowance_report(tid: str) -> dict:
     key = {"locations": "locations", "seats": "staff_seats",
            "registers": "registers", "kiosks": "clock_kiosks"}
     granted = tenancy.limits_of(tid)
+    # What the card processor is ACTUALLY billing, against what we think
+    # it should be. They agree until a raise half-lands — and a
+    # disagreement nobody can see is money quietly going the wrong way in
+    # one direction or the other.
+    billed = {}
+    try:
+        from erp.backend import db as _db, payments
+        from erp.backend.main import CFG as _CFG
+        prov = tenancy.provider()
+        if prov and payments.enabled(_CFG):
+            with tenancy.run_as(prov):
+                pcon = _db.connect()
+                try:
+                    r = pcon.execute(
+                        "SELECT payment_ref FROM store_subscriptions"
+                        " WHERE tenant_id=? AND status='active'"
+                        " ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+                finally:
+                    pcon.close()
+                if r and r["payment_ref"]:
+                    billed = payments.addon_quantities(_CFG, r["payment_ref"])
+    except Exception:                                        # noqa: BLE001
+        billed = {}
     lines, monthly = [], 0
     for k, bk in key.items():
         a2 = book.get(bk, {})
@@ -921,10 +944,18 @@ def _allowance_report(tid: str) -> dict:
         beyond = max(0, (n or 0) - a2.get("included", 0)) if n else 0
         cents = beyond * a2.get("each_cents", 0)
         monthly += cents
+        on_bill = billed.get(k)
         lines.append({"kind": k, "granted": n, "default": a2.get("included"),
                       "each_cents": a2.get("each_cents", 0),
-                      "beyond": beyond, "cents": cents})
-    return {"lines": lines, "monthly_cents": monthly, "granted": granted}
+                      "beyond": beyond, "cents": cents,
+                      "billed": on_bill,
+                      "disagrees": on_bill is not None and on_bill != beyond})
+    return {"lines": lines, "monthly_cents": monthly, "granted": granted,
+            "checked_bill": bool(billed),
+            "disagreements": [l["kind"] for l in lines if l["disagrees"]],
+            "note": "What the processor bills is read from the processor, "
+                    "not from our own last write — the question is what it "
+                    "will actually charge on billing day."}
 
 
 def _node_report(tid: str, reg: dict) -> dict:

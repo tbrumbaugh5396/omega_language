@@ -5686,22 +5686,77 @@ def entitlements_raise(body: RaiseBody, user=Depends(admin_user),
                         "so it has gone to your account manager rather than "
                         f"being refused. Anything up to {ceiling} takes "
                         "effect immediately."}
+    beyond = max(0, want - each.get("included", 0))
+    monthly = beyond * each.get("each_cents", 0)
+
+    # The bill first, then the permission — in that order, and only in that
+    # order. A limit that rises without the subscription following it is
+    # revenue quietly given away; the reverse is a client billed for a
+    # till they were never allowed to open, which is worse. So the charge
+    # is attempted first and the entitlement only follows if it took.
+    #
+    # Lowering is the exception: it goes through whatever the processor
+    # says, because refusing to let somebody give a till back until
+    # Stripe answers is holding their own money hostage to our uptime.
+    bill = _bill_addon(tid, kind, beyond, each.get("each_cents", 0))
+    if want > now and not bill["ok"] and bill.get("blocking"):
+        raise HTTPException(
+            502, f"the card processor did not take the change — {bill['reason']}"
+                 ". Nothing was altered, so your bill and your limits still "
+                 "agree. Try again, or ask us to do it.")
+
     lim = dict(tenancy.limits_of(tid))
     lim[kind] = want
     tenancy.set_limits(tid, lim)
-    beyond = max(0, want - each.get("included", 0))
-    monthly = beyond * each.get("each_cents", 0)
     fleet.log("limit raised" if want > now else "limit lowered",
               f"{tid}: {kind} {now} \u2192 {want} "
-              f"(${monthly / 100:.0f}/mo)", user["name"])
+              f"(${monthly / 100:.0f}/mo) \u00b7 {bill['reason']}",
+              user["name"])
     audit.record(con, user, "POST", "/api/entitlements/raise",
-                 f"{kind} {now} to {want}", 200)
+                 f"{kind} {now} to {want} — {bill['reason']}", 200)
     return {"ok": True, "kind": kind, "from": now, "to": want,
             "monthly_cents": monthly,
             "each_cents": each.get("each_cents", 0),
-            "note": "In effect now. It joins the next invoice — nothing is "
-                    "charged today, and dropping it back before then costs "
-                    "nothing."}
+            "billed": bill["ok"], "billing": bill["reason"],
+            "note": ("On your bill from now, prorated for the rest of this "
+                     "month." if bill["ok"] and bill.get("charged") else
+                     "In effect now. " + bill["reason"].capitalize()
+                     + ", so somebody here will make the invoice match.")}
+
+
+def _bill_addon(tid: str, kind: str, qty: int, unit_cents: int) -> dict:
+    """Tell the card processor what this install should now be billed.
+
+    Runs as the PROVIDER, because the subscription is a row in the
+    provider's own store — the tenant's install has no business holding
+    the key that moves its own bill.
+
+    `blocking` marks the failures worth stopping for. A processor that
+    refused is one; an install with no card subscription behind it is
+    not — invoice-mode clients are billed by a person who reads the same
+    fleet history this writes to.
+    """
+    prov = tenancy.provider()
+    if not prov:
+        return {"ok": True, "charged": False, "blocking": False,
+                "reason": "no provider install to bill through"}
+    with tenancy.run_as(prov):
+        pcon = db.connect()
+        try:
+            row = pcon.execute(
+                "SELECT payment_ref FROM store_subscriptions"
+                " WHERE tenant_id=? AND status='active'"
+                " ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+        finally:
+            pcon.close()
+        sub = row["payment_ref"] if row else ""
+        if not sub:
+            return {"ok": True, "charged": False, "blocking": False,
+                    "reason": "this install is not billed by card"}
+        out = payments.set_addon_quantity(CFG, sub, kind, qty, unit_cents)
+    return {"ok": bool(out.get("ok")), "charged": bool(out.get("ok")) and
+            qty > 0 and unit_cents > 0, "blocking": not out.get("ok"),
+            "reason": out.get("reason", "")}
 
 
 @app.get("/api/entitlements")

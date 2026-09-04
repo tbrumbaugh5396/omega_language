@@ -439,9 +439,16 @@ async function limitsForm(tid) {
           ? `, ${money(l.each_cents)} each beyond` : ""}</span></label>
       <input id="lim-${k}" type="number" min="0" placeholder="plan default"
         value="${l.granted === null || l.granted === undefined
-          ? "" : l.granted}"></div>`;
+          ? "" : l.granted}">
+      ${l.disagrees ? `<span class="warn-note">the card is being billed
+        for ${l.billed} beyond the plan, not ${l.beyond}</span>` : ""}</div>`;
   };
   modal(`<h3>What ${esc(tid)} bought</h3>
+    ${(now.disagreements || []).length ? `<p class="warn-note">The card
+      processor is charging a different number to the one recorded here.
+      One of the two is wrong, and neither corrects itself — saving this
+      form sets the limit but does not move the bill, so put the bill
+      right at the processor once you know which number is true.</p>` : ""}
     <p class="dim">Left blank means whatever the plan includes. A number
       here is enforced on their install — the till past the line is
       refused at the door with the price in the message, rather than

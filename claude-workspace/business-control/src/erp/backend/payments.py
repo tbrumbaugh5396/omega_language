@@ -213,3 +213,133 @@ def subscription_status(cfg: dict, sub_id: str) -> str:
     if r.status_code != 200:
         return ""
     return r.json().get("status") or ""
+
+
+# ---------- metered add-ons: tills, kiosks, locations, seats ----------
+#
+# Stripe prices are immutable, so "five registers instead of three" is not
+# a price change — it is a QUANTITY change on a subscription item whose
+# price is "$19 per register per month". That is what Stripe's quantity
+# model is for, and it means a raise is one call with one number in it
+# rather than minting a new price object every time somebody opens a lane.
+#
+# Every function here returns a plain result rather than raising, and says
+# whether it actually reached Stripe. A caller that cannot tell the
+# difference between "done" and "not configured" will report both as done.
+
+ADDON_LABEL = {"registers": "Register", "kiosks": "Clock kiosk",
+               "locations": "Location", "seats": "Staff seat"}
+
+
+def _find_price(cfg: dict, kind: str, unit_cents: int) -> str | None:
+    """The per-unit recurring price for this add-on, made once and reused.
+
+    Looked up by a lookup_key rather than remembered in our database: the
+    price lives in Stripe's account, and a local copy of somebody else's
+    id is a thing that goes stale silently.
+    """
+    key = f"bc_{kind}_{unit_cents}"
+    try:
+        r = httpx.get(f"{API}/prices", params={"lookup_keys[]": key,
+                                               "active": "true", "limit": 1},
+                      auth=(cfg["stripe_secret_key"], ""), timeout=15)
+        if r.status_code == 200 and r.json().get("data"):
+            return r.json()["data"][0]["id"]
+    except Exception:                                        # noqa: BLE001
+        return None
+    try:
+        r = httpx.post(
+            f"{API}/prices",
+            data={"currency": cfg.get("currency", "usd"),
+                  "unit_amount": unit_cents,
+                  "recurring[interval]": "month",
+                  "lookup_key": key,
+                  "product_data[name]":
+                      f"{ADDON_LABEL.get(kind, kind)} (each)"},
+            auth=(cfg["stripe_secret_key"], ""), timeout=20)
+        if r.status_code == 200:
+            return r.json().get("id")
+    except Exception:                                        # noqa: BLE001
+        pass
+    return None
+
+
+def set_addon_quantity(cfg: dict, sub_id: str, kind: str, qty: int,
+                       unit_cents: int) -> dict:
+    """Make the subscription bill for `qty` of this add-on.
+
+    Returns {ok, reason, quantity, item}. `ok` is False whenever the bill
+    was NOT changed — including when Stripe is not configured — because
+    the caller has to be able to tell a client "this is now on your bill"
+    only when it is.
+
+    Proration is left to Stripe's default: the client is charged for the
+    part of the month they actually have it. Billing a whole month for a
+    till opened on the 28th is the kind of small unfairness that gets
+    argued about for longer than it is worth.
+    """
+    if not enabled(cfg):
+        return {"ok": False, "reason": "no card processor is configured"}
+    if not sub_id:
+        return {"ok": False, "reason": "this plan is not billed by card"}
+    unit_cents = int(unit_cents or 0)
+    if unit_cents <= 0:
+        return {"ok": True, "reason": "included at no charge", "quantity": qty}
+    price = _find_price(cfg, kind, unit_cents)
+    if not price:
+        return {"ok": False, "reason": "could not make the per-unit price"}
+    try:
+        r = httpx.get(f"{API}/subscriptions/{sub_id}",
+                      auth=(cfg["stripe_secret_key"], ""), timeout=15)
+        if r.status_code != 200:
+            return {"ok": False, "reason": f"Stripe: {r.text[:100]}"}
+        items = r.json().get("items", {}).get("data", [])
+    except Exception as e:                                   # noqa: BLE001
+        return {"ok": False, "reason": f"could not reach Stripe ({e})"[:120]}
+    mine = next((i for i in items
+                 if (i.get("price") or {}).get("id") == price), None)
+    try:
+        if mine and qty > 0:
+            r = httpx.post(f"{API}/subscription_items/{mine['id']}",
+                           data={"quantity": qty},
+                           auth=(cfg["stripe_secret_key"], ""), timeout=20)
+        elif mine:
+            # Down to none: remove the line rather than bill a quantity of
+            # zero, which shows on an invoice as a $0 row nobody can read.
+            r = httpx.delete(f"{API}/subscription_items/{mine['id']}",
+                             auth=(cfg["stripe_secret_key"], ""), timeout=20)
+        elif qty > 0:
+            r = httpx.post(f"{API}/subscription_items",
+                           data={"subscription": sub_id, "price": price,
+                                 "quantity": qty},
+                           auth=(cfg["stripe_secret_key"], ""), timeout=20)
+        else:
+            return {"ok": True, "reason": "nothing to bill", "quantity": 0}
+    except Exception as e:                                   # noqa: BLE001
+        return {"ok": False, "reason": f"could not reach Stripe ({e})"[:120]}
+    if r.status_code != 200:
+        return {"ok": False, "reason": f"Stripe refused: {r.text[:120]}"}
+    return {"ok": True, "quantity": qty, "price": price,
+            "item": (r.json() or {}).get("id", ""),
+            "reason": "the subscription now bills for it"}
+
+
+def addon_quantities(cfg: dict, sub_id: str) -> dict:
+    """What the subscription currently bills, per add-on. {} when it cannot
+    be asked — which is not the same as nothing, and callers must not
+    read it as nothing."""
+    if not enabled(cfg) or not sub_id:
+        return {}
+    try:
+        r = httpx.get(f"{API}/subscriptions/{sub_id}",
+                      auth=(cfg["stripe_secret_key"], ""), timeout=15)
+        if r.status_code != 200:
+            return {}
+        out = {}
+        for i in r.json().get("items", {}).get("data", []):
+            lk = ((i.get("price") or {}).get("lookup_key") or "")
+            if lk.startswith("bc_"):
+                out[lk.split("_")[1]] = i.get("quantity", 0)
+        return out
+    except Exception:                                        # noqa: BLE001
+        return {}

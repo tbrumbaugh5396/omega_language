@@ -1625,3 +1625,12 @@ body.lane-on { overflow: hidden; }
 .plan-use b { font-size: 17px; }
 .plan-each { font-size: 12px; }
 .dl-acts.planline-acts { grid-template-columns: 84px; }
+
+/* A number the card processor disagrees with. Loud on purpose: this is
+   money moving in a direction nobody chose, and a quiet note about it is
+   worse than none, because it reads as handled. */
+.warn-note {
+  display: block; margin: 6px 0; padding: 6px 9px; border-radius: 6px;
+  background: rgba(240, 100, 90, .11); border: 1px solid rgba(240, 100, 90, .4);
+  color: #f08a80; font-size: .85em; line-height: 1.4;
+}
