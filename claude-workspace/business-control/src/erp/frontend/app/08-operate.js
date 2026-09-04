@@ -182,8 +182,8 @@ async function renderRoutes() {
         </span>
         ${routeMap(r.stops)}
         <table><thead><tr><th>#</th><th>store</th><th>city</th><th>leg</th>
-          <th>drive</th><th>ETA</th><th>done</th><th>proof</th>
-          </tr></thead><tbody>
+          <th>drive</th><th>ETA</th><th>done</th><th>stock</th>
+          <th>proof</th></tr></thead><tbody>
         ${r.stops.map((s) => `<tr><td>${s.seq + 1}</td><td>${esc(s.name)}</td>
           <td class="dim">${esc(s.city)}</td><td>${s.leg_km} km</td>
           <td>${fmtMin(s.drive_min)}</td><td>+${fmtMin(s.eta_min)}</td>
@@ -191,7 +191,12 @@ async function renderRoutes() {
             ${s.delivered ? "checked" : ""}
             title="marking it here is somebody's word for it; taking the
               stop records who took it and what they photographed"></td>
-          <td>${s.visit
+          <td>${s.delivered && !s.visit
+            ? `<button class="btn alt sm" data-par="${s.store_id}"
+                 data-name="${esc(s.name)}" title="assume the shelf was
+                 filled to target — an assumption, not a count">Assume
+                 par</button>` : ""}
+          ${s.visit
             ? `<button class="btn alt sm" data-svisit="${s.visit.id}"
                  title="${s.proved
                    ? "signed by " + esc(s.visit.contact_name
@@ -226,6 +231,21 @@ async function renderRoutes() {
       const [rid, status] = b.dataset.rs.split(":");
       await api(`/api/routes/${rid}/status`, { body: { status } });
       render();
+    };
+  });
+  document.querySelectorAll("[data-par]").forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm(`Set every line at ${b.dataset.name} to its target?\n\n`
+        + "This is an assumption, not a count — it says the shelf is full "
+        + "because you say so, and it goes in the audit log with your "
+        + "name on it. Taking the stop as a visit records what was "
+        + "actually handed over instead.")) return;
+      try {
+        const r = await api("/api/admin/stores/par-fill",
+                            { body: { store_id: +b.dataset.par } });
+        toast(`${r.lines} line(s) assumed full — ${r.units} units`);
+        renderRoutes();
+      } catch (e) { toast(e.message); }
     };
   });
   document.querySelectorAll("[data-take-stop]").forEach((b) => {

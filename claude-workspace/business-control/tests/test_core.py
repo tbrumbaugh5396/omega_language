@@ -465,7 +465,28 @@ c.post(f"/api/routes/{route2['id']}/stop", headers=A,
 inv = c.get("/api/inventory", headers=A).json()
 row = next(i for i in inv if i["store_id"] == stores[2]["id"]
            and i["product_id"] == pid)
-ok(row["qty"] == 24, "route delivery restocks the store to par")
+ok(row["qty"] == 1,
+   "ticking a stop moves no stock. It used to top the store up to par, "
+   "which is not a measurement of anything — it says the truck filled the "
+   "shelf because somebody said the truck went there, and the store's "
+   "stock then drifts from the shelf by however wrong that was")
+_par = c.post("/api/admin/stores/par-fill", headers=A,
+              json={"store_id": stores[2]["id"]}).json()
+ok(_par["lines"] >= 1,
+   "restocking to par is still there, asked for by name — losing it would "
+   "push a coverage round back into a spreadsheet")
+inv = c.get("/api/inventory", headers=A).json()
+row = next(i for i in inv if i["store_id"] == stores[2]["id"]
+           and i["product_id"] == pid)
+ok(row["qty"] == 24, "and then it fills the shelf to target")
+ok("assumed" in _par["note"].lower() or "Assumed" in _par["note"],
+   "while saying what it is: an assumption somebody made on purpose, "
+   "which is worth far more than the same assumption made by a checkbox")
+_aud = c.get("/api/admin/audit", headers=A).json()
+_rows = _aud if isinstance(_aud, list) else _aud.get("entries", _aud.get(
+    "rows", []))
+ok(any("assumed full" in (e.get("detail") or "") for e in _rows[:30]),
+   "and it is in the audit log with a name on it")
 
 # --- passwords ---
 p1 = c.post("/api/login", json={"name": "Pat Password",

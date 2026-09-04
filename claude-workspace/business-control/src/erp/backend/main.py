@@ -3849,15 +3849,56 @@ def mark_stop(rid: int, body: StopBody, user=Depends(current_user),
     # to close a stop, and a system that only accepts proof is a system
     # that gets worked around with a paper list. What it cannot do is
     # look like the proved kind — route_json says which is which.
+    #
+    # It also no longer moves stock. Ticking a box used to top the store
+    # up to par, which is not a measurement of anything: it says the
+    # truck filled the shelf because somebody said the truck went there.
+    # A store's stock then drifts from the shelf by however wrong that
+    # assumption was, and nothing records which numbers were counted and
+    # which were assumed. Taking the stop as a visit records what was
+    # actually handed over; restocking to par is now something a person
+    # asks for by name.
     con.execute("UPDATE route_stops SET delivered=? WHERE route_id=? AND seq=?",
                 (1 if body.delivered else 0, rid, body.seq))
-    # Coverage trucks restock to par: delivering a stop tops the store up.
-    if body.delivered and not stop["delivered"]:
-        con.execute(
-            "UPDATE inventory SET qty=MAX(qty, par), updated_at=?"
-            " WHERE store_id=?", (db.now(), stop["store_id"]))
     con.commit()
     return {"ok": True}
+
+
+class ParBody(BaseModel):
+    store_id: int
+    note: str = ""
+
+
+@app.post("/api/admin/stores/par-fill")
+def store_par_fill(body: ParBody, user=Depends(admin_user),
+                   con=Depends(get_con)):
+    """Assume the shelf is full, and say who assumed it.
+
+    A coverage truck that restocks every line to its target is a real
+    workflow, and losing it would push people back to a spreadsheet. What
+    it is not is a count — so it is asked for deliberately, by a named
+    person, and the audit log carries who and when. An assumption
+    somebody made on purpose is worth far more than the same assumption
+    made by a checkbox.
+    """
+    st = con.execute("SELECT name FROM stores WHERE id=?",
+                     (body.store_id,)).fetchone()
+    if st is None:
+        raise HTTPException(404, "no such store")
+    rows = con.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(MAX(0, par - qty)),0) AS up"
+        " FROM inventory WHERE store_id=? AND qty < par",
+        (body.store_id,)).fetchone()
+    con.execute("UPDATE inventory SET qty=MAX(qty, par), updated_at=?"
+                " WHERE store_id=?", (db.now(), body.store_id))
+    con.commit()
+    audit.record(con, user, "POST", "/api/admin/stores/par-fill",
+                 f"{st['name']}: {rows['n']} line(s) assumed full"
+                 + (f" — {body.note[:120]}" if body.note else ""), 200)
+    return {"ok": True, "lines": rows["n"], "units": rows["up"],
+            "store": st["name"],
+            "note": "Assumed, not counted. The stock now says the shelf is "
+                    "at target because somebody decided it is."}
 
 
 # ---------- promotions & in-person events ----------
