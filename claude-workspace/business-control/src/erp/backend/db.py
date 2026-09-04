@@ -385,6 +385,38 @@ def connect() -> sqlite3.Connection:
 
 
 # Columns added after first release; applied to pre-existing databases.
+STOCK_LEDGER = """
+/* How a shelf got to the number it says.
+
+   Materials have had this since the beginning — every movement with a
+   reason and an actor, so the running total and the record cannot
+   disagree. Store stock did not: it was a bare integer that four
+   different places overwrote, and "how did this store come to have two
+   cases" had no answer at all. Worse, the column could not tell a count
+   from an assumption, so a shelf topped up to par on somebody's say-so
+   read exactly like a shelf somebody had walked and counted.
+
+   Signed quantities, like the materials ledger, because a delivery and a
+   sale are the same event with opposite signs and giving them separate
+   columns means adding them up wrongly somewhere. */
+CREATE TABLE IF NOT EXISTS inventory_moves (
+  id INTEGER PRIMARY KEY,
+  store_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  qty REAL NOT NULL,                       -- signed: + in, - out
+  balance REAL NOT NULL DEFAULT 0,         -- what it read afterwards
+  reason TEXT NOT NULL,                    -- order:12, visit:4, par, count
+  counted INTEGER DEFAULT 0,               -- 1 = somebody actually looked
+  actor TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inventory_moves_line
+  ON inventory_moves(store_id, product_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS inventory_moves_when
+  ON inventory_moves(created_at DESC);
+"""
+
 KIOSK_TABLE = """
 /* A tablet by the door, registered once. For staff who clock in on it,
    the tablet IS the location — and a better one than a browser's guess,
@@ -398,6 +430,59 @@ CREATE TABLE IF NOT EXISTS kiosks (
   last_seen REAL DEFAULT 0
 );
 """
+
+def stock_move(con, store_id: int, product_id: int, delta: float,
+               reason: str, actor: str = "", note: str = "",
+               counted: bool = False) -> float:
+    """The only way a store's stock changes.
+
+    Writes the movement and applies it in one place, so the ledger and
+    the running total cannot disagree — the same rule the materials
+    ledger has always had, arriving late for the shelves.
+
+    `counted` marks the movements where somebody actually looked. A
+    stocktake and an assumed par-fill both land as a positive number, and
+    a business that cannot tell them apart cannot tell which of its
+    figures it is entitled to trust.
+    """
+    if not delta:
+        return current_qty(con, store_id, product_id)
+    con.execute(
+        "INSERT INTO inventory(store_id,product_id,qty,updated_at)"
+        " VALUES(?,?,0,?) ON CONFLICT(store_id,product_id) DO NOTHING",
+        (store_id, product_id, now()))
+    con.execute(
+        "UPDATE inventory SET qty=MAX(0, qty + ?), updated_at=?"
+        " WHERE store_id=? AND product_id=?",
+        (delta, now(), store_id, product_id))
+    after = current_qty(con, store_id, product_id)
+    con.execute(
+        "INSERT INTO inventory_moves(store_id,product_id,qty,balance,reason,"
+        " counted,actor,note,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (store_id, product_id, delta, after, reason[:60],
+         1 if counted else 0, actor[:80], note[:200], now()))
+    return after
+
+
+def current_qty(con, store_id: int, product_id: int) -> float:
+    r = con.execute("SELECT qty FROM inventory WHERE store_id=?"
+                    " AND product_id=?", (store_id, product_id)).fetchone()
+    return float(r["qty"]) if r else 0.0
+
+
+def stock_set(con, store_id: int, product_id: int, qty: float, reason: str,
+              actor: str = "", note: str = "", counted: bool = False) -> float:
+    """Set a line to a number, recorded as the movement it implies.
+
+    Somebody typing 18 into a stock box has not made 18 appear — they
+    have moved it by the difference, and the difference is what a ledger
+    can be read down. A screen that writes the absolute number leaves a
+    hole exactly where the question gets asked.
+    """
+    delta = qty - current_qty(con, store_id, product_id)
+    return stock_move(con, store_id, product_id, delta, reason, actor, note,
+                      counted)
+
 
 MIGRATIONS = (
     # Who an email actually went to. The log joined users for the address,
@@ -474,6 +559,7 @@ def init() -> None:
     try:
         con.executescript(SCHEMA)
         con.executescript(KIOSK_TABLE)
+        con.executescript(STOCK_LEDGER)
         for stmt in MIGRATIONS:
             try:
                 con.execute(stmt)

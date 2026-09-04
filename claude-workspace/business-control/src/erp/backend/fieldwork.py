@@ -302,11 +302,9 @@ def hand_over(con, visit_id: int, actor: str) -> dict:
                               (st["product_id"],)).fetchone()
             units = short * ((per["case_size"] or 1)
                              if o["kind"] == "distributor" else 1)
-            con.execute(
-                "INSERT INTO inventory(store_id,product_id,qty,updated_at)"
-                " VALUES(?,?,?,?) ON CONFLICT(store_id,product_id)"
-                " DO UPDATE SET qty=qty+?, updated_at=?",
-                (back_to, st["product_id"], units, db.now(), units, db.now()))
+            db.stock_move(con, back_to, st["product_id"], units,
+                          f"refused:{v['order_id']}", actor,
+                          st["note"] or "refused at the door")
             returned += units
     if handed:
         # Delivered means all of it was taken. A partly-refused delivery

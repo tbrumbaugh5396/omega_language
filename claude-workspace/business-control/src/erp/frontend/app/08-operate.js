@@ -77,7 +77,11 @@ async function renderInventory() {
             <td><input class="inv-n" type="number"
               data-invp="${s.id}:${r.product_id}" value="${r.par}"></td>
             <td><button class="btn alt sm"
-              data-invdel="${s.id}:${r.product_id}">Remove</button></td>`
+                data-invhist="${s.id}:${r.product_id}"
+                data-name="${esc(r.product_name)}"
+                title="how this line got to the number it says">Why</button>
+              <button class="btn alt sm"
+                data-invdel="${s.id}:${r.product_id}">Remove</button></td>`
           : `<td class="${r.low ? "low" : ""}">${r.qty}</td>
              <td class="dim">${r.par}</td>`}
         </tr>`).join("")}
@@ -85,6 +89,12 @@ async function renderInventory() {
     }).join("")}`;
 
   if ($("#inv-new")) $("#inv-new").onclick = () => productForm();
+  view().querySelectorAll("[data-invhist]").forEach((b) => {
+    b.onclick = () => {
+      const [store, product] = b.dataset.invhist.split(":");
+      stockHistory(+store, +product, b.dataset.name);
+    };
+  });
   /* Stock is edited in place rather than through a dialog: correcting a
      count is something you do to a whole shelf at once, and a modal per row
      turns twenty corrections into sixty clicks. */
@@ -1119,6 +1129,42 @@ function mrrSection(d) {
             </div>`)).join("")}</div>` : ""}
       <p class="dim">${esc(d.note)}</p>
     </div>`;
+}
+
+/* How a shelf got to the number it says. Materials have had this since
+   the beginning; store stock was a bare integer four different places
+   overwrote, and the column could not tell a count from an assumption —
+   so a shelf topped up on somebody's say-so read exactly like a shelf
+   somebody had walked. */
+async function stockHistory(store, product, name) {
+  const d = await api(`/api/inventory/moves?store_id=${store}`
+    + `&product_id=${product}&days=180`);
+  const when = (t) => fmtDate(t);
+  modal(`<h3>${esc(name)}</h3>
+    <p class="dim">${d.moves.length} movement${
+      d.moves.length === 1 ? "" : "s"} in ${d.days} days · ${d.counted}
+      counted, ${d.assumed} inferred${d.last_count
+        ? ` · last counted ${when(d.last_count)}` : " · never counted"}.</p>
+    ${d.moves.length ? `<div class="tablewrap"><table>
+      <thead><tr><th>when</th><th>change</th><th>left</th><th>why</th>
+        <th>who</th></tr></thead>
+      <tbody>${d.moves.map((m) => `<tr${m.counted ? ' class="dl-signed"' : ""}>
+        <td class="dim">${when(m.created_at)}</td>
+        <td class="${m.qty > 0 ? "good" : "low"}">${m.qty > 0 ? "+" : ""}${
+          m.qty}</td>
+        <td><b>${m.balance}</b></td>
+        <td>${esc(m.reason)}${m.counted
+          ? ' <span class="pill ok">counted</span>'
+          : ' <span class="pill">inferred</span>'}
+          ${m.note ? `<br><span class="dim">${esc(m.note)}</span>` : ""}</td>
+        <td class="dim">${esc(m.actor || "—")}</td>
+      </tr>`).join("")}</tbody></table></div>`
+      : emptyState("box", "Nothing recorded yet",
+                   "Movements from here on are kept. What the line reads "
+                   + "now is where it started.")}
+    <p class="dim">${esc(d.note)}</p>
+    <div class="modal-foot">
+      <button class="btn" data-close>Close</button></div>`, "wide");
 }
 
 // ---------- admin ----------

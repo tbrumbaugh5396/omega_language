@@ -1552,11 +1552,8 @@ def _consume_stock(con, o) -> None:
         have = inv["qty"] if inv else 0
         if have < units:
             shorts.append(f"{it['name']} (need {units}, have {have})")
-        con.execute(
-            "INSERT INTO inventory(store_id,product_id,qty,updated_at)"
-            " VALUES(?,?,0,?) ON CONFLICT(store_id,product_id)"
-            " DO UPDATE SET qty=MAX(0, qty-?), updated_at=?",
-            (sid, it["product_id"], db.now(), units, db.now()))
+        db.stock_move(con, sid, it["product_id"], -units,
+                      f"order:{o['id']}", "", it["name"])
     con.execute("UPDATE orders SET fulfilled_store_id=? WHERE id=?",
                 (sid, o["id"]))
     con.commit()
@@ -2447,6 +2444,42 @@ def picklist(user=Depends(current_user), con=Depends(get_con)):
     return out
 
 
+@app.get("/api/inventory/moves")
+def inventory_moves(store_id: int = 0, product_id: int = 0, days: int = 90,
+                    limit: int = 200, user=Depends(current_user),
+                    con=Depends(get_con)):
+    """How a shelf got to the number it says.
+
+    Every movement carries whether somebody actually looked. A stocktake
+    and an assumed par-fill are both a positive number, and a business
+    that cannot tell them apart cannot tell which of its figures it is
+    entitled to trust.
+    """
+    since = db.now() - max(1, min(400, days)) * 86400
+    q = ("SELECT m.*, COALESCE(p.name,'') AS product,"
+         " COALESCE(s.name,'') AS store FROM inventory_moves m"
+         " LEFT JOIN products p ON p.id=m.product_id"
+         " LEFT JOIN stores s ON s.id=m.store_id"
+         " WHERE m.created_at>=?")
+    args = [since]
+    if store_id:
+        q += " AND m.store_id=?"
+        args.append(store_id)
+    if product_id:
+        q += " AND m.product_id=?"
+        args.append(product_id)
+    rows = [dict(r) for r in con.execute(
+        q + " ORDER BY m.id DESC LIMIT ?", (*args, max(1, min(500, limit))))]
+    counted = [r for r in rows if r["counted"]]
+    return {"moves": rows, "days": days,
+            "counted": len(counted), "assumed": len(rows) - len(counted),
+            "last_count": counted[0]["created_at"] if counted else 0,
+            "note": "Signed: what came in and what went out, and what the "
+                    "line read afterwards. A movement marked counted is one "
+                    "somebody looked at; the rest are what the system "
+                    "inferred from an order or an assumption."}
+
+
 @app.get("/api/inventory")
 def inventory(store_id: int = 0, user=Depends(current_user),
               con=Depends(get_con)):
@@ -2471,17 +2504,23 @@ class InventoryBody(BaseModel):
     product_id: int
     qty: int
     par: int = 24
+    note: str = ""
 
 
 @app.post("/api/admin/inventory")
 def set_inventory(body: InventoryBody, user=Depends(admin_user),
                   con=Depends(get_con)):
+    # Typing a number into a stock box is a count: somebody looked at a
+    # shelf. Recorded as the movement it implies rather than as an
+    # absolute, because a ledger cannot be read down a column of numbers
+    # that overwrite each other.
     con.execute(
         "INSERT INTO inventory(store_id,product_id,qty,par,updated_at)"
-        " VALUES(?,?,?,?,?) ON CONFLICT(store_id,product_id)"
-        " DO UPDATE SET qty=excluded.qty, par=excluded.par,"
-        " updated_at=excluded.updated_at",
-        (body.store_id, body.product_id, body.qty, body.par, db.now()))
+        " VALUES(?,?,0,?,?) ON CONFLICT(store_id,product_id)"
+        " DO UPDATE SET par=excluded.par, updated_at=excluded.updated_at",
+        (body.store_id, body.product_id, body.par, db.now()))
+    db.stock_set(con, body.store_id, body.product_id, body.qty,
+                 "count", user["name"], body.note, counted=True)
     con.commit()
     return {"ok": True}
 
@@ -3889,8 +3928,12 @@ def store_par_fill(body: ParBody, user=Depends(admin_user),
         "SELECT COUNT(*) AS n, COALESCE(SUM(MAX(0, par - qty)),0) AS up"
         " FROM inventory WHERE store_id=? AND qty < par",
         (body.store_id,)).fetchone()
-    con.execute("UPDATE inventory SET qty=MAX(qty, par), updated_at=?"
-                " WHERE store_id=?", (db.now(), body.store_id))
+    for r in con.execute(
+            "SELECT product_id, qty, par FROM inventory WHERE store_id=?"
+            " AND qty < par", (body.store_id,)).fetchall():
+        db.stock_move(con, body.store_id, r["product_id"],
+                      r["par"] - r["qty"], "par", user["name"],
+                      body.note or "assumed full to target", counted=False)
     con.commit()
     audit.record(con, user, "POST", "/api/admin/stores/par-fill",
                  f"{st['name']}: {rows['n']} line(s) assumed full"

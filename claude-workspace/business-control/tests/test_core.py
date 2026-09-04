@@ -470,6 +470,20 @@ ok(row["qty"] == 1,
    "which is not a measurement of anything — it says the truck filled the "
    "shelf because somebody said the truck went there, and the store's "
    "stock then drifts from the shelf by however wrong that was")
+# --- how a shelf got to the number it says -----------------------------
+# Materials have had a ledger since the beginning: every movement with a
+# reason and an actor. Store stock did not — it was a bare integer four
+# different places overwrote, and "how did this store come to have two
+# cases" had no answer at all.
+_lm = c.get(f"/api/inventory/moves?store_id={stores[2]['id']}"
+            f"&product_id={pid}", headers=A).json()
+ok(_lm["moves"] and _lm["moves"][0]["reason"] == "count"
+   and _lm["moves"][0]["counted"] == 1,
+   "typing a number into a stock box is a COUNT — somebody looked at a "
+   "shelf — and it lands in the ledger as one")
+ok(_lm["moves"][0]["balance"] == 1,
+   "carrying what the line read afterwards, so the history can be read "
+   "down rather than added up")
 _par = c.post("/api/admin/stores/par-fill", headers=A,
               json={"store_id": stores[2]["id"]}).json()
 ok(_par["lines"] >= 1,
@@ -487,6 +501,23 @@ _rows = _aud if isinstance(_aud, list) else _aud.get("entries", _aud.get(
     "rows", []))
 ok(any("assumed full" in (e.get("detail") or "") for e in _rows[:30]),
    "and it is in the audit log with a name on it")
+_lm2 = c.get(f"/api/inventory/moves?store_id={stores[2]['id']}"
+             f"&product_id={pid}", headers=A).json()
+ok(_lm2["moves"][0]["reason"] == "par"
+   and _lm2["moves"][0]["counted"] == 0,
+   "an assumed top-up is in the same ledger and marked as inferred — a "
+   "stocktake and a par-fill are both a positive number, and a business "
+   "that cannot tell them apart cannot tell which of its figures it is "
+   "entitled to trust")
+ok(_lm2["counted"] >= 1 and _lm2["assumed"] >= 1,
+   "which the summary counts separately")
+ok(_lm2["moves"][0]["balance"] == 24 and _lm2["moves"][0]["qty"] == 23,
+   "and the movement is the DIFFERENCE it made, not the number that was "
+   "typed — a screen that writes the absolute leaves a hole exactly "
+   "where the question gets asked")
+_ship = c.get("/api/inventory/moves", headers=A).json()
+ok(all("balance" in m and "actor" in m for m in _ship["moves"]),
+   "every movement says what the line read afterwards and who moved it")
 
 # --- passwords ---
 p1 = c.post("/api/login", json={"name": "Pat Password",
