@@ -360,7 +360,7 @@ const SKELETON = '<div class="skel"></div><div class="skel" style="height:180px"
 
 function emptyState(icon, title, hint) {
   return `<div class="card empty"><span class="e-ic">${opsIcon(icon)}</span>
-    <b>${title}</b><br>${hint}</div>`;
+    <b>${title}</b>${hint}</div>`;
 }
 
 async function render() {

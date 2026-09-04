@@ -432,6 +432,9 @@ async function renderAnalytics() {
       ${engagement.overall.falling_off
         ? '<span class="pill bad">falling off</span>'
         : '<span class="pill ok">healthy</span>'}</div></div>`;
+  if ($("#pg-by")) $("#pg-by").onchange = (e) => {
+    GRAPH_BY = e.target.value; renderAnalytics();
+  };
   if ($("#cal-day")) $("#cal-day").onclick = () => markDayForm();
   if ($("#sky-get")) $("#sky-get").onclick = async (ev) => {
     ev.target.disabled = true;
@@ -469,21 +472,34 @@ function graphSection(g) {
                     y: 46 + row * H + (inCol < per ? (per - inCol) * H / 2 : 0),
                     n };
   });
-  const maxRank = Math.max(...g.nodes.map((n) => n.rank), 0.01);
+  // Size by rank or by views. They disagree exactly where the answer is
+  // interesting — a page everybody passes through against a page
+  // everybody looks at — so it is a switch rather than a decision made
+  // once on somebody's behalf.
+  const by = GRAPH_BY;
+  const val = (n) => by === "views" ? n.views : n.rank;
+  const maxV = Math.max(...g.nodes.map(val), 0.0001);
   const width = PAD * 2 + (COLS - 1) * W;
   const height = 46 + per * H;
-  const r = (n) => 9 + 17 * Math.sqrt(n.rank / maxRank);
+  const r = (n) => 9 + 17 * Math.sqrt(val(n) / maxV);
   const short = (p) => p.length > 20 ? p.slice(0, 19) + "…" : p;
+  // Two pages that link both ways drew one arrow exactly on top of the
+  // other, and the return trip is usually the more interesting half. So
+  // every edge bows to ITS OWN side: the arc is offset perpendicular to
+  // the line, and the sign of the offset comes from the direction — A→B
+  // bows one way and B→A the other, whatever order they arrive in.
   const edges = g.edges.map((e) => {
     const a = pos[e.from], b = pos[e.to];
     if (!a || !b) return "";
-    const mid = (a.x + b.x) / 2;
-    // A curve rather than a line: two pages that link both ways would
-    // draw one arrow on top of the other, and the return trip is usually
-    // the more interesting half.
-    const bow = a.x === b.x ? 46 : 0;
-    return `<path class="pg-edge" d="M${a.x} ${a.y} C${mid + bow} ${a.y},
-      ${mid + bow} ${b.y}, ${b.x} ${b.y}"
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const back = (dx || dy) < 0 ? -1 : 1;      // which way this one runs
+    const lift = Math.min(56, 14 + len * 0.13) * back;
+    // Perpendicular to the line, so the bow shows on verticals too.
+    const cx = (a.x + b.x) / 2 - (dy / len) * lift;
+    const cy = (a.y + b.y) / 2 + (dx / len) * lift;
+    return `<path class="pg-edge" d="M${a.x} ${a.y} Q${cx.toFixed(1)} ${
+      cy.toFixed(1)}, ${b.x} ${b.y}"
       stroke-width="${(0.6 + 5 * e.p).toFixed(2)}"
       marker-end="url(#pg-arrow)">
       <title>${esc(e.from)} → ${esc(e.to)} · ${e.n} time${
@@ -491,7 +507,17 @@ function graphSection(g) {
         next on ${esc(e.from)}</title></path>`;
   }).join("");
   return `
-    <h3>How the pages connect</h3>
+    <div class="page-head graph-head">
+      <h3>How the pages connect</h3>
+      <div class="top-actions">
+        <select id="pg-by">
+          <option value="rank"${by === "rank" ? " selected" : ""}
+            >size by rank</option>
+          <option value="views"${by === "views" ? " selected" : ""}
+            >size by views</option>
+        </select>
+      </div>
+    </div>
     <div class="card">
       <p class="dim">${esc(g.note)}</p>
       <div class="graph-wrap">
@@ -510,8 +536,8 @@ function graphSection(g) {
             <text x="${p.x}" y="${p.y + r(n) + 13}" text-anchor="middle"
               >${esc(short(n.page))}</text>
             <text class="pg-sub" x="${p.x}" y="${p.y + r(n) + 25}"
-              text-anchor="middle">${n.views} · ${Math.round(
-                n.rank * 100)}% rank</text>
+              text-anchor="middle">${n.views} view${n.views === 1 ? "" : "s"}
+              · ${Math.round(n.rank * 100)}% rank</text>
             <title>${esc(n.page)} — ${n.views} views, ${n.entries} arrived
               here first, ${n.exit_rate}% left from here. Rank ${
               (n.rank * 100).toFixed(1)}%: the share of a wandering
@@ -520,12 +546,20 @@ function graphSection(g) {
         }).join("")}
       </svg>
       </div>
-      <p class="dim">Circle size is rank, not views — the two disagree
-        whenever a quiet page sits on everybody's way through. Amber is a
-        page more than half of visits end on. ${g.sessions} session${
-        g.sessions === 1 ? "" : "s"} over ${g.days} days.</p>
+      <p class="dim">${by === "rank"
+        ? "Circle size is rank — the share of a wandering visitor's time "
+          + "each page holds. It disagrees with views exactly where a quiet "
+          + "page sits on everybody's way through, which is the interesting "
+          + "case."
+        : "Circle size is raw views. Useful for seeing what gets looked "
+          + "at; switch to rank to see what the traffic runs through."}
+        Amber is a page more than half of visits end on. ${g.sessions}
+        session${g.sessions === 1 ? "" : "s"} over ${g.days} days.</p>
     </div>`;
 }
+/* Which measure the circles are drawn at. Kept outside the render so
+   changing it does not lose the rest of the page's scroll. */
+let GRAPH_BY = "rank";
 
 /* What a basket is worth, and whether anybody comes back. The median
    sits beside every average on purpose: one wholesale order in a month of

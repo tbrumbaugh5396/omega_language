@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS visit_steps (
   state TEXT NOT NULL DEFAULT 'open',
   note TEXT DEFAULT '',
   qty REAL,                                -- counted, where a step counts
+  line_id INTEGER DEFAULT 0,               -- the purchase order line, if any
+  expected_qty REAL,                       -- what the paperwork says is coming
   done_at REAL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS visit_steps_v ON visit_steps(visit_id, seq);
@@ -111,6 +113,12 @@ CREATE INDEX IF NOT EXISTS visit_media_v ON visit_media(visit_id);
 
 def init_tables(con):
     con.executescript(TABLES)
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(visit_steps)")}
+    for name, decl in (("line_id", "INTEGER DEFAULT 0"),
+                       ("expected_qty", "REAL")):
+        if name not in cols:
+            con.execute(f"ALTER TABLE visit_steps ADD COLUMN {name} {decl}")
+    con.commit()
 
 
 def steps_for(con, visit_id: int) -> list:
@@ -174,6 +182,29 @@ def open_visit(con, template_id: int, user_id: int, **kw) -> int:
             steps = json.loads(tpl["steps"])
         except Exception:                                    # noqa: BLE001
             steps = []
+    # Goods coming in: the list IS the paperwork. A receiving checklist
+    # somebody types out by hand is a checklist that says what they
+    # remember was ordered, which is the number least worth checking
+    # against — so the lines still outstanding on the order become the
+    # steps, each carrying what is expected so a short pallet is visible
+    # while the driver is still there rather than at the month end.
+    po_id = kw.get("po_id", 0)
+    if po_id:
+        for ln in con.execute(
+                "SELECT l.id, l.qty, l.received, COALESCE(m.name,'material')"
+                "  AS name, COALESCE(m.unit,'') AS unit"
+                " FROM purchase_order_lines l"
+                " LEFT JOIN materials m ON m.id=l.material_id"
+                " WHERE l.po_id=? ORDER BY l.id", (po_id,)):
+            left = round(ln["qty"] - (ln["received"] or 0), 3)
+            if left <= 0:
+                continue
+            con.execute(
+                "INSERT INTO visit_steps(visit_id,seq,label,wants_photo,"
+                " line_id,expected_qty) VALUES(?,?,?,1,?,?)",
+                (vid, 1000 + ln["id"],
+                 f"{ln['name']} — {left:g}{(' ' + ln['unit']).rstrip()}"
+                 " expected", ln["id"], left))
     for i, st in enumerate(steps or []):
         if isinstance(st, str):
             st = {"label": st}
@@ -184,6 +215,40 @@ def open_visit(con, template_id: int, user_id: int, **kw) -> int:
              1 if st.get("photo") else 0))
     con.commit()
     return vid
+
+
+def book_in(con, visit_id: int, actor: str) -> dict:
+    """Post what was counted on a receiving visit against its order.
+
+    Counted, not expected. The whole reason the step carries both is that
+    they differ, and a receiving screen that books the ordered quantity
+    because that is what the paperwork said is a screen that invents
+    stock. A line counted short leaves the order part-received, which is
+    what it is.
+    """
+    from . import supply
+    v = con.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
+    if v is None or not v["po_id"]:
+        return {"booked": 0}
+    lines, short, over = {}, [], []
+    for st in con.execute(
+            "SELECT * FROM visit_steps WHERE visit_id=? AND line_id>0",
+            (visit_id,)):
+        if st["qty"] is None or st["state"] == "open":
+            continue
+        got = float(st["qty"])
+        if got > 0:
+            lines[str(st["line_id"])] = got
+        want = float(st["expected_qty"] or 0)
+        if want and got < want:
+            short.append({"label": st["label"], "expected": want, "got": got})
+        elif want and got > want:
+            over.append({"label": st["label"], "expected": want, "got": got})
+    if not lines:
+        return {"booked": 0, "short": short, "over": over}
+    out = supply.receive_po(con, v["po_id"], lines, actor)
+    return {"booked": out["lines"], "complete": out["complete"],
+            "short": short, "over": over}
 
 
 def new_token() -> str:

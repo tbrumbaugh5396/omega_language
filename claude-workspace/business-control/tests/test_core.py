@@ -3663,6 +3663,50 @@ ok(any(f["failed"] for f in _fs["failed"]),
 ok(_fs["km"] == 28.0 and _fs["photos"] >= 1,
    "with the miles and the pictures added up beside them")
 
+# Goods coming in: the list IS the paperwork. A receiving checklist typed
+# out by hand says what somebody remembers was ordered, which is the
+# number least worth checking against.
+_sup = c.post("/api/supply/suppliers", headers=A,
+              json={"name": "Yuzu Imports"}).json()
+_mat = c.post("/api/supply/materials", headers=A, json={
+    "name": "Yuzu concentrate", "unit": "L",
+    "supplier_id": _sup.get("id", 1)}).json()
+_po = c.post("/api/supply/purchase-orders", headers=A, json={
+    "supplier_id": _sup.get("id", 1),
+    "lines": [{"material_id": _mat.get("id", 1), "qty": 100,
+               "unit_cost_cents": 900}]}).json()
+_poid = _po.get("id") or 1
+_rv = c.post("/api/field/visits", headers=A, json={
+    "kind": "receiving", "title": "Pallet in", "po_id": _poid}).json()["id"]
+_rvd = c.get(f"/api/field/visits/{_rv}", headers=A).json()
+ok(len(_rvd["steps"]) == 1 and _rvd["steps"][0]["expected_qty"] == 100.0,
+   "the lines still outstanding on the order become the steps, each "
+   "carrying what is expected — so a short pallet is visible while the "
+   "driver is still there rather than at the month end")
+ok(_rvd["steps"][0]["line_id"],
+   "and each step knows which line it answers")
+c.post(f"/api/field/visits/{_rv}/start", headers=A, json={})
+c.post(f"/api/field/steps/{_rvd['steps'][0]['id']}", headers=A,
+       json={"state": "done", "qty": 92, "note": "two cases refused"})
+_fin = c.post(f"/api/field/visits/{_rv}/finish", headers=A, json={}).json()
+ok(_fin["received"]["booked"] == 1
+   and _fin["received"]["short"][0]["got"] == 92.0,
+   "closing the visit books what was COUNTED, not what was ordered — a "
+   "receiving screen that books the paperwork's number is a screen that "
+   "invents stock")
+_poafter = c.get(f"/api/supply/purchase-orders", headers=A).json()
+_line = None
+for _o in (_poafter if isinstance(_poafter, list)
+           else _poafter.get("orders", [])):
+    for _l in _o.get("lines", []):
+        if _l.get("id") == _rvd["steps"][0]["line_id"]:
+            _line = _l
+ok(_line is None or _line["received"] == 92.0,
+   "the order line carries the 92 that arrived")
+_again = c.post(f"/api/field/visits/{_rv}/finish", headers=A, json={}).json()
+ok("received" not in _again,
+   "and finishing a finished visit does not book the pallet in twice")
+
 # --- clocking in where the work is ------------------------------------------
 # Somebody rostered at the Norristown shop punching in from home is a
 # payroll question. The fence answers it — but only on the way in.
@@ -3801,6 +3845,33 @@ ok(any(o["kind"] == "pos" for o in (_ords if isinstance(_ords, list)
    "a counter sale is an ordinary order — the day book, the P&L, margin "
    "and stock all read orders already, and a second sales table would "
    "have meant teaching every one of them a second answer")
+
+# The same till, handed to the customer.
+_lane = c.post("/api/pos/session", headers=A, json={
+    "register": "lane-smoke", "self_serve": True,
+    "float_cents": 10000}).json()
+ok(_lane["self_serve"] and _lane["float_cents"] == 0,
+   "an unattended lane opens with no float — there is no drawer, so a "
+   "float would be a number nobody can count at the end")
+_cashtry = c.post("/api/pos/sale", headers=A, json={
+    "register": "lane-smoke",
+    "items": [{"product_id": _prod["id"], "qty": 1,
+               "unit_price_cents": 500}],
+    "tenders": [{"kind": "cash", "cents": 500}]})
+ok(_cashtry.status_code == 400 and "cards only" in _cashtry.json()["detail"],
+   "and it takes cards only: a machine that accepts a twenty and owes "
+   "eleven dollars back with nobody standing at it is a complaint with a "
+   "receipt attached")
+_lanesale = c.post("/api/pos/sale", headers=A, json={
+    "register": "lane-smoke",
+    "items": [{"product_id": _prod["id"], "qty": 1,
+               "unit_price_cents": 500}],
+    "tenders": [{"kind": "card", "cents": 500, "ref": "self"}]}).json()
+ok(_lanesale["receipt"]["token"],
+   "a customer serving themselves still gets a receipt of their own")
+_lanedr = c.get("/api/pos/session?register=lane-smoke", headers=A).json()
+ok(_lanedr["expected_cents"] == 0 and _lanedr["taken_cents"] == 500,
+   "and the lane takes money without expecting any cash in a drawer")
 
 from storefront.backend import governance as _gov  # noqa: E402
 ok("till" in _gov.PERMISSIONS and _gov.ROLE_DEFAULTS["cashier"] == ["till"],

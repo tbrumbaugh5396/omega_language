@@ -1833,14 +1833,22 @@ async function renderTill() {
             <input id="tl-float" type="number" min="0" step="0.01"
               value="100.00"></div>
         </div>
+        <label class="perm"><input type="checkbox" id="tl-self">
+          <span><b>Unattended lane</b><small>the customer rings it up
+            themselves. Cards only — a machine that takes a twenty and owes
+            eleven dollars back with nobody standing at it is a complaint
+            with a receipt attached. The way out is your own PIN.</small>
+          </span></label>
         <button class="btn" id="tl-open">Open the drawer</button>
       </div>`;
     $("#tl-open").onclick = async () => {
       TILL.register = $("#tl-reg").value.trim() || "counter";
       try {
+        const self_serve = $("#tl-self").checked;
         await api("/api/pos/session", { body: {
-          register: TILL.register,
+          register: TILL.register, self_serve,
           float_cents: Math.round((+$("#tl-float").value || 0) * 100) } });
+        if (self_serve) { await renderTill(); return selfServe(); }
         renderTill();
       } catch (e) { toast(e.message); }
     };
@@ -1855,6 +1863,9 @@ async function renderTill() {
           ${money(sess.expected_cents)} should be in the drawer</p></div>
       <div class="top-actions">
         <button class="btn alt" id="tl-day">Today's takings</button>
+        ${sess.session.self_serve
+          ? `<button class="btn" id="tl-lane">Hand it to the customer
+             </button>` : ""}
         <button class="btn alt" id="tl-close">Cash up</button>
       </div>
     </div>
@@ -1926,6 +1937,7 @@ async function renderTill() {
   });
   $("#tl-clear").onclick = () => { TILL.lines = []; renderTill(); };
   $("#tl-day").onclick = () => tillDay();
+  if ($("#tl-lane")) $("#tl-lane").onclick = () => selfServe();
   $("#tl-close").onclick = () => cashUp(sess);
   $("#tl-take").onclick = async () => {
     const card = Math.round((+$("#tl-card").value || 0) * 100);
@@ -2045,4 +2057,133 @@ async function tillDay() {
       </tr>`).join("")}</tbody></table></div>` : ""}
     <div class="modal-foot">
       <button class="btn" data-close>Close</button></div>`, "wide");
+}
+
+
+/* ---------- the unattended lane ----------
+   The same till, handed to the customer. Two things change and they are
+   both about there being nobody there: it takes cards only, because a
+   machine that accepts a twenty and owes somebody eleven dollars with
+   nobody standing at it is a complaint with a receipt attached; and the
+   way out is the attendant's own secret, checked at the server, so a
+   tablet left on a counter is a locked screen rather than an open back
+   office. */
+async function selfServe() {
+  const prods = await api("/api/products");
+  const sellable = prods.filter((p) => p.active !== 0);
+  let lines = [];
+  const box = document.createElement("div");
+  box.id = "self-lane";
+  document.body.appendChild(box);
+  document.body.classList.add("lane-on");
+
+  const draw = (state) => {
+    const total = lines.reduce((t, l) => t + l.qty * l.price, 0);
+    if (state && state.done) {
+      box.innerHTML = `<div class="lane-wrap lane-thanks">
+        <h1>Thank you</h1>
+        <p class="lane-total">${money(state.total)}</p>
+        <img class="lane-qr" alt="your receipt"
+          src="/api/qr.svg?data=${encodeURIComponent(
+            location.origin + "/rc/" + state.token)}">
+        <p>Scan for your receipt — it is yours to keep.</p>
+        <button class="btn lane-big" id="lane-next">Done</button>
+      </div>`;
+      $("#lane-next").onclick = () => { lines = []; draw(); };
+      // And if nobody presses it, the next customer does not inherit
+      // somebody else's receipt on the screen.
+      setTimeout(() => { if ($("#lane-next")) { lines = []; draw(); } }, 25000);
+      return;
+    }
+    box.innerHTML = `
+      <div class="lane-wrap">
+        <div class="lane-head">
+          <h1>Scan or tap what you are buying</h1>
+          <button class="btn alt sm" id="lane-out">Staff</button>
+        </div>
+        <div class="lane-grid">
+          ${sellable.map((p) => `<button class="lane-item" data-add="${p.id}"
+            data-price="${p.price_cents}" data-name="${esc(p.name)}">
+            <b>${esc(p.name)}</b><span>${money(p.price_cents)}</span>
+          </button>`).join("")}
+        </div>
+        <div class="lane-basket">
+          ${lines.length ? lines.map((l, i) => `<div class="lane-line">
+            <span>${esc(l.name)}</span>
+            <button class="btn alt sm" data-less="${i}">−</button>
+            <b>${l.qty}</b>
+            <button class="btn alt sm" data-more="${i}">+</button>
+            <span class="tl-m">${money(l.qty * l.price)}</span>
+          </div>`).join("")
+            : '<p class="dim">Nothing yet.</p>'}
+          <div class="lane-total-row"><span>Total</span>
+            <b>${money(total)}</b></div>
+          <button class="btn lane-big" id="lane-pay"
+            ${lines.length ? "" : "disabled"}>Pay by card</button>
+          <p class="dim">Cards only at this lane. For cash, please see a
+            member of staff.</p>
+        </div>
+      </div>`;
+    box.querySelectorAll("[data-add]").forEach((b) => b.onclick = () => {
+      const id = +b.dataset.add;
+      const at = lines.findIndex((l) => l.id === id);
+      if (at < 0) lines.push({ id, name: b.dataset.name,
+                               price: +b.dataset.price, qty: 1 });
+      else lines[at].qty += 1;
+      draw();
+    });
+    box.querySelectorAll("[data-more]").forEach((b) => b.onclick = () => {
+      lines[+b.dataset.more].qty += 1; draw();
+    });
+    box.querySelectorAll("[data-less]").forEach((b) => b.onclick = () => {
+      const l = lines[+b.dataset.less];
+      l.qty -= 1;
+      if (l.qty < 1) lines.splice(+b.dataset.less, 1);
+      draw();
+    });
+    $("#lane-out").onclick = () => laneExit(box);
+    if ($("#lane-pay")) $("#lane-pay").onclick = async () => {
+      $("#lane-pay").disabled = true;
+      $("#lane-pay").textContent = "taking the payment…";
+      try {
+        const r = await api("/api/pos/sale", { body: {
+          register: TILL.register,
+          items: lines.map((l) => ({ product_id: l.id, qty: l.qty,
+                                     unit_price_cents: l.price })),
+          tenders: [{ kind: "card", cents: total, ref: "self" }] } });
+        draw({ done: true, total, token: r.receipt.token });
+      } catch (e) {
+        toast(e.message);
+        $("#lane-pay").disabled = false;
+        $("#lane-pay").textContent = "Pay by card";
+      }
+    };
+  };
+  draw();
+}
+
+/* The way out is the attendant's own secret, checked at the server —
+   the same door kiosk mode uses, and for the same reason: a tablet on a
+   counter must not be talkable out of it. */
+function laneExit(box) {
+  const pad = document.createElement("div");
+  pad.className = "lane-exit";
+  pad.innerHTML = `<div class="card">
+    <h3>Staff</h3>
+    <p class="dim">Your PIN or your password.</p>
+    <input id="lane-secret" type="password" autocomplete="off" autofocus>
+    <div class="modal-foot">
+      <button class="btn alt" id="lane-back">Back to shopping</button>
+      <button class="btn" id="lane-go">Unlock</button></div></div>`;
+  box.appendChild(pad);
+  pad.querySelector("#lane-back").onclick = () => pad.remove();
+  pad.querySelector("#lane-go").onclick = async () => {
+    try {
+      await api("/api/kiosk/unlock", { body: {
+        secret: pad.querySelector("#lane-secret").value } });
+      box.remove();
+      document.body.classList.remove("lane-on");
+      renderTill();
+    } catch (e) { toast(e.message); }
+  };
 }

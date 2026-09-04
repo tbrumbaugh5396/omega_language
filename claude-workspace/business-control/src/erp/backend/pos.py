@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS register_sessions (
   expected_cents INTEGER DEFAULT 0,       -- float + cash in - change out
   variance_cents INTEGER DEFAULT 0,       -- counted - expected, signed
   closed_by INTEGER DEFAULT 0,
+  self_serve INTEGER DEFAULT 0,           -- the customer rings it themselves
   note TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS register_open
@@ -77,10 +78,16 @@ CREATE TABLE IF NOT EXISTS receipts (
 
 def init_tables(con):
     con.executescript(TABLES)
+    cols = {r["name"] for r in con.execute(
+        "PRAGMA table_info(register_sessions)")}
+    if "self_serve" not in cols:
+        con.execute("ALTER TABLE register_sessions ADD COLUMN self_serve"
+                    " INTEGER DEFAULT 0")
+        con.commit()
 
 
 def open_session(con, user_id: int, register: str, float_cents: int,
-                 store_id: int = 0) -> dict:
+                 store_id: int = 0, self_serve: bool = False) -> dict:
     live = con.execute(
         "SELECT id FROM register_sessions WHERE register=? AND closed_at=0",
         (register,)).fetchone()
@@ -88,11 +95,13 @@ def open_session(con, user_id: int, register: str, float_cents: int,
         raise ValueError(f"{register} is already open (session {live['id']})")
     cur = con.execute(
         "INSERT INTO register_sessions(register,store_id,user_id,opened_at,"
-        " float_cents) VALUES(?,?,?,?,?)",
-        (register[:40], store_id, user_id, db.now(), max(0, float_cents)))
+        " float_cents,self_serve) VALUES(?,?,?,?,?,?)",
+        (register[:40], store_id, user_id, db.now(),
+         0 if self_serve else max(0, float_cents), 1 if self_serve else 0))
     con.commit()
     return {"id": cur.lastrowid, "register": register,
-            "float_cents": float_cents}
+            "self_serve": bool(self_serve),
+            "float_cents": 0 if self_serve else float_cents}
 
 
 def session_of(con, register: str = "counter"):

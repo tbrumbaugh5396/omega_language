@@ -4618,6 +4618,13 @@ def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
     if tpl and tpl["needs_mileage"] and body.odo_km is None:
         raise HTTPException(400, "read the odometer before you close it")
     state = "abandoned" if body.abandon_because.strip() else "done"
+    # Goods coming in get posted here, once. Booking on the way out
+    # rather than per step because a pallet is counted as a pallet: half
+    # a delivery entered line by line as somebody walks past it leaves
+    # stock that is right for ten minutes and wrong afterwards.
+    booked = None
+    if state == "done" and r["po_id"] and r["state"] != "done":
+        booked = fieldwork.book_in(con, vid, user["name"])
     con.execute(
         "UPDATE visits SET state=?, finished_at=?, end_lat=?, end_lng=?,"
         " end_accuracy_m=?, end_odo_km=?, contact_name=?, contact_role=?,"
@@ -4628,8 +4635,11 @@ def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
          db.now() if body.signature.strip() else 0,
          (body.abandon_because or body.note).strip()[:500], vid))
     con.commit()
-    return fieldwork.shape(con, con.execute(
+    out = fieldwork.shape(con, con.execute(
         "SELECT * FROM visits WHERE id=?", (vid,)).fetchone())
+    if booked is not None:
+        out["received"] = booked
+    return out
 
 
 class VisitPhotoBody(Where):
@@ -4697,6 +4707,7 @@ class OpenTillBody(BaseModel):
     register: str = "counter"
     float_cents: int = 0
     store_id: int = 0
+    self_serve: bool = False
 
 
 @app.post("/api/pos/session")
@@ -4706,7 +4717,8 @@ def pos_open(body: OpenTillBody, user=Depends(permitted("till")),
     from . import pos
     try:
         out = pos.open_session(con, user["id"], body.register,
-                               body.float_cents, body.store_id)
+                               body.float_cents, body.store_id,
+                               body.self_serve)
     except ValueError as e:
         raise HTTPException(409, str(e))
     audit.record(con, user, "POST", "/api/pos/session",
@@ -4804,6 +4816,14 @@ def pos_sale(body: SaleBody, user=Depends(permitted("till")),
     for t in body.tenders:
         if t.kind not in pos.TENDERS:
             raise HTTPException(400, f"tender must be one of {pos.TENDERS}")
+        # An unattended lane takes no notes. Cash needs a drawer that can
+        # give change back, and a machine that accepts a twenty and owes
+        # somebody eleven dollars with nobody standing there is not a
+        # feature — it is a complaint with a receipt attached.
+        if s["self_serve"] and t.kind == "cash":
+            raise HTTPException(
+                400, "this lane is self-service and takes cards only — "
+                     "there is no drawer to give change out of")
     if body.tenders and paid < subtotal:
         raise HTTPException(
             400, f"the tenders come to {paid}c against a {subtotal}c sale — "
