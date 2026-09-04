@@ -289,6 +289,84 @@ async function standUpClient(slug, eid, name, opts = {}) {
   };
 }
 
+/* Who to ring today. The client dossier answers this one install at a
+   time, which is the wrong shape for the question it is usually asked
+   in — not "how is Zenjoy doing" but "who is waiting on us". Loaded
+   after the board rather than with it: this asks every tenant on every
+   node, and a board that waits for the slowest one is a board nobody
+   leaves open. */
+const PRESSURE_WORDS = {
+  asking: ["asking", "turned away and not yet answered"],
+  over: ["over", "using more than they are covered for"],
+  pinned: ["full", "at the limit; the next busy day is a refusal"],
+  spare: ["spare room", "paying for what they have never used"],
+  settled: ["settled", "was turned away, since resolved"],
+  unreachable: ["unreachable", "their node did not answer"],
+};
+
+async function fleetPressure() {
+  const box = $("#fleet-pressure");
+  if (!box) return;
+  let d;
+  try { d = await api("/api/store/admin/fleet/pressure"); }
+  catch (e) {
+    box.innerHTML = `<b>Limits across the fleet</b>
+      <p class="dim">Could not read it: ${esc(e.message)}</p>`;
+    return;
+  }
+  const live = d.rows.filter((r) => r.worst !== "quiet");
+  const chip = (n, k) => n
+    ? `<span class="pill ${k === "asking" || k === "over" ? "bad" : ""}"
+         title="${PRESSURE_WORDS[k][1]}">${n} ${PRESSURE_WORDS[k][0]}</span>`
+    : "";
+  box.innerHTML = `
+    <div class="card-head"><b>Limits across the fleet</b>
+      <span class="chips">${chip(d.asking, "asking")}${chip(d.over, "over")}
+        ${chip(d.pinned, "pinned")}${chip(d.spare, "spare")}
+        ${chip(d.unreachable, "unreachable")}</span>
+      <span class="dim">${d.upside_cents
+        ? "+" + money(d.upside_cents) + " a month if they bought what they "
+          + "keep reaching for" : ""}${d.unused_cents
+        ? " · " + money(d.unused_cents) + " a month paid for unused room"
+        : ""}</span>
+    </div>
+    ${live.length ? `<div class="sig-rows">${live.map((r) => `
+      <div class="doc-line press-line">
+        <span class="dl-title"><b>${esc(r.tenant)}</b>
+          <span class="dim">${esc(r.node)}</span></span>
+        <span class="press-state"><span class="pill ${
+          r.worst === "asking" || r.worst === "over" ? "bad"
+          : r.worst === "unreachable" ? "warn" : ""}"
+          title="${PRESSURE_WORDS[r.worst]
+            ? PRESSURE_WORDS[r.worst][1] : ""}">${PRESSURE_WORDS[r.worst]
+            ? PRESSURE_WORDS[r.worst][0] : esc(r.worst)}</span></span>
+        <span class="press-why dim">${r.why ? esc(r.why)
+          : r.lines.map((l) => `${esc(l.kind)}: ${esc(l.verdict)}`)
+              .join(" · ")}</span>
+        <span class="press-money ${r.at_stake_cents < 0 ? "dim" : ""}">${
+          r.at_stake_cents
+            ? (r.at_stake_cents > 0 ? "+" : "\u2212")
+              + money(Math.abs(r.at_stake_cents)) + "/mo"
+            : ""}</span>
+        <span class="dl-acts press-acts">
+          <button class="btn alt sm" data-plim="${esc(r.tenant)}"
+            >Limits</button>
+          <button class="btn alt sm" data-prep="${esc(r.tenant)}"
+            >Report</button></span>
+      </div>`).join("")}</div>`
+    : `<p class="dim">Nobody is pressed against a limit and nobody is
+       paying for room they never use. This is the quiet answer, not a
+       missing one.</p>`}
+    <p class="dim">${esc(d.note)}${d.rows.length - live.length
+      ? ` ${d.rows.length - live.length} install${
+          d.rows.length - live.length === 1 ? "" : "s"} had nothing to
+        say.` : ""}</p>`;
+  box.querySelectorAll("[data-plim]").forEach((b) =>
+    b.onclick = () => limitsForm(b.dataset.plim));
+  box.querySelectorAll("[data-prep]").forEach((b) =>
+    b.onclick = () => clientDossier(b.dataset.prep));
+}
+
 async function renderFleet() {
   const f = await api("/api/store/admin/fleet");
   const bar = (n) => {
@@ -420,6 +498,8 @@ async function renderFleet() {
           data-eid="${c.engagement_id}" data-name="${esc(c.name)}"
           >${esc(c.name)} — stand up</button>`).join("")}</div>
     </div>` : ""}
+    <div class="card" id="fleet-pressure"><b>Limits across the fleet</b>
+      <p class="dim">Reading every install…</p></div>
     ${f.nodes.map(nodeCard).join("")}
     ${f.events.length ? `<div class="card"><b>Fleet history</b>
       <div class="log-lines">${f.events.map((e) => `
@@ -428,6 +508,8 @@ async function renderFleet() {
           <span class="dim">${esc(e.what)}${e.detail
             ? " — " + esc(e.detail) : ""}</span></div>`).join("")}
       </div></div>` : ""}`;
+
+  fleetPressure();
 
   const nn = $("#node-new");
   if (nn) nn.onclick = () => {

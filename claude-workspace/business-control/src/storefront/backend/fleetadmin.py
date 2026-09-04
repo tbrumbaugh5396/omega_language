@@ -866,6 +866,135 @@ def tenant_usage(tid: str) -> dict:
         tenancy.CURRENT.reset(tok)
 
 
+def tenant_pressure(tid: str) -> dict:
+    """One tenant's limit pressure, wherever that tenant lives."""
+    from erp.backend import db as _edb
+    from erp.backend import fleet, tenancy
+    node = tenancy.node_of(tid)
+    if node != tenancy.NODE_ID:
+        return fleet._node_call(
+            node, "GET", f"/api/node/tenants/{tid}/pressure").json()
+    tok = tenancy.CURRENT.set(tid)
+    try:
+        con = _edb.connect()
+        try:
+            return _pressure_from(con)
+        finally:
+            con.close()
+    finally:
+        tenancy.CURRENT.reset(tok)
+
+
+# What a tenant's pressure means for the provider, in the order somebody
+# would act on it.
+#
+#   asking  — they told us they want more and we have not given it: a
+#             service failure before it is a sales opportunity
+#   over    — they are using more than they are covered for, so revenue
+#             is leaking today rather than being available tomorrow
+#   pinned  — full without being refused yet; the next busy day refuses
+#   unreach — we could not ask, which is worth knowing precisely because
+#             a shorter board otherwise reads as better news
+#   spare   — paying for room they have never used. The same conversation
+#             from the other end, and the one nobody ever has.
+_PRESSURE_RANK = {"asking": 0, "over": 1, "pinned": 2, "unreachable": 3,
+                  "spare": 4, "settled": 5, "quiet": 6}
+
+
+def _classify(kind: str, pr: dict, each_cents: int) -> dict:
+    """One line about one metered unit on one install.
+
+    `at_stake_cents` is a month of money, signed by direction: positive is
+    revenue this install would owe if it bought what it keeps reaching
+    for, negative is what it is paying us for room it has never touched.
+    Both are worth a phone call and only one of them is comfortable to
+    make, which is exactly why it has to be on the same board.
+    """
+    cap, used, peak = pr.get("cap", 0), pr.get("used", 0), pr.get("peak", 0)
+    if pr.get("unanswered"):
+        state, stake = "asking", each_cents
+    elif used > cap:
+        state, stake = "over", (used - cap) * each_cents
+    elif pr.get("refused"):
+        state, stake = "settled", 0
+    elif cap and pr.get("at_cap_days"):
+        state, stake = "pinned", each_cents
+    elif (pr.get("peak_known") and cap > 1 and peak
+          and cap - peak >= max(2, cap // 2)):
+        state, stake = "spare", -((cap - peak) * each_cents)
+    elif pr.get("peak_known") and cap > 1 and not peak:
+        state, stake = "spare", -((cap - 1) * each_cents)
+    else:
+        state, stake = "quiet", 0
+    return {"kind": kind, "state": state, "cap": cap, "used": used,
+            "peak": peak, "peak_known": bool(pr.get("peak_known")),
+            "refused": pr.get("refused", 0),
+            "unanswered": pr.get("unanswered", 0),
+            "at_cap_days": pr.get("at_cap_days", 0),
+            "at_stake_cents": stake, "verdict": pr.get("verdict", "")}
+
+
+@router.get("/api/store/admin/fleet/pressure")
+def fleet_pressure(u=Depends(admin_user), con=Depends(get_con)):
+    """Every install held against its own limits, in one list.
+
+    The per-client dossier answers this one client at a time, which is
+    the wrong shape for the question it is usually asked in: not "how is
+    Zenjoy doing" but "who should we be ringing today". A client who was
+    turned away twice last week has already made the decision and is
+    waiting for us to notice; a client paying for five tills who has
+    never run more than two is going to notice on their own eventually,
+    and it goes far better when we get there first.
+
+    A tenant whose node will not answer is listed as unreachable rather
+    than omitted. A silently shorter list reads as good news.
+    """
+    _provider_only()
+    from erp.backend import tenancy
+    from . import pricebook
+    book = pricebook.allowances()
+    key = {"locations": "locations", "seats": "staff_seats",
+           "registers": "registers", "kiosks": "clock_kiosks"}
+    rows = []
+    for tid, reg in (tenancy.registry().get("tenants", {})).items():
+        if (reg.get("status") or "active") != "active":
+            continue
+        try:
+            pressure = tenant_pressure(tid)
+        except Exception as e:                               # noqa: BLE001
+            rows.append({"tenant": tid, "node": reg.get("node") or "local",
+                         "worst": "unreachable", "at_stake_cents": 0,
+                         "lines": [], "why": str(e)[:120]})
+            continue
+        lines = [_classify(k, pressure[k],
+                           book.get(key[k], {}).get("each_cents", 0))
+                 for k in key if k in pressure]
+        lines = [ln for ln in lines if ln["state"] != "quiet"]
+        lines.sort(key=lambda ln: _PRESSURE_RANK.get(ln["state"], 9))
+        rows.append({
+            "tenant": tid, "node": reg.get("node") or "local",
+            "hosts": reg.get("hosts") or [],
+            "worst": lines[0]["state"] if lines else "quiet",
+            "at_stake_cents": sum(ln["at_stake_cents"] for ln in lines),
+            "lines": lines})
+    rows.sort(key=lambda r: (_PRESSURE_RANK.get(r["worst"], 9),
+                             -abs(r["at_stake_cents"])))
+    asking = [r for r in rows if r["worst"] == "asking"]
+    return {
+        "rows": rows,
+        "asking": len(asking),
+        "over": len([r for r in rows if r["worst"] == "over"]),
+        "pinned": len([r for r in rows if r["worst"] == "pinned"]),
+        "spare": len([r for r in rows if r["worst"] == "spare"]),
+        "unreachable": len([r for r in rows if r["worst"] == "unreachable"]),
+        "upside_cents": sum(max(0, r["at_stake_cents"]) for r in rows),
+        "unused_cents": sum(-min(0, r["at_stake_cents"]) for r in rows),
+        "note": "Money is a month, and signed: what an install would owe "
+                "if it bought what it keeps reaching for, against what it "
+                "already pays for room it has never used.",
+    }
+
+
 @router.get("/api/store/admin/fleet/tenants/{tid}/report")
 def tenant_report(tid: str, u=Depends(admin_user), con=Depends(get_con)):
     _provider_only()

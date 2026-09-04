@@ -1654,3 +1654,17 @@ body.lane-on { overflow: hidden; }
   display: block;
 }
 .plan-spark i.at-cap { background: #f08a80; }
+
+/* The fleet's limit board: who is waiting on us, and who is paying for
+   room they never use. Money is right-aligned because the eye reads a
+   column of figures down, not across. */
+.doc-line.press-line {
+  grid-template-columns: 1.2fr auto 3fr auto auto;
+  align-items: center;
+}
+.press-why { font-size: .86em; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.press-money { text-align: right; font-variant-numeric: tabular-nums;
+  white-space: nowrap; color: #7fd6a8; font-weight: 600; }
+.press-money.dim { color: var(--dim); font-weight: 400; }
+.press-state { white-space: nowrap; }

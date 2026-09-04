@@ -816,6 +816,63 @@ ok(_met.peak_registers(_hd, 30)["peak"] == 1,
    "needed")
 _sw.close(); _hd.close()
 
+# --- one board: who is waiting on us, and who is paying for nothing -----
+# The dossier answers this one install at a time, which is the wrong
+# shape for the question it actually gets asked in: not "how is alpha
+# doing" but "who should we be ringing today".
+_fp = c.get("/api/store/admin/fleet/pressure", headers=AA).json()
+_row = {r["tenant"]: r for r in _fp["rows"]}
+ok("alpha" in _row,
+   "every active install is on the board, read through the same dock the "
+   "dossier uses — a client on a worker node is not a client we get to "
+   "leave off")
+ok(_row["alpha"]["worst"] in ("asking", "over", "pinned", "settled",
+                              "spare", "quiet"),
+   "each one carries the single word for the worst thing true of it, "
+   "because a board that makes the reader derive the headline has moved "
+   "the work rather than done it")
+ok(set(_fp) >= {"asking", "over", "pinned", "spare", "unreachable",
+                "upside_cents", "unused_cents"},
+   "and the summary counts every state it can sort into — one missing "
+   "from the header is a column of the board that silently reads as zero")
+_states = [ln["state"] for r in _fp["rows"] for ln in r["lines"]]
+ok("quiet" not in _states,
+   "units with nothing to say are dropped from the rows rather than "
+   "listed as fine: a board is a list of things to do")
+ok(_fp["unused_cents"] >= 0 and _fp["upside_cents"] >= 0,
+   "the two directions are totalled apart. Money owed to us and money we "
+   "are taking for unused room are both worth a call, and netting them "
+   "into one figure hides whichever is smaller")
+
+# The whole point of the ranking is that the reader starts at the top.
+_ranked = [r["worst"] for r in _fp["rows"]]
+_order = ["asking", "over", "pinned", "unreachable", "spare", "settled",
+          "quiet"]
+ok(_ranked == sorted(_ranked, key=lambda w: _order.index(w)),
+   "and they are ordered by what it costs to ignore them: somebody we "
+   "turned away and never answered before somebody merely full, and both "
+   "before somebody with room to spare")
+
+_tn.set_limits("alpha", {"registers": 1})
+_pl = c.post("/api/pos/session", headers=_ah,
+             json={"register": "board-a", "float_cents": 0})
+c.post("/api/pos/session", headers=_ah,
+       json={"register": "board-b", "float_cents": 0})
+_fp2 = c.get("/api/store/admin/fleet/pressure", headers=AA).json()
+_a2 = {r["tenant"]: r for r in _fp2["rows"]}["alpha"]
+ok(_a2["worst"] == "asking" and _fp2["asking"] >= 1,
+   "a refusal moves that install straight to the top of the board — they "
+   "have already made the decision and are waiting for us to notice")
+ok(_a2["at_stake_cents"] > 0,
+   "with the price of the thing they were refused beside it, so the call "
+   "is one sentence rather than a research task")
+c.post("/api/pos/session/close", headers=_ah,
+       json={"session_id": _pl.json()["id"], "counted_cents": 0})
+ok(c.get("/api/store/admin/fleet/pressure",
+         headers=BB).status_code in (403, 404),
+   "and the board is the provider's alone — who else is pressed against a "
+   "limit is our client list, and a hosted admin reading it reads that")
+
 # --- and the bill has to move with it, or the number is a fiction -------
 # A limit raised on our side and not on theirs is a till we gave away. A
 # bill raised and the limit not applied is a client paying for a till they

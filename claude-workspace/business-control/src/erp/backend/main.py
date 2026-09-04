@@ -6286,6 +6286,30 @@ def node_usage(tid: str, request: Request):
         tenancy.CURRENT.reset(tok)
 
 
+@app.get("/api/node/tenants/{tid}/pressure")
+def node_pressure(tid: str, request: Request):
+    """The fleet roll-up's remote half.
+
+    Its own dock rather than a slice of /usage: the roll-up asks every
+    tenant on every node at once, and making each of them compute twenty
+    meters and a month of pageviews to answer "how many tills at once"
+    is a board nobody will leave open.
+    """
+    _fleet_auth(request)
+    if tid not in tenancy.all_tenants():
+        raise HTTPException(404, "this node does not hold that tenant")
+    from storefront.backend import fleetadmin
+    tok = tenancy.CURRENT.set(tid)
+    try:
+        con = db.connect()
+        try:
+            return fleetadmin._pressure_from(con)
+        finally:
+            con.close()
+    finally:
+        tenancy.CURRENT.reset(tok)
+
+
 @app.get("/api/node/tenants/{tid}/export")
 def node_export(tid: str, request: Request):
     """Hand a tenant back — the recall's first half."""
