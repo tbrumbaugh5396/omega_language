@@ -1514,6 +1514,33 @@ ok(_fin["cases"] == 4, "finishing a run records what was actually made")
 _m4 = [m for m in c.get("/api/supply", headers=A).json()["materials"]
        if m["id"] == _mat["id"]][0]
 ok(_m4["on_hand"] == 7, "and consumes materials for the real number, not the plan")
+
+# The two ledgers meet here or nowhere. "Add the cases it made" was a
+# sentence in finish_run's docstring and nothing else: materials were
+# consumed and the finished goods went nowhere, so a case could be
+# manufactured out of real ingredients and exist in no store's stock.
+ok(_fin.get("made") and _fin["made"]["units"] > 0,
+   "closing a run puts its output on a shelf — a run that consumes real "
+   "ingredients and produces goods that exist nowhere is the seam between "
+   "the two records, and it is where stock goes missing")
+_pcase = [p2 for p2 in c.get("/api/products", headers=A).json()
+          if p2["id"] == _prod][0]
+ok(_fin["made"]["units"] == 4 * (_pcase["case_size"] or 1),
+   "in units, because a shelf counts units and a run counts cases — two "
+   "units of measure meeting unconverted is the oldest way for stock to "
+   "be wrong by a factor of twelve")
+_tr = c.get(f"/api/supply/trail/{_prod}", headers=A).json()
+ok(_tr["materials_used"] == 8 and _tr["made_units"] == _fin["made"]["units"],
+   "and one product reads down both ledgers in one list: what the run "
+   "consumed and what it produced")
+_sides = {m["side"] for m in _tr["moves"]}
+ok(_sides == {"materials", "goods"},
+   "both sides of the seam, in one order — 'we bought a thousand litres, "
+   "where did it go' crosses it at production and was unanswerable from "
+   "either side alone")
+ok(any(m["reason"] == f"run:{_run['id']}" for m in _tr["moves"]
+       if m["side"] == "goods"),
+   "with the run itself as the reason on the shelf side")
 ok(c.post(f"/api/supply/runs/{_run['id']}/finish", headers=A,
           json={"actual_cases": 1}).status_code == 400,
    "a finished run can't be finished twice")

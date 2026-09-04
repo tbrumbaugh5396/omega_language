@@ -2951,12 +2951,27 @@ def supply_add_run(body: supply.RunBody, user=Depends(permitted("supply")),
 
 class RunFinishBody(BaseModel):
     actual_cases: int
+    store_id: int = 0                 # where the cases land; 0 = decide it
 
 
 @app.post("/api/supply/runs/{rid}/finish")
 def supply_finish_run(rid: int, body: RunFinishBody, user=Depends(permitted("supply")),
                       con=Depends(get_con)):
-    return supply.finish_run(con, rid, body.actual_cases, user["name"])
+    return supply.finish_run(con, rid, body.actual_cases, user["name"],
+                             getattr(body, "store_id", 0) or 0)
+
+
+@app.get("/api/supply/trail/{product_id}")
+def supply_trail(product_id: int, days: int = 180,
+                 user=Depends(permitted("supply")), con=Depends(get_con)):
+    """One product, both ledgers, in one order.
+
+    A case is made of materials and then lives on a shelf, and those were
+    two records that never met. "We bought a thousand litres, where did it
+    go" crosses the seam at production and was unanswerable from either
+    side alone.
+    """
+    return supply.trail(con, product_id, max(1, min(400, days)))
 
 
 @app.patch("/api/supply/runs/{rid}")

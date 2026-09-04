@@ -144,6 +144,10 @@ async function renderSupply() {
         </div>
         <span class="pill ${r.status === "done" ? "ok"
           : r.status === "scrapped" ? "bad" : ""}">${esc(r.status)}</span>
+        <button class="btn alt sm" data-trail="${r.product_id}"
+          data-name="${esc(r.product_name || "product #" + r.product_id)}"
+          title="the materials this consumed and the cases it put on a
+            shelf, in one list">Trail</button>
         ${r.status !== "done" && r.status !== "scrapped"
           ? `<button class="btn sm" data-runfin="${r.id}">Finish</button>
              <button class="btn alt sm" data-rowdel="run:${r.id}">Delete</button>`
@@ -202,6 +206,8 @@ async function renderSupply() {
     receiveForm(+b.dataset.porecv, refresh));
   view().querySelectorAll("[data-polink]").forEach((b) => b.onclick = () =>
     portalLinkForm(+b.dataset.polink, refresh));
+  view().querySelectorAll("[data-trail]").forEach((b) => b.onclick = () =>
+    trailFor(+b.dataset.trail, b.dataset.name));
   view().querySelectorAll("[data-runfin]").forEach((b) => b.onclick = () =>
     finishForm(+b.dataset.runfin, refresh));
   view().querySelectorAll("[data-adj]").forEach((b) => b.onclick = () =>
@@ -514,28 +520,70 @@ function runForm(products, refresh) {
   };
 }
 
-function finishForm(rid, refresh) {
+async function finishForm(rid, refresh) {
   const run = SUP.runs.find((r) => r.id === rid);
+  const stores = await api("/api/stores").catch(() => []);
   modal(`<h3>Finish this run</h3>
     <p class="dim">Materials are consumed against what was actually made, not
       what was planned — those differ, and the materials followed the real
-      number.</p>
+      number. The cases go onto a shelf: a run that consumes real
+      ingredients and produces goods that exist nowhere is the seam
+      between the two ledgers, and it is where stock goes missing.</p>
     <label>Cases produced</label>
     <input id="fin-cases" type="number" value="${run.planned_cases}">
+    <label>Where they land</label>
+    <select id="fin-store">
+      <option value="0">the best-stocked store</option>
+      ${stores.map((st) => `<option value="${st.id}"${
+        run.store_id === st.id ? " selected" : ""}>${esc(st.name)}</option>`)
+        .join("")}</select>
     <div class="modal-acts"><button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="fin-save">Finish</button></div>`);
   $("#fin-save").onclick = async () => {
     try {
-      const r = await api(`/api/supply/runs/${rid}/finish`,
-        { body: { actual_cases: +$("#fin-cases").value || 0 } });
+      const r = await api(`/api/supply/runs/${rid}/finish`, { body: {
+        actual_cases: +$("#fin-cases").value || 0,
+        store_id: +$("#fin-store").value || 0 } });
       closeModal();
       toast(r.went_negative.length
         ? `Done — but ${r.went_negative.join(", ")} went negative, so the `
           + "recipe or the counts need a look"
-        : `Done — ${r.cases} cases, materials consumed`);
+        : r.made
+          ? `Done — ${r.cases} cases, ${r.made.units} units onto the shelf`
+          : `Done — ${r.cases} cases, materials consumed`);
       refresh();
     } catch (e) { toast(e.message); }
   };
+}
+
+/* One product, both ledgers. "We bought a thousand litres, where did it
+   go" crosses the seam at production and was unanswerable from either
+   side alone. */
+async function trailFor(pid, name) {
+  const d = await api(`/api/supply/trail/${pid}?days=180`);
+  modal(`<h3>${esc(name)}</h3>
+    <p class="dim">${d.runs} run${d.runs === 1 ? "" : "s"} ·
+      ${d.materials_used} of materials consumed · ${d.made_units} units
+      made. ${esc(d.note)}</p>
+    ${d.moves.length ? `<div class="tablewrap"><table>
+      <thead><tr><th>when</th><th>side</th><th>change</th><th>what</th>
+        <th>why</th></tr></thead>
+      <tbody>${d.moves.map((m) => `<tr>
+        <td class="dim">${fmtDate(m.at)}</td>
+        <td>${m.side === "goods"
+          ? '<span class="pill ok">shelf</span>'
+          : '<span class="pill">materials</span>'}</td>
+        <td class="${m.qty > 0 ? "good" : "low"}">${m.qty > 0 ? "+" : ""}${
+          m.qty} ${esc(m.unit)}</td>
+        <td>${esc(m.what)}</td>
+        <td>${esc(m.reason)}${m.counted
+          ? ' <span class="pill ok">counted</span>' : ""}
+          ${m.note ? `<br><span class="dim">${esc(m.note)}</span>` : ""}</td>
+      </tr>`).join("")}</tbody></table></div>`
+      : emptyState("box", "Nothing on either side yet",
+                   "A run that finishes will show on both.")}
+    <div class="modal-foot">
+      <button class="btn" data-close>Close</button></div>`, "wide");
 }
 
 function adjustForm(mid, refresh) {

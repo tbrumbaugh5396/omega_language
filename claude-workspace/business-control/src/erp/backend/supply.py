@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS production_runs (
   id INTEGER PRIMARY KEY,
   product_id INTEGER NOT NULL,
   facility TEXT DEFAULT '',
+  store_id INTEGER DEFAULT 0,         -- where the cases land when it closes
   status TEXT DEFAULT 'planned',      -- planned|running|done|scrapped
   planned_cases INTEGER DEFAULT 0,
   actual_cases INTEGER DEFAULT 0,
@@ -171,6 +172,7 @@ SHIP_STATUS = ("booked", "in_transit", "customs", "arrived")
 MIGRATIONS = (
     "ALTER TABLE purchase_orders ADD COLUMN portal_token TEXT DEFAULT ''",
     "ALTER TABLE purchase_orders ADD COLUMN confirmed_at REAL DEFAULT 0",
+    "ALTER TABLE production_runs ADD COLUMN store_id INTEGER DEFAULT 0",
 )
 
 
@@ -234,6 +236,60 @@ class POBody(BaseModel):
     expected: float = 0
     notes: str = ""
     lines: list[POLineBody] = []
+
+
+def trail(con, product_id: int, days: int = 180) -> dict:
+    """One product, both ledgers, in one order.
+
+    A case is made of materials and then lives on a shelf, and those were
+    two records that never met. Reading them together is the only way to
+    answer the question anybody actually has — "we bought a thousand
+    litres, where did it go" — which crosses the seam at production and
+    was unanswerable on either side of it alone.
+    """
+    since = time.time() - days * 86400
+    out = []
+    runs = {r["id"]: r for r in con.execute(
+        "SELECT id, actual_cases, finished_at FROM production_runs"
+        " WHERE product_id=?", (product_id,))}
+    for r in con.execute(
+            "SELECT m.*, mat.name, mat.unit FROM material_moves m"
+            " JOIN materials mat ON mat.id=m.material_id"
+            " WHERE m.created_at>=? AND m.reason LIKE 'run:%'", (since,)):
+        rid = int(str(r["reason"]).split(":")[1] or 0)
+        if rid not in runs:
+            continue
+        out.append({"side": "materials", "at": r["created_at"],
+                    "what": r["name"], "unit": r["unit"] or "",
+                    "qty": r["qty"], "reason": r["reason"],
+                    "actor": r["actor"] or "", "note": r["note"] or "",
+                    "counted": False})
+    try:
+        for r in con.execute(
+                "SELECT m.*, COALESCE(s.name,'') AS store FROM"
+                " inventory_moves m LEFT JOIN stores s ON s.id=m.store_id"
+                " WHERE m.product_id=? AND m.created_at>=?",
+                (product_id, since)):
+            out.append({"side": "goods", "at": r["created_at"],
+                        "what": r["store"] or f"store {r['store_id']}",
+                        "unit": "units", "qty": r["qty"],
+                        "balance": r["balance"], "reason": r["reason"],
+                        "actor": r["actor"] or "", "note": r["note"] or "",
+                        "counted": bool(r["counted"])})
+    except Exception:                                        # noqa: BLE001
+        pass
+    out.sort(key=lambda x: -x["at"])
+    made = sum(x["qty"] for x in out
+               if x["side"] == "goods" and str(x["reason"]).startswith("run:"))
+    used = sum(-x["qty"] for x in out if x["side"] == "materials")
+    return {"product_id": product_id, "days": days, "moves": out[:250],
+            "made_units": round(made, 3), "materials_used": round(used, 3),
+            "runs": len(runs),
+            "note": "Both sides of the same product: the materials a run "
+                    "consumed and the cases it put on a shelf. They meet at "
+                    "production, which is the only place they ever touch — "
+                    "and until a run's output was booked, they did not "
+                    "touch at all."}
 
 
 class RunBody(BaseModel):
@@ -512,11 +568,21 @@ def receive_po(con, po_id: int, lines: dict, actor: str) -> dict:
     return {"ok": True, "complete": complete, "lines": booked}
 
 
-def finish_run(con, run_id: int, actual_cases: int, actor: str) -> dict:
+def finish_run(con, run_id: int, actual_cases: int, actor: str,
+               store_id: int = 0) -> dict:
     """Close a production run: consume the materials it used, add the cases
     it made. Consumption is computed from what was actually produced, not
     what was planned, because those differ and the materials followed the
-    real number."""
+    real number.
+
+    "Add the cases it made" is the half that used to be a sentence in this
+    docstring and nothing else. Materials were consumed and the finished
+    goods went nowhere — the two ledgers met at production and did not
+    join, so a case could be manufactured out of real ingredients and then
+    exist in no store's stock. Closing a run now puts its output on a
+    shelf through the same primitive everything else uses, with the run as
+    the reason, which is the seam where the two records finally touch.
+    """
     r = con.execute("SELECT * FROM production_runs WHERE id=?",
                     (run_id,)).fetchone()
     if r is None:
@@ -537,13 +603,39 @@ def finish_run(con, run_id: int, actual_cases: int, actor: str) -> dict:
         move(con, b["material_id"], -qty, f"run:{run_id}", actor)
         used.append({"name": b["name"], "qty": round(qty, 2),
                      "negative": b["on_hand"] - qty < 0})
+    # Where the cases go. The run's own store if it has one, else the one
+    # named on the way in, else the best-stocked store — the same
+    # fallback shipping uses, so goods do not vanish because nobody said.
+    landed = store_id or (r["store_id"] if "store_id" in r.keys() else 0)
+    if not landed:
+        row = con.execute(
+            "SELECT s.id FROM stores s JOIN inventory i ON i.store_id=s.id"
+            " WHERE s.active=1 GROUP BY s.id ORDER BY SUM(i.qty) DESC"
+            " LIMIT 1").fetchone()
+        landed = row["id"] if row else 0
+    made = None
+    if landed and actual_cases > 0:
+        from . import db as _db
+        p = con.execute("SELECT case_size, name FROM products WHERE id=?",
+                        (r["product_id"],)).fetchone()
+        # Cases into units, because a store's shelf counts units and the
+        # run counts cases. Two units of measure meeting unconverted is
+        # the oldest way for stock to be wrong by a factor of twelve.
+        units = actual_cases * ((p["case_size"] or 1) if p else 1)
+        _db.stock_move(con, landed, r["product_id"], units,
+                       f"run:{run_id}", actor,
+                       f"{actual_cases} case(s) made")
+        made = {"store_id": landed, "units": units,
+                "product": p["name"] if p else ""}
     con.execute(
         "UPDATE production_runs SET status='done', actual_cases=?,"
-        " finished_at=? WHERE id=?", (actual_cases, time.time(), run_id))
+        " store_id=?, finished_at=? WHERE id=?",
+        (actual_cases, landed, time.time(), run_id))
     con.commit()
     # A negative stock level is left visible rather than clamped: it means
     # the recipe or the counts are wrong, and hiding it hides the problem.
     return {"ok": True, "cases": actual_cases, "materials": used,
+            "made": made,
             "went_negative": [u["name"] for u in used if u["negative"]]}
 
 
