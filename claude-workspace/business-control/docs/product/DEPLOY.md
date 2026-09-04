@@ -40,7 +40,14 @@ shop.yourbrand.com {
 ```
 
 `sudo systemctl reload caddy` — Caddy fetches and renews the TLS certificate
-by itself. 
+by itself. Caddy also appends the caller's address to `X-Forwarded-For`,
+which is what lets the app tell one device's network from another's —
+the kiosk setup link is bound to the network it was minted on, and
+without a proxy saying who called, every device looks identical and that
+binding protects nothing. Nothing to configure: because the app binds
+`127.0.0.1`, a request whose peer is loopback can only have come through
+Caddy, so its hop is trusted and a forged header from outside is not.
+
 Real HTTPS also unlocks phone camera/mic (calls, scanner) and iOS
 push with no warnings.
 
@@ -85,7 +92,11 @@ you), writes `data/backups/last.json`, and the Platform tab reads it — a
 green "backed up 3h ago" chip when the promise is being kept, a red one
 when it is not.
 
-Binding to 127.0.0.1 means only Caddy (with TLS) can reach it.
+Binding to 127.0.0.1 means only Caddy (with TLS) can reach it — and it is
+what makes `X-Forwarded-For` worth reading at all. If you ever bind this
+to a public interface, that stops being true: a request could reach the
+app without passing the proxy, and anything deciding on the caller's
+address should be assumed fooled.
 
 ## 5. Harden the app config (`data/config.json`)
 
@@ -96,6 +107,7 @@ Binding to 127.0.0.1 means only Caddy (with TLS) can reach it.
 | `session_days` | `30` (default) | a sign-in token unused this many days expires and is rotated dead; use refreshes it. `0` disables |
 | `admin_key` | (rotate it) | anyone who ever saw the old one can mint admins |
 | `smtp` / `stripe_secret_key` | your real creds | entered on the server, never committed anywhere. With SMTP set, team invites are emailed as well as linked |
+| `trust_forwarded_for` | (leave unset **on this layout**) | who a request came from, for the checks that care — the kiosk setup link only works on the network it was minted on. Unset is correct here: the app binds `127.0.0.1`, so a request whose peer is loopback came through Caddy and its appended hop is read automatically. Set it to `true` **only** when the proxy is on a different machine, and never while anything but a proxy can reach the port |
 
 Firewall: allow only 22/80/443 (`ufw allow 22,80,443/tcp && ufw enable`).
 

@@ -1733,20 +1733,47 @@ def _touch_kiosk(con, kid: str) -> None:
         pass
 
 
+def _loopback(host: str) -> bool:
+    """Did this arrive from something on this very machine."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _client_ip(request: Request) -> str:
     """Who is actually asking.
 
-    request.client.host, unless this install has been told it sits behind
-    a proxy it trusts. Reading X-Forwarded-For without being told to is
-    how an address check becomes a formality: the header is written by
-    the client, so anybody could claim to be standing in the shop.
+    X-Forwarded-For is written by whoever is asking, so honouring it on
+    faith turns an address check into a formality — anybody could claim
+    to be standing in the shop. It is read in exactly two cases.
+
+    The first is a request that arrived from this machine. In the
+    deployment this software actually ships with, the app binds 127.0.0.1
+    and Caddy holds the port: a request whose peer is loopback came
+    through that proxy, because nothing else can reach the socket, and a
+    remote attacker cannot make their packets appear to originate from
+    the host. So the proxy's own appended hop is worth reading, and the
+    VPS works correctly with nothing to remember — which matters, because
+    a security setting you have to remember is one that is missing on the
+    box where it counted.
+
+    The second is being told: `trust_forwarded_for` covers the topology
+    where the proxy is on another machine, where nobody can infer this
+    for us.
+
+    Both take the LAST hop. Caddy and nginx both APPEND the real client
+    to whatever the client sent, so the tail is the proxy's own word for
+    who called and everything before it is hearsay. Reading the first
+    entry — which is the more common mistake — reads the attacker's.
     """
-    if CFG.get("trust_forwarded_for"):
+    peer = request.client.host if request.client else ""
+    if CFG.get("trust_forwarded_for") or _loopback(peer):
         fwd = (request.headers.get("x-forwarded-for") or "").split(",")
         hop = fwd[-1].strip() if fwd and fwd[-1].strip() else ""
         if hop:
             return hop
-    return request.client.host if request.client else ""
+    return peer
 
 
 def _same_network(a: str, b: str) -> bool:

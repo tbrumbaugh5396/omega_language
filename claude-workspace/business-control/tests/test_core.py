@@ -1289,6 +1289,35 @@ ok(not _sn("203.0.113.7", "2001:db8::7") and not _sn("", "203.0.113.7"),
    "two families never match, and an address we do not have matches "
    "nothing — an unknown network is not a passing network")
 
+# Who a request came from, which the network binding rests on entirely.
+from erp.backend.main import _client_ip as _cip  # noqa: E402
+
+
+class _FakeReq:
+    def __init__(self, peer, xff=None):
+        self.client = type("C", (), {"host": peer})()
+        self.headers = {"x-forwarded-for": xff} if xff else {}
+
+
+ok(_cip(_FakeReq("127.0.0.1", "203.0.113.9")) == "203.0.113.9",
+   "behind the proxy this ships with, the caller's real address is read "
+   "with nothing to configure — the app binds loopback, so a request "
+   "whose peer is 127.0.0.1 can only have come through Caddy")
+ok(_cip(_FakeReq("127.0.0.1", "10.9.9.9, 203.0.113.9")) == "203.0.113.9",
+   "and it takes the LAST hop, which is the proxy's own word for who "
+   "called. Everything before it is what the caller claimed, so reading "
+   "the first entry — the commoner mistake — reads the attacker's")
+ok(_cip(_FakeReq("203.0.113.50", "127.0.0.1")) == "203.0.113.50",
+   "a request that did NOT come through a local proxy has its header "
+   "ignored outright: otherwise anyone could post one and be believed")
+ok(_cip(_FakeReq("127.0.0.1")) == "127.0.0.1",
+   "and with no header there is nothing to read, so the peer stands")
+_dep = open("docs/product/DEPLOY.md").read()
+ok("trust_forwarded_for" in _dep and "different machine" in _dep,
+   "the runbook says when to set it and when not to — the answer for "
+   "the layout it documents is 'not at all', and a setting nobody "
+   "explains gets turned on everywhere by somebody being careful")
+
 _bl = c.post(f"/api/admin/kiosks/{_k1}/enrol", headers=A, json={}).json()
 ok(_bl["bound"] and "same network" in _bl["note"],
    "a link is bound by default rather than by remembering to ask")
