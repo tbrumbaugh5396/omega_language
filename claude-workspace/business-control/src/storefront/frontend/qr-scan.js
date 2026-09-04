@@ -19,6 +19,28 @@
 
   const supported = () => "BarcodeDetector" in global;
 
+  /* The formats a till needs. QR is the default because that is what every
+     existing caller here is scanning; a shop counter asks for the retail
+     symbologies as well, and they are requested by name rather than by
+     asking for everything — a detector told to look for fourteen formats
+     at once is slower at the one that is actually under the beam. */
+  const RETAIL = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128",
+                  "code_39", "itf", "qr_code"];
+
+  /* Ask the browser which of them it can actually do. Chrome on a phone
+     reads all of these; a desktop build may read three. Handing the
+     detector a format it does not know makes it refuse the lot, which
+     presents as a scanner that never sees anything. */
+  async function usable(want) {
+    try {
+      const have = await global.BarcodeDetector.getSupportedFormats();
+      const keep = want.filter((f) => have.includes(f));
+      return keep.length ? keep : null;
+    } catch (e) {
+      return want;            // older builds have no getSupportedFormats
+    }
+  }
+
   function overlay(title, hint) {
     const el = document.createElement("div");
     el.className = "qrs-wrap";
@@ -76,12 +98,19 @@
       }
       navigator.mediaDevices.getUserMedia(
         { video: { facingMode: "environment" } }
-      ).then((s) => {
+      ).then(async (s) => {
         if (done) { s.getTracks().forEach((t) => t.stop()); return; }
         stream = s;
         video.srcObject = s;
         video.play().catch(() => {});
-        const det = new global.BarcodeDetector({ formats: ["qr_code"] });
+        const want = o.formats || ["qr_code"];
+        const formats = await usable(want);
+        if (!formats) {
+          status.textContent = "This browser cannot read that kind of code. "
+            + "Type it in instead.";
+          return finish(null);
+        }
+        const det = new global.BarcodeDetector({ formats });
         const tick = async () => {
           if (done) return;
           try {
@@ -124,5 +153,52 @@
     return { ok: true };
   }
 
-  global.QRScan = { supported, scan, signIn, signInLink };
+  /* ---------- the scanner that is actually on the counter ----------
+
+     Most retail scanners are not cameras. They are USB devices that
+     pretend to be a keyboard: they type the digits very fast and press
+     Enter. Nothing has to be granted, nothing has to be opened, and the
+     page only has to notice that a burst of keystrokes arrived faster
+     than fingers can move and ended in a Return.
+
+     Which is also how it stays out of the way: a person typing into a
+     search box types at human speed, so the burst never triggers, and
+     anything typed into a real input is left alone entirely. */
+  function wedge(onCode, opts) {
+    const o = opts || {};
+    const minLen = o.minLength || 4;
+    const gap = o.gapMs || 40;          // a scanner beats this comfortably
+    let buf = "", last = 0;
+    const onKey = (e) => {
+      const now = Date.now();
+      const el = document.activeElement;
+      const typing = el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA"
+                            || el.isContentEditable);
+      if (typing && !el.dataset.wedge) return;
+      if (now - last > gap) buf = "";
+      last = now;
+      if (e.key === "Enter") {
+        const code = buf;
+        buf = "";
+        if (code.length >= minLen) {
+          e.preventDefault();
+          onCode(code);
+        }
+        return;
+      }
+      if (e.key.length === 1) buf += e.key;
+      // A long burst with no Return is a scanner configured without one:
+      // flushed on a timer so it still works, just a beat later.
+      clearTimeout(wedge._t);
+      wedge._t = setTimeout(() => {
+        if (buf.length >= minLen) { const c = buf; buf = ""; onCode(c); }
+        buf = "";
+      }, 120);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }
+
+  global.QRScan = { supported, scan, signIn, signInLink, wedge,
+                    RETAIL };
 })(window);

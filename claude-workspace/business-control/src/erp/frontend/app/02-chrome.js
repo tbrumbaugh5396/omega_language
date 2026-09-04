@@ -364,6 +364,10 @@ function emptyState(icon, title, hint) {
 }
 
 async function render() {
+  // A keyboard-scanner listener belongs to the till, not to the app. Left
+  // on, it would swallow the Enter key on every other screen — which is
+  // the sort of bug that gets blamed on the keyboard.
+  if (typeof wedgeOff === "function") wedgeOff();
   renderChrome();
   syncRoute();
   clearInterval(S._dcTimer);        // stop polling Discord once you leave it

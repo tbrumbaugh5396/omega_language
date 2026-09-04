@@ -3394,12 +3394,15 @@ ok('id="sh-new"' in _ops and 'id="inv-new"' in _ops,
    "both product pages — the shop and the inventory — open a new product")
 ok("async function productForm(" in _ops,
    "through one form, so the two doors cannot drift apart")
-_pfm = _ops.split("async function productForm(")[1][:2600]
+_pfm = _ops.split("async function productForm(")[1][:3600]
 ok("/api/admin/product-kinds" in _pfm and 'id="npd-kind"' in _pfm,
    "which asks which lane it sits in, from the kinds this install has")
 ok("draft: true" in _pfm and "/shelf" in _pfm,
    "and a new line opens as a draft — priced and described in private, "
    "invisible to the shop until somebody publishes it")
+ok('id="npd-bar"' in _pfm and "QRScan.wedge" in _pfm,
+   "with a place for the barcode that can be scanned into — the natural "
+   "moment to teach the till a code is while somebody is holding the tin")
 
 # Eight connections lived behind one list. A person looking for QuickBooks
 # looks in the navigation, and four of the eight already had a page there.
@@ -3845,6 +3848,52 @@ ok(any(o["kind"] == "pos" for o in (_ords if isinstance(_ords, list)
    "a counter sale is an ordinary order — the day book, the P&L, margin "
    "and stock all read orders already, and a second sales table would "
    "have meant teaching every one of them a second answer")
+
+# A beep has to mean one thing. Codes are normalised at both ends,
+# because people paste them out of spreadsheets with spaces in and a
+# scanner sends the digits and nothing else.
+_bp = c.post(f"/api/admin/products/{_prod['id']}/barcode", headers=A,
+             json={"barcode": " 5060337502115 "}).json()
+ok(_bp["barcode"] == "5060337502115",
+   "a code is stored as the scanner would read it back — storing "
+   "'0 12345 67890 5' and scanning '012345678905' is a product that "
+   "exists twice and can be found neither time")
+_look = c.get("/api/pos/lookup?code=5060337502115", headers=A).json()
+ok(_look["id"] == _prod["id"], "and scanning it finds the product")
+ok(c.get("/api/pos/lookup?code=506-0337 502115", headers=A).json()["id"]
+   == _prod["id"], "however it was typed")
+_other = [p for p in c.get("/api/products", headers=A).json()
+          if p["id"] != _prod["id"]][0]
+ok(c.post(f"/api/admin/products/{_other['id']}/barcode", headers=A,
+          json={"barcode": "5060337502115"}).status_code == 409,
+   "two products cannot share a code — a beep that could mean either is "
+   "worse than a beep that means nothing")
+ok(c.get(f"/api/pos/lookup?code={_prod['sku']}", headers=A).json()["id"]
+   == _prod["id"],
+   "a SKU works too, because staff type those when a label is torn")
+ok(c.get("/api/pos/lookup?code=00000000000", headers=A).status_code == 404,
+   "and an unknown code says so rather than ringing up the wrong thing")
+ok(c.get("/api/pos/lookup?code=5060337502115").status_code in (401, 403),
+   "the lookup is the till's — it is the product list with a different "
+   "shape")
+
+_qrjs = c.get("/qr-scan.js").text
+ok("ean_13" in _qrjs and "upc_a" in _qrjs and "code_128" in _qrjs,
+   "the reader knows the symbologies a shop actually prints, not just QR")
+ok("getSupportedFormats" in _qrjs,
+   "and asks the browser which of them it can do — handing a detector a "
+   "format it does not know makes it refuse the lot, which presents as a "
+   "scanner that never sees anything")
+ok("function wedge(" in _qrjs and "keydown" in _qrjs,
+   "and the scanner actually on a counter is a USB device that types, so "
+   "there is a listener for a burst of keystrokes ending in Return")
+ok("gapMs" in _qrjs or "gap = " in _qrjs,
+   "told apart from a person typing by speed, which is the only thing "
+   "that distinguishes them")
+ok("wedgeOff" in _ops and "if (typeof wedgeOff" in _ops,
+   "and it is turned off when the till is not on screen — left on it "
+   "would swallow the Enter key everywhere else, which is the sort of "
+   "bug that gets blamed on the keyboard")
 
 # The same till, handed to the customer.
 _lane = c.post("/api/pos/session", headers=A, json={

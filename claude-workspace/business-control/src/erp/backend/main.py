@@ -741,17 +741,98 @@ class ProductBody(BaseModel):
     price_cents: int
     case_size: int = 12
     case_price_cents: int
+    barcode: str = ""
 
 
 @app.post("/api/admin/products")
 def add_product(body: ProductBody, user=Depends(admin_user), con=Depends(get_con)):
     con.execute(
         "INSERT INTO products(sku,name,description,category,price_cents,"
-        " case_size,case_price_cents) VALUES(?,?,?,?,?,?,?)",
+        " case_size,case_price_cents,barcode) VALUES(?,?,?,?,?,?,?,?)",
         (body.sku, body.name, body.description, body.category,
-         body.price_cents, body.case_size, body.case_price_cents))
+         body.price_cents, body.case_size, body.case_price_cents,
+         _clean_code(body.barcode)))
     con.commit()
     return {"ok": True}
+
+
+def _clean_code(raw: str) -> str:
+    """A scanned code, as the scanner would read it back.
+
+    Wedge scanners send whatever is under the beam and people paste codes
+    out of spreadsheets with spaces, hyphens and a trailing tab in them.
+    Storing "0 12345 67890 5" and scanning "012345678905" is a product
+    that exists twice and can be found neither time, so both ends go
+    through here.
+    """
+    return "".join(ch for ch in (raw or "").strip()
+                   if ch.isalnum())[:64].upper()
+
+
+class BarcodeBody(BaseModel):
+    barcode: str = ""
+
+
+@app.post("/api/admin/products/{pid}/barcode")
+def product_barcode(pid: int, body: BarcodeBody, user=Depends(admin_user),
+                    con=Depends(get_con)):
+    """Teach the till what is printed on the tin.
+
+    A SKU is what we call it and we chose it; a barcode is what the
+    manufacturer stamped on the packaging and the scanner reads. Two
+    products cannot share one, because a beep that could mean either is
+    worse than a beep that means nothing.
+    """
+    code = _clean_code(body.barcode)
+    if con.execute("SELECT 1 FROM products WHERE id=?", (pid,)).fetchone() \
+            is None:
+        raise HTTPException(404, "no such product")
+    if code:
+        clash = con.execute(
+            "SELECT name FROM products WHERE barcode=? AND id!=?",
+            (code, pid)).fetchone()
+        if clash:
+            raise HTTPException(
+                409, f"{clash['name']} already scans as that — one code, one "
+                     "product, or the beep means nothing")
+    con.execute("UPDATE products SET barcode=? WHERE id=?", (code, pid))
+    con.commit()
+    return {"ok": True, "barcode": code}
+
+
+@app.get("/api/pos/lookup")
+def pos_lookup(code: str, user=Depends(permitted("till")),
+               con=Depends(get_con)):
+    """What did that beep mean?
+
+    Tried in the order a shop would: the barcode printed on the item, the
+    SKU we gave it, then the id — because staff type SKUs when a label is
+    torn and nobody types an id, but a scanner sometimes reads one off an
+    internal shelf tag.
+    """
+    raw = (code or "").strip()
+    clean = _clean_code(raw)
+    if not clean:
+        raise HTTPException(400, "nothing scanned")
+    row = con.execute(
+        "SELECT * FROM products WHERE barcode=? AND barcode!=''",
+        (clean,)).fetchone()
+    if row is None:
+        row = con.execute(
+            "SELECT * FROM products WHERE UPPER(REPLACE(sku,'-',''))=?",
+            (clean,)).fetchone()
+    if row is None and clean.isdigit():
+        row = con.execute("SELECT * FROM products WHERE id=?",
+                          (int(clean),)).fetchone()
+    if row is None:
+        raise HTTPException(
+            404, f"nothing here scans as {raw[:40]} — an owner can put the "
+                 "code on the product from the shop screen")
+    if not row["active"]:
+        raise HTTPException(409, f"{row['name']} is not on sale")
+    return {"id": row["id"], "name": row["name"], "sku": row["sku"],
+            "barcode": row["barcode"] or "",
+            "price_cents": row["price_cents"]}
 
 
 class ProductMetaBody(BaseModel):

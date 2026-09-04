@@ -1605,3 +1605,12 @@ body.lane-on { overflow: hidden; }
   .lane-wrap { grid-template-columns: 1fr; }
   .lane-basket { position: static; }
 }
+
+.till-scan { display: flex; gap: 6px; margin-bottom: 10px; }
+.till-scan input { flex: 1; min-width: 0; }
+.till-scan .btn { flex: none; padding: 0 10px; }
+.lane-scan { grid-column: 1 / -1; display: flex; gap: 10px; }
+.lane-scan input { flex: 1; font-size: 18px; padding: 14px; }
+.lane-scan .btn { flex: none; padding: 0 20px; }
+.lane-said { grid-column: 1 / -1; min-height: 22px; font-size: 17px;
+  font-weight: 600; margin: -4px 0 0; }

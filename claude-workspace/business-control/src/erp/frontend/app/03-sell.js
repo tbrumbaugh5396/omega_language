@@ -33,11 +33,25 @@ async function productForm() {
         matches the unit price</span></label>
         <input id="npd-case" type="number" min="0" step="0.01"></div>
     </div>
-    <label>Description</label>
-    <textarea id="npd-desc" rows="3"></textarea>
+    <div class="row2">
+      <div><label>Barcode <span class="opt">what the scanner reads —
+        scan it here</span></label>
+        <input id="npd-bar" data-wedge="1" autocomplete="off"
+          placeholder="hold it under the scanner"></div>
+      <div><label>Description</label><input id="npd-desc"></div>
+    </div>
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="npd-save">Add as a draft</button></div>`);
+  // The natural moment to teach the till a code is while holding the tin.
+  if (window.QRScan && QRScan.wedge) {
+    const off = QRScan.wedge((code) => {
+      const el = $("#npd-bar");
+      if (el) { el.value = code; el.classList.add("got"); }
+    });
+    const shut = closeModal;
+    closeModal = function () { off(); closeModal = shut; shut(); };
+  }
   $("#npd-save").onclick = async () => {
     const name = $("#npd-name").value.trim();
     const price = Math.round((+$("#npd-price").value || 0) * 100);
@@ -48,6 +62,7 @@ async function productForm() {
     try {
       await api("/api/admin/products", { body: {
         sku, name, description: $("#npd-desc").value.trim(),
+        barcode: $("#npd-bar").value.trim(),
         category: $("#npd-cat").value.trim() || "General",
         price_cents: price, case_size: 12,
         case_price_cents: Math.round((+$("#npd-case").value || 0) * 100)
@@ -1811,6 +1826,34 @@ async function whoHasSaid() {
    tenders that can be more than one, change that comes back, and a count
    at the end whose difference is stated rather than absorbed. */
 let TILL = { lines: [], register: "counter" };
+let TILL_WEDGE = null;             // the keyboard-scanner listener, if on
+
+/* A beep, turned into a line. The lookup is the server's because the
+   answer depends on what this shop sells — and because a till that
+   resolves codes in the browser is a till that can be shown a product
+   list by anybody who opens the network tab. */
+async function scanned(code, add, onMiss) {
+  try {
+    const p = await api(`/api/pos/lookup?code=${encodeURIComponent(code)}`);
+    add(p);
+    return p;
+  } catch (e) {
+    if (onMiss) onMiss(e.message);
+    else toast(e.message);
+    return null;
+  }
+}
+
+/* Listen for the scanner on the counter — the USB kind that types. Kept
+   in one place so the till and the unattended lane cannot drift into
+   behaving differently at the one moment a customer is watching. */
+function wedgeOn(handler) {
+  wedgeOff();
+  if (window.QRScan && QRScan.wedge) TILL_WEDGE = QRScan.wedge(handler);
+}
+function wedgeOff() {
+  if (TILL_WEDGE) { TILL_WEDGE(); TILL_WEDGE = null; }
+}
 
 async function renderTill() {
   const [prods, sess] = await Promise.all([
@@ -1878,6 +1921,13 @@ async function renderTill() {
       </div>
       <div class="till-basket">
         <h3>Sale</h3>
+        <div class="till-scan">
+          <input id="tl-code" data-wedge="1" autocomplete="off"
+            placeholder="scan, or type a barcode / SKU">
+          <button class="btn alt sm" id="tl-cam"
+            title="use this device's camera">${opsIcon("camera", "btn-ic")}
+          </button>
+        </div>
         ${TILL.lines.length ? `<div class="till-lines">${TILL.lines.map((l, i) => `
           <div class="till-line">
             <span class="tl-n">${esc(l.name)}</span>
@@ -1923,6 +1973,25 @@ async function renderTill() {
   };
   view().querySelectorAll("[data-add]").forEach((b) => b.onclick = () =>
     add(+b.dataset.add, b.dataset.name, +b.dataset.price, 1));
+  const ring = (p) => add(p.id, p.name, p.price_cents, 1);
+  // The USB scanner types; the box is there for a torn label and for the
+  // camera to hand its answer to.
+  wedgeOn((code) => scanned(code, ring));
+  $("#tl-code").onkeydown = async (e) => {
+    if (e.key !== "Enter") return;
+    const v = $("#tl-code").value.trim();
+    if (!v) return;
+    $("#tl-code").value = "";
+    scanned(v, ring);
+  };
+  $("#tl-cam").onclick = async () => {
+    if (!window.QRScan || !QRScan.supported())
+      return toast("no camera reader in this browser — the scanner on the "
+                   + "counter still works, and so does typing it");
+    const code = await QRScan.scan({ title: "Scan the barcode",
+                                     formats: QRScan.RETAIL });
+    if (code) scanned(code, ring);
+  };
   view().querySelectorAll("[data-more]").forEach((b) => b.onclick = () => {
     TILL.lines[+b.dataset.more].qty += 1; renderTill();
   });
@@ -2089,6 +2158,7 @@ async function selfServe() {
         <p>Scan for your receipt — it is yours to keep.</p>
         <button class="btn lane-big" id="lane-next">Done</button>
       </div>`;
+      wedgeOff();     // nothing rings up while a receipt is on the screen
       $("#lane-next").onclick = () => { lines = []; draw(); };
       // And if nobody presses it, the next customer does not inherit
       // somebody else's receipt on the screen.
@@ -2101,6 +2171,12 @@ async function selfServe() {
           <h1>Scan or tap what you are buying</h1>
           <button class="btn alt sm" id="lane-out">Staff</button>
         </div>
+        <div class="lane-scan">
+          <input id="lane-code" data-wedge="1" autocomplete="off"
+            placeholder="hold the barcode under the scanner">
+          <button class="btn alt" id="lane-cam">Use the camera</button>
+        </div>
+        <p class="lane-said dim" id="lane-said"></p>
         <div class="lane-grid">
           ${sellable.map((p) => `<button class="lane-item" data-add="${p.id}"
             data-price="${p.price_cents}" data-name="${esc(p.name)}">
@@ -2141,6 +2217,41 @@ async function selfServe() {
       if (l.qty < 1) lines.splice(+b.dataset.less, 1);
       draw();
     });
+    const said = (msg, bad) => {
+      const el = $("#lane-said");
+      if (!el) return;
+      el.textContent = msg;
+      el.className = "lane-said " + (bad ? "low" : "good");
+      clearTimeout(said._t);
+      said._t = setTimeout(() => {
+        if ($("#lane-said")) { $("#lane-said").textContent = ""; }
+      }, 4000);
+    };
+    const ring = (p) => {
+      const at = lines.findIndex((l) => l.id === p.id);
+      if (at < 0) lines.push({ id: p.id, name: p.name,
+                              price: p.price_cents, qty: 1 });
+      else lines[at].qty += 1;
+      draw();
+      said(`${p.name} — ${money(p.price_cents)}`);
+    };
+    // A customer cannot be told to press a button first: the scanner is
+    // live the whole time this screen is up.
+    wedgeOn((code) => scanned(code, ring, (m) => said(m, true)));
+    $("#lane-code").onkeydown = (e) => {
+      if (e.key !== "Enter") return;
+      const v = $("#lane-code").value.trim();
+      $("#lane-code").value = "";
+      if (v) scanned(v, ring, (m) => said(m, true));
+    };
+    $("#lane-cam").onclick = async () => {
+      if (!window.QRScan || !QRScan.supported())
+        return said("This screen has no camera reader — please use the "
+                    + "scanner, or ask a member of staff.", true);
+      const code = await QRScan.scan({ title: "Hold the barcode up",
+                                       formats: QRScan.RETAIL });
+      if (code) scanned(code, ring, (m) => said(m, true));
+    };
     $("#lane-out").onclick = () => laneExit(box);
     if ($("#lane-pay")) $("#lane-pay").onclick = async () => {
       $("#lane-pay").disabled = true;
@@ -2181,6 +2292,7 @@ function laneExit(box) {
     try {
       await api("/api/kiosk/unlock", { body: {
         secret: pad.querySelector("#lane-secret").value } });
+      wedgeOff();
       box.remove();
       document.body.classList.remove("lane-on");
       renderTill();

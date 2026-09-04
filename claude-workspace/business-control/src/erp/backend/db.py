@@ -418,6 +418,13 @@ MIGRATIONS = (
     # from wherever you are.
     "ALTER TABLE users ADD COLUMN clock_store_id INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN clock_kiosk_only INTEGER DEFAULT 0",
+    # The number printed on the thing itself. Separate from the SKU: a SKU
+    # is what WE call it and we chose it, a barcode is what the
+    # manufacturer stamped on the tin and the scanner reads. For own-brand
+    # goods they are often the same string, and for everything bought in
+    # they are never the same string.
+    "ALTER TABLE products ADD COLUMN barcode TEXT DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS products_barcode ON products(barcode)",
     "ALTER TABLE trucks ADD COLUMN driver_user_id INTEGER",
     "ALTER TABLE routes ADD COLUMN total_min REAL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT ''",
