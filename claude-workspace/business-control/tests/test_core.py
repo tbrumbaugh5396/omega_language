@@ -1274,6 +1274,72 @@ _live = [k for k in c.get("/api/admin/kiosks", headers=A).json()
 ok(_live["claimed_at"] > 0,
    "the kiosk row records when a tablet last took its identity — a "
    "device claimed a door and somebody should be able to see that later")
+# The link is bound to the network it was minted on. An owner presses
+# the button standing in the shop; so is the tablet.
+from erp.backend.main import _same_network as _sn  # noqa: E402
+ok(_sn("203.0.113.9", "203.0.113.7") and not _sn("203.0.114.9",
+                                                 "203.0.113.7"),
+   "same shop, not same city: a /24 covers the office computer and the "
+   "tablet by the door, which are on one network and never on one address")
+ok(_sn("2001:db8::5", "2001:db8::99")
+   and not _sn("2001:db9::5", "2001:db8::99"),
+   "and a /64 does the same for v6, where a single device holds more "
+   "addresses than a shop has staff")
+ok(not _sn("203.0.113.7", "2001:db8::7") and not _sn("", "203.0.113.7"),
+   "two families never match, and an address we do not have matches "
+   "nothing — an unknown network is not a passing network")
+
+_bl = c.post(f"/api/admin/kiosks/{_k1}/enrol", headers=A, json={}).json()
+ok(_bl["bound"] and "same network" in _bl["note"],
+   "a link is bound by default rather than by remembering to ask")
+ok("network_known" in _bl and "network" in _bl,
+   "and it reports which network it bound to, and whether that address "
+   "can tell one device from another at all — a check that passes "
+   "everything reads as protection, which is worse than admitting there "
+   "is none, so the screen is given what it needs to say so")
+ok(_bl["network_known"] is (bool(_bl["network"])
+                            and not _bl["network"].startswith("127.")),
+   "and that flag is the honest reading of the address rather than a "
+   "hopeful constant")
+_kc3 = _db.connect()
+_kc3.execute("UPDATE kiosk_enrolments SET made_ip='203.0.113.7'"
+             " WHERE token=?", (_bl["token"],))
+_kc3.commit(); _kc3.close()
+_wrong = c.post("/api/kiosk/claim", json={"token": _bl["token"]})
+ok(_wrong.status_code == 403 and "same network" in _wrong.json()["detail"],
+   "a device somewhere else is refused even inside the few minutes")
+ok(c.post("/api/kiosk/claim", json={"token": _bl["token"]},
+          headers={"X-Forwarded-For": "203.0.113.9"}).status_code == 403,
+   "and it cannot talk its way in: the forwarded header is written by "
+   "whoever is asking, so it is ignored unless this install has been "
+   "told a proxy in front of it is trustworthy")
+_kc4 = _db.connect()
+_still = _kc4.execute("SELECT used FROM kiosk_enrolments WHERE token=?",
+                      (_bl["token"],)).fetchone()["used"]
+_kc4.close()
+ok(not _still,
+   "a refusal does not spend the link — otherwise anybody could destroy "
+   "a setup by opening it from the wrong place, which is a denial of "
+   "service dressed as a security check")
+
+_any = c.post(f"/api/admin/kiosks/{_k1}/enrol", headers=A,
+              json={"anywhere": True}).json()
+ok(not _any["bound"] and "key" in _any["note"],
+   "an owner can deliberately make one for a tablet that is genuinely "
+   "elsewhere, and is told what they have made")
+_kc5 = _db.connect()
+_kc5.execute("UPDATE kiosk_enrolments SET made_ip='198.51.100.4'"
+             " WHERE token=?", (_any["token"],))
+_kc5.commit(); _kc5.close()
+ok(c.post("/api/kiosk/claim",
+          json={"token": _any["token"]}).status_code == 200,
+   "which then works from anywhere — the escape hatch has to exist, or "
+   "the first person locked out of a second site turns the whole check "
+   "off for everybody")
+ok(any("ANY network" in (e.get("detail") or "")
+       for e in c.get("/api/admin/audit", headers=A).json()["entries"][:12]),
+   "and it is on the record as the deliberate act it is")
+
 _ejs = ops_app_js()
 ok('S.tab === "enrol" && S.deepKey' in _ejs
    and 'S.tab !== "enrol"' in _ejs,

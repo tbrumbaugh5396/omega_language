@@ -875,7 +875,7 @@ async function renderKiosks() {
    deliberate moment where an owner hands one to a tablet — carried on a
    QR because the tablet is across the room from the computer that
    registered it. */
-async function kioskSetup(k, arrived = false) {
+async function kioskSetup(k, arrived = false, anywhere = false) {
   if (!k) return;
   const isHere = localStorage.getItem(KIOSK_KEY) === k.kiosk_id;
   modal(`<h3>Set up ${esc(k.label || k.kiosk_id)}</h3>
@@ -884,7 +884,8 @@ async function kioskSetup(k, arrived = false) {
     <p class="dim">Making a one-time setup link…</p>`);
   let link;
   try {
-    link = await api(`/api/admin/kiosks/${k.kiosk_id}/enrol`, { body: {} });
+    link = await api(`/api/admin/kiosks/${k.kiosk_id}/enrol`,
+                     { body: { anywhere: !!anywhere } });
   } catch (e) { closeModal(); toast(e.message); return; }
   const mins = Math.max(1, Math.round(link.expires_sec / 60));
   modal(`<h3>Set up ${esc(k.label || k.kiosk_id)}</h3>
@@ -897,13 +898,39 @@ async function kioskSetup(k, arrived = false) {
       <p class="dim" style="word-break:break-all">${esc(link.url)}</p>
       <p class="dim"><b>Good once, for ${mins} minute${mins === 1 ? "" : "s"}
         </b> — so a photograph of this code taken afterwards is worth
-        nothing.</p></div>
+        nothing.</p>
+      ${link.bound
+        ? `<p class="dim">${link.network_known
+            ? `Bound to this network (${esc(link.network)}). A device
+               somewhere else is refused even inside the ${mins} minutes.`
+            : `<span class="warn-note">This install cannot tell one
+               device's network from another's — everything reaches it
+               from ${esc(link.network || "one address")}. The link is
+               marked as bound, but that check will pass anything. Set
+               <code>trust_forwarded_for</code> if a proxy is in front,
+               or treat this link as a key.</span>`}</p>`
+        : `<p class="warn-note">Not bound to any network: anybody who
+           gets this within ${mins} minute${mins === 1 ? "" : "s"} can
+           point their own device at this door.</p>`}
+    </div>
     <div class="modal-foot">
       <button class="btn alt" data-close>Close</button>
+      ${link.bound ? `<button class="btn alt" id="k-any"
+        title="for a tablet that is not on this network — a second site,
+        or somebody setting it up over the phone">Different
+        network</button>` : ""}
       <button class="btn alt" id="k-copy">Copy link</button>
       <button class="btn" id="k-claim" ${isHere ? "disabled" : ""}>${isHere
         ? "this device already is" : "Make THIS device the kiosk"}</button>
     </div>`);
+  const ab = $("#k-any");
+  if (ab) ab.onclick = () => {
+    if (!confirm("Make a link that works from anywhere?\n\nAnybody who "
+      + "gets hold of it inside its few minutes can make their own "
+      + "device this door. Only do this when the tablet genuinely is "
+      + "somewhere else.")) return;
+    kioskSetup(k, false, true);
+  };
   const cp = $("#k-copy");
   if (cp) cp.onclick = async () => {
     try {

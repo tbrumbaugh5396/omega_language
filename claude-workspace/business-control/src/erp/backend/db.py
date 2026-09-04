@@ -463,7 +463,10 @@ CREATE TABLE IF NOT EXISTS kiosk_enrolments (
   made_at REAL NOT NULL,
   expires_at REAL NOT NULL,
   used INTEGER DEFAULT 0,
-  claimed_at REAL DEFAULT 0
+  claimed_at REAL DEFAULT 0,
+  made_ip TEXT DEFAULT '',         -- the network the owner minted it on
+  bound INTEGER DEFAULT 1,         -- 0 = deliberately usable from anywhere
+  claimed_ip TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS kiosk_enrolments_kiosk
   ON kiosk_enrolments(kiosk_id);
@@ -610,6 +613,11 @@ def stock_set(con, store_id: int, product_id: int, qty: float, reason: str,
 
 
 MIGRATIONS = (
+    # A setup link is bound to the network it was minted on. Installs
+    # that already have the table get the columns rather than losing it.
+    "ALTER TABLE kiosk_enrolments ADD COLUMN made_ip TEXT DEFAULT ''",
+    "ALTER TABLE kiosk_enrolments ADD COLUMN bound INTEGER DEFAULT 1",
+    "ALTER TABLE kiosk_enrolments ADD COLUMN claimed_ip TEXT DEFAULT ''",
     # Who an email actually went to. The log joined users for the address,
     # which is fine for a customer and useless for a client's point of
     # contact — they are not a user of this system and never will be.

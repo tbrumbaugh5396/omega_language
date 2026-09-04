@@ -5,6 +5,7 @@ import html as _html
 import io
 import json
 import os
+import ipaddress
 import secrets
 import socket
 import urllib.parse as _url
@@ -1732,9 +1733,53 @@ def _touch_kiosk(con, kid: str) -> None:
         pass
 
 
+def _client_ip(request: Request) -> str:
+    """Who is actually asking.
+
+    request.client.host, unless this install has been told it sits behind
+    a proxy it trusts. Reading X-Forwarded-For without being told to is
+    how an address check becomes a formality: the header is written by
+    the client, so anybody could claim to be standing in the shop.
+    """
+    if CFG.get("trust_forwarded_for"):
+        fwd = (request.headers.get("x-forwarded-for") or "").split(",")
+        hop = fwd[-1].strip() if fwd and fwd[-1].strip() else ""
+        if hop:
+            return hop
+    return request.client.host if request.client else ""
+
+
+def _same_network(a: str, b: str) -> bool:
+    """Close enough to be the same room.
+
+    Not equality: a shop's tablet and the office computer are on one
+    network and rarely on one address. A /24 for v4 and a /64 for v6 is
+    the smallest thing that covers "same shop" without covering "same
+    city".
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    try:
+        x, y = ipaddress.ip_address(a), ipaddress.ip_address(b)
+    except ValueError:
+        return False
+    if x.version != y.version:
+        return False
+    bits = 24 if x.version == 4 else 64
+    return (ipaddress.ip_network(f"{a}/{bits}", strict=False)
+            == ipaddress.ip_network(f"{b}/{bits}", strict=False))
+
+
+class EnrolBody(BaseModel):
+    anywhere: bool = False
+
+
 @app.post("/api/admin/kiosks/{kiosk_id}/enrol")
-def kiosk_enrol_link(kiosk_id: str, user=Depends(admin_user),
-                     con=Depends(get_con)):
+def kiosk_enrol_link(kiosk_id: str, request: Request,
+                     body: EnrolBody = EnrolBody(),
+                     user=Depends(admin_user), con=Depends(get_con)):
     """Mint a link that lets somebody set a tablet up without being us.
 
     Setting a kiosk up meant signing in as an owner ON the tablet, which
@@ -1750,16 +1795,29 @@ def kiosk_enrol_link(kiosk_id: str, user=Depends(admin_user),
     token = secrets.token_urlsafe(24)
     ttl = int(CFG.get("kiosk_enrol_ttl_sec", 900))
     now = db.now()
+    ip = _client_ip(request)
+    # Bound to the network it was made on unless somebody deliberately
+    # says otherwise: the owner is standing in the shop when they press
+    # this, and so is the tablet.
+    bound = 0 if body.anywhere else 1
     con.execute(
         "INSERT INTO kiosk_enrolments(token,kiosk_id,made_by,made_at,"
-        "expires_at) VALUES(?,?,?,?,?)",
-        (token, kiosk_id, user["id"], now, now + ttl))
+        "expires_at,made_ip,bound) VALUES(?,?,?,?,?,?,?)",
+        (token, kiosk_id, user["id"], now, now + ttl, ip, bound))
     con.commit()
     audit.record(con, user, "POST", f"/api/admin/kiosks/{kiosk_id}/enrol",
-                 f"enrolment link for {k['label'] or kiosk_id}", 200)
+                 f"enrolment link for {k['label'] or kiosk_id}"
+                 + ("" if bound else " \u2014 usable from ANY network"), 200)
     return {"token": token, "expires_sec": ttl,
             "url": f"{base_url()}/ops/#/enrol/{token}",
-            "label": k["label"] or kiosk_id}
+            "label": k["label"] or kiosk_id, "bound": bool(bound),
+            "network": ip,
+            # Said out loud, because a check that cannot tell two devices
+            # apart is worse than none: it reads as protection.
+            "network_known": bool(ip) and not ip.startswith("127."),
+            "note": ("Only a device on this same network can use it."
+                     if bound else
+                     "Usable from any network \u2014 treat it as a key.")}
 
 
 class ClaimBody(BaseModel):
@@ -1767,7 +1825,7 @@ class ClaimBody(BaseModel):
 
 
 @app.post("/api/kiosk/claim")
-def kiosk_claim(body: ClaimBody, con=Depends(get_con)):
+def kiosk_claim(body: ClaimBody, request: Request, con=Depends(get_con)):
     """Spend an enrolment link. Deliberately open: whoever is standing at
     the tablet does this, and requiring a session here would put us back
     to needing an owner at every door.
@@ -1783,6 +1841,15 @@ def kiosk_claim(body: ClaimBody, con=Depends(get_con)):
         raise HTTPException(
             410, "that setup link has been used already or has run out. "
                  "Ask for a fresh one from Company \u2192 Clock kiosks.")
+    here = _client_ip(request)
+    if row["bound"] and not _same_network(here, row["made_ip"] or ""):
+        # Not burned. The link is still good for the tablet it was meant
+        # for, and spending it on a refusal would let anybody destroy a
+        # setup simply by opening the link from the wrong place.
+        raise HTTPException(
+            403, "this device is not on the same network as the computer "
+                 "that made the setup link. Open it on the tablet in the "
+                 "shop, or ask for a link marked for another network.")
     k = con.execute("SELECT k.*, COALESCE(s.name,'') AS store FROM kiosks k"
                     " LEFT JOIN stores s ON s.id=k.store_id"
                     " WHERE k.kiosk_id=? AND k.active=1",
@@ -1790,8 +1857,9 @@ def kiosk_claim(body: ClaimBody, con=Depends(get_con)):
     if k is None:
         raise HTTPException(410, "that kiosk has been removed or switched "
                                  "off since the link was made")
-    con.execute("UPDATE kiosk_enrolments SET used=1, claimed_at=?"
-                " WHERE token=?", (db.now(), row["token"]))
+    con.execute("UPDATE kiosk_enrolments SET used=1, claimed_at=?,"
+                " claimed_ip=? WHERE token=?",
+                (db.now(), here, row["token"]))
     con.commit()
     return {"kiosk_id": k["kiosk_id"], "label": k["label"],
             "store": k["store"]}
