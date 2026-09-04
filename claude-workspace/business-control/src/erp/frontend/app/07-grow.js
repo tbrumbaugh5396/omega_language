@@ -786,6 +786,64 @@ async function clientDossier(tid, sec = "overview") {
   dossierModal(tid, d, sec);
 }
 
+/* This client's own limits, and where they sit in the queue of clients
+   waiting on us. The roll-up is fleet-wide by design, but somebody who
+   has opened one dossier is about to make one call, and "third of nine"
+   is the difference between ringing them today and ringing them when
+   there is a gap. Fetched after the modal is up rather than with it: the
+   roll-up asks every tenant on every node, and a dossier that will not
+   open until the slowest node answers is a dossier nobody opens. */
+async function dossierPressure(tid) {
+  const box = $("#ds-press");
+  if (!box) return;                       // another tab is showing
+  let d;
+  try { d = await api("/api/store/admin/fleet/pressure"); }
+  catch (e) {
+    box.innerHTML = `<b>Against their limits</b>
+      <p class="dim">Could not read the fleet: ${esc(e.message)}</p>`;
+    return;
+  }
+  const live = d.rows.filter((r) => r.worst !== "quiet");
+  const mine = d.rows.find((r) => r.tenant === tid);
+  const at = live.findIndex((r) => r.tenant === tid);
+  const w = (k) => PRESSURE_WORDS[k] || [k, ""];
+  if (!mine) {
+    box.innerHTML = `<b>Against their limits</b>
+      <p class="dim">Not on the roll-up — no active install to read.</p>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="card-head"><b>Against their limits</b>
+      <span class="pill ${mine.worst === "asking" || mine.worst === "over"
+        ? "bad" : mine.worst === "quiet" ? "ok" : ""}"
+        title="${esc(w(mine.worst)[1])}">${esc(w(mine.worst)[0])}</span>
+      ${mine.at_stake_cents ? `<span class="press-money ${
+        mine.at_stake_cents < 0 ? "dim" : ""}">${mine.at_stake_cents > 0
+          ? "+" : "\u2212"}${money(Math.abs(mine.at_stake_cents))}/mo</span>`
+        : ""}
+      <button class="btn alt sm" data-dlim2>Limits</button>
+    </div>
+    ${mine.lines.length ? `<div class="press-lines">${mine.lines.map((l) => `
+      <p class="dim"><b>${esc(LIMIT_WORDS[l.kind]
+        ? LIMIT_WORDS[l.kind][0] : l.kind)}</b>
+        — ${esc(l.verdict)}</p>`).join("")}</div>`
+      : `<p class="dim">Nothing pressed and nothing wasted.</p>`}
+    <p class="dim">${at >= 0
+      ? `${_ord(at + 1)} of ${live.length} install${
+          live.length === 1 ? "" : "s"} with something to answer for`
+      : `Nothing to answer for; ${live.length} other${
+          live.length === 1 ? "" : "s"} do`}${d.asking
+      ? ` \u00b7 ${d.asking} asking across the fleet` : ""}${d.idle
+      ? ` \u00b7 ${d.idle} with tablets nobody touches` : ""}.</p>`;
+  const b2 = box.querySelector("[data-dlim2]");
+  if (b2) b2.onclick = () => limitsForm(tid);
+}
+
+function _ord(n) {
+  const s = ["th", "st", "nd", "rd"];
+  return n + (s[(n % 100 - 20) % 10] || s[n % 100] || s[0]);
+}
+
 function dossierModal(tid, d, sec) {
   const n = (v) => (v || 0).toLocaleString();
   const day = (ts) => ts ? new Date(ts * 1000).toLocaleDateString() : "?";
@@ -793,6 +851,8 @@ function dossierModal(tid, d, sec) {
   const bl = d.billing || {};
 
   const overview = () => `
+    <div id="ds-press" class="card ds-press"><b>Against their limits</b>
+      <p class="dim">Reading the fleet…</p></div>
     <div class="lrn-rtotals" style="display:flex;gap:26px;flex-wrap:wrap">
       <span><b>${n(d.scale.locations)}</b><span class="dim"> locations</span></span>
       <span><b>${n(d.scale.seats_used)}</b><span class="dim"> seats used</span></span>
@@ -924,6 +984,8 @@ function dossierModal(tid, d, sec) {
       <button class="btn alt" id="ds-actas">Act as admin</button>
       <button class="btn alt" id="ds-caps">Capabilities</button>
       <button class="btn" data-close>Done</button></div>`, "wide");
+
+  dossierPressure(tid);
 
   document.querySelectorAll("[data-dsec]").forEach((b) => b.onclick =
     () => dossierModal(tid, d, b.dataset.dsec));

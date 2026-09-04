@@ -1071,17 +1071,29 @@ def fleet_pressure(u=Depends(admin_user), con=Depends(get_con)):
             "lines": lines})
     rows.sort(key=lambda r: (_PRESSURE_RANK.get(r["worst"], 9),
                              -abs(r["at_stake_cents"])))
-    asking = [r for r in rows if r["worst"] == "asking"]
+    # Counted by "has a line in this state", not by "this is the worst
+    # thing about them". An install whose tills are on fire also has two
+    # tablets nobody touches, and counting only its worst problem is the
+    # same suppression as an elif — the header would say nought idle
+    # while a row underneath plainly shows two.
+    def having(state):
+        return len([r for r in rows
+                    if r["worst"] == state
+                    or any(ln["state"] == state for ln in r["lines"])])
+
     return {
         "rows": rows,
-        "asking": len(asking),
-        "over": len([r for r in rows if r["worst"] == "over"]),
-        "pinned": len([r for r in rows if r["worst"] == "pinned"]),
-        "spare": len([r for r in rows if r["worst"] == "spare"]),
-        "idle": len([r for r in rows if r["worst"] == "idle"]),
+        "asking": having("asking"),
+        "over": having("over"),
+        "pinned": having("pinned"),
+        "spare": having("spare"),
+        "idle": having("idle"),
         "unreachable": len([r for r in rows if r["worst"] == "unreachable"]),
         "upside_cents": sum(max(0, r["at_stake_cents"]) for r in rows),
         "unused_cents": sum(-min(0, r["at_stake_cents"]) for r in rows),
+        "counted": "by installs having each state, not by their worst "
+                   "one — the same install can be on more than one of "
+                   "these, and usually the interesting ones are",
         "note": "Money is a month, and signed: what an install would owe "
                 "if it bought what it keeps reaching for, against what it "
                 "already pays for room it has never used.",

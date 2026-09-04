@@ -994,6 +994,33 @@ ok(_a2["at_stake_cents"] > 0,
    "is one sentence rather than a research task")
 c.post("/api/pos/session/close", headers=_ah,
        json={"session_id": _pl.json()["id"], "counted_cents": 0})
+# An install whose tills are on fire also has a tablet nobody touches,
+# and a header that counts only its worst problem would say nought idle
+# while the row underneath plainly shows one.
+from erp.backend import db as _dbp  # noqa: E402
+_ktok = _tn.CURRENT.set("alpha")
+try:
+    _kcon = _dbp.connect()
+    _kcon.execute(
+        "INSERT INTO kiosks(kiosk_id,label,store_id,active,created_at,"
+        "last_seen) VALUES(?,?,?,?,?,?)",
+        ("board-idle", "Spare", 0, 1, _t0.time() - 40 * 86400, 0))
+    _kcon.commit()
+    _kcon.close()
+finally:
+    _tn.CURRENT.reset(_ktok)
+_fp3 = c.get("/api/store/admin/fleet/pressure", headers=AA).json()
+_a3 = {r["tenant"]: r for r in _fp3["rows"]}["alpha"]
+ok(_a3["worst"] == "asking",
+   "the row still leads with the worst thing true of it, because the "
+   "reader starts at the top and works down")
+ok("idle" in [ln["state"] for ln in _a3["lines"]],
+   "and carries the quieter one underneath rather than dropping it")
+ok(_fp3["idle"] >= 1,
+   "which the header counts too: states are tallied by the installs "
+   "having them, not by the installs whose worst problem they are — the "
+   "same suppression as an elif, one level up")
+
 ok(c.get("/api/store/admin/fleet/pressure",
          headers=BB).status_code in (403, 404),
    "and the board is the provider's alone — who else is pressed against a "

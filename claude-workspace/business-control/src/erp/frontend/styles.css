@@ -1679,3 +1679,12 @@ body.lane-on { overflow: hidden; }
 .plan-where span { white-space: nowrap; }
 .plan-where b { color: var(--ink, #e8ecf3); font-weight: 600; }
 .plan-where.idle-list b { color: #f0a08a; }
+
+/* This client's limits inside their dossier, with the fleet around them:
+   somebody who opened one dossier is about to make one call, and where
+   this client sits in the queue decides whether it happens today. */
+.card.ds-press { margin-bottom: 12px; }
+.press-lines { margin-top: 6px; }
+.press-lines p { margin: 3px 0; font-size: .88em; }
+.press-lines b { color: var(--ink, #e8ecf3); font-weight: 600;
+  text-transform: uppercase; font-size: .82em; letter-spacing: .04em; }
