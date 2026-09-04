@@ -3588,6 +3588,81 @@ ok(c.get("/api/analytics/mrr").status_code in (401, 403),
    "and it is the office's number")
 
 
+# --- the field --------------------------------------------------------------
+# Delivering cases, resetting a shelf, taking a pallet off a truck: four
+# departments call these different things and they are one shape. What
+# makes a visit evidence rather than a claim is what this checks.
+_tpl = c.post("/api/field/templates", headers=A, json={
+    "name": "Shelf reset", "kind": "merchandising",
+    "needs_signature": True, "needs_mileage": True,
+    "steps": [{"label": "Photo before", "photo": True},
+              {"label": "Face the stock"},
+              {"label": "Check date codes"}]}).json()
+ok(_tpl["id"], "a kind of call is a template, not code — the questions on "
+   "a merchandising visit change every season, and a change that needs a "
+   "developer happens in a spreadsheet instead")
+ok(c.post("/api/field/templates", headers=A,
+          json={"name": "x", "kind": "nonsense"}).status_code == 400,
+   "and it is one of the kinds the field knows")
+_vid = c.post("/api/field/visits", headers=A,
+              json={"template_id": _tpl["id"]}).json()["id"]
+_v = c.get(f"/api/field/visits/{_vid}", headers=A).json()
+ok(len(_v["steps"]) == 3 and _v["state"] == "planned",
+   "booking one copies the list onto it, so a template edited later does "
+   "not rewrite a visit that already happened")
+c.post(f"/api/field/visits/{_vid}/start", headers=A,
+       json={"lat": 40.1, "lng": -75.3, "accuracy_m": 10, "odo_km": 41230})
+_sid = _v["steps"][0]["id"]
+ok(c.post(f"/api/field/steps/{_sid}", headers=A,
+          json={"state": "skipped"}).status_code == 400,
+   "skipping needs a reason — a list that only offers 'done' gets ticked "
+   "from the van, and everybody involved knows it")
+ok(c.post(f"/api/field/steps/{_sid}", headers=A,
+          json={"state": "failed", "note": "three cases out of date"}
+          ).status_code == 200, "and failing is an answer, with the reason")
+_png = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+        "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+_ph = c.post("/api/field/photo", headers=A, json={
+    "visit_id": _vid, "step_id": _sid, "caption": "the shelf",
+    "lat": 40.1, "lng": -75.3, "accuracy_m": 8,
+    "data_url": _png}).json()
+ok(_ph["token"], "a picture goes with the visit")
+_v = c.get(f"/api/field/visits/{_vid}", headers=A).json()
+ok(_v["media"][0]["lat"] == 40.1 and _v["media"][0]["accuracy_m"] == 8,
+   "carrying where and how surely the phone said it was taken — a photo "
+   "of a shelf proves nothing about which shelf, and the same photo with "
+   "a fix on it proves both")
+ok(c.post("/api/field/photo", headers=A, json={
+    "visit_id": _vid, "data_url": "data:image/png;base64,bm90YW5pbWFnZQ=="}
+    ).status_code == 400, "and it has to actually be a picture")
+ok(c.get(f"/media/visit/{_ph['token']}", headers=A).status_code == 200
+   and c.get(f"/media/visit/{_ph['token']}").status_code in (401, 403),
+   "which is served to the office and not to the internet")
+
+ok(c.post(f"/api/field/visits/{_vid}/finish", headers=A,
+          json={"odo_km": 41258}).status_code == 400,
+   "a visit that is signed for cannot be closed unsigned — a delivery "
+   "accepted by 'manager' is a delivery nobody accepted")
+_done = c.post(f"/api/field/visits/{_vid}/finish", headers=A, json={
+    "odo_km": 41258, "signature": "D. Okafor",
+    "contact_name": "Dele Okafor", "contact_role": "store manager"}).json()
+ok(_done["state"] == "done" and _done["km"] == 28.0,
+   "and the distance comes off the odometer at both ends, not the GPS "
+   "trail — a phone in a loading bay invents a straight line through a "
+   "building, and mileage is a payment")
+ok(_done["open_steps"] == 2 and _done["failed_steps"] == ["Photo before"],
+   "a visit can be closed over an unfinished list, because the field is "
+   "not tidy and refusing would teach people to tick everything — but "
+   "what was left open stays on it")
+_fs = c.get("/api/field/visits?days=30", headers=A).json()
+ok(_fs["done"] >= 1 and _fs["clean"] == 0 and _fs["clean_pct"] == 0.0,
+   "so 'finished' and 'finished properly' are counted apart — the second "
+   "is the number this exists to make visible")
+ok(any(f["failed"] for f in _fs["failed"]),
+   "and whatever came back failed is named rather than averaged away")
+ok(_fs["km"] == 28.0 and _fs["photos"] >= 1,
+   "with the miles and the pictures added up beside them")
+
 # --- clocking in where the work is ------------------------------------------
 # Somebody rostered at the Norristown shop punching in from home is a
 # payroll question. The fence answers it — but only on the way in.

@@ -1532,3 +1532,23 @@ table.cohort th:first-child, table.cohort th:nth-child(2) { text-align: left; }
   .till { grid-template-columns: 1fr; }
   .till-basket { position: static; }
 }
+
+
+/* ---------- the field ---------- */
+.doc-line.fieldline { grid-template-columns:
+  minmax(0, 1fr) minmax(0, 220px) 120px 128px; cursor: pointer; }
+.fieldline:hover { border-left-color: var(--accent); }
+.fieldline-m, .fieldline-w { font-size: 12px; }
+.doc-line.vstep { grid-template-columns: minmax(0, 1fr) 80px auto; }
+.dl-acts.vstep-acts { grid-template-columns: repeat(4, 62px); }
+.vstep-done { border-left-color: var(--good); }
+.vstep-failed { border-left-color: var(--bad); }
+.vstep-skipped { border-left-color: var(--warn); }
+label.btn.phot { display: inline-flex; align-items: center; cursor: pointer; }
+.vshots { display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.vshot { margin: 0; background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--r-sm); overflow: hidden; }
+.vshot img { width: 100%; height: 120px; object-fit: cover; display: block;
+  background: #000; }
+.vshot figcaption { padding: 6px 8px; font-size: 11px; line-height: 1.35; }

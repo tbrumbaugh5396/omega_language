@@ -786,3 +786,334 @@ function dbEdit(d, cols, row, pk) {
     } catch (e) { toast(e.message); }
   };
 }
+
+
+/* ---------- the field ----------
+   Delivering cases, resetting a shelf, taking a pallet off a truck: four
+   departments, one shape. A visit has a place, a list, evidence and a
+   moment it was finished — and what makes it evidence rather than a
+   claim is that the pictures carry their own coordinates and clock. */
+const VISIT_ICON = { delivery: "truck", merchandising: "store",
+                     receiving: "box", production: "tools", visit: "pin" };
+
+async function renderField() {
+  const d = await api(`/api/field/visits?days=30${
+    FIELD_MINE ? "&mine=1" : ""}`);
+  const isAdmin = S.user && S.user.is_admin;
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Field</h2>
+        <p class="dim">Deliveries, merchandising calls, goods coming in.
+          Every visit carries its list, its pictures and where they were
+          taken — a photo of a shelf proves nothing about which shelf, and
+          the same photo with a fix on it proves both.</p></div>
+      <div class="top-actions">
+        <button class="btn alt${FIELD_MINE ? " on" : ""}" id="fd-mine">${
+          FIELD_MINE ? "Everyone's" : "Only mine"}</button>
+        ${isAdmin ? `<button class="btn alt" id="fd-tpl">Checklists</button>
+          <button class="btn" id="fd-new">${opsIcon("truck", "btn-ic")}
+            Book a visit</button>` : ""}
+      </div>
+    </div>
+    <div class="mrr-heads">
+      <div class="mrr-fig"><span class="dim">visits, 30 days</span>
+        <b>${d.count}</b></div>
+      <div class="mrr-fig"><span class="dim">finished</span>
+        <b>${d.done}</b></div>
+      <div class="mrr-fig" title="finished with nothing left open and
+        nothing failed — a visit marked done over a half-ticked list is
+        the thing this exists to make visible">
+        <span class="dim">clean</span>
+        <b class="${d.clean_pct === null ? "" : d.clean_pct >= 80 ? "good"
+          : "low"}">${d.clean_pct === null ? "—" : d.clean_pct + "%"}</b></div>
+      <div class="mrr-fig"><span class="dim">miles driven</span>
+        <b>${d.km}</b></div>
+      <div class="mrr-fig"><span class="dim">pictures</span>
+        <b>${d.photos}</b></div>
+    </div>
+    ${d.failed.length ? `<div class="card alert">
+      <b>${d.failed.length} visit${d.failed.length === 1 ? "" : "s"} came
+        back with something failed</b>
+      <div class="chips">${d.failed.map((f) => `<button class="btn alt sm"
+        data-visit="${f.id}">${esc(f.who)} · ${esc(f.failed.join(", "))
+        }</button>`).join("")}</div></div>` : ""}
+    ${d.visits.length ? `<div class="sig-rows">${d.visits.map((v) => `
+      <div class="doc-line fieldline${v.state === "done" ? "" : " dl-awaiting"}"
+        data-visit="${v.id}">
+        <span class="dl-title">
+          <span class="doc-ic">${opsIcon(VISIT_ICON[v.kind] || "pin")}</span>
+          <b>${esc(v.title || v.kind)}</b>
+          <span class="dim">${esc(v.who)}${v.store
+            ? " · " + esc(v.store.name) : ""}</span></span>
+        <span class="fl-tags">
+          <span class="pill ${v.state === "done" ? "ok"
+            : v.state === "abandoned" ? "bad" : "warn"}">${esc(v.state)}</span>
+          ${v.failed_steps.length
+            ? `<span class="pill bad">${v.failed_steps.length} failed</span>`
+            : ""}
+          ${v.open_steps ? `<span class="pill warn">${v.open_steps} left
+            open</span>` : ""}
+        </span>
+        <span class="dim fieldline-m">${v.media.length} photo${
+          v.media.length === 1 ? "" : "s"}${v.km ? ` · ${v.km} km` : ""}</span>
+        <span class="dim fieldline-w">${v.started_at
+          ? fmtDate(v.started_at) : "not started"}</span>
+      </div>`).join("")}</div>`
+      : emptyState("truck", "Nothing in the field yet",
+                   "Book a visit, or make a checklist for the kind of call "
+                   + "your people actually do.")}`;
+  $("#fd-mine").onclick = () => { FIELD_MINE = !FIELD_MINE; renderField(); };
+  if ($("#fd-new")) $("#fd-new").onclick = () => bookVisitForm();
+  if ($("#fd-tpl")) $("#fd-tpl").onclick = () => templateForm();
+  view().querySelectorAll("[data-visit]").forEach((el) =>
+    el.onclick = () => openVisit(+el.dataset.visit));
+}
+let FIELD_MINE = false;
+
+async function bookVisitForm() {
+  const [tpls, stores, people] = await Promise.all([
+    api("/api/field/templates"), api("/api/stores"),
+    api("/api/admin/users").catch(() => [])]);
+  modal(`<h3>Book a visit</h3>
+    <label>Checklist</label>
+    <select id="bv-tpl">${tpls.map((t) =>
+      `<option value="${t.id}">${esc(t.name)} · ${esc(t.kind)}</option>`)
+      .join("") || '<option value="0">none — a bare visit</option>'}</select>
+    <div class="row2">
+      <div><label>Who</label><select id="bv-who">${people
+        .filter((p) => p.active).map((p) =>
+          `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
+        </select></div>
+      <div><label>Where</label><select id="bv-store">
+        <option value="0">nowhere in particular</option>
+        ${stores.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`)
+          .join("")}</select></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="bv-go">Book it</button></div>`);
+  $("#bv-go").onclick = async () => {
+    try {
+      await api("/api/field/visits", { body: {
+        template_id: +$("#bv-tpl").value || 0,
+        user_id: +$("#bv-who").value || 0,
+        store_id: +$("#bv-store").value || 0 } });
+      closeModal(); renderField();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function templateForm() {
+  modal(`<h3>A checklist</h3>
+    <p class="dim">What this kind of call asks. One line per step; put a
+      * at the end of a line that wants a picture.</p>
+    <div class="row2">
+      <div><label>Name</label><input id="tp-name"
+        placeholder="Shelf reset"></div>
+      <div><label>Kind</label><select id="tp-kind">
+        ${["delivery", "merchandising", "receiving", "production", "visit"]
+          .map((k) => `<option>${k}</option>`).join("")}</select></div>
+    </div>
+    <label>Steps</label>
+    <textarea id="tp-steps" rows="6" placeholder="Photo of the shelf before *
+Face and rotate stock
+Check date codes
+Photo after *"></textarea>
+    <label class="perm"><input type="checkbox" id="tp-sig">
+      <span><b>Signed for</b><small>somebody at the place puts their name
+        on it — a delivery accepted by "manager" is a delivery nobody
+        accepted</small></span></label>
+    <label class="perm"><input type="checkbox" id="tp-odo">
+      <span><b>Odometer</b><small>read at both ends. Mileage from the
+        odometer, not the GPS trail: a phone in a loading bay invents a
+        straight line through a building, and mileage is a payment
+        </small></span></label>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="tp-go">Save it</button></div>`);
+  $("#tp-go").onclick = async () => {
+    const steps = $("#tp-steps").value.split("\n").map((l) => l.trim())
+      .filter(Boolean).map((l) => ({
+        label: l.replace(/\s*\*$/, ""), photo: /\*$/.test(l) }));
+    if (!$("#tp-name").value.trim() || !steps.length)
+      return toast("a name and at least one step");
+    try {
+      await api("/api/field/templates", { body: {
+        name: $("#tp-name").value.trim(), kind: $("#tp-kind").value, steps,
+        needs_signature: $("#tp-sig").checked,
+        needs_mileage: $("#tp-odo").checked } });
+      closeModal(); toast("checklist saved");
+    } catch (e) { toast(e.message); }
+  };
+}
+
+async function openVisit(vid) {
+  const v = await api(`/api/field/visits/${vid}`);
+  const live = v.state === "started";
+  const draw = () => {
+    modalBody().innerHTML = `
+      <div class="page-head">
+        <div><h3>${esc(v.title || v.kind)}</h3>
+          <p class="dim">${esc(v.who)}${v.store
+            ? " · " + esc(v.store.name) : ""} · ${esc(v.state)}${
+            v.metres_from_store !== null
+              ? ` · started ${v.metres_from_store} m from the pin` : ""}</p>
+        </div>
+        <div class="top-actions">
+          ${v.state === "planned"
+            ? '<button class="btn" data-vstart>Start</button>' : ""}
+          ${live ? '<button class="btn" data-vend>Finish</button>' : ""}
+          <button class="btn alt" data-close>Close</button>
+        </div>
+      </div>
+      ${v.steps.length ? `<div class="sig-rows">${v.steps.map((s) => `
+        <div class="doc-line vstep vstep-${s.state}">
+          <span class="dl-title"><b>${esc(s.label)}</b>
+            ${s.note ? `<span class="dim">${esc(s.note)}</span>` : ""}</span>
+          <span class="pill ${s.state === "done" ? "ok"
+            : s.state === "failed" ? "bad"
+            : s.state === "skipped" ? "warn" : ""}">${esc(s.state)}</span>
+          <span class="dl-acts vstep-acts">
+            ${live ? `<button class="btn alt sm" data-sdone="${s.id}"
+              >Done</button>
+              <button class="btn alt sm" data-sskip="${s.id}">Skip</button>
+              <button class="btn alt sm" data-sfail="${s.id}">Fail</button>
+              ${s.wants_photo ? `<label class="btn alt sm phot">Photo
+                <input type="file" accept="image/*" capture="environment"
+                  data-sphoto="${s.id}" hidden></label>` : "<span></span>"}`
+              : ""}
+          </span>
+        </div>`).join("")}</div>` : ""}
+      ${live ? `<div class="page-head cal-add">
+        <p class="dim">A picture of anything — the pallet, the paperwork,
+          the shelf. It records where and when your phone says it was
+          taken.</p>
+        <div class="top-actions">
+          <label class="btn alt phot">Add a picture
+            <input type="file" accept="image/*" capture="environment"
+              data-vphoto hidden></label>
+        </div></div>` : ""}
+      ${v.media.length ? `<h4 class="mrr-h">Evidence</h4>
+        <div class="vshots">${v.media.map((m) => `
+          <figure class="vshot">
+            <img src="/media/visit/${esc(m.token)}" alt="${esc(m.caption)}">
+            <figcaption class="dim">${esc(m.caption || m.kind)}<br>
+              ${m.lat ? `${m.lat.toFixed(4)}, ${m.lng.toFixed(4)}${
+                m.accuracy_m ? ` ±${Math.round(m.accuracy_m)}m` : ""}`
+                : "no fix"}<br>${fmtDate(m.taken_at)}</figcaption>
+          </figure>`).join("")}</div>` : ""}
+      ${v.signature ? `<p class="dim">Signed <b>${esc(v.signature)}</b>${
+        v.contact_role ? ` · ${esc(v.contact_role)}` : ""}${
+        v.km ? ` · ${v.km} km driven` : ""}</p>` : ""}`;
+    wire();
+  };
+  const again = async () => {
+    const fresh = await api(`/api/field/visits/${vid}`);
+    Object.assign(v, fresh); draw();
+  };
+  const shoot = async (file, stepId) => {
+    const raw = await new Promise((yes) => {
+      const fr = new FileReader();
+      fr.onload = () => yes(fr.result);
+      fr.readAsDataURL(file);
+    });
+    const at = await punchWhere();
+    try {
+      await api("/api/field/photo", { body: {
+        visit_id: vid, step_id: stepId || 0, data_url: raw,
+        taken_at: Math.round(file.lastModified / 1000) || 0,
+        lat: at.lat, lng: at.lng, accuracy_m: at.accuracy_m } });
+      again();
+    } catch (e) { toast(e.message); }
+  };
+  function wire() {
+    modalBody().querySelectorAll("[data-close]").forEach((b) =>
+      b.onclick = closeModal);
+    const st = modalBody().querySelector("[data-vstart]");
+    if (st) st.onclick = async () => {
+      const odo = prompt("Odometer now, if this visit is driven to");
+      if (odo === null && !confirm("Start without a reading?")) return;
+      const at = await punchWhere();
+      try {
+        Object.assign(v, await api(`/api/field/visits/${vid}/start`,
+          { body: { ...at, odo_km: odo ? +odo : null } }));
+        draw();
+      } catch (e) { toast(e.message); }
+    };
+    const en = modalBody().querySelector("[data-vend]");
+    if (en) en.onclick = () => finishVisit(v, () => { closeModal();
+      renderField(); });
+    modalBody().querySelectorAll("[data-sdone]").forEach((b) =>
+      b.onclick = async () => {
+        await api(`/api/field/steps/${b.dataset.sdone}`,
+                  { body: { state: "done" } }).catch((e) => toast(e.message));
+        again();
+      });
+    const why = (id, state) => async () => {
+      const note = prompt(state === "skipped" ? "Why skipped?" : "What failed?");
+      if (!note || !note.trim()) return;
+      try {
+        await api(`/api/field/steps/${id}`, { body: { state, note } });
+        again();
+      } catch (e) { toast(e.message); }
+    };
+    modalBody().querySelectorAll("[data-sskip]").forEach((b) =>
+      b.onclick = why(b.dataset.sskip, "skipped"));
+    modalBody().querySelectorAll("[data-sfail]").forEach((b) =>
+      b.onclick = why(b.dataset.sfail, "failed"));
+    modalBody().querySelectorAll("[data-sphoto]").forEach((inp) =>
+      inp.onchange = (e) => e.target.files[0]
+        && shoot(e.target.files[0], +inp.dataset.sphoto));
+    const one = modalBody().querySelector("[data-vphoto]");
+    if (one) one.onchange = (e) => e.target.files[0] && shoot(e.target.files[0]);
+  }
+  modal("<h3>…</h3>", "wide");
+  draw();
+}
+
+function finishVisit(v, after) {
+  modal(`<h3>Finish ${esc(v.title || v.kind)}</h3>
+    ${v.open_steps ? `<div class="card alert"><b>${v.open_steps} step${
+      v.open_steps === 1 ? " is" : "s are"} still open.</b>
+      <span class="dim">You can close it anyway — the field is not tidy,
+        and refusing would only teach people to tick everything. What is
+        left open stays on the record.</span></div>` : ""}
+    <div class="row2">
+      <div><label>Who was there</label>
+        <input id="fv-name" placeholder="their name"></div>
+      <div><label>Their job</label>
+        <input id="fv-role" placeholder="store manager"></div>
+    </div>
+    <label>They sign <span class="opt">their name, typed by them</span></label>
+    <input id="fv-sig" placeholder="name">
+    <div class="row2">
+      <div><label>Odometer</label>
+        <input id="fv-odo" type="number" step="0.1"
+          placeholder="${v.start_odo_km || ""}"></div>
+      <div><label>Note</label><input id="fv-note"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn alt" id="fv-abandon">Could not do it</button>
+      <button class="btn" id="fv-go">Finish</button></div>`);
+  const send = async (abandon) => {
+    const at = await punchWhere();
+    const body = { ...at,
+      odo_km: $("#fv-odo").value ? +$("#fv-odo").value : null,
+      contact_name: $("#fv-name").value.trim(),
+      contact_role: $("#fv-role").value.trim(),
+      signature: $("#fv-sig").value.trim(),
+      note: $("#fv-note").value.trim() };
+    if (abandon) {
+      const why = prompt("What stopped it?");
+      if (!why || !why.trim()) return;
+      body.abandon_because = why.trim();
+    }
+    try {
+      await api(`/api/field/visits/${v.id}/finish`, { body });
+      closeModal();
+      if (after) after();
+    } catch (e) { toast(e.message); }
+  };
+  $("#fv-go").onclick = () => send(false);
+  $("#fv-abandon").onclick = () => send(true);
+}

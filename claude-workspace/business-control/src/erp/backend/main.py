@@ -59,6 +59,8 @@ def _init_core(tid=None):
         _mrr.init_tables(con)
         from . import pos as _pos
         _pos.init_tables(con)
+        from . import fieldwork as _fw
+        _fw.init_tables(con)
         from . import daybook as _dbk
         _dbk.init_tables(con)
         con.commit()
@@ -4439,6 +4441,254 @@ def analytics_drop_day(day: str, name: str, user=Depends(admin_user),
                 (day, name))
     con.commit()
     return {"ok": True}
+
+
+# ---------- the field ----------
+
+class TemplateBody(BaseModel):
+    name: str
+    kind: str = "visit"
+    steps: list = []
+    needs_signature: bool = False
+    needs_mileage: bool = False
+    active: bool = True
+
+
+@app.get("/api/field/templates")
+def field_templates(user=Depends(current_user), con=Depends(get_con)):
+    import json
+    out = []
+    for r in con.execute("SELECT * FROM visit_templates WHERE active=1"
+                         " ORDER BY kind, name"):
+        d = dict(r)
+        try:
+            d["steps"] = json.loads(r["steps"])
+        except Exception:                                    # noqa: BLE001
+            d["steps"] = []
+        out.append(d)
+    return out
+
+
+@app.post("/api/field/templates")
+def field_template_save(body: TemplateBody, user=Depends(admin_user),
+                        con=Depends(get_con)):
+    from . import fieldwork
+    if body.kind not in fieldwork.KINDS:
+        raise HTTPException(400, f"kind must be one of {fieldwork.KINDS}")
+    cur = con.execute(
+        "INSERT INTO visit_templates(name,kind,steps,needs_signature,"
+        " needs_mileage,active,created_at) VALUES(?,?,?,?,?,?,?)",
+        (body.name.strip()[:120], body.kind, json.dumps(body.steps),
+         1 if body.needs_signature else 0, 1 if body.needs_mileage else 0,
+         1 if body.active else 0, db.now()))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+class VisitBody(BaseModel):
+    template_id: int = 0
+    kind: str = ""
+    title: str = ""
+    user_id: int = 0
+    store_id: int = 0
+    supplier_id: int = 0
+    order_id: int = 0
+    po_id: int = 0
+    planned_for: float = 0
+    steps: list | None = None
+
+
+@app.get("/api/field/visits")
+def field_visits(days: int = 30, mine: int = 0, state: str = "",
+                 user=Depends(current_user), con=Depends(get_con)):
+    from . import fieldwork
+    d = fieldwork.summary(con, max(1, min(365, days)),
+                          user["id"] if mine else 0)
+    if state:
+        d["visits"] = [v for v in d["visits"] if v["state"] == state]
+    return d
+
+
+@app.get("/api/field/visits/{vid}")
+def field_visit(vid: int, user=Depends(current_user), con=Depends(get_con)):
+    from . import fieldwork
+    r = con.execute("SELECT * FROM visits WHERE id=?", (vid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such visit")
+    return fieldwork.shape(con, r)
+
+
+@app.post("/api/field/visits")
+def field_visit_new(body: VisitBody, user=Depends(current_user),
+                    con=Depends(get_con)):
+    """Put a visit on somebody's list."""
+    from . import fieldwork
+    if body.user_id and body.user_id != user["id"] and not user["is_admin"]:
+        raise HTTPException(403, "only an owner books somebody else's day")
+    vid = fieldwork.open_visit(
+        con, body.template_id, body.user_id or user["id"],
+        kind=body.kind, title=body.title, store_id=body.store_id,
+        supplier_id=body.supplier_id, order_id=body.order_id,
+        po_id=body.po_id, planned_for=body.planned_for, steps=body.steps)
+    return {"ok": True, "id": vid}
+
+
+class VisitMoveBody(Where):
+    odo_km: float | None = None
+    note: str = ""
+    contact_name: str = ""
+    contact_role: str = ""
+    signature: str = ""
+    abandon_because: str = ""
+
+
+@app.post("/api/field/visits/{vid}/start")
+def field_start(vid: int, body: VisitMoveBody, user=Depends(current_user),
+                con=Depends(get_con)):
+    from . import fieldwork
+    r = con.execute("SELECT * FROM visits WHERE id=?", (vid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such visit")
+    if r["state"] not in ("planned", "started"):
+        raise HTTPException(409, "that visit is already finished")
+    con.execute(
+        "UPDATE visits SET state='started', started_at=COALESCE("
+        " NULLIF(started_at,0), ?), start_lat=?, start_lng=?,"
+        " start_accuracy_m=?, start_odo_km=? WHERE id=?",
+        (db.now(), body.lat, body.lng, body.accuracy_m, body.odo_km, vid))
+    con.commit()
+    return fieldwork.shape(con, con.execute(
+        "SELECT * FROM visits WHERE id=?", (vid,)).fetchone())
+
+
+class StepBody(BaseModel):
+    state: str = "done"
+    note: str = ""
+    qty: float | None = None
+
+
+@app.post("/api/field/steps/{sid}")
+def field_step(sid: int, body: StepBody, user=Depends(current_user),
+               con=Depends(get_con)):
+    """Tick, skip or fail one line of the list.
+
+    Skipping and failing both need a reason. A list that only offers
+    "done" gets ticked from the van, and everybody involved knows it —
+    so the other two answers exist and cost a sentence.
+    """
+    from . import fieldwork
+    if body.state not in fieldwork.STEP_STATES:
+        raise HTTPException(400, f"state must be {fieldwork.STEP_STATES}")
+    if body.state in ("skipped", "failed") and not body.note.strip():
+        raise HTTPException(
+            400, f"say why it was {body.state} — a blank reason is the same "
+                 "as not answering")
+    r = con.execute("SELECT * FROM visit_steps WHERE id=?", (sid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such step")
+    con.execute(
+        "UPDATE visit_steps SET state=?, note=?, qty=?, done_at=?"
+        " WHERE id=?",
+        (body.state, body.note.strip()[:300], body.qty,
+         db.now() if body.state != "open" else 0, sid))
+    con.commit()
+    return {"ok": True}
+
+
+@app.post("/api/field/visits/{vid}/finish")
+def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
+                 con=Depends(get_con)):
+    """Close the visit, with whoever was there named on it.
+
+    A visit can be finished over an unfinished list — the field is not
+    tidy and refusing would only teach people to tick everything. What
+    it cannot do is hide it: what was left open is on the record and in
+    the summary.
+    """
+    from . import fieldwork
+    r = con.execute("SELECT * FROM visits WHERE id=?", (vid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such visit")
+    tpl = con.execute("SELECT * FROM visit_templates WHERE id=?",
+                      (r["template_id"],)).fetchone()
+    if tpl and tpl["needs_signature"] and not body.signature.strip():
+        raise HTTPException(
+            400, "this one is signed for — a delivery accepted by 'manager' "
+                 "is a delivery nobody accepted")
+    if tpl and tpl["needs_mileage"] and body.odo_km is None:
+        raise HTTPException(400, "read the odometer before you close it")
+    state = "abandoned" if body.abandon_because.strip() else "done"
+    con.execute(
+        "UPDATE visits SET state=?, finished_at=?, end_lat=?, end_lng=?,"
+        " end_accuracy_m=?, end_odo_km=?, contact_name=?, contact_role=?,"
+        " signature=?, signed_at=?, note=? WHERE id=?",
+        (state, db.now(), body.lat, body.lng, body.accuracy_m, body.odo_km,
+         body.contact_name.strip()[:120], body.contact_role.strip()[:60],
+         body.signature.strip()[:120],
+         db.now() if body.signature.strip() else 0,
+         (body.abandon_because or body.note).strip()[:500], vid))
+    con.commit()
+    return fieldwork.shape(con, con.execute(
+        "SELECT * FROM visits WHERE id=?", (vid,)).fetchone())
+
+
+class VisitPhotoBody(Where):
+    visit_id: int
+    step_id: int = 0
+    kind: str = "photo"
+    caption: str = ""
+    taken_at: float = 0
+    data_url: str = ""
+
+
+@app.post("/api/field/photo")
+def field_photo(body: VisitPhotoBody, user=Depends(current_user),
+                con=Depends(get_con)):
+    """A picture, with where and when the phone said it was taken.
+
+    The coordinates are what make it evidence. A photo of a shelf proves
+    nothing about which shelf; the same photo with a fix and a clock
+    proves both — recorded as reported, accuracy included, because a
+    rounded-off truth is a number somebody will later insist was exact.
+    """
+    import base64
+    from . import fieldwork
+    if con.execute("SELECT 1 FROM visits WHERE id=?",
+                   (body.visit_id,)).fetchone() is None:
+        raise HTTPException(404, "no such visit")
+    try:
+        head, b64 = body.data_url.split(",", 1)
+        raw = base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(400, "bad image data")
+    if len(raw) > 4_000_000:
+        raise HTTPException(400, "picture too large (4 MB max)")
+    if raw[:2] not in IMAGE_MAGIC:
+        raise HTTPException(400, "not a recognised image")
+    tok = fieldwork.new_token()
+    UPLOADS().mkdir(parents=True, exist_ok=True)
+    (UPLOADS() / f"visit_{tok}").write_bytes(raw)
+    con.execute(
+        "INSERT INTO visit_media(visit_id,step_id,token,kind,caption,lat,lng,"
+        " accuracy_m,taken_at,bytes,mime,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (body.visit_id, body.step_id, tok, body.kind[:20],
+         body.caption.strip()[:200], body.lat, body.lng, body.accuracy_m,
+         body.taken_at or db.now(), len(raw),
+         IMAGE_MAGIC.get(raw[:2], ""), db.now()))
+    con.commit()
+    return {"ok": True, "token": tok, "url": f"/media/visit/{tok}"}
+
+
+@app.get("/media/visit/{token}")
+def visit_photo(token: str, user=Depends(current_user), con=Depends(get_con)):
+    r = con.execute("SELECT mime FROM visit_media WHERE token=?",
+                    (token,)).fetchone()
+    f = UPLOADS() / f"visit_{token}"
+    if r is None or not f.exists():
+        raise HTTPException(404, "no such picture")
+    return Response(f.read_bytes(), media_type=r["mime"] or "image/jpeg",
+                    headers={"Cache-Control": "private, max-age=86400"})
 
 
 # ---------- the counter ----------
