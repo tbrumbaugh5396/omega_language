@@ -948,6 +948,83 @@ def _classify(kind: str, pr: dict, each_cents: int,
             "at_stake_cents": stake, "verdict": pr.get("verdict", "")}
 
 
+# The words an operator would actually say. "kiosks: turned away twice"
+# is a column heading read down a phone; "Clock kiosks" is a thing in a
+# shop.
+_UNIT_WORDS = {"registers": "Tills", "kiosks": "Clock kiosks",
+               "locations": "Locations", "seats": "Staff seats"}
+
+
+def _limit_notes(pressure: dict) -> list:
+    """The advisory lines about the metered units.
+
+    Each fact is appended on its own rather than chained behind the last
+    one. An install that was refused a fourth tablet AND has two sitting
+    untouched has one of the more useful conversations available to us
+    waiting in it, and an elif would have thrown away the half that makes
+    the call worth making.
+    """
+    from . import pricebook
+    book = pricebook.allowances()
+    key = {"locations": "locations", "seats": "staff_seats",
+           "registers": "registers", "kiosks": "clock_kiosks"}
+    out = []
+    for k, pr in pressure.items():
+        word = _UNIT_WORDS.get(k, k)
+        each = book.get(key.get(k, ""), {}).get("each_cents", 0)
+        included = book.get(key.get(k, ""), {}).get("included", 0)
+        if pr.get("refused"):
+            out.append(
+                f"{word}: turned away {pr['refused']} time"
+                f"{'' if pr['refused'] == 1 else 's'} in 30 days"
+                + (f", {pr['unanswered']} never answered"
+                   if pr.get("unanswered") else ", since resolved")
+                + " — they have already asked for this")
+
+        idle = (pr.get("kiosks") or {}).get("idle") or []
+        if idle:
+            never = sum(1 for x in idle if x["never"])
+            total = pr["kiosks"]["total"]
+            # Only what is past the plan's own allowance is money. A
+            # saving quoted that is not there turns a helpful call into
+            # an awkward one.
+            billed = min(len(idle), max(0, pr.get("cap", 0) - included))
+            named = ", ".join(x["label"] or x["kiosk_id"] for x in idle[:3])
+            out.append(
+                f"{word}: {len(idle)} of {total} tablets untouched for 30 "
+                f"days"
+                + (f" ({never} never at all)" if never else "")
+                + f" — {named}"
+                + (f". Retiring them is ${billed * each / 100:.0f} a month"
+                   if billed and each else ". Inside their allowance, so "
+                   "this is a habit rather than a bill")
+                + ", and somebody has to go and look at them either way")
+
+        # Where the pressure actually is. A business-wide peak sends an
+        # operator into a call with a number the manager cannot act on.
+        # Only real shops: "another lane belongs at not-tied-to-a-location"
+        # is not advice. And a leader of one is not a leader.
+        where = [w for w in (pr.get("by_store") or [])
+                 if w["peak"] and w["store_id"]]
+        if (len(where) > 1 and where[0]["peak"] > 1
+                and where[0]["peak"] > where[1]["peak"]):
+            out.append(
+                f"{word}: the busy one is {where[0]['store']} at "
+                f"{where[0]['peak']} at once — the rest never passed "
+                f"{where[1]['peak']}. Another lane belongs there rather "
+                f"than anywhere")
+
+        if (pr.get("peak_known") and pr.get("cap") and pr.get("peak")
+                and not pr.get("refused")
+                and pr["headroom"] >= max(2, pr["cap"] // 2)):
+            out.append(
+                f"{word}: busiest moment used {pr['peak']} of {pr['cap']} — "
+                f"they are paying for room they have never needed, and "
+                f"hearing that from us before they notice it is worth "
+                f"more than the difference")
+    return out
+
+
 @router.get("/api/store/admin/fleet/pressure")
 def fleet_pressure(u=Depends(admin_user), con=Depends(get_con)):
     """Every install held against its own limits, in one list.
@@ -1043,21 +1120,7 @@ def tenant_report(tid: str, u=Depends(admin_user), con=Depends(get_con)):
         if vals is not None and all(not v["value"] for v in vals):
             notes.append(f"{catalog[cid]['name']} is granted but idle — "
                          f"train it up, or trim ${catalog[cid]['price']}/mo")
-    for k, pr in (usage.get("pressure") or {}).items():
-        if pr.get("refused"):
-            notes.append(
-                f"{k}: turned away {pr['refused']} time"
-                f"{'' if pr['refused'] == 1 else 's'} in 30 days"
-                + (f", {pr['unanswered']} never answered"
-                   if pr.get("unanswered") else ", since resolved")
-                + " — they have already asked for this")
-        elif pr.get("peak_known") and pr.get("cap") and pr.get("peak") \
-                and pr["headroom"] >= max(2, pr["cap"] // 2):
-            notes.append(
-                f"{k}: busiest moment used {pr['peak']} of {pr['cap']} — "
-                f"they are paying for room they have never needed, and "
-                f"hearing that from us before they notice it is worth "
-                f"more than the difference")
+    notes.extend(_limit_notes(usage.get("pressure") or {}))
     for cid, vals in metered.items():
         if (caps is not None and cid not in caps and cid in catalog
                 and any(v["value"] for v in vals)):

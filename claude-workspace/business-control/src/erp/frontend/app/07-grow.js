@@ -807,7 +807,11 @@ function dossierModal(tid, d, sec) {
         <span>· ${esc(x)}</span>
         ${/granted but idle/.test(x) ? `<button class="btn alt sm"
           data-dtrim title="open the capability editor — trim or keep">
-          adjust</button>` : ""}</p>`).join("")}
+          adjust</button>`
+        : /^(Tills|Clock kiosks|Locations|Staff seats):/.test(x)
+          ? `<button class="btn alt sm" data-dlim
+             title="open what they bought — the note is about a number
+             that is set here">limits</button>` : ""}</p>`).join("")}
     </div>` : `<p class="dim" style="margin-top:12px">Nothing to flag —
       scale fits the plan and every capability shows use.</p>`}`;
 
@@ -925,6 +929,8 @@ function dossierModal(tid, d, sec) {
     () => dossierModal(tid, d, b.dataset.dsec));
   document.querySelectorAll("[data-dtrim]").forEach((b) => b.onclick =
     () => capsEditor(tid, { after: () => clientDossier(tid) }));
+  document.querySelectorAll("[data-dlim]").forEach((b) => b.onclick =
+    () => limitsForm(tid));
   $("#ds-refresh").onclick = () => clientDossier(tid, sec);
   $("#ds-caps").onclick =
     () => capsEditor(tid, { after: () => clientDossier(tid, sec) });

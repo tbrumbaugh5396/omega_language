@@ -816,6 +816,62 @@ ok(_met.peak_registers(_hd, 30)["peak"] == 1,
    "needed")
 _sw.close(); _hd.close()
 
+# --- the advice an operator reads down the phone -------------------------
+from storefront.backend import fleetadmin as _fa2  # noqa: E402
+
+_pn = _fa2._limit_notes({
+    "kiosks": {"cap": 4, "used": 3, "refused": 2, "unanswered": 0,
+               "peak_known": False, "peak": 3, "headroom": 1,
+               "kiosks": {"total": 3, "days": 30, "idle": [
+                   {"label": "Spare", "kiosk_id": "c", "never": True},
+                   {"label": "Back office", "kiosk_id": "b",
+                    "never": False}]}},
+})
+ok(len(_pn) == 2,
+   "a refusal and two untouched tablets are two notes, not one — an "
+   "install asking for a fourth while two sit idle has the best "
+   "conversation we can have waiting in it, and chaining the second "
+   "behind the first would throw away the half that makes the call")
+ok(any("Spare" in n and "Back office" in n for n in _pn),
+   "and the idle ones are named, because 'two tablets' sends somebody to "
+   "look at three")
+ok(any("$12 a month" in n for n in _pn),
+   "with only what is past the plan's allowance priced: quoting a saving "
+   "that is not there turns a helpful call into an awkward one")
+ok(all(not n.startswith("kiosks:") for n in _pn)
+   and any(n.startswith("Clock kiosks:") for n in _pn),
+   "in the words somebody would say out loud — 'kiosks:' is a column "
+   "heading, 'Clock kiosks' is a thing in a shop")
+
+_pn2 = _fa2._limit_notes({
+    "kiosks": {"cap": 1, "used": 1, "refused": 0, "unanswered": 0,
+               "peak_known": False, "peak": 1, "headroom": 0,
+               "kiosks": {"total": 1, "days": 30, "idle": [
+                   {"label": "Door", "kiosk_id": "a", "never": True}]}}})
+ok(any("habit rather than a bill" in n for n in _pn2),
+   "an idle tablet inside the included allowance is still worth saying "
+   "and is not worth invoicing over, and the note says which it is")
+
+_pn3 = _fa2._limit_notes({
+    "registers": {"cap": 4, "used": 2, "refused": 0, "unanswered": 0,
+                  "peak_known": True, "peak": 3, "headroom": 1,
+                  "by_store": [
+                      {"store": "Camden", "store_id": 1, "peak": 3},
+                      {"store": "Soho", "store_id": 2, "peak": 1}]}})
+ok(any("Camden" in n and "belongs there" in n for n in _pn3),
+   "and where the pressure actually is: a business-wide peak sends an "
+   "operator into a call with a number the manager cannot act on")
+_pn4 = _fa2._limit_notes({
+    "registers": {"cap": 4, "used": 2, "refused": 0, "unanswered": 0,
+                  "peak_known": True, "peak": 2, "headroom": 2,
+                  "by_store": [
+                      {"store": "not tied to a location", "store_id": 0,
+                       "peak": 2},
+                      {"store": "Soho", "store_id": 2, "peak": 1}]}})
+ok(not any("belongs there" in n for n in _pn4),
+   "though 'another lane belongs at not-tied-to-a-location' is not "
+   "advice, so a leader that is not a real shop makes no claim")
+
 # --- which shop, and which tablet ----------------------------------------
 # "You peaked at four tills" is true and useless to a manager deciding
 # whether to open a fifth lane in one particular shop.
