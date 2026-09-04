@@ -450,6 +450,23 @@ CREATE INDEX IF NOT EXISTS stock_layers_line
   ON stock_layers(store_id, product_id, created_at);
 """
 
+REFUSAL_TABLE = """
+/* Every time a metered limit turned somebody away. Written here rather
+   than in metering.py's own module so that an install upgraded into this
+   version has the table before the first refusal, not after it. */
+CREATE TABLE IF NOT EXISTS limit_refusals (
+  id INTEGER PRIMARY KEY,
+  at REAL NOT NULL,
+  kind TEXT NOT NULL,
+  cap INTEGER NOT NULL,
+  in_use INTEGER NOT NULL,
+  user_id INTEGER DEFAULT 0,
+  who TEXT DEFAULT '',
+  answered_at REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS limit_refusals_at ON limit_refusals(kind, at);
+"""
+
 KIOSK_TABLE = """
 /* A tablet by the door, registered once. For staff who clock in on it,
    the tablet IS the location — and a better one than a browser's guess,
@@ -652,6 +669,7 @@ def init() -> None:
         con.executescript(SCHEMA)
         con.executescript(KIOSK_TABLE)
         con.executescript(STOCK_LEDGER)
+        con.executescript(REFUSAL_TABLE)
         for stmt in MIGRATIONS:
             try:
                 con.execute(stmt)

@@ -631,6 +631,41 @@ const LIMIT_WORDS = {
   seats: ["Staff seats", "people who sign in to run the business"],
 };
 
+/* Thirty days of the busiest-moment-per-day, as thirty bars. A limit is
+   a line across the top of it: what a client wants to know is not "how
+   many tills do I have" but "how often did that number stop being
+   enough", and that is a shape rather than a figure. */
+function planSpark(byDay, cap) {
+  const days = [];
+  for (let i = 29; i >= 0; i--) {
+    const t = new Date(Date.now() - i * 864e5);
+    const k = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}`
+      + `-${String(t.getDate()).padStart(2, "0")}`;
+    days.push([k, byDay[k] || 0]);
+  }
+  const top = Math.max(cap || 1, ...days.map((d) => d[1]));
+  if (!days.some((d) => d[1])) return "";
+  return `<span class="plan-spark" title="busiest moment each day, last 30
+    days">${days.map(([k, n]) => `<i class="${n >= cap && cap ? "at-cap" : ""}"
+      style="height:${Math.max(2, Math.round(n / top * 22))}px"
+      title="${k}: ${n}"></i>`).join("")}</span>`;
+}
+
+function planVerdict(pr) {
+  if (!pr) return "";
+  const bits = [];
+  if (pr.peak_known) bits.push(`busiest moment <b>${pr.peak}</b> of
+    ${pr.cap}${pr.busiest_day ? ` (${pr.busiest_day.slice(5)})` : ""}`);
+  if (pr.refused) bits.push(`<b class="bad">turned away ${pr.refused}
+    time${pr.refused === 1 ? "" : "s"}</b> in 30 days`);
+  else if (pr.at_cap_days) bits.push(`at the limit on ${pr.at_cap_days}
+    day${pr.at_cap_days === 1 ? "" : "s"}`);
+  if (!bits.length) return "";
+  return `<div class="plan-pressure${pr.refused ? " pressed" : ""}">
+    ${planSpark(pr.by_day || {}, pr.cap)}
+    <span>${bits.join(" · ")}</span></div>`;
+}
+
 async function renderPlan() {
   const d = await api("/api/entitlements");
   const money2 = (c) => money(c);
@@ -659,9 +694,19 @@ async function renderPlan() {
         <span class="dl-acts planline-acts">${d.tenant
           ? `<button class="btn alt sm" data-plan="${l.kind}"
                data-now="${l.allowed}" data-max="${l.self_serve_max}"
-               data-each="${l.each_cents}">Change</button>` : ""}</span>
-      </div>`;
+               data-each="${l.each_cents}"
+               data-peak="${(l.pressure || {}).peak || 0}">Change</button>`
+          : ""}</span>
+      </div>${planVerdict(l.pressure)}`;
     }).join("")}</div>
+    ${d.turned_away ? `<div class="card alert">
+      <b>Your limits turned somebody away ${d.turned_away}
+        time${d.turned_away === 1 ? "" : "s"} in the last
+        ${d.window_days} days</b>
+      <span class="dim">Each one was a person who wanted to do something
+        and could not — at a counter, or setting up a tablet. Raising the
+        number takes effect immediately.</span>
+    </div>` : ""}
     ${d.overage_cents ? `<div class="card alert">
       <b>${money2(d.overage_cents)} a month over what you are covered
         for</b>
@@ -672,12 +717,16 @@ async function renderPlan() {
     <p class="dim">${esc(d.note)}</p>`;
   view().querySelectorAll("[data-plan]").forEach((b) =>
     b.onclick = () => planChange(b.dataset.plan, +b.dataset.now,
-                                +b.dataset.max, +b.dataset.each));
+                                +b.dataset.max, +b.dataset.each,
+                                +b.dataset.peak));
 }
 
-function planChange(kind, now, ceiling, each) {
+function planChange(kind, now, ceiling, each, peak) {
   const w = LIMIT_WORDS[kind] || [kind, ""];
   modal(`<h3>${w[0]}</h3>
+    ${peak ? `<p class="dim">Your busiest moment in the last 30 days used
+      <b>${peak}</b>. A number below that is one you have already needed
+      more than.</p>` : ""}
     <p class="dim">You have ${now}. ${each
       ? `Each one beyond what the plan includes is ${money(each)} a month.`
       : ""} You can set up to ${ceiling} yourself; past that it goes to

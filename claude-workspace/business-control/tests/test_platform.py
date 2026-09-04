@@ -729,6 +729,93 @@ ok(c.post("/api/entitlements/raise", headers=_ah,
           json={"kind": "unicorns", "to": 3}).status_code == 400,
    "and nothing is counted in units this software does not have")
 
+# --- what the limit actually cost them -----------------------------------
+# A refusal that nobody writes down is a queue at a counter that has
+# vanished by the time anyone talks about the plan. Every one is now a row.
+from erp.backend import metering as _met  # noqa: E402
+
+_pr = c.get("/api/entitlements", headers=_ah).json()
+_reg = [x for x in _pr["lines"] if x["kind"] == "registers"][0]
+ok(_reg["pressure"]["refused"] >= 1,
+   "the tills refused earlier in this run were written down rather than "
+   "raised and forgotten — a 409 is the only trace a queue ever leaves")
+ok(_pr["turned_away"] >= 1,
+   "and the screen leads with the count, because the number of people "
+   "this software turned away is the one fact that decides the plan")
+ok(_reg["pressure"]["peak_known"] and _reg["pressure"]["peak"] >= 1,
+   "registers report a real peak: they are metered on tills open AT ONCE, "
+   "so the count at the moment somebody looks answers a question nobody "
+   "asked")
+ok(not [x for x in _pr["lines"]
+        if x["kind"] == "seats"][0]["pressure"]["peak_known"],
+   "and seats do not pretend to have one — a thing that exists is not a "
+   "thing that runs at once, and the screen says which it is looking at "
+   "rather than dressing a current count up as a measurement")
+ok([x for x in _pr["lines"] if x["kind"] == "seats"][0]["pressure"]
+   ["why_no_peak"],
+   "in words, on the object, so nobody has to know the difference in "
+   "advance to read it correctly")
+
+# Every earlier refusal in this run was already answered by the raise
+# that followed it, which is the whole point — so this makes a fresh one.
+c.post("/api/store/admin/fleet/tenants/alpha/limits", headers=AA,
+       json={"registers": 1})
+_only = c.post("/api/pos/session", headers=_ah,
+               json={"register": "press-a", "float_cents": 0})
+ok(c.post("/api/pos/session", headers=_ah,
+          json={"register": "press-b", "float_cents": 0}).status_code == 409,
+   "the second till on a limit of one is refused, and that refusal is now "
+   "a row rather than a shrug")
+_bef = [x for x in c.get("/api/entitlements", headers=_ah).json()["lines"]
+        if x["kind"] == "registers"][0]["pressure"]["unanswered"]
+ok(_bef >= 1, "an unanswered refusal is somebody who wanted a till and "
+   "did not get one — counted apart from one we later fixed, because the "
+   "two are opposite outcomes that look identical in a total")
+_ans = c.post("/api/entitlements/raise", headers=_ah,
+              json={"kind": "registers", "to": 2}).json()
+ok(_ans["answered"] >= _bef,
+   "raising the limit answers every refusal that was waiting on it, not "
+   "just the last one — three people turned away from the same fourth "
+   "till on one afternoon were all asking for the same thing")
+ok([x for x in c.get("/api/entitlements", headers=_ah).json()["lines"]
+    if x["kind"] == "registers"][0]["pressure"]["unanswered"] == 0,
+   "after which none are outstanding, and the gap between refused and "
+   "answered is what the limit is costing")
+c.post("/api/pos/session/close", headers=_ah,
+       json={"session_id": _only.json()["id"], "counted_cents": 0})
+
+_sw = sqlite3.connect(":memory:"); _sw.row_factory = sqlite3.Row
+_sw.executescript("CREATE TABLE register_sessions(opened_at REAL,"
+                  " closed_at REAL)")
+_n0 = _t0.time()
+for _o, _c2 in ((_n0 - 2 * 86400, _n0 - 2 * 86400 + 7200),
+                (_n0 - 2 * 86400 + 1800, _n0 - 2 * 86400 + 5400),
+                (_n0 - 2 * 86400 + 3600, _n0 - 2 * 86400 + 4000),
+                (_n0 - 5 * 86400, 0)):
+    _sw.execute("INSERT INTO register_sessions VALUES(?,?)", (_o, _c2))
+_pk = _met.peak_registers(_sw, 30, cap=3)
+ok(_pk["peak"] == 4,
+   "the sweep counts the busiest instant, not the busiest day: three "
+   "lanes overlapping for forty minutes plus one left open all week is "
+   "four at once, and four is what gets refused")
+ok(_pk["by_day"][_t0.strftime("%Y-%m-%d",
+                              _t0.localtime(_n0 - 3 * 86400))] == 1,
+   "a day with no opening and no closing in it is not a quiet day if a "
+   "lane was running through it — a sweep that only looks where the "
+   "events are reports a whole weekend as zero")
+_hd = sqlite3.connect(":memory:"); _hd.row_factory = sqlite3.Row
+_hd.executescript("CREATE TABLE register_sessions(opened_at REAL,"
+                  " closed_at REAL)")
+_hd.execute("INSERT INTO register_sessions VALUES(?,?)",
+            (_n0 - 7200, _n0 - 3600))
+_hd.execute("INSERT INTO register_sessions VALUES(?,?)",
+            (_n0 - 3600, _n0 - 1800))
+ok(_met.peak_registers(_hd, 30)["peak"] == 1,
+   "and a lane handed from one cashier to the next at the same second is "
+   "one lane, not briefly two — an invented peak sells a till nobody "
+   "needed")
+_sw.close(); _hd.close()
+
 # --- and the bill has to move with it, or the number is a fiction -------
 # A limit raised on our side and not on theirs is a till we gave away. A
 # bill raised and the limit not applied is a client paying for a till they

@@ -1634,3 +1634,23 @@ body.lane-on { overflow: hidden; }
   background: rgba(240, 100, 90, .11); border: 1px solid rgba(240, 100, 90, .4);
   color: #f08a80; font-size: .85em; line-height: 1.4;
 }
+
+/* How it has felt to live inside a metered limit: thirty days of the
+   busiest moment, under the row it belongs to. Small on purpose — it is
+   context for a decision, not a dashboard of its own. */
+.plan-pressure {
+  display: flex; align-items: flex-end; gap: 10px;
+  margin: -4px 0 10px; padding: 0 12px 6px;
+  font-size: .82em; color: var(--dim);
+}
+.plan-pressure.pressed { color: #f0a08a; }
+.plan-pressure b { color: var(--ink, #e8ecf3); font-weight: 600; }
+.plan-pressure b.bad { color: #f08a80; }
+.plan-spark {
+  display: inline-flex; align-items: flex-end; gap: 1px; height: 22px;
+}
+.plan-spark i {
+  width: 4px; border-radius: 1px; background: var(--panel2, #2a3040);
+  display: block;
+}
+.plan-spark i.at-cap { background: #f08a80; }

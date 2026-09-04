@@ -18,7 +18,8 @@ from pydantic import BaseModel
 
 from . import (abtest, achieve, analytics, audit, auth, chat, config, cycles,
                db, dbview, integrations, logistics, mailer, notify,
-               payments, push, shopify_sub, social, supply, tenancy)
+               metering, payments, push, shopify_sub, social, supply,
+               tenancy)
 
 app = FastAPI(title="Business Control")
 # The tenant-aware view of config: every read and every settings-page write
@@ -789,16 +790,22 @@ def entitled(kind: str) -> int:
     return _allowance(kind).get("included", 1)
 
 
-def _check_room(kind: str, in_use: int, what: str) -> None:
+def _check_room(con, user, kind: str, in_use: int, what: str) -> None:
     """Refuse the one past the line, with the number in the message.
 
     A limit checked only at invoice time is a limit the client discovers a
     month after they broke it, in an argument about money. This one is
     checked at the door and says exactly what it would cost to raise.
+
+    And it is written down. A refusal nobody records is a queue at a
+    counter that has vanished by the time anyone discusses the plan — so
+    the connection and the person are arguments rather than options, to
+    make an unrecorded refusal impossible to write by accident.
     """
     cap = entitled(kind)
     if in_use < cap:
         return
+    metering.record(con, user, kind, cap, in_use)
     each = _allowance(kind).get("each", 0)
     raise HTTPException(
         409,
@@ -1676,7 +1683,7 @@ def kiosk_register(body: KioskBody, user=Depends(admin_user),
     known = con.execute("SELECT 1 FROM kiosks WHERE kiosk_id=?",
                         (kid,)).fetchone()
     if not known and body.active:
-        _check_room("kiosks", con.execute(
+        _check_room(con, user, "kiosks", con.execute(
             "SELECT COUNT(*) AS n FROM kiosks WHERE active=1"
         ).fetchone()["n"], "clock kiosk(s)")
     con.execute(
@@ -2461,7 +2468,7 @@ class StoreBody(BaseModel):
 
 @app.post("/api/admin/stores")
 def add_store(body: StoreBody, user=Depends(admin_user), con=Depends(get_con)):
-    _check_room("locations", con.execute(
+    _check_room(con, user, "locations", con.execute(
         "SELECT COUNT(*) AS n FROM stores WHERE active=1"
     ).fetchone()["n"], "location(s)")
     con.execute(
@@ -5260,7 +5267,7 @@ def pos_open(body: OpenTillBody, user=Depends(permitted("till")),
     # Counted here rather than at invoice time, because a limit nobody
     # meets until the bill arrives is an argument about money.
     if pos.session_of(con, body.register) is None:
-        _check_room("registers", con.execute(
+        _check_room(con, user, "registers", con.execute(
             "SELECT COUNT(*) AS n FROM register_sessions WHERE closed_at=0"
         ).fetchone()["n"], "till(s) open at once")
     try:
@@ -5708,6 +5715,11 @@ def entitlements_raise(body: RaiseBody, user=Depends(admin_user),
     lim = dict(tenancy.limits_of(tid))
     lim[kind] = want
     tenancy.set_limits(tid, lim)
+    # Everybody who was turned away for want of this is now let through,
+    # and the count of them is the honest answer to "was that limit
+    # costing us anything" — which is a different question from "did
+    # somebody eventually click the button".
+    answered = metering.answer(con, kind) if want > now else 0
     fleet.log("limit raised" if want > now else "limit lowered",
               f"{tid}: {kind} {now} \u2192 {want} "
               f"(${monthly / 100:.0f}/mo) \u00b7 {bill['reason']}",
@@ -5718,6 +5730,7 @@ def entitlements_raise(body: RaiseBody, user=Depends(admin_user),
             "monthly_cents": monthly,
             "each_cents": each.get("each_cents", 0),
             "billed": bill["ok"], "billing": bill["reason"],
+            "answered": answered,
             "note": ("On your bill from now, prorated for the rest of this "
                      "month." if bill["ok"] and bill.get("charged") else
                      "In effect now. " + bill["reason"].capitalize()
@@ -5791,10 +5804,18 @@ def entitlements(user=Depends(current_user), con=Depends(get_con)):
                     "each_cents": each.get("each_cents", 0),
                     "included": each.get("included", 0),
                     "self_serve_max": ceiling.get(kind, 0),
-                    "can_raise": bool(tid) and cap < ceiling.get(kind, 0)})
+                    "can_raise": bool(tid) and cap < ceiling.get(kind, 0),
+                    # What it has actually been like to live inside this
+                    # limit: how busy it got, and who it turned away. A
+                    # client deciding whether to buy a fourth till should
+                    # be reading their own last month, not guessing.
+                    "pressure": metering.pressure(con, kind, cap, used)})
+    turned_away = sum(x["pressure"]["refused"] for x in out)
     return {"tenant": tid or "", "lines": out,
             "granted": tenancy.limits_of(tid) if tid else {},
             "overage_cents": sum(x["over"] * x["each_cents"] for x in out),
+            "turned_away": turned_away,
+            "window_days": 30,
             "note": "A register is a till open at once, not a tablet in a "
                     "drawer. What is granted here is what was sold; the "
                     "rest is what a plan includes."}

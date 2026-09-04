@@ -827,7 +827,25 @@ def _usage_from(con) -> dict:
             "top_referrers": top_refs,
         },
         "meters": m,
+        # What it has been like to live inside the metered limits: the
+        # busiest moment, and everybody the limit turned away. Read here,
+        # inside the tenant's own database, so a client on a worker node
+        # answers this through the same dock as everything else rather
+        # than needing its own errand.
+        "pressure": _pressure_from(con),
     }
+
+
+def _pressure_from(con) -> dict:
+    """Never fatal. An install too old to have the refusal table has no
+    refusals to report, which is a true statement about it."""
+    try:
+        from erp.backend import metering, tenancy as _tn
+        from erp.backend.main import _in_use, entitled
+        return {k: metering.pressure(con, k, entitled(k), _in_use(con, k))
+                for k in _tn.LIMIT_KEYS}
+    except Exception:                                        # noqa: BLE001
+        return {}
 
 
 def tenant_usage(tid: str) -> dict:
@@ -880,6 +898,21 @@ def tenant_report(tid: str, u=Depends(admin_user), con=Depends(get_con)):
         if vals is not None and all(not v["value"] for v in vals):
             notes.append(f"{catalog[cid]['name']} is granted but idle — "
                          f"train it up, or trim ${catalog[cid]['price']}/mo")
+    for k, pr in (usage.get("pressure") or {}).items():
+        if pr.get("refused"):
+            notes.append(
+                f"{k}: turned away {pr['refused']} time"
+                f"{'' if pr['refused'] == 1 else 's'} in 30 days"
+                + (f", {pr['unanswered']} never answered"
+                   if pr.get("unanswered") else ", since resolved")
+                + " — they have already asked for this")
+        elif pr.get("peak_known") and pr.get("cap") and pr.get("peak") \
+                and pr["headroom"] >= max(2, pr["cap"] // 2):
+            notes.append(
+                f"{k}: busiest moment used {pr['peak']} of {pr['cap']} — "
+                f"they are paying for room they have never needed, and "
+                f"hearing that from us before they notice it is worth "
+                f"more than the difference")
     for cid, vals in metered.items():
         if (caps is not None and cid not in caps and cid in catalog
                 and any(v["value"] for v in vals)):
