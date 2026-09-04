@@ -223,7 +223,11 @@ async def _proxy_to_node(request: Request, addr: str):
 JOBS = ["general", "driver", "dsd", "warehouse", "sales_rep", "ambassador",
         "event_staff"]
 # One list, so the status-change endpoint and the order editor can't drift.
-ORDER_STATUSES = ("pending", "confirmed", "shipped", "delivered", "cancelled")
+# part_delivered is its own state rather than a flag on delivered: a
+# delivery the customer took half of is not delivered, and calling it so
+# is how a credit note goes unwritten.
+ORDER_STATUSES = ("pending", "confirmed", "shipped", "delivered",
+                  "part_delivered", "cancelled")
 
 
 # ---------- helpers ----------
@@ -4579,6 +4583,48 @@ class VisitBody(BaseModel):
     steps: list | None = None
 
 
+@app.get("/api/field/outbound")
+def field_outbound(user=Depends(current_user), con=Depends(get_con)):
+    """What is going out, and who is taking it."""
+    from . import fieldwork
+    return fieldwork.outbound(con)
+
+
+class DropBody(BaseModel):
+    order_id: int
+    user_id: int = 0
+    template_id: int = 0
+
+
+@app.post("/api/field/outbound/take")
+def field_take(body: DropBody, user=Depends(current_user),
+               con=Depends(get_con)):
+    """Put somebody on this drop."""
+    from . import fieldwork
+    o = con.execute(
+        "SELECT o.*, COALESCE(u.name,'') AS who, COALESCE(s.name,'') AS store"
+        " FROM orders o LEFT JOIN users u ON u.id=o.user_id"
+        " LEFT JOIN stores s ON s.id=o.store_id WHERE o.id=?",
+        (body.order_id,)).fetchone()
+    if o is None:
+        raise HTTPException(404, "no such order")
+    if o["status"] in ("delivered", "cancelled"):
+        raise HTTPException(409, f"that order is already {o['status']}")
+    live = con.execute(
+        "SELECT id FROM visits WHERE order_id=? AND state IN"
+        " ('planned','started')", (body.order_id,)).fetchone()
+    if live:
+        raise HTTPException(
+            409, f"somebody is already taking it (visit {live['id']})")
+    to = o["who"] or o["ship_name"] or o["store"] or "customer"
+    vid = fieldwork.open_visit(
+        con, body.template_id, body.user_id or user["id"],
+        kind="delivery", order_id=body.order_id,
+        store_id=o["store_id"] or 0,
+        title=f"{to} — order #{o['id']}")
+    return {"ok": True, "id": vid}
+
+
 @app.get("/api/field/inbound")
 def field_inbound(user=Depends(current_user), con=Depends(get_con)):
     """What is on its way in from suppliers, and who is meeting it."""
@@ -4843,6 +4889,19 @@ def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
                          "and the word has to be written down")
         if counted:
             booked = fieldwork.book_in(con, vid, user["name"])
+    # Going out settles against the order it was carrying, and the
+    # signature is the point of it — a delivery dispute is never about
+    # our count, it is about whether they got it.
+    handed = None
+    if state == "done" and r["order_id"] and r["state"] != "done":
+        tpl2 = con.execute("SELECT needs_signature FROM visit_templates"
+                           " WHERE id=?", (r["template_id"],)).fetchone()
+        if not body.signature.strip() and not (tpl2
+                                               and tpl2["needs_signature"]):
+            raise HTTPException(
+                400, "a delivery is proved by the person who took it — put "
+                     "their name on it, or abandon the drop and say why")
+        handed = fieldwork.hand_over(con, vid, user["name"])
     con.execute(
         "UPDATE visits SET state=?, finished_at=?, end_lat=?, end_lng=?,"
         " end_accuracy_m=?, end_odo_km=?, contact_name=?, contact_role=?,"
@@ -4857,6 +4916,8 @@ def field_finish(vid: int, body: VisitMoveBody, user=Depends(current_user),
         "SELECT * FROM visits WHERE id=?", (vid,)).fetchone())
     if booked is not None:
         out["received"] = booked
+    if handed is not None:
+        out["handed"] = handed
     return out
 
 

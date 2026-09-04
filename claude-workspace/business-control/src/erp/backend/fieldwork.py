@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS visit_steps (
   qty REAL,                                -- counted, where a step counts
   line_id INTEGER DEFAULT 0,               -- the purchase order line, if any
   material_id INTEGER DEFAULT 0,           -- what it is, when no order says
+  product_id INTEGER DEFAULT 0,            -- the line being delivered out
   expected_qty REAL,                       -- what is actually coming
   ordered_qty REAL,                        -- what we asked for, if different
   done_at REAL DEFAULT 0
@@ -119,7 +120,8 @@ def init_tables(con):
     for name, decl in (("line_id", "INTEGER DEFAULT 0"),
                        ("expected_qty", "REAL"),
                        ("ordered_qty", "REAL"),
-                       ("material_id", "INTEGER DEFAULT 0")):
+                       ("material_id", "INTEGER DEFAULT 0"),
+                       ("product_id", "INTEGER DEFAULT 0")):
         if name not in cols:
             con.execute(f"ALTER TABLE visit_steps ADD COLUMN {name} {decl}")
     con.commit()
@@ -198,6 +200,26 @@ def open_visit(con, template_id: int, user_id: int, **kw) -> int:
     # against the promise where there is one, and carries the order
     # beside it so the two arguments stay separate: one is with the
     # driver at the door, the other is with the buyer next week.
+    # Going out. The mirror image of receiving in shape and not at all in
+    # meaning: the stock left when the order shipped, so what this visit
+    # settles is whether it ARRIVED — and a delivery argument is never
+    # about our count, it is about whether the customer got it. Which is
+    # why the proof here is the signature at the door and the photograph
+    # in the bay, and why anything refused has to come back to stock
+    # rather than being quietly written off the order.
+    order_id = kw.get("order_id", 0)
+    if order_id and not kw.get("po_id"):
+        for it in con.execute(
+                "SELECT oi.product_id, oi.qty, COALESCE(p.name,'item') AS name"
+                " FROM order_items oi LEFT JOIN products p"
+                "  ON p.id=oi.product_id WHERE oi.order_id=?", (order_id,)):
+            con.execute(
+                "INSERT INTO visit_steps(visit_id,seq,label,wants_photo,"
+                " product_id,expected_qty,ordered_qty) VALUES(?,?,?,1,?,?,?)",
+                (vid, 2000 + it["product_id"],
+                 f"{it['name']} — {it['qty']:g} to hand over",
+                 it["product_id"], float(it["qty"]), float(it["qty"])))
+
     po_id = kw.get("po_id", 0)
     if po_id:
         promised = _promised(con, po_id)
@@ -232,6 +254,71 @@ def open_visit(con, template_id: int, user_id: int, **kw) -> int:
              1 if st.get("photo") else 0))
     con.commit()
     return vid
+
+
+def hand_over(con, visit_id: int, actor: str) -> dict:
+    """Settle a delivery against the order it was carrying.
+
+    Stock does not leave here — it left when the order shipped. What
+    happens here is the opposite: anything the customer would not take
+    comes BACK, to the store that sent it, because two cases refused at a
+    door are two cases on a van and not two cases that evaporated. An
+    order settled by writing the shortfall off the paperwork is how a
+    van's stock and the system's diverge by exactly the amount nobody
+    wanted.
+    """
+    v = con.execute("SELECT * FROM visits WHERE id=?", (visit_id,)).fetchone()
+    if v is None or not v["order_id"]:
+        return {"handed": 0}
+    o = con.execute("SELECT * FROM orders WHERE id=?",
+                    (v["order_id"],)).fetchone()
+    if o is None:
+        return {"handed": 0}
+    back_to = o["fulfilled_store_id"] or o["store_id"] or 0
+    handed, refused, returned = 0, [], 0
+    for st in con.execute(
+            "SELECT * FROM visit_steps WHERE visit_id=? AND product_id>0",
+            (visit_id,)):
+        if st["state"] == "open":
+            continue
+        want = float(st["ordered_qty"] or 0)
+        got = float(st["qty"]) if st["qty"] is not None else (
+            0.0 if st["state"] in ("failed", "skipped") else want)
+        handed += 1
+        short = round(want - got, 3)
+        if short <= 0:
+            continue
+        refused.append({"label": st["label"], "ordered": want,
+                        "accepted": got, "back": short,
+                        "why": st["note"] or ""})
+        if back_to and st["product_id"]:
+            # Cases in units, the way the order shipped them.
+            per = con.execute("SELECT case_size FROM products WHERE id=?",
+                              (st["product_id"],)).fetchone()
+            units = short * ((per["case_size"] or 1)
+                             if o["kind"] == "distributor" else 1)
+            con.execute(
+                "INSERT INTO inventory(store_id,product_id,qty,updated_at)"
+                " VALUES(?,?,?,?) ON CONFLICT(store_id,product_id)"
+                " DO UPDATE SET qty=qty+?, updated_at=?",
+                (back_to, st["product_id"], units, db.now(), units, db.now()))
+            returned += units
+    if handed:
+        # Delivered means all of it was taken. A partly-refused delivery
+        # is not delivered, and calling it so is how a credit note goes
+        # unwritten.
+        con.execute("UPDATE orders SET status=? WHERE id=?",
+                    ("delivered" if not refused else "part_delivered",
+                     v["order_id"]))
+        con.commit()
+    return {"handed": handed, "refused": refused,
+            "returned_units": returned, "back_to_store": back_to,
+            # Refused stock with no store on the order has nowhere to go
+            # back to. Saying so is the whole of the fix available here:
+            # silently dropping it is how a van and the system diverge by
+            # exactly the amount nobody wanted.
+            "nowhere_to_return": bool(refused and not back_to),
+            "accepted_all": not refused}
 
 
 def book_loose(con, visit_id: int, actor: str) -> dict:
@@ -337,6 +424,48 @@ def _promised(con, po_id: int) -> dict:
         return {}
     return {str(k): float(v) for k, v in said.items()
             if str(v).strip() != ""}
+
+
+def outbound(con, days: int = 14, when: float = 0) -> dict:
+    """What is going out, and who is taking it.
+
+    An order that has been paid for and not yet handed over is a promise
+    with a van in front of it. The column that matters is the same one as
+    on the way in: whether anybody is booked to do it — a drop nobody is
+    named on is a drop that happens when somebody has a spare hour.
+    """
+    when = when or time.time()
+    out = []
+    for o in con.execute(
+            "SELECT o.*, COALESCE(u.name,'') AS who,"
+            " COALESCE(s.name,'') AS store FROM orders o"
+            " LEFT JOIN users u ON u.id=o.user_id"
+            " LEFT JOIN stores s ON s.id=o.store_id"
+            " WHERE o.status IN ('paid','confirmed','shipped',"
+            "  'part_delivered') AND o.kind!='pos'"
+            " ORDER BY o.created_at DESC LIMIT 60"):
+        items = [dict(r) for r in con.execute(
+            "SELECT oi.qty, COALESCE(p.name,'item') AS name"
+            " FROM order_items oi LEFT JOIN products p ON p.id=oi.product_id"
+            " WHERE oi.order_id=?", (o["id"],))]
+        if not items:
+            continue
+        v = con.execute(
+            "SELECT id, state, finished_at FROM visits WHERE order_id=?"
+            " ORDER BY id DESC LIMIT 1", (o["id"],)).fetchone()
+        out.append({
+            "order_id": o["id"], "kind": o["kind"], "status": o["status"],
+            "who": o["who"] or o["ship_name"] or "",
+            "where": o["store"] or o["city"] or "",
+            "cents": o["total_cents"], "items": items,
+            "placed": o["created_at"],
+            "visit": dict(v) if v else None,
+        })
+    return {"drops": out, "count": len(out),
+            "unbooked": sum(1 for x in out if not x["visit"]),
+            "note": "An order paid for and not yet handed over is a promise "
+                    "with a van in front of it. A drop nobody is named on "
+                    "is a drop that happens when somebody has a spare hour."}
 
 
 def inbound(con, days: int = 30, when: float = 0) -> dict:

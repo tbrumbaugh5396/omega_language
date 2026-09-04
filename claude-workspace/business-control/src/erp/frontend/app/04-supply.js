@@ -797,9 +797,10 @@ const VISIT_ICON = { delivery: "truck", merchandising: "store",
                      receiving: "box", production: "tools", visit: "pin" };
 
 async function renderField() {
-  const [d, inb] = await Promise.all([
+  const [d, inb, outb] = await Promise.all([
     api(`/api/field/visits?days=30${FIELD_MINE ? "&mine=1" : ""}`),
-    api("/api/field/inbound").catch(() => null)]);
+    api("/api/field/inbound").catch(() => null),
+    api("/api/field/outbound").catch(() => null)]);
   const isAdmin = S.user && S.user.is_admin;
   view().innerHTML = `
     <div class="page-head">
@@ -832,6 +833,7 @@ async function renderField() {
       <div class="mrr-fig"><span class="dim">pictures</span>
         <b>${d.photos}</b></div>
     </div>
+    ${outb && outb.drops.length ? outboundBox(outb) : ""}
     ${inb && inb.deliveries.length ? inboundBox(inb) : ""}
     ${d.failed.length ? `<div class="card alert">
       <b>${d.failed.length} visit${d.failed.length === 1 ? "" : "s"} came
@@ -869,6 +871,16 @@ async function renderField() {
   if ($("#fd-tpl")) $("#fd-tpl").onclick = () => templateForm();
   view().querySelectorAll("[data-visit]").forEach((el) =>
     el.onclick = () => openVisit(+el.dataset.visit));
+  view().querySelectorAll("[data-take]").forEach((b) => b.onclick =
+    async (ev) => {
+      ev.stopPropagation();
+      try {
+        const r = await api("/api/field/outbound/take",
+                            { body: { order_id: +b.dataset.take } });
+        toast("it is yours — the list is on the visit");
+        openVisit(r.id);
+      } catch (e) { toast(e.message); }
+    });
   view().querySelectorAll("[data-meet]").forEach((b) => b.onclick =
     async (ev) => {
       ev.stopPropagation();
@@ -879,6 +891,42 @@ async function renderField() {
         openVisit(r.id);
       } catch (e) { toast(e.message); }
     });
+}
+
+/* What is going out. The same shape as coming in and not the same
+   question: the stock left when the order shipped, so a delivery visit
+   settles whether it ARRIVED — and the only column that predicts trouble
+   is whether anybody is named on it. */
+function outboundBox(d) {
+  const waiting = d.drops.filter((x) => !x.visit);
+  const show = (waiting.length ? waiting : d.drops).slice(0, 10);
+  return `
+    <h3>Going out</h3>
+    <p class="dim">${d.count} order${d.count === 1 ? "" : "s"} paid for and
+      not yet handed over${d.unbooked
+        ? `, ${d.unbooked} with nobody named on ${d.unbooked === 1
+          ? "it" : "them"}` : ""}. ${esc(d.note.split(". ").slice(-1)[0])}</p>
+    <div class="sig-rows">${show.map((x) => `
+      <div class="doc-line inbound">
+        <span class="dl-title">
+          <b>${esc(x.who || x.where || "order #" + x.order_id)}</b>
+          <span class="dim">#${x.order_id} · ${x.items.map((i) =>
+            `${i.qty}× ${esc(i.name)}`).join(", ")}</span></span>
+        <span class="fl-tags">
+          <span class="pill ${x.status === "shipped" ? "ok"
+            : x.status === "part_delivered" ? "warn" : ""}">${
+            esc(x.status.replace("_", " "))}</span>
+          <span class="pill">${esc(x.kind)}</span>
+        </span>
+        <span class="dim inbound-eta">${money(x.cents)}</span>
+        <span class="dl-acts inbound-acts">${x.visit
+          ? `<button class="btn alt sm" data-visit="${x.visit.id}">${
+            x.visit.state === "done" ? "Delivered" : "Open"}</button>`
+          : '<button class="btn alt sm" data-take="' + x.order_id
+            + '">Take it</button>'}</span>
+      </div>`).join("")}</div>
+    ${d.drops.length > show.length ? `<p class="dim">${
+      d.drops.length - show.length} more already spoken for.</p>` : ""}`;
 }
 
 /* What is on its way in. An order the supplier has confirmed is a
@@ -1049,7 +1097,8 @@ async function openVisit(vid) {
               : ""}
           </span>
         </div>`).join("")}</div>` : ""}
-      ${live && v.kind === "receiving" ? `<div class="page-head cal-add">
+      ${live && v.kind === "receiving" && !v.order_id
+        ? `<div class="page-head cal-add">
         <p class="dim">${v.po_id
           ? "Anything else off the truck that was not on the order goes on "
             + "here too."
@@ -1264,6 +1313,16 @@ function finishVisit(v, after) {
     try {
       const out = await api(`/api/field/visits/${v.id}/finish`, { body });
       closeModal();
+      const h = out.handed;
+      if (h && h.refused && h.refused.length) {
+        toast(`${h.refused.length} line${h.refused.length === 1 ? "" : "s"} `
+          + `refused — ${h.returned_units} unit(s) back on the van and back `
+          + "into stock" + (h.nowhere_to_return
+            ? ", except there is no store on this order to return them to"
+            : ""));
+      } else if (h && h.accepted_all) {
+        toast("Signed for — the whole order was taken");
+      }
       const r = out.received;
       if (r && r.short && r.short.length) {
         toast(`${r.short.length} line${r.short.length === 1 ? "" : "s"} short `

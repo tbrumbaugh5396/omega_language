@@ -3773,6 +3773,76 @@ ok(not _row2 or _row2[0]["lines"][0]["promised"] is None,
    "and a promise already kept stops being reported as news — 'they "
    "promised 70' against 30 still owed reads as seventy more coming")
 
+# Going out. The mirror of receiving in shape and not at all in meaning:
+# the stock left when the order shipped, so what a delivery visit settles
+# is whether it ARRIVED.
+c.post("/api/admin/stores", headers=A, json={
+    "name": "Drop Test Depot", "kind": "retail", "region": "Northeast",
+    "city": "Trenton", "lat": 40.2171, "lng": -74.7429})
+_dsid = [x for x in c.get("/api/stores", headers=A).json()
+         if x["name"] == "Drop Test Depot"][0]["id"]
+_dpid = c.get("/api/products", headers=A).json()[0]["id"]
+_ocon = _mdb.connect()
+_dp = _ocon.execute(
+    "INSERT INTO orders(user_id,kind,status,region,store_id,"
+    " fulfilled_store_id,subtotal_cents,total_cents,created_at)"
+    " VALUES(1,'distributor','shipped','Northeast',?,?,10000,10000,?)",
+    (_dsid, _dsid, _t0.time())).lastrowid
+_ocon.execute("INSERT INTO order_items(order_id,product_id,qty,"
+              " unit_price_cents) VALUES(?,?,4,2500)", (_dp, _dpid))
+_ocon.execute("INSERT INTO inventory(store_id,product_id,qty,updated_at)"
+              " VALUES(?,?,0,0) ON CONFLICT(store_id,product_id)"
+              " DO UPDATE SET qty=0", (_dsid, _dpid))
+_ocon.commit()
+_case = _ocon.execute("SELECT case_size FROM products WHERE id=?",
+                      (_dpid,)).fetchone()["case_size"] or 1
+_ocon.close()
+
+_ob = c.get("/api/field/outbound", headers=A).json()
+_drop = [x for x in _ob["drops"] if x["order_id"] == _dp][0]
+ok(_drop["visit"] is None and _ob["unbooked"] >= 1,
+   "an order paid for and not yet handed over is a promise with a van in "
+   "front of it, and the one nobody is named on is the one that happens "
+   "when somebody has a spare hour")
+_take = c.post("/api/field/outbound/take", headers=A,
+               json={"order_id": _dp}).json()
+_tv = c.get(f"/api/field/visits/{_take['id']}", headers=A).json()
+ok(len(_tv["steps"]) == 1 and _tv["steps"][0]["ordered_qty"] == 4.0,
+   "taking it copies the order's lines onto the visit as things to hand "
+   "over")
+ok(c.post("/api/field/outbound/take", headers=A,
+          json={"order_id": _dp}).status_code == 409,
+   "and two people do not take one drop")
+c.post(f"/api/field/visits/{_take['id']}/start", headers=A, json={})
+c.post(f"/api/field/steps/{_tv['steps'][0]['id']}", headers=A,
+       json={"state": "done", "qty": 3, "note": "one case dented, refused"})
+_nosig = c.post(f"/api/field/visits/{_take['id']}/finish", headers=A,
+                json={})
+ok(_nosig.status_code == 400 and "proved by the person" in
+   _nosig.json()["detail"],
+   "a delivery is proved by whoever took it — a delivery dispute is never "
+   "about our count, it is about whether they got it")
+_out = c.post(f"/api/field/visits/{_take['id']}/finish", headers=A, json={
+    "signature": "R. Alvarez", "contact_name": "Rosa Alvarez",
+    "contact_role": "receiving clerk"}).json()["handed"]
+ok(not _out["accepted_all"] and _out["refused"][0]["back"] == 1.0,
+   "three of four taken leaves one refused")
+ok(_out["returned_units"] == float(_case),
+   "and the refused case comes BACK to the store that sent it — two "
+   "cases refused at a door are two cases on a van, not two cases that "
+   "evaporated, and writing the shortfall off the paperwork is how a "
+   "van's stock and the system's diverge by exactly the amount nobody "
+   "wanted")
+_icon = _mdb.connect()
+ok(_icon.execute("SELECT qty FROM inventory WHERE store_id=? AND"
+                 " product_id=?", (_dsid, _dpid)).fetchone()["qty"]
+   == _case, "in units, the way the order shipped them")
+ok(_icon.execute("SELECT status FROM orders WHERE id=?",
+                 (_dp,)).fetchone()["status"] == "part_delivered",
+   "and a delivery the customer took half of is not delivered — calling "
+   "it so is how a credit note goes unwritten")
+_icon.close()
+
 # A truck that answers to no order. Replacement pallets, samples, a case
 # coming back — these arrive, and refusing to book them until somebody
 # raises a retrospective purchase order means they get booked as an
