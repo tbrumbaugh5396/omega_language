@@ -969,6 +969,20 @@ class EngBody(BaseModel):
     blockers: str = "\x00"
 
 
+@router.get("/api/store/admin/pipeline")
+def pipeline_kpis(u=Depends(admin_user), con=Depends(get_con)):
+    """The studio's numbers, read off work already recorded.
+
+    Nothing here is measured on purpose: the gates already know when each
+    one passed, and the dates table already holds planned against actual
+    with the reason it moved. That is a pipeline, a conversion funnel, a
+    cycle time and a delivery record — it was only ever missing the
+    addition.
+    """
+    from . import pipeline
+    return pipeline.snapshot(con)
+
+
 @router.get("/api/store/admin/engagements")
 def list_engagements(archived: int = 0, u=Depends(admin_user),
                      con=Depends(get_con)):

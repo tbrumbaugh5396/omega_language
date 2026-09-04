@@ -1457,3 +1457,9 @@ form.inline > button.btn:last-child { margin-left: auto; }
   border-radius: 4px; }
 .wd-v { text-align: right; font-variant-numeric: tabular-nums; }
 .cal-add { margin: 18px 0 0; align-items: center; }
+
+.conc-card { margin: 4px 0 10px; }
+.wd-row.pipe-row { grid-template-columns: 150px 1fr 96px 28px; }
+.pipe-n { color: var(--text); font-size: 12.5px; }
+.wd-row.sky-row { grid-template-columns: 78px 1fr 78px 1fr 62px; }
+.wd-row.sky-row b { text-align: right; }

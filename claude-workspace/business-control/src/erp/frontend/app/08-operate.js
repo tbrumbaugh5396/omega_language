@@ -344,13 +344,14 @@ async function renderExperiments() {
 // ---------- analytics ----------
 
 async function renderAnalytics() {
-  const [regions, funnel, engagement, pnl, proj, mrr, days] =
+  const [regions, funnel, engagement, pnl, proj, mrr, days, pipe] =
     await Promise.all([
       api("/api/analytics/regions"), api("/api/analytics/funnel"),
       api("/api/analytics/engagement"), api("/api/analytics/pnl"),
       api("/api/analytics/projection?months=6").catch(() => null),
       api("/api/analytics/mrr?months=12").catch(() => null),
-      api("/api/analytics/days?days=90").catch(() => null)]);
+      api("/api/analytics/days?days=90").catch(() => null),
+      api("/api/store/admin/pipeline").catch(() => null)]);
   const maxV = Math.max(...funnel.steps.map((s) => s.visitors), 1);
   const maxD = Math.max(...engagement.daily.map((d) => d.total), 1);
   view().innerHTML = `
@@ -361,6 +362,7 @@ async function renderAnalytics() {
         vs ${a.prior_7} last week</div>`).join("")}</div>` : ""}
     ${mrr && mrr.months.length ? mrrSection(mrr) : ""}
     ${days ? daysSection(days) : ""}
+    ${pipe && pipe.engagements ? pipeSection(pipe) : ""}
     ${proj ? `<h3>Next six months</h3>
     <div class="card">
       <p class="dim">${esc(proj.note)}${proj.thin
@@ -427,6 +429,105 @@ async function renderAnalytics() {
         ? '<span class="pill bad">falling off</span>'
         : '<span class="pill ok">healthy</span>'}</div></div>`;
   if ($("#cal-day")) $("#cal-day").onclick = () => markDayForm();
+  if ($("#sky-get")) $("#sky-get").onclick = async (ev) => {
+    ev.target.disabled = true;
+    ev.target.textContent = "asking…";
+    try {
+      const r = await api("/api/analytics/weather?days=90", { method: "POST" });
+      toast(`${r.days} days of weather, ${r.from} to ${r.to}`);
+      renderAnalytics();
+    } catch (err) {
+      toast(err.message);
+      ev.target.disabled = false;
+      ev.target.textContent = "Fetch the weather";
+    }
+  };
+}
+
+/* The studio's own numbers. Nothing here is measured on purpose: the
+   gates already know when each one passed and the dates table already
+   holds planned against actual, so this is addition, not instrumentation.
+   The one that earns its place is concentration — a studio with most of
+   its revenue in one client is one phone call from a bad year, and that
+   belongs on a screen long before the call. */
+function pipeSection(d) {
+  const conc = d.concentration.build;
+  const mono = d.concentration.monthly;
+  const dl = d.delivery;
+  const risky = conc && conc.top_pct >= 40;
+  return `
+    <h3>Studio pipeline</h3>
+    <div class="card">
+      <div class="mrr-heads">
+        <div class="mrr-fig"><span class="dim">open</span>
+          <b>${money(d.open_value_cents)}</b></div>
+        <div class="mrr-fig" title="won, and being built"><span class="dim">
+          in delivery</span><b>${money(d.delivering_value_cents)}</b></div>
+        <div class="mrr-fig"><span class="dim">win rate</span>
+          <b>${d.win_rate_pct === null ? "—" : d.win_rate_pct + "%"}</b></div>
+        <div class="mrr-fig"><span class="dim">avg deal</span>
+          <b>${money(d.avg_deal_cents)}</b></div>
+        <div class="mrr-fig" title="from first contact to a signed
+          contract"><span class="dim">cycle</span>
+          <b>${d.median_cycle_days === null ? "—"
+            : d.median_cycle_days + "d"}</b></div>
+      </div>
+      ${conc ? `<div class="card ${risky ? "alert" : ""} conc-card">
+        <b>${conc.top_pct}% of the build book is ${esc(conc.top_name)}</b>
+        <span class="dim">Top three are ${conc.top3_pct}% of
+          ${money(conc.total_cents)}.${mono
+            ? ` On the monthly book it is ${mono.top_pct}%
+               (${esc(mono.top_name)}).` : ""}
+          ${risky ? "A studio with most of its revenue in one client is one "
+            + "phone call from a bad year." : ""}</span>
+      </div>` : ""}
+      <h4 class="mrr-h">Where the work is</h4>
+      <div class="wd-rows">${d.stages.map((s) => {
+        const top = Math.max(...d.stages.map((x) => x.value_cents), 1);
+        return `<div class="wd-row pipe-row">
+          <span class="wd-n pipe-n">${esc(s.label)}</span>
+          <div class="wd-bar"><span style="width:${
+            Math.round(100 * s.value_cents / top)}%"></span></div>
+          <span class="wd-v">${money(s.value_cents)}</span>
+          <span class="dim">${s.n}</span>
+        </div>`;
+      }).join("")}</div>
+      <h4 class="mrr-h">How far they get</h4>
+      <div class="tablewrap"><table>
+        <thead><tr><th>stage</th><th>reached</th><th>of all</th>
+          <th>median days to it</th></tr></thead>
+        <tbody>${d.funnel.map((f) => `<tr>
+          <td>${esc(f.label)}</td><td>${f.reached}</td>
+          <td class="dim">${f.pct}%</td>
+          <td class="dim">${f.median_days === null ? "—"
+            : f.median_days + "d"}</td></tr>`).join("")}</tbody>
+      </table></div>
+      ${d.stuck.length ? `<h4 class="mrr-h">Longest without a move</h4>
+        <div class="sig-rows">${d.stuck.map((x) => `
+          <div class="doc-line mrr-line">
+            <span class="dl-title"><b>${esc(x.name)}</b>
+              <span class="dim">${esc(x.stage_label)}</span></span>
+            <span class="pill ${x.idle_days > 30 ? "warn" : ""}">${
+              Math.round(x.idle_days)}d</span>
+            <span class="mrr-amt">${money(x.value_cents)}</span>
+          </div>`).join("")}</div>` : ""}
+      <h4 class="mrr-h">Delivery</h4>
+      <p class="dim">${dl.dated
+        ? `${dl.on_time_pct}% of ${dl.dated} dated milestones landed on or
+           before the day they were planned for${dl.median_slip_days !== null
+             ? `; the median moved ${dl.median_slip_days} day${
+               Math.abs(dl.median_slip_days) === 1 ? "" : "s"}` : ""}.${
+           dl.launch_on_time_pct !== null
+             ? ` ${dl.launch_on_time_pct}% of launches hit their target
+                date.` : ""}`
+        : "No milestone has both a planned and an actual date yet — "
+          + "delivery is measured off the Dates table, and it is empty."}</p>
+      ${dl.reasons.length ? `<div class="chips">${dl.reasons.map((r) =>
+        `<span class="pill">${esc(r.why)} · ${r.n}</span>`).join("")}</div>
+        <p class="dim">A date that moved with a reason beside it is a
+          project being managed. One that moved silently will move
+          again.</p>` : ""}
+    </div>`;
 }
 
 /* The trading calendar. A month has four weekends or five; Easter moves;
@@ -501,8 +602,70 @@ function daysSection(d) {
           <button class="btn alt" id="cal-day">Mark a day</button>
         </div>
       </div>
-      ${d.weather ? "" : `<p class="dim">Weather has columns on these rows
-        and nothing in them yet — the join is here when you want it.</p>`}
+      ${labourBox(d.labour)}
+      ${skyBox(d.sky)}
+    </div>`;
+}
+
+/* What the hours bought, and whether the rota held. Two numbers that need
+   each other: sales per hour says whether the staffing was worth it,
+   adherence says whether the staffing that was planned is the staffing
+   that happened. Read the first alone and you congratulate yourself on a
+   productive day that was two people not turning up. */
+function labourBox(l) {
+  if (!l || !l.hours) return "";
+  const r = l.rota;
+  return `<h4 class="mrr-h">Hours</h4>
+    <p class="dim">${money(l.per_hour_cents)} of sales per labour hour
+      across ${l.hours} hours${l.best_day
+        ? `; the best day made ${money(l.best_day.cents)} an hour` : ""}.
+      ${r.planned
+        ? `${r.adherence_pct}% of ${r.planned} published shift${
+           r.planned === 1 ? "" : "s"} were clocked into${r.missed
+             ? `, ${r.missed} not at all` : ""}${r.late
+             ? `, ${r.late} more than five minutes late (median ${
+                r.median_late_min} min)` : ""}.`
+        : "No published shifts in the window to measure the clock "
+          + "against."}</p>`;
+}
+
+/* Weather is not a KPI. "It rained" explains nothing; "wet Saturdays run
+   14% under dry ones across eleven of them" is something to staff
+   against. So it is only ever reported as a comparison with enough days
+   behind it. */
+function skyBox(s) {
+  if (!s) return "";
+  if (!s.enough) {
+    return `<h4 class="mrr-h">Weather</h4>
+      <div class="page-head cal-add">
+        <p class="dim">${esc(s.why || "No weather on these days yet.")}
+          It lands on the day beside the money, because "it rained" is not
+          a metric and "Saturday was down 18% and it rained" is the start
+          of one.</p>
+        <div class="top-actions">
+          <button class="btn alt" id="sky-get">Fetch the weather</button>
+        </div>
+      </div>`;
+  }
+  const line = (x) => x ? `<div class="wd-row sky-row">
+      <span class="wd-n">${esc(x.hi_label)}</span>
+      <span class="dim">${x.hi_days}d · ${money(x.hi_avg_cents)}</span>
+      <span class="wd-n">${esc(x.lo_label)}</span>
+      <span class="dim">${x.lo_days}d · ${money(x.lo_avg_cents)}</span>
+      <b class="${x.diff_pct > 0 ? "good" : x.diff_pct < 0 ? "low" : ""}">${
+        x.diff_pct > 0 ? "+" : ""}${x.diff_pct}%</b>
+    </div>` : "";
+  return `<h4 class="mrr-h">Weather <span class="dim">${s.have} days</span>
+    </h4>
+    <div class="wd-rows">${line(s.rain)}${line(s.warm)}${line(s.cloud)}</div>
+    <p class="dim">${esc(s.note)}</p>
+    <div class="page-head cal-add">
+      <p class="dim">Observed, not forecast — afterwards the question is
+        what the weather was, and a forecast that was wrong is exactly the
+        day you are trying to explain.</p>
+      <div class="top-actions">
+        <button class="btn alt" id="sky-get">Refresh the weather</button>
+      </div>
     </div>`;
 }
 

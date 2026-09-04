@@ -4209,7 +4209,39 @@ def analytics_days(days: int = 90, region: str = "", user=Depends(admin_user),
     daybook.rebuild(con, max(14, min(400, days)))
     out = daybook.series(con, days, region)
     out["compare"] = daybook.compare(con, region)
+    out["sky"] = daybook.weather_read(con, days, region)
+    out["labour"] = daybook.labour_read(con, days, region)
     return out
+
+
+@app.post("/api/analytics/weather")
+def analytics_weather(days: int = 90, user=Depends(admin_user),
+                      con=Depends(get_con)):
+    """Fetch the observed weather for the window and put it on the days.
+
+    Asked for rather than fetched on a schedule: it reaches a third party,
+    and a reporting screen that quietly makes outbound requests every time
+    somebody opens it is a screen nobody can reason about. Observed, not
+    forecast — the question afterwards is what the weather WAS, and a
+    forecast that was wrong is exactly the day you are trying to explain.
+    """
+    from . import daybook
+    lat = float(CFG.get("weather_lat") or 0)
+    lon = float(CFG.get("weather_lon") or 0)
+    if not lat and not lon:
+        raise HTTPException(
+            400, "set weather_lat and weather_lon first — one point, and it "
+                 "should be where the business actually is")
+    days = max(7, min(365, days))
+    end = time.strftime("%Y-%m-%d")
+    start = time.strftime("%Y-%m-%d",
+                          time.localtime(time.time() - days * 86400))
+    try:
+        got = daybook.fetch_weather(lat, lon, start, end)
+    except Exception as e:                                   # noqa: BLE001
+        raise HTTPException(502, f"the weather service did not answer: {e}")
+    n = daybook.save_weather(con, got)
+    return {"ok": True, "days": n, "from": start, "to": end}
 
 
 class CalendarDayBody(BaseModel):

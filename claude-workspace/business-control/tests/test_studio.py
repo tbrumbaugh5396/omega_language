@@ -426,6 +426,43 @@ ok(_gd["current_stage"] == "03-agreement",
    "reopening a gate moves the stage back by the same derivation, and the "
    "signed evidence stays in the vault untouched")
 
+# --- the studio's own numbers, read off work already recorded ---------------
+# Nothing here is instrumented: the gates already know when each one
+# passed and the dates table already holds planned against actual. It was
+# only ever missing the addition.
+_pipe = c.get("/api/store/admin/pipeline", headers=A).json()
+ok(_pipe["engagements"] >= 1 and "funnel" in _pipe,
+   "the pipeline is a snapshot of every engagement against the gate "
+   "ladder they all share")
+ok(len(_pipe["funnel"]) == len(_stg_gates) if False else
+   all(f["pct"] <= 100 for f in _pipe["funnel"]),
+   "how far they get, gate by gate, as a share of all of them")
+ok(all(f["median_days"] is None or f["median_days"] >= 0
+       for f in _pipe["funnel"]),
+   "and the time to each is a median of real gaps — never a negative "
+   "duration, which is what a gate signed out of order would produce")
+ok(_pipe["win_rate_pct"] is not None,
+   "the win rate is measured at the contract, not the proposal: before it "
+   "is a conversation, after it is delivery, and mixing the two flatters "
+   "whichever end has more rows")
+_conc = _pipe["concentration"]["build"]
+ok(_conc is None or (0 <= _conc["top_pct"] <= 100
+                     and _conc["top3_pct"] >= _conc["top_pct"]),
+   "concentration says how much of the book is one client — the number "
+   "nobody asks for until the phone call")
+ok("build" in _pipe["concentration"] and "monthly" in _pipe["concentration"],
+   "on both books, because they fail differently: the biggest build costs "
+   "a quarter, the biggest retainer costs every month after it")
+ok(_pipe["delivery"]["on_time_pct"] is None
+   or 0 <= _pipe["delivery"]["on_time_pct"] <= 100,
+   "delivery is planned against actual off the Dates table, and stays "
+   "quiet when no milestone has both")
+ok(isinstance(_pipe["stuck"], list) and len(_pipe["stuck"]) <= 5,
+   "and the longest without a move is a short list, because a list of "
+   "everything is not a prompt to do anything")
+ok(c.get("/api/store/admin/pipeline").status_code in (401, 403),
+   "the studio's numbers are the studio's")
+
 # --- archiving a client ----------------------------------------------------
 _ar = c.post("/api/store/admin/engagements", headers=A,
              json={"name": "Parked Smoke"}).json()

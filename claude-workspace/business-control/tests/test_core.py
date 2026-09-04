@@ -3665,6 +3665,46 @@ ok(all(k in _days["days"][0] for k in
    "a metric, and 'Saturday was down 18% and it rained' is the start of "
    "one")
 
+# The rebuild must not throw away what it does not know about. INSERT OR
+# REPLACE deletes the row and writes a new one, dropping every column the
+# statement does not name — so a rebuild wiped the weather it had just
+# been given, every time anybody opened the screen.
+_wcon = _mdb.connect()
+_dbk.rebuild(_wcon, 30)
+_wday = _dbk._day_key(_t0.time() - 5 * 86400)
+_dbk.save_weather(_wcon, {_wday: {"temp_c": 18.5, "precip_mm": 4.2,
+                                  "cloud_pct": 80.0, "humidity_pct": 71.0}})
+ok(_wcon.execute("SELECT temp_c FROM day_facts WHERE day=? AND region=''",
+                 (_wday,)).fetchone()["temp_c"] == 18.5,
+   "weather lands on the day row beside the money")
+_dbk.rebuild(_wcon, 30)
+ok(_wcon.execute("SELECT temp_c FROM day_facts WHERE day=? AND region=''",
+                 (_wday,)).fetchone()["temp_c"] == 18.5,
+   "and a rebuild keeps it — recomputing the facts must not drop the "
+   "columns it does not compute")
+_sky = _dbk.weather_read(_wcon, 30)
+ok(not _sky["enough"] and _sky["have"] == 1,
+   "one day of weather is not a comparison, and it says so rather than "
+   "reporting a 100% difference off a single Tuesday")
+for _i in range(20):
+    _d = _dbk._day_key(_t0.time() - (_i + 1) * 86400)
+    _dbk.save_weather(_wcon, {_d: {"temp_c": 10.0 + _i, "precip_mm": _i % 4,
+                                   "cloud_pct": 50.0, "humidity_pct": 60.0}})
+_sky = _dbk.weather_read(_wcon, 30)
+ok(_sky["enough"] and _sky["warm"] and _sky["warm"]["hi_days"] >= 5
+   and _sky["warm"]["lo_days"] >= 5,
+   "with enough of them it splits warm against cool, both sides big "
+   "enough to be a comparison")
+ok(_sky["warm"]["split_at"] is not None and _sky["cloud"] is None,
+   "at the median of the days themselves — and a field where every day is "
+   "identical splits into nothing, rather than into a spurious result")
+_lab = _dbk.labour_read(_wcon, 30)
+ok("per_hour_cents" in _lab and "rota" in _lab
+   and _lab["rota"]["adherence_pct"] is None,
+   "sales per labour hour comes with rota adherence beside it — read the "
+   "first alone and a day two people did not turn up looks productive")
+_wcon.close()
+
 # --- how long a customer stays, and what they are worth ---------------------
 # One connection, closed at the end. Three opened inline and left to the
 # garbage collector is a lock held for however long that takes, which is

@@ -257,10 +257,22 @@ def rebuild(con, days: int = 120, when: float = 0) -> int:
     for i in range(days):
         slot(_day_key(start + i * DAY), "")
 
+    # Upsert the facts and ONLY the facts. INSERT OR REPLACE deletes the
+    # row and writes a new one, which silently drops every column this
+    # statement does not name — so a rebuild threw away the weather it had
+    # just been given, every time anybody opened the screen.
     con.executemany(
-        "INSERT OR REPLACE INTO day_facts(day,region,weekday,revenue_cents,"
+        "INSERT INTO day_facts(day,region,weekday,revenue_cents,"
         " orders,units,visitors,new_customers,labour_minutes,holiday,closed,"
-        " built_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        " built_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+        " ON CONFLICT(day,region) DO UPDATE SET"
+        "  weekday=excluded.weekday, revenue_cents=excluded.revenue_cents,"
+        "  orders=excluded.orders, units=excluded.units,"
+        "  visitors=excluded.visitors,"
+        "  new_customers=excluded.new_customers,"
+        "  labour_minutes=excluded.labour_minutes,"
+        "  holiday=excluded.holiday, closed=excluded.closed,"
+        "  built_at=excluded.built_at",
         [(d, rg, v["weekday"], v["revenue_cents"], v["orders"], v["units"],
           v["visitors"], v["new_customers"], v["labour_minutes"],
           v["holiday"], v["closed"], when)
@@ -366,4 +378,183 @@ def compare(con, region: str = "", when: float = 0) -> dict:
                 "figure is the one to read when they disagree: the raw "
                 "difference includes the calendar, and the calendar is not "
                 "something the business did.",
+    }
+
+
+# ---------- the sky ----------
+#
+# Weather is not a KPI. "It rained" explains nothing on its own; "Saturday
+# was down 18% and it rained" is the start of an explanation, and "wet
+# Saturdays run 14% under dry ones across eleven of them" is a fact you
+# can staff against. So it lands on the day row beside the money rather
+# than in a service of its own, and the only numbers reported off it are
+# comparisons with enough days behind them to mean something.
+#
+# Open-Meteo, because it needs no key, serves history and forecast from
+# one shape, and asks nothing about who is asking. Observed weather, not
+# forecast: the retrospective question is what the weather WAS, and a
+# forecast that was wrong is exactly the day you are trying to explain.
+
+WEATHER_URL = "https://archive-api.open-meteo.com/v1/archive"
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+
+def fetch_weather(lat: float, lon: float, start: str, end: str,
+                  timeout: float = 12.0) -> dict:
+    """{day: {temp_c, precip_mm, cloud_pct, humidity_pct}} for a range.
+
+    Raises on anything that goes wrong, so a caller can say so plainly
+    rather than writing a day of zeroes and calling it a measurement.
+    """
+    import json
+    import urllib.parse
+    import urllib.request
+    today = time.strftime("%Y-%m-%d")
+    url = WEATHER_URL if end < today else FORECAST_URL
+    q = urllib.parse.urlencode({
+        "latitude": round(lat, 4), "longitude": round(lon, 4),
+        "start_date": start, "end_date": end,
+        "daily": "temperature_2m_mean,precipitation_sum,cloud_cover_mean,"
+                 "relative_humidity_2m_mean",
+        "timezone": "auto"})
+    with urllib.request.urlopen(f"{url}?{q}", timeout=timeout) as r:
+        got = json.loads(r.read().decode("utf-8"))
+    d = got.get("daily") or {}
+    days = d.get("time") or []
+    out = {}
+    for i, day in enumerate(days):
+        def at(key):
+            vals = d.get(key) or []
+            return vals[i] if i < len(vals) else None
+        out[day] = {"temp_c": at("temperature_2m_mean"),
+                    "precip_mm": at("precipitation_sum"),
+                    "cloud_pct": at("cloud_cover_mean"),
+                    "humidity_pct": at("relative_humidity_2m_mean")}
+    return out
+
+
+def save_weather(con, got: dict, region: str = "") -> int:
+    n = 0
+    for day, w in got.items():
+        cur = con.execute(
+            "UPDATE day_facts SET temp_c=?, precip_mm=?, cloud_pct=?,"
+            " humidity_pct=? WHERE day=? AND region=?",
+            (w["temp_c"], w["precip_mm"], w["cloud_pct"], w["humidity_pct"],
+             day, region))
+        n += cur.rowcount
+    con.commit()
+    return n
+
+
+def weather_read(con, days: int = 90, region: str = "",
+                 when: float = 0) -> dict:
+    """What the weather did to trade, said carefully.
+
+    Wet against dry and warm against cool, each reported only with enough
+    days on both sides to be a comparison rather than an anecdote. The
+    threshold is the median rather than a fixed millimetre, because "wet"
+    means something different in Seattle and Phoenix and a number baked
+    in here would be wrong in one of them.
+    """
+    when = when or time.time()
+    start = _day_key(_midnight(when) - (days - 1) * DAY)
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM day_facts WHERE region=? AND day>=? AND temp_c"
+        " IS NOT NULL AND closed=0 ORDER BY day", (region, start))]
+    if len(rows) < 14:
+        return {"have": len(rows), "enough": False,
+                "why": "fewer than fourteen days of weather on trading days "
+                       "— nothing here would be a comparison yet"}
+
+    def split(field, label_hi, label_lo):
+        vals = sorted(r[field] for r in rows if r[field] is not None)
+        if len(vals) < 14:
+            return None
+        mid = vals[len(vals) // 2]
+        hi = [r for r in rows if (r[field] or 0) > mid]
+        lo = [r for r in rows if (r[field] or 0) <= mid]
+        if len(hi) < 5 or len(lo) < 5:
+            return None
+        a = sum(r["revenue_cents"] for r in hi) / len(hi)
+        b = sum(r["revenue_cents"] for r in lo) / len(lo)
+        return {"field": field, "split_at": round(mid, 1),
+                "hi_label": label_hi, "lo_label": label_lo,
+                "hi_days": len(hi), "lo_days": len(lo),
+                "hi_avg_cents": int(a), "lo_avg_cents": int(b),
+                "diff_pct": round((a - b) / b * 100, 1) if b else None}
+    return {
+        "have": len(rows), "enough": True,
+        "rain": split("precip_mm", "wet", "dry"),
+        "warm": split("temp_c", "warmer", "cooler"),
+        "cloud": split("cloud_pct", "cloudier", "clearer"),
+        "note": "Each split is at the median of the days themselves, not a "
+                "fixed threshold: wet means something different in Seattle "
+                "and Phoenix. A difference across a few dozen days is a "
+                "hint to staff against, not a law.",
+    }
+
+
+# ---------- what the hours bought, and whether the rota held ----------
+
+def labour_read(con, days: int = 90, region: str = "",
+                when: float = 0) -> dict:
+    """Sales per labour hour, and the rota against the clock.
+
+    Two numbers that need each other. Sales per hour says whether the
+    staffing was worth it; adherence says whether the staffing that was
+    planned is the staffing that happened. A business that reads the
+    first without the second congratulates itself on a productive day
+    that was actually a day two people did not turn up.
+    """
+    when = when or time.time()
+    start_ts = _midnight(when) - (days - 1) * DAY
+    start = _day_key(start_ts)
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM day_facts WHERE region=? AND day>=? AND closed=0",
+        (region, start))]
+    worked = sum(r["labour_minutes"] for r in rows) / 60
+    rev = sum(r["revenue_cents"] for r in rows)
+    per_day = [{"day": r["day"], "cents": int(r["revenue_cents"]
+                                              / (r["labour_minutes"] / 60))}
+               for r in rows if r["labour_minutes"] >= 60]
+
+    planned = kept = missed = 0
+    late = []
+    try:
+        for sh in con.execute(
+                "SELECT s.id, s.user_id, s.starts, s.ends FROM"
+                " scheduled_shifts s WHERE s.published=1 AND s.starts>=?"
+                "  AND s.starts<?", (start_ts, when)):
+            planned += 1
+            got = con.execute(
+                "SELECT clock_in FROM shifts WHERE user_id=? AND clock_in>=?"
+                " AND clock_in<? ORDER BY clock_in LIMIT 1",
+                (sh["user_id"], sh["starts"] - 3 * 3600,
+                 sh["ends"])).fetchone()
+            if got is None:
+                missed += 1
+                continue
+            kept += 1
+            # Late is measured in minutes past the start, not "was late":
+            # five minutes is weather and forty is a rota nobody read.
+            mins = (got["clock_in"] - sh["starts"]) / 60
+            if mins > 5:
+                late.append(round(mins))
+    except Exception:                                        # noqa: BLE001
+        planned = 0
+    return {
+        "hours": round(worked, 1),
+        "revenue_cents": rev,
+        "per_hour_cents": int(rev / worked) if worked else 0,
+        "days_measured": len(per_day),
+        "best_day": max(per_day, key=lambda x: x["cents"])
+        if per_day else None,
+        "rota": {
+            "planned": planned, "kept": kept, "missed": missed,
+            "adherence_pct": round(kept / planned * 100, 1)
+            if planned else None,
+            "late": len(late),
+            "median_late_min": int(sorted(late)[len(late) // 2])
+            if late else None,
+        },
     }

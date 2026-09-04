@@ -70,6 +70,14 @@ DEFAULTS = {
     # Independent contractor drivers: paid per completed route + per stop
     "contractor_per_route_cents": 9000,
     "contractor_per_stop_cents": 800,
+    # The calendar and the sky. Holidays are computed from the country's
+    # rules; the weather is fetched for one point, because a business
+    # whose regions span a continent wants the shop's weather, not the
+    # country's average — and one point is the honest version of that
+    # until there are coordinates per region to fetch.
+    "holiday_country": "US",
+    "weather_lat": 0.0,
+    "weather_lon": 0.0,
     # Private Shopify subscription app. Empty shop_domain = mock mode (a fake
     # contract book so the bill-run pipeline is testable without a store).
     "shopify": {"shop_domain": "",          # e.g. my-brand-dev.myshopify.com
