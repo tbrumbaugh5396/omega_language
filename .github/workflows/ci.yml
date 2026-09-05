@@ -1,8 +1,16 @@
 name: business-control CI
 
-# The smoke suite is the contract: 1,891 script-style checks in three
-# parts run in parallel, printing "all N checks passed" or failing loudly.
-# It runs on every push and PR that touches business-control.
+# The smoke suite is the contract: script-style checks in three parts run
+# in parallel, printing "all N checks passed" or failing loudly. It runs
+# on every push and PR that touches business-control.
+#
+# It also runs on days that are not today. A suite green on a Tuesday
+# says less than it looks about a Sunday: fixtures have said "+35 days"
+# and meant "next month", and put a shift on next Monday while a holiday
+# sat on tomorrow. Both were right most days and wrong on the rest, and
+# both reached main. So a small sample of awkward dates runs on every
+# push, and the whole set runs nightly, where an hour of runner time
+# costs nobody a wait.
 
 on:
   push:
@@ -12,9 +20,15 @@ on:
   pull_request:
     paths: ["claude-workspace/business-control/**",
             ".github/workflows/ci.yml"]
+  schedule:
+    # 03:27 UTC. Odd minute on purpose: the top of an hour is when every
+    # cron on GitHub fires at once and yours waits behind them.
+    - cron: "27 3 * * *"
+  workflow_dispatch:
 
 jobs:
   smoke:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -37,3 +51,35 @@ jobs:
             src/storefront/frontend/*.js; do node --check "$f"; done
       - name: smoke suite (three parts, parallel)
         run: PYTHONPATH=src python tests/test_smoke.py
+
+      # Three dates rather than seventeen: a weekend, a year end and a
+      # clock change, which between them are the three ways a date
+      # fixture has actually been wrong here. Roughly one extra suite's
+      # worth of time, which is a price worth paying on every push.
+      - name: dates (sample)
+        run: PYTHONPATH=src python scripts/audit_dates.py --sample --jobs 1
+
+  # The whole set, once a night. Seventeen suites is an hour of runner
+  # time and nobody's wait, which is the right shape for a check that
+  # answers "is this still true in February".
+  dates:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: claude-workspace/business-control
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: claude-workspace/business-control/requirements.lock
+      - name: install
+        run: pip install -r requirements.lock
+      - name: dates (every awkward one)
+        # One lane: a hosted runner has two cores and each date is
+        # already three processes. More lanes here is more swapping, not
+        # more parallelism.
+        run: PYTHONPATH=src python scripts/audit_dates.py --jobs 1

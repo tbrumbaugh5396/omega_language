@@ -56,7 +56,11 @@ runs all three parts at seventeen awkward dates — every weekday, month
 ends, a year end, a leap day, both clock changes — via `BC_FAKE_NOW`,
 which `tests/_harness.py` reads to move `time.time()`, `date.today()` and
 `datetime.now()` together. `--weekdays` does just the seven, which is the
-cheap version and catches most of it.
+cheap version and catches most of it; `--sample` does three — a weekend,
+a year end and a clock change, being the three ways a date fixture has
+actually been wrong here — and that is what CI runs on every push. The
+full seventeen run nightly on a schedule, and `--jobs N` caps the lanes
+for a runner with two cores and no interest in swapping.
 
 Rules that fall out of it, for anything a test dates:
 

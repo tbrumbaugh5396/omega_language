@@ -10,6 +10,9 @@ each daylight-saving change — and reports which parts fail on which.
 
     PYTHONPATH=src python3 scripts/audit_dates.py           # the awkward set
     PYTHONPATH=src python3 scripts/audit_dates.py --weekdays  # just the seven
+    PYTHONPATH=src python3 scripts/audit_dates.py --sample    # three, for CI
+    PYTHONPATH=src python3 scripts/audit_dates.py --jobs 2    # lanes, for a
+                                                              # small runner
 
 It is not part of the normal suite: it is that suite run seventeen times,
 which is a coffee break rather than seconds. Run it when the date
@@ -64,6 +67,18 @@ DATES = [
 ]
 
 
+def _flag(name, default=0):
+    """--jobs 2, for a runner with two cores and no interest in swapping."""
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            try:
+                return max(1, int(sys.argv[i + 1]))
+            except ValueError:
+                pass
+    return default
+
+
 def run(label, when, parts):
     """One date, its parts in parallel — the same shape test_smoke uses,
     because twenty suites end to end is a coffee break and nobody runs a
@@ -91,13 +106,26 @@ def run(label, when, parts):
     return not bad
 
 
+# One from each family that has actually caught something: a weekend, a
+# year end, and a clock change. Cheap enough to run on every push, and
+# between them they cover the three ways a date fixture has been wrong
+# here — the weekday it lands on, the month it is counted into, and the
+# hour it thinks it is.
+SAMPLE = ("Sun", "year-end", "dst-autumn")
+
+
 def main():
     parts = PARTS
-    dates = DATES[:7] if "--weekdays" in sys.argv else DATES
+    if "--sample" in sys.argv:
+        dates = [d for d in DATES if d[0] in SAMPLE]
+    elif "--weekdays" in sys.argv:
+        dates = DATES[:7]
+    else:
+        dates = DATES
     print(f"running {len(parts)} parts at {len(dates)} dates\n", flush=True)
     # A few dates at a time: each one is already three processes, and
     # oversubscribing the box makes the slow parts slower, not the run.
-    lanes = max(1, min(4, (os.cpu_count() or 4) // 2))
+    lanes = _flag("--jobs") or max(1, min(4, (os.cpu_count() or 4) // 2))
     with cf.ThreadPoolExecutor(max_workers=lanes) as pool:
         good = sum(pool.map(lambda d: run(d[0], d[1], parts), dates))
     print(f"\n{good}/{len(dates)} dates clean")
