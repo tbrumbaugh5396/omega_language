@@ -27,6 +27,7 @@ Weather has columns here and nothing in them yet. It belongs on a day
 rather than in a service of its own: "it rained" is not a metric, and
 "Saturday was down 18% and it rained" is the beginning of one.
 """
+import calendar
 import time
 
 DAY = 86400
@@ -345,7 +346,15 @@ def compare(con, region: str = "", when: float = 0) -> dict:
     # Month to date against the same stretch of the month before. Three
     # days of September against the whole of August is not a comparison,
     # it is a subtraction — and it always says the business collapsed.
-    upto = lt.tm_mday
+    #
+    # Clamped to the shorter month, because on the 31st of December there
+    # is no 31st of November to hold it against: taking the whole of one
+    # side and as much as exists of the other is the same subtraction in
+    # a smaller costume. The held-back days are named rather than
+    # dropped quietly.
+    prev_len = calendar.monthrange(py, pm)[1]
+    upto = min(lt.tm_mday, prev_len)
+    held = lt.tm_mday - upto
 
     def side(month):
         rows = [dict(r) for r in con.execute(
@@ -355,6 +364,13 @@ def compare(con, region: str = "", when: float = 0) -> dict:
         trade = [r for r in rows if not r["closed"]]
         cents = sum(r["revenue_cents"] for r in rows)
         return {"month": month, "revenue_cents": cents, "days": len(rows),
+                # The stretch asked for, beside how much of it we hold.
+                # They part company when the history does not reach back
+                # far enough — a comparison against nineteen days of a
+                # month, presented as a month, reads as a collapse that
+                # never happened.
+                "stretch": upto, "covered": len(rows),
+                "short_by": max(0, upto - len(rows)),
                 "trading_days": len(trade), "orders": sum(
                     r["orders"] for r in rows),
                 "per_trading_day_cents": int(cents / len(trade))
@@ -366,15 +382,24 @@ def compare(con, region: str = "", when: float = 0) -> dict:
     def pct(now, was):
         return round((now - was) / was * 100, 1) if was else None
     return {
-        "this": b, "last": a, "to_day": upto,
+        "this": b, "last": a, "to_day": upto, "held_back_days": held,
         "raw_pct": pct(b["revenue_cents"], a["revenue_cents"]),
         "per_day_pct": pct(b["per_trading_day_cents"],
                            a["per_trading_day_cents"]),
         "trading_day_gap": b["trading_days"] - a["trading_days"],
+        "thin": bool(a["short_by"] or b["short_by"]),
         "note": f"Both sides are the first {upto} days of the month, so a "
                 f"month three days old is not compared with one that is "
                 f"over. Two months are rarely the same shape even then. "
-                "The per-trading-day "
+                + (f"The last {held} day(s) of this month are held back: "
+                   f"{last_m} has no day to hold them against. "
+                   if held else "")
+                + (f"{last_m} is short {a['short_by']} day(s) of that "
+                   f"stretch and {this_m} short {b['short_by']}: there is "
+                   f"no history for them, so this is less of a comparison "
+                   f"than it looks. " if (a["short_by"] or b["short_by"])
+                   else "")
+                + "The per-trading-day "
                 "figure is the one to read when they disagree: the raw "
                 "difference includes the calendar, and the calendar is not "
                 "something the business did.",

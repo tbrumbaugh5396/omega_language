@@ -40,6 +40,33 @@ part file directly). Shared prologue lives in `tests/_harness.py` — a
 part must build all of its own state; never lean on another part's.
 Still run the full suite in background with output to a file.
 
+## Dates
+
+The suite is green on the day you run it, which is a weaker claim than it
+looks: a fixture saying "+35 days" and meaning "next month", or "next
+Monday" while a holiday sits on "tomorrow", is right most days and wrong
+on the rest. Two such failures appeared within a week of each other from
+the calendar alone.
+
+```bash
+PYTHONPATH=src python3 scripts/audit_dates.py
+```
+
+runs all three parts at seventeen awkward dates — every weekday, month
+ends, a year end, a leap day, both clock changes — via `BC_FAKE_NOW`,
+which `tests/_harness.py` reads to move `time.time()`, `date.today()` and
+`datetime.now()` together. `--weekdays` does just the seven, which is the
+cheap version and catches most of it.
+
+Rules that fall out of it, for anything a test dates:
+
+- days are calendar days, not multiples of 86400 (a fortnight in seconds
+  crosses a clock change an hour out, and lands on the wrong day)
+- hours are wall-clock hours, not seconds past midnight
+- "next month" is a month, not thirty-five days
+- a fixture anchored to `now` and one anchored to a week boundary drift
+  into each other; anchor both to the same thing
+
 ## Backups
 
 `scripts/backup.py` archives the whole fleet (pulls from worker nodes) and

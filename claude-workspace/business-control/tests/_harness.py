@@ -16,6 +16,45 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+
+# --- the clock, when somebody wants to run this on a different day -------
+# Two failures in one week came from fixtures that were right on a Friday
+# and wrong on a Saturday: "+35 days" meaning "next month", and a shift on
+# next Monday meeting a holiday anchored to tomorrow. Neither is findable
+# by reading, and both are findable by running the suite on the day it
+# breaks. BC_FAKE_NOW moves the whole process to that day.
+#
+# Time still runs forward from there rather than freezing: a frozen clock
+# is its own kind of unreality, and TTLs that never advance would hide
+# exactly the expiry bugs this is meant to surface.
+_fake = os.environ.get("BC_FAKE_NOW")
+if _fake:
+    import datetime as _dtm
+    import time as _tm
+
+    _origin = float(_fake)
+    _real_time = _tm.time                      # the genuine one, kept
+    _started = _real_time()
+    _tm.time = lambda: _origin + (_real_time() - _started)
+
+    # date.today() and datetime.now() reach the clock through C rather
+    # than through time.time(), so they need saying separately or the
+    # nutrition and cycles screens would still be living in the present.
+    class _Date(_dtm.date):
+        @classmethod
+        def today(cls):
+            return cls.fromtimestamp(_tm.time())
+
+    class _DateTime(_dtm.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(_tm.time(), tz)
+
+        @classmethod
+        def utcnow(cls):
+            return cls.utcfromtimestamp(_tm.time())
+
+    _dtm.date, _dtm.datetime = _Date, _DateTime
 # Each part process gets its own data dir, whatever the caller exported —
 # a shared dir across parallel parts would be the flakiest test in the file.
 os.environ["BUSINESS_CONTROL_DATA"] = tempfile.mkdtemp(prefix="bc_test_")

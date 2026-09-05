@@ -475,6 +475,31 @@ _hw = c.post("/api/admin/users", headers=AA, json={
 # five nine-hour days from the Monday before last, which cannot straddle
 # a boundary whatever day the suite happens to run on.
 from erp.backend.timesheet import _week_start as _wks  # noqa: E402
+
+def _hour(ts, h, m=0):
+    """`h` o'clock on the day `ts` falls in.
+
+    Midnight plus h * 3600 is an hour out on the two days a year the
+    clocks change — enough to turn eleven into noon, or four into five,
+    and to make a rota test read a correct answer as a wrong one.
+    """
+    lt = _t0.localtime(ts)
+    return _t0.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+
+
+def _days_on(ts, n):
+    """`n` days later at the same wall-clock time.
+
+    Adding n * 86400 is an hour out on either side of a clock change, and
+    that hour is enough: eleven o'clock the following Thursday became
+    noon, which the weekly school-run exception blocks, and the test read
+    it as the blackout leaking into a second week.
+    """
+    lt = _t0.localtime(ts)
+    return _t0.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + n,
+                       lt.tm_hour, lt.tm_min, 0, 0, 0, -1))
+
+
 _wk = _wks(_now) - 7 * 86400
 import sqlite3 as _sq3
 _hcon = _sq3.connect(_tn.tenant_dir("alpha") / "business_control.db")
@@ -490,9 +515,15 @@ ok(_hrow["worked_hours"] == 45.0 and _hrow["overtime_hours"] == 5.0
    and _hrow["regular_hours"] == 40.0,
    "a week of nine-hour days is forty regular and five overtime — split "
    "at the line the business sets, not at one baked into a payroll screen")
+# Pinned inside the window above rather than to "tomorrow". Anchored to
+# now, this holiday fell outside a fortnight ending on a Sunday whenever
+# the suite ran on the Sunday, and reached into whichever weekday the
+# rota tests further down had named whenever it did not. A fixture that
+# moves relative to the calendar cannot be reasoned about beside one that
+# does not: this is the Wednesday of the current week, always.
 _off = c.post("/api/time-off", headers=AA, json={
-    "kind": "holiday", "starts": _now + 86400, "ends": _now + 2 * 86400,
-    "user_id": _hw}).json()
+    "kind": "holiday", "starts": _wk + 9 * 86400,
+    "ends": _wk + 10 * 86400, "user_id": _hw}).json()
 ok(_off["hours"] == 8, "a day of holiday is eight hours unless somebody "
    "says otherwise")
 c.post(f"/api/time-off/{_off['id']}/decide", headers=AA,
@@ -596,13 +627,17 @@ ok(_av["ok"], "somebody's week is theirs to describe, and an office may "
 # test is about. A fixture anchored to "tomorrow" and one anchored to
 # "next Monday" are three days apart or ten, depending on the weekday
 # somebody runs the suite.
-_mon = _wks(_now) + 14 * 86400
+# Both of these are calendar days, not multiples of 86400. Adding a
+# fortnight in seconds across the November fall-back lands an hour early
+# — on the Sunday, not the Monday — and the rota then correctly says a
+# Monday shift does not fit a Sunday nobody offered to work.
+_mon = _days_on(_wks(_now), 14)
 _in = c.post("/api/schedule", headers=AA, json={
-    "user_id": _hw, "starts": _mon + 10 * 3600,
-    "ends": _mon + 16 * 3600}).json()
+    "user_id": _hw, "starts": _hour(_mon, 10),
+    "ends": _hour(_mon, 16)}).json()
 _out = c.post("/api/schedule", headers=AA, json={
-    "user_id": _hw, "starts": _mon + 19 * 3600,
-    "ends": _mon + 22 * 3600}).json()
+    "user_id": _hw, "starts": _hour(_mon, 19),
+    "ends": _hour(_mon, 22)}).json()
 ok(_in["fits"] and not _out["fits"],
    "a shift inside those hours fits and one outside them does not — said "
    "out loud rather than refused, because a rota that will not let a "
@@ -1164,7 +1199,7 @@ ok(_tn.limits_of("alpha") == {},
 # everybody whose life has an afternoon in it. Four things have an opinion
 # about Thursday at three, and they are read in order of how specific they
 # are.
-_thu = _wks(_now) + 7 * 86400 + 3 * 86400          # next Thursday
+_thu = _days_on(_wks(_now), 10)             # the Thursday after next
 c.post("/api/availability", headers=AA, json={
     "user_id": _hw, "weekday": 3, "from_min": 9 * 60, "to_min": 17 * 60})
 _week = c.get(f"/api/availability?user_id={_hw}", headers=AA).json()
@@ -1199,18 +1234,18 @@ def _state(ts, mins, uid=_hw):
     return [p for p in r["people"] if p["user_id"] == uid][0]
 
 
-ok(_state(_thu + 11 * 3600, 120)["state"] == "away",
+ok(_state(_hour(_thu, 11), 120)["state"] == "away",
    "eleven o'clock that Thursday is gone: the blackout beat the week")
-ok(_state(_thu + 11 * 3600, 120)["why"] == "dentist",
+ok(_state(_hour(_thu, 11), 120)["why"] == "dentist",
    "and the reason is the specific one — leave beats a blackout beats "
    "what is true every week, because 'away' is not what a manager needs "
    "to know")
-ok(_state(_thu + 16 * 3600, 60)["state"] == "free",
+ok(_state(_hour(_thu, 16), 60)["state"] == "free",
    "four o'clock the same day is not: a blackout takes hours, not days")
-ok(_state(_thu + 7 * 86400 + 11 * 3600, 60)["state"] == "free",
+ok(_state(_hour(_days_on(_thu, 7), 11), 60)["state"] == "free",
    "and it takes them from ONE Thursday — the week goes on afterwards")
-ok(_state(_thu + 11 * 3600 + 3600, 30)["state"] == "away"
-   and _state(_thu + 9 * 3600, 60)["state"] == "free",
+ok(_state(_hour(_thu, 12), 30)["state"] == "away"
+   and _state(_hour(_thu, 9), 60)["state"] == "free",
    "the day is read window by window, not as a flag")
 
 _fri = _state(_thu + 86400, 60)
@@ -1223,7 +1258,7 @@ _never = [p for p in c.get(f"/api/availability/who?at={_thu}&mins=60",
           if p["state"] == "unsaid"]
 ok(_never, "while somebody who has said nothing at all reads as nothing "
    "at all")
-_at_work = _state(_mon + 11 * 3600, 60)
+_at_work = _state(_hour(_mon, 11), 60)
 ok(_at_work["state"] == "booked",
    "and somebody already on a shift is not offered as free for it")
 

@@ -2116,8 +2116,9 @@ ok("cogs_measured_cents" in _pnl0,
 _con_c = _db.connect()
 _pid_c = _con_c.execute(
     "SELECT oi.product_id FROM order_items oi JOIN orders o ON o.id=oi.order_id"
-    " WHERE o.status!='cancelled' AND o.created_at >= strftime('%s','now')-2592000"
-    " GROUP BY oi.product_id ORDER BY SUM(oi.qty) DESC LIMIT 1").fetchone()
+    " WHERE o.status!='cancelled' AND o.created_at >= ?"
+    " GROUP BY oi.product_id ORDER BY SUM(oi.qty) DESC LIMIT 1",
+    (_t0.time() - 2592000,)).fetchone()
 _con_c.close()
 ok(_pid_c is not None, "something was sold in the P&L window")
 _pid_c = _pid_c["product_id"]
@@ -2609,7 +2610,13 @@ ok('/theme.js?v=' in c.get("/admin/theme").text,
 from storefront.backend import api as _sfapi  # noqa: E402
 _v1 = _sfapi.asset_version()
 _scan = Path(_sfapi.config.STOREFRONT_DIR) / "qr-scan.js"
-os.utime(_scan, (_t.time() + 60, _t.time() + 60))
+# Newer than the version we just read, not newer than the wall clock. The
+# version is the newest mtime in the directory, and a machine whose clock
+# is behind those files — a test running on a moved clock, a restore onto
+# a box with a wrong date — would set an mtime that is older than what is
+# already there and watch nothing happen.
+_bump = float(_v1) + 60 if str(_v1).isdigit() else _t.time() + 60
+os.utime(_scan, (_bump, _bump))
 ok(_sfapi.asset_version() != _v1,
    "touching any asset moves the version, not only the ones once listed")
 ok("si-scan" in _store_js, "and so does the storefront")
@@ -4942,10 +4949,23 @@ ok(len(_ds["weekdays"]) <= 7 and all(w["days"] for w in _ds["weekdays"]),
 _dcon.close()
 
 _days = c.get("/api/analytics/days?days=60", headers=A).json()
-ok(_days["compare"]["this"]["days"] == _days["compare"]["last"]["days"],
+print("DBG", _days["compare"]["to_day"], _days["compare"]["held_back_days"],
+      _days["compare"]["this"]["month"], _days["compare"]["this"]["days"],
+      _days["compare"]["last"]["month"], _days["compare"]["last"]["days"])
+_cmp = _days["compare"]
+ok(_cmp["this"]["stretch"] == _cmp["last"]["stretch"],
    "month against month compares the SAME stretch of each — three days "
    "of September against the whole of August is not a comparison, it is "
    "a subtraction, and it always says the business collapsed")
+ok(all(x["covered"] <= x["stretch"] for x in (_cmp["this"], _cmp["last"])),
+   "and it says how much of that stretch it actually holds, which is a "
+   "different fact from the stretch: on the thirtieth of April, sixty "
+   "days of history does not reach the first of March")
+ok(_cmp["thin"] == bool(_cmp["this"]["short_by"]
+                        or _cmp["last"]["short_by"]),
+   "a side missing days is flagged rather than averaged over — a month "
+   "compared against nineteen days of another, presented as a month, "
+   "reads as a collapse that never happened")
 ok("per_day_pct" in _days["compare"] and "raw_pct" in _days["compare"],
    "and it reports the raw difference beside the per-trading-day one, "
    "because where they disagree the calendar is the difference")
