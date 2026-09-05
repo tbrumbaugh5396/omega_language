@@ -1318,6 +1318,68 @@ ok("trust_forwarded_for" in _dep and "different machine" in _dep,
    "the layout it documents is 'not at all', and a setting nobody "
    "explains gets turned on everywhere by somebody being careful")
 
+# A CDN answers for every caller, so the /24 guess collapses behind one:
+# every shop arrives from the same edge and looks like one network.
+from erp.backend import main as _mn3  # noqa: E402
+_cfg0 = _mn3.CFG.get
+
+
+def _cfg(**over):
+    _mn3.CFG.get = lambda k, d=None: over.get(k, _cfg0(k, d))
+
+
+_cfg(client_ip_header="", kiosk_networks=[])
+ok(_cip(_FakeReq("127.0.0.1", "198.51.100.7")) == "198.51.100.7",
+   "behind a CDN with nothing configured, the address is the edge's — "
+   "which is the same for every shop, and a check on it is a formality")
+_mn3.CFG.get = lambda k, d=None: ({"client_ip_header": "cf-connecting-ip",
+                                   "kiosk_networks": []}.get(k)
+                                  if k in ("client_ip_header",
+                                           "kiosk_networks")
+                                  else _cfg0(k, d))
+_r2 = _FakeReq("127.0.0.1", "198.51.100.7")
+_r2.headers["cf-connecting-ip"] = "203.0.113.44"
+ok(_cip(_r2) == "203.0.113.44",
+   "told which header the CDN fills in, it reads the caller the CDN "
+   "actually saw — named in config rather than guessed, because a header "
+   "we invented a meaning for is one anybody can send")
+_r3 = _FakeReq("203.0.113.50", "10.0.0.1")
+_r3.headers["cf-connecting-ip"] = "127.0.0.1"
+ok(_cip(_r3) == "203.0.113.50",
+   "and a request that did not come through the local proxy has it "
+   "ignored with everything else: the CDN header is only the CDN's word "
+   "when the CDN is who is speaking")
+
+_NETS = ["203.0.113.0/24", "192.0.2.0/24"]
+_cfg(client_ip_header="cf-connecting-ip", kiosk_networks=_NETS)
+_af = _mn3._allowed_from
+ok(_af("203.0.113.44", "203.0.113.9"),
+   "with the shops' own networks declared, a tablet in the shop the link "
+   "was made in is let through")
+ok(not _af("192.0.2.10", "203.0.113.9"),
+   "and a device at ANOTHER of the same business's shops is not — which "
+   "is the case a /24 comparison behind one CDN edge could never see")
+ok(not _af("198.51.100.7", "203.0.113.9")
+   and not _af("81.2.69.4", "203.0.113.9"),
+   "nor the edge itself, nor somebody's home broadband")
+ok(_af("203.0.113.44", "81.2.69.4"),
+   "a link minted off-site is spendable in any declared shop and nowhere "
+   "else — an owner at an airport can still set a tablet up, and nobody "
+   "at the airport can spend what they made")
+_cfg(client_ip_header="", kiosk_networks=["nonsense", "203.0.113.0/24"])
+ok(_mn3._listed("203.0.113.44") == "203.0.113.0/24",
+   "one unparseable entry does not take the good ones down with it")
+_cfg(client_ip_header="", kiosk_networks=["nonsense"])
+ok(_af("203.0.113.44", "203.0.113.9") and not _af("81.2.69.4", "203.0.1.9"),
+   "and a list that is entirely rubbish falls back to the rough check "
+   "rather than to letting everybody in — a typo in config should cost "
+   "precision, never the whole door")
+_mn3.CFG.get = _cfg0
+_dep2 = open("docs/product/DEPLOY.md").read()
+ok("kiosk_networks" in _dep2 and "client_ip_header" in _dep2,
+   "both are in the runbook, because neither is discoverable from a "
+   "screen that looks fine until the day it is wrong")
+
 _bl = c.post(f"/api/admin/kiosks/{_k1}/enrol", headers=A, json={}).json()
 ok(_bl["bound"] and "same network" in _bl["note"],
    "a link is bound by default rather than by remembering to ask")
@@ -4758,10 +4820,29 @@ ok(_narrow["repeat_pct"] is None and _narrow["customers_in_window"] == 0
    "a window nobody bought in has no rate rather than a rate of zero")
 
 # Two months back, so there is a row with a month after it to follow.
-_old = _c_now - 70 * 86400
+# Said in months rather than in days: "+35 days" is not "the next month"
+# when the cohort lands near the end of one, so this test passed until
+# the day the clock made _old the 27th and pushed the return into the
+# month after next. Cohorts are calendar buckets, so the fixture has to
+# speak calendar too.
+def _month_start(back):
+    """Midday on the 10th, `back` months before now — midday and the 10th
+    so no timezone or short-month edge can nudge it into a neighbour."""
+    t = _t0.localtime(_c_now)
+    y, m = t.tm_year, t.tm_mon - back
+    while m < 1:
+        m += 12
+        y -= 1
+    return _t0.mktime((y, m, 10, 12, 0, 0, 0, 0, -1))
+
+
+# Three months back, not two: the baskets above already sit ~40 days ago,
+# and a cohort sharing their month would be a row of eleven rather than
+# the four this is about.
+_old = _month_start(3)
 for _i in range(4):
     _buy(800 + _i, _old, 2000)
-_buy(800, _old + 35 * 86400, 2000)        # one of them returns a month on
+_buy(800, _month_start(2), 2000)          # one of them returns a month on
 _co = _com.cohorts(_ccon, 12, when=_c_now)
 _row = next(x for x in _co["cohorts"] if x["size"] == 4)
 ok(all(cell["month"] >= 1 for cell in _row["cells"]),

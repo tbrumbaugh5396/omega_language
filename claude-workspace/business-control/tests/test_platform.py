@@ -589,7 +589,14 @@ _av = c.post("/api/availability", headers=AA, json={
 ok(_av["ok"], "somebody's week is theirs to describe, and an office may "
    "write one down on their behalf — because people always tell you in "
    "person")
-_mon = _wks(_now) + 7 * 86400            # next Monday
+# Two Mondays out, not one. The approved holiday above runs from
+# tomorrow to the day after, and on a Saturday that reaches into next
+# Monday morning — so this shift landed inside approved leave and did
+# not fit, correctly, for reasons that had nothing to do with what the
+# test is about. A fixture anchored to "tomorrow" and one anchored to
+# "next Monday" are three days apart or ten, depending on the weekday
+# somebody runs the suite.
+_mon = _wks(_now) + 14 * 86400
 _in = c.post("/api/schedule", headers=AA, json={
     "user_id": _hw, "starts": _mon + 10 * 3600,
     "ends": _mon + 16 * 3600}).json()

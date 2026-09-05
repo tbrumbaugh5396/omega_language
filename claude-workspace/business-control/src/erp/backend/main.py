@@ -1768,12 +1768,76 @@ def _client_ip(request: Request) -> str:
     entry — which is the more common mistake — reads the attacker's.
     """
     peer = request.client.host if request.client else ""
-    if CFG.get("trust_forwarded_for") or _loopback(peer):
-        fwd = (request.headers.get("x-forwarded-for") or "").split(",")
-        hop = fwd[-1].strip() if fwd and fwd[-1].strip() else ""
-        if hop:
-            return hop
-    return peer
+    if not (CFG.get("trust_forwarded_for") or _loopback(peer)):
+        return peer
+    # A CDN collapses every caller to one of its own edge addresses, so
+    # X-Forwarded-For behind one says "Cloudflare", not "the shop". The
+    # CDN's own header carries the caller it actually saw. Named in
+    # config rather than guessed, because a header we invented a meaning
+    # for is a header anybody can send.
+    name = (CFG.get("client_ip_header") or "").strip().lower()
+    if name:
+        direct = (request.headers.get(name) or "").split(",")[0].strip()
+        if direct:
+            return direct
+    fwd = (request.headers.get("x-forwarded-for") or "").split(",")
+    hop = fwd[-1].strip() if fwd and fwd[-1].strip() else ""
+    return hop or peer
+
+
+def _kiosk_networks() -> list:
+    """The networks this business's shops actually call from.
+
+    A /24 either side of one address is a guess that works when the app
+    can see real addresses and collapses the moment a CDN puts every shop
+    behind one edge. A list of the networks that exist is not a guess.
+    Malformed entries are dropped rather than crashing a clock-in screen,
+    and an all-malformed list reports as no list at all.
+    """
+    out = []
+    for raw in (CFG.get("kiosk_networks") or []):
+        try:
+            out.append(ipaddress.ip_network(str(raw).strip(), strict=False))
+        except ValueError:
+            continue
+    return out
+
+
+def _listed(ip: str) -> str:
+    """Which declared network this address falls in, or ''."""
+    nets = _kiosk_networks()
+    if not nets or not ip:
+        return ""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ""
+    for n in nets:
+        if addr.version == n.version and addr in n:
+            return str(n)
+    return ""
+
+
+def _allowed_from(here: str, made: str) -> bool:
+    """May a device at `here` spend a link minted at `made`.
+
+    With networks declared, that list is the rule: the tablet has to be
+    on one of them, and on the same one the link was made on when the
+    link was made on one at all. An owner minting from an airport can
+    still make a link for the shop, and a device in the airport cannot
+    spend it.
+
+    With nothing declared, the old guess stands — a /24 either side of
+    the minting address — because a business that has not told us its
+    networks is better served by a rough check than by none.
+    """
+    if not _kiosk_networks():
+        return _same_network(here, made)
+    mine = _listed(here)
+    if not mine:
+        return False
+    theirs = _listed(made)
+    return (mine == theirs) if theirs else True
 
 
 def _same_network(a: str, b: str) -> bool:
@@ -1838,11 +1902,14 @@ def kiosk_enrol_link(kiosk_id: str, request: Request,
     return {"token": token, "expires_sec": ttl,
             "url": f"{base_url()}/ops/#/enrol/{token}",
             "label": k["label"] or kiosk_id, "bound": bool(bound),
-            "network": ip,
+            "network": ip, "listed": _listed(ip),
+            "has_allowlist": bool(_kiosk_networks()),
             # Said out loud, because a check that cannot tell two devices
             # apart is worse than none: it reads as protection.
             "network_known": bool(ip) and not ip.startswith("127."),
-            "note": ("Only a device on this same network can use it."
+            "note": (("Only a device on the same declared network can use "
+                      "it." if _kiosk_networks() else
+                      "Only a device on this same network can use it.")
                      if bound else
                      "Usable from any network \u2014 treat it as a key.")}
 
@@ -1869,7 +1936,7 @@ def kiosk_claim(body: ClaimBody, request: Request, con=Depends(get_con)):
             410, "that setup link has been used already or has run out. "
                  "Ask for a fresh one from Company \u2192 Clock kiosks.")
     here = _client_ip(request)
-    if row["bound"] and not _same_network(here, row["made_ip"] or ""):
+    if row["bound"] and not _allowed_from(here, row["made_ip"] or ""):
         # Not burned. The link is still good for the tablet it was meant
         # for, and spending it on a refusal would let anybody destroy a
         # setup simply by opening the link from the wrong place.

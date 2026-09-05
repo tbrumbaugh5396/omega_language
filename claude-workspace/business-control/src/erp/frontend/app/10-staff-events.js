@@ -899,7 +899,17 @@ async function kioskSetup(k, arrived = false, anywhere = false) {
       <p class="dim"><b>Good once, for ${mins} minute${mins === 1 ? "" : "s"}
         </b> — so a photograph of this code taken afterwards is worth
         nothing.</p>
-      ${link.bound
+      ${link.bound && link.has_allowlist
+        ? (link.listed
+          ? `<p class="dim">Bound to <b>${esc(link.listed)}</b>, one of the
+             networks this business has declared. A device anywhere else —
+             including on another of your own sites — is refused.</p>`
+          : `<p class="dim">You are not on any network this business has
+             declared, so this link will work from any of them and only
+             from them. That is usually right when you are minting it for
+             a shop you are not standing in; it is worth a second look if
+             you thought you were.</p>`)
+      : link.bound
         ? `<p class="dim">${link.network_known
             ? `Bound to this network (${esc(link.network)}). A device
                somewhere else is refused even inside the ${mins} minutes.`
