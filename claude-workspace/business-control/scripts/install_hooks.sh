@@ -86,5 +86,19 @@ if [ -n "$FAILED" ]; then
 fi
 HOOK
 chmod +x "$ROOT/hooks/pre-push"
+
+# Keep the connection alive while the hook thinks.
+#
+# git opens the transport to the remote BEFORE running pre-push, then sits
+# there while the hook runs. A hook that takes two minutes usually gets
+# away with it; one that takes seven does not, and GitHub closes the
+# session with "Connection to github.com closed by remote host" — after
+# the suite has passed, so the failure looks like anything except what it
+# is. That is the push flake this repo has been living with: not the
+# suite, the silence.
+git config core.sshCommand \
+  "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20"
 echo "pre-push hook installed: the suite gates every push, on today and"
 echo "on a weekend, a year end and a clock change."
+echo "ssh keepalive set for this repo, so the remote does not hang up"
+echo "while the hook is still running."

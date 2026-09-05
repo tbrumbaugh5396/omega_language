@@ -86,6 +86,15 @@ that is too much for the change in hand:
 always checks the same date and a failure reproduces. Three pushes cover
 what one `sample` run covers.
 
+`scripts/install_hooks.sh` also sets `core.sshCommand` with an SSH
+keepalive, and that is not optional decoration. git opens the connection
+to the remote *before* running pre-push and then waits: a hook that takes
+seven minutes leaves the session idle long enough for GitHub to hang up
+with "Connection to github.com closed by remote host" — after the suite
+has passed, so the failure reads as anything except what it is. That was
+the push flake this repo lived with while the hook took two minutes; at
+seven it is not a flake, it is every push.
+
 ## Backups
 
 `scripts/backup.py` archives the whole fleet (pulls from worker nodes) and
