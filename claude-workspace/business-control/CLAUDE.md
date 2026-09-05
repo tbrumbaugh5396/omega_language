@@ -71,6 +71,21 @@ Rules that fall out of it, for anything a test dates:
 - a fixture anchored to `now` and one anchored to a week boundary drift
   into each other; anchor both to the same thing
 
+The pre-push hook runs the suite on today AND on the three sample dates,
+which on a four-core machine is about seven minutes against two. When
+that is too much for the change in hand:
+
+| `BC_HOOK_DATES=` | what it runs | roughly |
+|---|---|---|
+| `off` | today only | 2 min |
+| `one` | today + one of the three, rotating by commit | 3 min |
+| (unset) | today + all three | 7 min |
+| `all` | today + all seventeen | go for a walk |
+
+`one` rotates deterministically on the pushed commit, so the same commit
+always checks the same date and a failure reproduces. Three pushes cover
+what one `sample` run covers.
+
 ## Backups
 
 `scripts/backup.py` archives the whole fleet (pulls from worker nodes) and

@@ -11,6 +11,7 @@ each daylight-saving change — and reports which parts fail on which.
     PYTHONPATH=src python3 scripts/audit_dates.py           # the awkward set
     PYTHONPATH=src python3 scripts/audit_dates.py --weekdays  # just the seven
     PYTHONPATH=src python3 scripts/audit_dates.py --sample    # three, for CI
+    PYTHONPATH=src python3 scripts/audit_dates.py --only Sun  # exactly one
     PYTHONPATH=src python3 scripts/audit_dates.py --jobs 2    # lanes, for a
                                                               # small runner
 
@@ -67,6 +68,15 @@ DATES = [
 ]
 
 
+def _named(name):
+    """--only dst-autumn, for a hook that checks one date per push."""
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return ""
+
+
 def _flag(name, default=0):
     """--jobs 2, for a runner with two cores and no interest in swapping."""
     if name in sys.argv:
@@ -116,7 +126,14 @@ SAMPLE = ("Sun", "year-end", "dst-autumn")
 
 def main():
     parts = PARTS
-    if "--sample" in sys.argv:
+    only = _named("--only")
+    if only:
+        dates = [d for d in DATES if d[0] == only]
+        if not dates:
+            print(f"no date called {only!r}. Known: "
+                  + ", ".join(d[0] for d in DATES))
+            return 2
+    elif "--sample" in sys.argv:
         dates = [d for d in DATES if d[0] in SAMPLE]
     elif "--weekdays" in sys.argv:
         dates = DATES[:7]
