@@ -409,18 +409,26 @@ def display(rid: int, con=Depends(get_con)):
     def one(extra, args):
         r = con.execute(
             "SELECT b.starts, b.ends, b.title, b.session_id,"
-            " COALESCE(c.name,'') AS course, COALESCE(u.name,'') AS teacher"
+            " COALESCE(c.name,'') AS course, COALESCE(u.name,'') AS teacher,"
+            # A session id on the booking says a class was started, not
+            # that one is running. A wall reading "in progress" twenty
+            # minutes after everybody left is worse than a blank one:
+            # it is the screen being confidently wrong in a corridor.
+            " COALESCE(cs.status,'') AS class_state"
             " FROM room_bookings b"
             " LEFT JOIN courses c ON c.id=b.course_id"
             " LEFT JOIN users u ON u.id=b.teacher_id"
+            " LEFT JOIN class_sessions cs ON cs.id=b.session_id"
             " WHERE b.room_id=? AND b.state='booked'" + extra,
             args).fetchone()
         if not r:
             return None
         d = dict(r)
         d["said"] = _said(d)
-        d["started"] = bool(d["session_id"])
-        d["recording"] = _capturing(con, d["session_id"] or 0)
+        d["started"] = d["class_state"] == "open"
+        d["finished"] = d["class_state"] in ("closed", "cancelled")
+        d["recording"] = (_capturing(con, d["session_id"] or 0)
+                          if d["started"] else False)
         return d
 
     cur = one(" AND b.starts<=? AND b.ends>? LIMIT 1", (rid, now, now))
@@ -432,11 +440,176 @@ def display(rid: int, con=Depends(get_con)):
         " ORDER BY b.starts LIMIT 4", (rid, now))]
     for x in later:
         x["said"] = _said(x)
+    can = _startable(con, rid, now)
     return {"room": {"id": room["id"], "name": room["name"],
                      "seats": room["seats"]},
             "at": now, "now": cur, "next": nxt, "later": later[1:],
+            # A button that cannot do anything is worse than no button:
+            # somebody taps it, types a code, and learns nothing about
+            # why. So the wall is only offered the one it can act on.
+            "can_start": bool(can),
+            "can_end": bool(cur and cur["started"]),
+            "starting": dict(can)["course"] if can else "",
             "state": ("in progress" if cur and cur["started"]
+                      else "finished" if cur and cur["finished"]
                       else "due" if cur else "free")}
+
+
+# ---------- starting a class from the wall ----------
+#
+# The display has no session, on purpose: it is bolted up in a corridor
+# and a tablet signed in as somebody is worse to leave there than a
+# timetable. So a teacher proves who they are the way this software
+# already lets people prove it at a shared device — a PIN, the same one
+# the time clock takes.
+#
+# Two things keep that from being a hole. The blast radius is one class:
+# the only thing a correct PIN can start is the class already booked into
+# THIS room, now, by somebody who teaches that course. Nothing else on
+# the wall can be reached, and a wrong PIN does nothing at all.
+#
+# And it is throttled, which matters more than the first point. A wrong
+# PIN doing nothing is not the risk; the risk is a corridor screen
+# working as an oracle — somebody standing there trying four-digit codes
+# until one is accepted, and then walking to the time clock with it. Five
+# wrong tries and the room stops answering for a minute, doubling.
+_TRIES: dict = {}
+_MAX_TRIES = 5
+
+
+def _throttled(rid: int) -> float:
+    """Seconds this room is refusing PINs for, or 0."""
+    n, until = _TRIES.get(rid, (0, 0.0))
+    return max(0.0, until - time.time())
+
+
+def _wrong(rid: int) -> None:
+    n, _ = _TRIES.get(rid, (0, 0.0))
+    n += 1
+    wait = 0.0
+    if n >= _MAX_TRIES:
+        # 60s, then 120, then 240 — long enough that guessing ten
+        # thousand codes stops being an afternoon's work.
+        wait = 60.0 * (2 ** (n - _MAX_TRIES))
+    _TRIES[rid] = (n, time.time() + wait)
+
+
+def _right(rid: int) -> None:
+    _TRIES.pop(rid, None)
+
+
+def _refuse(rid: int, course: str):
+    """A code that is real but not this class's teacher.
+
+    It does NOT say whose code it is. The first version did — "Anna, you
+    do not teach Spanish A2" — on the reasoning that a real teacher at
+    the wrong door deserves a straight answer. That was the wrong trade:
+    the real teacher already knows their own name, and the only person
+    who learns anything from it is a stranger typing codes in a corridor,
+    who is told that the one they guessed is real and whose it is.
+
+    It counts against the throttle for the same reason. Somebody working
+    through four-digit codes is going to find valid ones belonging to
+    people who do not teach here, and a limit that only counts
+    unrecognised codes would let them keep going all afternoon.
+    """
+    _wrong(rid)
+    raise HTTPException(
+        403, f"that code cannot start {course}. Its teacher, or an "
+             f"owner, can — or start it from the Learning page.")
+
+
+class PinBody(BaseModel):
+    pin: str = ""
+
+
+def _startable(con, rid: int, now: float):
+    """The booking this room could start right now.
+
+    Fifteen minutes early is still on time: a teacher who arrives before
+    the hour and cannot start the class stands there until the clock
+    agrees with them, which is a worse rule than the one it enforces.
+    """
+    return con.execute(
+        "SELECT b.*, COALESCE(c.name,'') AS course FROM room_bookings b"
+        " LEFT JOIN courses c ON c.id=b.course_id"
+        " WHERE b.room_id=? AND b.state='booked' AND b.session_id=0"
+        " AND b.course_id>0 AND b.starts<=? AND b.ends>?"
+        " ORDER BY b.starts LIMIT 1", (rid, now + 900, now)).fetchone()
+
+
+def _who(con, rid: int, pin: str):
+    """The person behind this PIN, or a refusal that does not say which
+    part was wrong."""
+    wait = _throttled(rid)
+    if wait:
+        raise HTTPException(
+            429, f"too many wrong codes on this screen. Try again in "
+                 f"{int(wait) + 1} seconds, or start the class from the "
+                 f"Learning page.")
+    from .main import CFG
+    from . import auth
+    u = auth.check_pin(con, pin, CFG["pin_pepper"])
+    if u is None:
+        _wrong(rid)
+        raise HTTPException(403, "that code was not recognised")
+    # Deliberately NOT clearing the count here. Recognising a code is not
+    # the same as it being allowed to do this, and clearing on
+    # recognition would hand the budget straight back to somebody
+    # guessing their way through valid codes. The caller clears it when
+    # the whole thing actually worked.
+    return u
+
+
+@router.post("/api/rooms/{rid}/start")
+def start_here(rid: int, body: PinBody, con=Depends(get_con)):
+    """Start the class this room is booked for, from the wall."""
+    _room(con, rid)
+    now = db.now()
+    bk = _startable(con, rid, now)
+    if bk is None:
+        raise HTTPException(
+            409, "there is no class booked in here to start. A booking "
+                 "without a course is a room held for something else, and "
+                 "a class already running is already running.")
+    user = _who(con, rid, body.pin)
+    from . import classroom, learning
+    if not learning.may_edit(con, user, bk["course_id"]):
+        _refuse(rid, bk["course"])
+    sess = classroom.start_class(con, course_id=bk["course_id"],
+                                 teacher_id=user["id"])
+    sid = sess.id
+    con.execute("UPDATE room_bookings SET session_id=?, teacher_id=?"
+                " WHERE id=?", (sid, user["id"], bk["id"]))
+    con.commit()
+    _right(rid)
+    return {"ok": True, "session_id": sid, "started_by": user["name"],
+            "course": bk["course"]}
+
+
+@router.post("/api/rooms/{rid}/end")
+def end_here(rid: int, body: PinBody, con=Depends(get_con)):
+    """Close the class running in here, on the way out of the door."""
+    _room(con, rid)
+    now = db.now()
+    bk = con.execute(
+        "SELECT b.*, COALESCE(c.name,'') AS course FROM room_bookings b"
+        " LEFT JOIN courses c ON c.id=b.course_id"
+        " JOIN class_sessions cs ON cs.id=b.session_id AND cs.status='open'"
+        " WHERE b.room_id=? AND b.state='booked' AND b.session_id>0"
+        " AND b.starts<=? ORDER BY b.starts DESC LIMIT 1",
+        (rid, now + 900)).fetchone()
+    if bk is None:
+        raise HTTPException(409, "nothing is running in here")
+    user = _who(con, rid, body.pin)
+    from . import classroom, learning
+    if not learning.may_edit(con, user, bk["course_id"]):
+        _refuse(rid, bk["course"])
+    classroom.end_class(con, session_id=bk["session_id"],
+                        actor_id=user["id"])
+    con.commit()
+    _right(rid)
+    return {"ok": True, "ended_by": user["name"], "course": bk["course"]}
 
 
 @router.get("/api/rooms/{rid}/now")

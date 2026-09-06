@@ -1577,12 +1577,27 @@ ok(c.get(f"/api/rooms/{_rm2}/display").json()["state"] == "due",
    "a room booked for now but not started reads as due, which is a "
    "different thing from a class in progress and the difference somebody "
    "standing outside the door is asking about")
+# A real class, not a made-up session id: "started" means a class that
+# is open, and attaching a number that matches nothing should not make a
+# wall claim a room is in use.
+_wc = c.post("/api/learning/courses", headers=A,
+             json={"name": "Wall test", "language": "es"}).json()["id"]
+_wsid = c.post("/api/learning/sessions", headers=A,
+               json={"course_id": _wc}).json()["session"]["id"]
 c.post(f"/api/rooms/bookings/{_wb}/session", headers=A,
-       json={"session_id": 4242})
+       json={"session_id": _wsid})
 _live = c.get(f"/api/rooms/{_rm2}/display").json()
 ok(_live["state"] == "in progress" and _live["now"]["started"],
    "and once the teacher starts the class, the screen says they are in "
    "there")
+c.post(f"/api/rooms/bookings/{_wb}/session", headers=A,
+       json={"session_id": 999999})
+ok(c.get(f"/api/rooms/{_rm2}/display").json()["state"] != "in progress",
+   "while a session id matching no class at all leaves the wall saying "
+   "anything but 'in progress' — a screen is not made truthful by being "
+   "handed a number")
+c.post(f"/api/rooms/bookings/{_wb}/session", headers=A,
+       json={"session_id": _wsid})
 ok(_live["now"]["recording"] is False,
    "recording is claimed only when segments are actually landing — a "
    "screen that says RECORDING because a video room id exists is a "
@@ -1603,6 +1618,76 @@ ok("DISPLAY_KEY" in _djs and 'k.kind === "display"' in _djs,
    "punch button in a corridor")
 ok("setInterval(paint" in _djs,
    "it refreshes itself, because nobody walks over to reload a wall")
+
+# --- starting a class from the wall --------------------------------------
+# The display has no session, so a teacher proves who they are the way
+# this software already lets people prove it at a shared device.
+_crs = c.post("/api/learning/courses", headers=A,
+              json={"name": "Spanish A2", "language": "es",
+                    "level": "A2"}).json()["id"]
+c.post("/api/me", headers=A, json={"pin": "7788"})
+_rm3 = c.post("/api/rooms", headers=A,
+              json={"name": "Studio 8", "kind": "classroom"}).json()["id"]
+_soon2 = _t0.time() - 120
+c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rm3, "starts": _soon2, "ends": _soon2 + 5400,
+    "course_id": _crs})
+_w2 = c.get(f"/api/rooms/{_rm3}/display").json()
+ok(_w2["can_start"] and _w2["starting"] == "Spanish A2",
+   "the wall offers to start the class booked into this room, and names "
+   "it — a button that cannot do anything is worse than no button")
+
+ok(c.post(f"/api/rooms/{_rm3}/start",
+          json={"pin": "0000"}).status_code == 403,
+   "a code nobody has does nothing")
+_go = c.post(f"/api/rooms/{_rm3}/start", json={"pin": "7788"})
+ok(_go.status_code == 200 and _go.json()["started_by"],
+   "the teacher's own time-clock code starts it, with no session left "
+   "behind on a screen bolted to a corridor wall")
+_w3 = c.get(f"/api/rooms/{_rm3}/display").json()
+ok(_w3["state"] == "in progress" and _w3["can_end"] and not _w3["can_start"],
+   "and the wall changes to say they are in there")
+
+# A session id on a booking says a class was STARTED, not that one is
+# running. This was wrong first time round and the wall said "in
+# progress" twenty minutes after everybody had left.
+c.post(f"/api/rooms/{_rm3}/end", json={"pin": "7788"})
+_w4 = c.get(f"/api/rooms/{_rm3}/display").json()
+ok(_w4["state"] == "finished" and not _w4["can_end"],
+   "once it ends, the wall says finished rather than staying confidently "
+   "wrong in a corridor until the booking runs out")
+ok(_w4["now"]["recording"] is False,
+   "and a class that is over is not recording, whatever is on disk")
+
+_rm4 = c.post("/api/rooms", headers=A,
+              json={"name": "Studio 10", "kind": "classroom"}).json()["id"]
+_s4 = _t0.time() - 60
+c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rm4, "starts": _s4, "ends": _s4 + 3600, "course_id": _crs})
+c.post("/api/admin/users", headers=A, json={
+    "name": "Bystander", "role": "employee"})
+_bs = [u for u in c.get("/api/admin/users", headers=A).json()
+       if u["name"] == "Bystander"][0]["id"]
+c.patch(f"/api/admin/users/{_bs}", headers=A, json={"pin": "4242"})
+_no = c.post(f"/api/rooms/{_rm4}/start", json={"pin": "4242"})
+if _no.status_code == 403:
+    ok("Bystander" not in _no.json()["detail"],
+       "a code that is real but not this class's teacher is refused "
+       "WITHOUT naming whose it is — the real teacher knows their own "
+       "name, and the only person who learns anything from it is a "
+       "stranger in a corridor being told the code they guessed is real")
+
+for _i in range(6):
+    _last = c.post(f"/api/rooms/{_rm4}/start", json={"pin": "0001"})
+ok(_last.status_code == 429,
+   "and the screen stops answering after five wrong codes. A wrong code "
+   "doing nothing was never the risk — the risk is a corridor screen "
+   "working as an oracle, somebody trying four-digit codes until one is "
+   "taken and then walking to the time clock with it")
+ok(c.post(f"/api/rooms/{_rm3}/start",
+          json={"pin": "0001"}).status_code != 429,
+   "the lockout is per screen, so one room being hammered does not shut "
+   "the class down the corridor")
 
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),

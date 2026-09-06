@@ -1773,3 +1773,14 @@ body.lane-on { overflow: hidden; }
 .disp-later { display: flex; gap: 16px; flex-wrap: wrap;
   justify-content: center; color: var(--dim);
   font-size: clamp(12px, 1.8vw, 16px); }
+
+/* Tapped standing up, by somebody holding a folder. Keys big enough for
+   that, and the code shown as dots because a wall screen is read by the
+   room as well as by the person typing. */
+.disp-act { margin-top: 20px; }
+.btn.disp-btn { font-size: clamp(16px, 2.6vw, 24px); padding: 14px 30px; }
+.pinbox { text-align: center; font-size: 30px; letter-spacing: 12px;
+  margin: 10px 0 4px; min-height: 38px; }
+.pinpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.btn.pinkey { font-size: 22px; padding: 16px 0; }
+.btn.pinkey.go { background: var(--accent); color: #06111c; }

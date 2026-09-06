@@ -1335,6 +1335,58 @@ function bookingForm(rooms, roomId) {
    reload a wall. */
 const DISPLAY_KEY = "bc_display_room";
 
+/* A teacher proves who they are the way this software already lets
+   people prove it at a shared device: the PIN the time clock takes. No
+   session is made — nothing is left signed in on a wall — and the only
+   thing a correct code can do here is the class already booked into this
+   room, now.
+
+   Big keys, because this is tapped standing up, by somebody holding a
+   folder, on a screen at eye height. */
+function dispPin(rid, what, course, done) {
+  let pin = "";
+  modal(`<h3>${what === "start" ? "Start " + esc(course) : "End the class"}
+    </h3>
+    <p class="dim">Your time-clock code. Nothing is signed in on this
+      screen — it starts the class and forgets you.</p>
+    <div class="pinbox"><span id="pin-dots">····</span></div>
+    <div class="pinpad">${[1, 2, 3, 4, 5, 6, 7, 8, 9, "clear", 0, "ok"]
+      .map((k) => `<button class="btn alt pinkey${k === "ok" ? " go" : ""}"
+        data-k="${k}">${k === "clear" ? "←" : k === "ok" ? "✓" : k}</button>`)
+      .join("")}</div>
+    <p class="dim" id="pin-msg"></p>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button></div>`);
+  const dots = () => {
+    $("#pin-dots").textContent = pin.padEnd(4, "·").split("").map(
+      (c, i) => (i < pin.length ? "●" : "·")).join("");
+  };
+  const send = async () => {
+    if (pin.length < 3) { $("#pin-msg").textContent = "That is too short.";
+      return; }
+    try {
+      const r = await api(`/api/rooms/${rid}/${what}`, { body: { pin } });
+      closeModal();
+      toast(what === "start"
+        ? `${r.course} started — ${r.started_by}`
+        : `${r.course} ended — ${r.ended_by}`);
+      done();
+    } catch (e) {
+      pin = ""; dots();
+      $("#pin-msg").innerHTML = `<b class="bad">${esc(e.message)}</b>`;
+    }
+  };
+  document.querySelectorAll(".pinkey").forEach((b) => b.onclick = () => {
+    const k = b.dataset.k;
+    if (k === "clear") { pin = pin.slice(0, -1); }
+    else if (k === "ok") { return send(); }
+    else if (pin.length < 8) { pin += k; }
+    dots();
+    if (pin.length === 4) send();
+  });
+  dots();
+}
+
 /* Three Tuesdays of the same class, listed as times alone, read on a wall
    as three classes tonight. Anything not today says which day. */
 const sameDay = (ts) =>
@@ -1375,7 +1427,8 @@ async function renderDisplay() {
             ? " · " + esc(n.teacher) : ""}</div>
           <div class="disp-state">
             <span class="disp-pill${n.started ? " on" : ""}">${n.started
-              ? "in progress" : "due to start"}</span>
+              ? "in progress" : n.finished ? "finished"
+              : "due to start"}</span>
             ${n.recording ? `<span class="disp-pill rec">recording</span>`
               : ""}
           </div>`
@@ -1385,11 +1438,18 @@ async function renderDisplay() {
           <b>${esc(d.next.said)}</b> ${sameDay(d.next.starts)
             ? "at " + t(d.next.starts)
             : dayOf(d.next.starts) + " at " + t(d.next.starts)}</div>` : ""}
+        ${d.can_start || d.can_end ? `<div class="disp-act">
+          <button class="btn disp-btn" id="disp-go">${d.can_start
+            ? "Start " + esc(d.starting) : "End the class"}</button>
+        </div>` : ""}
         ${(d.later || []).length ? `<div class="disp-later">${d.later
           .map((x) => `<span>${sameDay(x.starts) ? "" : dayOf(x.starts)
             + " "}${t(x.starts)} ${esc(x.said)}</span>`)
           .join("")}</div>` : ""}
       </div>`;
+    const go = $("#disp-go");
+    if (go) go.onclick = () => dispPin(rid, d.can_start ? "start" : "end",
+                                       d.can_start ? d.starting : "", paint);
   };
   await paint();
   // Half a minute: often enough that "due to start" becomes "in
