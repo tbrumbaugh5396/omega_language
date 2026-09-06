@@ -54,7 +54,9 @@ function syncRoute() {
   const want = (S.tab === "clients" && S.engId)
     ? `#/clients/${S.engId}`
     : (S.deepKey && (S.tab === "kiosks" || S.tab === "enrol"))
-      ? `#/${S.tab}/${S.deepKey}` : `#/${S.tab || "shop"}`;
+      ? `#/${S.tab}/${S.deepKey}`
+      : (S.tab === "display" && S.deepId)
+        ? `#/display/${S.deepId}` : `#/${S.tab || "shop"}`;
   if (location.hash !== want) history.pushState(null, "", want);
 }
 addEventListener("hashchange", () => { if (applyRoute()) render(); });

@@ -952,15 +952,20 @@ _ws.close()
 _ks = sqlite3.connect(":memory:"); _ks.row_factory = sqlite3.Row
 _ks.executescript(
     "CREATE TABLE kiosks(kiosk_id TEXT, label TEXT, store_id INT,"
-    " active INT, created_at REAL, last_seen REAL);"
+    " active INT, created_at REAL, last_seen REAL,"
+    " kind TEXT DEFAULT 'clock');"
     "CREATE TABLE stores(id INTEGER PRIMARY KEY, name TEXT);")
 _kn = _t0.time()
-for _kid, _lab, _cr, _sn in (("a", "door", _kn - 90 * 86400, _kn - 2 * 86400),
-                             ("b", "back", _kn - 90 * 86400, _kn - 60 * 86400),
-                             ("c", "spare", _kn - 90 * 86400, 0),
-                             ("d", "new", _kn - 2 * 86400, 0)):
-    _ks.execute("INSERT INTO kiosks VALUES(?,?,?,?,?,?)",
-                (_kid, _lab, 1, 1, _cr, _sn))
+for _kid, _lab, _cr, _sn, _knd in (
+        ("a", "door", _kn - 90 * 86400, _kn - 2 * 86400, "clock"),
+        ("b", "back", _kn - 90 * 86400, _kn - 60 * 86400, "clock"),
+        ("c", "spare", _kn - 90 * 86400, 0, "clock"),
+        ("d", "new", _kn - 2 * 86400, 0, "clock"),
+        # A wall screen, old and never punched on, because nobody punches
+        # on a wall screen.
+        ("e", "Studio 2 door", _kn - 90 * 86400, 0, "display")):
+    _ks.execute("INSERT INTO kiosks VALUES(?,?,?,?,?,?,?)",
+                (_kid, _lab, 1, 1, _cr, _sn, _knd))
 _ki = _met.kiosks_idle(_ks, 30)
 ok(_ki["live"] == 1 and len(_ki["idle"]) == 2,
    "a tablet switched on, billed, and untouched for a month is money "
@@ -970,6 +975,12 @@ ok(_ki["settling"] == 1
    and "new" not in [k["label"] for k in _ki["idle"]],
    "but one registered this week is being set up, not wasted. Calling it "
    "waste on day two is how a report teaches people to ignore it")
+ok(_ki["total"] == 4
+   and "Studio 2 door" not in [k["label"] for k in _ki["idle"]],
+   "and a room display is not in the report at all — it is untouched by "
+   "design, so calling it an idle tablet somebody should go and look at "
+   "would be a report crying wolf about the one device working exactly "
+   "as intended")
 ok(any(k["never"] for k in _ki["idle"])
    and any(k["days_idle"] == 60 for k in _ki["idle"]),
    "never once and idle since June are different conversations, so they "

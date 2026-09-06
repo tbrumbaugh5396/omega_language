@@ -239,11 +239,16 @@ def kiosks_idle(con, days: int = 30) -> dict:
     now = time.time()
     cut = now - days * DAY
     try:
+        # Clock kiosks only, to match what is counted and billed. A wall
+        # display is untouched by design — nobody punches in on it — so
+        # listing it as an idle tablet somebody should go and look at
+        # would be a report crying wolf about the one device that is
+        # working exactly as intended.
         rows = [dict(r) for r in con.execute(
             "SELECT k.kiosk_id, k.label, k.created_at, k.last_seen,"
             " COALESCE(s.name,'') AS store FROM kiosks k"
             " LEFT JOIN stores s ON s.id=k.store_id"
-            " WHERE k.active=1 ORDER BY k.last_seen")]
+            " WHERE k.active=1 AND k.kind='clock' ORDER BY k.last_seen")]
     except Exception:                                        # noqa: BLE001
         return {"known": False, "idle": [], "live": 0, "settling": 0}
     idle, live, settling = [], 0, 0

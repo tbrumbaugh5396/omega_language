@@ -787,6 +787,13 @@ def _usage_from(con) -> dict:
     meter("sourcing", "purchase orders", _q1(con,
         "SELECT COUNT(*) FROM purchase_orders WHERE created_at>?", (mo,)),
         "30d")
+    # Displays are free and therefore invisible to the limits, which is a
+    # reason to count them somewhere: a fleet that cannot see a thing it
+    # gave away cannot tell whether giving it away was worth anything.
+    meter("learning", "room displays", _q1(con,
+        "SELECT COUNT(*) FROM kiosks WHERE active=1 AND kind='display'"))
+    meter("learning", "rooms", _q1(con,
+        "SELECT COUNT(*) FROM rooms WHERE active=1"))
     meter("api", "live keys", _q1(con,
         "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"))
 

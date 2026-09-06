@@ -1664,13 +1664,18 @@ class KioskBody(BaseModel):
     label: str = ""
     store_id: int = 0
     active: bool = True
+    kind: str = "clock"          # clock | display
+    room_id: int = 0             # a display shows one room
 
 
 @app.get("/api/admin/kiosks")
 def kiosks_list(user=Depends(admin_user), con=Depends(get_con)):
     rows = [dict(r) for r in con.execute(
-        "SELECT k.*, COALESCE(s.name,'') AS store FROM kiosks k"
-        " LEFT JOIN stores s ON s.id=k.store_id ORDER BY k.label, k.kiosk_id")]
+        "SELECT k.*, COALESCE(s.name,'') AS store,"
+        " COALESCE(rm.name,'') AS room FROM kiosks k"
+        " LEFT JOIN stores s ON s.id=k.store_id"
+        " LEFT JOIN rooms rm ON rm.id=k.room_id"
+        " ORDER BY k.kind, k.label, k.kiosk_id")]
     now = db.now()
     for k in rows:
         # A setup link already walking to the door, so nobody mints five
@@ -1691,6 +1696,12 @@ def kiosks_list(user=Depends(admin_user), con=Depends(get_con)):
 @app.post("/api/admin/kiosks")
 def kiosk_register(body: KioskBody, user=Depends(admin_user),
                    con=Depends(get_con)):
+    if body.kind not in ("clock", "display"):
+        raise HTTPException(400, "a kiosk is a clock or a display")
+    if body.kind == "display" and not body.room_id:
+        raise HTTPException(
+            400, "a display shows one room, so it needs to be told which. "
+                 "Add the room first under Rooms.")
     """Register the tablet by the door.
 
     The id is minted here rather than accepted from the device: a kiosk
@@ -1699,19 +1710,21 @@ def kiosk_register(body: KioskBody, user=Depends(admin_user),
     kid = (body.kiosk_id or "").strip() or secrets.token_urlsafe(9)
     known = con.execute("SELECT 1 FROM kiosks WHERE kiosk_id=?",
                         (kid,)).fetchone()
-    if not known and body.active:
+    if not known and body.active and body.kind == "clock":
         _check_room(con, user, "kiosks", con.execute(
             "SELECT COUNT(*) AS n FROM kiosks WHERE active=1"
-        ).fetchone()["n"], "clock kiosk(s)")
+            " AND kind='clock'").fetchone()["n"], "clock kiosk(s)")
     con.execute(
-        "INSERT INTO kiosks(kiosk_id,label,store_id,active,created_at)"
-        " VALUES(?,?,?,?,?) ON CONFLICT(kiosk_id) DO UPDATE SET"
+        "INSERT INTO kiosks(kiosk_id,label,store_id,active,created_at,"
+        "kind,room_id) VALUES(?,?,?,?,?,?,?)"
+        " ON CONFLICT(kiosk_id) DO UPDATE SET"
         " label=excluded.label, store_id=excluded.store_id,"
-        " active=excluded.active",
+        " active=excluded.active, kind=excluded.kind,"
+        " room_id=excluded.room_id",
         (kid, body.label.strip()[:60], body.store_id,
-         1 if body.active else 0, db.now()))
+         1 if body.active else 0, db.now(), body.kind, max(0, body.room_id)))
     con.commit()
-    return {"ok": True, "kiosk_id": kid}
+    return {"ok": True, "kiosk_id": kid, "kind": body.kind}
 
 
 def _touch_kiosk(con, kid: str) -> None:
@@ -1957,7 +1970,8 @@ def kiosk_claim(body: ClaimBody, request: Request, con=Depends(get_con)):
                 (db.now(), here, row["token"]))
     con.commit()
     return {"kiosk_id": k["kiosk_id"], "label": k["label"],
-            "store": k["store"]}
+            "store": k["store"], "kind": k["kind"] or "clock",
+            "room_id": k["room_id"] or 0}
 
 
 @app.delete("/api/admin/kiosks/{kiosk_id}")
@@ -5903,8 +5917,16 @@ def _in_use(con, kind: str) -> int:
         "registers": lambda: con.execute(
             "SELECT COUNT(*) AS n FROM register_sessions WHERE closed_at=0"
         ).fetchone()["n"],
+        # Clock kiosks only. A screen on a wall showing what is in the
+        # room takes no input, holds nothing and earns nobody anything,
+        # and billing a school $6 a classroom for a timetable it can
+        # already read on a phone is how a feature nobody adopts gets
+        # built. Counting them here would also refuse the fifth
+        # classroom's screen at the door, correctly, for entirely the
+        # wrong reason.
         "kiosks": lambda: con.execute(
-            "SELECT COUNT(*) AS n FROM kiosks WHERE active=1").fetchone()["n"],
+            "SELECT COUNT(*) AS n FROM kiosks WHERE active=1"
+            " AND kind='clock'").fetchone()["n"],
         "seats": lambda: con.execute(
             "SELECT COUNT(*) AS n FROM users WHERE active=1 AND"
             " (is_admin=1 OR role IN ('owner','employee','cashier',"
@@ -6051,7 +6073,8 @@ def entitlements(user=Depends(current_user), con=Depends(get_con)):
             "SELECT COUNT(*) AS n FROM register_sessions WHERE closed_at=0"
         ).fetchone()["n"],
         "kiosks": con.execute(
-            "SELECT COUNT(*) AS n FROM kiosks WHERE active=1").fetchone()["n"],
+            "SELECT COUNT(*) AS n FROM kiosks WHERE active=1"
+            " AND kind='clock'").fetchone()["n"],
         "seats": con.execute(
             "SELECT COUNT(*) AS n FROM users WHERE active=1 AND"
             " (is_admin=1 OR role IN ('owner','employee','cashier',"

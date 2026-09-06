@@ -236,7 +236,7 @@ function renderChrome() {
   // "enrol" is a screen without a tab: a tablet arrives on it from a QR
   // with nobody signed in, and bouncing it to the first allowed tab —
   // which is what an unknown id does — silently threw the setup away.
-  if (S.tab !== "login" && S.tab !== "enrol"
+  if (S.tab !== "login" && S.tab !== "enrol" && S.tab !== "display"
       && !tabs.find((t) => t.id === S.tab)) S.tab = tabs[0].id;
   const btn = (t) =>
     `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}${
@@ -390,6 +390,10 @@ async function render() {
   // walk to every door and sign in on it. The token in the URL is the
   // authority, and it buys one thing once.
   if (S.tab === "enrol" && S.deepKey) return renderEnrol();
+  // A screen bolted to a wall, with nobody signed in on it. Same reason
+  // as enrolment: putting a login between a corridor and a timetable is
+  // how a tablet ends up permanently signed in as somebody's manager.
+  if (S.tab === "display") return renderDisplay();
   if (!S.user && S.tab === "login") return renderLogin();
   view().innerHTML = SKELETON;
   const fn = {
@@ -402,6 +406,7 @@ async function render() {
     docs: renderDocs, clients: renderClients,
     staff: renderStaff, events: renderEvents, customers: renderCustomers,
     kiosks: renderKiosks, enrol: renderEnrol, rooms: renderRooms,
+    display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,
     profile: renderProfile, stores: renderStores,

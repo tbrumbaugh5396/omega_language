@@ -499,7 +499,12 @@ CREATE TABLE IF NOT EXISTS kiosks (
   store_id INTEGER DEFAULT 0,
   active INTEGER DEFAULT 1,
   created_at REAL NOT NULL,
-  last_seen REAL DEFAULT 0
+  last_seen REAL DEFAULT 0,
+  -- clock: a tablet people punch in on, and the thing the plan counts.
+  -- display: a screen on a wall that shows what is in the room. It takes
+  -- no input, holds nothing, and is not billed — see _in_use().
+  kind TEXT NOT NULL DEFAULT 'clock',
+  room_id INTEGER DEFAULT 0            -- which room a display is showing
 );
 """
 
@@ -613,6 +618,11 @@ def stock_set(con, store_id: int, product_id: int, qty: float, reason: str,
 
 
 MIGRATIONS = (
+    # Kiosks became two things. Everything that existed before is a clock
+    # kiosk, which is what the default says, so no install wakes up with
+    # its tablets reclassified underneath it.
+    "ALTER TABLE kiosks ADD COLUMN kind TEXT NOT NULL DEFAULT 'clock'",
+    "ALTER TABLE kiosks ADD COLUMN room_id INTEGER DEFAULT 0",
     # A setup link is bound to the network it was minted on. Installs
     # that already have the table get the columns rather than losing it.
     "ALTER TABLE kiosk_enrolments ADD COLUMN made_ip TEXT DEFAULT ''",

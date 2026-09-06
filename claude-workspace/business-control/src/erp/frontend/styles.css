@@ -1742,3 +1742,34 @@ body.lane-on { overflow: hidden; }
   .doc-line.room-line { grid-template-columns: minmax(0, 1fr) auto; }
   .room-now, .room-next { grid-column: 1 / -1; }
 }
+
+/* The wall screen. Sized to be read from a doorway rather than from a
+   desk: one thing large, one thing under it, everything else small and
+   below. Fills the viewport because that is the whole tablet. */
+.disp {
+  min-height: 78vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+  gap: 10px; padding: 24px 16px;
+}
+.disp-room { font-size: clamp(18px, 4vw, 34px); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--dim); }
+.disp-what { font-size: clamp(34px, 11vw, 104px); font-weight: 700;
+  line-height: 1.03; }
+.disp-what.disp-free { color: var(--dim); font-weight: 500; }
+.disp-when { font-size: clamp(15px, 3vw, 27px); color: var(--dim); }
+.disp-state { display: flex; gap: 10px; flex-wrap: wrap;
+  justify-content: center; margin-top: 6px; }
+.disp-pill {
+  font-size: clamp(13px, 2.2vw, 20px); padding: 5px 14px;
+  border-radius: var(--r-pill, 999px); border: 1px solid var(--line);
+  color: var(--dim);
+}
+.disp-pill.on { border-color: #2dd4bf; color: #2dd4bf; }
+/* Recording is stated only when segments are actually landing, so it is
+   allowed to look definite. */
+.disp-pill.rec { border-color: #f0605a; color: #f0605a; }
+.disp-pill.rec::before { content: "\25cf"; margin-right: 7px; }
+.disp-next { margin-top: 16px; font-size: clamp(14px, 2.6vw, 23px); }
+.disp-later { display: flex; gap: 16px; flex-wrap: wrap;
+  justify-content: center; color: var(--dim);
+  font-size: clamp(12px, 1.8vw, 16px); }

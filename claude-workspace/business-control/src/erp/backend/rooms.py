@@ -354,6 +354,91 @@ def attach(bid: int, body: AttachBody, user=Depends(permitted("rooms")),
     return {"ok": True}
 
 
+def _capturing(con, session_id: int) -> bool:
+    """Is this class actually being recorded, right now.
+
+    Not "does it have a video room" — that is a different claim, and a
+    screen that says RECORDING because a room id exists is a screen that
+    lies to a class about being on tape. The SFU writes segments as it
+    forwards, so a directory with something recent in it is the honest
+    answer, and no answer at all is False.
+    """
+    if not session_id:
+        return False
+    try:
+        import glob
+        import os
+        from . import services, tenancy
+        s = services.service("sfu")
+        rec = (s or {}).get("record_dir") or ""
+        row = con.execute("SELECT room FROM class_sessions WHERE id=?",
+                          (session_id,)).fetchone()
+        room = (row["room"] if row else "") or ""
+        if not (rec and room):
+            return False
+        tid = tenancy.CURRENT.get() or "default"
+        cut = time.time() - 300          # something written in five minutes
+        for f in glob.glob(os.path.join(rec, f"bc-{tid}-{room}-*", "*")):
+            try:
+                if os.path.getmtime(f) > cut:
+                    return True
+            except OSError:
+                continue
+    except Exception:                                        # noqa: BLE001
+        return False
+    return False
+
+
+@router.get("/api/rooms/{rid}/display")
+def display(rid: int, con=Depends(get_con)):
+    """What a screen on the wall of this room should say.
+
+    Deliberately open, like the enrolment claim: this is a screen bolted
+    to a wall in a corridor, and putting a login between it and the
+    timetable means somebody signs a tablet in as an owner and leaves it
+    that way, which is a worse thing to have in a corridor than a
+    timetable anybody could have read on the door.
+
+    It says the room, what is in it, and what is next. Nothing else is on
+    it — no register, no roster, no names of children — because a screen
+    in a corridor is read by whoever walks past.
+    """
+    room = _room(con, rid)
+    now = db.now()
+
+    def one(extra, args):
+        r = con.execute(
+            "SELECT b.starts, b.ends, b.title, b.session_id,"
+            " COALESCE(c.name,'') AS course, COALESCE(u.name,'') AS teacher"
+            " FROM room_bookings b"
+            " LEFT JOIN courses c ON c.id=b.course_id"
+            " LEFT JOIN users u ON u.id=b.teacher_id"
+            " WHERE b.room_id=? AND b.state='booked'" + extra,
+            args).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["said"] = _said(d)
+        d["started"] = bool(d["session_id"])
+        d["recording"] = _capturing(con, d["session_id"] or 0)
+        return d
+
+    cur = one(" AND b.starts<=? AND b.ends>? LIMIT 1", (rid, now, now))
+    nxt = one(" AND b.starts>? ORDER BY b.starts LIMIT 1", (rid, now))
+    later = [dict(r) for r in con.execute(
+        "SELECT b.starts, b.title, COALESCE(c.name,'') AS course"
+        " FROM room_bookings b LEFT JOIN courses c ON c.id=b.course_id"
+        " WHERE b.room_id=? AND b.state='booked' AND b.starts>?"
+        " ORDER BY b.starts LIMIT 4", (rid, now))]
+    for x in later:
+        x["said"] = _said(x)
+    return {"room": {"id": room["id"], "name": room["name"],
+                     "seats": room["seats"]},
+            "at": now, "now": cur, "next": nxt, "later": later[1:],
+            "state": ("in progress" if cur and cur["started"]
+                      else "due" if cur else "free")}
+
+
 @router.get("/api/rooms/{rid}/now")
 def what_is_on(rid: int, user=Depends(current_user), con=Depends(get_con)):
     """What this room holds now and next.

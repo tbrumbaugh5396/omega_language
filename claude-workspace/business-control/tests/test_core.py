@@ -1525,6 +1525,85 @@ ok('"rooms"' in _gov and '("/api/rooms", "rooms")' in _gov,
    "and booking a room is its own permission: whoever runs the timetable "
    "should not need the shipping config to do it")
 
+# --- the screen on the wall ----------------------------------------------
+# A kiosk became two things. Everything that came before is a clock, so
+# no install wakes up with its tablets reclassified underneath it.
+_rm2 = c.post("/api/rooms", headers=A,
+              json={"name": "Studio 9", "kind": "classroom"}).json()["id"]
+_k_before = [x for x in c.get("/api/entitlements", headers=A).json()["lines"]
+             if x["kind"] == "kiosks"][0]["used"]
+_disp = c.post("/api/admin/kiosks", headers=A, json={
+    "label": "Studio 9 door", "kind": "display", "room_id": _rm2})
+ok(_disp.status_code == 200 and _disp.json()["kind"] == "display",
+   "a kiosk can be a screen that shows the room rather than a tablet "
+   "people punch in on")
+_k_after = [x for x in c.get("/api/entitlements", headers=A).json()["lines"]
+            if x["kind"] == "kiosks"][0]["used"]
+ok(_k_after == _k_before,
+   "and it is not counted against the plan. Billing a school $6 a "
+   "classroom for a timetable it could read on the door is how a feature "
+   "nobody adopts gets built — and counting them would refuse the fifth "
+   "classroom's screen at the door, correctly, for the wrong reason")
+ok(c.post("/api/admin/kiosks", headers=A,
+          json={"label": "Nowhere", "kind": "display"}).status_code == 400,
+   "a display shows ONE room, so it is refused without one rather than "
+   "hung on a wall showing nothing")
+ok(c.post("/api/admin/kiosks", headers=A,
+          json={"label": "X", "kind": "hologram"}).status_code == 400,
+   "and a kiosk is one of the two things it can be")
+
+_dcon = _db.connect()
+_kinds = {r[0] for r in _dcon.execute("SELECT DISTINCT kind FROM kiosks")}
+_dcon.close()
+ok("clock" in _kinds,
+   "every kiosk that existed before the split is still a clock kiosk — a "
+   "default that reclassified them would have moved somebody's bill "
+   "without anybody asking")
+
+_wall = c.get(f"/api/rooms/{_rm2}/display")
+ok(_wall.status_code == 200,
+   "the wall screen reads without a session: a login between a corridor "
+   "and a timetable is how a tablet ends up permanently signed in as "
+   "somebody's manager, which is worse to leave in a corridor than a "
+   "timetable anybody could have read on the door")
+_w = _wall.json()
+ok(_w["state"] == "free" and set(_w) >= {"room", "now", "next", "later"},
+   "an empty room says so rather than showing nothing at all")
+_soon = _t0.time() - 300
+_wb = c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rm2, "starts": _soon, "ends": _soon + 3600,
+    "title": "Evening class"}).json()["ids"][0]
+ok(c.get(f"/api/rooms/{_rm2}/display").json()["state"] == "due",
+   "a room booked for now but not started reads as due, which is a "
+   "different thing from a class in progress and the difference somebody "
+   "standing outside the door is asking about")
+c.post(f"/api/rooms/bookings/{_wb}/session", headers=A,
+       json={"session_id": 4242})
+_live = c.get(f"/api/rooms/{_rm2}/display").json()
+ok(_live["state"] == "in progress" and _live["now"]["started"],
+   "and once the teacher starts the class, the screen says they are in "
+   "there")
+ok(_live["now"]["recording"] is False,
+   "recording is claimed only when segments are actually landing — a "
+   "screen that says RECORDING because a video room id exists is a "
+   "screen lying to a class about being on tape")
+_names = str(_live)
+ok("teacher" in _live["now"] and "roster" not in _names
+   and "student" not in _names,
+   "and nothing else is on it: a screen in a corridor is read by "
+   "whoever walks past, so what is NOT on it is the design")
+
+_djs = ops_app_js()
+ok('S.tab === "display"' in _djs and 'S.tab !== "display"' in _djs,
+   "the wall screen renders with nobody signed in, and the tab list does "
+   "not bounce it to the shop")
+ok("DISPLAY_KEY" in _djs and 'k.kind === "display"' in _djs,
+   "and claiming a display's setup link makes the tablet a display "
+   "rather than a clock — a wall screen handed a clock identity is a "
+   "punch button in a corridor")
+ok("setInterval(paint" in _djs,
+   "it refreshes itself, because nobody walks over to reload a wall")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

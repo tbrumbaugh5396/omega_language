@@ -807,16 +807,23 @@ async function renderKiosks() {
         <th>last used</th><th></th></tr></thead>
       <tbody>${ks.map((k) => {
         const [word, why] = kioskState(k);
+        const disp = k.kind === "display";
         return `<tr${k.active ? "" : ' class="dim"'}>
           <td><b>${esc(k.label || "(no label)")}</b>
+            ${disp ? `<span class="pill" title="a screen on a wall: it
+              shows what is in the room, takes no input, and is not
+              counted against your plan">display${k.room
+                ? " · " + esc(k.room) : ""}</span>` : ""}
             ${k.kiosk_id === here
               ? '<span class="pill ok">this device</span>' : ""}
             ${k.active ? "" : '<span class="pill">off</span>'}</td>
           <td class="dim">${esc(k.store || "no location set")}</td>
           <td class="dim">${k.created_at ? fmtDate(k.created_at) : "—"}</td>
-          <td><span class="pill ${word === "in use" ? "ok"
+          <td>${disp ? `<span class="dim" title="nobody punches in on a
+            wall screen, so there is nothing to be idle about">shows the
+            room</span>` : `<span class="pill ${word === "in use" ? "ok"
             : word.startsWith("idle") || word === "never used" ? "bad" : ""}"
-            title="${esc(why)}">${esc(word)}</span>
+            title="${esc(why)}">${esc(word)}</span>`}
             ${k.link_out_sec ? `<span class="pill warn" title="somebody is
               carrying a setup link for this tablet right now">link out
               ${Math.max(1, Math.round(k.link_out_sec / 60))}m</span>` : ""}
@@ -965,6 +972,20 @@ function kioskForm(k) {
     </label>
     <input id="k-label" placeholder="Front door"
       value="${k ? esc(k.label || "") : ""}">
+    <label>What it is</label>
+    <select id="k-kind">
+      <option value="clock">A time clock — people punch in on it</option>
+      <option value="display">A room display — it shows what is in the
+        room</option>
+    </select>
+    <div id="k-roomwrap" hidden>
+      <label>Which room</label>
+      <select id="k-room"><option value="0">pick one</option></select>
+      <p class="dim">A display is not counted against your plan and costs
+        nothing: it takes no input and holds nothing, and charging for a
+        timetable somebody could read on the door would be charging for
+        the door.</p>
+    </div>
     <label>Location <span class="opt">which shop it stands in</span></label>
     <select id="k-store"><option value="0">not set</option></select>
     <label class="perm" style="margin-top:8px">
@@ -975,6 +996,22 @@ function kioskForm(k) {
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="k-save">${k ? "Save" : "Register"}</button>
     </div>`);
+  const kk = $("#k-kind");
+  if (kk) {
+    if (k && k.kind) kk.value = k.kind;
+    const flip = () => { $("#k-roomwrap").hidden = kk.value !== "display"; };
+    kk.onchange = flip; flip();
+    api("/api/rooms").then((rr) => {
+      const sel = $("#k-room");
+      if (!sel) return;
+      (rr.rooms || []).filter((r) => r.active).forEach((r) => {
+        const o = document.createElement("option");
+        o.value = r.id; o.textContent = r.name + (r.store ? " · " + r.store : "");
+        if (k && k.room_id === r.id) o.selected = true;
+        sel.appendChild(o);
+      });
+    }).catch(() => {});
+  }
   api("/api/stores").then((ss) => {
     const sel = $("#k-store");
     if (!sel) return;
@@ -988,6 +1025,8 @@ function kioskForm(k) {
   $("#k-save").onclick = async () => {
     const body = { label: $("#k-label").value.trim(),
                    store_id: +$("#k-store").value || 0,
+                   kind: $("#k-kind").value,
+                   room_id: +$("#k-room").value || 0,
                    active: $("#k-active").checked };
     if (k) body.kiosk_id = k.kiosk_id;
     try {
@@ -1025,6 +1064,15 @@ async function renderEnrol() {
     return;
   }
   S.deepKey = null;
+  if (k.kind === "display") {
+    // A wall screen has no use for a clock identity, and giving it one
+    // would put a punch button in a corridor.
+    localStorage.setItem(DISPLAY_KEY, String(k.room_id || 0));
+    S.tab = "display";
+    S.deepId = k.room_id || 0;
+    render();
+    return;
+  }
   localStorage.setItem(KIOSK_KEY, k.kiosk_id);
   view().innerHTML = `<div class="card">
     <b>This tablet is now the ${esc(k.label || k.kiosk_id)} kiosk</b>
@@ -1274,4 +1322,78 @@ function bookingForm(rooms, roomId) {
     } catch (e) { $("#bk-msg").innerHTML = `<b class="bad">${esc(e.message)}
       </b>`; }
   };
+}
+
+/* ---------- the screen on the wall ----------
+   Read from the doorway, by whoever walks past. So: the room's name, the
+   one thing happening, the one thing next, and nothing else. No roster,
+   no register, no names of children — a screen in a corridor is read by
+   everybody, and what is on it is a decision about that rather than
+   about screen space.
+
+   It refreshes itself, because nobody is going to walk over and pull to
+   reload a wall. */
+const DISPLAY_KEY = "bc_display_room";
+
+/* Three Tuesdays of the same class, listed as times alone, read on a wall
+   as three classes tonight. Anything not today says which day. */
+const sameDay = (ts) =>
+  new Date(ts * 1000).toDateString() === new Date().toDateString();
+const dayOf = (ts) => new Date(ts * 1000).toLocaleDateString(undefined,
+  { weekday: "short", day: "numeric", month: "short" });
+
+async function renderDisplay() {
+  const rid = S.deepId || +(localStorage.getItem(DISPLAY_KEY) || 0);
+  if (!rid) {
+    view().innerHTML = `<div class="card empty">
+      <b>This screen has not been given a room</b>
+      <span class="dim">Register it under Company → Clock kiosks as a
+        room display, and open its setup link here.</span></div>`;
+    return;
+  }
+  if (S.deepId) localStorage.setItem(DISPLAY_KEY, String(rid));
+  S.deepId = null;
+  clearInterval(S._dispTimer);
+  const paint = async () => {
+    let d;
+    try { d = await api(`/api/rooms/${rid}/display`); }
+    catch (e) {
+      const v = view();
+      if (v) v.innerHTML = `<div class="disp"><div class="disp-room">
+        Out of touch</div><p class="disp-line">${esc(e.message)}</p></div>`;
+      return;
+    }
+    const t = (ts) => new Date(ts * 1000).toLocaleTimeString(undefined,
+      { hour: "2-digit", minute: "2-digit" });
+    const n = d.now;
+    view().innerHTML = `
+      <div class="disp disp-${d.state.replace(" ", "-")}">
+        <div class="disp-room">${esc(d.room.name)}</div>
+        ${n ? `
+          <div class="disp-what">${esc(n.said)}</div>
+          <div class="disp-when">${t(n.starts)} – ${t(n.ends)}${n.teacher
+            ? " · " + esc(n.teacher) : ""}</div>
+          <div class="disp-state">
+            <span class="disp-pill${n.started ? " on" : ""}">${n.started
+              ? "in progress" : "due to start"}</span>
+            ${n.recording ? `<span class="disp-pill rec">recording</span>`
+              : ""}
+          </div>`
+        : `<div class="disp-what disp-free">Free</div>
+           <div class="disp-when">Nothing booked in here right now</div>`}
+        ${d.next ? `<div class="disp-next">Next:
+          <b>${esc(d.next.said)}</b> ${sameDay(d.next.starts)
+            ? "at " + t(d.next.starts)
+            : dayOf(d.next.starts) + " at " + t(d.next.starts)}</div>` : ""}
+        ${(d.later || []).length ? `<div class="disp-later">${d.later
+          .map((x) => `<span>${sameDay(x.starts) ? "" : dayOf(x.starts)
+            + " "}${t(x.starts)} ${esc(x.said)}</span>`)
+          .join("")}</div>` : ""}
+      </div>`;
+  };
+  await paint();
+  // Half a minute: often enough that "due to start" becomes "in
+  // progress" while somebody is still walking in, rare enough that a
+  // wall screen is not a load generator.
+  S._dispTimer = setInterval(paint, 30000);
 }
