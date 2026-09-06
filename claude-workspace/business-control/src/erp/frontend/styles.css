@@ -1721,3 +1721,24 @@ body.lane-on { overflow: hidden; }
 .hint { border-bottom: 1px dotted currentColor; cursor: help; }
 .press-more { margin-left: 5px; font-size: .78em; color: #f0a08a;
   cursor: help; border-bottom: 1px dotted currentColor; }
+
+/* Rooms: what is in there now, and what is coming. The corridor question
+   first, because somebody standing outside a door is asking it. */
+.doc-line.room-line {
+  grid-template-columns: 1.1fr 1.3fr 1.4fr auto;
+  align-items: center;
+}
+.room-now { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.room-now b { font-weight: 600; }
+.room-next { font-size: .85em; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+/* Four columns need a pane wide enough for four. Narrower than that, the
+   name and the buttons keep the row and everything else drops beneath —
+   the same shape the fleet row takes, because it is the same problem.
+   minmax(0, 1fr) rather than 1fr: a plain fr refuses to shrink below its
+   content and pushes the page sideways instead, which is how a row with
+   a long course name in it ends up scrolling a phone. */
+@media (max-width: 900px) {
+  .doc-line.room-line { grid-template-columns: minmax(0, 1fr) auto; }
+  .room-now, .room-next { grid-column: 1 / -1; }
+}

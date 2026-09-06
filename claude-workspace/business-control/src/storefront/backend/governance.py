@@ -46,12 +46,20 @@ PERMISSIONS = {
     # order placed last week, and a shop that can only grant both grants
     # both to the Saturday staff.
     "till": "The register: open a drawer, take a sale, print a receipt",
+    # Who may give away a room. Apart from `settings` because booking a
+    # studio for Tuesday is an everyday act by whoever runs the timetable,
+    # and handing that person the shipping config to get it is how a
+    # permission list stops meaning anything.
+    "rooms": "Rooms and the timetable: book, move and cancel",
 }
 
 # What each role gets when no explicit grant is recorded.
 ROLE_DEFAULTS = {
     "owner": ["*"],
     "employee": ["products", "orders", "analytics"],
+    # A teacher books the room they are about to teach in. Anything else
+    # is a phone call to somebody who is mid-class.
+    "teacher": ["rooms"],
     # Somebody hired to stand at a till. The till and nothing else — not
     # because they are not trusted, but because a role that quietly
     # carries the customer list is a role nobody can hand out quickly.
@@ -104,6 +112,7 @@ PATH_RULES = [
     # blunt kind of permission that gets granted once and never revoked.
     ("/api/supply", "supply"),
     ("/api/pos", "till"),
+    ("/api/rooms", "rooms"),
 ]
 
 

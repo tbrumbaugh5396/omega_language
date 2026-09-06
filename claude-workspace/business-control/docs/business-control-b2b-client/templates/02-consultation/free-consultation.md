@@ -163,6 +163,7 @@ needed here?
 | `documents` | Contracts, policies, signatures | ☐ |
 | `supply` | Suppliers, materials, POs, production | ☐ |
 | `till` | The register: open a drawer, take a sale, print a receipt | ☐ |
+| `rooms` | Rooms and the timetable: book, move and cancel | ☐ |
 
 ---
 

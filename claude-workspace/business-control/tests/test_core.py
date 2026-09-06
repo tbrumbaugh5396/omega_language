@@ -1438,6 +1438,93 @@ ok('S.tab === "enrol" && S.deepKey' in _ejs
    "otherwise bounce an unknown tab to the shop and throw the setup away "
    "without a word")
 
+# --- rooms, and who has them when ----------------------------------------
+# A class had a teacher, a course and a start time and no place, which is
+# fine until two of them want the same four walls at six on a Tuesday.
+def _rm_at(y, mo, d, h, mi=0):
+    return _t0.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+
+_rm = c.post("/api/rooms", headers=A, json={
+    "name": "Studio 2", "store_id": 1, "kind": "classroom", "seats": 12})
+ok(_rm.status_code == 200, "a room is a place inside a location")
+_rid = _rm.json()["id"]
+ok(c.post("/api/rooms", headers=A,
+          json={"name": "", "kind": "classroom"}).status_code == 400
+   and c.post("/api/rooms", headers=A,
+              json={"name": "X", "kind": "dungeon"}).status_code == 400,
+   "it needs a name, and a kind this software has heard of")
+
+_t1 = _rm_at(2027, 4, 6, 18)                     # a Tuesday, six o'clock
+_bk = c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t1, "ends": _t1 + 5400,
+    "title": "Spanish A2", "repeat_weeks": 10}).json()
+ok(_bk["booked"] == 10 and not _bk["refused"],
+   "a term is ten Tuesdays, booked in one go — a timetable somebody has "
+   "to enter ten times is a timetable kept in a spreadsheet")
+_rows = c.get(f"/api/rooms/bookings?from_ts={_t1 - 86400}"
+              f"&to_ts={_t1 + 80 * 86400}&room_id={_rid}",
+              headers=A).json()["bookings"]
+ok(all(_t0.localtime(b["starts"]).tm_hour == 18 for b in _rows),
+   "and every one of them is at six o'clock — a term booked from October "
+   "runs through the clocks changing, and a repeat counted in seconds "
+   "would quietly move half of it to five")
+ok(len({_t0.strftime("%Y-%m-%d", _t0.localtime(b["starts"]))
+        for b in _rows}) == 10,
+   "on ten different days rather than ten copies of one")
+
+_clash = c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t1 + 1800, "ends": _t1 + 3600,
+    "title": "Staff meeting"})
+ok(_clash.status_code == 409 and "Spanish A2" in _clash.json()["detail"],
+   "a second booking over the first is refused, and told what has it — "
+   "'no' without 'because Anna has it' sends somebody hunting")
+ok(c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t1 - 3600, "ends": _t1,
+    "title": "Beginners"}).status_code == 200,
+   "but a class ending exactly when the next begins is two bookings, not "
+   "a clash: get that wrong and no timetable can be built back to back")
+
+_t2 = _rm_at(2027, 4, 7, 20)                     # the Wednesday, eight
+c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t2 + 7 * 86400, "ends": _t2 + 7 * 86400 + 1800,
+    "title": "Governors"})
+_part = c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t2, "ends": _t2 + 3600,
+    "title": "Conversation club", "repeat_weeks": 4}).json()
+ok(_part["booked"] == 3 and len(_part["refused"]) == 1,
+   "asking for four weeks and getting three is what happens when one is "
+   "already taken")
+ok(_part["refused"][0]["taken_by"] == "Governors",
+   "and the one that was skipped says which week and what took it, "
+   "rather than being silently dropped from a run of four")
+
+_ser = [b for b in c.get(f"/api/rooms/bookings?from_ts={_t2 - 86400}"
+                         f"&to_ts={_t2 + 40 * 86400}&room_id={_rid}",
+                         headers=A).json()["bookings"]
+        if b["said"] == "Conversation club"]
+_sid2 = _ser[0]["id"]
+ok(c.delete(f"/api/rooms/bookings/{_sid2}?whole_series=1",
+            headers=A).json()["cancelled"] >= 3,
+   "cancelling a weekly booking can take the whole run — a term called "
+   "off one Tuesday at a time is how one gets missed")
+
+_now = c.get(f"/api/rooms/{_rid}/now", headers=A).json()
+ok("now" in _now and "next" in _now and _now["room"]["name"] == "Studio 2",
+   "and a room can be asked what it holds now and next, which is the "
+   "shape a screen on a wall wants")
+ok(c.get("/api/rooms", headers=A).json()["rooms"][0]["next"] is not None,
+   "the list answers the corridor question without a second request")
+
+_del = c.delete(f"/api/rooms/{_rid}", headers=A).json()
+ok(_del.get("archived") and not _del.get("deleted"),
+   "a room that has been used is switched off rather than deleted — last "
+   "term's timetable is how somebody answers 'where was that class'")
+_gov = open("src/storefront/backend/governance.py").read()
+ok('"rooms"' in _gov and '("/api/rooms", "rooms")' in _gov,
+   "and booking a room is its own permission: whoever runs the timetable "
+   "should not need the shipping config to do it")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

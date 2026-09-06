@@ -44,7 +44,8 @@ def _init_core(tid=None):
         # back, which only exist once this module has finished defining them
         # — and _init_core first runs at the bottom of this file, where it has
         from . import classroom, community, learning, library, materials
-        from . import nutrition
+        from . import nutrition, rooms
+        rooms.init_tables(con)
         learning.init_tables(con)
         classroom.init_tables(con)
         community.init_tables(con)
@@ -6252,6 +6253,8 @@ from storefront.backend import learn as store_learn  # noqa: E402
 from storefront.backend import nutrition as store_nutrition  # noqa: E402
 app.include_router(learning.router)
 app.include_router(classroom.router)
+from . import rooms as _rooms  # noqa: E402  (safe: included late)
+app.include_router(_rooms.router)
 app.include_router(community.router)
 app.include_router(library.router)
 app.include_router(materials.router)

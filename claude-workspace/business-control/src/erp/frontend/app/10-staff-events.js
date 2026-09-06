@@ -1037,3 +1037,241 @@ async function renderEnrol() {
   const b = $("#en-clock");
   if (b) b.onclick = () => { S.tab = "clock"; render(); };
 }
+
+/* ---------- rooms, and who has them when ----------
+   A class had a teacher, a course and a start time, and no place — fine
+   until two of them want the same four walls at six on a Tuesday. The
+   list answers the corridor question (what is in there NOW), and the
+   timetable answers the planning one. */
+const ROOM_KINDS = { classroom: "Classroom", studio: "Studio",
+                     meeting: "Meeting room", hall: "Hall", other: "Room" };
+
+function roomWhen(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric",
+                                           month: "short" })
+    + " " + d.toLocaleTimeString(undefined, { hour: "2-digit",
+                                              minute: "2-digit" });
+}
+
+async function renderRooms() {
+  const [rs, tt] = await Promise.all([
+    api("/api/rooms").catch(() => ({ rooms: [], kinds: [] })),
+    api("/api/rooms/bookings").catch(() => ({ bookings: [] })),
+  ]);
+  const rooms = rs.rooms || [];
+  view().innerHTML = `
+    <div class="page-head">
+      <div><h2>Rooms</h2>
+        <p class="dim">Where a class actually happens. A booking is made
+          before its class exists — a class begins when a teacher starts
+          one, so a timetable of started classes would be a timetable of
+          the past.</p></div>
+      <span class="chips">
+        <button class="btn alt" id="rm-book" ${rooms.length ? "" : "disabled"}
+          >Book a room</button>
+        <button class="btn" id="rm-new">${opsIcon("calendar", "btn-ic")}
+          Add a room</button></span>
+    </div>
+    ${rooms.length ? `<div class="sig-rows">${rooms.map((r) => `
+      <div class="doc-line room-line${r.active ? "" : " dim"}">
+        <span class="dl-title"><b>${esc(r.name)}</b>
+          <span class="dim">${esc(ROOM_KINDS[r.kind] || r.kind)}${r.store
+            ? " · " + esc(r.store) : ""}${r.seats
+            ? " · " + r.seats + " seats" : ""}${r.active ? "" : " · off"}
+          </span></span>
+        <span class="room-now">${r.now
+          ? `<span class="pill ${r.now.session_id ? "ok" : ""}"
+               title="${r.now.session_id
+                 ? "the class has started — they are in there"
+                 : "booked for now, not started yet"}">${r.now.session_id
+                 ? "in progress" : "due now"}</span>
+             <b>${esc(r.now.course || r.now.title || "booked")}</b>
+             ${r.now.teacher ? `<span class="dim">${esc(r.now.teacher)}
+               </span>` : ""}`
+          : `<span class="dim">free</span>`}</span>
+        <span class="room-next dim">${r.next
+          ? `next: ${esc(r.next.course || r.next.title || "booked")} ·
+             ${roomWhen(r.next.starts)}`
+          : "nothing booked ahead"}</span>
+        <span class="dl-acts">
+          <button class="btn alt sm" data-rmbook="${r.id}">Book</button>
+          <button class="btn alt sm" data-rmedit="${r.id}">Edit</button>
+        </span>
+      </div>`).join("")}</div>`
+      : `<div class="card empty"><b>No rooms yet</b>
+         <span class="dim">A room is a place inside a location — Studio 2
+           at the Camden shop. Add one and a class can be given somewhere
+           to be.</span></div>`}
+
+    <h3 style="margin-top:16px">The next fortnight</h3>
+    ${(tt.bookings || []).length ? `<div class="card"><div class="tablewrap">
+      <table>
+      <thead><tr><th>when</th><th>room</th><th>what</th><th>who</th>
+        <th></th></tr></thead>
+      <tbody>${tt.bookings.map((b) => `<tr>
+        <td>${roomWhen(b.starts)}<span class="dim"> –
+          ${new Date(b.ends * 1000).toLocaleTimeString(undefined,
+            { hour: "2-digit", minute: "2-digit" })}</span></td>
+        <td>${esc(b.room)}</td>
+        <td><b>${esc(b.said)}</b>${b.live
+          ? ' <span class="pill ok">in progress</span>' : ""}
+          ${b.series ? '<span class="pill" title="one of a repeating '
+            + 'booking">weekly</span>' : ""}</td>
+        <td class="dim">${esc(b.teacher || "—")}</td>
+        <td><button class="btn alt sm" data-rmcancel="${b.id}"
+          data-series="${esc(b.series || "")}"
+          data-what="${esc(b.said)}">Cancel</button></td>
+      </tr>`).join("")}</tbody></table></div></div>`
+      : `<p class="dim">Nothing booked. A room nobody has asked for is
+         either new or in the wrong building.</p>`}`;
+
+  const nb = $("#rm-new");
+  if (nb) nb.onclick = () => roomForm(null);
+  const bb = $("#rm-book");
+  if (bb) bb.onclick = () => bookingForm(rooms, rooms[0] && rooms[0].id);
+  view().querySelectorAll("[data-rmbook]").forEach((b) =>
+    b.onclick = () => bookingForm(rooms, +b.dataset.rmbook));
+  view().querySelectorAll("[data-rmedit]").forEach((b) =>
+    b.onclick = () => roomForm(rooms.find((r) => r.id === +b.dataset.rmedit)));
+  view().querySelectorAll("[data-rmcancel]").forEach((b) =>
+    b.onclick = async () => {
+      const series = b.dataset.series;
+      let all = 0;
+      if (series) {
+        all = confirm(`Cancel every remaining "${b.dataset.what}" in this `
+          + "weekly booking?\n\nOK for all of them, Cancel for just this "
+          + "one.") ? 1 : 0;
+      } else if (!confirm(`Cancel "${b.dataset.what}"?`)) { return; }
+      try {
+        await api(`/api/rooms/bookings/${b.dataset.rmcancel}`
+          + (all ? "?whole_series=1" : ""), { method: "DELETE" });
+        toast(all ? "the series is cancelled" : "cancelled");
+        renderRooms();
+      } catch (e) { toast(e.message); }
+    });
+}
+
+function roomForm(r) {
+  modal(`<h3>${r ? "Edit" : "Add"} a room</h3>
+    <p class="dim">A place inside a location. What it is called here is
+      what somebody will look for on a timetable.</p>
+    <label>Name</label>
+    <input id="rm-name" placeholder="Studio 2" value="${r ? esc(r.name) : ""}">
+    <div class="row2">
+      <div><label>Location</label>
+        <select id="rm-store"><option value="0">not set</option></select></div>
+      <div><label>Kind</label><select id="rm-kind">${
+        Object.entries(ROOM_KINDS).map(([k, v]) =>
+          `<option value="${k}"${r && r.kind === k ? " selected" : ""}
+            >${v}</option>`).join("")}</select></div>
+    </div>
+    <div class="row2">
+      <div><label>Seats <span class="opt">blank if nobody has counted
+        </span></label>
+        <input id="rm-seats" type="number" min="0"
+          value="${r && r.seats ? r.seats : ""}"></div>
+      <div><label>Note</label><input id="rm-note"
+        value="${r ? esc(r.note || "") : ""}"></div>
+    </div>
+    ${r ? `<label class="perm" style="margin-top:8px">
+      <input type="checkbox" id="rm-active" ${r.active ? "checked" : ""}>
+      <span><b>In use</b><small>a room switched off keeps its history and
+        takes no new bookings</small></span></label>` : ""}
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="rm-save">${r ? "Save" : "Add"}</button></div>`);
+  api("/api/stores").then((ss) => {
+    const sel = $("#rm-store");
+    if (!sel) return;
+    (ss.stores || ss || []).forEach((st) => {
+      const o = document.createElement("option");
+      o.value = st.id; o.textContent = st.name;
+      if (r && r.store_id === st.id) o.selected = true;
+      sel.appendChild(o);
+    });
+  }).catch(() => {});
+  $("#rm-save").onclick = async () => {
+    const body = { name: $("#rm-name").value.trim(),
+                   store_id: +$("#rm-store").value || 0,
+                   kind: $("#rm-kind").value,
+                   seats: +$("#rm-seats").value || 0,
+                   note: $("#rm-note").value.trim(),
+                   active: r ? $("#rm-active").checked : true };
+    try {
+      await api(r ? `/api/rooms/${r.id}` : "/api/rooms",
+                { body, method: r ? "PATCH" : "POST" });
+      closeModal(); renderRooms();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+/* Booking is where the clash lives, so the form says what it hit rather
+   than refusing and leaving somebody to guess which of eleven weeks was
+   the problem. */
+function bookingForm(rooms, roomId) {
+  const now = new Date(Date.now() + 3600e3);
+  now.setMinutes(0, 0, 0);
+  const local = (d) => new Date(d.getTime()
+    - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  modal(`<h3>Book a room</h3>
+    <div class="row2">
+      <div><label>Room</label><select id="bk-room">${rooms
+        .filter((r) => r.active).map((r) =>
+          `<option value="${r.id}"${r.id === roomId ? " selected" : ""}
+            >${esc(r.name)}</option>`).join("")}</select></div>
+      <div><label>Course <span class="opt">or leave it and give it a
+        title</span></label>
+        <select id="bk-course"><option value="0">not a course</option>
+        </select></div>
+    </div>
+    <label>Title <span class="opt">when it is not a course — a meeting,
+      the floor being sanded</span></label>
+    <input id="bk-title" placeholder="Staff meeting">
+    <div class="row2">
+      <div><label>Starts</label>
+        <input id="bk-start" type="datetime-local"
+          value="${local(now)}"></div>
+      <div><label>Ends</label>
+        <input id="bk-end" type="datetime-local"
+          value="${local(new Date(now.getTime() + 5400e3))}"></div>
+    </div>
+    <label>Repeat <span class="opt">weekly, at this time</span></label>
+    <select id="bk-rep">
+      <option value="0">just once</option>
+      <option value="4">4 weeks</option>
+      <option value="6">6 weeks</option>
+      <option value="10">10 weeks — a term</option>
+      <option value="12">12 weeks</option>
+    </select>
+    <p class="dim" id="bk-msg"></p>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="bk-go">Book it</button></div>`);
+  api("/api/learn/courses").then((cs) => {
+    const sel = $("#bk-course");
+    if (!sel) return;
+    (cs.courses || cs || []).forEach((c) => {
+      const o = document.createElement("option");
+      o.value = c.id; o.textContent = c.name;
+      sel.appendChild(o);
+    });
+  }).catch(() => {});
+  $("#bk-go").onclick = async () => {
+    const ts = (id) => new Date($(id).value).getTime() / 1000;
+    const body = { room_id: +$("#bk-room").value,
+                   starts: ts("#bk-start"), ends: ts("#bk-end"),
+                   title: $("#bk-title").value.trim(),
+                   course_id: +$("#bk-course").value || 0,
+                   repeat_weeks: +$("#bk-rep").value || 0 };
+    if (!body.starts || !body.ends) {
+      $("#bk-msg").textContent = "It needs a start and an end."; return; }
+    try {
+      const r = await api("/api/rooms/bookings", { body });
+      closeModal();
+      toast(r.note || "booked");
+      renderRooms();
+    } catch (e) { $("#bk-msg").innerHTML = `<b class="bad">${esc(e.message)}
+      </b>`; }
+  };
+}
