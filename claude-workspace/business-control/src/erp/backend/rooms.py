@@ -441,6 +441,18 @@ def display(rid: int, con=Depends(get_con)):
     for x in later:
         x["said"] = _said(x)
     can = _startable(con, rid, now)
+    # A course runs one class at a time. If it is already open somewhere,
+    # offering Start here is offering a button that will fail — and the
+    # wall should say which, because "nothing happened" in a corridor is
+    # indistinguishable from a broken screen.
+    blocked = ""
+    if can:
+        other = con.execute(
+            "SELECT 1 FROM class_sessions WHERE course_id=? AND"
+            " status='open' LIMIT 1", (can["course_id"],)).fetchone()
+        if other:
+            blocked = f"{can['course']} is already running somewhere else"
+            can = None
     return {"room": {"id": room["id"], "name": room["name"],
                      "seats": room["seats"]},
             "at": now, "now": cur, "next": nxt, "later": later[1:],
@@ -449,6 +461,8 @@ def display(rid: int, con=Depends(get_con)):
             # why. So the wall is only offered the one it can act on.
             "can_start": bool(can),
             "can_end": bool(cur and cur["started"]),
+            "can_mark": bool(cur and cur["started"]),
+            "blocked": blocked,
             "starting": dict(can)["course"] if can else "",
             "state": ("in progress" if cur and cur["started"]
                       else "finished" if cur and cur["finished"]
@@ -610,6 +624,134 @@ def end_here(rid: int, body: PinBody, con=Depends(get_con)):
     con.commit()
     _right(rid)
     return {"ok": True, "ended_by": user["name"], "course": bk["course"]}
+
+
+# ---------- the sheet, behind the code ----------
+#
+# A wall at rest shows no names. That was the whole design of it: a
+# screen in a corridor is read by whoever walks past, so what is NOT on
+# it is the point. Marking attendance needs names, which is a real
+# tension and not one to paper over — so the sheet lives BEHIND the code
+# and closes itself, and the wall goes back to a course title and a time.
+#
+# One PIN opens it for a few minutes rather than once per student:
+# marking twenty people twenty codes at a time is how a register ends up
+# filled in afterwards from memory, which is the thing attendance exists
+# to stop being.
+#
+# Marking is the DOOR, not the teacher. This software already draws that
+# line — a volunteer with the sheet can mark presence; opening, closing
+# and pay stay the teacher's — and a wall is exactly where the door
+# stands.
+_DOORS: dict = {}
+_DOOR_TTL = 300.0
+
+
+def _open_door(rid: int, sid: int, uid: int, name: str) -> str:
+    import secrets
+    tok = secrets.token_urlsafe(18)
+    _DOORS[tok] = {"room": rid, "session": sid, "user": uid, "name": name,
+                   "until": time.time() + _DOOR_TTL}
+    # Anything expired goes now rather than accumulating: this is a dict
+    # in a process that runs for months.
+    for k, v in list(_DOORS.items()):
+        if v["until"] < time.time():
+            _DOORS.pop(k, None)
+    return tok
+
+
+def _at_door(tok: str, rid: int) -> dict:
+    d = _DOORS.get(tok or "")
+    if not d or d["until"] < time.time() or d["room"] != rid:
+        raise HTTPException(
+            403, "the sheet has closed. Enter your code again to reopen "
+                 "it — it shuts itself so a list of names is not left up "
+                 "on a wall.")
+    return d
+
+
+def _sheet(con, rid: int, door: dict) -> dict:
+    """The roster, as a corridor may see it.
+
+    No photographs. The staff screen carries faces because attendance
+    cannot run on initials, and that reasoning does not survive being
+    moved to a wall: a face on a screen in a corridor is visible to
+    everybody in the corridor, and names are already more than this
+    should be showing.
+    """
+    from . import classroom
+    r = classroom.roster(con, door["session"])
+    return {"course": (r.get("course") or {}).get("name", ""),
+            "session_id": door["session"],
+            "open_for_sec": int(door["until"] - time.time()),
+            "marking_as": door["name"],
+            "summary": r.get("summary"),
+            "roster": [{"student_id": x["student_id"], "name": x["name"],
+                        "status": x["status"], "at": x["at"]}
+                       for x in r.get("roster", [])]}
+
+
+@router.post("/api/rooms/{rid}/roster")
+def open_sheet(rid: int, body: PinBody, con=Depends(get_con)):
+    """Open the register for the class running in here."""
+    _room(con, rid)
+    now = db.now()
+    bk = con.execute(
+        "SELECT b.*, COALESCE(c.name,'') AS course FROM room_bookings b"
+        " LEFT JOIN courses c ON c.id=b.course_id"
+        " JOIN class_sessions cs ON cs.id=b.session_id AND cs.status='open'"
+        " WHERE b.room_id=? AND b.state='booked' AND b.starts<=?"
+        " ORDER BY b.starts DESC LIMIT 1", (rid, now + 900)).fetchone()
+    if bk is None:
+        raise HTTPException(
+            409, "no class is running in here, so there is nobody to mark. "
+                 "Start it first.")
+    user = _who(con, rid, body.pin)
+    from . import classroom
+    try:
+        classroom._door(con, user, bk["course_id"])
+    except HTTPException:
+        _refuse(rid, bk["course"])
+    _right(rid)
+    tok = _open_door(rid, bk["session_id"], user["id"], user["name"])
+    out = _sheet(con, rid, _DOORS[tok])
+    out["token"] = tok
+    return out
+
+
+class MarkAtDoor(BaseModel):
+    token: str = ""
+    student_id: int = 0
+    status: str = "present"
+    note: str = ""
+
+
+@router.post("/api/rooms/{rid}/mark")
+def mark_here(rid: int, body: MarkAtDoor, con=Depends(get_con)):
+    """Mark one person, with the sheet already open."""
+    _room(con, rid)
+    door = _at_door(body.token, rid)
+    from . import attendance as A
+    from . import classroom
+    if body.status not in A.ATTENDANCE_STATUSES:
+        raise HTTPException(400, f"status is one of {A.ATTENDANCE_STATUSES}")
+    classroom.do_check_in(con, session_id=door["session"],
+                          student_id=body.student_id, method=A.BY_TEACHER,
+                          marked_by=door["user"], status=body.status,
+                          note=body.note.strip()[:200])
+    con.commit()
+    # Every mark pushes the closing time out: somebody working down a
+    # list of twenty should not be timed out at fourteen.
+    door["until"] = time.time() + _DOOR_TTL
+    return _sheet(con, rid, door)
+
+
+@router.post("/api/rooms/{rid}/close-sheet")
+def close_sheet(rid: int, body: MarkAtDoor, con=Depends(get_con)):
+    """Put the sheet away. The screen does this on its own when the
+    person walks off, and this is the same thing said deliberately."""
+    _DOORS.pop(body.token or "", None)
+    return {"ok": True}
 
 
 @router.get("/api/rooms/{rid}/now")

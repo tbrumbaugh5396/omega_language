@@ -1784,3 +1784,12 @@ body.lane-on { overflow: hidden; }
 .pinpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .btn.pinkey { font-size: 22px; padding: 16px 0; }
 .btn.pinkey.go { background: var(--accent); color: #06111c; }
+
+/* The register, behind the code. Rows big enough to tap standing up. */
+.sheet { max-height: 52vh; overflow-y: auto; margin: 8px 0; }
+.sheet-row { display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.sheet-name { font-size: 1.05em; }
+.sheet-marks { display: flex; gap: 5px; flex-shrink: 0; }
+.disp-blocked { margin-top: 14px; color: #f0a08a;
+  font-size: clamp(13px, 2vw, 18px); }

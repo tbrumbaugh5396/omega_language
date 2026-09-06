@@ -1343,10 +1343,74 @@ const DISPLAY_KEY = "bc_display_room";
 
    Big keys, because this is tapped standing up, by somebody holding a
    folder, on a screen at eye height. */
+/* The register, on a wall, which is a tension rather than a feature: the
+   screen shows no names at rest precisely because a corridor reads it.
+   So the sheet is a modal that a code opens and that shuts itself, and
+   the wall goes back to a course title and a time. No photographs —
+   attendance on the staff screen carries faces because it cannot run on
+   initials, and that reasoning does not survive being moved to a
+   corridor. */
+function dispSheet(rid, data, done) {
+  let d = data;
+  const draw = () => {
+    modal(`<h3>${esc(d.course)}</h3>
+      <p class="dim">Marking as ${esc(d.marking_as)}. This closes itself
+        in a few minutes — a list of names is not left up on a wall.</p>
+      <div class="sheet">${(d.roster || []).map((r) => `
+        <div class="sheet-row" data-sid="${r.student_id}">
+          <span class="sheet-name">${esc(r.name)}</span>
+          <span class="sheet-marks">${["present", "late", "absent"]
+            .map((st) => `<button class="btn ${r.status === st ? "" : "alt "}sm"
+              data-mark="${st}" data-for="${r.student_id}">${st}</button>`)
+            .join("")}</span>
+        </div>`).join("") || '<p class="dim">Nobody is enrolled on this '
+        + 'course yet.</p>'}</div>
+      <p class="dim" id="sheet-msg">${d.summary ? Object.entries(d.summary)
+        .filter(([, v]) => typeof v === "number" && v)
+        .map(([k, v]) => `${v} ${k}`).join(" · ") : ""}</p>
+      <div class="modal-foot">
+        <button class="btn" id="sheet-done">Done</button></div>`, "wide");
+    document.querySelectorAll("[data-mark]").forEach((b) =>
+      b.onclick = async () => {
+        b.disabled = true;
+        try {
+          d = await api(`/api/rooms/${rid}/mark`, { body: {
+            token: d.token, student_id: +b.dataset.for,
+            status: b.dataset.mark } });
+          d.token = data.token;
+          draw();
+        } catch (e) {
+          closeModal();
+          toast(e.message);
+          done();
+        }
+      });
+    $("#sheet-done").onclick = () => {
+      api(`/api/rooms/${rid}/close-sheet`, { body: { token: d.token } })
+        .catch(() => {});
+      clearTimeout(S._sheetShut);
+      closeModal();
+      done();
+    };
+    // The screen puts it away by itself, because the way a sheet of
+    // names ends up left on a wall is somebody being called into a
+    // classroom mid-register.
+    clearTimeout(S._sheetShut);
+    S._sheetShut = setTimeout(() => {
+      api(`/api/rooms/${rid}/close-sheet`, { body: { token: d.token } })
+        .catch(() => {});
+      closeModal();
+      done();
+    }, Math.max(30, d.open_for_sec || 300) * 1000);
+  };
+  d.token = data.token;
+  draw();
+}
+
 function dispPin(rid, what, course, done) {
   let pin = "";
-  modal(`<h3>${what === "start" ? "Start " + esc(course) : "End the class"}
-    </h3>
+  modal(`<h3>${what === "start" ? "Start " + esc(course)
+    : what === "roster" ? "Attendance" : "End the class"}</h3>
     <p class="dim">Your time-clock code. Nothing is signed in on this
       screen — it starts the class and forgets you.</p>
     <div class="pinbox"><span id="pin-dots">····</span></div>
@@ -1367,6 +1431,7 @@ function dispPin(rid, what, course, done) {
     try {
       const r = await api(`/api/rooms/${rid}/${what}`, { body: { pin } });
       closeModal();
+      if (what === "roster") { return dispSheet(rid, r, done); }
       toast(what === "start"
         ? `${r.course} started — ${r.started_by}`
         : `${r.course} ended — ${r.ended_by}`);
@@ -1438,18 +1503,27 @@ async function renderDisplay() {
           <b>${esc(d.next.said)}</b> ${sameDay(d.next.starts)
             ? "at " + t(d.next.starts)
             : dayOf(d.next.starts) + " at " + t(d.next.starts)}</div>` : ""}
-        ${d.can_start || d.can_end ? `<div class="disp-act">
-          <button class="btn disp-btn" id="disp-go">${d.can_start
-            ? "Start " + esc(d.starting) : "End the class"}</button>
+        ${d.can_start || d.can_end || d.can_mark ? `<div class="disp-act">
+          ${d.can_start ? `<button class="btn disp-btn" id="disp-go">Start
+            ${esc(d.starting)}</button>` : ""}
+          ${d.can_mark ? `<button class="btn alt disp-btn" id="disp-sheet"
+            >Attendance</button>` : ""}
+          ${d.can_end ? `<button class="btn alt disp-btn" id="disp-end"
+            >End the class</button>` : ""}
         </div>` : ""}
+        ${d.blocked ? `<div class="disp-blocked">${esc(d.blocked)}</div>`
+          : ""}
         ${(d.later || []).length ? `<div class="disp-later">${d.later
           .map((x) => `<span>${sameDay(x.starts) ? "" : dayOf(x.starts)
             + " "}${t(x.starts)} ${esc(x.said)}</span>`)
           .join("")}</div>` : ""}
       </div>`;
     const go = $("#disp-go");
-    if (go) go.onclick = () => dispPin(rid, d.can_start ? "start" : "end",
-                                       d.can_start ? d.starting : "", paint);
+    if (go) go.onclick = () => dispPin(rid, "start", d.starting, paint);
+    const en = $("#disp-end");
+    if (en) en.onclick = () => dispPin(rid, "end", "", paint);
+    const sh = $("#disp-sheet");
+    if (sh) sh.onclick = () => dispPin(rid, "roster", "", paint);
   };
   await paint();
   // Half a minute: often enough that "due to start" becomes "in

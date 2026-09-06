@@ -1689,6 +1689,75 @@ ok(c.post(f"/api/rooms/{_rm3}/start",
    "the lockout is per screen, so one room being hammered does not shut "
    "the class down the corridor")
 
+# --- the register, behind the code ---------------------------------------
+# The wall shows no names at rest, on purpose. Marking needs names, which
+# is a tension rather than a feature: the sheet is opened by a code and
+# shuts itself, and the wall goes back to a course title and a time.
+# Its own course and room: a booking's class is started once, and a
+# course runs one class at a time, so reusing either would be testing
+# those rules rather than the register.
+_crs2 = c.post("/api/learning/courses", headers=A,
+               json={"name": "Register test", "language": "es"}).json()["id"]
+c.post(f"/api/learning/courses/{_crs2}/enroll", headers=A,
+       json={"name": "Bystander"})
+_rm6 = c.post("/api/rooms", headers=A,
+              json={"name": "Studio 13", "kind": "classroom"}).json()["id"]
+_s6 = _t0.time() - 60
+c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rm6, "starts": _s6, "ends": _s6 + 3600, "course_id": _crs2})
+c.post(f"/api/rooms/{_rm6}/start", json={"pin": "7788"})
+_sheet = c.post(f"/api/rooms/{_rm6}/roster", json={"pin": "7788"})
+ok(_sheet.status_code == 200 and _sheet.json()["token"],
+   "a code opens the register for the class running in this room")
+_sh = _sheet.json()
+ok("photo" not in str(_sh),
+   "with no photographs. The staff screen carries faces because "
+   "attendance cannot run on initials, and that reasoning does not "
+   "survive being moved to a corridor where everybody walking past can "
+   "see the screen")
+ok(_sh["marking_as"] and _sh["open_for_sec"] > 0,
+   "it says who is marking and that it is going to close itself")
+
+_tok = _sh["token"]
+_m = c.post(f"/api/rooms/{_rm6}/mark", json={
+    "token": _tok, "student_id": [r["student_id"] for r in _sh["roster"]][0],
+    "status": "late"})
+ok(_m.status_code == 200
+   and any(r["status"] == "late" for r in _m.json()["roster"]),
+   "one code marks the whole class rather than one code per student — "
+   "twenty codes for twenty people is how a register ends up filled in "
+   "afterwards from memory, which is the thing attendance exists to stop")
+ok(_m.json()["open_for_sec"] > 0,
+   "and every mark pushes the closing time out, so somebody working down "
+   "a list of twenty is not timed out at fourteen")
+ok(c.post(f"/api/rooms/{_rm6}/mark", json={
+    "token": "invented", "student_id": 1}).status_code == 403,
+   "a token nobody was given opens nothing")
+ok(c.post(f"/api/rooms/{_rm4}/mark", json={
+    "token": _tok, "student_id": 1}).status_code == 403,
+   "and a sheet is for the room it was opened in: one code at one door "
+   "does not mark a register down the corridor")
+c.post(f"/api/rooms/{_rm6}/close-sheet", json={"token": _tok})
+ok(c.post(f"/api/rooms/{_rm6}/mark", json={
+    "token": _tok, "student_id": 1}).status_code == 403,
+   "and putting it away means it is away")
+
+# A course runs one class at a time, so a wall offering to start one that
+# is already open elsewhere is offering a button that will fail.
+_rm5 = c.post("/api/rooms", headers=A,
+              json={"name": "Studio 12", "kind": "classroom"}).json()["id"]
+_s5 = _t0.time() - 60
+c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rm5, "starts": _s5, "ends": _s5 + 3600, "course_id": _crs2})
+_w5 = c.get(f"/api/rooms/{_rm5}/display").json()
+ok(not _w5["can_start"] and "already running" in _w5["blocked"],
+   "so it does not offer it, and says why — 'nothing happened' in a "
+   "corridor is indistinguishable from a broken screen")
+ok(c.post(f"/api/rooms/{_rm5}/roster",
+          json={"pin": "7788"}).status_code == 409,
+   "and a room with no class running has nobody to mark, which it says "
+   "rather than opening an empty sheet")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):
