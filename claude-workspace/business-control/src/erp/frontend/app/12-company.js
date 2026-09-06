@@ -629,6 +629,9 @@ const LIMIT_WORDS = {
   kiosks: ["Clock kiosks", "tablets people punch in on"],
   locations: ["Locations", "shops, depots, kitchens"],
   seats: ["Staff seats", "people who sign in to run the business"],
+  connections: ["Connections", "services this software already speaks"],
+  custom_connections: ["Custom connections",
+                       "ones we wrote for a system of yours"],
 };
 
 /* Thirty days of the busiest-moment-per-day, as thirty bars. A limit is

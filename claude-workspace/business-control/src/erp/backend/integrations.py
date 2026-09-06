@@ -504,6 +504,22 @@ def settings(con, name: str) -> dict:
 
 def save(con, name: str, credentials: dict, account: str = "",
          setting: dict | None = None, expires_at: float = 0) -> None:
+    # Connecting a service that is not already connected is the moment
+    # the count moves, so it is the moment the plan is asked. Saving a
+    # new credential for one already connected is a re-auth, not a new
+    # connection, and refusing that would lock somebody out of the
+    # service they are trying to get back into.
+    known = con.execute("SELECT 1 FROM integrations WHERE provider=?"
+                        " AND active=1", (name,)).fetchone()
+    if not known:
+        try:
+            from .main import _check_room, current_user  # noqa: F401
+            from . import db as _db  # noqa: F401
+            n = con.execute("SELECT COUNT(*) AS n FROM integrations"
+                            " WHERE active=1").fetchone()["n"]
+            _check_room(con, None, "connections", n, "connection(s)")
+        except ImportError:
+            pass
     con.execute(
         "INSERT INTO integrations(provider,credentials,account,settings,"
         " active,connected_at,expires_at) VALUES(?,?,?,?,1,?,?)"

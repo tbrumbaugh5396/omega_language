@@ -1758,6 +1758,30 @@ ok(c.post(f"/api/rooms/{_rm5}/roster",
    "and a room with no class running has nobody to mark, which it says "
    "rather than opening an empty sheet")
 
+# --- connections, metered apart from custom ones --------------------------
+_ent2 = c.get("/api/entitlements", headers=A).json()
+_by2 = {l["kind"]: l for l in _ent2["lines"]}
+ok({"connections", "custom_connections"} <= set(_by2),
+   "an install can see both kinds of connection on the same screen as "
+   "its tills and its seats, because they are the same question: how "
+   "much of this do we have and what does more cost")
+ok(_by2["custom_connections"]["self_serve_max"] == 0
+   and not _by2["custom_connections"]["can_raise"],
+   "and the custom one cannot be raised from that screen — it is work "
+   "before it is a number, and a button that takes the money and "
+   "delivers nothing is the worst thing that could be on it")
+ok(0 < _by2["custom_connections"]["included"]
+   < _by2["connections"]["included"],
+   "the plan includes fewer custom ones than ordinary ones, which is the "
+   "difference said in the one place a client reads it")
+ok(c.post("/api/admin/integrations/custom", headers=A, json={
+    "label": "Broker portal", "url": "https://x.example/hook",
+    "auth_kind": "bearer"}).status_code == 200,
+   "and a single-tenant install may have one anyway: an install nobody "
+   "sold anything to is unlimited by design, because a legacy shop must "
+   "never wake up with fewer features than it went to bed with. The "
+   "refusal is proven where limits exist, on tenant alpha")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

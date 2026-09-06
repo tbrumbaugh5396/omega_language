@@ -228,7 +228,9 @@ def subscription_status(cfg: dict, sub_id: str) -> str:
 # difference between "done" and "not configured" will report both as done.
 
 ADDON_LABEL = {"registers": "Register", "kiosks": "Clock kiosk",
-               "locations": "Location", "seats": "Staff seat"}
+               "locations": "Location", "seats": "Staff seat",
+               "connections": "Connection",
+               "custom_connections": "Custom connection"}
 
 
 def _find_price(cfg: dict, kind: str, unit_cents: int) -> str | None:

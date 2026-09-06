@@ -666,6 +666,34 @@ def _fleet_events():
     return _fl.events(20)
 
 _allow = _pb.allowances()
+# Integration was one line on a quote and two different jobs behind it.
+ok(set(_allow) >= {"connections", "custom_connections"},
+   "the price book meters connections apart from custom ones — quoting "
+   "them as one word is how a $500 job turns into three weeks")
+ok(_allow["custom_connections"]["each_cents"]
+   > 4 * _allow["connections"]["each_cents"],
+   "and a custom one costs several times a normal one, because nobody at "
+   "the other end has promised us anything: a documented API deprecates "
+   "a field with six months' notice, a bespoke system changes on a "
+   "Tuesday and the first we hear is the orders stopping")
+ok(0 < _allow["custom_connections"]["included"]
+   < _allow["connections"]["included"],
+   "some of each are included and fewer of the custom ones — a business "
+   "with an internal tool and a broker's portal is an ordinary business "
+   "rather than an upsell, and a plan that included none would have cut "
+   "off a feature clients already had")
+ok(0 < _tn.SELF_SERVE_CEILING.get("custom_connections", 0)
+   < _tn.SELF_SERVE_CEILING["connections"],
+   "a client may declare their own up to a point — an internal tool has "
+   "a URL and a key like anything else — but the ceiling is lower than "
+   "for the ones we ship, because eleven bespoke systems is either an "
+   "integration project or a misunderstanding and both want a person")
+_pb_text = open("docs/product/price-book.md").read()
+ok("7c." in _pb_text and "from $1,200" in _pb_text and "$500" in _pb_text,
+   "the book prices the two one-offs apart as well: wiring against our "
+   "own documented API is flat, and a system nobody here has "
+   "documentation for is scoped per system")
+
 ok(set(_allow) >= {"locations", "staff_seats", "registers", "clock_kiosks"},
    "the price book is the source for what a plan includes and what more "
    "costs, the same as everything else here")
@@ -676,7 +704,8 @@ ok(_allow["registers"]["each_cents"] == 1900
 
 _ent = c.get("/api/entitlements", headers=AA).json()
 _by = {x["kind"]: x for x in _ent["lines"]}
-ok(set(_by) == {"locations", "registers", "kiosks", "seats"},
+ok(set(_by) == {"locations", "registers", "kiosks", "seats",
+                "connections", "custom_connections"},
    "an install can see what it may have, what it is using, and what more "
    "would cost — one screen, because it is the same question from three "
    "sides")
@@ -1198,6 +1227,26 @@ ok("not" in (_giveback.json().get("billing") or "").lower()
    "and it says out loud that the credit has not reached the card yet, so "
    "somebody chases it rather than assuming")
 _mn2._bill_addon = _was
+
+# Integration, metered: the enforcement lives where limits do.
+# alpha already declared one earlier in this file, so the limit is set
+# to two: this is the second, and the third is the one refused.
+_tn.set_limits("alpha", {"custom_connections": 2})
+ok(c.post("/api/admin/integrations/custom", headers=_ah, json={
+    "label": "Broker portal", "url": "https://x.example/hook",
+    "auth_kind": "bearer"}).status_code == 200,
+   "one that was sold goes through")
+ok(c.post("/api/admin/integrations/custom", headers=_ah, json={
+    "label": "Broker portal", "url": "https://x2.example/hook",
+    "auth_kind": "bearer"}).status_code == 200,
+   "and editing it is not a second one — refusing an edit because the "
+   "count is full would trap somebody at the moment they are fixing it")
+_cc2 = c.post("/api/admin/integrations/custom", headers=_ah, json={
+    "label": "Trends feed", "url": "https://y.example/hook",
+    "auth_kind": "bearer"})
+ok(_cc2.status_code == 409 and "$25" in _cc2.json()["detail"],
+   "while a genuinely second one, past what was sold, is refused at the "
+   "door with the price in the message")
 
 _tn.set_limits("alpha", {})
 ok(_tn.limits_of("alpha") == {},

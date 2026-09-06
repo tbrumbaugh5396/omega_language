@@ -250,14 +250,23 @@ def caps_of(tid) -> list | None:
 # the smallest — never "unlimited", because a missing number that reads
 # as infinity is how a client ends up with eleven tills on a one-till
 # plan and an invoice nobody can explain.
-LIMIT_KEYS = ("locations", "seats", "registers", "kiosks")
+LIMIT_KEYS = ("locations", "seats", "registers", "kiosks",
+              "connections", "custom_connections")
 
 # How far a client may raise their own limits without asking. Small
 # increments are a decision they are entitled to make about their own
 # business at a published price; a jump to fifty tills is a conversation,
 # because it is either a new shop or a mistake and both deserve a person.
 SELF_SERVE_CEILING = {"locations": 5, "seats": 25, "registers": 6,
-                      "kiosks": 6}
+                      "kiosks": 6, "connections": 12,
+                      # A client may declare their own — an internal tool
+                      # has a URL and a key like anything else — so this
+                      # is self-serve up to a point. Past six it is a
+                      # conversation, because a business wiring eleven
+                      # bespoke systems into this is either an
+                      # integration project or a misunderstanding, and
+                      # both want a person.
+                      "custom_connections": 6}
 
 
 def ceiling_of(tid) -> dict:

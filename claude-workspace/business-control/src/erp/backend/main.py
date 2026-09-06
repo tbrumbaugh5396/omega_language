@@ -765,15 +765,27 @@ def add_product(body: ProductBody, user=Depends(admin_user), con=Depends(get_con
 
 # ---------- what a client is entitled to, of the things you count ----------
 
+# The price book's row name for each metered thing. They differ where a
+# client's word and a column heading differ, which is most of them.
+_ALLOWANCE_ROW = {"locations": "locations", "seats": "staff_seats",
+                  "registers": "registers", "kiosks": "clock_kiosks",
+                  "connections": "connections",
+                  "custom_connections": "custom_connections"}
+
+
 def _allowance(kind: str) -> dict:
     try:
         from storefront.backend import pricebook
         book = pricebook.allowances()
     except Exception:                                        # noqa: BLE001
         book = {}
-    key = {"registers": "registers", "kiosks": "clock_kiosks",
-           "locations": "locations", "seats": "staff_seats"}[kind]
-    return book.get(key, {"included": 1, "each": 0, "each_cents": 0})
+    key = _ALLOWANCE_ROW.get(kind, kind)
+    # A default of one is right for a shop and wrong for a connector
+    # nobody has written yet: an install that cannot read the book should
+    # not silently grant a custom integration.
+    fallback = {"included": 2 if kind == "custom_connections" else 1,
+                "each": 0, "each_cents": 0}
+    return book.get(key, fallback)
 
 
 def entitled(kind: str) -> int:
@@ -3613,6 +3625,16 @@ def integrations_custom_save(body: CustomProviderBody,
         raise HTTPException(400, "unknown authorisation kind")
     events = [e for e in body.events
               if e in integrations.EVENT_LABELS][:20]
+    # Checked at the door like every other metered thing, and only for a
+    # NEW one — editing a connector that already exists is not a second
+    # connector, and refusing an edit because the count is full would
+    # trap somebody at exactly the moment they are trying to fix it.
+    known = con.execute("SELECT 1 FROM custom_providers WHERE slug=?",
+                        (slug,)).fetchone()
+    if not known:
+        _check_room(con, user, "custom_connections", con.execute(
+            "SELECT COUNT(*) AS n FROM custom_providers").fetchone()["n"],
+            "custom connection(s)")
     con.execute(
         "INSERT INTO custom_providers(slug,label,blurb,url,auth_kind,"
         " auth_name,events,inbound,created_at) VALUES(?,?,?,?,?,?,?,?,?)"
@@ -5931,6 +5953,17 @@ def _in_use(con, kind: str) -> int:
             "SELECT COUNT(*) AS n FROM users WHERE active=1 AND"
             " (is_admin=1 OR role IN ('owner','employee','cashier',"
             " 'teacher','volunteer','director'))").fetchone()["n"],
+        # A connection is one of the services this software already
+        # speaks and somebody has actually configured — not one of the
+        # eight on offer. Offering a thing is not the same as running it.
+        "connections": lambda: con.execute(
+            "SELECT COUNT(*) AS n FROM integrations WHERE active=1"
+        ).fetchone()["n"],
+        # And a custom one is a connector written for this client
+        # against a system of their own, which is a different cost to
+        # keep alive — see §7c of the price book.
+        "custom_connections": lambda: con.execute(
+            "SELECT COUNT(*) AS n FROM custom_providers").fetchone()["n"],
     }[kind]()
 
 
@@ -6075,6 +6108,11 @@ def entitlements(user=Depends(current_user), con=Depends(get_con)):
         "kiosks": con.execute(
             "SELECT COUNT(*) AS n FROM kiosks WHERE active=1"
             " AND kind='clock'").fetchone()["n"],
+        "connections": con.execute(
+            "SELECT COUNT(*) AS n FROM integrations WHERE active=1"
+        ).fetchone()["n"],
+        "custom_connections": con.execute(
+            "SELECT COUNT(*) AS n FROM custom_providers").fetchone()["n"],
         "seats": con.execute(
             "SELECT COUNT(*) AS n FROM users WHERE active=1 AND"
             " (is_admin=1 OR role IN ('owner','employee','cashier',"

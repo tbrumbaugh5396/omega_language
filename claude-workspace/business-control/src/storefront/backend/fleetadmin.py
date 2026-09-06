@@ -959,7 +959,9 @@ def _classify(kind: str, pr: dict, each_cents: int,
 # is a column heading read down a phone; "Clock kiosks" is a thing in a
 # shop.
 _UNIT_WORDS = {"registers": "Tills", "kiosks": "Clock kiosks",
-               "locations": "Locations", "seats": "Staff seats"}
+               "locations": "Locations", "seats": "Staff seats",
+               "connections": "Connections",
+               "custom_connections": "Custom connections"}
 
 
 def _limit_notes(pressure: dict) -> list:
@@ -1052,7 +1054,9 @@ def fleet_pressure(u=Depends(admin_user), con=Depends(get_con)):
     from . import pricebook
     book = pricebook.allowances()
     key = {"locations": "locations", "seats": "staff_seats",
-           "registers": "registers", "kiosks": "clock_kiosks"}
+           "registers": "registers", "kiosks": "clock_kiosks",
+           "connections": "connections",
+           "custom_connections": "custom_connections"}
     rows = []
     for tid, reg in (tenancy.registry().get("tenants", {})).items():
         if (reg.get("status") or "active") != "active":
@@ -1172,7 +1176,9 @@ def _allowance_report(tid: str) -> dict:
     from . import pricebook
     book = pricebook.allowances()
     key = {"locations": "locations", "seats": "staff_seats",
-           "registers": "registers", "kiosks": "clock_kiosks"}
+           "registers": "registers", "kiosks": "clock_kiosks",
+           "connections": "connections",
+           "custom_connections": "custom_connections"}
     granted = tenancy.limits_of(tid)
     # What the card processor is ACTUALLY billing, against what we think
     # it should be. They agree until a raise half-lands — and a

@@ -231,6 +231,7 @@ they already have.
 | Capabilities | as chosen | as chosen |
 | Storefront | off — visitors go to their site | ours |
 | Build | none, or a **$500** wiring setup | §12's ladder |
+| Talking to their other systems | §7c, priced apart | §7c, priced apart |
 | Their website talks to it | scoped API key | not needed |
 
 The monthly is identical because the cost to serve is identical: it is the
@@ -240,6 +241,43 @@ figure stops believing the rest of the page.
 
 **Wiring setup — $500.** Mint the key, point their developer at the four
 calls that matter, and stay on the line while the first real order arrives.
+
+## 7c. Integration, which is two jobs and one word
+
+"Integration" has been one line on a quote and two entirely different pieces
+of work behind it, and quoting them as one is how a $500 job turns into three
+weeks. They are separated here because the difference is not size — it is who
+owns the thing at the other end.
+
+**Wiring — $500, flat.** Connecting a website or a system to the platform
+through the API we wrote and documented. Their developer reads our page and
+calls our endpoints. The scope is ours, it is the same every time, and so is
+the price.
+
+**A custom integration — from $1,200, per system, scoped first.** A system we
+have no documentation for: their accountant's package, a 3PL, a bespoke till,
+a fifteen-year-old stock system somebody's cousin wrote. We read their
+documentation if it exists and their traffic if it does not, write the
+connector, and then own it.
+
+It is not flat because the scope is not ours. It is quoted per system after a
+scoping call, and the call is free — a fixed price on an unknown system is a
+number one side regrets, and it is always the same side.
+
+| | Wiring | Custom integration |
+|---|---|---|
+| What is at the other end | our API | theirs |
+| Who wrote the documentation | us | them, or nobody |
+| Scope | known | scoped, per system |
+| One-off | **$500** | **from $1,200** |
+| Monthly after | nothing | **$25** per connection past the two included |
+| When their end changes | nothing happens | we fix it, that month |
+
+That last row is the whole reason for the monthly. A documented API changes on
+a schedule and announces it. A bespoke system changes when somebody at their
+end feels like it, on a Tuesday, without telling anybody — and the first
+anybody here knows is a client ringing to say the orders stopped. Charging
+nothing for that is charging nothing for the only part that is open-ended.
 Skippable: a client with a competent developer needs a key and an afternoon,
 and charging them for a phone call they did not need is how the number stops
 being trusted.
@@ -305,6 +343,8 @@ else. Pick one unit. (§15 item 3.)
 | Staff seats | 5 | +$7 each |
 | Registers | 1 | +$19 each |
 | Clock kiosks | 1 | +$6 each |
+| Connections | 3 | +$5 each |
+| Custom connections | 2 | +$25 each |
 
 Billable seats are people who sign in to run the business. Customers,
 students, donors and affiliates are always free — they are the point of the
@@ -318,7 +358,30 @@ nothing until somebody opens a drawer with it.
 
 A **clock kiosk** is a tablet bolted up for people to punch in on. Cheaper
 than a register because it does one thing, has no money in it, and is the
-device most likely to be a hand-me-down.
+device most likely to be a hand-me-down. A **room display** — a screen showing
+what is in a classroom — is not counted at all: it takes no input, holds
+nothing, and charging for a timetable somebody could read off the door is
+charging for the door.
+
+A **connection** is one of the services this software already speaks: the
+accounting package, the chat room, the calendar. Three are included because a
+business that connects nothing is not really using this, and the fourth
+onwards is $5 — a real but small number, because the work was done once and
+every client after the first is configuration.
+
+A **custom connection** is one pointed at a system this software does not
+ship: the client declares it themselves, or we build it for them under §7c.
+Two are included — a business with an internal tool and a broker's portal is
+an ordinary business, not an upsell — and each after that is $25 a month.
+
+Five times a normal connection, for a reason worth saying out loud: nobody at
+the other end has promised us anything. A documented API deprecates a field
+with six months' notice. A bespoke system changes on a Tuesday because
+somebody there felt like it, and the first we hear is the client ringing to
+say the orders stopped. The $25 is that Tuesday.
+
+Declaring one and having us build one are different bills for the same row:
+the row is what it costs to keep alive, and §7c is what it costs to exist.
 
 Both are counted against what the client is entitled to, and the count is
 enforced rather than trusted: a fourth lane on a three-lane plan is refused
