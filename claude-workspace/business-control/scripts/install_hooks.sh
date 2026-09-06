@@ -19,27 +19,40 @@ cat > "$ROOT/hooks/pre-push" <<'HOOK'
 # four cores is the same work either way, and a hook somebody waits seven
 # minutes for is a hook they learn to pass --no-verify to.
 #
-# Measured on a four-core machine: today alone is under two minutes, and
-# today plus the three is nearly seven. That is the honest cost of four
-# suites on four cores, so the modes are here to be used rather than
-# admired.
+# ONE other day by default, not three. Measured on a four-core machine:
+# today alone is under two minutes, today plus one is three, today plus
+# three is nearly seven. Four suites on four cores is that much work
+# however it is arranged.
 #
-#   BC_HOOK_DATES=one   one of the three, rotating by the commit being
-#                       pushed — the same commit always checks the same
-#                       date, so a failure reproduces, and three pushes
-#                       cover all three. About four minutes.
-#   BC_HOOK_DATES=off   today only, for a typo fix. Under two.
-#   BC_HOOK_DATES=all   all seventeen. Go and do something else.
+# Seven minutes was the first thing tried and it is the wrong answer, for
+# a reason that is about people rather than arithmetic. A hook is only
+# worth what it actually runs, and a seven-minute wait on every push is
+# how `--no-verify` becomes muscle memory — at which point the gate is
+# open on exactly the pushes somebody was in a hurry to make, which are
+# not a random sample of pushes.
+#
+# One is enough here because the hook is not the thorough check and was
+# never meant to be. CI runs all three sample dates on every push and all
+# seventeen nightly. The hook's job is to catch the obvious before it
+# leaves the machine, cheaply enough that nobody minds. Rotating by
+# commit, three pushes cover what one sample run covers, and people push
+# more than three times.
+#
+#   BC_HOOK_DATES=sample  all three at once. Seven minutes. Worth it when
+#                         you have just touched a date fixture and would
+#                         rather not wait for the nightly.
+#   BC_HOOK_DATES=off     today only, for a typo fix. Under two.
+#   BC_HOOK_DATES=all     all seventeen. Go and do something else.
 BC="$(git rev-parse --show-toplevel)/claude-workspace/business-control"
 [ -d "$BC" ] || exit 0
 cd "$BC"
 
-MODE="${BC_HOOK_DATES:-sample}"
+MODE="${BC_HOOK_DATES:-one}"
 case "$MODE" in
   off) echo "pre-push: the suite, today only..." ;;
-  one) echo "pre-push: the suite, on today and one other day..." ;;
+  sample) echo "pre-push: the suite, on today and three other days..." ;;
   all) echo "pre-push: the suite, on today and every awkward day..." ;;
-  *)   echo "pre-push: the suite, on today and three other days..." ;;
+  *)   echo "pre-push: the suite, on today and one other day..." ;;
 esac
 
 PYTHONPATH=src .venv/bin/python tests/test_smoke.py > /tmp/bc-hook-today.log 2>&1 &
@@ -49,7 +62,8 @@ DATES=0
 if [ "$MODE" != "off" ]; then
   case "$MODE" in
     all) ARG="" ;;
-    one)
+    sample) ARG="--sample" ;;
+    *)
       # Deterministic per commit rather than random: a hook that checks a
       # different date every time is a hook whose failures nobody can
       # reproduce, which is how a real bug gets waved through as a flake.
@@ -59,7 +73,6 @@ if [ "$MODE" != "off" ]; then
       ARG="--only ${SAMPLE[$IDX]}"
       echo "pre-push: this commit's date is ${SAMPLE[$IDX]}"
       ;;
-    *) ARG="--sample" ;;
   esac
   # shellcheck disable=SC2086
   PYTHONPATH=src .venv/bin/python scripts/audit_dates.py $ARG --jobs 2 \
@@ -81,7 +94,8 @@ if [ -n "$FAILED" ]; then
   echo "pre-push: $FAILED failed — push refused." >&2
   echo "  today:  /tmp/bc-hook-today.log" >&2
   [ "$DATES" != 0 ] && echo "  dates:  /tmp/bc-hook-dates.log" >&2
-  echo "  (BC_HOOK_DATES=off skips the dates; --no-verify skips it all.)" >&2
+  echo "  (BC_HOOK_DATES=off skips the dates, =sample runs all three;
+   --no-verify skips the lot, and is how a gate stops being one.)" >&2
   exit 1
 fi
 HOOK
@@ -99,6 +113,7 @@ chmod +x "$ROOT/hooks/pre-push"
 git config core.sshCommand \
   "ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=20"
 echo "pre-push hook installed: the suite gates every push, on today and"
-echo "on a weekend, a year end and a clock change."
+echo "on one other day, rotating by commit. BC_HOOK_DATES=sample for all"
+echo "three; CI runs all three on every push and all seventeen nightly."
 echo "ssh keepalive set for this repo, so the remote does not hang up"
 echo "while the hook is still running."

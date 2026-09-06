@@ -71,20 +71,34 @@ Rules that fall out of it, for anything a test dates:
 - a fixture anchored to `now` and one anchored to a week boundary drift
   into each other; anchor both to the same thing
 
-The pre-push hook runs the suite on today AND on the three sample dates,
-which on a four-core machine is about seven minutes against two. When
-that is too much for the change in hand:
+The pre-push hook runs the suite on today AND on **one** other day,
+rotating by the commit being pushed.
 
 | `BC_HOOK_DATES=` | what it runs | roughly |
 |---|---|---|
 | `off` | today only | 2 min |
-| `one` | today + one of the three, rotating by commit | 3 min |
-| (unset) | today + all three | 7 min |
+| (unset) | today + one of three, rotating by commit | 3 min |
+| `sample` | today + all three | 7 min |
 | `all` | today + all seventeen | go for a walk |
 
-`one` rotates deterministically on the pushed commit, so the same commit
-always checks the same date and a failure reproduces. Three pushes cover
-what one `sample` run covers.
+One and not three, which was the first thing tried. The reason is about
+people rather than arithmetic: a hook is worth what it actually runs, and
+a seven-minute wait on every push is how `--no-verify` becomes muscle
+memory. At that point the gate is open on exactly the pushes somebody was
+in a hurry to make, which are not a random sample of pushes.
+
+One is enough here because **the hook is not the thorough check and was
+never meant to be**. CI runs all three sample dates on every push and all
+seventeen nightly. The hook's job is to catch the obvious before it
+leaves the machine, cheaply enough that nobody minds paying. Rotating by
+commit, three pushes cover what one `sample` run covers, and people push
+more than three times.
+
+The rotation is deterministic on the pushed commit, not random: the same
+commit always checks the same date, so a failure reproduces. A hook that
+checked a different day each time would produce failures nobody could
+reproduce, and an unreproducible failure gets waved through as a flake —
+which is how both bugs this exists to catch reached main.
 
 `scripts/install_hooks.sh` also sets `core.sshCommand` with an SSH
 keepalive, and that is not optional decoration. git opens the connection
