@@ -1816,3 +1816,14 @@ body.lane-on { overflow: hidden; }
 .give-bar.best { opacity: 1; }
 .give-bar.part { background: repeating-linear-gradient(45deg,
   var(--accent, #2dd4bf) 0 3px, transparent 3px 6px); opacity: .9; }
+
+/* A fund against its target. Capped at full and said in words when it is
+   past, because an appeal does not stop being worth giving to the moment
+   it works. */
+.fund-goal { margin: 6px 0 2px; }
+.fund-goal-bar { height: 6px; border-radius: 999px; background: var(--line);
+  overflow: hidden; margin-bottom: 4px; max-width: 340px; }
+.fund-goal-bar i { display: block; height: 100%;
+  background: var(--accent, #2dd4bf); }
+.fund-goal-bar i.done { background: #7fd6a8; }
+.fund-goal .dim { font-size: .85em; }

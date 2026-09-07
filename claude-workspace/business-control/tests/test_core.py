@@ -2069,6 +2069,37 @@ ok(c.get("/api/store/admin/donations/9999/gifts",
          headers=A).status_code == 404,
    "a fund that does not exist has no givers")
 
+# How far the appeal has got.
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 2000, "active": True})
+_th = c.get("/api/store/donation").json()["fund"]
+ok(_th["pct"] == 25 and not _th["passed"],
+   "a fund with a target shows how far it has got — $5 of $20 is a "
+   "quarter of the way")
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 300, "active": True})
+_th2 = c.get("/api/store/donation").json()["fund"]
+ok(_th2["pct"] == 100 and _th2["passed"],
+   "past the target the bar stops at full and the fact does not — an "
+   "appeal does not stop being worth giving to the moment it works, so "
+   "the fund keeps taking and the wording says which it is")
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 0, "active": True})
+ok(c.get("/api/store/donation").json()["fund"]["pct"] is None,
+   "and a fund with no target draws no thermometer rather than a bar "
+   "measuring against nothing — which is the control a shop has if it "
+   "would rather not show one, and the only one it is offered")
+_pjs = ops_app_js()
+ok("to go" in _pjs and "passed, and still taking" in _pjs,
+   "the shop's own card says what is left, or that it is past — a "
+   "percentage on its own leaves somebody doing the subtraction")
+ok("give-goal-bar" in open("src/storefront/frontend/store.js").read(),
+   "and the shopper sees it at the moment they are deciding, which is "
+   "the only moment it changes anything")
+
 # Giving over time, in calendar months.
 def _months_back(n, day=12):
     """The 12th of the month `n` months before this one. Relative,

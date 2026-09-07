@@ -176,9 +176,18 @@ function donationsCard(d, trend) {
           <span class="${f.held_cents ? "bad" : "dim"}">
             <b>${money(f.held_cents)}</b>
             <span class="dim">still here</span></span>` : ""}
-        ${f.target_cents ? `<span class="dim">target
-          ${money(f.target_cents)}</span>` : ""}
       </div>
+      ${f.target_cents ? `<div class="fund-goal">
+        <div class="fund-goal-bar"><i style="width:${Math.min(100,
+          Math.round(f.raised_cents / f.target_cents * 100))}%"
+          class="${f.raised_cents >= f.target_cents ? "done" : ""}"></i>
+        </div>
+        <span class="dim">${Math.round(
+          f.raised_cents / f.target_cents * 100)}% of
+          ${money(f.target_cents)}${f.raised_cents >= f.target_cents
+            ? " — passed, and still taking"
+            : ` · ${money(f.target_cents - f.raised_cents)} to go`}</span>
+      </div>` : ""}
       ${(f.remittances || []).length ? `<div class="fundrow-log">${
         f.remittances.map((r) => `<span>${fmtDate(r.sent_at)} ·
           ${money(r.cents)}${r.reference ? " · " + esc(r.reference)

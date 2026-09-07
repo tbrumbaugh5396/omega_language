@@ -996,6 +996,13 @@ $("#checkout-btn").onclick = async () => {
     ${fund ? `<div class="co-give">
       <div class="co-give-txt"><b>${esc(fund.name)}</b>
         <span class="dim">${esc(fund.blurb || fund.note || "")}</span></div>
+      ${fund.target_cents ? `<div class="give-goal">
+        <div class="give-goal-bar"><i style="width:${fund.pct}%"></i></div>
+        <span class="dim">${money(fund.raised_cents)} of
+          ${money(fund.target_cents)}${fund.passed
+            ? " — target passed, and still open" : ""}</span>
+      </div>` : fund.raised_cents ? `<p class="dim">
+        ${money(fund.raised_cents)} given so far</p>` : ""}
       <div class="co-give-amts">
         ${(() => {
           // Round up first, because it is the one people take: the

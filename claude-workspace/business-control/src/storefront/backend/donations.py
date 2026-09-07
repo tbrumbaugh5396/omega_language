@@ -235,6 +235,15 @@ def offer(con=Depends(get_con)):
         # a total that fell when the money was sent on would read as
         # donations being taken back.
         "raised_cents": t["raised_cents"],
+        "gifts": t["gifts"],
+        # Progress, and whether it is past. A fund that has passed its
+        # target keeps taking money — the appeal did not stop being
+        # worth giving to because it worked — so the bar is capped and
+        # the sentence is not.
+        "pct": (min(100, round(t["raised_cents"] / f["target_cents"] * 100))
+                if f["target_cents"] else None),
+        "passed": bool(f["target_cents"]
+                       and t["raised_cents"] >= f["target_cents"]),
         "note": ("Collected for " + f["payee"] if f["kind"] == "collected"
                  and f["payee"] else ""),
     }}

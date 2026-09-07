@@ -1494,3 +1494,13 @@ body.offer-open { overflow: hidden; }
 .co-give-amts { display: flex; gap: 6px; flex-wrap: wrap; }
 .co-give-amt.on { border-color: var(--accent, #2dd4bf);
   color: var(--accent, #2dd4bf); }
+
+/* How far the appeal has got. Truthful even when that is not flattering:
+   a shop that would rather not show a bar at two per cent can leave the
+   target blank, which is the honest control and the only one offered. */
+.give-goal { margin: 2px 0 10px; }
+.give-goal-bar { height: 6px; border-radius: var(--r-pill, 999px);
+  background: var(--line); overflow: hidden; margin-bottom: 4px; }
+.give-goal-bar i { display: block; height: 100%;
+  background: var(--accent, #2dd4bf); }
+.give-goal .dim { font-size: 12.5px; }
