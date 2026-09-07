@@ -5125,6 +5125,33 @@ ok(c.request("DELETE",
 
 _arp = c.get("/api/store/admin/fleet/tenants/alpha/report",
              headers=AA).json()
+# The client's rooms, as this office may see them.
+_rmx = c.post("/api/rooms", headers=_ah,
+              json={"name": "Studio A", "kind": "classroom",
+                    "seats": 10}).json()["id"]
+# _t0 has been rebound by this point in the file; ask the clock itself.
+_rnow = __import__("time").time() - 60
+c.post("/api/rooms/bookings", headers=_ah, json={
+    "room_id": _rmx, "starts": _rnow, "ends": _rnow + 3600,
+    "title": "Evening class"})
+c.post("/api/admin/kiosks", headers=_ah, json={
+    "label": "Studio A door", "kind": "display", "room_id": _rmx})
+_dsr = c.get("/api/store/admin/fleet/tenants/alpha/report",
+             headers=AA).json()
+_mine = [r for r in _dsr.get("rooms", []) if r["name"] == "Studio A"]
+ok(_mine and _mine[0]["state"] == "due" and _mine[0]["displays"] == 1,
+   "the dossier shows a client's rooms, what is in them right now, and "
+   "which have a screen on the wall — a room without one is a thing to "
+   "offer rather than a thing to sell, since a display costs nothing")
+ok(_mine[0]["what"] == "Evening class" and _mine[0]["seats"] == 10,
+   "with enough to be worth reading on a call")
+_seen = _jn.dumps(_dsr.get("rooms", []))
+ok("student" not in _seen.lower() and "roster" not in _seen.lower(),
+   "and it stops at the door: no register, no student, no name of "
+   "anybody enrolled. The wall in the client's own corridor does not "
+   "show those, and a screen in our office has less business with them "
+   "than that one does")
+
 ok(_arp["scale"]["seats_used"] >= 1 and isinstance(_arp["notes"], list),
    "the provider can read its own dossier too — alpha shows the seats "
    "this very suite has been filling")

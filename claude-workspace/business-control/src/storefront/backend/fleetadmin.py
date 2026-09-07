@@ -840,7 +840,52 @@ def _usage_from(con) -> dict:
         # answers this through the same dock as everything else rather
         # than needing its own errand.
         "pressure": _pressure_from(con),
+        # Rooms and what is in them. The provider's view of a client's
+        # timetable stops at the door: which rooms exist, whether a
+        # screen is on the wall, and whether anything is happening. No
+        # register, no student, no name of anybody enrolled — the wall in
+        # the client's own corridor does not show those, and a screen in
+        # our office has less business with them than that one does.
+        "rooms": _rooms_from(con),
     }
+
+
+def _rooms_from(con) -> list:
+    try:
+        from erp.backend import db as _rdb
+        now = _rdb.now()
+        rows = [dict(r) for r in con.execute(
+            "SELECT r.id, r.name, r.kind, r.seats,"
+            " COALESCE(s.name,'') AS store,"
+            " (SELECT COUNT(*) FROM kiosks k WHERE k.room_id=r.id"
+            "  AND k.active=1 AND k.kind='display') AS displays"
+            " FROM rooms r LEFT JOIN stores s ON s.id=r.store_id"
+            " WHERE r.active=1 ORDER BY s.name, r.name")]
+        for r in rows:
+            cur = con.execute(
+                "SELECT b.title, b.session_id, COALESCE(c.name,'') AS course,"
+                " COALESCE(cs.status,'') AS class_state"
+                " FROM room_bookings b"
+                " LEFT JOIN courses c ON c.id=b.course_id"
+                " LEFT JOIN class_sessions cs ON cs.id=b.session_id"
+                " WHERE b.room_id=? AND b.state='booked'"
+                " AND b.starts<=? AND b.ends>? LIMIT 1",
+                (r["id"], now, now)).fetchone()
+            cur = dict(cur) if cur else None
+            r["what"] = ((cur or {}).get("title")
+                         or (cur or {}).get("course") or "")
+            r["state"] = ("in progress"
+                          if cur and cur["class_state"] == "open"
+                          else "finished"
+                          if cur and cur["class_state"] else
+                          "due" if cur else "free")
+            r["booked_ahead"] = con.execute(
+                "SELECT COUNT(*) AS n FROM room_bookings WHERE room_id=?"
+                " AND state='booked' AND starts>?",
+                (r["id"], now)).fetchone()["n"]
+        return rows
+    except Exception:                                        # noqa: BLE001
+        return []
 
 
 def _pressure_from(con) -> dict:

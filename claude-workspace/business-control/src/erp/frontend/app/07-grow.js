@@ -829,8 +829,8 @@ async function renderHQ() {
    per capability, traffic drawn as bars, the node and the billing that
    keep the lights on, and this client's slice of the maintenance record. */
 const DSECS = [["overview", "Overview"], ["meters", "Meters"],
-               ["traffic", "Traffic"], ["infra", "Node & billing"],
-               ["history", "History"]];
+               ["rooms", "Rooms"], ["traffic", "Traffic"],
+               ["infra", "Node & billing"], ["history", "History"]];
 
 async function clientDossier(tid, sec = "overview") {
   let d;
@@ -1023,7 +1023,53 @@ function dossierModal(tid, d, sec) {
         ${esc(e.what)}${e.detail ? ` · ${esc(e.detail)}` : ""}</p>`).join("")
     : '<p class="dim">no fleet events mention this client yet</p>';
 
-  const body = { overview, meters, traffic, infra, history };
+  /* The client's rooms, as this office may see them: which exist, which
+     have a screen on the wall, and whether anything is happening in
+     them right now. It stops at the door on purpose — no register, no
+     student, no name of anybody enrolled. The wall in their own
+     corridor does not show those, and a screen in our office has less
+     business with them than that one does. */
+  const rooms = () => {
+    const rs = d.rooms || [];
+    if (!rs.length) {
+      return `<div class="card empty"><b>No rooms</b>
+        <span class="dim">Nothing is timetabled here. A client teaching
+          or hiring space and not using this is either doing it in a
+          spreadsheet or does not know the screen exists — both are
+          worth a sentence on a call.</span></div>`;
+    }
+    const live = rs.filter((r) => r.state === "in progress").length;
+    const screens = rs.filter((r) => r.displays).length;
+    return `<div class="card-head"><b>${rs.length} room${
+        rs.length === 1 ? "" : "s"}</b>
+      <span class="chips">
+        ${live ? `<span class="pill ok">${live} in use now</span>` : ""}
+        <span class="pill ${screens ? "" : "warn"}"
+          title="a room display is free and shows what is on — a room
+          without one is a timetable somebody has to be told">${screens}
+          of ${rs.length} with a screen</span></span></div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>room</th><th>where</th><th>right now</th>
+          <th>ahead</th><th>screen</th></tr></thead>
+        <tbody>${rs.map((r) => `<tr>
+          <td><b>${esc(r.name)}</b>${r.seats
+            ? ` <span class="dim">${r.seats} seats</span>` : ""}</td>
+          <td class="dim">${esc(r.store || "—")}</td>
+          <td>${r.state === "free"
+            ? '<span class="dim">free</span>'
+            : `<span class="pill ${r.state === "in progress" ? "ok" : ""}"
+                 >${esc(r.state)}</span> ${esc(r.what || "")}`}</td>
+          <td class="dim">${r.booked_ahead || 0}</td>
+          <td>${r.displays
+            ? `<span class="pill ok">${r.displays}</span>`
+            : '<span class="dim">none</span>'}</td>
+        </tr>`).join("")}</tbody></table></div>
+      <p class="dim">A room display costs nothing and is not counted
+        against their plan, so a room without one is a thing to offer
+        rather than a thing to sell.</p>`;
+  };
+
+  const body = { overview, meters, rooms, traffic, infra, history };
   modal(`<h3>${esc(d.tenant)} — the dossier</h3>
     <p class="dim">${esc(d.class)} class · ${esc(d.status)} ·
       software \$${d.monthly_software}/mo ·
