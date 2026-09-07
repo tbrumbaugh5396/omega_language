@@ -174,6 +174,49 @@ def receipt_lines(fund, cents: int, donor: str, when: float,
     }
 
 
+def receipt_email(fund, cents: int, donor: str, shop: str,
+                  url: str) -> tuple:
+    """Subject and body for the donor's copy.
+
+    Says the same thing the page says, because a receipt that disagrees
+    with its own email is worse than one that was never sent. The
+    collected case still refuses to be a tax receipt — the wording is not
+    softer in an email because nobody is reading it over somebody's
+    shoulder.
+    """
+    amount = f"{cents / 100:.2f}"
+    if fund["kind"] == "ours":
+        return (f"Your donation receipt — {shop}",
+                f"Hi {donor or 'there'},\n\n"
+                f"Thank you for giving {amount} to {fund['name']}.\n\n"
+                f"Your receipt: {url}\n\n"
+                "No goods or services were provided in return for this "
+                "donation"
+                + (f", and our registered number is {fund['reference']}"
+                   if fund["reference"] else "")
+                + ".\n\nKeep the link — it is your copy, and it will "
+                  "still be there when you need it.")
+    payee = fund["payee"] or "the cause"
+    return (f"Thank you for giving to {payee}",
+            f"Hi {donor or 'there'},\n\n"
+            f"Thank you for the {amount} you gave through {shop} for "
+            f"{payee}.\n\n"
+            f"Your acknowledgement: {url}\n\n"
+            f"This is not a tax receipt. {shop} collected this on behalf "
+            f"of {payee} and is not the charity, so anything you need for "
+            f"tax has to come from them directly.\n\nKeep the link — it "
+            "is your copy.")
+
+
+def mark_emailed(con, token: str) -> None:
+    try:
+        con.execute("UPDATE donation_receipts SET emailed_at=?"
+                    " WHERE token=?", (time.time(), token))
+        con.commit()
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 # ---------- what the shop asks ----------
 
 @router.get("/api/store/donation")

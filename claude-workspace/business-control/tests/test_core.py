@@ -1995,6 +1995,35 @@ ok(c.get(f"/api/orders/{_dr['order_id']}/donation-receipt",
          headers=A).status_code == 200,
    "and staff can find it when a donor rings having lost theirs")
 
+_ec = _db.connect()
+_sent = _ec.execute(
+    "SELECT subject, status FROM email_log WHERE kind='donation-receipt'"
+    " ORDER BY id DESC LIMIT 1").fetchone()
+_rec2 = _ec.execute("SELECT emailed_at FROM donation_receipts"
+                    " WHERE order_id=?", (_dr["order_id"],)).fetchone()
+_ec.close()
+ok(_sent is not None and _rec2["emailed_at"] > 0,
+   "the copy is posted with the gift rather than waiting to be asked "
+   "for — a receipt somebody has to go looking for is one most people "
+   "never see")
+_ag = c.post(f"/api/orders/{_dr['order_id']}/donation-receipt/send",
+             headers=A).json()
+ok(_ag["sent"] is True,
+   "and 'send it again' actually sends. The automatic one dedups for "
+   "ever, which is right; a resend that inherited that key would be a "
+   "button whose only effect is the person clicking it telling the "
+   "donor it is on its way")
+ok(c.post(f"/api/orders/{_dr['order_id']}/donation-receipt/send",
+          headers=A).json()["sent"] is False,
+   "while a double-click inside the minute does not send twice")
+ok(_ag["to"] == _dr["email"],
+   "it goes to the address on the receipt and never to one in the "
+   "request — a staff-triggered send that took an arbitrary destination "
+   "is a way to post somebody's giving history to whoever asks nicely")
+ok(c.post("/api/orders/1/donation-receipt/send",
+          headers=A).status_code == 404,
+   "and an order with no donation has no receipt to send")
+
 
 _ours = c.post("/api/store/admin/donations", headers=A, json={
     "name": "Our own appeal", "kind": "ours", "active": False}).json()["id"]

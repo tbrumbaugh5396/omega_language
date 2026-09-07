@@ -1363,10 +1363,11 @@ def _place(con, user, body, as_guest):
         # The donor's copy, minted with the gift. Never fatal — a gift
         # taken and a receipt that would not generate is a bookkeeping
         # problem, and losing the gift to fix it would be a worse one.
-        store_donations.issue_receipt(
+        _dtok = store_donations.issue_receipt(
             con, oid, fund_id, donation,
             donor=(body.ship_name.strip() or user["name"]),
             email=user["email"] or "")
+        _send_donation_receipt(con, _dtok, user["id"], user["email"] or "")
     if disc_id:
         store_promos.record_redemption(con, disc_id, oid, user["id"], discount)
     if gift:
@@ -5814,6 +5815,74 @@ def pos_day(days: int = 1, user=Depends(permitted("till")),
 # /r/ belongs to affiliate referral codes and has since before this
 # existed. Receipts get /rc/ — still short enough that the QR stays
 # coarse and scans off thermal paper at arm's length.
+def _send_donation_receipt(con, token: str, uid: int, email: str,
+                           again: bool = False) -> bool:
+    """Post the donor their copy. Never fatal.
+
+    A gift that was taken and an email that would not go is a thing to
+    fix later; refusing the gift over it is not. Same rule as the order
+    confirmation two hundred lines up, and for the same reason.
+    """
+    if not (token and email):
+        return False
+    try:
+        r = con.execute("SELECT * FROM donation_receipts WHERE token=?",
+                        (token,)).fetchone()
+        if r is None:
+            return False
+        f = con.execute("SELECT * FROM donation_funds WHERE id=?",
+                        (r["fund_id"],)).fetchone()
+        if f is None:
+            return False
+        shop = CFG.get("brand_name") or "this shop"
+        subject, text = store_donations.receipt_email(
+            f, r["cents"], r["donor"], shop, f"{base_url()}/dr/{token}")
+        # The automatic one sends exactly once, ever. A deliberate resend
+        # has to be able to actually send — a button called "send it
+        # again" that cannot is worse than no button, because the person
+        # clicking it tells the donor it is on its way. So a resend gets
+        # its own key, coarse to the minute: the donor who rang gets
+        # their copy, and a double-click does not send twice.
+        key = (f"dr-{token[:14]}-{int(db.now() // 60)}" if again
+               else f"dr-{token[:14]}")
+        sent = mailer.log_and_send(con, CFG, uid, email, "donation-receipt",
+                                   subject, text, key)
+        if sent:
+            store_donations.mark_emailed(con, token)
+        return bool(sent)
+    except Exception:                                        # noqa: BLE001
+        return False
+
+
+@app.post("/api/orders/{oid}/donation-receipt/send")
+def resend_donation_receipt(oid: int, user=Depends(current_user),
+                            con=Depends(get_con)):
+    """Send it again, for the donor who rang having lost theirs.
+
+    To the address on the receipt, never to one supplied in the request:
+    a staff-triggered send that takes an arbitrary destination is a way
+    to post somebody's giving history to whoever asks nicely.
+    """
+    r = con.execute("SELECT * FROM donation_receipts WHERE order_id=?",
+                    (oid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no donation on that order")
+    if not r["email"]:
+        raise HTTPException(
+            409, "no email was given with that gift, so there is nowhere "
+                 "to send it. The link still works — read it to them.")
+    o = con.execute("SELECT user_id FROM orders WHERE id=?",
+                    (oid,)).fetchone()
+    ok_sent = _send_donation_receipt(
+        con, r["token"], o["user_id"] if o else 0, r["email"], again=True)
+    return {"ok": True, "sent": ok_sent, "to": r["email"],
+            "note": ("" if ok_sent else
+                     "Nothing went. Either one was already sent in the "
+                     "last minute, or no mail is configured on this "
+                     "install — the link still works either way, and can "
+                     "be read out.")}
+
+
 @app.get("/api/orders/{oid}/donation-receipt")
 def order_donation_receipt(oid: int, user=Depends(current_user),
                            con=Depends(get_con)):
