@@ -1948,6 +1948,25 @@ ok(c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
    "rows would move between income and a liability with nothing "
    "recording that they had")
 
+# The client's own books. Excluding donations from revenue is right and
+# leaves a shop whose bank does not match its turnover — so the gap is
+# named on the same table as both figures, or the turnover looks wrong.
+_pl = c.get("/api/analytics/pnl?days=365", headers=A).json()
+ok(_pl["donations_cents"] >= 500,
+   "the P&L shows what was taken in donations over the period")
+ok(_pl["taken_cents"] == _pl["revenue_cents"] + _pl["donations_cents"],
+   "and what the card machine actually saw, which is the figure that "
+   "has to agree with a bank statement — revenue alone never will once "
+   "a shop takes donations")
+ok(_pl["donations_held_cents"] >= 0 and "not income at all"
+   in _pl["donations_note"],
+   "with the part that is somebody else's money called that, on the "
+   "page, rather than left for an accountant to discover in March")
+_ajs = ops_app_js()
+ok("donations taken" in _ajs and "card machine saw" in _ajs,
+   "and the client's own P&L reads down to it: revenue, the donations "
+   "that are not revenue, and the sum that went through the machine")
+
 _sfjs2 = open("src/storefront/frontend/store.js").read()
 ok("GIVE_CENTS" in _sfjs2 and "addToCart(offer.product_id)" in _sfjs2,
    "the shop sends the donation beside the order rather than as a cart "

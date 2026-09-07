@@ -413,11 +413,22 @@ function hqMap(stores) {
       `<span><i style="background:${c}"></i>${r}</span>`).join("")}</div>`;
 }
 
+/* Revenue is not what went through the card machine when donations are
+   involved, and a client whose bank does not match their turnover — and
+   cannot see why — will assume the turnover is wrong. The gap is named
+   on the same table as both figures. */
 function pnlTable(p) {
   const row = (l, v, neg) => `<tr><td>${l}</td>
     <td style="text-align:right">${neg ? "−" : ""}${money(v)}</td></tr>`;
   return `<table>
     ${row("Revenue", p.revenue_cents)}
+    ${p.donations_cents ? `<tr class="sub"><td class="dim">donations taken
+        — charged, and not turnover</td>
+      <td style="text-align:right" class="dim">${money(p.donations_cents)}
+      </td></tr>
+      <tr class="sub"><td class="dim">so the card machine saw</td>
+      <td style="text-align:right" class="dim">${money(p.taken_cents)}
+      </td></tr>` : ""}
     ${row(`COGS${p.cogs_measured_pct
       ? ` — ${p.cogs_measured_pct}% from recipes` : ""}`, p.cogs_cents, 1)}
     ${p.cogs_measured_cents ? `<tr class="sub"><td class="dim">from recipes

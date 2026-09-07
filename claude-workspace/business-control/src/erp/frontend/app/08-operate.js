@@ -460,7 +460,11 @@ async function renderAnalytics() {
         trend — one-off sales, projected flat</p>
     </div>` : ""}
     <h3>P&L</h3>
-    <div class="card" style="max-width:520px">${pnlTable(pnl)}</div>
+    <div class="card" style="max-width:520px">${pnlTable(pnl)}
+      ${pnl.donations_cents ? `<p class="dim">${esc(pnl.donations_note)}${
+        pnl.donations_held_cents ? ` <b>${money(pnl.donations_held_cents)}
+          is still with you</b> and has not been sent on.` : ""}</p>` : ""}
+    </div>
     <h3>By region</h3>
     <div class="card"><table><thead><tr><th>region</th><th>revenue</th>
       <th>orders</th><th>distributor orders</th><th>visitors</th><th>stores</th>

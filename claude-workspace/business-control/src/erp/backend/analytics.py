@@ -77,6 +77,25 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
     revenue = con.execute(
         "SELECT COALESCE(SUM(subtotal_cents),0) c FROM orders"
         " WHERE created_at>=? AND status!='cancelled'", (since,)).fetchone()["c"]
+    # Charged, and deliberately not revenue — see donations.py. Reported
+    # here because a client whose bank does not match their turnover, and
+    # cannot see why, will assume the turnover is wrong. It is the
+    # difference, and it should be on the same page as both.
+    def _q(sql, args=()):
+        try:
+            return con.execute(sql, args).fetchone()[0] or 0
+        except Exception:                                    # noqa: BLE001
+            return 0
+
+    donations = _q("SELECT COALESCE(SUM(donation_cents),0) FROM orders"
+                   " WHERE created_at>=? AND status!='cancelled'", (since,))
+    held = max(0, _q(
+        "SELECT COALESCE(SUM(o.donation_cents),0) FROM orders o"
+        " JOIN donation_funds f ON f.id=o.donation_fund_id"
+        " WHERE f.kind='collected' AND o.status!='cancelled'")
+        - _q("SELECT COALESCE(SUM(r.cents),0) FROM donation_remittances r"
+             " JOIN donation_funds f ON f.id=r.fund_id"
+             " WHERE f.kind='collected'"))
     commissions = con.execute(
         "SELECT COALESCE(SUM(commission_cents),0) c FROM referrals"
         " WHERE created_at>=?", (since,)).fetchone()["c"]
@@ -147,7 +166,20 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
         "SELECT region, COALESCE(SUM(subtotal_cents),0) revenue_cents"
         " FROM orders WHERE created_at>=? AND status!='cancelled'"
         " GROUP BY region ORDER BY revenue_cents DESC", (since,)).fetchall()
-    return {"days": days, "revenue_cents": revenue, "cogs_cents": cogs,
+    return {"days": days, "revenue_cents": revenue,
+            # Money taken that is not turnover. Named here so the two
+            # figures can be held against a bank statement without
+            # anybody having to guess at the gap between them.
+            "donations_cents": donations,
+            "donations_held_cents": held,
+            "taken_cents": revenue + donations,
+            "donations_note": (
+                "Donations are charged on orders and are not revenue, so "
+                "turnover is lower than what went through the card "
+                "machine by exactly this much. Money collected for "
+                "somebody else is not income at all — it is held until "
+                "it is sent on."),
+            "cogs_cents": cogs,
             "cogs_shipped_cents": ledger_cogs,
             "cogs_unknown_units": round(ledger_unknown, 2),
             "cogs_basis": ("shipped" if ledger_cogs > 0
