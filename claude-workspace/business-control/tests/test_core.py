@@ -2024,6 +2024,34 @@ ok(c.post("/api/orders/1/donation-receipt/send",
           headers=A).status_code == 404,
    "and an order with no donation has no receipt to send")
 
+# The other side of the same list: who gave, on the fund.
+_gl = c.get(f"/api/store/admin/donations/{_fid}/gifts", headers=A).json()
+ok(_gl["total_cents"] == 500 and _gl["givers"] >= 1,
+   "a fund can be asked who gave to it — the shop's own customers and "
+   "its own orders, gathered by the thing they were given to rather than "
+   "by the basket they rode in on")
+ok(all("token" not in g for g in _gl["gifts"])
+   and any(g["receipt_url"] for g in _gl["gifts"]),
+   "with a way into each donor's copy and never the raw token")
+ok(any("email" in g for g in _gl["gifts"]),
+   "and the address it went to, because staff answer the phone: a donor "
+   "who has lost their copy is identified by where it was sent, and "
+   "making somebody cross-reference an order id to do that is how they "
+   "stop bothering")
+ok("passing_it_on" in _gl and "separate decision" in _gl["passing_it_on"],
+   "a collected fund says the thing worth saying where somebody is most "
+   "likely to be about to do it: these people gave at this checkout, not "
+   "to the charity. Sending the money on is what the shop undertook to "
+   "do; sending the list is a different act, and the donor's to make")
+_own_gifts = c.get(f"/api/store/admin/donations/{_own['id']}/gifts",
+                   headers=A).json()
+ok("passing_it_on" not in _own_gifts,
+   "and a fund whose money is the shop's own has no such line, because "
+   "there is nobody to pass anything to")
+ok(c.get("/api/store/admin/donations/9999/gifts",
+         headers=A).status_code == 404,
+   "a fund that does not exist has no givers")
+
 # One person's giving, in one place.
 ok(c.get("/api/store/account/donations").status_code == 401,
    "somebody's giving history is theirs — signed out, there is nothing "

@@ -134,6 +134,8 @@ function donationsCard(d) {
           : '<span class="pill">closed</span>'}
         <span class="dl-acts">
           <button class="btn alt sm" data-dnedit="${f.id}">Edit</button>
+          <button class="btn alt sm" data-dngifts="${f.id}"
+            data-name="${esc(f.name)}">Who gave</button>
           ${f.kind === "collected" ? `<button class="btn alt sm"
             data-dnremit="${f.id}" data-held="${f.held_cents}"
             data-name="${esc(f.name)}">Record a payment out</button>` : ""}
@@ -162,6 +164,52 @@ function donationsCard(d) {
          first question is whether it is ever yours.</p>`}
     <p class="dim">${esc(d.note)}</p>
   </div>`;
+}
+
+/* Who gave. The shop's own customers and its own orders — the same data
+   it already holds, gathered by the thing it was given to rather than by
+   the basket it rode in on. */
+async function fundGifts(fid, name) {
+  let d;
+  try { d = await api(`/api/store/admin/donations/${fid}/gifts`); }
+  catch (e) { return toast(e.message); }
+  const when = (t) => new Date(t * 1000).toLocaleDateString();
+  modal(`<h3>${esc(name)}</h3>
+    <p class="dim">${d.givers} giver${d.givers === 1 ? "" : "s"} ·
+      ${money(d.total_cents)}${d.payee ? " · for " + esc(d.payee) : ""}</p>
+    ${d.passing_it_on ? `<p class="warn-note">${esc(d.passing_it_on)}</p>`
+      : ""}
+    <div class="tablewrap"><table>
+      <thead><tr><th>who</th><th>when</th><th>gave</th><th>their copy</th>
+        <th></th></tr></thead>
+      <tbody>${(d.gifts || []).map((g) => `<tr>
+        <td><b>${esc(g.donor || "(no name given)")}</b>
+          ${g.email ? `<span class="dim"> ${esc(g.email)}</span>` : ""}</td>
+        <td class="dim">${when(g.created_at)}</td>
+        <td class="num">${money(g.cents)}</td>
+        <td>${g.receipt_url
+          ? `<a href="${g.receipt_url}" target="_blank" rel="noopener"
+               >open</a>${g.emailed_at
+              ? ' <span class="pill ok">sent</span>'
+              : ' <span class="dim">not sent</span>'}`
+          : '<span class="dim">none on file</span>'}</td>
+        <td>${g.receipt_url && g.email ? `<button class="btn alt sm"
+          data-dnsend="${g.order_id}">Send it again</button>` : ""}</td>
+      </tr>`).join("") || '<tr><td colspan="5" class="dim">nobody has given '
+        + 'to this yet</td></tr>'}</tbody></table></div>
+    <div class="modal-foot">
+      <button class="btn" data-close>Done</button></div>`, "wide");
+  document.querySelectorAll("[data-dnsend]").forEach((b) =>
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const r = await api(
+          `/api/orders/${b.dataset.dnsend}/donation-receipt/send`,
+          { body: {} });
+        toast(r.sent ? `sent to ${r.to}` : r.note);
+      } catch (e) { toast(e.message); }
+      b.disabled = false;
+    });
 }
 
 function donationFundForm(f) {
@@ -306,6 +354,8 @@ async function renderPromos() {
   document.querySelectorAll("[data-dnedit]").forEach((b) =>
     b.onclick = () => donationFundForm(
       (funds.funds || []).find((f) => f.id === +b.dataset.dnedit)));
+  document.querySelectorAll("[data-dngifts]").forEach((b) =>
+    b.onclick = () => fundGifts(b.dataset.dngifts, b.dataset.name));
   document.querySelectorAll("[data-dnremit]").forEach((b) =>
     b.onclick = async () => {
       const raw = prompt(`How much has gone to ${b.dataset.name}?\n\n`

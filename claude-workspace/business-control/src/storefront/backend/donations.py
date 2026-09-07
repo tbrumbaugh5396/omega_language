@@ -321,6 +321,52 @@ def list_funds(user=Depends(admin_user), con=Depends(get_con)):
     }
 
 
+@router.get("/api/store/admin/donations/{fid}/gifts")
+def fund_gifts(fid: int, user=Depends(admin_user), con=Depends(get_con)):
+    """Who gave to this fund, and what.
+
+    The shop's own customers and its own orders, so nothing here is data
+    it did not already hold — this is the same list, gathered by the
+    thing it was given to rather than by the basket it rode in on.
+
+    The email is included because staff answer the phone: a donor who
+    has lost their copy is identified by the address it went to, and
+    making somebody cross-reference an order id to do that is how they
+    stop bothering.
+    """
+    f = con.execute("SELECT * FROM donation_funds WHERE id=?",
+                    (fid,)).fetchone()
+    if f is None:
+        raise HTTPException(404, "no such fund")
+    rows = [dict(r) for r in con.execute(
+        "SELECT o.id AS order_id, o.donation_cents AS cents, o.created_at,"
+        " COALESCE(dr.donor,'') AS donor, COALESCE(dr.email,'') AS email,"
+        " COALESCE(dr.token,'') AS token,"
+        " COALESCE(dr.emailed_at,0) AS emailed_at"
+        " FROM orders o LEFT JOIN donation_receipts dr ON dr.order_id=o.id"
+        " WHERE o.donation_fund_id=? AND o.donation_cents>0"
+        " AND o.status!='cancelled' ORDER BY o.created_at DESC LIMIT 500",
+        (fid,))]
+    for r in rows:
+        r["receipt_url"] = f"/dr/{r['token']}" if r["token"] else ""
+        r.pop("token", None)
+    givers = len({r["email"] or f"o{r['order_id']}" for r in rows})
+    out = {"fund": f["name"], "kind": f["kind"], "payee": f["payee"],
+           "gifts": rows, "givers": givers,
+           "total_cents": sum(r["cents"] for r in rows)}
+    if f["kind"] == "collected":
+        # Worth saying where somebody is most likely to be about to do
+        # it. The donor gave at this shop's checkout; they did not join
+        # the charity's mailing list, and the two are different acts even
+        # though the money went the same way.
+        out["passing_it_on"] = (
+            f"These people gave at your checkout, not to "
+            f"{f['payee'] or 'the cause'}. Sending the money on is what "
+            f"you undertook to do; sending the list is a separate "
+            f"decision, and it is theirs rather than yours.")
+    return out
+
+
 @router.post("/api/store/admin/donations")
 def add_fund(body: FundBody, user=Depends(admin_user), con=Depends(get_con)):
     if not body.name.strip():
