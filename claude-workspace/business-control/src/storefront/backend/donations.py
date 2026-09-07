@@ -367,6 +367,62 @@ def fund_gifts(fid: int, user=Depends(admin_user), con=Depends(get_con)):
     return out
 
 
+@router.get("/api/store/admin/donations/{fid}/gifts.csv")
+def fund_gifts_csv(fid: int, user=Depends(admin_user),
+                   con=Depends(get_con)):
+    """The same list, as a file.
+
+    Without the receipt links. Every other column here is already in the
+    orders export, but a receipt URL is the donor's private address for
+    their own document — it needs no password, which is what makes it
+    convenient and what makes it exactly the wrong thing to put in a
+    spreadsheet that gets emailed to a committee. Staff who need one open
+    it from the screen, where the reading is deliberate and one at a
+    time.
+
+    The export is recorded, because handing a list of named people to a
+    file is a disclosure whether or not anybody meant it as one.
+    """
+    import csv
+    import io
+
+    from fastapi import Response
+
+    from erp.backend import audit
+
+    f = con.execute("SELECT * FROM donation_funds WHERE id=?",
+                    (fid,)).fetchone()
+    if f is None:
+        raise HTTPException(404, "no such fund")
+    rows = con.execute(
+        "SELECT o.id, o.created_at, o.donation_cents,"
+        " COALESCE(dr.donor,'') AS donor, COALESCE(dr.email,'') AS email,"
+        " COALESCE(dr.emailed_at,0) AS emailed_at"
+        " FROM orders o LEFT JOIN donation_receipts dr ON dr.order_id=o.id"
+        " WHERE o.donation_fund_id=? AND o.donation_cents>0"
+        " AND o.status!='cancelled' ORDER BY o.created_at",
+        (fid,)).fetchall()
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(["given_on", "donor", "email", "amount", "order_id",
+                "receipt_sent"])
+    for r in rows:
+        w.writerow([
+            time.strftime("%Y-%m-%d", time.localtime(r["created_at"])),
+            r["donor"], r["email"], f"{r['donation_cents'] / 100:.2f}",
+            r["id"], "yes" if r["emailed_at"] else "no"])
+    slug = "".join(ch if ch.isalnum() else "-"
+                   for ch in (f["name"] or "fund").lower()).strip("-")[:40]
+    day = time.strftime("%Y-%m-%d")
+    audit.record(con, user, "GET",
+                 f"/api/store/admin/donations/{fid}/gifts.csv",
+                 f"exported {len(rows)} donor(s) for {f['name']}", 200)
+    return Response(
+        out.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{slug}-donors-{day}.csv"'})
+
+
 @router.post("/api/store/admin/donations")
 def add_fund(body: FundBody, user=Depends(admin_user), con=Depends(get_con)):
     if not body.name.strip():

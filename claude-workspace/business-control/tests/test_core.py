@@ -2052,6 +2052,32 @@ ok(c.get("/api/store/admin/donations/9999/gifts",
          headers=A).status_code == 404,
    "a fund that does not exist has no givers")
 
+_csv = c.get(f"/api/store/admin/donations/{_fid}/gifts.csv", headers=A)
+ok(_csv.status_code == 200
+   and "given_on,donor,email,amount" in _csv.text,
+   "the list comes out as a file, for the spreadsheet somebody is going "
+   "to build from it anyway")
+ok("/dr/" not in _csv.text and "hospice-appeal-donors-"
+   in _csv.headers.get("content-disposition", ""),
+   "without the receipt links. A receipt URL needs no password — that "
+   "is what makes it convenient for the donor and exactly the wrong "
+   "thing to put in a spreadsheet emailed to a committee. And the "
+   "filename says which fund and which day, because a download called "
+   "export.csv is a file nobody can identify a week later")
+ok(any("exported" in (e.get("detail") or "") and "donor" in
+       (e.get("detail") or "")
+       for e in c.get("/api/admin/audit", headers=A).json()["entries"][:8]),
+   "and it is on the record: handing a list of named people to a file is "
+   "a disclosure whether or not anybody meant it as one")
+_ejs = ops_app_js()
+ok("d.passing_it_on && !confirm" in _ejs,
+   "the shop is asked before a collected fund's list becomes a file — "
+   "the same sentence as the screen, at the click that turns a list "
+   "somebody is looking at into one they can forward")
+ok(c.get(f"/api/store/admin/donations/{_fid}/gifts.csv").status_code
+   in (401, 403),
+   "and a donor list is not public")
+
 # One person's giving, in one place.
 ok(c.get("/api/store/account/donations").status_code == 401,
    "somebody's giving history is theirs — signed out, there is nothing "

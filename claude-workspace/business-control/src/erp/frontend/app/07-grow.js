@@ -198,7 +198,33 @@ async function fundGifts(fid, name) {
       </tr>`).join("") || '<tr><td colspan="5" class="dim">nobody has given '
         + 'to this yet</td></tr>'}</tbody></table></div>
     <div class="modal-foot">
+      <button class="btn alt" id="dn-csv" ${(d.gifts || []).length
+        ? "" : "disabled"}>Export CSV</button>
       <button class="btn" data-close>Done</button></div>`, "wide");
+  const csv = $("#dn-csv");
+  if (csv) csv.onclick = async () => {
+    // The confirmation is only on a collected fund, and it is the same
+    // sentence as the screen — asked here because this is the click
+    // that turns a list on a screen into a file somebody can forward.
+    if (d.passing_it_on && !confirm(d.passing_it_on
+        + "\n\nDownload the list?")) return;
+    try {
+      const r = await fetch(
+        `/api/store/admin/donations/${fid}/gifts.csv`,
+        { headers: { Authorization: "Bearer " + S.user.token } });
+      if (!r.ok) throw new Error(await r.text());
+      const blob = await r.blob();
+      const cd = r.headers.get("content-disposition") || "";
+      const nm = (cd.match(/filename="([^"]+)"/) || [])[1] || "donors.csv";
+      const a2 = document.createElement("a");
+      a2.href = URL.createObjectURL(blob);
+      a2.download = nm;
+      a2.click();
+      URL.revokeObjectURL(a2.href);
+      toast(`${nm} — the download is on the record, as a disclosure of `
+        + "named people should be");
+    } catch (e) { toast(e.message); }
+  };
   document.querySelectorAll("[data-dnsend]").forEach((b) =>
     b.onclick = async () => {
       b.disabled = true;
