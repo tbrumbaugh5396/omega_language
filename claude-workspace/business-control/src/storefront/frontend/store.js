@@ -937,6 +937,8 @@ async function drawUpsell() {
 }
 
 // ---------- checkout (guest-friendly, rides the ERP rails) ----------
+// Whether this visit has already taken the one suggestion it gets.
+let OFFER_TAKEN = false;
 $("#checkout-btn").onclick = async () => {
   if (!Object.keys(CART).length) { toast("Cart is empty"); return; }
   funnel("checkout");
@@ -945,6 +947,22 @@ $("#checkout-btn").onclick = async () => {
   const methods = await (await fetch("/api/store/shipping")).json();
   const sub = Object.entries(CART).reduce((a, [key, q]) => {
     const l = cartLine(key); return a + (l ? l.unit * q : 0); }, 0);
+  // One offer, or none. Asked for here rather than rendered from a list
+  // the page already has, because whether there is anything worth saying
+  // depends on what is in the basket — and nothing is the usual answer.
+  // One offer per visit, not one per render. Taking the suggestion and
+  // being handed another immediately is a rack of sweets, and the
+  // difference between a shop that helps and a shop that nags is
+  // entirely in whether it asks twice.
+  let offer = null;
+  if (OFFER_TAKEN) { offer = null; } else try {
+    offer = (await (await fetch("/api/store/checkout-offer", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subtotal_cents: sub, visitor_id: VID,
+        product_ids: Object.keys(CART).map((k) => +k.split(":")[0]),
+      }) })).json()).offer;
+  } catch { offer = null; }
   const disc = DISCOUNT ? Math.round(sub * (100 - DISCOUNT.pct) / 100) : sub;
   openModal(`<h3>Checkout</h3>
     <label>Name</label><input id="co-name" placeholder="Full name">
@@ -966,12 +984,37 @@ $("#checkout-btn").onclick = async () => {
     <label class="ship-opt"><input type="checkbox" id="co-subscribe">
       <b>${ico("repeat", "ico ico-sm")} Make it a monthly box</b>
       <span class="dim">skip · pause · cancel any time</span></label>
+    ${offer ? `<div class="co-offer">
+      <div class="co-offer-txt"><b>${esc(offer.label)}</b>
+        <span class="dim">${esc(offer.name)}${offer.blurb
+          ? " · " + esc(offer.blurb) : ""}${offer.short_by_cents
+          ? ` · you are ${money(offer.short_by_cents)} away`
+          : ""}</span></div>
+      <button class="btn-pill sm" id="co-take">Add
+        ${money(offer.price_cents)}${offer.saving_cents
+          ? ` <s class="dim">${money(offer.was_cents)}</s>` : ""}</button>
+    </div>` : ""}
     <div class="modal-actions">
       <button class="btn-pill ghost sm" data-close-modal>Back</button>
       <button class="btn-pill primary sm" id="co-place">Place order</button>
     </div>
     <p class="dim" id="co-msg" style="margin-top:8px"></p>`);
   $("#co-place").onclick = placeOrder;
+  const take = $("#co-take");
+  if (take) take.onclick = () => {
+    OFFER_TAKEN = true;
+    addToCart(offer.product_id);
+    fetch("/api/store/checkout-offer/taken", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offer_id: offer.offer_id,
+                             visitor_id: VID,
+                             value_cents: offer.price_cents }) })
+      .catch(() => {});
+    // Reopen rather than patch the total in place: adding an item can
+    // cross the free-shipping line, and a checkout showing a shipping
+    // price the order will not charge is the worst kind of wrong.
+    $("#checkout-btn").onclick();
+  };
 };
 
 async function placeOrder() {

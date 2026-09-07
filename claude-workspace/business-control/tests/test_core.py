@@ -1782,6 +1782,86 @@ ok(c.post("/api/admin/integrations/custom", headers=A, json={
    "never wake up with fewer features than it went to bed with. The "
    "refusal is proven where limits exist, on tenant alpha")
 
+# --- the one offer at checkout -------------------------------------------
+# Three products, because the rules are about one suggesting another.
+for _n in ("Offer test A", "Offer test B", "Offer test C"):
+    c.post("/api/admin/products", headers=A,
+           json={"sku": _n.replace(" ", "-").lower(), "name": _n,
+                 "price_cents": 349, "category": "tea",
+                 "case_size": 12, "case_price_cents": 3600})
+_op = [p for p in c.get("/api/products", headers=A).json()
+       if p["name"].startswith("Offer test")]
+_pa, _pb, _pc = _op[0]["id"], _op[1]["id"], _op[2]["id"]
+ok(c.post("/api/store/checkout-offer",
+          json={"subtotal_cents": 1500}).json()["offer"] is None,
+   "a shop with no offers says nothing at checkout, which is a real "
+   "answer and the one it starts with")
+ok(c.post("/api/store/admin/checkout-offers", headers=A, json={
+    "label": "x", "product_id": _pa,
+    "trigger": "cart_has"}).status_code == 400,
+   "a 'they already have' offer without saying what they have is refused "
+   "rather than quietly never matching")
+ok(c.post("/api/store/admin/checkout-offers", headers=A, json={
+    "label": "x", "product_id": _pa,
+    "trigger": "under_free_ship"}).status_code == 400,
+   "and a free-shipping nudge needs the line it is nudging them over")
+
+c.post("/api/store/admin/checkout-offers", headers=A, json={
+    "label": "Shipping is free with this", "product_id": _pb,
+    "trigger": "under_free_ship", "under_cents": 4000, "position": 1})
+c.post("/api/store/admin/checkout-offers", headers=A, json={
+    "label": "Goes with that", "product_id": _pc, "trigger": "cart_has",
+    "needs_product_id": _pa, "discount_pct": 20, "position": 0})
+
+_o1 = c.post("/api/store/checkout-offer", json={
+    "subtotal_cents": 1500, "product_ids": [_pa],
+    "visitor_id": "t1"}).json()["offer"]
+ok(_o1["product_id"] == _pc and _o1["saving_cents"] > 0,
+   "with a rule that fits, the first match by position wins — an owner "
+   "can predict the behaviour from the screen rather than discovering it "
+   "from sales")
+_o2 = c.post("/api/store/checkout-offer", json={
+    "subtotal_cents": 1500, "product_ids": [], "visitor_id": "t2"
+}).json()["offer"]
+ok(_o2["product_id"] == _pb and _o2["short_by_cents"] == 2500,
+   "without it, the basket falls through to the nudge, which says how "
+   "far off they are rather than just naming a threshold")
+ok(c.post("/api/store/checkout-offer", json={
+    "subtotal_cents": 6000, "product_ids": []}).json()["offer"] is None,
+   "and a basket already over the line is offered nothing — a slot that "
+   "always finds something to say ends up saying something irrelevant, "
+   "which at checkout is worse than an empty space")
+ok(c.post("/api/store/checkout-offer", json={
+    "subtotal_cents": 1500,
+    "product_ids": [_pa, _pc]}).json()["offer"]["product_id"] != _pc,
+   "it never offers what is already in the basket")
+
+c.post("/api/store/checkout-offer/taken", json={
+    "offer_id": _o1["offer_id"], "visitor_id": "t1",
+    "value_cents": _o1["price_cents"]})
+_rep = c.get("/api/store/admin/checkout-offers", headers=A).json()
+_row1 = [o for o in _rep["offers"] if o["label"] == "Goes with that"][0]
+ok(_row1["shown"] >= 1 and _row1["taken"] == 1
+   and _row1["take_pct"] is not None,
+   "shown and taken are both counted, because an offer nobody can "
+   "measure is decoration nobody can switch off")
+ok(_row1["taken_cents"] == _o1["price_cents"],
+   "with the money on what was taken")
+ok("not revenue" in _rep["note"] and "would have bought it anyway"
+   in _rep["note"],
+   "and the payload says what that money is NOT: some of those people "
+   "would have bought it anyway and there is no honest way from here to "
+   "know how many. A number that quietly claims credit for sales that "
+   "would have happened is how a feature nobody can evaluate survives "
+   "for years")
+
+_sfjs = c.get("/store.js").text if c.get("/store.js").status_code == 200 \
+    else open("src/storefront/frontend/store.js").read()
+ok("OFFER_TAKEN" in _sfjs,
+   "and the shop asks once: taking the suggestion and being handed "
+   "another immediately is a rack of sweets, and the difference between "
+   "a shop that helps and one that nags is whether it asks twice")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

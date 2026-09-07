@@ -855,7 +855,8 @@ def init_tables():
                 " ('Express',1499,'1–2 business days',1)")
         from . import (affiliates, campaigns, content, crud, discord,
                        documents, emailer, engagements, governance,
-                       partners, pixels, promos, support)
+                       offers, partners, pixels, promos, support)
+        offers.init_tables(con)
         promos.init_tables(con)
         content.init_tables(con)
         governance.init_tables(con)

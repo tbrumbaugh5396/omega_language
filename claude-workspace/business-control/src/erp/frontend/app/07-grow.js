@@ -1,12 +1,125 @@
 // ---------- promotions & events ----------
 
+/* The one thing a shop says on its last screen. Shown here rather than
+   on its own page because an owner thinking about offers is already
+   thinking about promotions, and a feature filed somewhere sensible and
+   alone is a feature nobody finds. */
+const OFFER_TRIGGERS = {
+  always: "everybody",
+  cart_has: "they already have…",
+  under_free_ship: "near free shipping",
+};
+
+function checkoutOffersCard(d, products) {
+  const rows = d.offers || [];
+  return `<div class="card">
+    <div class="card-head"><b>At checkout</b>
+      <span class="dim">One offer, or none — the first rule that matches
+        wins, and nothing is the usual answer. A checkout with four
+        offers is a checkout people leave.</span>
+      <button class="btn alt sm" id="co-new">Add an offer</button></div>
+    ${rows.length ? `<div class="tablewrap"><table>
+      <thead><tr><th>says</th><th>adds</th><th>when</th><th>shown</th>
+        <th>taken</th><th>value</th><th></th></tr></thead>
+      <tbody>${rows.map((o) => `<tr${o.active ? "" : ' class="dim"'}>
+        <td><b>${esc(o.label)}</b>${o.active ? ""
+          : ' <span class="pill">off</span>'}</td>
+        <td>${esc(o.product)}${o.discount_pct
+          ? ` <span class="pill ok">${o.discount_pct}% off</span>` : ""}</td>
+        <td class="dim">${esc(OFFER_TRIGGERS[o.trigger] || o.trigger)}${
+          o.trigger === "cart_has" && o.needs ? " " + esc(o.needs) : ""}${
+          o.trigger === "under_free_ship" && o.under_cents
+            ? " " + money(o.under_cents) : ""}</td>
+        <td class="num">${o.shown}</td>
+        <td class="num">${o.taken}${o.take_pct !== null
+          ? ` <span class="dim">${o.take_pct}%</span>` : ""}</td>
+        <td class="num">${money(o.taken_cents)}</td>
+        <td><button class="btn alt sm" data-coedit="${o.id}">Edit</button>
+          <button class="btn alt sm" data-codrop="${o.id}"
+            data-label="${esc(o.label)}">Remove</button></td>
+      </tr>`).join("")}</tbody></table></div>
+      <p class="dim">Value is what was taken from this slot over
+        ${d.days} days — <b>not</b> revenue this slot created. Some of
+        those people would have bought it anyway and there is no honest
+        way from here to know how many.</p>`
+      : `<p class="dim">Nothing is offered at checkout. One good
+         suggestion — the thing that goes with what they already have, or
+         the item that gets them over free shipping — is worth more than
+         a page of them.</p>`}
+  </div>`;
+}
+
+function checkoutOfferForm(o, products) {
+  const opts = (sel) => products.map((p) =>
+    `<option value="${p.id}"${o && o[sel] === p.id ? " selected" : ""}
+      >${esc(p.name)}</option>`).join("");
+  modal(`<h3>${o ? "Edit" : "New"} checkout offer</h3>
+    <label>What it says</label>
+    <input id="co-label" placeholder="Goes well with what you have"
+      value="${o ? esc(o.label) : ""}">
+    <div class="row2">
+      <div><label>What it adds</label>
+        <select id="co-prod">${opts("product_id")}</select></div>
+      <div><label>% off <span class="opt">0 = the usual price</span></label>
+        <input id="co-pct" type="number" min="0" max="90"
+          value="${o ? o.discount_pct : 0}"></div>
+    </div>
+    <label>When to show it</label>
+    <select id="co-trig">${Object.entries(OFFER_TRIGGERS).map(([k, v]) =>
+      `<option value="${k}"${o && o.trigger === k ? " selected" : ""}
+        >${v}</option>`).join("")}</select>
+    <div id="co-needs-wrap" hidden><label>…which is</label>
+      <select id="co-needs">${opts("needs_product_id")}</select></div>
+    <div id="co-under-wrap" hidden>
+      <label>Free shipping starts at <span class="opt">cents</span></label>
+      <input id="co-under" type="number" min="0"
+        value="${o && o.under_cents ? o.under_cents : 4000}"></div>
+    <label>Order <span class="opt">low first — the first match wins</span>
+    </label>
+    <input id="co-pos" type="number" value="${o ? o.position : 0}">
+    <label class="perm" style="margin-top:8px">
+      <input type="checkbox" id="co-active" ${!o || o.active ? "checked" : ""}>
+      <span><b>Live</b><small>off keeps it and its history without showing
+        it</small></span></label>
+    <p class="dim" id="co-msg"></p>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="co-save">${o ? "Save" : "Add"}</button></div>`);
+  const trig = $("#co-trig");
+  const flip = () => {
+    $("#co-needs-wrap").hidden = trig.value !== "cart_has";
+    $("#co-under-wrap").hidden = trig.value !== "under_free_ship";
+  };
+  trig.onchange = flip; flip();
+  $("#co-save").onclick = async () => {
+    const body = { label: $("#co-label").value.trim(),
+                   product_id: +$("#co-prod").value,
+                   trigger: trig.value,
+                   needs_product_id: +$("#co-needs").value || 0,
+                   under_cents: +$("#co-under").value || 0,
+                   discount_pct: +$("#co-pct").value || 0,
+                   position: +$("#co-pos").value || 0,
+                   active: $("#co-active").checked };
+    try {
+      await api(o ? `/api/store/admin/checkout-offers/${o.id}`
+                  : "/api/store/admin/checkout-offers",
+                { body, method: o ? "PATCH" : "POST" });
+      closeModal(); renderPromos();
+    } catch (e) { $("#co-msg").innerHTML = `<b class="bad">${esc(e.message)}
+      </b>`; }
+  };
+}
+
 async function renderPromos() {
   const isAdmin = S.user && S.user.is_admin;
   const [list, products, net] = await Promise.all([
     isAdmin ? api("/api/admin/promos") : api("/api/promos"),
     api("/api/products"), api("/api/net").catch(() => null)]);
+  const offers = isAdmin
+    ? await api("/api/store/admin/checkout-offers").catch(() => null) : null;
   view().innerHTML = `
     <h2>Promotions & events</h2>
+    ${offers ? checkoutOffersCard(offers, products) : ""}
     ${isAdmin ? `<div class="card">
       <form class="inline" id="promo-form">
         <label class="f">type <select id="pm-kind">
@@ -70,6 +183,23 @@ async function renderPromos() {
     render();
   };
   wireRows({ promo: list }, renderPromos);
+  const con = $("#co-new");
+  if (con) con.onclick = () => checkoutOfferForm(null, products);
+  document.querySelectorAll("[data-coedit]").forEach((b) =>
+    b.onclick = () => checkoutOfferForm(
+      (offers.offers || []).find((o) => o.id === +b.dataset.coedit),
+      products));
+  document.querySelectorAll("[data-codrop]").forEach((b) =>
+    b.onclick = async () => {
+      if (!confirm(`Remove "${b.dataset.label}"?\n\nIts shown/taken `
+        + "history is kept — what was tried and did not work is the only "
+        + "reason the next one is a better guess.")) return;
+      try {
+        await api(`/api/store/admin/checkout-offers/${b.dataset.codrop}`,
+                  { method: "DELETE" });
+        renderPromos();
+      } catch (e) { toast(e.message); }
+    });
   document.querySelectorAll("[data-pm-toggle]").forEach((b) => {
     b.onclick = async () => {
       await api(`/api/admin/promos/${b.dataset.pmToggle}/toggle`, { body: {} });

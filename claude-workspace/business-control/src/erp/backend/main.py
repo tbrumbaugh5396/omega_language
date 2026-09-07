@@ -6269,6 +6269,7 @@ from storefront.backend import documents as store_docs  # noqa: E402
 from storefront.backend import engagements as store_eng  # noqa: E402
 from storefront.backend import fleetadmin as store_fleet  # noqa: E402
 from storefront.backend import sow as store_sow  # noqa: E402
+from storefront.backend import offers as store_offers  # noqa: E402
 from storefront.backend import pixels as store_pixels  # noqa: E402
 from storefront.backend import support as store_support  # noqa: E402
 from storefront.backend import promos as store_promos  # noqa: E402
@@ -6296,6 +6297,7 @@ app.include_router(store_content.router)
 app.include_router(store_aff.router)
 app.include_router(store_gov.router)
 app.include_router(store_partners.router)
+app.include_router(store_offers.router)
 app.include_router(store_pixels.router)
 app.include_router(store_support.router)
 app.include_router(store_campaigns.router)
