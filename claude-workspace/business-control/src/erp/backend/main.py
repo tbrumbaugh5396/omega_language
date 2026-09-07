@@ -1363,9 +1363,19 @@ def _place(con, user, body, as_guest):
         # The donor's copy, minted with the gift. Never fatal — a gift
         # taken and a receipt that would not generate is a bookkeeping
         # problem, and losing the gift to fix it would be a worse one.
+        # The account, then the delivery name — not the other way round.
+        # A present is bought by one person and shipped to another, and
+        # ship_name is where the parcel goes. Crediting the gift to the
+        # recipient is a receipt made out to somebody who did not give
+        # anything, which is worse than useless to whoever gave.
+        #
+        # For a brand-new guest the two are the same string, because the
+        # account is minted from the order — so this is never worse and
+        # is right whenever the shopper has an account, which is every
+        # returning customer.
         _dtok = store_donations.issue_receipt(
             con, oid, fund_id, donation,
-            donor=(body.ship_name.strip() or user["name"]),
+            donor=(user["name"] or body.ship_name.strip()),
             email=user["email"] or "")
         _send_donation_receipt(con, _dtok, user["id"], user["email"] or "")
     if disc_id:

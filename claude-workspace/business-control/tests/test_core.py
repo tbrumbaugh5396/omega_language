@@ -2024,6 +2024,29 @@ ok(c.post("/api/orders/1/donation-receipt/send",
           headers=A).status_code == 404,
    "and an order with no donation has no receipt to send")
 
+# A present is bought by one person and shipped to another.
+_gift = c.post("/api/orders", headers=A, json={
+    "items": [{"product_id": _pid2, "qty": 1}], "donation_cents": 400,
+    "ship_name": "Granny Smith", "address": "2 Lane", "city": "Y",
+    "postal": "2"})
+if _gift.json().get("awaiting_confirmation"):
+    _gc = _db.connect()
+    _gt = _gc.execute("SELECT token FROM pending_orders ORDER BY id DESC"
+                      " LIMIT 1").fetchone()["token"]
+    _gc.close()
+    c.get(f"/confirm-order/{_gt}")
+_gc2 = _db.connect()
+_grow = _gc2.execute(
+    "SELECT dr.donor, o.ship_name FROM donation_receipts dr"
+    " JOIN orders o ON o.id=dr.order_id ORDER BY dr.order_id DESC"
+    " LIMIT 1").fetchone()
+_gc2.close()
+ok(_grow["ship_name"] == "Granny Smith" and _grow["donor"] != "Granny Smith",
+   "the parcel goes to the recipient and the receipt is made out to "
+   "whoever paid — a gift receipt crediting the person who was given the "
+   "present is made out to somebody who did not give anything, which is "
+   "worse than useless to the person who did")
+
 
 _ours = c.post("/api/store/admin/donations", headers=A, json={
     "name": "Our own appeal", "kind": "ours", "active": False}).json()["id"]
