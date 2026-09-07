@@ -5856,7 +5856,7 @@ def _send_donation_receipt(con, token: str, uid: int, email: str,
         subject, text = store_donations.receipt_email(
             f, r["cents"], r["donor"], shop, f"{base_url()}/dr/{token}",
             prog=store_donations.progress_line(
-                _et, store_donations.progress(f, _et)),
+                _et, store_donations.progress(f, _et), bool(f["active"])),
             asat=time.strftime("%d %B %Y", time.localtime(db.now())))
         # The automatic one sends exactly once, ever. A deliberate resend
         # has to be able to actually send — a button called "send it
@@ -5991,7 +5991,7 @@ def donation_receipt(token: str, con=Depends(get_con)):
     # The same sentence the emailed copy carries. The bar is the picture
     # of it; a page and its own email disagreeing about the figure is
     # worse than neither of them carrying it.
-    _line = store_donations.progress_line(_t, _pr)
+    _line = store_donations.progress_line(_t, _pr, bool(f["active"]))
     _bar = (f"<div class=bar><i style=\"width:{_pr['pct']}%\"></i></div>"
             if _pr["pct"] is not None else "")
     # Their own gift named inside the total, because "your money went

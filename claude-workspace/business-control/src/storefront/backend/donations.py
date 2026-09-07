@@ -134,24 +134,36 @@ def progress(fund, t: dict) -> dict:
     }
 
 
-def progress_line(t: dict, pr: dict) -> str:
-    """The one sentence, for the page and the email both.
+def progress_line(t: dict, pr: dict, still_open: bool = True) -> str:
+    """The one sentence, for every surface that says it.
 
     The page draws a bar and the email cannot, which makes it tempting
     to write them separately — and that is how a receipt ends up
     disagreeing with the email that carried it. The bar was always
     decoration; this sentence was always the fact. So there is one of
     it, and the page is the sentence plus a picture of it.
+
+    `still_open` is not decoration either. A closed appeal reading "with
+    $3,933.50 to go" is telling somebody it is still going, and the two
+    places this sentence is read from — a receipt kept for years, and a
+    donor's own giving page — are exactly where a fund is most likely to
+    be one nobody is collecting for any more. An appeal that ended short
+    says so. Dressing that up as an ongoing total would be the one kind
+    of comfort this page has no right to offer.
     """
     m = lambda c: "$%s" % f"{c / 100:,.2f}"                   # noqa: E731
     if pr["pct"] is None:
-        return f"{m(t['raised_cents'])} given so far"
+        return f"{m(t['raised_cents'])} given" + (" so far" if still_open
+                                                  else " in all")
     head = f"{m(t['raised_cents'])} of {m(pr['target_cents'])}"
     if pr["passed"]:
         # Not "100%". Capping the bar is right — it cannot draw past its
         # own end — but a percentage between two figures that contradict
         # it is a document arguing with itself.
-        return head + " — passed, and still open"
+        return head + (" — passed, and still open" if still_open
+                       else " — passed, and now closed")
+    if not still_open:
+        return head + f" — {pr['pct']}%, and it closed there"
     return head + f" — {pr['pct']}%, with {m(pr['left_cents'])} to go"
 
 
@@ -331,8 +343,8 @@ def my_donations(con=Depends(get_con), user=Depends(_customer)):
     """
     rows = [dict(r) for r in con.execute(
         "SELECT o.id AS order_id, o.donation_cents AS cents,"
-        " o.created_at, f.name AS fund, f.kind, f.payee, f.reference,"
-        " COALESCE(dr.token,'') AS token"
+        " o.created_at, f.id AS fund_id, f.name AS fund, f.kind,"
+        " f.payee, f.reference, COALESCE(dr.token,'') AS token"
         " FROM orders o JOIN donation_funds f ON f.id=o.donation_fund_id"
         " LEFT JOIN donation_receipts dr ON dr.order_id=o.id"
         " WHERE o.user_id=? AND o.donation_cents>0"
@@ -351,8 +363,36 @@ def my_donations(con=Depends(get_con), user=Depends(_customer)):
         r["receipt_url"] = f"/dr/{r['token']}" if r["token"] else ""
         r["tax_receipt"] = r["kind"] == "ours"
         r.pop("token", None)
+    # Where each appeal they gave to has got to — one entry per fund and
+    # not one per gift, because somebody who gave to the same appeal
+    # three times wants to see it once. Only the funds they actually
+    # gave to: this is their page, not a list of causes to consider.
+    #
+    # No "as at" here, unlike the emailed copy. This page is fetched when
+    # it is opened, so the figure is current by construction and dating
+    # it would be adding doubt where there is none.
+    funds = []
+    for fid in dict.fromkeys(r["fund_id"] for r in rows):
+        fr = con.execute("SELECT * FROM donation_funds WHERE id=?",
+                         (fid,)).fetchone()
+        if fr is None:
+            continue                    # the fund was removed under them
+        ft = totals(con, fid)
+        pr = progress(fr, ft)
+        mine = [r for r in rows if r["fund_id"] == fid]
+        funds.append({
+            "fund_id": fid, "name": fr["name"], "kind": fr["kind"],
+            "payee": fr["payee"] or "", "active": bool(fr["active"]),
+            "mine_cents": sum(r["cents"] for r in mine),
+            "my_gifts": len(mine),
+            "raised_cents": ft["raised_cents"], "gifts": ft["gifts"],
+            "line": progress_line(ft, pr, bool(fr["active"])), **pr,
+        })
+    for r in rows:
+        r.pop("fund_id", None)
     return {
         "gifts": rows, "to_us_cents": to_us, "through_us_cents": through,
+        "funds": funds,
         "years": sorted(years.values(), key=lambda x: x["year"],
                         reverse=True),
         "note": ("What you gave to us and what you gave through us are "

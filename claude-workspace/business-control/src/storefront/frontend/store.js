@@ -1571,6 +1571,17 @@ async function drawAccount() {
         ${giving.through_us_cents ? `<b>${money(giving.through_us_cents)}
           </b><span class="dim">given through us for others</span>` : ""}
       </div>
+      ${(giving.funds || []).map((f) => `
+        <div class="give-fund">
+          <div class="give-fund-top"><b>${esc(f.name)}${f.active ? ""
+            : ` <span class="dim">· closed</span>`}</b>
+            <span class="dim">${money(f.mine_cents)} from you${
+              f.my_gifts > 1 ? ` over ${f.my_gifts} gifts` : ""}</span>
+          </div>
+          ${f.pct !== null ? `<div class="give-goal-bar"><i
+            style="width:${f.pct}%"></i></div>` : ""}
+          <span class="dim">${esc(f.line)}</span>
+        </div>`).join("")}
       ${giving.years.length > 1 ? giving.years.map((y) => `
         <div class="ship-opt"><b>${y.year}</b>
           <span class="dim">${y.gifts} gift${y.gifts === 1 ? "" : "s"}</span>

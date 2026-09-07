@@ -1504,3 +1504,8 @@ body.offer-open { overflow: hidden; }
 .give-goal-bar i { display: block; height: 100%;
   background: var(--accent, #2dd4bf); }
 .give-goal .dim { font-size: 12.5px; }
+
+.give-fund{padding:.55rem 0;border-bottom:1px solid var(--line)}
+.give-fund-top{display:flex;justify-content:space-between;
+  align-items:baseline;gap:.6rem;flex-wrap:wrap}
+.give-fund .give-goal-bar{margin:.4rem 0 .3rem}

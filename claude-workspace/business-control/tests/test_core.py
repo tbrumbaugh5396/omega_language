@@ -2310,6 +2310,71 @@ ok("has to come from them" in _mine["note"],
    "gave THROUGH us is not ours to certify — we handled it, they "
    "received it — and one combined 'you have given' figure would "
    "overstate what this business can stand behind")
+# Where each appeal they gave to has got to.
+ok(len(_mine["funds"]) >= 2
+   and sum(f["my_gifts"] for f in _mine["funds"]) == len(_mine["gifts"]),
+   "the giving page shows progress once per fund, not once per gift — "
+   "somebody who gave to the same appeal three times wants to see the "
+   "appeal once, and every gift is accounted for in exactly one of them")
+ok(all(f["mine_cents"] <= f["raised_cents"] for f in _mine["funds"]),
+   "with their own share named inside the fund's total, which is the "
+   "question a giving page is opened to answer")
+_fset = {f["name"] for f in _mine["funds"]}
+ok(all(g["fund"] in _fset for g in _mine["gifts"]),
+   "and only the funds they actually gave to. This is their page, not "
+   "a list of causes to consider")
+ok(all("fund_id" not in g for g in _mine["gifts"]),
+   "the gift rows do not carry the internal id they were grouped by")
+# Open with a target, then closed — the two states said out loud, and
+# checked against the receipt for the same fund rather than against
+# themselves.
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 1000000, "active": True})
+_mo = [f for f in c.get("/api/store/account/donations", headers=A).json()
+       ["funds"] if f["fund_id"] == _fid][0]
+ok(_mo["pct"] is not None and "to go" in _mo["line"],
+   "an open appeal with a target shows how far it has got, and what is "
+   "left")
+ok(_mo["line"] in c.get(f"/dr/{_dr['token']}").text,
+   "and it is the identical sentence to the one on the receipt for a "
+   "gift to that same fund — checked against the receipt itself, not "
+   "against a copy of the rule. Three surfaces writing it three times "
+   "is three chances for a donor's own page to disagree with the "
+   "document in their inbox")
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 1000000, "active": False})
+_mine = c.get("/api/store/account/donations", headers=A).json()
+_mc = [f for f in _mine["funds"] if f["fund_id"] == _fid][0]
+ok(not _mc["active"] and "closed there" in _mc["line"],
+   "and a closed appeal says so rather than 'with $3,933.50 to go'. "
+   "That wording tells somebody it is still running, and a giving page "
+   "read years later is exactly where a fund is most likely to be one "
+   "nobody is collecting for any more — an appeal that ended short says "
+   "so, because dressing it up is a comfort this page has no right to "
+   "offer")
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 0, "active": False})
+_mc2 = [f for f in c.get("/api/store/account/donations", headers=A).json()
+        ["funds"] if f["fund_id"] == _fid][0]
+ok("given in all" in _mc2["line"] and "so far" not in _mc2["line"],
+   "and a closed fund with no target says 'given in all' rather than "
+   "'so far', which is the same tense problem in the case where there "
+   "is no bar to draw")
+# Put the fund back as it was found. These checks borrowed shared
+# fixture state — the active fund is what a later checkout is offered —
+# and a test that leaves it changed fails a test three hundred lines
+# down with a symptom that has nothing to do with it.
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 0, "active": True})
+_sjs = open("src/storefront/frontend/store.js").read()
+ok("give-fund" in _sjs and "· closed" in _sjs,
+   "the page marks the fund itself closed too, so the bar beside it is "
+   "not read as a live one")
+
 # A real second account, not a stub: an isolation test that cannot fail
 # is not an isolation test.
 _oc3 = _db.connect()
