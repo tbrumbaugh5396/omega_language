@@ -2,6 +2,7 @@
 import csv
 import time
 import html as _html
+import secrets as _secrets
 import io
 import json
 import os
@@ -5880,7 +5881,14 @@ def _send_donation_receipt(con, token: str, uid: int, email: str,
             for k, v in list(_RESENT.items()):
                 if db.now() - v > 3600:
                     _RESENT.pop(k, None)
-        key = (f"dr-{token[:14]}-{int(db.now())}" if again
+        # A key nothing collides with, which int(db.now()) was not: two
+        # deliberate resends landing in the same second produced the same
+        # key, and the second was refused as a duplicate — silently, and
+        # reported to the sender as "nothing went". Seconds are a
+        # coincidence, not an identity. The 60s throttle above is what
+        # stops a double-click; this key's only job is to stop the mailer
+        # mistaking one resend for a repeat of another.
+        key = (f"dr-{token[:14]}-{_secrets.token_hex(4)}" if again
                else f"dr-{token[:14]}")
         sent = mailer.log_and_send(con, CFG, uid, email, "donation-receipt",
                                    subject, text, key)

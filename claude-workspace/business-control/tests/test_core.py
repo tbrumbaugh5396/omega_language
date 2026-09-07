@@ -2178,6 +2178,21 @@ ok(_eb.count("$20.00") and "$5.00" in _eb,
    "document, and a bare 5.00 against the page's $5.00 is the kind of "
    "small disagreement that makes somebody check the rest")
 _pl_page = c.get(f"/dr/{_dr['token']}").text.split("class=pl")[1][:80]
+_RS.clear()
+_sent2 = []
+_orig2 = mailer.send
+mailer.send = lambda cfg, to, s, t: (_sent2.append(t), "sent")[1]
+c.post(f"/api/orders/{_dr['order_id']}/donation-receipt/send", headers=A)
+mailer.send = _orig2
+ok(len(_sent2) == 1,
+   "and a second deliberate resend in the same second still goes. Its "
+   "dedup key was the clock to the second, so two of them collided and "
+   "the mailer refused the later one as a repeat — silently, while "
+   "telling the person who asked that nothing went. Seconds are a "
+   "coincidence, not an identity; the throttle is what stops a "
+   "double-click, and the key's only job is to keep one resend from "
+   "being mistaken for another")
+
 ok(_pl_page.split(">")[1].split("<")[0].strip() in _eb,
    "and it is the identical sentence, from one function. The page draws "
    "a bar and the email cannot, which is exactly the invitation to "
@@ -2900,8 +2915,23 @@ c.post("/api/me", headers=A, json={"pin": "5511"})
 _au2 = c.get("/api/admin/audit?entity=me", headers=A).json()
 ok(any("pin=***" in e["detail"] for e in _au2["entries"]),
    "a PIN in a request body is recorded as a name, never a value")
-ok(not any("5511" in (e["detail"] or "") for e in _au2["entries"]),
-   "and the value itself is nowhere in the log")
+# As a value in its own right, not as four digits found anywhere. An
+# audit detail carries request bodies, and request bodies carry raw
+# epoch floats — expires=1790492765.032191, whose last six digits are
+# effectively random. A bare substring search over that will match a
+# four-digit PIN by chance about once in a few hundred runs, and it duly
+# did: a Sunday push failed on this line with the PIN nowhere near the
+# log. A test that fails at random on a gate everybody has to pass is
+# worse than no test, because the first thing it teaches is that red
+# means try again.
+#
+# Bounded by "not part of a longer number" rather than by field name, so
+# it still catches the thing worth catching — the PIN surfacing where
+# nobody expected it, name=5511 as much as pin=5511 — while a run of
+# digits inside a timestamp cannot trip it.
+_leak = _re.compile(r"(?<![\d.])5511(?![\d.])")
+ok(not any(_leak.search(e["detail"] or "") for e in _au2["entries"]),
+   "and the value itself is nowhere in the log, in any field")
 ok(c.get("/api/admin/audit", headers={"Authorization": "Bearer nope"}
          ).status_code == 401, "the audit log needs an admin")
 
@@ -5880,9 +5910,6 @@ ok(len(_ds["weekdays"]) <= 7 and all(w["days"] for w in _ds["weekdays"]),
 _dcon.close()
 
 _days = c.get("/api/analytics/days?days=60", headers=A).json()
-print("DBG", _days["compare"]["to_day"], _days["compare"]["held_back_days"],
-      _days["compare"]["this"]["month"], _days["compare"]["this"]["days"],
-      _days["compare"]["last"]["month"], _days["compare"]["last"]["days"])
 _cmp = _days["compare"]
 ok(_cmp["this"]["stretch"] == _cmp["last"]["stretch"],
    "month against month compares the SAME stretch of each — three days "
