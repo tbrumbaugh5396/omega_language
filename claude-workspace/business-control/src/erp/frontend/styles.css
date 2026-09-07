@@ -1793,3 +1793,15 @@ body.lane-on { overflow: hidden; }
 .sheet-marks { display: flex; gap: 5px; flex-shrink: 0; }
 .disp-blocked { margin-top: 14px; color: #f0a08a;
   font-size: clamp(13px, 2vw, 18px); }
+
+/* A fund: whose money, how much came in, how much has gone. The two
+   kinds look different on purpose — one is income and one never was. */
+.fundrow { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.fundrow-top { display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; }
+.fundrow-top .dl-acts { margin-left: auto; display: flex; gap: 6px; }
+.fundrow-nums { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 6px;
+  font-size: .92em; }
+.fundrow-nums .bad b { color: #f08a80; }
+.fundrow-log { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 5px;
+  font-size: .8em; color: var(--dim); }

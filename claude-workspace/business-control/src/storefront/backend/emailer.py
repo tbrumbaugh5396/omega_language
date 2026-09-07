@@ -143,7 +143,9 @@ def list_campaigns(u=Depends(admin_user), con=Depends(get_con)):
         if r["discount_code"]:
             first = sends[-1]["started_at"] if sends else 0
             row = con.execute(
-                "SELECT COUNT(*) n, COALESCE(SUM(total_cents),0) v FROM orders"
+                "SELECT COUNT(*) n,"
+                " COALESCE(SUM(total_cents - COALESCE(donation_cents,0)),0) v"
+                " FROM orders"
                 " WHERE UPPER(COALESCE(discount_code,''))=? AND created_at>=?",
                 (r["discount_code"].upper(), first)).fetchone()
             d["orders"] = row["n"]

@@ -100,7 +100,9 @@ def orders_for(con, discount_code: str, since: float) -> dict:
     if not discount_code:
         return {"orders": 0, "revenue_cents": 0}
     row = con.execute(
-        "SELECT COUNT(*) n, COALESCE(SUM(total_cents),0) v FROM orders"
+        "SELECT COUNT(*) n,"
+        " COALESCE(SUM(total_cents - COALESCE(donation_cents,0)),0) v"
+        " FROM orders"
         " WHERE UPPER(COALESCE(discount_code,''))=? AND created_at >= ?",
         (discount_code.upper(), since or 0)).fetchone()
     return {"orders": row["n"], "revenue_cents": row["v"]}

@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS orders (
   region TEXT DEFAULT '',
   store_id INTEGER,
   subtotal_cents INTEGER NOT NULL,
+  -- Charged, and never a sale. In total_cents because the card is
+  -- debited for it; out of subtotal_cents, which is what every revenue
+  -- figure here sums. See storefront/backend/donations.py.
+  donation_cents INTEGER DEFAULT 0,
+  donation_fund_id INTEGER DEFAULT 0,
   tax_cents INTEGER DEFAULT 0,
   shipping_cents INTEGER DEFAULT 0,
   total_cents INTEGER DEFAULT 0,
@@ -618,6 +623,10 @@ def stock_set(con, store_id: int, product_id: int, qty: float, reason: str,
 
 
 MIGRATIONS = (
+    # A donation is charged, so it is in the total; it is not a sale, so
+    # it is in neither the subtotal nor anything that reports revenue.
+    "ALTER TABLE orders ADD COLUMN donation_cents INTEGER DEFAULT 0",
+    "ALTER TABLE orders ADD COLUMN donation_fund_id INTEGER DEFAULT 0",
     # Kiosks became two things. Everything that existed before is a clock
     # kiosk, which is what the default says, so no install wakes up with
     # its tablets reclassified underneath it.

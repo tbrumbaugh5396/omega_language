@@ -1862,6 +1862,97 @@ ok("OFFER_TAKEN" in _sfjs,
    "another immediately is a rack of sweets, and the difference between "
    "a shop that helps and one that nags is whether it asks twice")
 
+# --- donations, which are not a sale --------------------------------------
+ok(c.post("/api/store/admin/donations", headers=A,
+          json={"name": "Hospice", "kind": "collected"}).status_code == 400,
+   "money collected for somebody else has to say who: it is not income "
+   "and somebody will have to prove where it went")
+_fid = c.post("/api/store/admin/donations", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "blurb": "Round up",
+    "target_cents": 400000}).json()["id"]
+ok(c.get("/api/store/donation").json()["fund"]["name"] == "Hospice appeal",
+   "and the checkout is offered one fund, not four — a shop asking which "
+   "of four charities is asking a question nobody came to answer")
+
+_pid2 = c.get("/api/products", headers=A).json()[0]["id"]
+_rev0 = _db.connect()
+_before = _rev0.execute("SELECT COALESCE(SUM(subtotal_cents),0) c FROM"
+                        " orders WHERE status!='cancelled'").fetchone()["c"]
+_rev0.close()
+# Pay-on-delivery for a passwordless account goes through an email
+# confirmation, so the donation has to survive being parked as JSON and
+# replayed — which is worth proving rather than routing around.
+c.post("/api/me", headers=A, json={"email": "donor@example.com"})
+_ord = c.post("/api/orders", headers=A, json={
+    "items": [{"product_id": _pid2, "qty": 1}], "donation_cents": 500,
+    "ship_name": "T", "address": "1 St", "city": "X", "postal": "1"})
+ok(_ord.status_code == 200, f"an order takes a donation ({_ord.text[:90]})")
+if _ord.json().get("awaiting_confirmation"):
+    _pc2 = _db.connect()
+    _tok2 = _pc2.execute("SELECT token FROM pending_orders ORDER BY id DESC"
+                         " LIMIT 1").fetchone()["token"]
+    _pc2.close()
+    ok(c.get(f"/confirm-order/{_tok2}").status_code == 200,
+       "and it survives the confirmation round trip — the order is parked "
+       "as JSON and replayed, so a field the parking forgot would lose "
+       "somebody's donation silently")
+_c2 = _db.connect()
+_o = _c2.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 1").fetchone()
+_after = _c2.execute("SELECT COALESCE(SUM(subtotal_cents),0) c FROM orders"
+                     " WHERE status!='cancelled'").fetchone()["c"]
+_c2.close()
+ok(_o["donation_cents"] == 500 and _o["donation_fund_id"] == _fid,
+   "it lands in its own column on the order, against the fund it was for")
+ok(_o["total_cents"] - (_o["subtotal_cents"] + _o["tax_cents"]
+                        + _o["shipping_cents"] - _o["discount_cents"]
+                        - _o["gift_cents"]) == 500,
+   "and it IS charged — the card is debited for it, so it is in the total")
+ok(_after - _before == _o["subtotal_cents"],
+   "but revenue moved by the goods alone. A donation as a £5 product "
+   "would have landed in cost of goods with no cost basis, in stock as a "
+   "thing that never arrives, in taxable revenue, in average order "
+   "value and in every cohort — and a year of numbers would be quietly "
+   "wrong before anybody asked why")
+
+_tot = c.get("/api/store/donation").json()["fund"]
+ok(_tot["raised_cents"] == 500, "the fund knows what it has taken")
+ok(c.post(f"/api/store/admin/donations/{_fid}/remit", headers=A,
+          json={"cents": 9999}).status_code == 409,
+   "sending on more than was collected is refused — that is either a "
+   "typo or a different transaction, and neither should be recorded as "
+   "this one")
+c.post(f"/api/store/admin/donations/{_fid}/remit", headers=A,
+       json={"cents": 300, "reference": "BACS-1"})
+_f = [f for f in c.get("/api/store/admin/donations",
+                       headers=A).json()["funds"] if f["id"] == _fid][0]
+ok(_f["raised_cents"] == 500 and _f["remitted_cents"] == 300
+   and _f["held_cents"] == 200,
+   "'we raised five hundred for the hospice' is a sentence a shop should "
+   "be able to prove, and 'three hundred sent, two hundred still with "
+   "us' is the one that keeps it true")
+ok(c.get("/api/store/donation").json()["fund"]["raised_cents"] == 500,
+   "the shop's thermometer still shows what was RAISED — a total that "
+   "fell when the money was sent on would read as donations being taken "
+   "back")
+
+_ours = c.post("/api/store/admin/donations", headers=A, json={
+    "name": "Our own appeal", "kind": "ours", "active": False}).json()["id"]
+ok(c.post(f"/api/store/admin/donations/{_ours}/remit", headers=A,
+          json={"cents": 100}).status_code == 400,
+   "a fund whose money is the business's own has nobody to send it to, "
+   "and a remittance there would be an invented transaction")
+ok(c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "ours"}).status_code == 409,
+   "and once money has been taken, whose it is cannot change: the same "
+   "rows would move between income and a liability with nothing "
+   "recording that they had")
+
+_sfjs2 = open("src/storefront/frontend/store.js").read()
+ok("GIVE_CENTS" in _sfjs2 and "addToCart(offer.product_id)" in _sfjs2,
+   "the shop sends the donation beside the order rather than as a cart "
+   "line — the offer adds to the basket, the donation never does")
+
 # --- page-to-page funnel ---
 for _v, _pages in (("pf-1", ["/", "/find", "/"]), ("pf-2", ["/", "/events"]),
                    ("pf-3", ["/"])):

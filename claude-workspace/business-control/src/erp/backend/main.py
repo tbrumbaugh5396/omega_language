@@ -1022,6 +1022,8 @@ class OrderBody(BaseModel):
     pay_method: str = ""        # "card" to request Stripe Checkout
     discount_code: str = ""     # storefront discount code (store_discounts)
     gift_card_code: str = ""    # storefront gift card (gift_cards)
+    donation_cents: int = 0     # charged, never a sale — see donations.py
+    donation_fund_id: int = 0
     shipping_method_id: int | None = None  # store_shipping_methods row
 
 
@@ -1320,7 +1322,24 @@ def _place(con, user, body, as_guest):
         g = store_promos.gift_balance(con, body.gift_card_code)
         if g:
             gift = min(g["balance_cents"], discounted + tax + shipping)
-    total = discounted + tax + shipping - gift
+    # A donation rides on the order because the shopper pays once, and
+    # is kept out of everything that calls itself revenue.
+    donation, fund_id = 0, 0
+    if body.donation_cents > 0:
+        _fund = con.execute(
+            "SELECT id FROM donation_funds WHERE id=? AND active=1",
+            (body.donation_fund_id,)).fetchone() if body.donation_fund_id \
+            else con.execute(
+                "SELECT id FROM donation_funds WHERE active=1"
+                " ORDER BY id LIMIT 1").fetchone()
+        if _fund is None:
+            raise HTTPException(
+                400, "there is no fund open to take a donation for. Money "
+                     "taken with nowhere to put it is money nobody can "
+                     "account for.")
+        donation = min(int(body.donation_cents), 100000)
+        fund_id = _fund["id"]
+    total = discounted + tax + shipping - gift + donation
     pay_status = "on_terms" if kind == "distributor" else "cod"
     want_card = body.pay_method == "card" and payments.enabled(CFG)
     if want_card:
@@ -1330,14 +1349,15 @@ def _place(con, user, body, as_guest):
         "INSERT INTO orders(user_id,kind,region,store_id,subtotal_cents,"
         " discount_cents,discount_code,gift_cents,gift_card_code,tax_cents,"
         " shipping_cents,total_cents,payment_status,ship_name,address,city,"
-        " postal,phone,affiliate_code,visitor_id,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " postal,phone,affiliate_code,visitor_id,created_at,"
+        " donation_cents,donation_fund_id)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], kind, region, body.store_id, subtotal, discount,
          disc_code, gift, body.gift_card_code.strip().upper() if gift else "",
          tax, shipping, total, pay_status, body.ship_name.strip(),
          body.address.strip(), body.city.strip(), body.postal.strip(),
          body.phone.strip(), body.affiliate_code.strip(), body.visitor_id,
-         db.now()))
+         db.now(), donation, fund_id))
     oid = cur.lastrowid
     if disc_id:
         store_promos.record_redemption(con, disc_id, oid, user["id"], discount)
@@ -6269,6 +6289,7 @@ from storefront.backend import documents as store_docs  # noqa: E402
 from storefront.backend import engagements as store_eng  # noqa: E402
 from storefront.backend import fleetadmin as store_fleet  # noqa: E402
 from storefront.backend import sow as store_sow  # noqa: E402
+from storefront.backend import donations as store_donations  # noqa: E402
 from storefront.backend import offers as store_offers  # noqa: E402
 from storefront.backend import pixels as store_pixels  # noqa: E402
 from storefront.backend import support as store_support  # noqa: E402
@@ -6297,6 +6318,7 @@ app.include_router(store_content.router)
 app.include_router(store_aff.router)
 app.include_router(store_gov.router)
 app.include_router(store_partners.router)
+app.include_router(store_donations.router)
 app.include_router(store_offers.router)
 app.include_router(store_pixels.router)
 app.include_router(store_support.router)

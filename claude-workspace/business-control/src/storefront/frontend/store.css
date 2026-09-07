@@ -1482,3 +1482,15 @@ body.offer-open { overflow: hidden; }
   font-size: 14px; min-width: 0; }
 .co-offer-txt .dim { font-size: 12.5px; }
 .co-offer s { margin-left: 6px; }
+
+/* The collection, at checkout. Reads as an aside like the offer does —
+   asked once, easy to decline, and never a line in the basket. */
+.co-give { margin: 12px 0 4px; padding: 12px 14px; border-radius: var(--r-md, 10px);
+  background: var(--surface-2, rgba(127,127,127,.06));
+  border: 1px solid var(--line); }
+.co-give-txt { display: flex; flex-direction: column; gap: 2px;
+  font-size: 14px; margin-bottom: 8px; }
+.co-give-txt .dim { font-size: 12.5px; }
+.co-give-amts { display: flex; gap: 6px; flex-wrap: wrap; }
+.co-give-amt.on { border-color: var(--accent, #2dd4bf);
+  color: var(--accent, #2dd4bf); }

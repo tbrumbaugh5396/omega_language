@@ -747,7 +747,8 @@ def _usage_from(con) -> dict:
         "SELECT COUNT(*) FROM orders WHERE created_at>? AND"
         " status!='cancelled'", (mo,)), "30d")
     meter("selling", "revenue_cents", _q1(con,
-        "SELECT SUM(total_cents) FROM orders WHERE created_at>? AND"
+        "SELECT SUM(total_cents - COALESCE(donation_cents,0)) FROM orders"
+        " WHERE created_at>? AND"
         " status!='cancelled'", (mo,)), "30d")
     meter("selling", "products", _q1(con,
         "SELECT COUNT(*) FROM products WHERE active=1"))

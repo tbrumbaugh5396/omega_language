@@ -939,6 +939,11 @@ async function drawUpsell() {
 // ---------- checkout (guest-friendly, rides the ERP rails) ----------
 // Whether this visit has already taken the one suggestion it gets.
 let OFFER_TAKEN = false;
+// What was added for the collection, if anything. Never a cart line: a
+// donation is not a product, and putting it in the basket would put it
+// in stock, in cost of goods and in every revenue figure the shop has.
+let GIVE_CENTS = 0;
+let GIVE_FUND = 0;
 $("#checkout-btn").onclick = async () => {
   if (!Object.keys(CART).length) { toast("Cart is empty"); return; }
   funnel("checkout");
@@ -954,6 +959,10 @@ $("#checkout-btn").onclick = async () => {
   // being handed another immediately is a rack of sweets, and the
   // difference between a shop that helps and a shop that nags is
   // entirely in whether it asks twice.
+  let fund = null;
+  try {
+    fund = (await (await fetch("/api/store/donation")).json()).fund;
+  } catch { fund = null; }
   let offer = null;
   if (OFFER_TAKEN) { offer = null; } else try {
     offer = (await (await fetch("/api/store/checkout-offer", {
@@ -984,6 +993,24 @@ $("#checkout-btn").onclick = async () => {
     <label class="ship-opt"><input type="checkbox" id="co-subscribe">
       <b>${ico("repeat", "ico ico-sm")} Make it a monthly box</b>
       <span class="dim">skip · pause · cancel any time</span></label>
+    ${fund ? `<div class="co-give">
+      <div class="co-give-txt"><b>${esc(fund.name)}</b>
+        <span class="dim">${esc(fund.blurb || fund.note || "")}</span></div>
+      <div class="co-give-amts">
+        ${(() => {
+          // Round up first, because it is the one people take: the
+          // amount is small, obvious, and already in their head.
+          const up = (100 - (Math.round(disc + 0) % 100)) % 100;
+          const opts = up && up >= 20 ? [up, 200, 500] : [100, 200, 500];
+          return opts.map((c, i) => `<button type="button"
+            class="btn-pill sm ghost co-give-amt" data-give="${c}"
+            >${i === 0 && up && up >= 20 ? "Round up " : ""}${money(c)}
+            </button>`).join("");
+        })()}
+        <button type="button" class="btn-pill sm ghost co-give-amt"
+          data-give="0">No thanks</button>
+      </div>
+    </div>` : ""}
     ${offer ? `<div class="co-offer">
       <div class="co-offer-txt"><b>${esc(offer.label)}</b>
         <span class="dim">${esc(offer.name)}${offer.blurb
@@ -1000,6 +1027,13 @@ $("#checkout-btn").onclick = async () => {
     </div>
     <p class="dim" id="co-msg" style="margin-top:8px"></p>`);
   $("#co-place").onclick = placeOrder;
+  document.querySelectorAll(".co-give-amt").forEach((b) =>
+    b.onclick = () => {
+      GIVE_CENTS = +b.dataset.give || 0;
+      GIVE_FUND = GIVE_CENTS ? (fund ? fund.id : 0) : 0;
+      document.querySelectorAll(".co-give-amt").forEach((x) =>
+        x.classList.toggle("on", x === b));
+    });
   const take = $("#co-take");
   if (take) take.onclick = () => {
     OFFER_TAKEN = true;
@@ -1043,6 +1077,7 @@ async function placeOrder() {
         affiliate_code: activeRef(),
         discount_code: DISCOUNT ? DISCOUNT.code : "",
         gift_card_code: GIFT ? GIFT.code : "",
+        donation_cents: GIVE_CENTS, donation_fund_id: GIVE_FUND,
         shipping_method_id: shipEl ? +shipEl.value : null,
         pay_method: payEl ? payEl.value : "",
         ship_name: name, address: $("#co-addr").value.trim(),

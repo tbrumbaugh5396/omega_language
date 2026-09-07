@@ -110,6 +110,121 @@ function checkoutOfferForm(o, products) {
   };
 }
 
+/* Donations, and whose money they are. The two kinds are kept visibly
+   apart because they are different books: money collected for somebody
+   else was never income, and the only way a shop can prove "we raised
+   four thousand for the hospice" is if it can also say what has gone. */
+function donationsCard(d) {
+  const fs = d.funds || [];
+  return `<div class="card">
+    <div class="card-head"><b>Donations</b>
+      <span class="dim">Never revenue. Charged on the order, kept out of
+        every figure that says revenue.</span>
+      <button class="btn alt sm" id="dn-new">New fund</button></div>
+    ${fs.length ? fs.map((f) => `<div class="fundrow">
+      <div class="fundrow-top">
+        <b>${esc(f.name)}</b>
+        <span class="pill ${f.kind === "ours" ? "ok" : "warn"}"
+          title="${f.kind === "ours"
+            ? "the business's own money — income"
+            : "held on trust until it is sent on — not income, ever"}"
+          >${f.kind === "ours" ? "ours" : "collected for "
+            + esc(f.payee || "somebody")}</span>
+        ${f.active ? '<span class="pill ok">live</span>'
+          : '<span class="pill">closed</span>'}
+        <span class="dl-acts">
+          <button class="btn alt sm" data-dnedit="${f.id}">Edit</button>
+          ${f.kind === "collected" ? `<button class="btn alt sm"
+            data-dnremit="${f.id}" data-held="${f.held_cents}"
+            data-name="${esc(f.name)}">Record a payment out</button>` : ""}
+        </span>
+      </div>
+      <div class="fundrow-nums">
+        <span><b>${money(f.raised_cents)}</b>
+          <span class="dim">raised · ${f.gifts} gift${
+            f.gifts === 1 ? "" : "s"}</span></span>
+        ${f.kind === "collected" ? `
+          <span><b>${money(f.remitted_cents)}</b>
+            <span class="dim">sent on</span></span>
+          <span class="${f.held_cents ? "bad" : "dim"}">
+            <b>${money(f.held_cents)}</b>
+            <span class="dim">still here</span></span>` : ""}
+        ${f.target_cents ? `<span class="dim">target
+          ${money(f.target_cents)}</span>` : ""}
+      </div>
+      ${(f.remittances || []).length ? `<div class="fundrow-log">${
+        f.remittances.map((r) => `<span>${fmtDate(r.sent_at)} ·
+          ${money(r.cents)}${r.reference ? " · " + esc(r.reference)
+            : ""}</span>`).join("")}</div>` : ""}
+    </div>`).join("")
+      : `<p class="dim">No fund is open. A shop can take donations at
+         checkout once there is somewhere for the money to go — and the
+         first question is whether it is ever yours.</p>`}
+    <p class="dim">${esc(d.note)}</p>
+  </div>`;
+}
+
+function donationFundForm(f) {
+  modal(`<h3>${f ? "Edit" : "New"} fund</h3>
+    <label>Name</label>
+    <input id="dn-name" placeholder="Hospice appeal"
+      value="${f ? esc(f.name) : ""}">
+    <label>Whose money is it</label>
+    <select id="dn-kind" ${f && f.raised_cents ? "disabled" : ""}>
+      <option value="collected"${f && f.kind === "collected"
+        ? " selected" : ""}>Collected for somebody else — not income</option>
+      <option value="ours"${f && f.kind === "ours" ? " selected" : ""}
+        >Ours — the business's own income</option>
+    </select>
+    ${f && f.raised_cents ? `<p class="dim">Money has already been taken
+      for this fund, so whose it is cannot change now — the same rows
+      would move between income and a liability with nothing recording
+      that they had. Close it and open another.</p>` : ""}
+    <div id="dn-payee-wrap">
+      <label>Who it goes to</label>
+      <input id="dn-payee" placeholder="St Anne's Hospice"
+        value="${f ? esc(f.payee || "") : ""}">
+      <label>Their reference <span class="opt">charity number, if there is
+        one</span></label>
+      <input id="dn-ref" value="${f ? esc(f.reference || "") : ""}">
+    </div>
+    <label>What the shopper is told</label>
+    <input id="dn-blurb" placeholder="Round up for the hospice"
+      value="${f ? esc(f.blurb || "") : ""}">
+    <label>Target <span class="opt">cents · blank for no thermometer</span>
+    </label>
+    <input id="dn-target" type="number" min="0"
+      value="${f && f.target_cents ? f.target_cents : ""}">
+    <label class="perm" style="margin-top:8px">
+      <input type="checkbox" id="dn-active" ${!f || f.active ? "checked" : ""}>
+      <span><b>Live at checkout</b><small>one fund at a time — a checkout
+        asking which of four charities is asking a question nobody came
+        to answer</small></span></label>
+    <p class="dim" id="dn-msg"></p>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="dn-save">${f ? "Save" : "Open it"}</button>
+    </div>`);
+  const kind = $("#dn-kind");
+  const flip = () => { $("#dn-payee-wrap").hidden = kind.value !== "collected"; };
+  kind.onchange = flip; flip();
+  $("#dn-save").onclick = async () => {
+    const body = { name: $("#dn-name").value.trim(), kind: kind.value,
+                   payee: $("#dn-payee").value.trim(),
+                   reference: $("#dn-ref").value.trim(),
+                   blurb: $("#dn-blurb").value.trim(),
+                   target_cents: +$("#dn-target").value || 0,
+                   active: $("#dn-active").checked };
+    try {
+      await api(f ? `/api/store/admin/donations/${f.id}`
+                  : "/api/store/admin/donations",
+                { body, method: f ? "PATCH" : "POST" });
+      closeModal(); renderPromos();
+    } catch (e) { $("#dn-msg").innerHTML = `<b class="bad">${esc(e.message)}
+      </b>`; }
+  };
+}
+
 async function renderPromos() {
   const isAdmin = S.user && S.user.is_admin;
   const [list, products, net] = await Promise.all([
@@ -117,9 +232,12 @@ async function renderPromos() {
     api("/api/products"), api("/api/net").catch(() => null)]);
   const offers = isAdmin
     ? await api("/api/store/admin/checkout-offers").catch(() => null) : null;
+  const funds = isAdmin
+    ? await api("/api/store/admin/donations").catch(() => null) : null;
   view().innerHTML = `
     <h2>Promotions & events</h2>
     ${offers ? checkoutOffersCard(offers, products) : ""}
+    ${funds ? donationsCard(funds) : ""}
     ${isAdmin ? `<div class="card">
       <form class="inline" id="promo-form">
         <label class="f">type <select id="pm-kind">
@@ -183,6 +301,23 @@ async function renderPromos() {
     render();
   };
   wireRows({ promo: list }, renderPromos);
+  const dn = $("#dn-new");
+  if (dn) dn.onclick = () => donationFundForm(null);
+  document.querySelectorAll("[data-dnedit]").forEach((b) =>
+    b.onclick = () => donationFundForm(
+      (funds.funds || []).find((f) => f.id === +b.dataset.dnedit)));
+  document.querySelectorAll("[data-dnremit]").forEach((b) =>
+    b.onclick = async () => {
+      const raw = prompt(`How much has gone to ${b.dataset.name}?\n\n`
+        + `In cents. ${money(+b.dataset.held)} is being held.`);
+      if (!raw) return;
+      const ref = prompt("Payment reference, if there is one") || "";
+      try {
+        await api(`/api/store/admin/donations/${b.dataset.dnremit}/remit`,
+                  { body: { cents: +raw || 0, reference: ref } });
+        renderPromos();
+      } catch (e) { toast(e.message); }
+    });
   const con = $("#co-new");
   if (con) con.onclick = () => checkoutOfferForm(null, products);
   document.querySelectorAll("[data-coedit]").forEach((b) =>
