@@ -1805,3 +1805,14 @@ body.lane-on { overflow: hidden; }
 .fundrow-nums .bad b { color: #f08a80; }
 .fundrow-log { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 5px;
   font-size: .8em; color: var(--dim); }
+
+/* Giving, month by month. The month still running is hatched rather than
+   solid, because a half-month drawn like a whole one is a fall that did
+   not happen. */
+.give-trend { margin: 8px 0 12px; }
+.give-bars { display: flex; align-items: flex-end; gap: 3px; height: 48px; }
+.give-bar { width: 14px; border-radius: 2px; background: var(--accent, #2dd4bf);
+  display: block; opacity: .75; }
+.give-bar.best { opacity: 1; }
+.give-bar.part { background: repeating-linear-gradient(45deg,
+  var(--accent, #2dd4bf) 0 3px, transparent 3px 6px); opacity: .9; }

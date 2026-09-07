@@ -321,6 +321,70 @@ def list_funds(user=Depends(admin_user), con=Depends(get_con)):
     }
 
 
+@router.get("/api/store/admin/donations/trend")
+def trend(months: int = 12, fund_id: int = 0, user=Depends(admin_user),
+          con=Depends(get_con)):
+    """Giving month by month.
+
+    Calendar months, not thirty-day blocks. Stepping by thirty days
+    prints one month twice and skips February, and a series that cannot
+    count months is one nobody should trust with the shape it draws.
+
+    The month in progress is marked as such. Half of September against
+    the whole of August always looks like a collapse, and a shop that
+    reads one of those on the seventh will conclude that giving has
+    stopped rather than that the month has.
+    """
+    months = max(1, min(36, months))
+    now = time.time()
+    lt = time.localtime(now)
+    buckets, keys = [], []
+    y, m = lt.tm_year, lt.tm_mon
+    for _ in range(months):
+        keys.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    keys.reverse()
+    where = " AND o.donation_fund_id=?" if fund_id else ""
+    args = [keys[0] + "-01"] + ([fund_id] if fund_id else [])
+    rows = con.execute(
+        "SELECT strftime('%Y-%m', o.created_at, 'unixepoch', 'localtime')"
+        " AS mon, COUNT(*) AS gifts,"
+        " COALESCE(SUM(o.donation_cents),0) AS cents,"
+        " COALESCE(MAX(o.donation_cents),0) AS biggest,"
+        " COUNT(DISTINCT o.user_id) AS givers"
+        " FROM orders o WHERE o.donation_cents>0"
+        " AND o.status!='cancelled'"
+        " AND date(o.created_at,'unixepoch','localtime')>=date(?)"
+        + where + " GROUP BY mon", args).fetchall()
+    got = {r["mon"]: dict(r) for r in rows}
+    this_month = f"{lt.tm_year:04d}-{lt.tm_mon:02d}"
+    for k in keys:
+        b = got.get(k) or {"gifts": 0, "cents": 0, "biggest": 0,
+                           "givers": 0}
+        buckets.append({
+            "month": k, "gifts": b["gifts"], "cents": b["cents"],
+            "givers": b["givers"], "biggest_cents": b["biggest"],
+            "average_cents": round(b["cents"] / b["gifts"]) if b["gifts"]
+            else 0,
+            "partial": k == this_month,
+        })
+    done = [b for b in buckets if not b["partial"] and b["gifts"]]
+    return {
+        "months": buckets, "fund_id": fund_id,
+        "total_cents": sum(b["cents"] for b in buckets),
+        # Best month excludes the one still running, for the same reason
+        # it is marked: a month three days old cannot win and should not
+        # be allowed to lose either.
+        "best": max(done, key=lambda b: b["cents"])["month"] if done else "",
+        "note": "Calendar months, and the one still running is marked. "
+                "Half of a month against the whole of the last always "
+                "looks like a collapse, and it is the calendar rather "
+                "than the giving.",
+    }
+
+
 @router.get("/api/store/admin/donations/{fid}/gifts")
 def fund_gifts(fid: int, user=Depends(admin_user), con=Depends(get_con)):
     """Who gave to this fund, and what.

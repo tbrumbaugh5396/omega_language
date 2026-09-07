@@ -1455,7 +1455,21 @@ ok(c.post("/api/rooms", headers=A,
               json={"name": "X", "kind": "dungeon"}).status_code == 400,
    "it needs a name, and a kind this software has heard of")
 
-_t1 = _rm_at(2027, 4, 6, 18)                     # a Tuesday, six o'clock
+def _next_weekday(wd, hour, weeks_out=1):
+    """The next `wd` at `hour`, at least `weeks_out` weeks away.
+
+    Not a date typed into the file. A booking fixture pinned to April
+    2027 is in the future until it is not, and then the series-cancel
+    test — which only touches bookings that have not happened — quietly
+    stops testing anything and starts failing instead.
+    """
+    lt = _t0.localtime(_t0.time())
+    days = (wd - lt.tm_wday) % 7 + 7 * weeks_out
+    return _t0.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + days,
+                       hour, 0, 0, 0, 0, -1))
+
+
+_t1 = _next_weekday(1, 18)                       # a Tuesday, six o'clock
 _bk = c.post("/api/rooms/bookings", headers=A, json={
     "room_id": _rid, "starts": _t1, "ends": _t1 + 5400,
     "title": "Spanish A2", "repeat_weeks": 10}).json()
@@ -1485,10 +1499,13 @@ ok(c.post("/api/rooms/bookings", headers=A, json={
    "but a class ending exactly when the next begins is two bookings, not "
    "a clash: get that wrong and no timetable can be built back to back")
 
-_t2 = _rm_at(2027, 4, 7, 20)                     # the Wednesday, eight
+_t2 = _next_weekday(2, 20)                       # the Wednesday, eight
 c.post("/api/rooms/bookings", headers=A, json={
-    "room_id": _rid, "starts": _t2 + 7 * 86400, "ends": _t2 + 7 * 86400 + 1800,
-    "title": "Governors"})
+    # The NEXT Wednesday, as a calendar week rather than 604800 seconds:
+    # across a clock change those are not the same instant, and the
+    # repeat this is meant to collide with is booked by the calendar.
+    "room_id": _rid, "starts": _next_weekday(2, 20, 2),
+    "ends": _next_weekday(2, 20, 2) + 1800, "title": "Governors"})
 _part = c.post("/api/rooms/bookings", headers=A, json={
     "room_id": _rid, "starts": _t2, "ends": _t2 + 3600,
     "title": "Conversation club", "repeat_weeks": 4}).json()
@@ -2051,6 +2068,61 @@ ok("passing_it_on" not in _own_gifts,
 ok(c.get("/api/store/admin/donations/9999/gifts",
          headers=A).status_code == 404,
    "a fund that does not exist has no givers")
+
+# Giving over time, in calendar months.
+def _months_back(n, day=12):
+    """The 12th of the month `n` months before this one. Relative,
+    because a fixture dated to August 2026 falls out of a twelve-month
+    window the moment the clock is anywhere else — which is exactly what
+    the date audit exists to catch, and I had just written one."""
+    lt = _t0.localtime(_t0.time())
+    y, m = lt.tm_year, lt.tm_mon - n
+    while m < 1:
+        m += 12
+        y -= 1
+    return _t0.mktime((y, m, day, 14, 0, 0, 0, 0, -1)), f"{y:04d}-{m:02d}"
+
+
+_tc = _db.connect()
+_m1, _ = _months_back(2)
+_m2, _aug_key = _months_back(1)
+for _when, _cents in ((_m1, 1200), (_m2, 2500), (_m2, 600)):
+    _tc.execute(
+        "INSERT INTO orders(user_id,kind,region,store_id,subtotal_cents,"
+        "tax_cents,shipping_cents,total_cents,payment_status,status,"
+        "created_at,donation_cents,donation_fund_id)"
+        " VALUES(?,'customer','',0,1000,0,0,?,'cod','confirmed',?,?,?)",
+        (1, 1000 + _cents, _when, _cents, _fid))
+_tc.commit(); _tc.close()
+_tr = c.get("/api/store/admin/donations/trend?months=12", headers=A).json()
+ok(len(_tr["months"]) == 12
+   and len({m["month"] for m in _tr["months"]}) == 12,
+   "twelve DIFFERENT calendar months — stepping by thirty days prints "
+   "one month twice and skips February, and a series that cannot count "
+   "months is one nobody should trust with the shape it draws")
+ok(sum(1 for m in _tr["months"] if m["partial"]) == 1
+   and _tr["months"][-1]["partial"],
+   "with the month still running marked, and only that one")
+_fin = [m for m in _tr["months"] if not m["partial"] and m["cents"]]
+ok(_tr["best"] and _tr["best"] != _tr["months"][-1]["month"],
+   "the best month is chosen from the finished ones. Half of September "
+   "against the whole of August always looks like a collapse, and a "
+   "month three days old cannot win — so it is not allowed to lose "
+   "either")
+_aug = [m for m in _tr["months"] if m["month"] == _aug_key][0]
+ok(_aug["gifts"] == 2 and _aug["cents"] == 3100
+   and _aug["biggest_cents"] == 2500
+   and _aug["average_cents"] == 1550,
+   "each month carries what it is made of — the count, the average and "
+   "the biggest single gift, because one large one moves an average "
+   "past every ordinary gift in the month")
+ok(c.get(f"/api/store/admin/donations/trend?fund_id={_fid}",
+         headers=A).json()["fund_id"] == _fid,
+   "and it can be asked about one fund rather than all of them")
+_tjs = ops_app_js()
+ok("give-bar" in _tjs and 'm.partial ? " part"' in _tjs,
+   "the shop's own chart draws the running month differently, because a "
+   "half-month drawn like a whole one is a fall that did not happen")
 
 _csv = c.get(f"/api/store/admin/donations/{_fid}/gifts.csv", headers=A)
 ok(_csv.status_code == 200

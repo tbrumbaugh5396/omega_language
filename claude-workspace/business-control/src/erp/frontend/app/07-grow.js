@@ -114,13 +114,38 @@ function checkoutOfferForm(o, products) {
    apart because they are different books: money collected for somebody
    else was never income, and the only way a shop can prove "we raised
    four thousand for the hospice" is if it can also say what has gone. */
-function donationsCard(d) {
+/* Giving month by month. Calendar months, and the one still running is
+   drawn differently — half of September against the whole of August
+   always looks like a collapse, and it is the calendar rather than the
+   giving. */
+function givingTrend(t) {
+  if (!t || !(t.months || []).some((m) => m.cents)) return "";
+  const top = Math.max(...t.months.map((m) => m.cents), 1);
+  return `<div class="give-trend">
+    <div class="give-bars">${t.months.map((m) => `
+      <span class="give-bar${m.partial ? " part" : ""}${
+        m.month === t.best ? " best" : ""}"
+        style="height:${Math.max(2, Math.round(m.cents / top * 46))}px"
+        title="${m.month}: ${money(m.cents)} from ${m.gifts} gift${
+          m.gifts === 1 ? "" : "s"}${m.gifts
+          ? `, ${money(m.average_cents)} on average, biggest
+             ${money(m.biggest_cents)}` : ""}${m.partial
+          ? " — this month is still running" : ""}"></span>`).join("")}</div>
+    <p class="dim">${t.months[0].month} to ${
+      t.months[t.months.length - 1].month} · ${money(t.total_cents)}${
+      t.best ? ` · best month ${t.best}` : " · no finished month yet"}.
+      ${esc(t.note)}</p>
+  </div>`;
+}
+
+function donationsCard(d, trend) {
   const fs = d.funds || [];
   return `<div class="card">
     <div class="card-head"><b>Donations</b>
       <span class="dim">Never revenue. Charged on the order, kept out of
         every figure that says revenue.</span>
       <button class="btn alt sm" id="dn-new">New fund</button></div>
+    ${givingTrend(trend)}
     ${fs.length ? fs.map((f) => `<div class="fundrow">
       <div class="fundrow-top">
         <b>${esc(f.name)}</b>
@@ -308,10 +333,13 @@ async function renderPromos() {
     ? await api("/api/store/admin/checkout-offers").catch(() => null) : null;
   const funds = isAdmin
     ? await api("/api/store/admin/donations").catch(() => null) : null;
+  const giveTrend = (funds && (funds.funds || []).length)
+    ? await api("/api/store/admin/donations/trend?months=12")
+      .catch(() => null) : null;
   view().innerHTML = `
     <h2>Promotions & events</h2>
     ${offers ? checkoutOffersCard(offers, products) : ""}
-    ${funds ? donationsCard(funds) : ""}
+    ${funds ? donationsCard(funds, giveTrend) : ""}
     ${isAdmin ? `<div class="card">
       <form class="inline" id="promo-form">
         <label class="f">type <select id="pm-kind">

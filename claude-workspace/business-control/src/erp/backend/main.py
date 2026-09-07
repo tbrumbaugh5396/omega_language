@@ -5825,6 +5825,12 @@ def pos_day(days: int = 1, user=Depends(permitted("till")),
 # /r/ belongs to affiliate referral codes and has since before this
 # existed. Receipts get /rc/ — still short enough that the QR stays
 # coarse and scans off thermal paper at arm's length.
+# When each receipt was last deliberately sent again. In memory, like
+# the kiosk throttle: the worst a restart can cost is one extra email,
+# and the alternative is a column that means two different things.
+_RESENT: dict = {}
+
+
 def _send_donation_receipt(con, token: str, uid: int, email: str,
                            again: bool = False) -> bool:
     """Post the donor their copy. Never fatal.
@@ -5850,10 +5856,27 @@ def _send_donation_receipt(con, token: str, uid: int, email: str,
         # The automatic one sends exactly once, ever. A deliberate resend
         # has to be able to actually send — a button called "send it
         # again" that cannot is worse than no button, because the person
-        # clicking it tells the donor it is on its way. So a resend gets
-        # its own key, coarse to the minute: the donor who rang gets
-        # their copy, and a double-click does not send twice.
-        key = (f"dr-{token[:14]}-{int(db.now() // 60)}" if again
+        # clicking it tells the donor it is on its way.
+        #
+        # So a resend carries a key nothing will collide with, and the
+        # double-click is stopped by asking when the last one actually
+        # went. The first version bucketed the clock by the minute, which
+        # only stops a double-click when the two land in the same bucket
+        # — at 12:00:59 and 12:01:01 it sends twice, which the date audit
+        # duly caught as a flake.
+        # Against the last RESEND, not against emailed_at — that column
+        # also records the automatic one, and a donor ringing a minute
+        # after their order would have been refused the copy they were
+        # ringing about.
+        if again:
+            last = _RESENT.get(token, 0)
+            if db.now() - last < 60:
+                return False
+            _RESENT[token] = db.now()
+            for k, v in list(_RESENT.items()):
+                if db.now() - v > 3600:
+                    _RESENT.pop(k, None)
+        key = (f"dr-{token[:14]}-{int(db.now())}" if again
                else f"dr-{token[:14]}")
         sent = mailer.log_and_send(con, CFG, uid, email, "donation-receipt",
                                    subject, text, key)
@@ -5887,10 +5910,10 @@ def resend_donation_receipt(oid: int, user=Depends(current_user),
         con, r["token"], o["user_id"] if o else 0, r["email"], again=True)
     return {"ok": True, "sent": ok_sent, "to": r["email"],
             "note": ("" if ok_sent else
-                     "Nothing went. Either one was already sent in the "
-                     "last minute, or no mail is configured on this "
-                     "install — the link still works either way, and can "
-                     "be read out.")}
+                     "Nothing went. Either one went less than a minute "
+                     "ago, or no mail is configured on this install — "
+                     "the link still works either way, and can be read "
+                     "out.")}
 
 
 @app.get("/api/orders/{oid}/donation-receipt")
