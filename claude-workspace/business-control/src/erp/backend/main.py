@@ -1359,6 +1359,14 @@ def _place(con, user, body, as_guest):
          body.phone.strip(), body.affiliate_code.strip(), body.visitor_id,
          db.now(), donation, fund_id))
     oid = cur.lastrowid
+    if donation:
+        # The donor's copy, minted with the gift. Never fatal — a gift
+        # taken and a receipt that would not generate is a bookkeeping
+        # problem, and losing the gift to fix it would be a worse one.
+        store_donations.issue_receipt(
+            con, oid, fund_id, donation,
+            donor=(body.ship_name.strip() or user["name"]),
+            email=user["email"] or "")
     if disc_id:
         store_promos.record_redemption(con, disc_id, oid, user["id"], discount)
     if gift:
@@ -5806,6 +5814,80 @@ def pos_day(days: int = 1, user=Depends(permitted("till")),
 # /r/ belongs to affiliate referral codes and has since before this
 # existed. Receipts get /rc/ — still short enough that the QR stays
 # coarse and scans off thermal paper at arm's length.
+@app.get("/api/orders/{oid}/donation-receipt")
+def order_donation_receipt(oid: int, user=Depends(current_user),
+                           con=Depends(get_con)):
+    """Where the donor's copy lives, for staff who are asked for it.
+
+    A donor rings up having lost the link, and the person answering
+    should be able to find it without a database. Staff-only: it carries
+    a name and an amount.
+    """
+    r = con.execute("SELECT token, cents FROM donation_receipts"
+                    " WHERE order_id=?", (oid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no donation on that order")
+    return {"url": f"{base_url()}/dr/{r['token']}", "cents": r["cents"]}
+
+
+@app.get("/dr/{token}", response_class=HTMLResponse)
+def donation_receipt(token: str, con=Depends(get_con)):
+    """The donor's own copy, at an address they can keep.
+
+    Kept apart from the order receipt because a donation and a purchase
+    are different documents to whoever reads them next. An order receipt
+    proves what was bought; this proves what was given, which is a thing
+    an accountant, a tax office or an employer's matching scheme asks
+    about on its own.
+    """
+    r = con.execute("SELECT * FROM donation_receipts WHERE token=?",
+                    (token,)).fetchone()
+    if r is None:
+        return HTMLResponse(
+            "<h3>No receipt at this address.</h3><p>The link may have been "
+            "mistyped. Ask the shop and they can send it again.</p>", 404)
+    f = con.execute("SELECT * FROM donation_funds WHERE id=?",
+                    (r["fund_id"],)).fetchone()
+    if f is None:
+        return HTMLResponse("<h3>That fund is no longer on record.</h3>", 410)
+    shop = CFG.get("brand_name") or "this shop"
+    d = store_donations.receipt_lines(f, r["cents"], r["donor"],
+                                      r["issued_at"], shop)
+    e = _html.escape
+    when = time.strftime("%d %B %Y", time.localtime(d["at"]))
+    return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{e(d['title'])} — {e(shop)}</title>
+<style>body{{font:16px/1.55 system-ui,sans-serif;max-width:34rem;
+margin:6vh auto;padding:0 1.2rem;color:#16202b}}
+h1{{font-size:1.35rem;margin:0 0 .2rem}}
+.amt{{font-size:2.6rem;font-weight:700;margin:1.2rem 0 .2rem}}
+.k{{color:#5b6b7c;font-size:.9rem}}
+table{{width:100%;border-collapse:collapse;margin:1.4rem 0}}
+td{{padding:.45rem 0;border-bottom:1px solid #e6ebf0;vertical-align:top}}
+td:last-child{{text-align:right}}
+.note{{background:#f4f7fa;border-radius:.5rem;padding:.9rem 1rem;
+font-size:.92rem;color:#3d4c5c}}
+.ack{{border-left:3px solid #d08a2c;background:#fdf6ec}}
+@media print{{body{{margin:0}}.noprint{{display:none}}}}</style>
+<h1>{e(d['title'])}</h1>
+<p class=k>{e(shop)}</p>
+<div class=amt>{'$%.2f' % (d['cents'] / 100)}</div>
+<p class=k>given {e(when)}</p>
+<table>
+  <tr><td>Given by</td><td>{e(d['donor'] or 'a supporter')}</td></tr>
+  <tr><td>Fund</td><td>{e(d['for'])}</td></tr>
+  {f"<tr><td>Collected for</td><td>{e(d['payee'])}</td></tr>"
+     if d['payee'] else ""}
+  {f"<tr><td>Registered number</td><td>{e(d['reference'])}</td></tr>"
+     if d['reference'] else ""}
+  <tr><td>Reference</td><td>DR-{r['order_id']}</td></tr>
+</table>
+<p class="note{'' if d['tax_receipt'] else ' ack'}">{e(d['statement'])}</p>
+<p class=k>Keep this link — it is your copy.</p>
+<p class=noprint><button onclick="print()">Print</button></p>""")
+
+
 @app.get("/rc/{token}", response_class=HTMLResponse)
 def public_receipt(token: str, con=Depends(get_con)):
     """The customer's copy, at an address they can keep.

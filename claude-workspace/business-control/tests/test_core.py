@@ -1936,6 +1936,66 @@ ok(c.get("/api/store/donation").json()["fund"]["raised_cents"] == 500,
    "fell when the money was sent on would read as donations being taken "
    "back")
 
+# The donor's own copy. Kept apart from the order receipt because a
+# donation and a purchase are different documents to whoever reads them
+# next: one proves what was bought, the other what was given.
+_ocon = _db.connect()
+_dr = _ocon.execute("SELECT * FROM donation_receipts ORDER BY order_id DESC"
+                    " LIMIT 1").fetchone()
+_ocon.close()
+ok(_dr is not None and _dr["cents"] == 500,
+   "a donation mints the donor a receipt, with the gift")
+_page = c.get(f"/dr/{_dr['token']}")
+ok(_page.status_code == 200 and "$5.00" in _page.text,
+   "at an address they can keep — token-addressed, because an order id "
+   "is guessable by counting and this one carries a name and an amount")
+ok("acknowledgement, not a tax receipt" in _page.text
+   and "Hospice" in _page.text,
+   "and a shop collecting for a hospice says exactly that. It is not the "
+   "hospice and cannot issue a tax receipt on somebody else's behalf — a "
+   "document that looked like one would be the shop making a claim it "
+   "has no standing to make, and that is a mistake a tax office finds "
+   "rather than an accountant")
+ok("No goods or services" not in _page.text,
+   "so the line a tax office looks for is absent, because it would not "
+   "be true of this document")
+
+_own = c.post("/api/store/admin/donations", headers=A, json={
+    "name": "Our appeal", "kind": "ours", "reference": "CHY 12345"}).json()
+_o2 = c.post("/api/orders", headers=A, json={
+    "items": [{"product_id": _pid2, "qty": 1}], "donation_cents": 1000,
+    "donation_fund_id": _own["id"], "ship_name": "Alex Donor",
+    "address": "1 St", "city": "X", "postal": "1"})
+if _o2.json().get("awaiting_confirmation"):
+    _pc3 = _db.connect()
+    _t3 = _pc3.execute("SELECT token FROM pending_orders ORDER BY id DESC"
+                       " LIMIT 1").fetchone()["token"]
+    _pc3.close()
+    c.get(f"/confirm-order/{_t3}")
+_oc2 = _db.connect()
+_dr2 = _oc2.execute("SELECT * FROM donation_receipts ORDER BY order_id DESC"
+                    " LIMIT 1").fetchone()
+_oc2.close()
+_p2 = c.get(f"/dr/{_dr2['token']}").text
+ok("Donation receipt" in _p2 and "No goods or services were provided"
+   in _p2 and "CHY 12345" in _p2,
+   "a charity taking its OWN donations issues the real thing: its "
+   "number, and the line a tax office looks for")
+ok("acknowledgement, not a tax receipt" not in _p2,
+   "and does not disclaim what it is entitled to say")
+
+ok(c.get("/dr/nosuchtoken").status_code == 404,
+   "an address nobody was given holds nothing")
+_ost = c.get(f"/api/store/order-status/{_dr['order_id']}").json()
+ok(_ost.get("donation_receipt_url", "").endswith(_dr["token"]),
+   "the order page hands the link over, because that is where somebody "
+   "looks for anything to do with an order they placed — and a receipt "
+   "nobody can find is a receipt that was not issued")
+ok(c.get(f"/api/orders/{_dr['order_id']}/donation-receipt",
+         headers=A).status_code == 200,
+   "and staff can find it when a donor rings having lost theirs")
+
+
 _ours = c.post("/api/store/admin/donations", headers=A, json={
     "name": "Our own appeal", "kind": "ours", "active": False}).json()["id"]
 ok(c.post(f"/api/store/admin/donations/{_ours}/remit", headers=A,

@@ -1266,6 +1266,19 @@ def order_status(order_id: int, con=Depends(get_con)):
         raise HTTPException(404, "order not found")
     steps = ["pending", "confirmed", "shipped", "delivered"]
     d = dict(o)
+    # A donation on this order has its own document. Handed over here
+    # because the order page is where somebody goes looking for anything
+    # to do with an order they placed, and a receipt nobody can find is
+    # a receipt that was not issued.
+    try:
+        dr = con.execute(
+            "SELECT token, cents FROM donation_receipts WHERE order_id=?",
+            (order_id,)).fetchone()
+        if dr:
+            d["donation_cents"] = dr["cents"]
+            d["donation_receipt_url"] = f"/dr/{dr['token']}"
+    except Exception:                                        # noqa: BLE001
+        pass
     d["steps"] = steps
     d["step_index"] = steps.index(o["status"]) if o["status"] in steps else -1
     return d

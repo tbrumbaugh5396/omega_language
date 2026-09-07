@@ -63,6 +63,20 @@ CREATE TABLE IF NOT EXISTS donation_remittances (
   by_user INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS dr_fund ON donation_remittances(fund_id, sent_at);
+
+/* The donor's own copy, at an address they can keep. Token-addressed
+   because an order id is guessable by counting, and this one carries a
+   name and an amount. */
+CREATE TABLE IF NOT EXISTS donation_receipts (
+  order_id INTEGER PRIMARY KEY,
+  token TEXT UNIQUE NOT NULL,
+  fund_id INTEGER NOT NULL,
+  cents INTEGER NOT NULL,
+  donor TEXT DEFAULT '',
+  email TEXT DEFAULT '',
+  issued_at REAL NOT NULL,
+  emailed_at REAL DEFAULT 0
+);
 """
 
 
@@ -93,6 +107,71 @@ def totals(con, fund_id: int) -> dict:
     return {"raised_cents": got["c"], "gifts": got["n"],
             "remitted_cents": sent["c"],
             "held_cents": max(0, got["c"] - sent["c"])}
+
+
+def issue_receipt(con, order_id: int, fund_id: int, cents: int,
+                  donor: str = "", email: str = "") -> str:
+    """Mint the donor's copy. Returns the token, or '' if it could not.
+
+    Never fatal: a gift that was taken and a receipt that failed to
+    generate is a bookkeeping problem, and losing the gift to fix it
+    would be a worse one.
+    """
+    if not (order_id and fund_id and cents > 0):
+        return ""
+    try:
+        import secrets
+        row = con.execute("SELECT token FROM donation_receipts"
+                          " WHERE order_id=?", (order_id,)).fetchone()
+        if row:
+            return row["token"]
+        tok = secrets.token_urlsafe(18)
+        con.execute(
+            "INSERT INTO donation_receipts(order_id,token,fund_id,cents,"
+            "donor,email,issued_at) VALUES(?,?,?,?,?,?,?)",
+            (order_id, tok, fund_id, cents, (donor or "")[:80],
+             (email or "")[:120], time.time()))
+        con.commit()
+        return tok
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def receipt_lines(fund, cents: int, donor: str, when: float,
+                  shop: str) -> dict:
+    """What a donation receipt may honestly say.
+
+    This is the whole of the thinking. A charity taking its own donations
+    issues a tax receipt: its name, its number, and the line a tax office
+    looks for — that nothing was received in return.
+
+    A shop collecting for a hospice is not the hospice. It cannot issue a
+    tax receipt on somebody else's behalf, and a document that looked
+    like one would be the shop making a claim it has no standing to
+    make — the kind of mistake that is discovered by a tax office rather
+    than by an accountant. So what it issues is an acknowledgement: you
+    gave this much, through us, and it is going there. Anybody who needs
+    a tax receipt has to get it from the charity, and the paper says so
+    rather than leaving them to find out.
+    """
+    ours = fund["kind"] == "ours"
+    return {
+        "title": "Donation receipt" if ours else "Thank you for giving",
+        "issuer": shop,
+        "for": fund["name"],
+        "payee": "" if ours else (fund["payee"] or ""),
+        "reference": fund["reference"] or "",
+        "cents": cents, "donor": donor, "at": when,
+        "tax_receipt": bool(ours),
+        "statement": (
+            "No goods or services were provided in return for this "
+            "donation." if ours else
+            f"This is an acknowledgement, not a tax receipt. "
+            f"{shop} collected this on behalf of "
+            f"{fund['payee'] or 'the named cause'} and is not the "
+            f"charity — anything you need for tax has to come from "
+            f"them."),
+    }
 
 
 # ---------- what the shop asks ----------

@@ -1137,7 +1137,10 @@ function openTracking() {
       .join("")}</div>
       <p class="dim">Order #${o.id} · ${money(o.total_cents)}
       ${o.discount_cents ? `· ${o.discount_code} saved ${money(o.discount_cents)}` : ""}
-      · payment ${o.payment_status}</p>`;
+      · payment ${o.payment_status}</p>
+      ${o.donation_receipt_url ? `<p><a href="${o.donation_receipt_url}"
+        target="_blank" rel="noopener">Your receipt for the
+        ${money(o.donation_cents)} donation</a></p>` : ""}`;
   };
 }
 
