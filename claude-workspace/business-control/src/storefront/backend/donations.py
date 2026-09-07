@@ -110,6 +110,30 @@ def totals(con, fund_id: int) -> dict:
             "held_cents": max(0, got["c"] - sent["c"])}
 
 
+def progress(fund, t: dict) -> dict:
+    """How far the appeal has got, in one place.
+
+    The checkout says it, the shop's card says it and the donor's
+    receipt says it, and the arithmetic was on its way to living in
+    three of them. A capped percentage computed three times is three
+    chances to cap one of them differently.
+
+    `pct` is None when there is no target, which is the signal to draw
+    nothing rather than a bar measuring against zero. It caps at 100 and
+    `passed` does not, because a fund that has met its target keeps
+    taking money and a page that implied otherwise would turn a success
+    into a closed door.
+    """
+    tc = fund["target_cents"] or 0
+    raised = t["raised_cents"]
+    return {
+        "target_cents": tc,
+        "pct": min(100, round(raised / tc * 100)) if tc else None,
+        "passed": bool(tc and raised >= tc),
+        "left_cents": max(0, tc - raised) if tc else 0,
+    }
+
+
 def issue_receipt(con, order_id: int, fund_id: int, cents: int,
                   donor: str = "", email: str = "") -> str:
     """Mint the donor's copy. Returns the token, or '' if it could not.
@@ -240,10 +264,7 @@ def offer(con=Depends(get_con)):
         # target keeps taking money — the appeal did not stop being
         # worth giving to because it worked — so the bar is capped and
         # the sentence is not.
-        "pct": (min(100, round(t["raised_cents"] / f["target_cents"] * 100))
-                if f["target_cents"] else None),
-        "passed": bool(f["target_cents"]
-                       and t["raised_cents"] >= f["target_cents"]),
+        **{k: v for k, v in progress(f, t).items() if k != "target_cents"},
         "note": ("Collected for " + f["payee"] if f["kind"] == "collected"
                  and f["payee"] else ""),
     }}

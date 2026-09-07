@@ -2100,6 +2100,56 @@ ok("give-goal-bar" in open("src/storefront/frontend/store.js").read(),
    "and the shopper sees it at the moment they are deciding, which is "
    "the only moment it changes anything")
 
+# And the donor's own copy carries it too — the one page they keep.
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 2000, "active": True})
+_drp = c.get(f"/dr/{_dr['token']}").text
+ok("of $20.00" in _drp and "to go" in _drp,
+   "the receipt says where the fund has got to, not only what one "
+   "person gave — a gift lands somewhere, and until now the somewhere "
+   "was the one thing the receipt could not tell them")
+ok("as at" in _drp,
+   "and dates it. A receipt is a document about a fixed day, and this "
+   "is the only number on it that moves — undated on a printed page it "
+   "quietly ages into a wrong one")
+ok("$5.00 is part of that" in _drp,
+   "their own gift is named inside the total, because 'did mine go "
+   "into this' is the question the total is being read to answer")
+ok(_drp.index("class=\"note") < _drp.index("class=prog"),
+   "it sits below the statement and outside the table of facts. A "
+   "moving number among fixed ones makes the fixed ones look like they "
+   "might move too — including the amount, which is the part somebody "
+   "is relying on")
+ok("$20.00" in _drp.split("class=pl")[1][:80],
+   "and the words carry the whole fact rather than the bar. Print drops "
+   "background colours, so a figure that exists only as a coloured "
+   "rectangle does not survive the likeliest thing to happen to this "
+   "page")
+ok(".bar{display:none}" in _drp and "color-scheme:light" in _drp,
+   "the bar is hidden in print, and the page states its own ground — a "
+   "document with no background is dark text on whatever colour the "
+   "reader's browser happened to pick")
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 300, "active": True})
+_drp2 = c.get(f"/dr/{_dr['token']}").text
+_pl2 = _drp2.split("class=pl")[1][:80]
+ok("passed, and still open" in _pl2 and "100%" not in _pl2,
+   "past the target it says so and drops the percentage rather than "
+   "pinning it at 100 — capping the bar is right, it cannot draw past "
+   "its own end, but '$5.00 of $3.00 — 100%' puts a number between two "
+   "figures that contradict it, and a receipt must not argue with "
+   "itself")
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 0, "active": True})
+_drp3 = c.get(f"/dr/{_dr['token']}").text
+ok("given so far" in _drp3 and "class=bar" not in _drp3,
+   "and with no target there is no bar, but there is still news: no "
+   "target is not the same as nothing to say, and a donor still wants "
+   "to know their gift landed among others rather than alone")
+
 # Giving over time, in calendar months.
 def _months_back(n, day=12):
     """The 12th of the month `n` months before this one. Relative,

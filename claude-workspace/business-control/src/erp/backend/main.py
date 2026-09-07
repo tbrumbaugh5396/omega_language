@@ -5957,11 +5957,57 @@ def donation_receipt(token: str, con=Depends(get_con)):
                                       r["issued_at"], shop)
     e = _html.escape
     when = time.strftime("%d %B %Y", time.localtime(d["at"]))
+
+    # Where the appeal has got to, under the receipt rather than in it.
+    #
+    # A receipt is a document about one gift on one day, and it gets
+    # printed, filed and read back years later. The fund's total is the
+    # opposite: true this second and different tomorrow. Putting a moving
+    # number inside the table of fixed facts would make the whole page
+    # look like it might have changed — including the amount, which is
+    # the part somebody is relying on.
+    #
+    # So it sits below the statement, it is dated "as at", and the words
+    # carry the whole fact. The bar is decoration: print stylesheets drop
+    # background colours by default, and a fact that only exists as a
+    # coloured rectangle is a fact that does not survive being printed,
+    # which is the single most likely thing to happen to this page.
+    _t = store_donations.totals(con, f["id"])
+    _pr = store_donations.progress(f, _t)
+    _asat = time.strftime("%d %B %Y", time.localtime(db.now()))
+    _m = lambda c: "$%s" % f"{c / 100:,.2f}"                  # noqa: E731
+    if _pr["pct"] is not None:
+        _line = f"{_m(_t['raised_cents'])} of {_m(_pr['target_cents'])}"
+        # The percentage is dropped once it is passed rather than pinned
+        # at 100. Capping the BAR at full is right — it cannot draw past
+        # its own end — but "$66.50 of $50.00 — 100%" puts a number
+        # between two figures that contradict it, and a receipt arguing
+        # with itself is the one thing this page cannot afford to do.
+        _line += (" — passed, and still open" if _pr["passed"]
+                  else f" — {_pr['pct']}%, with "
+                       f"{_m(_pr['left_cents'])} to go")
+    else:
+        # No target is not no news. The donor still wants to know their
+        # gift landed among others rather than alone in a column.
+        _line = f"{_m(_t['raised_cents'])} given so far"
+    _bar = (f"<div class=bar><i style=\"width:{_pr['pct']}%\"></i></div>"
+            if _pr["pct"] is not None else "")
+    # Their own gift named inside the total, because "your money went
+    # into this" is the question the number is being read to answer.
+    _mine = (f"Your {_m(r['cents'])} is part of that."
+             if _t["raised_cents"] >= r["cents"] else "")
+    prog = f"""<div class=prog>
+  <p class=k>Where {e(f['name'])} has got to, as at {e(_asat)}</p>
+  {_bar}
+  <p class=pl>{e(_line)}</p>
+  {f'<p class=k>{e(_mine)}</p>' if _mine else ''}
+</div>"""
     return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>{e(d['title'])} — {e(shop)}</title>
-<style>body{{font:16px/1.55 system-ui,sans-serif;max-width:34rem;
-margin:6vh auto;padding:0 1.2rem;color:#16202b}}
+<style>:root{{color-scheme:light}}
+body{{font:16px/1.55 system-ui,sans-serif;max-width:34rem;
+margin:6vh auto;padding:0 1.2rem;color:#16202b;background:#fff}}
 h1{{font-size:1.35rem;margin:0 0 .2rem}}
 .amt{{font-size:2.6rem;font-weight:700;margin:1.2rem 0 .2rem}}
 .k{{color:#5b6b7c;font-size:.9rem}}
@@ -5971,7 +6017,15 @@ td:last-child{{text-align:right}}
 .note{{background:#f4f7fa;border-radius:.5rem;padding:.9rem 1rem;
 font-size:.92rem;color:#3d4c5c}}
 .ack{{border-left:3px solid #d08a2c;background:#fdf6ec}}
-@media print{{body{{margin:0}}.noprint{{display:none}}}}</style>
+.prog{{margin:1.6rem 0 0;padding-top:1.1rem;
+border-top:1px solid #e6ebf0}}
+.prog p{{margin:.35rem 0}}
+.pl{{font-size:.95rem}}
+.bar{{height:.5rem;border-radius:.25rem;background:#e6ebf0;
+overflow:hidden;margin:.5rem 0}}
+.bar i{{display:block;height:100%;background:#1f9d76}}
+@media print{{body{{margin:0}}.noprint{{display:none}}
+.bar{{display:none}}}}</style>
 <h1>{e(d['title'])}</h1>
 <p class=k>{e(shop)}</p>
 <div class=amt>{'$%.2f' % (d['cents'] / 100)}</div>
@@ -5986,7 +6040,9 @@ font-size:.92rem;color:#3d4c5c}}
   <tr><td>Reference</td><td>DR-{r['order_id']}</td></tr>
 </table>
 <p class="note{'' if d['tax_receipt'] else ' ack'}">{e(d['statement'])}</p>
-<p class=k>Keep this link — it is your copy.</p>
+{prog}
+<p class=k>Keep this link — it is your copy, and the figure above will
+have moved by the time you read it again.</p>
 <p class=noprint><button onclick="print()">Print</button></p>""")
 
 
