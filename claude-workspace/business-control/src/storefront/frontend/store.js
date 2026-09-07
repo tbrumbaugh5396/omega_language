@@ -1496,6 +1496,11 @@ async function drawAccount() {
   const [orders, subs] = await Promise.all([
     (await fetch("/api/store/account/orders", { headers: H })).json(),
     (await fetch("/api/store/account/subscriptions", { headers: H })).json()]);
+  let giving = null;
+  try {
+    giving = await (await fetch("/api/store/account/donations",
+                                { headers: H })).json();
+  } catch { giving = null; }
   const aff = await (await fetch("/api/store/affiliate/stats",
     { headers: H })).json().catch(() => ({ joined: false }));
   // the account panel follows the grant too: no affiliates capability,
@@ -1551,6 +1556,33 @@ async function drawAccount() {
         : `<button class="btn-pill ghost sm" data-sub="${s.id}:resume">resume</button>`
       )).join("") ||
         `<p class="dim">${t("no_plans")}</p>`}` : ""}
+    ${giving && (giving.gifts || []).length ? `
+      <h3 style="font-size:15px;margin-top:14px">Giving</h3>
+      <div class="ship-opt">
+        ${giving.to_us_cents ? `<b>${money(giving.to_us_cents)}</b>
+          <span class="dim">given to us</span>` : ""}
+        ${giving.through_us_cents ? `<b>${money(giving.through_us_cents)}
+          </b><span class="dim">given through us for others</span>` : ""}
+      </div>
+      ${giving.years.length > 1 ? giving.years.map((y) => `
+        <div class="ship-opt"><b>${y.year}</b>
+          <span class="dim">${y.gifts} gift${y.gifts === 1 ? "" : "s"}</span>
+          <span>${y.to_us_cents ? money(y.to_us_cents) + " to us" : ""}
+            ${y.through_us_cents ? (y.to_us_cents ? " · " : "")
+              + money(y.through_us_cents) + " through us" : ""}</span>
+        </div>`).join("") : ""}
+      ${giving.gifts.map((g) => `
+        <div class="ship-opt"><b>${money(g.cents)}</b>
+          <span class="dim">${esc(g.fund)}${g.payee
+            ? " · for " + esc(g.payee) : ""} ·
+            ${new Date(g.created_at * 1000).toLocaleDateString()}</span>
+          ${g.receipt_url
+            ? `<a class="btn-pill ghost sm" href="${g.receipt_url}"
+                 target="_blank" rel="noopener">${g.tax_receipt
+                   ? "receipt" : "acknowledgement"}</a>`
+            : `<span class="dim">no copy on file</span>`}
+        </div>`).join("")}
+      <p class="dim">${esc(giving.note)}</p>` : ""}
     <h3 style="font-size:15px;margin-top:14px">Orders</h3>
     ${(orders || []).map((o) => `
       <div class="ship-opt"><b>#${o.id}</b>

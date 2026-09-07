@@ -32,6 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .api import admin_user, get_con
+from .api import current_customer as _customer
 
 router = APIRouter()
 
@@ -237,6 +238,55 @@ def offer(con=Depends(get_con)):
         "note": ("Collected for " + f["payee"] if f["kind"] == "collected"
                  and f["payee"] else ""),
     }}
+
+
+@router.get("/api/store/account/donations")
+def my_donations(con=Depends(get_con), user=Depends(_customer)):
+    """Everything one person has given here, and their own copies.
+
+    Two totals, not one, and they are kept apart for the same reason the
+    receipts are. What somebody gave to this business, if it is a charity
+    taking its own donations, is a figure a tax office will accept from
+    us. What they gave THROUGH us for a hospice is not ours to certify —
+    we handled it, we did not receive it, and adding the two into a
+    single "you have given" number would be quietly overstating what we
+    are able to stand behind.
+
+    So: given to us, given through us, and a year-by-year split, because
+    a tax year is the unit anybody asking this question is working in.
+    """
+    rows = [dict(r) for r in con.execute(
+        "SELECT o.id AS order_id, o.donation_cents AS cents,"
+        " o.created_at, f.name AS fund, f.kind, f.payee, f.reference,"
+        " COALESCE(dr.token,'') AS token"
+        " FROM orders o JOIN donation_funds f ON f.id=o.donation_fund_id"
+        " LEFT JOIN donation_receipts dr ON dr.order_id=o.id"
+        " WHERE o.user_id=? AND o.donation_cents>0"
+        " AND o.status!='cancelled' ORDER BY o.created_at DESC",
+        (user["id"],))]
+    to_us = sum(r["cents"] for r in rows if r["kind"] == "ours")
+    through = sum(r["cents"] for r in rows if r["kind"] != "ours")
+    years: dict = {}
+    for r in rows:
+        y = time.strftime("%Y", time.localtime(r["created_at"]))
+        b = years.setdefault(y, {"year": y, "to_us_cents": 0,
+                                 "through_us_cents": 0, "gifts": 0})
+        b["gifts"] += 1
+        b["to_us_cents" if r["kind"] == "ours"
+          else "through_us_cents"] += r["cents"]
+        r["receipt_url"] = f"/dr/{r['token']}" if r["token"] else ""
+        r["tax_receipt"] = r["kind"] == "ours"
+        r.pop("token", None)
+    return {
+        "gifts": rows, "to_us_cents": to_us, "through_us_cents": through,
+        "years": sorted(years.values(), key=lambda x: x["year"],
+                        reverse=True),
+        "note": ("What you gave to us and what you gave through us are "
+                 "listed apart. Money we collected for somebody else was "
+                 "handled by us and received by them, so a receipt for "
+                 "it has to come from them — ours is an acknowledgement "
+                 "and says so."),
+    }
 
 
 # ---------- what the shop's owner runs ----------

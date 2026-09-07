@@ -2024,6 +2024,41 @@ ok(c.post("/api/orders/1/donation-receipt/send",
           headers=A).status_code == 404,
    "and an order with no donation has no receipt to send")
 
+# One person's giving, in one place.
+ok(c.get("/api/store/account/donations").status_code == 401,
+   "somebody's giving history is theirs — signed out, there is nothing "
+   "to see")
+_mine = c.get("/api/store/account/donations", headers=A).json()
+ok(len(_mine["gifts"]) >= 2 and all("token" not in g for g in
+                                    _mine["gifts"]),
+   "signed in, every gift they have made — with the link to their own "
+   "copy, and never the raw token, which is the thing that addresses it")
+ok(_mine["to_us_cents"] > 0 and _mine["through_us_cents"] > 0
+   and "to_us_cents" in str(_mine["years"][0]),
+   "two totals and a year-by-year split, because a tax year is the unit "
+   "anybody asking this question is working in")
+ok(all(g["tax_receipt"] == (g["kind"] == "ours") for g in _mine["gifts"]),
+   "each gift says whether its copy is a receipt or an acknowledgement, "
+   "which is the same distinction the document itself makes")
+ok("has to come from them" in _mine["note"],
+   "and the two totals are kept apart rather than added: what somebody "
+   "gave THROUGH us is not ours to certify — we handled it, they "
+   "received it — and one combined 'you have given' figure would "
+   "overstate what this business can stand behind")
+# A real second account, not a stub: an isolation test that cannot fail
+# is not an isolation test.
+_oc3 = _db.connect()
+_oc3.execute("INSERT INTO users(name,email,role,token,region,created_at)"
+             " VALUES('Nosy','nosy@example.com','customer','nosy-tok-1',"
+             "'',?)", (_t0.time(),))
+_oc3.commit(); _oc3.close()
+_NB = {"Authorization": "Bearer nosy-tok-1"}
+_other = c.get("/api/store/account/donations", headers=_NB)
+ok(_other.status_code == 200 and _other.json()["gifts"] == []
+   and _other.json()["to_us_cents"] == 0,
+   "and it is scoped to the account asking: somebody else's giving is "
+   "not in this one's list, and their totals are their own")
+
 # A present is bought by one person and shipped to another.
 _gift = c.post("/api/orders", headers=A, json={
     "items": [{"product_id": _pid2, "qty": 1}], "donation_cents": 400,
