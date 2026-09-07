@@ -208,9 +208,16 @@ async function fundGifts(fid, name) {
   try { d = await api(`/api/store/admin/donations/${fid}/gifts`); }
   catch (e) { return toast(e.message); }
   const when = (t) => new Date(t * 1000).toLocaleDateString();
-  modal(`<h3>${esc(name)}</h3>
+  modal(`<h3>${esc(name)}${d.active ? ""
+      : ` <span class="dim">· closed</span>`}</h3>
     <p class="dim">${d.givers} giver${d.givers === 1 ? "" : "s"} ·
       ${money(d.total_cents)}${d.payee ? " · for " + esc(d.payee) : ""}</p>
+    ${d.pct !== null ? `<div class="fund-goal">
+      <div class="fund-goal-bar"><i style="width:${d.pct}%"
+        class="${d.passed ? "done" : ""}"></i></div>
+      <span class="dim">${esc(d.line)}</span>
+    </div>` : `<p class="dim">${esc(d.line)}</p>`}
+    ${d.truncated ? `<p class="dim">${esc(d.truncated)}</p>` : ""}
     ${d.passing_it_on ? `<p class="warn-note">${esc(d.passing_it_on)}</p>`
       : ""}
     <div class="tablewrap"><table>

@@ -529,9 +529,26 @@ def fund_gifts(fid: int, user=Depends(admin_user), con=Depends(get_con)):
         r["receipt_url"] = f"/dr/{r['token']}" if r["token"] else ""
         r.pop("token", None)
     givers = len({r["email"] or f"o{r['order_id']}" for r in rows})
+    # The fund's own totals, not the sum of what is listed. The list
+    # stops at 500 and the fund does not, so on a busy appeal the two
+    # part company — and this report sits beside a card showing the
+    # authoritative figure, which is the worst place to publish a
+    # quieter one. Where they differ the report says so rather than
+    # letting somebody discover it by adding the column up.
+    t = totals(con, fid)
+    pr = progress(f, t)
+    listed = sum(r["cents"] for r in rows)
     out = {"fund": f["name"], "kind": f["kind"], "payee": f["payee"],
            "gifts": rows, "givers": givers,
-           "total_cents": sum(r["cents"] for r in rows)}
+           "total_cents": t["raised_cents"], "listed_cents": listed,
+           "listed": len(rows), "all_gifts": t["gifts"],
+           "active": bool(f["active"]),
+           "line": progress_line(t, pr, bool(f["active"])), **pr}
+    if t["gifts"] > len(rows):
+        out["truncated"] = (
+            f"Showing the most recent {len(rows)} of {t['gifts']} gifts. "
+            f"The totals above are the whole fund; the list below is "
+            f"not, and the CSV has all of them.")
     if f["kind"] == "collected":
         # Worth saying where somebody is most likely to be about to do
         # it. The donor gave at this shop's checkout; they did not join

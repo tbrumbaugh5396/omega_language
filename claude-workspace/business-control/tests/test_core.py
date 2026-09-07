@@ -2069,6 +2069,73 @@ ok(c.get("/api/store/admin/donations/9999/gifts",
          headers=A).status_code == 404,
    "a fund that does not exist has no givers")
 
+# The report carries the appeal's progress, from the same sentence.
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 2000, "active": True})
+_gp = c.get(f"/api/store/admin/donations/{_fid}/gifts", headers=A).json()
+ok(_gp["pct"] == 25 and "to go" in _gp["line"],
+   "the shop's fund report says how far the appeal has got, beside the "
+   "list of who got it there — the two facts are read together and were "
+   "on separate screens")
+ok(_gp["line"] in c.get(f"/dr/{_dr['token']}").text,
+   "the identical sentence to the donor's receipt for the same fund, "
+   "checked against the receipt rather than against a restatement of "
+   "the rule — the shop and the donor reading different numbers for one "
+   "appeal is the failure worth spending a function on")
+ok(_gp["total_cents"] == _gp["listed_cents"]
+   and _gp["all_gifts"] == _gp["listed"] and "truncated" not in _gp,
+   "and where the list is whole, the listed total and the fund's total "
+   "agree, with nothing to explain")
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 2000, "active": False})
+_gc = c.get(f"/api/store/admin/donations/{_fid}/gifts", headers=A).json()
+ok(not _gc["active"] and "closed" in _gc["line"],
+   "a closed appeal says so here too, so the bar beside it is not read "
+   "as a live one")
+# And where it is not whole, it says so. On its own fund with its own
+# orders, so nothing else in this file has to know about the 501 rows —
+# and both are deleted afterwards, because the point of using a
+# throwaway is that it gets thrown away.
+_bigf = c.post("/api/store/admin/donations", headers=A, json={
+    "name": "Big appeal", "kind": "ours", "target_cents": 100000,
+    "active": False}).json()["id"]
+_bcon = _db.connect()
+_bcon.executemany(
+    "INSERT INTO orders(user_id,kind,status,region,subtotal_cents,"
+    "total_cents,donation_cents,donation_fund_id,created_at)"
+    " VALUES(1,'web','paid','',0,100,100,?,?)",
+    [(_bigf, _t0.time() - i) for i in range(501)])
+_bcon.commit(); _bcon.close()
+_big = c.get(f"/api/store/admin/donations/{_bigf}/gifts", headers=A).json()
+ok(_big["listed"] == 500 and _big["all_gifts"] == 501,
+   "the list stops at 500 gifts, because a report nobody can scroll is "
+   "not a report")
+ok(_big["total_cents"] == 50100 and _big["listed_cents"] == 50000,
+   "but the total above it is the whole fund and not the sum of what "
+   "is listed. This report sits beside a card showing the real figure, "
+   "which is the worst place to publish a quieter one")
+ok("truncated" in _big and "501" in _big["truncated"]
+   and "CSV has all of them" in _big["truncated"],
+   "and the gap is stated rather than left to be found by adding the "
+   "column up — with where the rest actually is")
+ok(_big["pct"] == 50,
+   "the progress is the fund's, so a truncated list does not quietly "
+   "shorten the bar")
+_ccsv = c.get(f"/api/store/admin/donations/{_bigf}/gifts.csv", headers=A)
+ok(len(_ccsv.text.strip().split("\n")) == 502,
+   "and the CSV really does have all of them, header included — the "
+   "note above sends people there, so it had better be true")
+_bcon2 = _db.connect()
+_bcon2.execute("DELETE FROM orders WHERE donation_fund_id=?", (_bigf,))
+_bcon2.execute("DELETE FROM donation_funds WHERE id=?", (_bigf,))
+_bcon2.commit(); _bcon2.close()
+
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 0, "active": True})
+
 # How far the appeal has got.
 c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
     "name": "Hospice appeal", "kind": "collected",
