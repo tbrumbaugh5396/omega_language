@@ -2835,24 +2835,48 @@ ok(c.post("/api/store/admin/fleet/nodes", headers=AA,
 _wkey = _tn.registry()["nodes"]["node-w"]["key"]
 ok(len(_wkey) > 20, "and mints the key every shipment must present")
 
+# A file and not a PIPE. Nothing drains a pipe while the worker runs,
+# and a server that logs its way past the 64K buffer would block forever
+# on its own stderr — a hang that looks like the test being slow.
+_werrf = open(_wdata / "worker.err", "w+b")
 _wproc = _sp2.Popen(
     [sys.executable, str(ROOT / "scripts" / "launch.py"),
      "--port", str(_wport)],
     env={**os.environ, "BUSINESS_CONTROL_DATA": str(_wdata),
          "BUSINESS_CONTROL_NODE": "node-w",
          "BUSINESS_CONTROL_NODE_KEY": _wkey},
-    stdout=_sp2.DEVNULL, stderr=_sp2.DEVNULL)
+    stdout=_sp2.DEVNULL, stderr=_werrf)
 try:
-    for _ in range(120):
+    # A wall-clock deadline, not a count of tries. A loop of 120 attempts
+    # means thirty seconds when the port refuses instantly and two and a
+    # half minutes when it hangs, which is the wrong way round: the case
+    # that needs patience is a machine under load, and that is exactly
+    # the case where a refusal comes back fast. This box runs six suite
+    # parts at once under the pre-push hook, and a real server importing
+    # its way to a listening socket in that company took longer than the
+    # thirty seconds the count happened to buy.
+    _deadline = time.monotonic() + 120
+    while time.monotonic() < _deadline:
+        if _wproc.poll() is not None:
+            break                       # it died; say so below, with why
         try:
             _rq = _ur.Request(f"http://127.0.0.1:{_wport}/api/node/ping",
                               headers={"X-Fleet-Key": _wkey})
-            if _ur.urlopen(_rq, timeout=1).status == 200:
+            if _ur.urlopen(_rq, timeout=2).status == 200:
                 break
         except Exception:
             time.sleep(0.25)
     else:
-        raise RuntimeError("worker node never came up")
+        raise RuntimeError("worker node never came up within 120s")
+    if _wproc.poll() is not None:
+        # Its stderr is kept rather than binned. "Never came up" names a
+        # symptom and no cause, and the cause is sitting in the log —
+        # a port taken, an import that failed, a data dir that is not
+        # writable. A harness that bins it makes every one of those look
+        # like the same flake.
+        _werrf.flush(); _werrf.seek(0)
+        _werr = (_werrf.read() or b"").decode()[-2000:]
+        raise RuntimeError(f"worker node exited {_wproc.returncode}:\n{_werr}")
 
     _rq2 = _ur.Request(f"http://127.0.0.1:{_wport}/api/node/ping",
                        headers={"X-Fleet-Key": "wrong"})
