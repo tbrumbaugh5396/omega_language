@@ -795,6 +795,9 @@ def _usage_from(con) -> dict:
         "SELECT COUNT(*) FROM kiosks WHERE active=1 AND kind='display'"))
     meter("learning", "rooms", _q1(con,
         "SELECT COUNT(*) FROM rooms WHERE active=1"))
+    meter("selling", "donations raised", _q1(con,
+        "SELECT SUM(donation_cents) FROM orders WHERE created_at>? AND"
+        " status!='cancelled'", (mo,)), "30d")
     meter("api", "live keys", _q1(con,
         "SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL"))
 
@@ -848,7 +851,45 @@ def _usage_from(con) -> dict:
         # the client's own corridor does not show those, and a screen in
         # our office has less business with them than that one does.
         "rooms": _rooms_from(con),
+        # What a client has collected, and what of it is still theirs to
+        # send on. Here rather than only in a meter because money held on
+        # trust has an age, and an age is the part worth ringing about.
+        "donations": _donations_from(con),
     }
+
+
+def _donations_from(con) -> dict:
+    try:
+        funds, raised, remitted, held = [], 0, 0, 0
+        oldest = 0.0
+        now = time.time()
+        for f in con.execute("SELECT * FROM donation_funds ORDER BY id"):
+            got = con.execute(
+                "SELECT COALESCE(SUM(donation_cents),0) c, COUNT(*) n,"
+                " COALESCE(MIN(created_at),0) first FROM orders"
+                " WHERE donation_fund_id=? AND status!='cancelled'"
+                " AND donation_cents>0", (f["id"],)).fetchone()
+            sent = con.execute(
+                "SELECT COALESCE(SUM(cents),0) c FROM donation_remittances"
+                " WHERE fund_id=?", (f["id"],)).fetchone()["c"]
+            h = max(0, got["c"] - sent)
+            raised += got["c"]
+            remitted += sent
+            held += h if f["kind"] == "collected" else 0
+            if f["kind"] == "collected" and h and got["first"]:
+                oldest = max(oldest, now - got["first"])
+            funds.append({
+                "name": f["name"], "kind": f["kind"], "payee": f["payee"],
+                "raised_cents": got["c"], "gifts": got["n"],
+                "remitted_cents": sent,
+                "held_cents": h if f["kind"] == "collected" else 0,
+                "active": bool(f["active"])})
+        return {"funds": funds, "raised_cents": raised,
+                "remitted_cents": remitted, "held_cents": held,
+                "oldest_held_days": int(oldest / 86400) if oldest else 0}
+    except Exception:                                        # noqa: BLE001
+        return {"funds": [], "raised_cents": 0, "remitted_cents": 0,
+                "held_cents": 0, "oldest_held_days": 0}
 
 
 def _rooms_from(con) -> list:
@@ -1190,6 +1231,20 @@ def tenant_report(tid: str, u=Depends(admin_user), con=Depends(get_con)):
             notes.append(f"{catalog[cid]['name']} is granted but idle — "
                          f"train it up, or trim ${catalog[cid]['price']}/mo")
     notes.extend(_limit_notes(usage.get("pressure") or {}))
+    _dn = usage.get("donations") or {}
+    if _dn.get("held_cents"):
+        # Not an accusation — most of it is money waiting for a cheque
+        # run. But we host the record of it, so we are the only ones who
+        # can see it going stale, and a client who finds out from their
+        # auditor rather than from us will remember which it was.
+        days = _dn.get("oldest_held_days") or 0
+        notes.append(
+            f"holding ${_dn['held_cents'] / 100:.0f} collected for "
+            f"somebody else"
+            + (f", the oldest of it {days} days ago" if days else "")
+            + " — it is not their money and never was, so a long gap "
+              "between collecting and sending is worth a quiet word "
+              "before somebody's auditor asks first")
     for cid, vals in metered.items():
         if (caps is not None and cid not in caps and cid in catalog
                 and any(v["value"] for v in vals)):

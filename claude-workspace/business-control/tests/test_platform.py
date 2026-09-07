@@ -5136,6 +5136,21 @@ c.post("/api/rooms/bookings", headers=_ah, json={
     "title": "Evening class"})
 c.post("/api/admin/kiosks", headers=_ah, json={
     "label": "Studio A door", "kind": "display", "room_id": _rmx})
+# What a client has collected, and what of it is still with them.
+_dfid = c.post("/api/store/admin/donations", headers=_ah, json={
+    "name": "Shelter appeal", "kind": "collected",
+    "payee": "City Shelter"}).json()["id"]
+_dcon2 = _dbp.connect()
+_dtok = _tn.CURRENT.set("alpha")
+try:
+    _ac = _dbp.connect()
+    _ac.execute("UPDATE orders SET donation_cents=250, donation_fund_id=?"
+                " WHERE id=(SELECT id FROM orders ORDER BY id LIMIT 1)",
+                (_dfid,))
+    _ac.commit(); _ac.close()
+finally:
+    _tn.CURRENT.reset(_dtok)
+_dcon2.close()
 _dsr = c.get("/api/store/admin/fleet/tenants/alpha/report",
              headers=AA).json()
 _mine = [r for r in _dsr.get("rooms", []) if r["name"] == "Studio A"]
@@ -5145,6 +5160,25 @@ ok(_mine and _mine[0]["state"] == "due" and _mine[0]["displays"] == 1,
    "offer rather than a thing to sell, since a display costs nothing")
 ok(_mine[0]["what"] == "Evening class" and _mine[0]["seats"] == 10,
    "with enough to be worth reading on a call")
+
+_dnn = _dsr.get("donations") or {}
+ok(_dnn.get("raised_cents") == 250 and _dnn.get("held_cents") == 250,
+   "the dossier shows what a client has collected and what of it is "
+   "still with them — money held on trust is the one figure here that "
+   "is somebody else's")
+ok(any(f["kind"] == "collected" and f["payee"] == "City Shelter"
+       for f in _dnn.get("funds", [])),
+   "with whose it is on the row, because a fund's kind decides which "
+   "book it belongs in rather than how it looks")
+ok(any("collected for somebody else" in n for n in _dsr["notes"]),
+   "and it reaches the advice, not just a table. We host the record, "
+   "which makes us the only people who can see it going stale — and a "
+   "client who hears it from their auditor rather than from us will "
+   "remember which it was")
+_sell = {m["label"] for m in _dsr["meters"].get("selling", [])}
+ok("donations raised" in _sell,
+   "it meters alongside orders and revenue, while staying out of the "
+   "revenue figure itself")
 _seen = _jn.dumps(_dsr.get("rooms", []))
 ok("student" not in _seen.lower() and "roster" not in _seen.lower(),
    "and it stops at the door: no register, no student, no name of "

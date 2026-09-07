@@ -1334,7 +1334,51 @@ function dossierModal(tid, d, sec) {
         rather than a thing to sell.</p>`;
   };
 
-  const body = { overview, meters, rooms, traffic, infra, history };
+  /* What a client has collected, and what of it is still sitting with
+     them. On the money tab rather than its own, because the number that
+     matters is next to the other numbers about money. */
+  const giving = () => {
+    const d2 = d.donations || {};
+    const fs = d2.funds || [];
+    if (!fs.length) return "";
+    return `<div class="card" style="margin-top:12px">
+      <div class="card-head"><b>Donations</b>
+        <span class="dim">Charged on orders, never counted as their
+          revenue — here and in every figure on this page.</span></div>
+      <div class="lrn-rtotals" style="display:flex;gap:26px;flex-wrap:wrap">
+        <span><b>${money(d2.raised_cents || 0)}</b>
+          <span class="dim"> raised</span></span>
+        <span><b>${money(d2.remitted_cents || 0)}</b>
+          <span class="dim"> sent on</span></span>
+        <span class="${d2.held_cents ? "bad" : ""}">
+          <b>${money(d2.held_cents || 0)}</b>
+          <span class="dim"> held for somebody else</span></span>
+      </div>
+      ${d2.held_cents ? `<p class="warn-note">Money collected for
+        somebody else is not theirs and never was${d2.oldest_held_days
+          ? `, and the oldest of this came in ${d2.oldest_held_days} days
+             ago` : ""}. We host the record of it, which makes us the
+        only people who can see it going stale.</p>` : ""}
+      <div class="tablewrap"><table>
+        <thead><tr><th>fund</th><th>whose</th><th>raised</th>
+          <th>sent on</th><th>held</th></tr></thead>
+        <tbody>${fs.map((f) => `<tr${f.active ? "" : ' class="dim"'}>
+          <td><b>${esc(f.name)}</b>${f.active ? ""
+            : ' <span class="pill">closed</span>'}</td>
+          <td class="dim">${f.kind === "ours" ? "theirs — income"
+            : "collected for " + esc(f.payee || "somebody")}</td>
+          <td class="num">${money(f.raised_cents)}
+            <span class="dim">${f.gifts}</span></td>
+          <td class="num">${f.kind === "ours" ? "—"
+            : money(f.remitted_cents)}</td>
+          <td class="num ${f.held_cents ? "bad" : ""}">${f.kind === "ours"
+            ? "—" : money(f.held_cents)}</td>
+        </tr>`).join("")}</tbody></table></div>
+    </div>`;
+  };
+
+  const body = { overview, meters: () => meters() + giving(), rooms,
+                 traffic, infra, history };
   modal(`<h3>${esc(d.tenant)} — the dossier</h3>
     <p class="dim">${esc(d.class)} class · ${esc(d.status)} ·
       software \$${d.monthly_software}/mo ·
