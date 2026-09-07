@@ -134,6 +134,27 @@ def progress(fund, t: dict) -> dict:
     }
 
 
+def progress_line(t: dict, pr: dict) -> str:
+    """The one sentence, for the page and the email both.
+
+    The page draws a bar and the email cannot, which makes it tempting
+    to write them separately — and that is how a receipt ends up
+    disagreeing with the email that carried it. The bar was always
+    decoration; this sentence was always the fact. So there is one of
+    it, and the page is the sentence plus a picture of it.
+    """
+    m = lambda c: "$%s" % f"{c / 100:,.2f}"                   # noqa: E731
+    if pr["pct"] is None:
+        return f"{m(t['raised_cents'])} given so far"
+    head = f"{m(t['raised_cents'])} of {m(pr['target_cents'])}"
+    if pr["passed"]:
+        # Not "100%". Capping the bar is right — it cannot draw past its
+        # own end — but a percentage between two figures that contradict
+        # it is a document arguing with itself.
+        return head + " — passed, and still open"
+    return head + f" — {pr['pct']}%, with {m(pr['left_cents'])} to go"
+
+
 def issue_receipt(con, order_id: int, fund_id: int, cents: int,
                   donor: str = "", email: str = "") -> str:
     """Mint the donor's copy. Returns the token, or '' if it could not.
@@ -200,7 +221,7 @@ def receipt_lines(fund, cents: int, donor: str, when: float,
 
 
 def receipt_email(fund, cents: int, donor: str, shop: str,
-                  url: str) -> tuple:
+                  url: str, prog: str = "", asat: str = "") -> tuple:
     """Subject and body for the donor's copy.
 
     Says the same thing the page says, because a receipt that disagrees
@@ -208,8 +229,28 @@ def receipt_email(fund, cents: int, donor: str, shop: str,
     collected case still refuses to be a tax receipt — the wording is not
     softer in an email because nobody is reading it over somebody's
     shoulder.
+
+    The fund's progress goes in too, and it is the one line here that
+    needs an apology built into it. An email is frozen at the moment it
+    was sent and can never be corrected; the figure it quotes starts
+    going out of date on the way to the inbox. So it is dated, it says
+    plainly that it was true when sent, and it points at the link for
+    the number that is true now. A stale figure that admits to being one
+    is useful. A stale figure presented as current is a small lie that
+    gets worse every day it sits in somebody's archive.
     """
-    amount = f"{cents / 100:.2f}"
+    # With the currency, matching the page. The two documents are the
+    # same document, and a bare "7.50" against the page's "$7.50" is the
+    # kind of small disagreement that makes somebody check the rest.
+    amount = f"${cents / 100:,.2f}"
+    # Worded as the page words it, which also happens to be the only
+    # phrasing that carries both forms of the line — "of $4,000.00, 2%"
+    # and a plain "given so far" — without one of them reading as a
+    # sentence somebody forgot to finish.
+    note = (f"\n\nWhere {fund['name']} has got to"
+            + (f", as at {asat}" if asat else "")
+            + f": {prog}. That was true when this was sent — the link "
+              "above always has the figure for today.") if prog else ""
     if fund["kind"] == "ours":
         return (f"Your donation receipt — {shop}",
                 f"Hi {donor or 'there'},\n\n"
@@ -219,7 +260,9 @@ def receipt_email(fund, cents: int, donor: str, shop: str,
                 "donation"
                 + (f", and our registered number is {fund['reference']}"
                    if fund["reference"] else "")
-                + ".\n\nKeep the link — it is your copy, and it will "
+                + "."
+                + note
+                + "\n\nKeep the link — it is your copy, and it will "
                   "still be there when you need it.")
     payee = fund["payee"] or "the cause"
     return (f"Thank you for giving to {payee}",
@@ -229,8 +272,9 @@ def receipt_email(fund, cents: int, donor: str, shop: str,
             f"Your acknowledgement: {url}\n\n"
             f"This is not a tax receipt. {shop} collected this on behalf "
             f"of {payee} and is not the charity, so anything you need for "
-            f"tax has to come from them directly.\n\nKeep the link — it "
-            "is your copy.")
+            f"tax has to come from them directly."
+            + note
+            + "\n\nKeep the link — it is your copy.")
 
 
 def mark_emailed(con, token: str) -> None:

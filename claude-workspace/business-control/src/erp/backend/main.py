@@ -5851,8 +5851,12 @@ def _send_donation_receipt(con, token: str, uid: int, email: str,
         if f is None:
             return False
         shop = CFG.get("brand_name") or "this shop"
+        _et = store_donations.totals(con, f["id"])
         subject, text = store_donations.receipt_email(
-            f, r["cents"], r["donor"], shop, f"{base_url()}/dr/{token}")
+            f, r["cents"], r["donor"], shop, f"{base_url()}/dr/{token}",
+            prog=store_donations.progress_line(
+                _et, store_donations.progress(f, _et)),
+            asat=time.strftime("%d %B %Y", time.localtime(db.now())))
         # The automatic one sends exactly once, ever. A deliberate resend
         # has to be able to actually send — a button called "send it
         # again" that cannot is worse than no button, because the person
@@ -5976,20 +5980,10 @@ def donation_receipt(token: str, con=Depends(get_con)):
     _pr = store_donations.progress(f, _t)
     _asat = time.strftime("%d %B %Y", time.localtime(db.now()))
     _m = lambda c: "$%s" % f"{c / 100:,.2f}"                  # noqa: E731
-    if _pr["pct"] is not None:
-        _line = f"{_m(_t['raised_cents'])} of {_m(_pr['target_cents'])}"
-        # The percentage is dropped once it is passed rather than pinned
-        # at 100. Capping the BAR at full is right — it cannot draw past
-        # its own end — but "$66.50 of $50.00 — 100%" puts a number
-        # between two figures that contradict it, and a receipt arguing
-        # with itself is the one thing this page cannot afford to do.
-        _line += (" — passed, and still open" if _pr["passed"]
-                  else f" — {_pr['pct']}%, with "
-                       f"{_m(_pr['left_cents'])} to go")
-    else:
-        # No target is not no news. The donor still wants to know their
-        # gift landed among others rather than alone in a column.
-        _line = f"{_m(_t['raised_cents'])} given so far"
+    # The same sentence the emailed copy carries. The bar is the picture
+    # of it; a page and its own email disagreeing about the figure is
+    # worse than neither of them carrying it.
+    _line = store_donations.progress_line(_t, _pr)
     _bar = (f"<div class=bar><i style=\"width:{_pr['pct']}%\"></i></div>"
             if _pr["pct"] is not None else "")
     # Their own gift named inside the total, because "your money went

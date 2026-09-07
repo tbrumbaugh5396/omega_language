@@ -2141,6 +2141,49 @@ ok("passed, and still open" in _pl2 and "100%" not in _pl2,
    "its own end, but '$5.00 of $3.00 — 100%' puts a number between two "
    "figures that contradict it, and a receipt must not argue with "
    "itself")
+
+# And the emailed copy carries the same sentence — caught at mailer.send
+# rather than read off the source, because "the caller passes it" and
+# "it arrives in the body" are different claims and only one of them is
+# what the donor gets.
+c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
+    "name": "Hospice appeal", "kind": "collected",
+    "payee": "St Anne's Hospice", "target_cents": 2000, "active": True})
+# The resend throttle is a real one and an earlier check just used it,
+# so clear it rather than wait sixty seconds: what is under test here is
+# what the body says, not that the throttle works — which is checked in
+# its own right further up.
+from erp.backend.main import _RESENT as _RS               # noqa: E402
+_RS.clear()
+_sent_bodies = []
+_orig_ms = mailer.send
+mailer.send = lambda cfg, to, s, t: (_sent_bodies.append((s, t)), "sent")[1]
+c.post(f"/api/orders/{_dr['order_id']}/donation-receipt/send", headers=A)
+mailer.send = _orig_ms
+_eb = _sent_bodies[-1][1] if _sent_bodies else ""
+ok("of $20.00" in _eb and "to go" in _eb,
+   "the emailed receipt carries the progress too, not just the page it "
+   "links to — the email is the thing that arrives, and a donor who "
+   "never clicks through is still a donor who was told")
+ok("as at" in _eb and "true when this was sent" in _eb
+   and "always has the figure for today" in _eb,
+   "and it apologises for itself in advance. An email is frozen at the "
+   "moment it was sent and can never be corrected, so it dates the "
+   "figure, says it was true then, and points at the link for now — a "
+   "stale number that admits to being one is useful, and the same "
+   "number presented as current is a small lie that gets worse every "
+   "day it sits in an archive")
+ok(_eb.count("$20.00") and "$5.00" in _eb,
+   "with the currency on it, matching the page. The two are the same "
+   "document, and a bare 5.00 against the page's $5.00 is the kind of "
+   "small disagreement that makes somebody check the rest")
+_pl_page = c.get(f"/dr/{_dr['token']}").text.split("class=pl")[1][:80]
+ok(_pl_page.split(">")[1].split("<")[0].strip() in _eb,
+   "and it is the identical sentence, from one function. The page draws "
+   "a bar and the email cannot, which is exactly the invitation to "
+   "write them twice — and twice is how a receipt ends up disagreeing "
+   "with the email that carried it")
+
 c.patch(f"/api/store/admin/donations/{_fid}", headers=A, json={
     "name": "Hospice appeal", "kind": "collected",
     "payee": "St Anne's Hospice", "target_cents": 0, "active": True})
