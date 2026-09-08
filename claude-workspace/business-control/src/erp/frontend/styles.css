@@ -1830,10 +1830,26 @@ body.lane-on { overflow: hidden; }
 /* The wall screen. Sized to be read from a doorway rather than from a
    desk: one thing large, one thing under it, everything else small and
    below. Fills the viewport because that is the whole tablet. */
+/* The app caps main at a reading column, which is right for a form or a
+   table and wrong for this: a sign in a corridor is not read at a desk.
+   On a wall screen it was using 1044 of 1920 px and the rule below was
+   claiming to fill the viewport while doing it. Scoped by :has so no
+   other screen loses its column.
+
+   #view and not main: the cap is set by the id, so a rule naming only
+   the element loses to it however true it is. Written against the rule
+   it has to beat, which was found by asking the page which rule set the
+   value rather than by guessing which one probably had. */
+#view:has(> .disp) { max-width: none; }
 .disp {
   min-height: 78vh; display: flex; flex-direction: column;
   align-items: center; justify-content: center; text-align: center;
   gap: 10px; padding: 24px 16px;
+  /* Its own ground. It had none, so it took whatever the app page
+     happened to be — which is also how three colours below came to be
+     measured against a surface this screen does not paint on. A screen
+     that IS the whole tablet should say what it is painted on. */
+  background: var(--panel);
 }
 .disp-room { font-size: clamp(18px, 4vw, 34px); letter-spacing: .06em;
   text-transform: uppercase; color: var(--dim); }
@@ -1848,10 +1864,15 @@ body.lane-on { overflow: hidden; }
   border-radius: var(--r-pill); border: 1px solid var(--line);
   color: var(--dim);
 }
-.disp-pill.on { border-color: #2dd4bf; color: #2dd4bf; }
+/* Tokens, not the teal and salmon that were here. Those came from a
+   dark-theme era and this screen is light: they measured 1.55 and 2.67
+   against the surface it actually paints on. This is the one screen in
+   the product read from a doorway, and it held the least legible text
+   in it. */
+.disp-pill.on { border-color: var(--good); color: var(--good); }
 /* Recording is stated only when segments are actually landing, so it is
    allowed to look definite. */
-.disp-pill.rec { border-color: #f0605a; color: #f0605a; }
+.disp-pill.rec { border-color: var(--bad); color: var(--bad); }
 .disp-pill.rec::before { content: "\25cf"; margin-right: 7px; }
 .disp-next { margin-top: 16px; font-size: clamp(14px, 2.6vw, 23px); }
 .disp-later { display: flex; gap: 16px; flex-wrap: wrap;
@@ -1867,7 +1888,10 @@ body.lane-on { overflow: hidden; }
   margin: 10px 0 4px; min-height: 38px; }
 .pinpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .btn.pinkey { font-size: 22px; padding: 16px 0; }
-.btn.pinkey.go { background: var(--accent); color: #06111c; }
+/* White on the accent, not the near-black that was here: #06111c on
+   this brand's purple is 2.49 to one, on the key somebody presses to
+   commit. */
+.btn.pinkey.go { background: var(--accent); color: #fff; }
 
 /* The register, behind the code. Rows big enough to tap standing up. */
 .sheet { max-height: 52vh; overflow-y: auto; margin: 8px 0; }
@@ -1875,7 +1899,7 @@ body.lane-on { overflow: hidden; }
   gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
 .sheet-name { font-size: 1.05em; }
 .sheet-marks { display: flex; gap: 5px; flex-shrink: 0; }
-.disp-blocked { margin-top: 14px; color: #f0a08a;
+.disp-blocked { margin-top: 14px; color: var(--bad);
   font-size: clamp(13px, 2vw, 18px); }
 
 /* A fund: whose money, how much came in, how much has gone. The two
@@ -1895,21 +1919,21 @@ body.lane-on { overflow: hidden; }
    not happen. */
 .give-trend { margin: 8px 0 12px; }
 .give-bars { display: flex; align-items: flex-end; gap: 3px; height: 48px; }
-.give-bar { width: 14px; border-radius: 2px; background: var(--accent, #2dd4bf);
+.give-bar { width: 14px; border-radius: 2px; background: var(--accent);
   display: block; opacity: .75; }
 .give-bar.best { opacity: 1; }
 .give-bar.part { background: repeating-linear-gradient(45deg,
-  var(--accent, #2dd4bf) 0 3px, transparent 3px 6px); opacity: .9; }
+  var(--accent) 0 3px, transparent 3px 6px); opacity: .9; }
 
 /* A fund against its target. Capped at full and said in words when it is
    past, because an appeal does not stop being worth giving to the moment
    it works. */
 .fund-goal { margin: 6px 0 2px; }
-.fund-goal-bar { height: 6px; border-radius: 999px; background: var(--line);
+.fund-goal-bar { height: 6px; border-radius: var(--r-pill); background: var(--line);
   overflow: hidden; margin-bottom: 4px; max-width: 340px; }
 .fund-goal-bar i { display: block; height: 100%;
-  background: var(--accent, #2dd4bf); }
-.fund-goal-bar i.done { background: #7fd6a8; }
+  background: var(--accent); }
+.fund-goal-bar i.done { background: var(--good); }
 .fund-goal .dim { font-size: .85em; }
 
 .press-fund{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;

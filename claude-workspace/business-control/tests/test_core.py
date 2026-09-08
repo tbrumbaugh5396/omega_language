@@ -6340,17 +6340,45 @@ def _ratio(a, b):
     return round((max(la, lb) + .05) / (min(la, lb) + .05), 2)
 
 
-# Surfaces that are deliberately dark (the wall display sits on --deep)
-# and text that is deliberately white on a filled accent.
-_ON_DARK = (".disp-", ".scan-status", "button.btn", ".chip.on", ".bell-n")
+# A rule that sets its own background is painting its text on THAT, so
+# it is not measured against the panel. This started as a hand-kept list
+# of selectors — and the list was where the bug hid. .disp- was on it,
+# on my say-so that a wall display is a dark screen; it is not. .disp
+# set no background at all, so it painted on the app's light page, and
+# the three colours exempted on that assumption measured 1.55, 1.73 and
+# 2.67 against it. The one screen in the product meant to be read from a
+# doorway held the least legible text in it, and the guard had been told
+# not to look.
+#
+# So the exemption is read from the CSS instead of remembered. Every
+# entry the list used to hold — the buttons, the chips, the badge, the
+# scanner's caption — sets a background in its own rule and exempts
+# itself. Nothing has to be trusted, and .disp, which set none, could
+# not have exempted itself no matter what I believed about it.
 _faint = []
 for _m in _re.finditer(r"([^;{}]*)\{([^}]*)\}", _ocss):
     _sel = _m.group(1).strip().splitlines()[-1].strip()
-    if any(d in _sel for d in _ON_DARK):
+    _body = _m.group(2)
+    if _re.search(r"\bbackground(-color|-image)?:", _body):
         continue
-    for _cm in _re.finditer(r"(?<!-)\bcolor:\s*(#[0-9a-fA-F]{3,6})", _m.group(2)):
+    for _cm in _re.finditer(r"(?<!-)\bcolor:\s*(#[0-9a-fA-F]{3,6})", _body):
         if _ratio(_cm.group(1), "#f6f7f9") < 4.5:
             _faint.append(f"{_sel} {_cm.group(1)}")
+# The rule's own block, to its closing brace — not a fixed slice, which
+# a long enough comment walks straight out of.
+_disp_rule = _ocss.split(".disp {")[1].split("}")[0] if ".disp {" in _ocss else ""
+ok("#view:has(> .disp)" in _ocss,
+   "the wall screen is let out of the app's reading column. #view caps "
+   "at 1080 so a form or a table is read at a comfortable width; a sign "
+   "in a corridor is not read at a desk, and on a 1920 wall it was "
+   "using 1044 of them while the rule below claimed to fill the "
+   "viewport. Written against #view because the id is what sets the "
+   "cap — a rule naming only the element loses to it however true it is")
+ok("background: var(--panel)" in _disp_rule,
+   "and the wall display names the surface it paints on, so that claim "
+   "is a rule rather than a memory — a screen with no background of its "
+   "own takes whatever the page behind it happens to be, and every "
+   "colour chosen against the wrong one is wrong by exactly that much")
 ok(not _faint,
    "no hardcoded text colour falls below 4.5:1 on a panel. Eight did — "
    "a salmon and a mint from the same dark-theme era, on the money "
