@@ -4549,6 +4549,47 @@ _sjs = (_sfdir / "store.js").read_text()
 _scss = (_sfdir / "store.css").read_text()
 _ssw = (_sfdir / "sf-sw.js").read_text()
 
+# --- the shop's stylesheet reads no property that does not exist -----
+# The same guard the ops sheet carries, and it found the same shape of
+# bug: the donation controls were var(--accent, #2dd4bf), and --accent is
+# defined nowhere here. So the fallback was not a fallback, it was the
+# value — every shop on the platform got one hardcoded teal on the single
+# control that asks a customer for money, ignoring the brand every other
+# thing on that screen follows.
+#
+# Comments are stripped first: a rule is a rule, and the word --accent
+# inside the note explaining its removal is not one.
+_scss_live = _re.sub(r"/\*.*?\*/", "", _scss, flags=_re.S)
+_SF_INJECTED = {
+    "--cols",       # store.js layoutGrid(), from the measured width
+    "--consent-h",  # store.js, the consent bar's measured height
+    "--kind",       # store.js, per product group, inline
+}
+_sf_used = set(_re.findall(r"var\(\s*(--[\w-]+)", _scss_live))
+_sf_def = set(_re.findall(r"(--[\w-]+)\s*:", _scss_live))
+_sf_ghosts = sorted(_sf_used - _sf_def - _SF_INJECTED)
+ok(not _sf_ghosts,
+   "every custom property the storefront reads is defined in its own "
+   f"palette or injected by named code at runtime ({_sf_ghosts} is "
+   "neither — and a property nothing defines is a hardcoded value "
+   "wearing a variable's clothes, invisible to anyone reading :root)")
+ok("var(--flavour)" in _scss.split(".co-give-amt.on")[1][:120],
+   "so the donation controls tint from the shop's own brand, like the "
+   "rest of its checkout")
+
+# layoutGrid() sizes --cols from the measured width, but it is only ever
+# called on #product-grid.
+ok(_re.search(r"@media[^{]*max-width:\s*560px[^{]*\{\s*\.grid\s*\{[^}]*--cols:\s*1",
+              _scss_live),
+   "and every OTHER .grid narrows by stylesheet rather than keeping the "
+   "fallback of four. The reviews grid was four 66px columns on a "
+   "phone, one of them holding a whole paragraph — a fallback written "
+   "for a desktop, inherited by everything the script never visits")
+ok("min-width: min(280px, 100%)" in _scss,
+   "and the subscribe field asks for 280px or the width it actually "
+   "has, whichever is smaller: a minimum wider than the phone it is on "
+   "is a minimum the phone cannot honour")
+
 ok("showcase" in _sect.SECTION_TYPES and "showcase" in _sect.RENDERERS,
    "the showcase is a real section type, editable like the rest")
 ok(_sect.HOME_DEFAULT[0] == "showcase",

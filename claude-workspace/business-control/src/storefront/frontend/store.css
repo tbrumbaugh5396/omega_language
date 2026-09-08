@@ -41,6 +41,12 @@
   --r-md: 16px;
   --r-lg: 26px;
   --r-pill: 999px;
+  /* Defined rather than left to a fallback in one rule each. A fallback
+     for a property nothing defines is not a fallback, it is the value —
+     unreviewed, and invisible to anyone reading :root for the palette. */
+  --leaf: #7a9e4c;                       /* the affiliate page's ticks */
+  --surface-2: rgba(127, 127, 127, .06); /* the faint inset behind rows */
+  --cfg-w: 320px;                        /* the configurator's side rail */
   --radius: var(--r-md);      /* legacy alias */
 
   /* two shadows */
@@ -343,6 +349,14 @@ svg.can { display: block; width: 100%; height: auto; }
    lone card back. */
 .grid { display: grid; gap: 22px;
   grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); }
+/* layoutGrid() computes --cols from the measured width, but it is only
+   ever called on #product-grid — so every OTHER .grid on the site kept
+   the fallback of four, at every width. The reviews grid was four 66px
+   columns on a phone, one of them holding a paragraph. The fallback is
+   a desktop assumption, so these narrow it; #product-grid is untouched
+   because its inline value, being inline, still wins. */
+@media (max-width: 900px) { .grid { --cols: 2; } }
+@media (max-width: 560px) { .grid { --cols: 1; } }
 
 /* benefit strip — the nutrition/claims row */
 .benefits { background: var(--paper); border-top: 1px solid var(--line);
@@ -388,7 +402,7 @@ svg.can { display: block; width: 100%; height: auto; }
 
 /* ---------- the configurator ---------- */
 .cfg-grid { display: grid;
-  grid-template-columns: 1fr var(--cfg-w, 320px); gap: 28px;
+  grid-template-columns: 1fr var(--cfg-w); gap: 28px;
   align-items: start; }
 /* folded: the panel keeps a sliver so there is something to click back */
 .cfg-grid.rail-folded { grid-template-columns: 1fr 34px; }
@@ -652,7 +666,10 @@ svg.can { display: block; width: 100%; height: auto; }
 #subscribe-form { display: flex; gap: 10px; justify-content: center;
   flex-wrap: wrap; }
 #subscribe-form input { border: none; border-radius: var(--r-pill);
-  padding: 14px 22px; font-family: var(--ui); font-size: 15px; min-width: 280px; }
+  padding: 14px 22px; font-family: var(--ui); font-size: 15px;
+  /* min() and not a flat 280: a fixed minimum wider than the phone it
+     is on is a minimum the phone cannot honour. */
+  min-width: min(280px, 100%); }
 #subscribe-msg { color: #ffcba0; margin-top: 12px; font-weight: 500;
   font-size: 14px; }
 
@@ -1159,7 +1176,11 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
 .show-copy { max-width: 430px; }
 .show-copy b { display: block; font-family: var(--display);
   font-size: clamp(26px, 3.4vw, 42px); line-height: 1.1; margin-bottom: 10px; }
-.show-copy p { color: var(--ink-soft); font-size: 15.5px; margin-bottom: 14px; }
+/* No colour of its own: it sits on a tinted slide and inherits that
+   slide's ink, which is what it has always actually done — the rule
+   named a variable nothing defines, so it was already a no-op. Setting
+   it to a real ink now would put dark text on the orange one. */
+.show-copy p { font-size: 15.5px; margin-bottom: 14px; }
 .show-price { display: block; font-weight: 700; margin-bottom: 16px; }
 
 .show-arrow { position: absolute; top: 50%; transform: translateY(-50%);
@@ -1298,7 +1319,7 @@ html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
 .proof-line { font-family: var(--display);
   font-size: clamp(26px, 4.2vw, 52px); line-height: 1.12; color: var(--ink); }
 .proof-line b { color: var(--purple); }
-.proof-sub { margin-top: 10px; color: var(--ink-soft); font-size: 15.5px; }
+.proof-sub { margin-top: 10px; color: var(--ink-2); font-size: 15.5px; }
 
 /* ---------- film controls ----------
    The play/pause glyph rides over the film, quiet while playing and
@@ -1459,7 +1480,7 @@ body.offer-open { overflow: hidden; }
 .aff-join-copy p { color: var(--ink-2); margin-bottom: 18px; }
 .aff-ticks { list-style: none; display: flex; flex-direction: column; gap: 9px; }
 .aff-ticks li { display: flex; align-items: center; gap: 9px; font-size: 14.5px; }
-.aff-ticks .ico { color: var(--leaf, #7a9e4c); flex: none; }
+.aff-ticks .ico { color: var(--leaf); flex: none; }
 .aff-form { display: flex; flex-direction: column; gap: 12px;
   background: var(--paper); border-radius: var(--r-md); padding: 24px; }
 .aff-form label { display: flex; flex-direction: column; gap: 6px;
@@ -1477,7 +1498,7 @@ body.offer-open { overflow: hidden; }
 .co-offer { display: flex; align-items: center; justify-content: space-between;
   gap: 14px; margin: 12px 0 4px; padding: 12px 14px;
   border: 1px dashed var(--line); border-radius: var(--r-md, 10px);
-  background: var(--surface-2, rgba(127,127,127,.06)); }
+  background: var(--surface-2); }
 .co-offer-txt { display: flex; flex-direction: column; gap: 2px;
   font-size: 14px; min-width: 0; }
 .co-offer-txt .dim { font-size: 12.5px; }
@@ -1485,24 +1506,28 @@ body.offer-open { overflow: hidden; }
 
 /* The collection, at checkout. Reads as an aside like the offer does —
    asked once, easy to decline, and never a line in the basket. */
-.co-give { margin: 12px 0 4px; padding: 12px 14px; border-radius: var(--r-md, 10px);
-  background: var(--surface-2, rgba(127,127,127,.06));
+.co-give { margin: 12px 0 4px; padding: 12px 14px; border-radius: var(--r-md);
+  background: var(--surface-2);
   border: 1px solid var(--line); }
 .co-give-txt { display: flex; flex-direction: column; gap: 2px;
   font-size: 14px; margin-bottom: 8px; }
 .co-give-txt .dim { font-size: 12.5px; }
 .co-give-amts { display: flex; gap: 6px; flex-wrap: wrap; }
-.co-give-amt.on { border-color: var(--accent, #2dd4bf);
-  color: var(--accent, #2dd4bf); }
+/* --flavour, not a var(--accent, #2dd4bf) this sheet never defines: the
+   fallback was not a fallback, it was the value, and every shop on the
+   platform got the same hardcoded teal on the one control asking them
+   for money. It follows the tenant's brand now, like everything else at
+   this checkout does. */
+.co-give-amt.on { border-color: var(--flavour); color: var(--flavour); }
 
 /* How far the appeal has got. Truthful even when that is not flattering:
    a shop that would rather not show a bar at two per cent can leave the
    target blank, which is the honest control and the only one offered. */
 .give-goal { margin: 2px 0 10px; }
-.give-goal-bar { height: 6px; border-radius: var(--r-pill, 999px);
+.give-goal-bar { height: 6px; border-radius: var(--r-pill);
   background: var(--line); overflow: hidden; margin-bottom: 4px; }
 .give-goal-bar i { display: block; height: 100%;
-  background: var(--accent, #2dd4bf); }
+  background: var(--flavour); }
 .give-goal .dim { font-size: 12.5px; }
 
 .give-fund{padding:.55rem 0;border-bottom:1px solid var(--line)}
