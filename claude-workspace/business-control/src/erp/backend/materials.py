@@ -35,6 +35,20 @@ from . import tenancy
 
 MAX_IMAGE = 8 * 1024 * 1024
 MAX_MEDIA = 256 * 1024 * 1024
+MAX_DOC = 32 * 1024 * 1024
+
+# Documents a teacher hands out. Sniffed like everything else — a PDF
+# starts with %PDF, the Office formats are zip containers — and the zip
+# family is told apart by the name the sender declared, because from the
+# bytes alone a .docx and a .pptx are the same archive. A text file has
+# no signature at all, so it is the one kind admitted by NOT looking
+# like anything: valid UTF-8 with no NUL in it.
+_ZIP_KINDS = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".zip": "application/zip",
+}
 
 # leading-bytes signatures: (prefix, kind, mime, extension)
 _SIGNATURES = (
@@ -78,12 +92,29 @@ def uploads_root() -> str:
     return str(tenancy.data_dir() / "uploads")
 
 
-def sniff(data: bytes):
+def sniff(data: bytes, filename: str = ""):
     """(kind, mime, ext) from the leading bytes, or None. RIFF and ftyp
-    containers are refined by the tag deeper in."""
+    containers are refined by the tag deeper in; zip containers by the
+    declared name; text by being nothing else."""
     for prefix, kind, mime, ext in _SIGNATURES:
         if data.startswith(prefix):
             return kind, mime, ext
+    if data.startswith(b"%PDF"):
+        return "document", "application/pdf", ".pdf"
+    if data.startswith(b"PK\x03\x04"):
+        ext = os.path.splitext(str(filename or "").lower())[1]
+        if ext not in _ZIP_KINDS:
+            ext = ".zip"
+        return "document", _ZIP_KINDS[ext], ext
+    if data and b"\x00" not in data[:65536]:
+        try:
+            data[:65536].decode("utf-8")
+            if str(filename or "").lower().endswith((".txt", ".md", ".csv")):
+                ext = os.path.splitext(filename.lower())[1]
+                return "document", {".txt": "text/plain", ".md": "text/markdown",
+                                    ".csv": "text/csv"}[ext], ext
+        except UnicodeDecodeError:
+            pass
     if data[:4] == b"RIFF" and len(data) >= 12:
         tag = data[8:12]
         if tag == b"WEBP":
@@ -98,16 +129,18 @@ def sniff(data: bytes):
     return None
 
 
-def save(data: bytes, *, allow=("image", "audio", "video")) -> dict:
+def save(data: bytes, *, allow=("image", "audio", "video"),
+         filename: str = "") -> dict:
     if not data:
         raise HTTPException(400, "the upload arrived empty")
-    found = sniff(data)
+    found = sniff(data, filename)
     if found is None:
         raise HTTPException(400, "that file type is not accepted here")
     kind, mime, ext = found
     if kind not in allow:
         raise HTTPException(400, f"a {kind} is not accepted here")
-    cap = MAX_IMAGE if kind == "image" else MAX_MEDIA
+    cap = (MAX_IMAGE if kind == "image" else
+           MAX_DOC if kind == "document" else MAX_MEDIA)
     if len(data) > cap:
         raise HTTPException(400,
                             f"too large — the cap is {cap // (1024*1024)} MB")
@@ -248,9 +281,34 @@ async def ops_lesson_material(lid: int, request: Request,
     if not may_edit(con, user, r["course_id"]):
         raise HTTPException(403, "you do not teach this course")
     data = await read_upload(request)
-    saved = save(data)
+    name = request.headers.get("x-filename", "")
+    saved = save(data, allow=("image", "audio", "video", "document"),
+                 filename=name)
     mid = record(con, saved=saved, owner_id=user["id"], lesson_id=lid,
-                 original=request.headers.get("x-filename", ""))
+                 original=name)
+    con.commit()
+    return {"id": mid, **saved}
+
+
+@router.post("/api/learning/sessions/{sid}/material")
+async def ops_session_material(sid: int, request: Request,
+                               user=Depends(current_user),
+                               con=Depends(get_con)):
+    """Something put in front of THIS class — a handout, a slide deck,
+    a photo of the whiteboard. The teacher's, or the door's: whoever is
+    running the room may hand things out in it."""
+    s = con.execute("SELECT * FROM class_sessions WHERE id=?",
+                    (sid,)).fetchone()
+    if s is None:
+        raise HTTPException(404, "session not found")
+    from .classroom import _door
+    _door(con, user, s["course_id"])
+    data = await read_upload(request)
+    name = request.headers.get("x-filename", "")
+    saved = save(data, allow=("image", "audio", "video", "document"),
+                 filename=name)
+    mid = record(con, saved=saved, owner_id=user["id"], session_id=sid,
+                 original=name)
     con.commit()
     return {"id": mid, **saved}
 

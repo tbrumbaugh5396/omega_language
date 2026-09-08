@@ -4223,6 +4223,82 @@ ok("shareScreen" in _mjs_now() and "getDisplayMedia" in _mjs_now()
    "the mesh shares a screen by swapping the camera's track, so no "
    "renegotiation and nothing about the connection changes")
 
+# --- handouts: files a teacher puts in front of a class ------------------
+_lsn_id = c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["lessons"][0]["id"]
+_pdf = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+_up = c.post(f"/api/learning/lessons/{_lsn_id}/material", headers={
+    **TT, "Content-Type": "application/pdf", "X-Filename": "week 3.pdf"},
+    content=_pdf)
+ok(_up.status_code == 200 and _up.json()["kind"] == "document"
+   and _up.json()["mime"] == "application/pdf",
+   "a teacher attaches a PDF to a lesson — a handout, not only a drill")
+_zip = b"PK\x03\x04" + b"\x00" * 40
+ok(c.post(f"/api/learning/lessons/{_lsn_id}/material", headers={
+    **TT, "X-Filename": "slides.pptx"}, content=_zip).json()["mime"]
+   .endswith("presentationml.presentation"),
+   "an Office file is a zip with a name: the bytes say container, the "
+   "declared name says which kind, and nothing else is trusted from it")
+ok(c.post(f"/api/learning/lessons/{_lsn_id}/material", headers={
+    **TT, "X-Filename": "run.exe"}, content=b"MZ\x90\x00" + b"\x00" * 40
+   ).status_code == 400,
+   "and a file that looks like nothing this accepts is refused — a "
+   "classroom is not a place to hand out executables")
+_txt = c.post(f"/api/learning/sessions/{_s2}/material", headers={
+    **TT, "Content-Type": "text/plain", "X-Filename": "notes.txt"},
+    content=b"Homework: chapter 3.\n")
+ok(_txt.status_code == 200 and _txt.json()["kind"] == "document",
+   "and something for THIS class — a handout for tonight, not a lesson")
+ok(c.post(f"/api/learning/sessions/{_s2}/material", headers={
+    **LN, "X-Filename": "x.txt"}, content=b"hello").status_code in (401, 403),
+   "a learner cannot hand things out in it")
+_shared = c.get(f"/api/learn/sessions/{_s2}/shared", headers=LN).json()
+ok(any(i["title"] == "notes.txt" for i in _shared["items"]),
+   "and the learner's Shared tab lists what was put in front of the class")
+_mres = c.get("/media/" + _txt.json()["path"], headers=HA)
+ok(_mres.status_code == 200 and "notes.txt" in
+   _mres.headers.get("content-disposition", ""),
+   "served under the name it was handed out as, not a hex token — a "
+   "handout saved to a desk should still be called what it was called")
+_lv2 = c.get(f"/api/learn/lessons/{_lsn_id}", headers=TT).json()
+ok(_lv2["may_edit"] and any(m["kind"] == "document" for m in _lv2["materials"]),
+   "the lesson page tells the teacher they may attach, and lists what is "
+   "attached")
+
+# --- the course board -------------------------------------------------------
+_th = c.post(f"/api/learn/courses/{_crs}/threads", headers=LN,
+             json={"title": "When is the exam?", "body": "I missed it"})
+ok(_th.status_code == 200, "a learner asks the class a question")
+_tid = _th.json()["id"]
+ok(c.post(f"/api/learn/threads/{_tid}/posts", headers=NN,
+          json={"body": "Friday, I think"}).status_code == 200,
+   "another learner answers under it")
+ok(c.post(f"/api/learn/threads/{_tid}/posts", headers=TT,
+          json={"body": "Friday at ten."}).status_code == 200,
+   "and the teacher's answer lands under the question rather than in an "
+   "inbox")
+_thr = c.get(f"/api/learn/threads/{_tid}", headers=LN).json()
+ok(len(_thr["posts"]) == 2 and _thr["posts"][1]["author"] == _tch["name"],
+   "in order, with names")
+ok(c.get(f"/api/learn/threads/{_tid}", headers=_SG).status_code == 403
+   and c.get(f"/api/learn/courses/{_crs}/threads", headers=_SG).status_code == 403,
+   "and the board is the course's: somebody not in it can neither read "
+   "nor post")
+_p0 = _thr["posts"][0]["id"]
+ok(c.post(f"/api/learn/posts/{_p0}/delete", headers=LN).status_code == 403
+   and c.post(f"/api/learn/posts/{_p0}/delete", headers=TT).status_code == 200,
+   "a post is the author's or the teacher's to remove, nobody else's")
+_thr2 = c.get(f"/api/learn/threads/{_tid}", headers=LN).json()
+ok(len(_thr2["posts"]) == 2 and _thr2["posts"][0]["deleted"]
+   and _thr2["posts"][0]["body"] == "",
+   "and a removed post keeps its place with the body gone, so the thread "
+   "does not renumber under the people replying to it")
+ok(c.get(f"/api/learn/courses/{_crs}/threads", headers=TT).json()
+   ["threads"][0]["replies"] == 1,
+   "the board counts the replies that are still there")
+ok(c.post(f"/api/learn/courses/{_crs}/threads", headers=LN,
+          json={"title": "  ", "body": ""}).status_code == 400,
+   "a thread needs a title")
+
 c.post(f"/api/learning/sessions/{_cls2['session']['id']}/close", headers=TT)
 _ljs = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
         ).read_text(encoding="utf-8")

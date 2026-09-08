@@ -192,6 +192,7 @@
              scan student cards</button>` : ""}
         ${s.room && s.member ? `<button class="lrn-btn" data-joincall="${s.id}">Join the class online</button>` : ""}
         ${s.member || s.door ? `<button class="lrn-btn" data-panel="${s.id}">Chat &amp; shared</button>` : ""}
+        ${s.may_mark ? `<button class="lrn-btn" data-register="${s.id}">Register</button>` : ""}
       </div>
       <div class="lrn-panel-host" data-panelhost="${s.id}" hidden></div>
       <p class="lrn-meta">${live.some((x) => x.member)
@@ -226,6 +227,8 @@
           classPanel(host, s, { me: MYID, share: true, inCall: false }); } }
       else { host.hidden = true; b.textContent = "Chat & shared"; }
     });
+    root.querySelectorAll("[data-register]").forEach((b) => b.onclick = () =>
+      register(+b.dataset.register, live.find((x) => x.id === +b.dataset.register)));
     root.querySelectorAll("[data-door]").forEach((b) => b.onclick =
       async () => {
         /* Door mode: scan, greet, scan again — the scanner reopens after
@@ -347,7 +350,9 @@
       <h3>${esc(c.name)}</h3>
       <p class="lrn-meta">${esc([c.language, c.level].filter(Boolean).join(" · "))}${
         c.teacher ? " · " + esc(c.teacher) : ""}</p>
-      ${c.progress ? `<div class="lrn-bar"><i style="width:${c.progress.percent}%"></i></div>
+      ${c.teaching ? `<p class="lrn-meta">You teach this — the register, the
+        board and the handouts are inside.</p>` : ""}
+      ${c.progress && !c.teaching ? `<div class="lrn-bar"><i style="width:${c.progress.percent}%"></i></div>
         <p class="lrn-meta">${c.progress.lessons_done}/${c.progress.lessons_total} lessons ·
          ${c.progress.quizzes_passed}/${c.progress.quizzes_total} quizzes · ${c.progress.percent}%</p>` : ""}
       </div>`;
@@ -433,9 +438,12 @@
         <ul class="lrn-list">${d.quizzes.map((q) =>
         `<li><a href="#" data-q="${q.id}">${esc(q.title)}</a>
           <span class="lrn-meta">${q.attempt ? q.attempt.state : ""}</span></li>`).join("")}</ul>` : ""}
+      <h3>Discussion</h3>
+      <div id="lrn-board"><p class="lrn-meta">Loading…</p></div>
       <h3>Calendar</h3>
       <div id="lrn-cal-box"><p class="lrn-meta">Loading the calendar…</p></div>`;
     document.getElementById("lrn-back").onclick = home;
+    boardList(cid, document.getElementById("lrn-board"));
     calendar(cid).catch(() => {
       const box = document.getElementById("lrn-cal-box");
       if (box) box.innerHTML = "";
@@ -467,13 +475,23 @@
         ? `<video class="lrn-media" controls preload="metadata"
             src="/media/${m.path}"></video>`
         : `<img class="lrn-media" src="/media/${m.path}" alt="">`;
+    const av = (d.materials || []).filter((m) => m.kind !== "document");
+    const docs = (d.materials || []).filter((m) => m.kind === "document");
     root.innerHTML = `<span class="lrn-back" id="lrn-back">&larr; Course</span>
       <div class="lrn-lesson"><h2>${esc(d.title)}</h2>${d.html}</div>
-      ${(d.materials || []).length ? `<h3>Listen and watch</h3>
-        ${d.materials.map((m) => `<p>${media(m)}</p>`).join("")}` : ""}
+      ${av.length ? `<h3>Listen and watch</h3>
+        ${av.map((m) => `<p>${media(m)}</p>`).join("")}` : ""}
+      ${docs.length || d.may_edit ? `<h3>Materials</h3>
+        ${docs.map((m) => fileRow(m, d.may_edit)).join("")}
+        ${d.may_edit ? `<div class="lrn-attach"><label class="lrn-btn">Attach a file
+          <input type="file" id="lsn-file" hidden></label>
+          <span class="lrn-meta" id="lsn-file-note">PDF, Office, text, images — up to 32 MB</span></div>` : ""}` : ""}
       ${d.done ? '<p class="lrn-meta">Done ✓</p>'
         : '<button class="lrn-btn primary" id="lrn-done">Mark as done</button>'}`;
     document.getElementById("lrn-back").onclick = () => course(cid);
+    wireFileInput(document.getElementById("lsn-file"), document.getElementById("lsn-file-note"),
+      `/api/learning/lessons/${lid}/material`, () => lesson(lid, cid));
+    wireDeleteMats(() => lesson(lid, cid));
     const b = document.getElementById("lrn-done");
     if (b) b.onclick = async () => {
       await api("/api/learn/lessons/" + lid + "/done", {});
@@ -1365,6 +1383,149 @@
     });
   }
 
+  /* ── the register: the teacher's sheet, on the page they are already on ──
+     Four states per student, the same four the ops roster has, through the
+     same door route — so a teacher in the room with a phone need not go
+     and find a desk. Ticks are the thing you do on this screen, which is
+     why the unmarked come first. */
+  async function register(sid, s) {
+    let d;
+    try { d = await api(`/api/learning/sessions/${sid}`); }
+    catch (err) { alert(err.message); return; }
+    const STATES = ["present", "late", "absent", "excused"];
+    const rows = [...d.roster].sort((a, b) => (a.method ? 1 : 0) - (b.method ? 1 : 0));
+    root.innerHTML = tabs() + `
+      <span class="lrn-back" id="lrn-back">&larr; Check in</span>
+      <h2>${esc(d.course ? d.course.name : "Register")}</h2>
+      <p class="lrn-meta">${d.summary.attended}/${d.summary.enrolled} here ·
+        ${rows.filter((r) => !r.method).length} not yet marked · a grey status is
+        the system's guess, not a ruling</p>
+      <div class="lrn-attach">
+        <label class="lrn-btn">Share a file with the class
+          <input type="file" id="reg-file" hidden></label>
+        <span class="lrn-meta" id="reg-file-note"></span>
+      </div>
+      ${rows.map((r) => `<div class="lrn-reg" data-student="${r.student_id}">
+        ${r.photo ? `<img src="${esc(r.photo)}" alt="">` : `<img alt="">`}
+        <div><b>${esc(r.name)}</b>
+          <div class="lrn-meta">${r.method ? `${esc(r.status)} · by ${esc(r.method)}`
+            : `<span style="opacity:.6">${esc(r.status)} — unmarked</span>`}</div></div>
+        <div class="lrn-regbtns">${STATES.map((st) => `
+          <button class="lrn-btn sm ${r.method && r.status === st ? "on" : ""}"
+            data-mark="${r.student_id}:${st}">${st}</button>`).join("")}</div>
+      </div>`).join("")}`;
+    wireTabs();
+    document.getElementById("lrn-back").onclick = checkin;
+    root.querySelectorAll("[data-mark]").forEach((b) => b.onclick = async () => {
+      const [student_id, status] = b.dataset.mark.split(":");
+      try {
+        await api(`/api/learning/sessions/${sid}/mark`, { student_id: +student_id, status });
+        register(sid, s);
+      } catch (err) { toast(err.message); }
+    });
+    wireFileInput(document.getElementById("reg-file"), document.getElementById("reg-file-note"),
+      `/api/learning/sessions/${sid}/material`, () => toast("shared with the class"));
+  }
+
+  /* One file input, one raw upload, with the file's own name riding in a
+     header — the server sniffs the bytes and only uses the name to tell
+     one zip-shaped Office file from another. */
+  function wireFileInput(input, note, path, done) {
+    if (!input) return;
+    input.onchange = async () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      if (note) note.textContent = `uploading ${f.name}…`;
+      try {
+        const r = await fetch(path, { method: "POST", body: f,
+          headers: { "Content-Type": f.type || "application/octet-stream",
+                     "X-Filename": f.name, Authorization: "Bearer " + token() } });
+        if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m; } catch {}
+          throw new Error(m); }
+        if (note) note.textContent = `${f.name} — shared`;
+        done && done(await r.json());
+      } catch (err) { if (note) note.textContent = err.message; else toast(err.message); }
+      input.value = "";
+    };
+  }
+  const fileRow = (m, canDelete) => `<div class="lrn-file" data-mid="${m.id}">
+      <a href="/media/${esc(m.path)}" target="_blank" rel="noopener">${esc(m.original || m.kind)}</a>
+      <span class="lrn-meta">${esc(m.kind)}${m.bytes ? " · " + Math.round(m.bytes / 1024) + " KB" : ""}
+        ${canDelete ? `<button class="lrn-btn sm" data-delmat="${m.id}">remove</button>` : ""}</span>
+    </div>`;
+  function wireDeleteMats(refresh) {
+    root.querySelectorAll("[data-delmat]").forEach((b) => b.onclick = async () => {
+      try { await api(`/api/learning/materials/${b.dataset.delmat}/delete`, {}); refresh(); }
+      catch (err) { toast(err.message); }
+    });
+  }
+
+  /* ── the course board ─────────────────────────────────────────────────── */
+  const ago = (t) => { const m = Math.round((Date.now() / 1000 - t) / 60);
+    return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+  async function boardList(cid, host) {
+    let d;
+    try { d = await api(`/api/learn/courses/${cid}/threads`); }
+    catch (err) { host.innerHTML = `<p class="lrn-meta">${esc(err.message)}</p>`; return; }
+    host.innerHTML = `
+      <form id="lrn-newthread" class="lrn-say" style="flex-direction:column;align-items:stretch">
+        <input name="title" placeholder="Ask the class something" maxlength="160">
+        <textarea name="body" rows="2" placeholder="Details, optional"></textarea>
+        <button class="lrn-btn sm primary" style="align-self:flex-end">Post</button>
+      </form>
+      ${d.threads.length ? d.threads.map((t) => `<div class="lrn-thread">
+        <b data-thread="${t.id}">${t.pinned ? `<span class="lrn-meta">pinned · </span>` : ""}${esc(t.title)}</b>
+        <span class="lrn-meta">${esc(t.author)} · ${t.replies} repl${t.replies === 1 ? "y" : "ies"}
+          · ${ago(t.last_at)}</span></div>`).join("")
+        : `<p class="lrn-meta">Nothing asked yet. The first question is usually the one everybody had.</p>`}`;
+    host.querySelector("#lrn-newthread").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        await api(`/api/learn/courses/${cid}/threads`,
+          { title: f.title.value, body: f.body.value });
+        boardList(cid, host);
+      } catch (err) { toast(err.message); }
+    };
+    host.querySelectorAll("[data-thread]").forEach((el) => el.onclick = () =>
+      boardThread(+el.dataset.thread, cid));
+  }
+  async function boardThread(tid, cid) {
+    let t;
+    try { t = await api(`/api/learn/threads/${tid}`); }
+    catch (err) { alert(err.message); return; }
+    const mine = (uid) => uid === t.me || t.may_moderate;
+    root.innerHTML = `<span class="lrn-back" id="lrn-back">&larr; Course</span>
+      <h2>${esc(t.title)}</h2>
+      <div class="lrn-post"><span class="lrn-meta">${esc(t.author)} · ${ago(t.created_at)}
+        ${mine(t.user_id) ? `<button class="lrn-btn sm" id="lrn-delthread">delete thread</button>` : ""}</span>
+        <p>${esc(t.body)}</p></div>
+      ${t.posts.map((p) => `<div class="lrn-post">
+        <span class="lrn-meta">${esc(p.author)} · ${ago(p.created_at)}
+          ${!p.deleted && mine(p.user_id) ? `<button class="lrn-btn sm" data-delpost="${p.id}">delete</button>` : ""}</span>
+        <p>${p.deleted ? "<i class='lrn-meta'>removed</i>" : esc(p.body)}</p></div>`).join("")}
+      <form id="lrn-reply" class="lrn-say" style="flex-direction:column;align-items:stretch;margin-top:12px">
+        <textarea name="body" rows="3" placeholder="Reply"></textarea>
+        <button class="lrn-btn sm primary" style="align-self:flex-end">Reply</button>
+      </form>`;
+    document.getElementById("lrn-back").onclick = () => course(cid);
+    root.querySelector("#lrn-reply").onsubmit = async (e) => {
+      e.preventDefault();
+      try { await api(`/api/learn/threads/${tid}/posts`, { body: e.target.body.value });
+        boardThread(tid, cid); } catch (err) { toast(err.message); }
+    };
+    root.querySelectorAll("[data-delpost]").forEach((b) => b.onclick = async () => {
+      try { await api(`/api/learn/posts/${b.dataset.delpost}/delete`, {}); boardThread(tid, cid); }
+      catch (err) { toast(err.message); }
+    });
+    const dt = document.getElementById("lrn-delthread");
+    if (dt) dt.onclick = async () => {
+      if (!confirm("Delete this thread?")) return;
+      try { await api(`/api/learn/threads/${tid}/delete`, {}); course(cid); }
+      catch (err) { toast(err.message); }
+    };
+  }
+
   /* ── the class panel: who is here, what is being said, what is shared ──
      One panel, used two ways. Inside the call it sits beside the tiles;
      from the Check-in tab it opens on its own, so somebody in the room
@@ -1459,6 +1620,14 @@
       const l = host.querySelector("[data-course]");
       if (l) l.onclick = (e) => { e.preventDefault(); location.hash = "courses";
         setTimeout(() => course(s.course_id), 50); };
+      if (s.may_mark) {
+        const sh = host.querySelector("#lp-shared");
+        sh.insertAdjacentHTML("beforeend", `<div class="lrn-attach"><label class="lrn-btn sm">
+          Share a file<input type="file" id="lp-file" hidden></label>
+          <span class="lrn-meta" id="lp-file-note"></span></div>`);
+        wireFileInput(host.querySelector("#lp-file"), host.querySelector("#lp-file-note"),
+          `/api/learning/sessions/${s.id}/material`, drawShared);
+      }
     }
     drawPeople([]); drawShared(); pull();
     return { people: drawPeople, stop() { clearTimeout(timer); } };

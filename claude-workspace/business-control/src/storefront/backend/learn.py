@@ -104,8 +104,14 @@ def my_courses(user=Depends(current_customer), con=Depends(get_con)):
         d = {k: r[k] for k in ("id", "name", "language", "level", "blurb",
                                "product_id")}
         d["teacher"] = r["teacher_name"] or ""
-        if L.enrolled_in(con, r["id"], user["id"]):
+        # A course you teach is yours too. Without this a teacher on the
+        # learner page saw her own course in the catalogue with "Ask to
+        # join", because the teacher's surface used to be ops alone —
+        # and the register and the handouts now live on this page.
+        teaching = L.may_edit(con, user, r["id"])
+        if teaching or L.enrolled_in(con, r["id"], user["id"]):
             d["progress"] = L.course_progress(con, r["id"], user["id"])
+            d["teaching"] = teaching
             mine.append(d)
         else:
             # the catalogue: blurb and a door, never the content
@@ -167,6 +173,7 @@ def course_view(cid: int, user=Depends(current_customer),
                    "enrolled": len(CR.enrolled(con, cid))}
     return {"course": {k: c[k] for k in ("id", "name", "language", "level",
                                          "blurb")},
+            "may_edit": L.may_edit(con, user, cid),
             "lessons": lessons, "quizzes": quizzes,
             "progress": L.course_progress(con, cid, user["id"]),
             "session": session,
@@ -189,6 +196,7 @@ def lesson_view(lid: int, user=Depends(current_customer),
     return {"id": lesson["id"], "course_id": lesson["course_id"],
             "title": lesson["title"], "html": render_markdown(lesson["body"]),
             "position": lesson["position"], "done": done,
+            "may_edit": L.may_edit(con, user, lesson["course_id"]),
             "materials": MAT.of_lesson(con, lid)}
 
 
@@ -592,6 +600,106 @@ def class_say(sid: int, body: ChatBody, user=Depends(current_customer),
     return {"ok": True, "id": cur.lastrowid}
 
 
+# ── the course board ─────────────────────────────────────────────────────────
+
+def _seat(con, user, cid: int):
+    if not (L.enrolled_in(con, cid, user["id"]) or L.may_edit(con, user, cid)):
+        raise HTTPException(403, "you are not in this course")
+
+
+@router.get("/api/learn/courses/{cid}/threads")
+def board(cid: int, user=Depends(current_customer), con=Depends(get_con)):
+    _require_cap("learning")
+    _seat(con, user, cid)
+    from erp.backend import discuss as D
+    return {"threads": D.threads(con, cid),
+            "may_moderate": L.may_edit(con, user, cid), "me": user["id"]}
+
+
+class ThreadBody(BaseModel):
+    title: str = ""
+    body: str = ""
+
+
+@router.post("/api/learn/courses/{cid}/threads")
+def board_start(cid: int, body: ThreadBody, user=Depends(current_customer),
+                con=Depends(get_con)):
+    _require_cap("learning")
+    _seat(con, user, cid)
+    if not body.title.strip():
+        raise HTTPException(400, "a thread needs a title")
+    from erp.backend import discuss as D
+    tid = D.start(con, cid, user["id"], body.title, body.body)
+    con.commit()
+    return {"ok": True, "id": tid}
+
+
+@router.get("/api/learn/threads/{tid}")
+def board_thread(tid: int, user=Depends(current_customer),
+                 con=Depends(get_con)):
+    _require_cap("learning")
+    from erp.backend import discuss as D
+    t = D.thread(con, tid)
+    if t is None:
+        raise HTTPException(404, "no such thread")
+    _seat(con, user, t["course_id"])
+    t["may_moderate"] = L.may_edit(con, user, t["course_id"])
+    t["me"] = user["id"]
+    return t
+
+
+class PostBody(BaseModel):
+    body: str = ""
+
+
+@router.post("/api/learn/threads/{tid}/posts")
+def board_reply(tid: int, body: PostBody, user=Depends(current_customer),
+                con=Depends(get_con)):
+    _require_cap("learning")
+    from erp.backend import discuss as D
+    t = D.thread(con, tid)
+    if t is None:
+        raise HTTPException(404, "no such thread")
+    _seat(con, user, t["course_id"])
+    if not body.body.strip():
+        raise HTTPException(400, "nothing to post")
+    pid = D.reply(con, tid, user["id"], body.body)
+    con.commit()
+    return {"ok": True, "id": pid}
+
+
+@router.post("/api/learn/posts/{pid}/delete")
+def board_post_delete(pid: int, user=Depends(current_customer),
+                      con=Depends(get_con)):
+    """The author's, or the teacher's. The row stays with the body gone,
+    so a thread does not renumber under the people replying to it."""
+    _require_cap("learning")
+    r = con.execute("SELECT p.*, t.course_id FROM course_posts p"
+                    " JOIN course_threads t ON t.id=p.thread_id"
+                    " WHERE p.id=?", (pid,)).fetchone()
+    if r is None:
+        return {"ok": True}
+    if r["user_id"] != user["id"] and not L.may_edit(con, user, r["course_id"]):
+        raise HTTPException(403, "not yours to delete")
+    con.execute("UPDATE course_posts SET deleted=1, body='' WHERE id=?", (pid,))
+    con.commit()
+    return {"ok": True}
+
+
+@router.post("/api/learn/threads/{tid}/delete")
+def board_thread_delete(tid: int, user=Depends(current_customer),
+                        con=Depends(get_con)):
+    _require_cap("learning")
+    r = con.execute("SELECT * FROM course_threads WHERE id=?", (tid,)).fetchone()
+    if r is None:
+        return {"ok": True}
+    if r["user_id"] != user["id"] and not L.may_edit(con, user, r["course_id"]):
+        raise HTTPException(403, "not yours to delete")
+    con.execute("UPDATE course_threads SET deleted=1 WHERE id=?", (tid,))
+    con.commit()
+    return {"ok": True}
+
+
 @router.get("/api/learn/sessions/{sid}/shared")
 def class_shared(sid: int, user=Depends(current_customer),
                  con=Depends(get_con)):
@@ -943,13 +1051,18 @@ def serve_media(shard: str, name: str, con=Depends(get_con)):
     path = os.path.join(MAT.uploads_root(), shard, name)
     if not os.path.isfile(path):
         raise HTTPException(404, "no such file")
-    r = con.execute("SELECT mime FROM learning_materials WHERE path=?",
-                    (f"{shard}/{name}",)).fetchone()
+    r = con.execute("SELECT mime, kind, original FROM learning_materials"
+                    " WHERE path=?", (f"{shard}/{name}",)).fetchone()
+    headers = {"X-Content-Type-Options": "nosniff",
+               "Cache-Control": "private, max-age=31536000, immutable"}
+    if r and r["kind"] == "document" and r["original"]:
+        # A handout saved to a desk should keep the name it was handed
+        # out under, not a hex token.
+        safe = re.sub(r"[^\w.\- ]", "_", r["original"])[:120]
+        headers["Content-Disposition"] = f'inline; filename="{safe}"'
     return FileResponse(path, media_type=(r["mime"] if r else
                                           "application/octet-stream"),
-                        headers={"X-Content-Type-Options": "nosniff",
-                                 "Cache-Control":
-                                     "private, max-age=31536000, immutable"})
+                        headers=headers)
 
 
 # ── the public door: programmes + registration ───────────────────────────────
@@ -1070,6 +1183,17 @@ def learn_page(con=Depends(get_con)):
  .lrn-dot{{width:8px;height:8px;border-radius:50%;background:#3ccf8e;flex:none}}
  .lrn-shared{{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.15)}}
  .lrn-panel-host{{border:1px solid rgba(127,127,127,.25);border-radius:12px;margin:0 0 14px;display:flex;flex-direction:column}}
+ .lrn-reg{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.2)}}
+ .lrn-reg img{{width:34px;height:34px;border-radius:50%;object-fit:cover;background:rgba(127,127,127,.2)}}
+ .lrn-reg .lrn-regbtns{{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}}
+ .lrn-reg .lrn-btn.on{{outline:2px solid var(--accent,#5ac8b0)}}
+ .lrn-thread{{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.2)}}
+ .lrn-thread b{{flex:1;cursor:pointer}}
+ .lrn-post{{padding:10px 0;border-bottom:1px solid rgba(127,127,127,.15)}}
+ .lrn-post .lrn-meta{{display:block;margin-bottom:3px}}
+ .lrn-post p{{margin:0;white-space:pre-wrap}}
+ .lrn-attach{{display:flex;gap:8px;align-items:center;margin:8px 0}}
+ .lrn-file{{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid rgba(127,127,127,.15)}}
  @media (max-width:720px){{ .lrn-call-body{{flex-direction:column}} .lrn-call-side{{width:auto;border-left:0;border-top:1px solid rgba(127,127,127,.25)}} #lrn-call{{max-height:88vh}} }}
  .lrn-cal{{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:420px}}
  .lrn-cal .dow{{font-size:.75em;opacity:.6;text-align:center;padding:2px 0}}

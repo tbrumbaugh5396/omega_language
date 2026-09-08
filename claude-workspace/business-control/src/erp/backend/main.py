@@ -45,8 +45,9 @@ def _init_core(tid=None):
         # back, which only exist once this module has finished defining them
         # — and _init_core first runs at the bottom of this file, where it has
         from . import classroom, community, learning, library, materials
-        from . import nutrition, rooms
+        from . import discuss, nutrition, rooms
         rooms.init_tables(con)
+        discuss.init_tables(con)
         learning.init_tables(con)
         classroom.init_tables(con)
         community.init_tables(con)
