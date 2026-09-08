@@ -1541,7 +1541,7 @@ function dossierModal(tid, d, sec) {
       ${DSECS.map(([k, t]) => `<button class="btn sm ${k === sec ? ""
         : "alt"}" data-dsec="${k}">${t}</button>`).join("")}</div>
     <div id="ds-body">${body[sec]()}</div>
-    <div class="modal-foot" style="display:flex;gap:8px">
+    <div class="modal-foot ds-foot">
       <button class="btn alt" id="ds-refresh"
         title="read their tables again, right now">Refresh</button>
       <button class="btn alt" id="ds-actas">Act as admin</button>

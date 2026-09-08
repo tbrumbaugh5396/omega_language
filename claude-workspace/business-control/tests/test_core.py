@@ -6243,6 +6243,80 @@ ok('class="fl-hosts dim" title=' in _ops,
 ok(any("white-space: normal" in b for b in _fa_media),
    "and narrow, where it has a full-width row to itself, it wraps "
    "instead: nothing to reach for, because nothing is hidden")
+# The dossier's footer. It was an INLINE display:flex;gap:8px, which is
+# the strongest possible way to say "no stylesheet may have an opinion",
+# so nothing could make it wrap.
+ok('class="modal-foot ds-foot"' in _ops and "style=" not in
+   _ops.split('class="modal-foot ds-foot"')[1][:40],
+   "the dossier's footer takes its layout from the stylesheet, not from "
+   "an inline style. Inline beats every rule short of !important, so at "
+   "phone width its four buttons ran 367px inside a 293px box and the "
+   "one pushed out was Done — the dossier could be opened on a phone "
+   "and not closed from its own footer")
+ok(".modal-foot.ds-foot" in _ocss
+   and "flex-wrap: wrap" in _ocss.split(".modal-foot.ds-foot")[1][:120],
+   "and it wraps, named against its base so file order cannot decide it")
+ok(".card.ds-press .card-head" in _ocss,
+   "the dossier's limits head wraps too — card-head is nowrap, and "
+   "inside a modal on a phone it had 50px less than its contents")
+
+# --- every custom property a rule reads has to exist -----------------
+# .press-lines b was color: var(--ink, #e8ecf3). --ink is defined
+# nowhere, so the fallback was not a fallback, it was the value: a
+# near-white from a dark-theme era, on this app's near-white paper. The
+# label naming WHICH limit was at issue rendered at 1.11:1 against its
+# card — present in the DOM, invisible on the screen, and no test could
+# see it because every one of them reads text.
+_INJECTED = {
+    # the shell hands these in from the tenant's own theme
+    "--brand", "--brand-2", "--brand-warm",
+    # set per element or on :root by the app at runtime
+    "--kind",                      # 03-sell.js, per product group
+    "--rail", "--srail",           # 02-chrome.js / 09-clients.js, measured
+    "--topbar",                    # 02-chrome.js, measured
+}
+_used = set(_re.findall(r"var\(\s*(--[\w-]+)", _ocss))
+_defined = set(_re.findall(r"(--[\w-]+)\s*:", _ocss))
+_ghosts = sorted(_used - _defined - _INJECTED)
+ok(not _ghosts,
+   "every custom property a rule reads is either defined in this "
+   f"stylesheet or injected by a named thing at runtime ({_ghosts} is "
+   "neither, so its fallback is not a fallback — it is the value, "
+   "unreviewed)")
+
+# --- and no text on this app's paper may be unreadable ---------------
+def _lum(h):
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    f = lambda v: v / 12.92 if v <= 0.03928 else ((v + .055) / 1.055) ** 2.4
+    return .2126 * f(r) + .7152 * f(g) + .0722 * f(b)
+
+
+def _ratio(a, b):
+    la, lb = _lum(a), _lum(b)
+    return round((max(la, lb) + .05) / (min(la, lb) + .05), 2)
+
+
+# Surfaces that are deliberately dark (the wall display sits on --deep)
+# and text that is deliberately white on a filled accent.
+_ON_DARK = (".disp-", ".scan-status", "button.btn", ".chip.on", ".bell-n")
+_faint = []
+for _m in _re.finditer(r"([^;{}]*)\{([^}]*)\}", _ocss):
+    _sel = _m.group(1).strip().splitlines()[-1].strip()
+    if any(d in _sel for d in _ON_DARK):
+        continue
+    for _cm in _re.finditer(r"(?<!-)\bcolor:\s*(#[0-9a-fA-F]{3,6})", _m.group(2)):
+        if _ratio(_cm.group(1), "#f6f7f9") < 4.5:
+            _faint.append(f"{_sel} {_cm.group(1)}")
+ok(not _faint,
+   "no hardcoded text colour falls below 4.5:1 on a panel. Eight did — "
+   "a salmon and a mint from the same dark-theme era, on the money "
+   f"figure, the busiest location and the +N badge ({_faint[:3]}). They "
+   "read as decoration until you measure them, which is why this "
+   "measures them")
+
 ok(any(".log-line { grid-template-columns: auto minmax(0, 1fr)" in b
        for b in _ocss.split("@media")),
    "the history under it stacks too — 92 and 130 fixed left 67px for "
