@@ -1499,6 +1499,46 @@ ok(c.post("/api/rooms/bookings", headers=A, json={
    "but a class ending exactly when the next begins is two bookings, not "
    "a clash: get that wrong and no timetable can be built back to back")
 
+# A person is as bookable as a room.
+_rid2 = c.post("/api/rooms", headers=A, json={
+    "name": "Studio 9", "kind": "studio"}).json()["id"]
+_who = c.get("/api/admin/users", headers=A).json()[0]["id"]
+_t3 = _next_weekday(4, 15)                       # a Friday, three o'clock
+ok(c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t3, "ends": _t3 + 3600,
+    "title": "Grooming A", "teacher_id": _who}).status_code == 200,
+   "somebody is booked into a room for an hour")
+_dbl = c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid2, "starts": _t3, "ends": _t3 + 3600,
+    "title": "Grooming B", "teacher_id": _who})
+ok(_dbl.status_code == 409 and "already teaching" in _dbl.json()["detail"],
+   "and cannot be booked into a DIFFERENT room in the same hour. The "
+   "teacher was recorded and shown and never checked, so both bookings "
+   "were accepted: the timetable looked full and one of the two rooms "
+   "had nobody coming to it. Being the resource nobody modelled is how "
+   "a person gets double-booked")
+ok(c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid2, "starts": _t3, "ends": _t3 + 3600,
+    "title": "Grooming C", "teacher_id": 0}).status_code == 200,
+   "a free room at that hour still takes somebody else, because it was "
+   "the person who was busy and not the building")
+ok(c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t3 + 7200, "ends": _t3 + 10800,
+    "title": "Unstaffed A"}).status_code == 200
+   and c.post("/api/rooms/bookings", headers=A, json={
+       "room_id": _rid2, "starts": _t3 + 7200, "ends": _t3 + 10800,
+       "title": "Unstaffed B"}).status_code == 200,
+   "and nobody is not a person who can be in two places: two bookings "
+   "with no teacher named do not collide with each other, which they "
+   "would if teacher 0 were treated as somebody")
+_roomclash = c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _rid, "starts": _t3 + 8000, "ends": _t3 + 9000,
+    "title": "Room clash", "teacher_id": 0})
+ok(_roomclash.status_code == 409
+   and "already taken" in _roomclash.json()["detail"],
+   "while a room clash still reads as one — which of the two is busy is "
+   "the difference between finding another room and making a phone call")
+
 _t2 = _next_weekday(2, 20)                       # the Wednesday, eight
 c.post("/api/rooms/bookings", headers=A, json={
     # The NEXT Wednesday, as a calendar week rather than 604800 seconds:

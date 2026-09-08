@@ -92,22 +92,42 @@ def _room(con, rid: int):
 
 
 def clashes(con, room_id: int, starts: float, ends: float,
-            ignore: int = 0) -> list:
+            ignore: int = 0, teacher_id: int = 0) -> list:
     """Bookings already holding any part of that stretch.
 
     Touching is not overlapping: a class ending at six and one starting
     at six are two bookings, not a clash, which is why this is strict
     inequality on both sides. Get that wrong and every timetable built
     back to back is unbookable.
+
+    A room is not the only thing a booking consumes. The teacher was
+    recorded and shown and never checked, so the same person could be
+    put in two rooms at the same hour and both bookings would be
+    accepted — the timetable looked fine and one of the two classes had
+    nobody to teach it. A person is as bookable as a room, and being
+    the resource nobody modelled is exactly how they get double-booked.
+
+    Both are checked in one query rather than two, so a clash reports
+    once with the reason attached: `taken` says which one it was.
     """
-    return [dict(r) for r in con.execute(
-        "SELECT b.*, COALESCE(u.name,'') AS teacher,"
-        " COALESCE(c.name,'') AS course FROM room_bookings b"
-        " LEFT JOIN users u ON u.id=b.teacher_id"
-        " LEFT JOIN courses c ON c.id=b.course_id"
-        " WHERE b.room_id=? AND b.state='booked' AND b.id!=?"
-        " AND b.starts < ? AND b.ends > ?"
-        " ORDER BY b.starts", (room_id, ignore, ends, starts))]
+    sql = ("SELECT b.*, COALESCE(u.name,'') AS teacher,"
+           " COALESCE(c.name,'') AS course,"
+           " CASE WHEN b.room_id=? THEN 'room' ELSE 'teacher' END"
+           " AS taken"
+           " FROM room_bookings b"
+           " LEFT JOIN users u ON u.id=b.teacher_id"
+           " LEFT JOIN courses c ON c.id=b.course_id"
+           " WHERE b.state='booked' AND b.id!=?"
+           " AND b.starts < ? AND b.ends > ? AND (b.room_id=?")
+    args = [room_id, ignore, ends, starts, room_id]
+    if teacher_id:
+        # 0 is "nobody named", and nobody is not a person who can be in
+        # two places — without this every unstaffed booking would clash
+        # with every other unstaffed booking.
+        sql += " OR b.teacher_id=?"
+        args.append(teacher_id)
+    sql += ") ORDER BY b.starts"
+    return [dict(r) for r in con.execute(sql, args)]
 
 
 def _said(b: dict) -> str:
@@ -272,18 +292,29 @@ def book(body: BookBody, user=Depends(permitted("rooms")),
     for i in range(weeks):
         starts = _plus_weeks(body.starts, i)
         ends = starts + (body.ends - body.starts)
-        hit = clashes(con, body.room_id, starts, ends)
+        hit = clashes(con, body.room_id, starts, ends,
+                      teacher_id=max(0, body.teacher_id))
         if hit:
             refused.append({"starts": starts, "taken_by": _said(hit[0]),
-                            "by_whom": hit[0].get("teacher", "")})
+                            "by_whom": hit[0].get("teacher", ""),
+                            "taken": hit[0].get("taken", "room")})
             continue
         made.append((starts, ends))
     if not made:
         first = refused[0] if refused else {}
+        # Which of the two is taken, because they are different problems
+        # to whoever is holding the timetable: another room might do, and
+        # another teacher is a phone call.
+        who = first.get("by_whom") or "that teacher"
+        subject = (f"{room['name']} is already taken then"
+                   if first.get("taken", "room") == "room"
+                   else f"{who} is already teaching then")
         raise HTTPException(
-            409, f"{room['name']} is already taken then"
+            409, subject
                  + (f" — {first.get('taken_by')}" if first else "")
-                 + (f" ({first['by_whom']})" if first.get("by_whom") else "")
+                 + (f" ({first['by_whom']})"
+                    if first.get("by_whom")
+                    and first.get("taken", "room") == "room" else "")
                  + ". Nothing was booked.")
     series = f"s{int(db.now() * 1000)}" if len(made) > 1 else ""
     ids = []
