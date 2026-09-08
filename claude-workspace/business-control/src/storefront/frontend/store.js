@@ -473,6 +473,9 @@ function drawGrid() {
             : isQuoted(p)
             ? `<a class="add-btn" href="/p/build">
                  ${t("get_a_quote", "Get a quote")}</a>`
+            : p.service
+            ? `<button class="add-btn" data-book="${p.id}">
+                 ${t("pick_a_time", "Pick a time")}</button>`
             : `<button class="add-btn" data-add="${p.id}">
                  ${t("add_to_cart", "Add")}</button>`}
         </div>
@@ -512,6 +515,8 @@ function drawGrid() {
     document.querySelector(`[data-price-for="${s.dataset.varsel}"]`)
       .textContent = money(+s.selectedOptions[0].dataset.price);
   });
+  document.querySelectorAll("[data-book]").forEach((b) =>
+    b.onclick = () => openBooking(+b.dataset.book));
   document.querySelectorAll("[data-add]").forEach((b) =>
     b.onclick = () => {
       const sel = document.querySelector(
@@ -742,12 +747,91 @@ function saveCart() {
 }
 
 function addToCart(pid, vid = 0) {
+  // Every "Add" on the site comes through here — the card, the rail,
+  // the recommendations under a product page. A service has no
+  // meaning without a time, so it goes to the picker instead, whichever
+  // button was pressed.
+  const sp = (CATALOG.products || []).find((x) => x.id === pid);
+  if (sp && sp.service && !holdFor(pid)) { openBooking(pid); return; }
   const key = `${pid}:${vid}`;
   CART[key] = (CART[key] || 0) + 1;
   saveCart(); drawCart(); openCart();
   funnel("add_to_cart", { product_id: pid });
   PIXEL.track("add_to_cart", { value_cents: (cartLine(key) || {}).unit || 0 });
   toast("Added to cart");
+}
+
+// ---------- appointments: a held time rides in the cart with its product ----------
+// {productId: {appointment_id, starts, ends, staff, held_until}} — the hold
+// is the server's; this is only the memory of which one is ours.
+let HOLDS = JSON.parse(localStorage.getItem("sf_holds") || "{}");
+function saveHolds() { localStorage.setItem("sf_holds", JSON.stringify(HOLDS)); }
+function holdFor(pid) {
+  const h = HOLDS[pid];
+  if (h && h.held_until * 1000 > Date.now()) return h;
+  if (h) { delete HOLDS[pid]; saveHolds(); }
+  return null;
+}
+const fmtWhen = (ts) => new Date(ts * 1000).toLocaleString(undefined,
+  { weekday: "short", day: "numeric", month: "short", hour: "2-digit",
+    minute: "2-digit" });
+
+async function openBooking(pid) {
+  const p = CATALOG.products.find((x) => x.id === pid);
+  if (!p || !p.service) return;
+  const sid = p.service.id;
+  let dayStart = new Date(); dayStart.setHours(12, 0, 0, 0);
+  openModal(`<h3>${pname(p)}</h3>
+    <p class="dim">${p.service.duration_min} minutes · ${money(p.price_cents)}${
+      p.service.blurb ? " — " + esc(p.service.blurb) : ""}</p>
+    <div class="bk-days" id="bk-days"></div>
+    <div class="bk-slots" id="bk-slots"><span class="dim">loading…</span></div>
+    <p class="dim" id="bk-note"></p>`);
+  const load = async () => {
+    const days = $("#bk-days"), slots = $("#bk-slots");
+    slots.innerHTML = `<span class="dim">loading…</span>`;
+    let d;
+    try {
+      d = await (await fetch(`/api/store/services/${sid}/slots?day=${
+        dayStart.getTime() / 1000}&days=7`)).json();
+    } catch { slots.innerHTML = `<span class="dim">could not load times</span>`; return; }
+    days.innerHTML = d.days.map((x, i) => `<button class="bk-day ${i === 0 ? "on" : ""}"
+      data-day="${x.day}">${new Date(x.day * 1000).toLocaleDateString(undefined,
+        { weekday: "short", day: "numeric" })}<small>${x.free ? x.free + " free"
+        : "full"}</small></button>`).join("");
+    const draw = (day) => {
+      const got = d.days.find((x) => x.day === day) || d.days[0];
+      days.querySelectorAll(".bk-day").forEach((b) =>
+        b.classList.toggle("on", +b.dataset.day === got.day));
+      slots.innerHTML = got.slots.length ? got.slots.map((x) => `
+        <button class="bk-slot" ${x.free ? "" : "disabled"} data-starts="${x.starts}"
+          title="${x.free ? "" : esc(x.why)}">${new Date(x.starts * 1000)
+          .toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+        </button>`).join("") : `<span class="dim">not on that day</span>`;
+      slots.querySelectorAll("[data-starts]").forEach((b) => b.onclick = async () => {
+        b.disabled = true;
+        try {
+          const r = await fetch("/api/store/appointments/hold", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ service_id: sid, starts: +b.dataset.starts,
+              visitor_id: VID }) });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.detail || "could not hold that time");
+          HOLDS[pid] = { appointment_id: j.appointment_id, starts: j.starts,
+            ends: j.ends, staff: j.staff, held_until: j.held_until };
+          saveHolds();
+          CART[`${pid}:0`] = 1;            // one appointment per line
+          saveCart(); drawCart(); closeModal(); openCart();
+          funnel("add_to_cart", { product_id: pid });
+          toast(`${fmtWhen(j.starts)} — held for 15 minutes`);
+        } catch (e) { toast(e.message); b.disabled = false; load(); }
+      });
+    };
+    days.querySelectorAll(".bk-day").forEach((b) => b.onclick = () => draw(+b.dataset.day));
+    draw(d.days[0].day);
+    $("#bk-note").textContent = d.note || "";
+  };
+  load();
 }
 
 const FREE_SHIP_AT = 4000;
@@ -760,14 +844,21 @@ function drawCart() {
     return `<div class="cart-line" style="--flavour:${flavourOf(l.p)}">
       ${art(l.p, "art", false, true)}
       <div><b>${l.label}</b>
-        <span class="dim">${money(l.unit)} each</span>
+        ${l.p.service && holdFor(l.p.id)
+          ? `<span class="dim">${fmtWhen(holdFor(l.p.id).starts)}${
+              holdFor(l.p.id).staff ? " · with " + esc(holdFor(l.p.id).staff) : ""}</span>`
+          : l.p.service
+          ? `<span class="dim bad">time not held — pick one again</span>`
+          : `<span class="dim">${money(l.unit)} each</span>`}
         <span class="line-price">${money(l.unit * qty)}</span></div>
-      <div class="qty">
+      <div class="qty">${l.p.service ? `
+        <button data-dec="${key}" aria-label="Remove ${l.label}">
+          ${ico("minus", "ico ico-sm")}</button>` : `
         <button data-dec="${key}" aria-label="Remove one ${l.label}">
           ${ico("minus", "ico ico-sm")}</button>
         <span>${qty}</span>
         <button data-inc="${key}" aria-label="Add one ${l.label}">
-          ${ico("plus", "ico ico-sm")}</button>
+          ${ico("plus", "ico ico-sm")}</button>`}
       </div></div>`;
   }).join("");
   host.innerHTML = lines || `<div class="cart-empty">
@@ -1078,7 +1169,9 @@ async function placeOrder() {
       body: JSON.stringify({
         items: Object.entries(CART).map(([key, qty]) => {
           const [pid, vid] = key.split(":").map(Number);
-          return { product_id: pid, qty, variant_id: vid || null };
+          const h = holdFor(pid);
+          return { product_id: pid, qty, variant_id: vid || null,
+            appointment_id: h ? h.appointment_id : 0 };
         }),
         visitor_id: VID,
         affiliate_code: activeRef(),
@@ -1107,13 +1200,13 @@ async function placeOrder() {
       }).catch(() => {});
     }
     if (out.checkout_url) {   // Stripe Checkout (cards + wallets)
-      CART = {}; DISCOUNT = null; saveCart();
+      CART = {}; DISCOUNT = null; HOLDS = {}; saveHolds(); saveCart();
       location.href = out.checkout_url; return;
     }
     if (email) fetch("/api/store/subscribe", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, source: "checkout" }) });
-    CART = {}; DISCOUNT = null; saveCart(); drawCart();
+    CART = {}; DISCOUNT = null; HOLDS = {}; saveHolds(); saveCart(); drawCart();
     closeModal(); closeMenus();
     openModal(`<h3>Order placed</h3>
       <p>Order <b>#${out.id || out.order_id || ""}</b> is in. Track it any
@@ -1508,6 +1601,11 @@ async function drawAccount() {
     giving = await (await fetch("/api/store/account/donations",
                                 { headers: H })).json();
   } catch { giving = null; }
+  let appts = null;
+  try {
+    appts = await (await fetch("/api/store/account/appointments",
+                               { headers: H })).json();
+  } catch { appts = null; }
   const aff = await (await fetch("/api/store/affiliate/stats",
     { headers: H })).json().catch(() => ({ joined: false }));
   // the account panel follows the grant too: no affiliates capability,
@@ -1601,6 +1699,17 @@ async function drawAccount() {
             : `<span class="dim">no copy on file</span>`}
         </div>`).join("")}
       <p class="dim">${esc(giving.note)}</p>` : ""}
+    ${appts && appts.appointments.length ? `
+      <h3 style="font-size:15px;margin-top:14px">Appointments</h3>
+      ${appts.appointments.map((a) => `
+        <div class="ship-opt"><b>${esc(a.service)}</b>
+          <span class="dim">${fmtWhen(a.starts)}${a.staff
+            ? " · with " + esc(a.staff) : ""}${a.room ? " · " + esc(a.room) : ""}</span>
+          <span class="${a.state === "confirmed" && a.starts * 1000 > Date.now()
+            ? "" : "dim"}">${a.state === "confirmed"
+              ? (a.starts * 1000 > Date.now() ? "booked" : "past")
+              : a.state.replace("_", "-")}</span>
+        </div>`).join("")}` : ""}
     <h3 style="font-size:15px;margin-top:14px">Orders</h3>
     ${(orders || []).map((o) => `
       <div class="ship-opt"><b>#${o.id}</b>

@@ -1968,3 +1968,16 @@ body.lane-on { overflow: hidden; }
 .press-fund{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;
   padding:.15rem 0 .5rem 1.1rem}
 .press-fund .fund-goal-bar{flex:0 0 7rem}
+
+/* Bookings: a service row reads name, what it needs, when it runs, how
+   many are ahead. Needs and hours are the two facts a manager scans. */
+.doc-line.bk-line { grid-template-columns: 1.3fr 1fr 1.1fr auto auto; }
+.bk-needs { display: flex; gap: 10px; flex-wrap: wrap; font-size: .9em; }
+.bk-needs span { white-space: nowrap; }
+.bk-hours { font-size: .9em; white-space: nowrap; }
+.bk-count { white-space: nowrap; }
+.bk-slots .chip.off { opacity: .45; cursor: not-allowed; }
+@media (max-width: 760px) {
+  .doc-line.bk-line { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+  .bk-line .bk-needs, .bk-line .bk-hours { grid-column: 1 / -1; white-space: normal; }
+}

@@ -2081,6 +2081,162 @@ ok(c.post("/api/orders/1/donation-receipt/send",
           headers=A).status_code == 404,
    "and an order with no donation has no receipt to send")
 
+# --- bookings: a thing you buy that happens at a time ------------------
+_gp = c.post("/api/admin/products", headers=A, json={
+    "sku": "GROOM-T", "name": "Full groom", "price_cents": 6500,
+    "case_price_cents": 6500}).json()
+ok(_gp.get("id"), "creating a product says which one it made")
+_groom = _gp["id"]
+_groomer = c.get("/api/admin/users", headers=A).json()[0]["id"]
+_bay = c.post("/api/rooms", headers=A, json={
+    "name": "Grooming bay", "kind": "other"}).json()["id"]
+_svc = c.post("/api/store/admin/services", headers=A, json={
+    "name": "Full groom", "product_id": _groom, "duration_min": 60,
+    "buffer_min": 15, "room_id": _bay, "staff_ids": [_groomer],
+    "days": [True] * 7, "from_min": 540, "to_min": 720, "lead_hours": 0})
+ok(_svc.status_code == 200, "a service: an hour, a bay, a groomer, "
+   "mornings, every day")
+_svid = _svc.json()["id"]
+_cat = c.get("/api/store/catalog").json()
+_gcard = [p for p in _cat["products"] if p["id"] == _groom][0]
+ok(_gcard["kind"] == "service" and _gcard["service"]["id"] == _svid,
+   "the shelf files it as a service and the card knows it happens at a "
+   "time — the button says 'Pick a time', not 'Add'")
+
+_tmrw = _t0.time() + 86400
+_sl = c.get(f"/api/store/services/{_svid}/slots?day={_tmrw}").json()
+_day = _sl["days"][0]
+ok(_day["free"] == 2 and [_t0.localtime(x["starts"]).tm_min for x in
+                          _day["slots"]] == [0, 15],
+   "09:00–12:00 at an hour plus fifteen turnaround is two starts, 09:00 "
+   "and 10:15 — the buffer is real time, not a note")
+ok(all(x["staff_id"] == _groomer for x in _day["slots"]),
+   "and each one says who would take it")
+_s0 = _day["slots"][0]["starts"]
+
+_h1 = c.post("/api/store/appointments/hold", json={
+    "service_id": _svid, "starts": _s0, "visitor_id": "vis-a",
+    "name": "Ana"}).json()
+ok(_h1.get("appointment_id") and _h1["held_until"] > _t0.time() + 600,
+   "a visitor holds 09:00 for a quarter of an hour — long enough to pay, "
+   "short enough that a closed tab gives it back")
+ok(c.post("/api/store/appointments/hold", json={
+    "service_id": _svid, "starts": _s0, "visitor_id": "vis-b"}
+).status_code == 409,
+   "and the next visitor is told it has just gone, rather than both "
+   "being told 09:00")
+_sl2 = c.get(f"/api/store/services/{_svid}/slots?day={_tmrw}").json()
+_row0 = [x for x in _sl2["days"][0]["slots"] if x["starts"] == _s0][0]
+ok(not _row0["free"] and _row0["why"] == "full",
+   "a held slot shows as taken with the reason, so a page of greyed "
+   "times is not a page somebody rings up about")
+ok(c.post("/api/store/appointments/hold", json={
+    "service_id": _svid, "starts": _s0, "visitor_id": "vis-a"}
+).json().get("appointment_id") == _h1["appointment_id"] + 1
+   and c.get(f"/api/store/services/{_svid}/slots?day={_tmrw}").json()
+   ["days"][0]["free"] == 1,
+   "the same visitor choosing again replaces their hold rather than "
+   "stacking a second — one person, one slot")
+_aid = _h1["appointment_id"] + 1
+
+_login = c.post("/api/login", json={"name": "Ana", "role": "customer",
+                                    "email": "ana-groom@example.com"}).json()
+_AG = {"Authorization": "Bearer " + _login["token"]}
+_ship = {"ship_name": "Ana", "address": "1 St", "city": "X", "postal": "1",
+         "email": "ana-groom@example.com"}
+ok(c.post("/api/orders", headers=_AG, json={
+    "items": [{"product_id": _groom, "qty": 1}], **_ship}).status_code == 400,
+   "the cart refuses a service with no time on it — a grooming "
+   "appointment does not ship as a parcel")
+ok(c.post("/api/orders", headers=_AG, json={
+    "items": [{"product_id": _groom, "qty": 2, "appointment_id": _aid}],
+    **_ship}).status_code == 400,
+   "and two of one appointment is not a thing")
+ok(c.post("/api/orders", headers=_AG, json={
+    "items": [{"product_id": _groom, "qty": 1, "appointment_id": _aid}],
+    "visitor_id": "someone-else", **_ship}).status_code == 409,
+   "a hold id typed into somebody else's order is not their appointment")
+_ord = c.post("/api/orders", headers=_AG, json={
+    "items": [{"product_id": _groom, "qty": 1, "appointment_id": _aid}],
+    "visitor_id": "vis-a", **_ship}).json()
+_bcon = _db.connect()
+_ap = _bcon.execute("SELECT state, held_until, order_id FROM appointments"
+                    " WHERE id=?", (_aid,)).fetchone()
+if _ord.get("awaiting_confirmation"):
+    ok(_ap["state"] == "held" and _ap["held_until"] > _t0.time() + 2 * 86400,
+       "an order parked for email confirmation may sit for days, so its "
+       "hold is extended to match — a customer who did everything right "
+       "must not lose the slot from an email they were told to expect")
+    _ptok = _bcon.execute("SELECT token FROM pending_orders ORDER BY id DESC"
+                          " LIMIT 1").fetchone()["token"]
+    c.get(f"/confirm-order/{_ptok}")
+    _ap = _bcon.execute("SELECT state, order_id, user_id FROM appointments"
+                        " WHERE id=?", (_aid,)).fetchone()
+ok(_ap["state"] == "confirmed" and _ap["order_id"] and _ap["user_id"],
+   "the order lands and the held time becomes an appointment, in the "
+   "same transaction, tied to the order and the person")
+_bcon.close()
+_mine_ap = c.get("/api/store/account/appointments", headers=_AG).json()
+ok(len(_mine_ap["upcoming"]) == 1 and _mine_ap["upcoming"][0]["room"]
+   == "Grooming bay",
+   "and the customer sees it in their account, with the bay and who")
+
+# The three things a slot is made of, each on its own.
+_s1 = _day["slots"][1]["starts"]
+ok(c.post("/api/rooms/bookings", headers=A, json={
+    "room_id": _bay, "starts": _s1, "ends": _s1 + 1800,
+    "title": "Deep clean"}).status_code == 200
+   and [x for x in c.get(f"/api/store/services/{_svid}/slots?day={_tmrw}")
+        .json()["days"][0]["slots"] if x["starts"] == _s1][0]["why"]
+   == "room taken",
+   "the classroom timetable and the diary share the bay: a room booked "
+   "for a clean is not a room a dog can be groomed in")
+_svc2 = c.post("/api/store/admin/services", headers=A, json={
+    "name": "Nail trim", "duration_min": 30, "staff_ids": [_groomer],
+    "days": [True] * 7, "from_min": 540, "to_min": 720, "lead_hours": 0}
+).json()["id"]
+_trim = [x for x in c.get(f"/api/store/services/{_svc2}/slots?day={_tmrw}")
+         .json()["days"][0]["slots"] if x["starts"] == _s0][0]
+ok(not _trim["free"] and _trim["why"] == "nobody free",
+   "and the groomer is one person: booked for a groom at nine, they are "
+   "not free for a trim at nine on a different service either")
+_svc3 = c.post("/api/store/admin/services", headers=A, json={
+    "name": "Puppy class", "duration_min": 60, "capacity": 2,
+    "days": [True] * 7, "from_min": 540, "to_min": 660, "lead_hours": 0}
+).json()["id"]
+for v in ("p1", "p2"):
+    c.post("/api/store/appointments/hold", json={
+        "service_id": _svc3, "starts": _s0, "visitor_id": v})
+_pc = [x for x in c.get(f"/api/store/services/{_svc3}/slots?day={_tmrw}")
+       .json()["days"][0]["slots"] if x["starts"] == _s0][0]
+ok(not _pc["free"] and _pc["why"] == "full",
+   "a service with no room and nobody named takes its capacity and then "
+   "says full — two puppies, and the third is told so")
+
+_sb = c.post("/api/store/admin/appointments", headers=A, json={
+    "service_id": _svid, "starts": _s0 + 86400, "name": "Phoned in"})
+ok(_sb.status_code == 200 and _sb.json()["staff_id"] == _groomer,
+   "the phone rings: staff book on somebody's behalf, confirmed at once, "
+   "with the same free-time rules as the website")
+_diary = c.get("/api/store/admin/appointments?days=3", headers=A).json()
+ok(any(a["who"] == "Phoned in" for a in _diary["appointments"])
+   and any(a["state"] == "held" for a in _diary["appointments"]),
+   "the diary shows the booked and the held alike — a hold is a person "
+   "mid-checkout, and a slot that looks free and is not is how two "
+   "people get told 2:30")
+_done = [a for a in _diary["appointments"] if a["who"] == "Phoned in"][0]
+ok(c.post(f"/api/store/admin/appointments/{_done['id']}/state", headers=A,
+          json={"state": "no_show"}).status_code == 200,
+   "and who did not turn up is recorded, not deleted")
+_ops_bk = ops_app_js()
+ok("renderBookings" in _ops_bk and 'bookings: "selling"' in _ops_bk,
+   "the ops app has the Bookings screen, filed under Selling — it is a "
+   "thing the shop sells, not a new capability to buy")
+ok('data-book="${p.id}"' in open("src/storefront/frontend/store.js").read()
+   and "appointment_id: h ? h.appointment_id : 0" in
+   open("src/storefront/frontend/store.js").read(),
+   "and the storefront card offers a time and the checkout carries it")
+
 # The other side of the same list: who gave, on the fund.
 _gl = c.get(f"/api/store/admin/donations/{_fid}/gifts", headers=A).json()
 ok(_gl["total_cents"] == 500 and _gl["givers"] >= 1,

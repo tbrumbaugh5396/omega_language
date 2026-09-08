@@ -853,10 +853,11 @@ def init_tables():
                 "INSERT INTO store_shipping_methods(name,price_cents,eta,"
                 " position) VALUES ('Standard',599,'3–5 business days',0),"
                 " ('Express',1499,'1–2 business days',1)")
-        from . import (affiliates, campaigns, content, crud, discord,
-                       documents, emailer, engagements, governance,
+        from . import (affiliates, bookings, campaigns, content, crud,
+                       discord, documents, emailer, engagements, governance,
                        donations, offers, partners, pixels, promos, support)
         donations.init_tables(con)
+        bookings.init_tables(con)
         offers.init_tables(con)
         promos.init_tables(con)
         content.init_tables(con)
@@ -1023,6 +1024,16 @@ def catalog(con=Depends(get_con)):
     for m in con.execute("SELECT * FROM store_product_meta").fetchall():
         meta.setdefault(m["product_id"], {})[m["k"]] = m["v"]
     kinds_known = kind_map(con)
+    services = {}
+    try:
+        for r in con.execute("SELECT id, product_id, duration_min, blurb"
+                             " FROM bookable_services WHERE active=1"
+                             " AND product_id>0"):
+            services[r["product_id"]] = {"id": r["id"],
+                                         "duration_min": r["duration_min"],
+                                         "blurb": r["blurb"]}
+    except Exception:                                        # noqa: BLE001
+        pass
     # A plan somebody built for themselves is theirs, not stock: it keeps
     # its row so the subscription and the invoice have something to name,
     # and stays off the shelf. A DRAFT is the other reason a row is not on
@@ -1054,6 +1065,9 @@ def catalog(con=Depends(get_con)):
         p["quote"] = md.get("quote", "") == "1"
         # what it IS: the group it sits in and the colour it wears
         p["kind"] = kind_of(md, kinds_known)
+        # A thing that happens at a time. The button is "Pick a time",
+        # not "Add", and the cart will not take it without one.
+        p["service"] = services.get(p["id"])
         # What a bundle IS: the capabilities it turns on. Ids, because a
         # grant is made of ids — the names are for reading.
         p["caps"] = [x for x in (md.get("caps", "") or "").split(",") if x]

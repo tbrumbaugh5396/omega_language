@@ -754,14 +754,14 @@ class ProductBody(BaseModel):
 
 @app.post("/api/admin/products")
 def add_product(body: ProductBody, user=Depends(admin_user), con=Depends(get_con)):
-    con.execute(
+    cur = con.execute(
         "INSERT INTO products(sku,name,description,category,price_cents,"
         " case_size,case_price_cents,barcode) VALUES(?,?,?,?,?,?,?,?)",
         (body.sku, body.name, body.description, body.category,
          body.price_cents, body.case_size, body.case_price_cents,
          _clean_code(body.barcode)))
     con.commit()
-    return {"ok": True}
+    return {"ok": True, "id": cur.lastrowid}
 
 
 # ---------- what a client is entitled to, of the things you count ----------
@@ -1006,6 +1006,7 @@ class OrderItemBody(BaseModel):
     product_id: int
     qty: int
     variant_id: int | None = None    # storefront product_variants row
+    appointment_id: int = 0          # a held slot, for a bookable service
 
 
 class OrderBody(BaseModel):
@@ -1128,6 +1129,19 @@ def _refuse_plans(con, body) -> None:
             raise HTTPException(
                 400, f"{row['name']} bills every month — it is started from "
                      f"its own page, not bought in the cart")
+    # A service is a time. The cart takes it only with one — otherwise a
+    # grooming appointment ships as a parcel to nobody's diary.
+    need = store_bookings.holds_required(con, body.items)
+    for it in body.items:
+        if it.product_id in need and not it.appointment_id:
+            nm = con.execute("SELECT name FROM products WHERE id=?",
+                             (it.product_id,)).fetchone()
+            raise HTTPException(
+                400, f"{nm['name'] if nm else 'that service'} happens at a "
+                     f"time — pick one before checking out")
+        if it.product_id in need and it.qty != 1:
+            raise HTTPException(400, "one appointment per line — add "
+                                     "another time for another one")
 
 
 CONFIRM_TTL = 3 * 86400
@@ -1142,6 +1156,15 @@ def hold_for_confirmation(con, user, body):
     are read when the order actually becomes one rather than days earlier.
     """
     token = secrets.token_urlsafe(24)
+    # A held slot rides along for as long as the parked order may: the
+    # walk to checkout is now three days long, and a hold that expired
+    # on the way would fail the order at confirmation, hours later, from
+    # an email the customer was told to expect.
+    holds = {it.product_id: it.appointment_id for it in body.items
+             if it.appointment_id}
+    if holds:
+        store_bookings.extend_holds(con, holds, db.now() + CONFIRM_TTL,
+                                    body.visitor_id)
     con.execute(
         "INSERT INTO pending_orders(token,user_id,email,payload,as_guest,"
         " created_at,expires_at) VALUES(?,?,?,?,?,?,?)",
@@ -1409,6 +1432,16 @@ def _place(con, user, body, as_guest):
             notify.push(con, f"Enrolled by order #{oid}",
                         f"{user['name']} joined: "
                         + ", ".join(enrolled_courses), kind="learning")
+        # and a held time becomes an appointment, in this transaction
+        holds = {it.product_id: it.appointment_id for it in body.items
+                 if it.appointment_id}
+        if holds:
+            booked = store_bookings.book_by_order(
+                con, oid, user["id"], holds, body.visitor_id)
+            if booked:
+                notify.push(con, f"Booked by order #{oid}",
+                            f"{user['name']}: " + "; ".join(booked),
+                            kind="selling")
         # same rail, different desk: a product can open a coaching seat
         opened = nutrition.open_by_order(con, oid, user["id"])
         if opened:
@@ -6532,6 +6565,7 @@ from storefront.backend import engagements as store_eng  # noqa: E402
 from storefront.backend import fleetadmin as store_fleet  # noqa: E402
 from storefront.backend import sow as store_sow  # noqa: E402
 from storefront.backend import donations as store_donations  # noqa: E402
+from storefront.backend import bookings as store_bookings  # noqa: E402
 from storefront.backend import offers as store_offers  # noqa: E402
 from storefront.backend import pixels as store_pixels  # noqa: E402
 from storefront.backend import support as store_support  # noqa: E402
@@ -6561,6 +6595,7 @@ app.include_router(store_aff.router)
 app.include_router(store_gov.router)
 app.include_router(store_partners.router)
 app.include_router(store_donations.router)
+app.include_router(store_bookings.router)
 app.include_router(store_offers.router)
 app.include_router(store_pixels.router)
 app.include_router(store_support.router)
