@@ -818,11 +818,16 @@ async function openBooking(pid) {
           const j = await r.json();
           if (!r.ok) throw new Error(j.detail || "could not hold that time");
           HOLDS[pid] = { appointment_id: j.appointment_id, starts: j.starts,
-            ends: j.ends, staff: j.staff, held_until: j.held_until };
+            ends: j.ends, staff: j.staff, held_until: j.held_until,
+            needs: (j.intake || []).some((q) => q.required) };
           saveHolds();
           CART[`${pid}:0`] = 1;            // one appointment per line
-          saveCart(); drawCart(); closeModal(); openCart();
+          saveCart(); drawCart();
           funnel("add_to_cart", { product_id: pid });
+          // The form comes AFTER the time is held, not before: a form is a
+          // reason to leave, and a held time is a reason to stay.
+          if ((j.intake || []).length) { intakeForm(pid, j.appointment_id, j.intake, j.starts); return; }
+          closeModal(); openCart();
           toast(`${fmtWhen(j.starts)} — held for 15 minutes`);
         } catch (e) { toast(e.message); b.disabled = false; load(); }
       });
@@ -832,6 +837,57 @@ async function openBooking(pid) {
     $("#bk-note").textContent = d.note || "";
   };
   load();
+}
+
+/* What the shop needs to know before the appointment. Rendered from the
+   service's own questions; answers go to the held slot, and the order
+   will not go through until the required ones are there — the server
+   says which by name, so the cart can reopen this. */
+function intakeForm(pid, aid, questions, starts) {
+  const p = CATALOG.products.find((x) => x.id === pid) || {};
+  const field = (q) => {
+    const name = `iq-${esc(q.key)}`;
+    const req = q.required ? ` <span class="dim">(required)</span>` : "";
+    const help = q.help ? `<span class="dim">${esc(q.help)}</span>` : "";
+    if (q.kind === "long") return `<label class="iq"><span>${esc(q.label)}${req}</span>${help}
+      <textarea name="${name}" rows="3"></textarea></label>`;
+    if (q.kind === "number") return `<label class="iq"><span>${esc(q.label)}${req}</span>${help}
+      <input name="${name}" type="number" inputmode="decimal"></label>`;
+    if (q.kind === "yesno") return `<div class="iq"><span>${esc(q.label)}${req}</span>${help}
+      <div class="iq-opts"><label><input type="radio" name="${name}" value="yes"> Yes</label>
+      <label><input type="radio" name="${name}" value="no"> No</label></div></div>`;
+    if (q.kind === "choice") return `<label class="iq"><span>${esc(q.label)}${req}</span>${help}
+      <select name="${name}"><option value="">—</option>${(q.choices || []).map((c) =>
+        `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select></label>`;
+    return `<label class="iq"><span>${esc(q.label)}${req}</span>${help}
+      <input name="${name}" type="text" maxlength="2000"></label>`;
+  };
+  openModal(`<h3>${pname(p)}</h3>
+    <p class="dim">${fmtWhen(starts)} is held for you. A few things ${p.name ? "for " + esc(p.name) : "first"}:</p>
+    <form id="intake-form">${questions.map(field).join("")}
+      <p class="dim" id="intake-msg"></p>
+      <div class="buy-row"><button class="btn-pill primary" type="submit">Save and add to cart</button></div>
+    </form>`);
+  $("#intake-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const answers = {};
+    for (const q of questions) {
+      const el = e.target.querySelector(`[name="iq-${q.key}"]:checked, [name="iq-${q.key}"]:not([type=radio])`);
+      if (el) answers[q.key] = el.value;
+    }
+    const msg = $("#intake-msg"); msg.textContent = "saving…";
+    try {
+      const r = await fetch(`/api/store/appointments/${aid}/intake`, { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visitor_id: VID, answers }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || "could not save");
+      if (!j.complete) { msg.textContent = "still needed: " + j.missing.join("; "); return; }
+      if (HOLDS[pid]) { HOLDS[pid].needs = false; saveHolds(); }
+      drawCart(); closeModal(); openCart();
+      toast(`${fmtWhen(starts)} — held for 15 minutes`);
+    } catch (err) { msg.textContent = err.message; }
+  };
 }
 
 const FREE_SHIP_AT = 4000;
@@ -846,7 +902,8 @@ function drawCart() {
       <div><b>${l.label}</b>
         ${l.p.service && holdFor(l.p.id)
           ? `<span class="dim">${fmtWhen(holdFor(l.p.id).starts)}${
-              holdFor(l.p.id).staff ? " · with " + esc(holdFor(l.p.id).staff) : ""}</span>`
+              holdFor(l.p.id).staff ? " · with " + esc(holdFor(l.p.id).staff) : ""}${
+              holdFor(l.p.id).needs ? ` · <a href="#" data-intake="${l.p.id}" class="bad">finish the form</a>` : ""}</span>`
           : l.p.service
           ? `<span class="dim bad">time not held — pick one again</span>`
           : `<span class="dim">${money(l.unit)} each</span>`}
@@ -873,6 +930,15 @@ function drawCart() {
     if (shop) shop.scrollIntoView({ behavior: "smooth" });
     else location.href = "/#shop";
   };
+  host.querySelectorAll("[data-intake]").forEach((a) => a.onclick = async (e) => {
+    e.preventDefault();
+    const pid = +a.dataset.intake, h = holdFor(pid);
+    if (!h) return;
+    try {
+      const d = await (await fetch(`/api/store/appointments/${h.appointment_id}/intake?visitor_id=${encodeURIComponent(VID)}`)).json();
+      closeMenus(); intakeForm(pid, h.appointment_id, d.questions || [], h.starts);
+    } catch (err) { toast("could not open the form"); }
+  });
   host.querySelectorAll("[data-inc]").forEach((b) => b.onclick = () => {
     CART[b.dataset.inc]++; saveCart(); drawCart(); });
   host.querySelectorAll("[data-dec]").forEach((b) => b.onclick = () => {

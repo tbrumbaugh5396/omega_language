@@ -2228,6 +2228,103 @@ _done = [a for a in _diary["appointments"] if a["who"] == "Phoned in"][0]
 ok(c.post(f"/api/store/admin/appointments/{_done['id']}/state", headers=A,
           json={"state": "no_show"}).status_code == 200,
    "and who did not turn up is recorded, not deleted")
+# --- intake: what the shop needs to know before the appointment ---------
+_qs = [{"label": "Dog's name and breed", "kind": "text", "required": True},
+       {"label": "Vaccinations up to date?", "kind": "yesno", "required": True},
+       {"label": "Temperament", "kind": "choice",
+        "choices": ["calm", "nervous", "reactive"]},
+       {"label": "Anything else", "kind": "long"}]
+ok(c.patch(f"/api/store/admin/services/{_svid}", headers=A, json={
+    "name": "Full groom", "product_id": _groom, "duration_min": 60,
+    "buffer_min": 15, "room_id": _bay, "staff_ids": [_groomer],
+    "days": [True] * 7, "from_min": 540, "to_min": 720, "lead_hours": 0,
+    "intake": _qs}).status_code == 200,
+   "a service asks its questions: a name, a yes/no, one of a list, a "
+   "paragraph — and says which are required")
+ok(c.patch(f"/api/store/admin/services/{_svid}", headers=A, json={
+    "name": "Full groom", "duration_min": 60, "days": [True] * 7,
+    "from_min": 540, "to_min": 720,
+    "intake": [{"label": "Size", "kind": "choice", "choices": ["big"]}]}
+).status_code == 400,
+   "and a choice with one choice is refused, because that is not a "
+   "question")
+_cat2 = [p for p in c.get("/api/store/catalog").json()["products"]
+         if p["id"] == _groom][0]
+ok(_cat2["service"]["asks"] == 4,
+   "the card knows a form follows the time, so it can say so")
+_s_in = [x for x in c.get(f"/api/store/services/{_svid}/slots?day={_tmrw + 86400 * 3}")
+         .json()["days"][0]["slots"] if x["free"]][0]["starts"]
+_hi = c.post("/api/store/appointments/hold", json={
+    "service_id": _svid, "starts": _s_in, "visitor_id": "vis-q"}).json()
+ok([q["required"] for q in _hi["intake"]] == [True, True, False, False],
+   "holding the time hands back the questions — asked AFTER the slot is "
+   "held, because a form is a reason to leave and a held time is a "
+   "reason to stay")
+_aq = _hi["appointment_id"]
+_r0 = c.post("/api/orders", headers=_AG, json={
+    "items": [{"product_id": _groom, "qty": 1, "appointment_id": _aq}],
+    "visitor_id": "vis-q", **_ship})
+ok(_r0.status_code == 400 and "Vaccinations" in _r0.json()["detail"]
+   and "Dog's name" in _r0.json()["detail"],
+   "the order will not go through with the required ones blank, and it "
+   "names them rather than saying 'form incomplete'")
+ok(c.post(f"/api/store/appointments/{_aq}/intake", json={
+    "visitor_id": "vis-q", "answers": {"q2": "maybe"}}).status_code == 400,
+   "a yes/no does not take 'maybe'")
+ok(c.post(f"/api/store/appointments/{_aq}/intake", json={
+    "visitor_id": "vis-q", "answers": {"q3": "huge"}}).status_code == 400,
+   "and a choice does not take an answer off the list")
+ok(c.post(f"/api/store/appointments/{_aq}/intake", json={
+    "visitor_id": "someone-else", "answers": {"q1": "x"}}).status_code == 403,
+   "only the visitor holding the slot may answer for it")
+_half = c.post(f"/api/store/appointments/{_aq}/intake", json={
+    "visitor_id": "vis-q",
+    "answers": {"q1": "Biscuit, cockapoo", "q3": "nervous"}}).json()
+ok(not _half["complete"] and _half["missing"] == ["Vaccinations up to date?"],
+   "half an answer sheet is saved and says exactly what is still needed")
+ok(c.post(f"/api/store/appointments/{_aq}/intake", json={
+    "visitor_id": "vis-q", "answers": {"q2": "yes"}}).json()["complete"],
+   "and the rest completes it")
+_r1 = c.post("/api/orders", headers=_AG, json={
+    "items": [{"product_id": _groom, "qty": 1, "appointment_id": _aq}],
+    "visitor_id": "vis-q", **_ship})
+ok(_r1.status_code == 200, "now the order goes through")
+if _r1.json().get("awaiting_confirmation"):
+    _bc2 = _db.connect()
+    _pt2 = _bc2.execute("SELECT token FROM pending_orders ORDER BY id DESC"
+                        " LIMIT 1").fetchone()["token"]
+    _bc2.close()
+    c.get(f"/confirm-order/{_pt2}")
+_dq = [a for a in c.get("/api/store/admin/appointments?days=10", headers=A)
+       .json()["appointments"] if a["id"] == _aq][0]
+ok(_dq["state"] == "confirmed" and {x["label"]: x["answer"] for x in _dq["answers"]}
+   == {"Dog's name and breed": "Biscuit, cockapoo", "Temperament": "nervous",
+       "Vaccinations up to date?": "yes"},
+   "the diary shows the answers beside the appointment — the day's sheet")
+ok(any(x["label"] == "Temperament" for x in
+       c.get("/api/store/account/appointments", headers=_AG).json()
+       ["upcoming"][0]["answers"] if True),
+   "and the customer sees what they said")
+_ph = c.post("/api/store/admin/appointments", headers=A, json={
+    "service_id": _svid, "starts": _s_in + 86400, "name": "Phoned in",
+    "answers": {"q1": "Rex, alsatian", "q3": "reactive"}}).json()
+ok(_ph["missing"] == ["Vaccinations up to date?"],
+   "the phone takes the answers down too, and is allowed to leave a "
+   "required one blank — 'she'll tell us on the day' is an answer the "
+   "shop may accept from itself — while saying what is still to ask")
+_bc3 = _db.connect()
+ok(_bc3.execute("SELECT COUNT(*) FROM appointment_answers a JOIN"
+                " appointment_answers n ON n.appointment_id=a.appointment_id"
+                " AND n.q_key='q1' WHERE a.q_key='q3' AND a.answer='reactive'"
+                ).fetchone()[0] == 1,
+   "answers are rows, not a blob: 'which dogs are reactive' is a query, "
+   "not a grep")
+_bc3.close()
+ok("intakeForm(" in open("src/storefront/frontend/store.js").read()
+   and "bkQuestionRow" in ops_app_js(),
+   "the storefront asks the questions after the hold, and the shop edits "
+   "them on the service")
+
 _ops_bk = ops_app_js()
 ok("renderBookings" in _ops_bk and 'bookings: "selling"' in _ops_bk,
    "the ops app has the Bookings screen, filed under Selling — it is a "

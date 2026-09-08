@@ -85,11 +85,135 @@ CREATE TABLE IF NOT EXISTS appointments (
 CREATE INDEX IF NOT EXISTS appt_when ON appointments(starts, ends);
 CREATE INDEX IF NOT EXISTS appt_staff ON appointments(staff_id, starts);
 CREATE INDEX IF NOT EXISTS appt_order ON appointments(order_id);
+
+-- What the shop needs to know before the appointment, answered at
+-- booking. ROWS, not a blob: "which dogs are reactive" has to be a
+-- query, and a JSON column makes it a grep.
+CREATE TABLE IF NOT EXISTS appointment_answers (
+  appointment_id INTEGER NOT NULL,
+  q_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  answer TEXT DEFAULT '',
+  PRIMARY KEY (appointment_id, q_key)
+);
 """
+
+INTAKE_KINDS = ("text", "long", "number", "yesno", "choice")
+MAX_QUESTIONS = 20
 
 
 def init_tables(con) -> None:
     con.executescript(TABLES)
+    try:
+        con.execute("ALTER TABLE bookable_services ADD COLUMN intake TEXT"
+                    " DEFAULT '[]'")
+    except Exception:                                        # noqa: BLE001
+        pass                                # already there
+
+
+def _questions(s) -> list:
+    """The service's intake questions, in a shape the rest can trust."""
+    try:
+        raw = json.loads(s["intake"] or "[]")
+    except (ValueError, TypeError, KeyError, IndexError):
+        return []
+    out = []
+    for q in raw if isinstance(raw, list) else []:
+        if not isinstance(q, dict) or not str(q.get("label", "")).strip():
+            continue
+        kind = q.get("kind", "text")
+        out.append({"key": str(q.get("key") or "")[:40] or f"q{len(out) + 1}",
+                    "label": str(q["label"]).strip()[:160],
+                    "kind": kind if kind in INTAKE_KINDS else "text",
+                    "required": bool(q.get("required")),
+                    "choices": [str(c).strip()[:60] for c in
+                                (q.get("choices") or []) if str(c).strip()][:12],
+                    "help": str(q.get("help") or "").strip()[:200]})
+    return out[:MAX_QUESTIONS]
+
+
+def _clean_questions(qs: list) -> list:
+    """What a shop typed into the form, made safe and keyed. Keys are
+    minted from position when absent so an edit that reorders questions
+    keeps old answers matched to old questions by key, not by slot."""
+    out, seen = [], set()
+    for i, q in enumerate(qs or []):
+        if not isinstance(q, dict):
+            continue
+        label = str(q.get("label", "")).strip()
+        if not label:
+            continue
+        key = str(q.get("key") or "").strip()[:40]
+        if not key or key in seen:
+            key = f"q{i + 1}"
+            while key in seen:
+                key += "_"
+        seen.add(key)
+        kind = q.get("kind", "text")
+        if kind not in INTAKE_KINDS:
+            raise HTTPException(400, f"question kind is one of {INTAKE_KINDS}")
+        choices = [str(c).strip()[:60] for c in (q.get("choices") or [])
+                   if str(c).strip()][:12]
+        if kind == "choice" and len(choices) < 2:
+            raise HTTPException(400, f"'{label[:40]}' needs at least two "
+                                     "choices")
+        out.append({"key": key, "label": label[:160], "kind": kind,
+                    "required": bool(q.get("required")), "choices": choices,
+                    "help": str(q.get("help") or "").strip()[:200]})
+    if len(out) > MAX_QUESTIONS:
+        raise HTTPException(400, f"{MAX_QUESTIONS} questions is plenty — a "
+                                 "form nobody finishes is a booking nobody "
+                                 "makes")
+    return out
+
+
+def answers_of(con, aid: int) -> list:
+    return [dict(r) for r in con.execute(
+        "SELECT q_key AS key, label, answer FROM appointment_answers"
+        " WHERE appointment_id=? ORDER BY rowid", (aid,))]
+
+
+def intake_missing(con, aid: int) -> list:
+    """Required questions with no answer yet — the reason an order may
+    not go through, said as a list rather than a bool so the message can
+    name them."""
+    a = con.execute("SELECT service_id FROM appointments WHERE id=?",
+                    (aid,)).fetchone()
+    if a is None:
+        return []
+    s = _svc(con, a["service_id"])
+    have = {r["key"]: r["answer"] for r in answers_of(con, aid)}
+    return [q["label"] for q in _questions(s)
+            if q["required"] and not str(have.get(q["key"], "")).strip()]
+
+
+def _store_answers(con, aid: int, service, answers: dict) -> list:
+    """Validate against the questions and write the rows. Unknown keys
+    are dropped — an answer to a question the service does not ask is
+    not a fact about the appointment."""
+    qs = _questions(service)
+    written = []
+    for q in qs:
+        v = answers.get(q["key"])
+        if v is None:
+            continue
+        v = str(v).strip()[:2000]
+        if q["kind"] == "number" and v:
+            try:
+                float(v)
+            except ValueError:
+                raise HTTPException(400, f"'{q['label']}' wants a number")
+        if q["kind"] == "yesno" and v and v.lower() not in ("yes", "no"):
+            raise HTTPException(400, f"'{q['label']}' is yes or no")
+        if q["kind"] == "choice" and v and v not in q["choices"]:
+            raise HTTPException(400, f"'{q['label']}' is one of "
+                                     f"{', '.join(q['choices'])}")
+        con.execute("INSERT INTO appointment_answers(appointment_id,q_key,"
+                    "label,answer) VALUES(?,?,?,?) ON CONFLICT(appointment_id,"
+                    "q_key) DO UPDATE SET answer=excluded.answer,"
+                    " label=excluded.label", (aid, q["key"], q["label"], v))
+        written.append(q["key"])
+    return written
 
 
 # ---------- reading a service ----------
@@ -132,6 +256,7 @@ def _shape(con, s) -> dict:
                     (d["product_id"],)).fetchone() if d["product_id"] else None
     d["product"] = p["name"] if p else ""
     d["price_cents"] = p["price_cents"] if p else 0
+    d["intake"] = _questions(s)
     return d
 
 
@@ -361,6 +486,7 @@ def hold(body: HoldBody, con=Depends(get_con)):
             "staff": staff["name"] if staff else "",
             "held_until": now + HOLD_SECS,
             "product_id": s["product_id"],
+            "intake": _questions(s),
             "note": f"Held until {time.strftime('%H:%M', time.localtime(now + HOLD_SECS))} "
                     f"— finish the order to keep it."}
 
@@ -373,6 +499,44 @@ def release(aid: int, visitor_id: str = "", con=Depends(get_con)):
                 (aid, visitor_id))
     con.commit()
     return {"ok": True}
+
+
+class IntakeBody(BaseModel):
+    visitor_id: str = ""
+    answers: dict = {}
+
+
+def _own_hold(con, aid: int, visitor_id: str, user=None):
+    a = con.execute("SELECT * FROM appointments WHERE id=?", (aid,)).fetchone()
+    if a is None:
+        raise HTTPException(404, "no such appointment")
+    owner = (a["state"] == "held" and visitor_id and a["visitor_id"] == visitor_id) \
+        or (user is not None and a["user_id"] == user["id"])
+    if not owner:
+        raise HTTPException(403, "that appointment is not yours")
+    return a
+
+
+@router.post("/api/store/appointments/{aid}/intake")
+def intake(aid: int, body: IntakeBody, con=Depends(get_con)):
+    """The answers, from the visitor who holds the slot. Asked after the
+    time is held rather than before, because a form is a reason to
+    leave and a held time is a reason to stay."""
+    a = _own_hold(con, aid, body.visitor_id)
+    s = _svc(con, a["service_id"])
+    _store_answers(con, aid, s, body.answers or {})
+    con.commit()
+    missing = intake_missing(con, aid)
+    return {"ok": True, "missing": missing,
+            "complete": not missing, "answers": answers_of(con, aid)}
+
+
+@router.get("/api/store/appointments/{aid}/intake")
+def intake_get(aid: int, visitor_id: str = "", con=Depends(get_con)):
+    a = _own_hold(con, aid, visitor_id)
+    s = _svc(con, a["service_id"])
+    return {"questions": _questions(s), "answers": answers_of(con, aid),
+            "missing": intake_missing(con, aid)}
 
 
 def book_by_order(con, order_id: int, user_id: int, item_holds: dict,
@@ -403,6 +567,10 @@ def book_by_order(con, order_id: int, user_id: int, item_holds: dict,
                 (a["service_id"],)).fetchone()["product_id"] != pid:
             raise HTTPException(400, "that time belongs to a different "
                                      "service")
+        missing = intake_missing(con, aid)
+        if missing:
+            raise HTTPException(400, f"{a['service']} still needs: "
+                                     + "; ".join(missing))
         con.execute(
             "UPDATE appointments SET state='confirmed', order_id=?,"
             " user_id=?, held_until=0, source=? WHERE id=?",
@@ -429,6 +597,9 @@ def extend_holds(con, item_holds: dict, until: float,
                                      "another and try again")
         if visitor_id and a["visitor_id"] and a["visitor_id"] != visitor_id:
             raise HTTPException(409, "that held time is not yours")
+        missing = intake_missing(con, aid)
+        if missing:
+            raise HTTPException(400, "still needs: " + "; ".join(missing))
         con.execute("UPDATE appointments SET held_until=? WHERE id=?",
                     (until, aid))
 
@@ -460,7 +631,7 @@ def my_appointments(con=Depends(get_con), user=Depends(_customer)):
 
 def _mine(con, user) -> list:
     _live(con)
-    return [dict(r) for r in con.execute(
+    rows = [dict(r) for r in con.execute(
         "SELECT a.id, a.starts, a.ends, a.state, a.order_id, a.note,"
         " s.name AS service, s.duration_min, COALESCE(u.name,'') AS staff,"
         " COALESCE(r.name,'') AS room FROM appointments a"
@@ -469,6 +640,9 @@ def _mine(con, user) -> list:
         " LEFT JOIN rooms r ON r.id=a.room_id"
         " WHERE a.user_id=? AND a.state!='cancelled'"
         " ORDER BY a.starts DESC LIMIT 50", (user["id"],))]
+    for r in rows:
+        r["answers"] = answers_of(con, r["id"])
+    return rows
 
 
 # ---------- what the shop runs ----------
@@ -489,6 +663,7 @@ class ServiceBody(BaseModel):
     horizon_days: int = 30
     blurb: str = ""
     active: bool = True
+    intake: list = []
 
 
 def _check(body: ServiceBody) -> None:
@@ -530,17 +705,19 @@ def add_service(body: ServiceBody, user=Depends(admin_user),
             "SELECT 1 FROM products WHERE id=?", (body.product_id,)
     ).fetchone() is None:
         raise HTTPException(400, "no such product")
+    qs = _clean_questions(body.intake)
     cur = con.execute(
         "INSERT INTO bookable_services(name,product_id,duration_min,"
         "buffer_min,capacity,room_id,staff_ids,days,from_min,to_min,"
-        "step_min,lead_hours,horizon_days,blurb,active,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "step_min,lead_hours,horizon_days,blurb,active,intake,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (body.name.strip()[:120], body.product_id, body.duration_min,
          max(0, body.buffer_min), body.capacity, body.room_id,
          json.dumps(body.staff_ids), json.dumps(body.days[:7]),
          body.from_min, body.to_min, max(0, body.step_min),
          max(0, body.lead_hours), max(1, body.horizon_days),
-         body.blurb.strip()[:400], 1 if body.active else 0, time.time()))
+         body.blurb.strip()[:400], 1 if body.active else 0,
+         json.dumps(qs), time.time()))
     if body.product_id:
         # The product IS a service now, so the shelf files it as one
         # and the cart knows not to ship it.
@@ -559,17 +736,19 @@ def edit_service(sid: int, body: ServiceBody, user=Depends(admin_user),
                  con=Depends(get_con)):
     _svc(con, sid)
     _check(body)
+    qs = _clean_questions(body.intake)
     con.execute(
         "UPDATE bookable_services SET name=?,product_id=?,duration_min=?,"
         "buffer_min=?,capacity=?,room_id=?,staff_ids=?,days=?,from_min=?,"
-        "to_min=?,step_min=?,lead_hours=?,horizon_days=?,blurb=?,active=?"
-        " WHERE id=?",
+        "to_min=?,step_min=?,lead_hours=?,horizon_days=?,blurb=?,active=?,"
+        "intake=? WHERE id=?",
         (body.name.strip()[:120], body.product_id, body.duration_min,
          max(0, body.buffer_min), body.capacity, body.room_id,
          json.dumps(body.staff_ids), json.dumps(body.days[:7]),
          body.from_min, body.to_min, max(0, body.step_min),
          max(0, body.lead_hours), max(1, body.horizon_days),
-         body.blurb.strip()[:400], 1 if body.active else 0, sid))
+         body.blurb.strip()[:400], 1 if body.active else 0,
+         json.dumps(qs), sid))
     if body.product_id:
         con.execute("INSERT OR REPLACE INTO store_product_meta(product_id,"
                     "k,v) VALUES(?,'kind','service')", (body.product_id,))
@@ -600,6 +779,8 @@ def list_appointments(days: int = 14, past: int = 0,
     for r in rows:
         r["who"] = r["customer"] or r["name"] or "(no name)"
         r["email"] = r["customer_email"] or r["email"]
+        r["answers"] = answers_of(con, r["id"])
+        r["missing"] = intake_missing(con, r["id"]) if r["state"] == "held" else []
     return {"appointments": rows, "days": days,
             "today": sum(1 for r in rows if r["state"] == "confirmed"
                          and _midnight(r["starts"]) == _midnight(now))}
@@ -637,6 +818,7 @@ class StaffBookBody(BaseModel):
     email: str = ""
     user_id: int = 0
     note: str = ""
+    answers: dict = {}
 
 
 @router.post("/api/store/admin/appointments")
@@ -664,5 +846,10 @@ def staff_book(body: StaffBookBody, user=Depends(admin_user),
         (s["id"], body.starts, ends, who, s["room_id"] or 0, body.user_id,
          body.name.strip()[:80], body.email.strip()[:120],
          body.note.strip()[:500], f"staff:{user['id']}", now))
+    # Taken down over the phone rather than typed by the customer; the
+    # required ones are not enforced here, because "she'll tell us on
+    # the day" is an answer the shop is allowed to accept from itself.
+    _store_answers(con, cur.lastrowid, s, body.answers or {})
     con.commit()
-    return {"ok": True, "id": cur.lastrowid, "staff_id": who}
+    return {"ok": True, "id": cur.lastrowid, "staff_id": who,
+            "missing": intake_missing(con, cur.lastrowid)}

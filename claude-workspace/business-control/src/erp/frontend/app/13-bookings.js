@@ -72,7 +72,7 @@ async function renderBookings() {
         ? ` · ${ap.today} today` : ""}</span></h3>
     ${appts.length ? `<div class="card"><table>
       <thead><tr><th>when</th><th>who</th><th>what</th><th>with</th>
-        <th></th><th></th></tr></thead>
+        <th></th><th>intake</th><th></th></tr></thead>
       <tbody>${appts.map((a) => `<tr class="${a.state === "held" ? "dim" : ""}">
         <td>${bkWhen(a.starts)}</td>
         <td><b>${esc(a.who)}</b>${a.email
@@ -82,6 +82,10 @@ async function renderBookings() {
         <td><span class="pill ${a.state === "confirmed" ? "ok"
           : a.state === "no_show" ? "bad" : ""}" title="${
           (BK_STATE[a.state] || [])[1] || ""}">${(BK_STATE[a.state] || [a.state])[0]}</span></td>
+        <td>${(a.answers || []).length ? `<details class="bk-answers"><summary>${
+          a.answers.length} answer${a.answers.length === 1 ? "" : "s"}</summary>${
+          a.answers.map((x) => `<div><span class="dim">${esc(x.label)}</span> ${esc(x.answer || "—")}</div>`).join("")}
+          </details>` : (a.missing || []).length ? `<span class="dim" title="${esc(a.missing.join("; "))}">form unfinished</span>` : ""}</td>
         <td class="row-acts">${a.state === "confirmed" ? `
           <button class="btn alt sm" data-bkstate="${a.id}:done">Done</button>
           <button class="btn alt sm" data-bkstate="${a.id}:no_show">No-show</button>
@@ -104,6 +108,36 @@ async function renderBookings() {
       renderBookings();
     } catch (e) { toast(e.message); }
   });
+}
+
+const BK_QKINDS = { text: "short answer", long: "a paragraph", number: "a number",
+  yesno: "yes / no", choice: "one of a list" };
+function bkQuestionRow(q) {
+  return `<div class="bk-qrow" data-qkey="${esc(q.key || "")}">
+    <input data-qlabel placeholder="Dog's name and breed" value="${esc(q.label || "")}">
+    <select data-qkind>${Object.entries(BK_QKINDS).map(([k, l]) =>
+      `<option value="${k}" ${(q.kind || "text") === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+    <label class="chip ${q.required ? "on" : ""}" title="the order will not go through without it">
+      <input type="checkbox" data-qreq hidden ${q.required ? "checked" : ""}>required</label>
+    <input data-qchoices placeholder="choices, comma-separated" value="${esc((q.choices || []).join(", "))}"
+      ${(q.kind || "text") === "choice" ? "" : "hidden"}>
+    <button class="btn alt sm" type="button" data-qdel>remove</button>
+  </div>`;
+}
+
+/* What the customer would have typed, typed by whoever answered the
+   phone. Same questions, same rows, so the day's sheet reads the same
+   whichever way the booking came in. */
+function bkIntakeFields(qs) {
+  return (qs || []).map((q) => `<label class="bk-iq">${esc(q.label)}${q.required
+      ? ' <span class="dim">(required online)</span>' : ""}
+    ${q.kind === "long" ? `<textarea data-iq="${esc(q.key)}" rows="2"></textarea>`
+      : q.kind === "yesno" ? `<select data-iq="${esc(q.key)}"><option value="">—</option>
+          <option>yes</option><option>no</option></select>`
+      : q.kind === "choice" ? `<select data-iq="${esc(q.key)}"><option value="">—</option>${
+          (q.choices || []).map((c) => `<option>${esc(c)}</option>`).join("")}</select>`
+      : `<input data-iq="${esc(q.key)}" ${q.kind === "number" ? 'type="number"' : ""}>`}
+  </label>`).join("");
 }
 
 /* The form asks the three questions a slot is made of — a room, some
@@ -163,9 +197,14 @@ async function bkServiceForm(s) {
     </div>
     <label style="display:block;margin-top:10px">What the customer reads
       <textarea id="bk-blurb" rows="2">${esc(v.blurb)}</textarea></label>
-    ${s ? `<label class="chip ${v.active ? "on" : ""}" style="margin-top:8px">
+    <p class="dim" style="margin:12px 0 4px">Ask before the appointment
+      <span class="dim">— answered once the time is held; the order will not go
+      through until the required ones are</span></p>
+    <div id="bk-qs">${(v.intake || []).map(bkQuestionRow).join("")}</div>
+    <button class="btn alt sm" id="bk-addq" type="button">Add a question</button>
+    ${s ? `<div><label class="chip bk-toggle ${v.active ? "on" : ""}">
       <input type="checkbox" id="bk-active" hidden ${v.active ? "checked" : ""}>
-      taking bookings</label>` : ""}
+      taking bookings</label></div>` : ""}
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="bk-save">${s ? "Save" : "Add"}</button></div>`, "wide");
@@ -176,6 +215,19 @@ async function bkServiceForm(s) {
   });
   const mins = (id) => { const [h, m] = $(id).value.split(":").map(Number);
     return h * 60 + (m || 0); };
+  const wireQs = () => {
+    document.querySelectorAll("#bk-qs [data-qdel]").forEach((b) => b.onclick = () =>
+      b.closest(".bk-qrow").remove());
+    document.querySelectorAll("#bk-qs select[data-qkind]").forEach((sel) => sel.onchange = () => {
+      const row = sel.closest(".bk-qrow");
+      row.querySelector("[data-qchoices]").hidden = sel.value !== "choice";
+    });
+  };
+  wireQs();
+  $("#bk-addq").onclick = () => {
+    $("#bk-qs").insertAdjacentHTML("beforeend", bkQuestionRow({}));
+    wireQs();
+  };
   $("#bk-save").onclick = async () => {
     const body = {
       name: $("#bk-name").value, product_id: +$("#bk-product").value,
@@ -189,6 +241,14 @@ async function bkServiceForm(s) {
       lead_hours: +$("#bk-lead").value, horizon_days: +$("#bk-horizon").value,
       blurb: $("#bk-blurb").value,
       active: s ? $("#bk-active").checked : true,
+      intake: [...document.querySelectorAll("#bk-qs .bk-qrow")].map((row) => ({
+        key: row.dataset.qkey || "",
+        label: row.querySelector("[data-qlabel]").value,
+        kind: row.querySelector("[data-qkind]").value,
+        required: row.querySelector("[data-qreq]").checked,
+        choices: row.querySelector("[data-qchoices]").value.split(",")
+          .map((x) => x.trim()).filter(Boolean),
+      })).filter((q) => q.label.trim()),
     };
     try {
       if (s) await api(`/api/store/admin/services/${s.id}`,
@@ -215,13 +275,20 @@ async function bkStaffBook(services) {
       <label>Name<input id="bks-name" placeholder="who it's for"></label>
       <label>Email<input id="bks-email" type="email" placeholder="optional"></label>
     </div>
-    <p class="dim" style="margin:10px 0 4px">Free times</p>
-    <div class="chips bk-slots" id="bks-slots"><span class="dim">loading…</span></div>
+    <div id="bks-intake"></div>
     <label style="display:block;margin-top:10px">Note
-      <input id="bks-note" placeholder="the dog's name, what they asked for"></label>
+      <input id="bks-note" placeholder="anything else they said"></label>
+    <p class="dim" style="margin:10px 0 4px">Free times — pick one to book</p>
+    <div class="chips bk-slots" id="bks-slots"><span class="dim">loading…</span></div>
     <div class="modal-foot"><button class="btn alt" data-close>Close</button></div>`,
   "wide");
   let picked = null;
+  const askQs = () => {
+    const sv = live.find((x) => x.id === +$("#bks-svc").value);
+    $("#bks-intake").innerHTML = sv && (sv.intake || []).length
+      ? `<p class="dim" style="margin:10px 0 4px">Ask them</p>${bkIntakeFields(sv.intake)}` : "";
+  };
+  askQs();
   const load = async () => {
     const sid = +$("#bks-svc").value;
     const day = new Date($("#bks-day").value + "T12:00:00").getTime() / 1000;
@@ -240,14 +307,18 @@ async function bkStaffBook(services) {
       host.querySelectorAll("[data-slot]").forEach((b) => b.onclick = async () => {
         picked = +b.dataset.slot;
         try {
+          const answers = {};
+          document.querySelectorAll("#bks-intake [data-iq]").forEach((el) => {
+            if (el.value) answers[el.dataset.iq] = el.value; });
           const r = await api("/api/store/admin/appointments", { body: {
             service_id: sid, starts: picked, name: $("#bks-name").value,
-            email: $("#bks-email").value, note: $("#bks-note").value } });
-          closeModal(); toast(`booked${r.staff_id ? "" : ""}`); renderBookings();
+            email: $("#bks-email").value, note: $("#bks-note").value, answers } });
+          closeModal(); renderBookings();
+          toast((r.missing || []).length ? `booked — still to ask: ${r.missing.join("; ")}` : "booked");
         } catch (e) { toast(e.message); }
       });
     } catch (e) { host.innerHTML = `<span class="dim">${esc(e.message)}</span>`; }
   };
-  $("#bks-svc").onchange = load; $("#bks-day").onchange = load;
+  $("#bks-svc").onchange = () => { askQs(); load(); }; $("#bks-day").onchange = load;
   load();
 }

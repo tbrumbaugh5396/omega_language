@@ -1550,3 +1550,12 @@ body.offer-open { overflow: hidden; }
 .bk-slot:hover:not(:disabled) { border-color: var(--flavour); color: var(--flavour); }
 .bk-slot:disabled { opacity: .4; cursor: not-allowed; text-decoration: line-through; }
 .cart-line .bad { color: #b3261e; }
+
+/* The intake form: one question per row, the label above the field. */
+.iq { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.iq > span:first-child { font-weight: 600; font-size: 14px; }
+.iq input[type=text], .iq input[type=number], .iq select, .iq textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: var(--r-sm); font-family: var(--ui); font-size: 14px; }
+.iq-opts { display: flex; gap: 16px; }
+.iq-opts label { display: flex; gap: 6px; align-items: center; }

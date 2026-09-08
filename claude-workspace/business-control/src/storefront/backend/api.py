@@ -1026,12 +1026,14 @@ def catalog(con=Depends(get_con)):
     kinds_known = kind_map(con)
     services = {}
     try:
-        for r in con.execute("SELECT id, product_id, duration_min, blurb"
-                             " FROM bookable_services WHERE active=1"
+        from . import bookings as _bk
+        for r in con.execute("SELECT * FROM bookable_services WHERE active=1"
                              " AND product_id>0"):
             services[r["product_id"]] = {"id": r["id"],
                                          "duration_min": r["duration_min"],
-                                         "blurb": r["blurb"]}
+                                         "blurb": r["blurb"],
+                                         # so the card can say a form follows
+                                         "asks": len(_bk._questions(r))}
     except Exception:                                        # noqa: BLE001
         pass
     # A plan somebody built for themselves is theirs, not stock: it keeps

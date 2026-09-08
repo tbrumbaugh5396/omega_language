@@ -1981,3 +1981,21 @@ body.lane-on { overflow: hidden; }
   .doc-line.bk-line { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
   .bk-line .bk-needs, .bk-line .bk-hours { grid-column: 1 / -1; white-space: normal; }
 }
+
+/* Intake questions on a service: one row each, the kind beside the
+   label, choices only when the kind wants them. */
+.bk-qrow { display: grid; grid-template-columns: minmax(0, 2fr) auto auto minmax(0, 1.4fr) auto;
+  gap: 6px; align-items: center; margin: 6px 0; }
+/* Hidden keeps its column: with display:none the choices cell dropped
+   out of the grid and "remove" slid into its place, so the same button
+   sat in a different column on every other row. */
+.bk-qrow input[hidden] { display: block; visibility: hidden; }
+.bk-toggle { display: inline-flex; margin-top: 8px; }
+.bk-iq { display: block; margin: 6px 0; }
+.bk-iq input, .bk-iq select, .bk-iq textarea { width: 100%; }
+.bk-answers summary { cursor: pointer; font-size: .9em; }
+.bk-answers div { font-size: .85em; padding: 2px 0; }
+@media (max-width: 760px) {
+  .bk-qrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .bk-qrow [data-qchoices] { grid-column: 1 / -1; }
+}
