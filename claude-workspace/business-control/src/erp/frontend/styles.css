@@ -141,6 +141,15 @@ h3 { margin: 18px 0 8px; font-size: 11px; color: var(--dim);
 
 /* ---------- tables ---------- */
 .card table { border-collapse: collapse; width: 100%; font-size: 14px; }
+/* A wide table with nothing to scroll in takes the whole page sideways
+   with it. .tablewrap exists for this and 25 of the app's 57 tables were
+   written without one — the orders list is 981px of columns in a 351px
+   card on a phone, and the page went 637px wide to hold it.
+   The card scrolls instead of the page, and only where a table sits
+   directly in it: touching the TABLE's display would change how every
+   narrow one lays itself out, and a card that holds no table keeps the
+   overflow it had. */
+.card:has(> table) { overflow-x: auto; }
 th, td { text-align: left; padding: 7px 10px;
   border-bottom: 1px solid var(--line); }
 tr:last-child td { border-bottom: none; }

@@ -6432,6 +6432,20 @@ ok(not _faint,
    "not on a panel any more, and the token was chosen for a panel. All "
    "of them read as decoration until somebody measures them")
 
+# A wide table needs something to scroll in, and 25 of this app's 57
+# tables were written without the .tablewrap that exists for it.
+ok(".card:has(> table) { overflow-x: auto" in _ocss,
+   "a card holding a table scrolls, so the PAGE does not. The orders "
+   "list is 975px of columns in a 351px card on a phone, and without "
+   "this the whole document went 1012px wide to hold it — every screen "
+   "in the app sliding sideways under a list nobody could read anyway")
+_bare = len([m for m in _re.finditer(r"<table\b", _ops)
+             if "tablewrap" not in _ops[max(0, m.start() - 400):m.start()]])
+ok(_bare > 0,
+   f"and it is a rule rather than {_bare} more edits: the wrap is easy "
+   "to forget, was forgotten in nearly half of them, and forgetting it "
+   "again costs nothing now")
+
 ok(any(".log-line { grid-template-columns: auto minmax(0, 1fr)" in b
        for b in _ocss.split("@media")),
    "the history under it stacks too — 92 and 130 fixed left 67px for "
