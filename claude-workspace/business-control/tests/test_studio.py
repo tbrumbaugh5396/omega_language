@@ -1484,8 +1484,65 @@ c.request("DELETE",
           headers=A)
 c.delete(f"/api/store/admin/documents/{_gsrc['doc_id']}", headers=A)
 
+# --- a fenced block is the one place whitespace IS the content ------------
+# Without this the parser joined the lines into a paragraph and left the
+# backticks in — which the kickoff content planner has been going out to
+# clients wearing, and which made a site map impossible to put in a
+# document at all.
+from storefront.backend.pdfgen import doc_pdf as _dpdf     # noqa: E402
+_fence = "Before.\n\n```\nhome\n |-- /about\n `-- /pricing\n```\n\nAfter."
+_fb = [b for b in _docmod.md_blocks(_fence) if b[0] == "pre"]
+ok(len(_fb) == 1 and _fb[0][1].split("\n") == ["home", " |-- /about",
+                                                " `-- /pricing"],
+   "a fenced block keeps its line breaks and its leading spaces, which is "
+   "the whole of what a map is")
+ok("```" not in _docmod.md_html(_fence)
+   and "white-space:pre" in _docmod.md_html(_fence),
+   "and renders as preformatted rather than as a paragraph wearing its "
+   "own backticks")
+ok("<b>" not in _docmod.md_html("```\n**not bold** _not italic_\n```"),
+   "inside a fence a star is a bullet somebody drew, not emphasis")
+_fpdf_bytes = _dpdf("Map", _fence)
+ok(len(_fpdf_bytes) > 500 and b"/BaseFont /Courier" in _fpdf_bytes,
+   "the PDF sets a monospaced font for it, because a map whose columns "
+   "do not line up is not a map — and the HTML a client is shown and the "
+   "PDF they file must not disagree about that")
+from storefront.backend.pdfgen import _latin as _lat
+ok(all(len(_lat(ch)) == 1 for ch in "│─├└┌┐┘┬┴┼▼▲►◄▸"),
+   "box drawing downcasts one character to one for the PDF's latin-1. "
+   "Not two: the point of a map is that the columns line up, and a "
+   "two-character downcast would shear every line below it. Before this "
+   "they downcast to a question mark each")
+
+# --- both client rounds carry the map, and somewhere to answer -----------
+_tdir = ROOT / "docs/business-control-b2b-client/templates/08-build"
+for _fn, _what in (("homepage-feedback-form.md", "round 1"),
+                   ("website-feedback-form.md", "round 2")):
+    _ft = (_tdir / _fn).read_text()
+    _fbl = _docmod.md_blocks(_ft)
+    _fmap = [b for b in _fbl if b[0] == "pre"]
+    ok(len(_fmap) == 1 and "HOME" in _fmap[0][1],
+       f"{_what} shows the client how the pages connect, not only what "
+       "is on one of them — a page nobody links to still works and is "
+       "invisible, and the client is the one who knows which pages they "
+       "expect to be able to reach")
+    ok(max(len(x) for x in _fmap[0][1].split("\n")) <= 100,
+       f"and {_what}'s map fits the width of the page it prints on — "
+       "about 105 characters of Courier across an A4, so a map that "
+       "wraps is a map with its columns sheared")
+    ok(_ft.count("_____") >= 6 and "Clicks from home" in _ft,
+       f"{_what} leaves room to answer in sentences beside the ticks, "
+       "and counts the clicks from home for each page — the one number "
+       "about structure that can be known before there is any traffic "
+       "to measure")
+    ok("not what visitors will actually do" in _ft
+       or "Round 1 approved this shape as a plan" in _ft,
+       f"and {_what} says which of the two pictures it is. The graph in "
+       "the client's dashboard is drawn from real visits and this one "
+       "cannot be — there are none yet — so it is labelled as the plan "
+       "rather than passed off as a measurement")
+
 # --- per-section signing markers -------------------------------------------
-from storefront.backend.pdfgen import doc_pdf as _dpdf
 from storefront.backend.engagements import placeholders as _phs
 _mk = "A. [INITIALS]\n\nB. [INITIALS]\n\n[SIGN HERE]\n\nFill [X]."
 ok(_phs(_mk) == ["X"],

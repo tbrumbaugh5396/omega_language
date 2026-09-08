@@ -24,6 +24,14 @@ _DOWNCAST = {
     "✕": "x", "✗": "x", "→": "->", "←": "<-",
     "·": "-", "★": "*", "☆": "*", " ": " ",
     "≤": "<=", "≥": ">=", "−": "-",
+    # Box drawing, for a site map in a fenced block. One character for
+    # one character, always — the whole point of a map is that the
+    # columns line up, and a two-character downcast would shear every
+    # line below it. Without these the client's PDF showed a column of
+    # question marks where the HTML showed the tree.
+    "│": "|", "─": "-", "├": "+", "└": "\\", "┌": "+", "┐": "+",
+    "┘": "+", "┬": "+", "┴": "+", "┼": "+",
+    "▼": "v", "▲": "^", "►": ">", "◄": "<", "▸": ">",
 }
 
 
@@ -207,6 +215,23 @@ def _render_into(pdf: FPDF, title: str, md_text: str,
                      pdf.w - pdf.r_margin, pdf.get_y())
             pdf.set_draw_color(*LINE)
             pdf.ln(5)
+        elif kind == "pre":
+            # Monospaced and one line per line. A site map whose columns
+            # do not line up is not a site map, and the HTML the client
+            # is shown and the PDF they file must not disagree about
+            # that — one parser feeds both, so both honour the fence.
+            pdf.ln(1.5)
+            pdf.set_font("courier", size=8.5)
+            pdf.set_text_color(*INK)
+            for ln in b[1].split("\n"):
+                # multi_cell parks the cursor at the right edge, as the
+                # signature block above already notes — without this the
+                # second line of a map starts where the first one ended
+                # and fpdf runs out of page mid-character.
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(0, 4.2, _latin(ln) or " ")
+            pdf.set_font("helvetica", size=10)
+            pdf.ln(2)
         elif kind == "table":
             pdf.set_font("helvetica", size=9)
             with pdf.table(line_height=5.2,

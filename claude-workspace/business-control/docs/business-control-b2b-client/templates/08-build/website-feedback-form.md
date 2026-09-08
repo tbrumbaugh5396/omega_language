@@ -40,17 +40,92 @@ time gets tight I need to know what actually matters.
 
 ---
 
+## How the pages connect
+
+The site as built. Round 1 approved this shape as a plan; this is it
+made, so the question now is narrower — did anything land somewhere
+other than where we agreed, and can everything still be reached.
+
+```
+                              HOME
+                                |
+        +-------------+---------+---------+-------------+
+        |             |         |         |             |
+    [PAGE A]      [PAGE B]  [PAGE C]  [PAGE D]      [CONTACT]
+        |                       |
+        +-- [PAGE A1]           +-- [PAGE C1]
+        +-- [PAGE A2]           +-- [PAGE C2]
+
+    Also reachable from every page:  [FOOTER PAGE 1] · [FOOTER PAGE 2]
+```
+
+| Page | URL | Clicks from home | Linked from |
+|---|---|---|---|
+| Home | / | 0 | — |
+| [PAGE A] | [URL] | 1 | menu, home |
+| [PAGE B] | [URL] | 1 | menu |
+| [PAGE C] | [URL] | 1 | menu, home |
+| [PAGE A1] | [URL] | 2 | [PAGE A] |
+
+**Can you reach every page on that list without using the back button or
+typing an address?**
+
+- [ ] Yes
+- [ ] No — I could not get to: ______________
+
+> A page with nothing linking to it still exists and still works; it is
+> just invisible, which is the same thing as missing to everyone except
+> the person who built it. This is the check that catches it, and it is
+> quicker for you to do than for me — you know which pages you expect.
+
+**Anything in the wrong place?**
+
+_______________________________________________
+
+---
+
 ## Page by page
 
-Copy a block per page.
+One block per page. The table is for specific fixes; the paragraph is for
+the thing a table has no column for — that a page reads oddly, or does
+not do what it is there to do. Both are useful and they catch different
+problems.
 
 ### [PAGE NAME] — [URL]
+
+*What this page is for:* [PURPOSE]
 
 | # | Where | Issue | Should be | Priority |
 |---|---|---|---|---|
 | 1 | | | | Must / Nice |
 | 2 | | | | |
 | 3 | | | | |
+
+**Reading it as a visitor would — does it do its job?**
+
+_______________________________________________
+
+_______________________________________________
+
+### [PAGE NAME 2] — [URL]
+
+*What this page is for:* [PURPOSE]
+
+| # | Where | Issue | Should be | Priority |
+|---|---|---|---|---|
+| 1 | | | | Must / Nice |
+| 2 | | | | |
+| 3 | | | | |
+
+**Reading it as a visitor would — does it do its job?**
+
+_______________________________________________
+
+_______________________________________________
+
+> Copy another block per page. "Nothing to change here" is a real answer
+> and worth writing down — an unmentioned page and an approved page look
+> identical to me otherwise.
 
 ---
 

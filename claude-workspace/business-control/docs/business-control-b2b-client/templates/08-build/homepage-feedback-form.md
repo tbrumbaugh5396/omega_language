@@ -82,7 +82,96 @@ The order of sections top to bottom:
 
 - [ ] Yes  - [ ] No — [WHAT] should be higher
 
-## 4. The message
+## 4. How the pages connect
+
+This is the plan for the whole site, and the homepage is the door into
+it. Approving the door means approving where it leads, so it is here
+rather than in round 2 — moving a page after the rest is built is a
+change order; moving it now is a conversation.
+
+```
+                              HOME
+                                |
+        +-------------+---------+---------+-------------+
+        |             |         |         |             |
+    [PAGE A]      [PAGE B]  [PAGE C]  [PAGE D]      [CONTACT]
+        |                       |
+        +-- [PAGE A1]           +-- [PAGE C1]
+        +-- [PAGE A2]           +-- [PAGE C2]
+
+    Also reachable from every page:  [FOOTER PAGE 1] · [FOOTER PAGE 2]
+```
+
+| Page | What it is for | Clicks from home | In the menu? |
+|---|---|---|---|
+| Home | [PURPOSE] | 0 | — |
+| [PAGE A] | [PURPOSE] | 1 | Yes / No |
+| [PAGE B] | [PURPOSE] | 1 | Yes / No |
+| [PAGE C] | [PURPOSE] | 1 | Yes / No |
+| [PAGE D] | [PURPOSE] | 1 | Yes / No |
+| [PAGE A1] | [PURPOSE] | 2 | Yes / No |
+
+> **Clicks from home is the number worth arguing about.** Not because
+> deep pages are wrong — a case study belongs two clicks in — but because
+> a page you told me was important sitting at three is a disagreement we
+> should have now rather than after launch.
+>
+> This is the shape we intend, not what visitors will actually do. Once
+> the site is live the same picture gets drawn from real traffic, and the
+> two rarely match: the interesting pages are the quiet ones everybody
+> passes through. You will have that view in your dashboard.
+
+**Is anything missing from this map?**
+
+_______________________________________________
+
+**Is anything on it you do not want?**
+
+_______________________________________________
+
+**Is anything harder to reach than it should be?**
+
+_______________________________________________
+
+## 5. The homepage, section by section
+
+One block per section of the homepage, top to bottom. Write in plain
+sentences — a paragraph I can act on beats a tick I have to interpret.
+
+### [SECTION 1 — e.g. Hero]
+
+*What it is meant to do:* [PURPOSE]
+
+**Your response:**
+
+_______________________________________________
+
+_______________________________________________
+
+### [SECTION 2]
+
+*What it is meant to do:* [PURPOSE]
+
+**Your response:**
+
+_______________________________________________
+
+_______________________________________________
+
+### [SECTION 3]
+
+*What it is meant to do:* [PURPOSE]
+
+**Your response:**
+
+_______________________________________________
+
+_______________________________________________
+
+> Copy another block per section. If a section has nothing wrong with it,
+> saying so is useful too — it tells me what not to touch.
+
+## 6. The message
 
 **Is the headline right?**
 
@@ -94,14 +183,14 @@ The order of sections top to bottom:
 
 - [ ] Yes  - [ ] Not really — I'd expect: ______________
 
-## 5. On a phone
+## 7. On a phone
 
 Please open it on your phone before answering.
 
 - [ ] Looks good
 - [ ] Something's wrong: ______________
 
-## 6. Specific changes
+## 8. Specific changes
 
 Only structural or directional ones this round. Be as specific as you can.
 
@@ -111,7 +200,7 @@ Only structural or directional ones this round. Be as specific as you can.
 | 2 | | | |
 | 3 | | | |
 
-## 7. Anything new?
+## 9. Anything new?
 
 Anything here that wasn't in the requirements document?
 
@@ -120,7 +209,7 @@ _______________________________________________
 > Not a problem — but it'll be a change order rather than part of this round,
 > so it doesn't quietly delay the launch. I'll quote it before doing anything.
 
-## 8. Who else looked at this?
+## 10. Who else looked at this?
 
 | Name | Role | Their view |
 |---|---|---|

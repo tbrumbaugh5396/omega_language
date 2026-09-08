@@ -435,7 +435,8 @@ def md_blocks(text: str) -> list:
     different readings of the same document.
 
     Blocks: ("h", depth, text) · ("hr",) · ("table", head, rows) ·
-    ("list", ordered, items) · ("quote", text) · ("p", text)
+    ("list", ordered, items) · ("quote", text) · ("pre", text) ·
+    ("p", text)
     """
     out, para, lines = [], [], text.splitlines()
 
@@ -447,6 +448,19 @@ def md_blocks(text: str) -> list:
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
+        # A fenced block is the one place in this subset where the line
+        # breaks and the spaces ARE the content: a site map, a heading
+        # skeleton somebody writes into, a bit of address. Without this
+        # the lines were joined into a paragraph with the backticks left
+        # in — which the content planner has been going out to clients
+        # wearing.
+        if stripped.startswith("```"):
+            flush()
+            j, buf = i + 1, []
+            while j < len(lines) and not lines[j].strip().startswith("```"):
+                buf.append(lines[j]); j += 1
+            out.append(("pre", "\n".join(buf)))
+            i = j + 1; continue
         if not stripped:
             flush(); i += 1; continue
         if re.match(r"^#{1,4} ", stripped):
@@ -530,6 +544,15 @@ def md_html(text: str) -> str:
             tag = "ol" if b[1] else "ul"
             out.append(f"<{tag}>" + "".join(
                 f"<li>{_md_inline(x)}</li>" for x in b[2]) + f"</{tag}>")
+        elif kind == "pre":
+            # Escaped, never _md_inline: inside a fence a * is a bullet
+            # somebody drew and an underscore is a line to write on.
+            out.append('<pre style="white-space:pre;overflow-x:auto;'
+                       'font-family:ui-monospace,Menlo,Consolas,monospace;'
+                       'font-size:12px;line-height:1.45;margin:10px 0;'
+                       'padding:10px 12px;background:#f4f2f7;'
+                       'border-radius:6px">'
+                       + sect.esc(b[1]) + "</pre>")
         elif kind == "quote":
             out.append(f"<blockquote>{_md_inline(b[1])}</blockquote>")
         else:
