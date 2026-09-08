@@ -95,8 +95,9 @@
     return layers.map((l) => ({ ...l }));
   }
 
-  function createSfu({ room, api, config, onLocal, onRemote, onLeave,
+  function createSfu({ room, api, config, onWho, onLocal, onRemote, onLeave,
                        onState, onError, onMedia }) {
+    let sharing = false, screenStop = null;
     const cfg = config || {};
     const ice = cfg.ice_servers && cfg.ice_servers.length
       ? cfg.ice_servers : [{ urls: ["stun:stun.l.google.com:19302"] }];
@@ -197,6 +198,7 @@
         const present = new Set(r.peers || []);
         for (const id of [...subs.keys()]) if (!present.has(id)) drop(id);
         for (const id of present) if (!subs.has(id)) subscribe(id);
+        if (r.who && onWho) onWho(r.who);
       } catch (e) { /* transient — keep polling */ }
       if (!stopped) poller = setTimeout(poll, POLL_MS);
     }
@@ -234,6 +236,27 @@
         say("left");
       },
 
+      async shareScreen() {
+        if (!publishPc) throw new Error("not publishing yet");
+        const disp = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+        const track = disp.getVideoTracks()[0];
+        const snd = publishPc.getSenders().find((x) => x.track && x.track.kind === "video");
+        if (!snd) throw new Error("no video leg to carry a screen");
+        const cam = snd.track;
+        await snd.replaceTrack(track);
+        api(base + "/mark", { peer: selfId, screen: true }).catch(() => {});
+        if (onLocal) onLocal(new MediaStream([track]));
+        track.onended = async () => {
+          try { await snd.replaceTrack(cam); } catch (e) {}
+          api(base + "/mark", { peer: selfId, screen: false }).catch(() => {});
+          if (onLocal) onLocal(local);
+          sharing = false;
+        };
+        sharing = true; screenStop = () => track.stop();
+        return true;
+      },
+      async stopShare() { if (screenStop) { const f = screenStop; screenStop = null; f(); } },
+      get sharing() { return sharing; },
       has(kind) {
         if (!local) return false;
         return (kind === "video" ? local.getVideoTracks()

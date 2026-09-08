@@ -622,6 +622,10 @@ def report(con, actor, person_id: int, reason: str, *,
 # process never share a mailbox. In-memory on purpose.
 
 _ROOMS: dict = {}
+# room -> {peer_id: {"name", "user_id", "at", "screen"}}. Peers were ids only,
+# so a tile in a call was a hex string and nobody could say who was in
+# the room — the one question everybody in a room has.
+_WHO: dict = {}
 _LOCK = threading.Lock()
 
 
@@ -629,7 +633,11 @@ def _room_key(room: str) -> tuple:
     return (tenancy.CURRENT.get(), str(room)[:64])
 
 
-def _rtc_join(room: str, peer: str | None) -> dict:
+def _who_list(key: tuple) -> list:
+    return [{"peer": pid, **w} for pid, w in _WHO.get(key, {}).items()]
+
+
+def _rtc_join(room: str, peer: str | None, who: dict | None = None) -> dict:
     peer = peer or secrets.token_hex(6)
     key = _room_key(room)
     with _LOCK:
@@ -638,8 +646,22 @@ def _rtc_join(room: str, peer: str | None) -> dict:
             raise HTTPException(403, f"the call is full — the mesh carries"
                                      f" {MESH_MAX} people at most")
         r.setdefault(peer, [])
+        if who:
+            _WHO.setdefault(key, {})[peer] = {
+                "name": who.get("name", ""), "user_id": who.get("user_id", 0),
+                "at": time.time(), "screen": False}
         peers = [p for p in r if p != peer]
-    return {"peer": peer, "peers": peers}
+        roster = _who_list(key)
+    return {"peer": peer, "peers": peers, "who": roster}
+
+
+def _rtc_mark(room: str, peer: str, **flags) -> None:
+    """A fact about a peer the others should see — sharing a screen."""
+    key = _room_key(room)
+    with _LOCK:
+        w = _WHO.get(key, {}).get(peer)
+        if w:
+            w.update({k: bool(v) for k, v in flags.items()})
 
 
 def _rtc_signal(room: str, to: str, from_peer: str, payload) -> None:
@@ -658,15 +680,18 @@ def _rtc_poll(room: str, peer: str) -> dict:
         msgs = r.get(peer, [])
         r[peer] = []
         peers = [p for p in r if p != peer]
-    return {"messages": msgs, "peers": peers}
+        roster = _who_list(key)
+    return {"messages": msgs, "peers": peers, "who": roster}
 
 
 def _rtc_leave(room: str, peer: str) -> None:
     key = _room_key(room)
     with _LOCK:
         _ROOMS.get(key, {}).pop(peer, None)
+        _WHO.get(key, {}).pop(peer, None)
         if not _ROOMS.get(key):
             _ROOMS.pop(key, None)
+            _WHO.pop(key, None)
 
 
 def rtc_config(cfg) -> dict:

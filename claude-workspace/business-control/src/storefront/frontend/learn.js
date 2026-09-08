@@ -82,6 +82,7 @@
   // can see their own record — not so they can take classes. Their rail
   // is Profile alone, the same shape lingua-portal gave those roles.
   let MYROLE = "";
+  let MYID = 0;
   const profileOnly = () => MYROLE === "board" || MYROLE === "donor";
   function tabs() {
     const t = (id, label) => `<span class="lrn-tab ${VIEW === id ? "on" : ""}"
@@ -190,7 +191,9 @@
           ? `<button class="lrn-btn" data-door="${s.id}">Run the door —
              scan student cards</button>` : ""}
         ${s.room && s.member ? `<button class="lrn-btn" data-joincall="${s.id}">Join the class online</button>` : ""}
+        ${s.member || s.door ? `<button class="lrn-btn" data-panel="${s.id}">Chat &amp; shared</button>` : ""}
       </div>
+      <div class="lrn-panel-host" data-panelhost="${s.id}" hidden></div>
       <p class="lrn-meta">${live.some((x) => x.member)
         ? "Joining online checks you in too."
         : "Scan each arriving student's ID card — the door checks them "
@@ -213,7 +216,15 @@
       const s = live.find((x) => x.id === +b.dataset.joincall);
       // joining online IS attendance — check in quietly alongside
       api(`/api/learn/sessions/${s.id}/checkin`, {}).catch(() => {});
-      openCall(s.room, s.course, (s.enrolled || 0) + 1);
+      openCall(s.room, s.course, (s.enrolled || 0) + 1, s);
+    });
+    root.querySelectorAll("[data-panel]").forEach((b) => b.onclick = () => {
+      const s = live.find((x) => x.id === +b.dataset.panel);
+      const host = root.querySelector(`[data-panelhost="${s.id}"]`);
+      if (host.hidden) { host.hidden = false; b.textContent = "Hide chat";
+        if (!host.dataset.live) { host.dataset.live = "1";
+          classPanel(host, s, { me: MYID, share: true, inCall: false }); } }
+      else { host.hidden = true; b.textContent = "Chat & shared"; }
     });
     root.querySelectorAll("[data-door]").forEach((b) => b.onclick =
       async () => {
@@ -258,7 +269,7 @@
     root.querySelectorAll("[data-joincall]").forEach((b) => b.onclick = () => {
       const s = live.find((x) => x.id === +b.dataset.joincall);
       api(`/api/learn/sessions/${s.id}/checkin`, {}).catch(() => {});
-      openCall(s.room, s.course, (s.enrolled || 0) + 1);
+      openCall(s.room, s.course, (s.enrolled || 0) + 1, s);
     });
   }
 
@@ -1354,9 +1365,108 @@
     });
   }
 
+  /* ── the class panel: who is here, what is being said, what is shared ──
+     One panel, used two ways. Inside the call it sits beside the tiles;
+     from the Check-in tab it opens on its own, so somebody in the room
+     on a phone can read the chat and open what the teacher shared without
+     joining a video call they are physically sitting in. */
+  function classPanel(host, s, opts) {
+    const me = opts.me || 0;
+    let since = 0, timer = null, who = [];
+    host.innerHTML = `
+      <div class="lrn-panel-tabs">
+        <span class="lrn-ptab on" data-p="chat">Chat</span>
+        <span class="lrn-ptab" data-p="people">People <b id="lp-count"></b></span>
+        <span class="lrn-ptab" data-p="shared">Shared</span>
+      </div>
+      <div class="lrn-pane" data-pane="chat">
+        <div class="lrn-chat" id="lp-chat"><p class="lrn-meta">nothing said yet</p></div>
+        <form class="lrn-say" id="lp-say"><input placeholder="say something to the class"
+          maxlength="2000" autocomplete="off"><button class="lrn-btn sm primary">Send</button></form>
+      </div>
+      <div class="lrn-pane" data-pane="people" hidden><div id="lp-people"></div></div>
+      <div class="lrn-pane" data-pane="shared" hidden><div id="lp-shared"></div>
+        ${opts.share ? `<p class="lrn-meta" style="margin-top:8px">Class link — send it to
+          anyone in the course:<br><code id="lp-link">${esc(s.join_url || "")}</code>
+          <button class="lrn-btn sm" id="lp-copy">Copy</button></p>` : ""}
+      </div>`;
+    host.querySelectorAll(".lrn-ptab").forEach((t) => t.onclick = () => {
+      host.querySelectorAll(".lrn-ptab").forEach((x) => x.classList.toggle("on", x === t));
+      host.querySelectorAll(".lrn-pane").forEach((x) =>
+        x.hidden = x.dataset.pane !== t.dataset.p);
+    });
+    const chatEl = host.querySelector("#lp-chat");
+    const when = (t) => new Date(t * 1000).toLocaleTimeString([],
+      { hour: "2-digit", minute: "2-digit" });
+    async function pull() {
+      try {
+        const r = await api(`/api/learn/sessions/${s.id}/chat?since=${since}`);
+        if (r.messages.length) {
+          if (since === 0) chatEl.innerHTML = "";
+          for (const m of r.messages) {
+            since = Math.max(since, m.id);
+            const d = document.createElement("div");
+            d.className = "lrn-msg" + (m.user_id === r.me ? " mine" : "");
+            d.innerHTML = `<b>${esc(m.name)}</b> <span class="lrn-meta">${when(m.at)}</span>
+              <div>${esc(m.body).replace(/(https?:\/\/[^\s<]+)/g,
+                '<a href="$1" target="_blank" rel="noopener">$1</a>')}</div>`;
+            chatEl.appendChild(d);
+          }
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }
+      } catch (e) { /* the class may have ended; the next pull says so */ }
+      timer = setTimeout(pull, 2000);
+    }
+    host.querySelector("#lp-say").onsubmit = async (e) => {
+      e.preventDefault();
+      const inp = e.target.querySelector("input");
+      const text = inp.value.trim();
+      if (!text) return;
+      inp.value = "";
+      try { await api(`/api/learn/sessions/${s.id}/chat`, { body: text }); }
+      catch (err) { toast(err.message); }
+      clearTimeout(timer); pull();
+    };
+    const copy = host.querySelector("#lp-copy");
+    if (copy) copy.onclick = async () => {
+      const link = s.join_url || location.href;
+      try {
+        if (navigator.share) await navigator.share({ title: s.course, url: link });
+        else { await navigator.clipboard.writeText(link); toast("link copied"); }
+      } catch (e) { /* the sheet was dismissed */ }
+    };
+    function drawPeople(list) {
+      who = list || who;
+      const c = host.querySelector("#lp-count"); if (c) c.textContent = who.length || "";
+      host.querySelector("#lp-people").innerHTML = who.length
+        ? who.map((w) => `<div class="lrn-person">
+            <span class="lrn-dot"></span><b>${esc(w.name || "someone")}</b>
+            ${w.user_id === me ? '<span class="lrn-meta">you</span>' : ""}
+            ${w.screen ? '<span class="pill-live">sharing screen</span>' : ""}</div>`).join("")
+        : `<p class="lrn-meta">${opts.inCall ? "just you so far" : "nobody is on the video call"}</p>`;
+    }
+    async function drawShared() {
+      let items = [];
+      try { items = (await api(`/api/learn/sessions/${s.id}/shared`)).items || []; }
+      catch (e) { items = []; }
+      host.querySelector("#lp-shared").innerHTML = (items.length
+        ? items.map((m) => `<a class="lrn-shared" href="${esc(m.url)}" target="_blank"
+            rel="noopener">${esc(m.title || m.name || "file")}
+            <span class="lrn-meta">${esc(m.kind || "")}</span></a>`).join("")
+        : `<p class="lrn-meta">Nothing shared for this class yet.</p>`)
+        + `<p class="lrn-meta" style="margin-top:8px"><a href="#courses"
+            data-course="${s.course_id}">Course materials &rarr;</a></p>`;
+      const l = host.querySelector("[data-course]");
+      if (l) l.onclick = (e) => { e.preventDefault(); location.hash = "courses";
+        setTimeout(() => course(s.course_id), 50); };
+    }
+    drawPeople([]); drawShared(); pull();
+    return { people: drawPeople, stop() { clearTimeout(timer); } };
+  }
+
   /* ── the call overlay ─────────────────────────────────────────────────── */
   let MESH = null;
-  async function openCall(room, title, expected) {
+  async function openCall(room, title, expected, session) {
     if (MESH) { alert("You're already in a call — leave it first."); return; }
     if (!window.LinguaMesh) { alert("The call module didn't load."); return; }
     let cfg = { ice_servers: [] };
@@ -1382,36 +1492,66 @@
         <b>${esc(title || "Video call")}</b>
         <span class="lrn-meta" id="call-state">connecting…</span>
         <span style="flex:1"></span>
+        <button class="lrn-btn sm" id="call-share" title="show your screen to the class">Share screen</button>
+        <button class="lrn-btn sm" id="call-invite" title="copy a link that opens this class">Invite</button>
+        <button class="lrn-btn sm" id="call-panel">Chat</button>
         <button class="lrn-btn sm" id="call-mic">Mute</button>
         <button class="lrn-btn sm" id="call-cam">Camera off</button>
         <button class="lrn-btn sm primary" id="call-leave">Leave</button>
       </div>
-      <div class="lrn-call-grid" id="call-grid"></div>
+      <div class="lrn-call-body">
+        <div class="lrn-call-grid" id="call-grid"></div>
+        <div class="lrn-call-side" id="call-side" hidden></div>
+      </div>
       <p class="lrn-meta" id="call-media" style="margin:4px 12px"></p>
       ${note ? `<p class="lrn-meta" style="margin:0 12px 8px">${esc(note)}</p>` : ""}`;
     document.body.appendChild(ov);
     const grid = ov.querySelector("#call-grid");
+    const NAMES = new Map();      // peer id -> name, from the room's roster
+    const SCREEN = new Set();     // peers currently sharing a screen
     const tile = (id) => {
-      let v = grid.querySelector(`[data-peer="${id}"]`);
-      if (!v) {
-        v = document.createElement("video");
-        v.dataset.peer = id;
-        v.autoplay = true;
-        v.playsInline = true;
+      let w = grid.querySelector(`[data-tile="${id}"]`);
+      if (!w) {
+        w = document.createElement("div");
+        w.className = "lrn-tile"; w.dataset.tile = id;
+        const v = document.createElement("video");
+        v.dataset.peer = id; v.autoplay = true; v.playsInline = true;
         if (id === "me") v.muted = true;
-        grid.appendChild(v);
+        w.appendChild(v);
+        const lab = document.createElement("span");
+        lab.className = "lrn-tile-name"; lab.textContent = id === "me" ? "you" : "…";
+        w.appendChild(lab);
+        grid.appendChild(w);
       }
-      return v;
+      return w.querySelector("video");
     };
+    const label = (id) => {
+      const w = grid.querySelector(`[data-tile="${id}"]`); if (!w) return;
+      const n = id === "me" ? "you" : (NAMES.get(id) || "…");
+      w.querySelector(".lrn-tile-name").textContent = SCREEN.has(id) ? n + " · screen" : n;
+      w.classList.toggle("screen", SCREEN.has(id));
+    };
+    let panel = null;
     MESH = factory({
       room,
       api,
       iceServers: cfg.ice_servers,
       onLocal: (s) => { tile("me").srcObject = s; },
-      onRemote: (id, s) => { tile(id).srcObject = s; },
+      onRemote: (id, s) => { tile(id).srcObject = s; label(id); },
       onLeave: (id) => {
-        const v = grid.querySelector(`[data-peer="${id}"]`);
-        if (v) v.remove();
+        const w = grid.querySelector(`[data-tile="${id}"]`);
+        if (w) w.remove();
+        SCREEN.delete(id);
+      },
+      onWho: (who) => {
+        for (const w of who) { NAMES.set(w.peer, w.name);
+          if (w.screen) SCREEN.add(w.peer); else if (w.peer !== MESH.id) SCREEN.delete(w.peer); }
+        for (const id of NAMES.keys()) label(id);
+        if (panel) panel.people(who);
+      },
+      onMeta: (id, meta) => {
+        if (meta.screen) SCREEN.add(id); else SCREEN.delete(id);
+        label(id);
       },
       onState: (m) => {
         const el = ov.querySelector("#call-state");
@@ -1424,6 +1564,7 @@
       onError: () => {},
     });
     const close = () => {
+      if (panel) panel.stop();
       if (MESH) MESH.leave();
       MESH = null;
       ov.remove();
@@ -1437,8 +1578,37 @@
       const on = MESH && MESH.toggle("video");
       e.target.textContent = on ? "Camera off" : "Camera on";
     };
+    const shareBtn = ov.querySelector("#call-share");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      shareBtn.disabled = true; shareBtn.title = "this browser cannot share a screen";
+    }
+    shareBtn.onclick = async () => {
+      if (!MESH) return;
+      try {
+        if (MESH.sharing) { await MESH.stopShare(); shareBtn.textContent = "Share screen"; }
+        else if (await MESH.shareScreen()) { shareBtn.textContent = "Stop sharing"; }
+      } catch (e) { toast(e.message || "could not share"); }
+    };
+    ov.querySelector("#call-invite").onclick = async () => {
+      const link = (session && session.join_url) || location.href;
+      try {
+        if (navigator.share) await navigator.share({ title, url: link });
+        else { await navigator.clipboard.writeText(link); toast("link copied — anyone in the course can join with it"); }
+      } catch (e) {}
+    };
+    const side = ov.querySelector("#call-side");
+    ov.querySelector("#call-panel").onclick = (e) => {
+      side.hidden = !side.hidden;
+      e.target.textContent = side.hidden ? "Chat" : "Hide chat";
+      if (!side.hidden && !panel && session) {
+        panel = classPanel(side, session, { me: MYID, share: true, inCall: true });
+      }
+    };
     try { await MESH.join(); }
     catch (err) { alert(err.message); close(); }
+    // the panel shows the room's people from the first poll on
+    if (session) { side.hidden = false; ov.querySelector("#call-panel").textContent = "Hide chat";
+      panel = classPanel(side, session, { me: MYID, share: true, inCall: true }); }
   }
 
   /* ── boot ─────────────────────────────────────────────────────────────── */
@@ -1457,6 +1627,24 @@
   Promise.all([api("/api/learn/live"),
                api("/api/learn/me").catch(() => null)]).then(([live, me]) => {
     MYROLE = me ? me.role : "";
+    MYID = (me && me.id) || 0;
+    // /learn?join=<session> is the class link: land in the call, not on a
+    // tab. It still needs a seat — the live list only returns classes the
+    // person may be in, so a link forwarded outside the course opens nothing.
+    const joinId = +(new URLSearchParams(location.search).get("join") || 0);
+    if (joinId) {
+      try {
+        const s = (live || []).find((x) => x.id === joinId);
+        if (s && s.room && (s.member || s.door)) {
+          history.replaceState(null, "", "/learn#live");
+          showTab("live");
+          api(`/api/learn/sessions/${s.id}/checkin`, {}).catch(() => {});
+          openCall(s.room, s.course, (s.enrolled || 0) + 1, s);
+          return;
+        }
+        toast("that class is not open to you, or has ended");
+      } catch (e) {}
+    }
     const asked = location.hash.replace(/^#/, "");
     VIEW = profileOnly() ? "profile"
       : VIEWS()[asked] ? asked

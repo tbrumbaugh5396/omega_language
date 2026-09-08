@@ -58,6 +58,19 @@ CREATE TABLE IF NOT EXISTS checkins (
   PRIMARY KEY (session_id, student_id)
 );
 
+-- What was said in class, in text. Kept, not ephemeral: somebody who
+-- joins ten minutes late reads what they missed, and a link the teacher
+-- pasted is still there tomorrow.
+CREATE TABLE IF NOT EXISTS class_chat (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  name TEXT DEFAULT '',
+  body TEXT NOT NULL,
+  at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS class_chat_when ON class_chat(session_id, id);
+
 CREATE TABLE IF NOT EXISTS pay_rates (
   teacher_id INTEGER PRIMARY KEY,
   hourly_cents INTEGER NOT NULL DEFAULT 0,

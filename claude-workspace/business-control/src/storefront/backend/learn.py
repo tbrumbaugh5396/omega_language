@@ -426,9 +426,26 @@ def rtc_join(room: str, body: RtcBody, user=Depends(current_customer),
              con=Depends(get_con)):
     _require_cap("learning")
     _member(con, user)
-    out = CM._rtc_join(room, body.peer or None)
+    out = CM._rtc_join(room, body.peer or None,
+                       {"name": user["name"], "user_id": user["id"]})
     out["actor"] = {"id": user["id"], "name": user["name"]}
     return out
+
+
+class RtcMarkBody(BaseModel):
+    peer: str = ""
+    screen: bool = False
+
+
+@router.post("/api/learn/rtc/{room}/mark")
+def rtc_mark(room: str, body: RtcMarkBody, user=Depends(current_customer),
+             con=Depends(get_con)):
+    """Sharing a screen is said to the room, so the tile can be labelled
+    and the people list can show who is presenting."""
+    _require_cap("learning")
+    _member(con, user)
+    CM._rtc_mark(room, body.peer, screen=body.screen)
+    return {"ok": True}
 
 
 @router.post("/api/learn/rtc/{room}/signal")
@@ -523,6 +540,88 @@ def my_notifications_read(user=Depends(current_customer),
     return {"ok": True}
 
 
+def _class_and_seat(con, user, sid: int):
+    """The open session, and whether this person may be in its room:
+    enrolled, or the door (teacher, staff, volunteer). Same rule as the
+    live list, so what you can see you can also talk in."""
+    s = con.execute("SELECT s.*, c.name AS course FROM class_sessions s"
+                    " JOIN courses c ON c.id=s.course_id WHERE s.id=?",
+                    (sid,)).fetchone()
+    if s is None:
+        raise HTTPException(404, "no such class")
+    is_door = (user["is_admin"] or CM.is_staff(con, user)
+               or user["role"] in ("volunteer", "employee")
+               or L.may_edit(con, user, s["course_id"]))
+    if not (is_door or L.enrolled_in(con, s["course_id"], user["id"])):
+        raise HTTPException(403, "that class is not one of yours")
+    return s, is_door
+
+
+@router.get("/api/learn/sessions/{sid}/chat")
+def class_chat(sid: int, since: int = 0, user=Depends(current_customer),
+               con=Depends(get_con)):
+    """Everything said since message `since` — polled beside the call's
+    own poll, so one transport carries both."""
+    _require_cap("learning")
+    _class_and_seat(con, user, sid)
+    rows = [dict(r) for r in con.execute(
+        "SELECT id, user_id, name, body, at FROM class_chat"
+        " WHERE session_id=? AND id>? ORDER BY id LIMIT 200",
+        (sid, since))]
+    return {"messages": rows, "me": user["id"]}
+
+
+class ChatBody(BaseModel):
+    body: str = ""
+
+
+@router.post("/api/learn/sessions/{sid}/chat")
+def class_say(sid: int, body: ChatBody, user=Depends(current_customer),
+              con=Depends(get_con)):
+    _require_cap("learning")
+    s, _ = _class_and_seat(con, user, sid)
+    if s["status"] != "open":
+        raise HTTPException(409, "the class has ended")
+    text = body.body.strip()[:2000]
+    if not text:
+        raise HTTPException(400, "nothing to say")
+    cur = con.execute("INSERT INTO class_chat(session_id,user_id,name,body,at)"
+                      " VALUES(?,?,?,?,?)",
+                      (sid, user["id"], user["name"], text, time.time()))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+@router.get("/api/learn/sessions/{sid}/shared")
+def class_shared(sid: int, user=Depends(current_customer),
+                 con=Depends(get_con)):
+    """What the teacher put in front of the class: files attached to this
+    session, and the drills on the lesson it is teaching. Read from the
+    panel, in the call or from a phone in the room."""
+    _require_cap("learning")
+    s, _ = _class_and_seat(con, user, sid)
+    items = []
+    for m in con.execute(
+            "SELECT id, kind, path, original, mime, bytes, created_at"
+            " FROM learning_materials WHERE session_id=?"
+            " ORDER BY id DESC", (sid,)):
+        items.append({"id": m["id"], "kind": m["kind"],
+                      "title": m["original"] or m["kind"],
+                      "url": f"/media/{m['path']}", "bytes": m["bytes"],
+                      "at": m["created_at"]})
+    if s["lesson_id"]:
+        for m in con.execute(
+                "SELECT id, kind, path, original, bytes, created_at"
+                " FROM learning_materials WHERE lesson_id=? ORDER BY id",
+                (s["lesson_id"],)):
+            items.append({"id": m["id"], "kind": m["kind"],
+                          "title": m["original"] or f"lesson {m['kind']}",
+                          "url": f"/media/{m['path']}", "bytes": m["bytes"],
+                          "at": m["created_at"], "lesson": True})
+    return {"items": items, "course_id": s["course_id"],
+            "lesson_id": s["lesson_id"]}
+
+
 @router.get("/api/learn/live")
 def live_now(user=Depends(current_customer), con=Depends(get_con)):
     """Every class in session across MY courses — the check-in screen and
@@ -533,6 +632,8 @@ def live_now(user=Depends(current_customer), con=Depends(get_con)):
     # scanner from the portal they already live in.
     is_door = (user["is_admin"] or CM.is_staff(con, user)
                or user["role"] in ("volunteer", "employee"))
+    from erp.backend.main import base_url
+    base = base_url()
     out = []
     for s in con.execute(
             "SELECT s.*, c.name AS course, c.language, u.name AS teacher"
@@ -551,6 +652,14 @@ def live_now(user=Depends(current_customer), con=Depends(get_con)):
                     "started_at": s["started_at"], "room": s["room"],
                     "my_status": mine["status"] if mine else None,
                     "member": bool(member), "door": is_door,
+                    # The teacher's register lives on this page too, for a
+                    # teacher who is in the room rather than at a desk.
+                    "may_mark": bool(is_door
+                                     or L.may_edit(con, user, s["course_id"])),
+                    # A link that opens straight into the call, for the
+                    # class WhatsApp group. It still needs a seat: the
+                    # room is for people who are in the course.
+                    "join_url": f"{base}/learn?join={s['id']}",
                     "enrolled": len(CR.enrolled(con, s["course_id"]))})
     return out
 
@@ -937,9 +1046,31 @@ def learn_page(con=Depends(get_con)):
  .lrn-msg-report{{position:absolute;top:2px;right:-18px;cursor:pointer;opacity:.4}}
  .lrn-msg-report:hover{{opacity:1}}
  #lrn-call{{position:fixed;inset:auto 12px 12px 12px;max-height:70vh;background:var(--bg,#111);color:inherit;border:1px solid rgba(127,127,127,.4);border-radius:14px;z-index:200;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.4)}}
- .lrn-call-head{{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(127,127,127,.25)}}
+ .lrn-call-head{{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(127,127,127,.25);flex-wrap:wrap}}
+ .lrn-call-side code{{word-break:break-all}}
  .lrn-call-grid{{display:grid;gap:8px;padding:12px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));overflow-y:auto}}
  .lrn-call-grid video{{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3;object-fit:cover}}
+ .lrn-call-body{{display:flex;min-height:0;flex:1}}
+ .lrn-call-body .lrn-call-grid{{flex:1;align-content:start}}
+ .lrn-call-side{{width:min(340px,42vw);border-left:1px solid rgba(127,127,127,.25);display:flex;flex-direction:column;min-height:0}}
+ .lrn-tile{{position:relative}}
+ .lrn-tile.screen video{{object-fit:contain;background:#000}}
+ .lrn-tile-name{{position:absolute;left:8px;bottom:8px;font-size:12px;padding:2px 8px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff}}
+ .lrn-panel-tabs{{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid rgba(127,127,127,.25)}}
+ .lrn-ptab{{padding:6px 10px;border-radius:8px 8px 0 0;cursor:pointer;font-size:13px;opacity:.7}}
+ .lrn-ptab.on{{opacity:1;background:rgba(127,127,127,.15)}}
+ .lrn-ptab b{{font-weight:600;margin-left:4px}}
+ .lrn-pane{{display:flex;flex-direction:column;min-height:0;flex:1;padding:10px}}
+ .lrn-pane[hidden],.lrn-call-side[hidden],.lrn-panel-host[hidden]{{display:none}}
+ .lrn-chat{{flex:1;overflow-y:auto;min-height:120px;max-height:40vh;display:flex;flex-direction:column;gap:8px}}
+ .lrn-msg{{font-size:14px;line-height:1.35}} .lrn-msg.mine b{{color:var(--accent,#5ac8b0)}}
+ .lrn-msg b{{font-size:13px}} .lrn-msg a{{word-break:break-all}}
+ .lrn-say{{display:flex;gap:6px;margin-top:8px}} .lrn-say input{{flex:1;min-width:0}}
+ .lrn-person{{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(127,127,127,.15);font-size:14px}}
+ .lrn-dot{{width:8px;height:8px;border-radius:50%;background:#3ccf8e;flex:none}}
+ .lrn-shared{{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.15)}}
+ .lrn-panel-host{{border:1px solid rgba(127,127,127,.25);border-radius:12px;margin:0 0 14px;display:flex;flex-direction:column}}
+ @media (max-width:720px){{ .lrn-call-body{{flex-direction:column}} .lrn-call-side{{width:auto;border-left:0;border-top:1px solid rgba(127,127,127,.25)}} #lrn-call{{max-height:88vh}} }}
  .lrn-cal{{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:420px}}
  .lrn-cal .dow{{font-size:.75em;opacity:.6;text-align:center;padding:2px 0}}
  .lrn-cal .day{{text-align:center;padding:6px 0;border-radius:8px;border:1px solid transparent}}

@@ -4152,6 +4152,77 @@ ok(c.get(f"/api/learn/courses/{_crs}", headers=LN).json()
    ["session"]["room"] == _cls2["session"]["room"],
    "and the learner's course page hands them the same room the teacher's "
    "roster has — one class, one call")
+def _mjs_now():
+    return (Path(__file__).parent.parent / "src/storefront/frontend/rtc-mesh.js"
+            ).read_text(encoding="utf-8")
+
+
+# --- in the room: who is here, what is said, what is shared ---------------
+_s2 = _cls2["session"]["id"]
+_rm2 = _cls2["session"]["room"]
+_jrm = c.post(f"/api/learn/rtc/{_rm2}/join", headers=LN, json={}).json()
+ok(_jrm["who"] and _jrm["who"][0]["name"] and _jrm["who"][0]["peer"] == _jrm["peer"],
+   "joining a room says who you are, not only which mailbox you are — a "
+   "tile was a hex string, and the one question everybody in a room has "
+   "is who else is in it")
+c.post(f"/api/learn/rtc/{_rm2}/mark", headers=LN,
+       json={"peer": _jrm["peer"], "screen": True})
+_pl = c.get(f"/api/learn/rtc/{_rm2}/poll?peer=zz", headers=TT).json()
+ok(any(w["peer"] == _jrm["peer"] and w["screen"] for w in _pl["who"]),
+   "and sharing a screen is a fact the room's poll carries, so the tile "
+   "can say 'screen' and the people list can say who is presenting")
+c.post(f"/api/learn/rtc/{_rm2}/leave", headers=LN, json={"peer": _jrm["peer"]})
+ok(not any(w["peer"] == _jrm["peer"] for w in
+           c.get(f"/api/learn/rtc/{_rm2}/poll?peer=zz", headers=TT).json()["who"]),
+   "leaving takes your name off the list with your seat")
+
+ok(c.post(f"/api/learn/sessions/{_s2}/chat", headers=LN,
+          json={"body": "is this the right room?"}).status_code == 200,
+   "a learner in the class says something in text")
+ok(c.post(f"/api/learn/sessions/{_s2}/chat", headers=TT,
+          json={"body": "yes — see https://example.com/handout"}).status_code == 200,
+   "and the teacher answers")
+_ch = c.get(f"/api/learn/sessions/{_s2}/chat?since=0", headers=LN).json()
+ok([m["name"] for m in _ch["messages"]][-1] == _tch["name"]
+   and _ch["messages"][0]["body"].startswith("is this"),
+   "in order, with names — kept rather than ephemeral, so somebody who "
+   "joins ten minutes late reads what they missed")
+_last = _ch["messages"][-1]["id"]
+ok(c.get(f"/api/learn/sessions/{_s2}/chat?since={_last}", headers=LN).json()
+   ["messages"] == [],
+   "and polled by high-water mark, so the second poll carries nothing "
+   "twice")
+# A real stranger: an account with no seat in this course. (Nina has
+# one — she is the approved applicant — which is why she is not used.)
+_strg = c.post("/api/login", headers=HA, json={"name": "Passer By",
+                                               "role": "customer"}).json()
+_SG = {"Authorization": f"Bearer {_strg['token']}", **HA}
+ok(c.get(f"/api/learn/sessions/{_s2}/chat", headers=_SG).status_code == 403
+   and c.post(f"/api/learn/sessions/{_s2}/chat", headers=_SG,
+              json={"body": "hi"}).status_code == 403,
+   "somebody not in the course can neither read nor write it — the same "
+   "seat rule as the live list, so what you can see you can talk in")
+ok(c.post(f"/api/learn/sessions/{_s2}/chat", headers=LN,
+          json={"body": "   "}).status_code == 400,
+   "and nothing is not a message")
+_sh = c.get(f"/api/learn/sessions/{_s2}/shared", headers=LN).json()
+ok(_sh["course_id"] == _crs and isinstance(_sh["items"], list),
+   "what the class shared is a list the learner may read, keyed to the "
+   "course so the panel can point at the course's own materials")
+_lv = [x for x in c.get("/api/learn/live", headers=LN).json() if x["id"] == _s2]
+ok(_lv and _lv[0]["join_url"].endswith(f"/learn?join={_s2}")
+   and _lv[0]["may_mark"] is False,
+   "the live list hands a learner a link that opens straight into the "
+   "class, and says they may not run the register")
+ok([x for x in c.get("/api/learn/live", headers=TT).json()
+    if x["id"] == _s2][0]["may_mark"] is True,
+   "while the teacher may — the register lives on this page too, for a "
+   "teacher in the room rather than at a desk")
+ok("shareScreen" in _mjs_now() and "getDisplayMedia" in _mjs_now()
+   and "replaceTrack" in _mjs_now(),
+   "the mesh shares a screen by swapping the camera's track, so no "
+   "renegotiation and nothing about the connection changes")
+
 c.post(f"/api/learning/sessions/{_cls2['session']['id']}/close", headers=TT)
 _ljs = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
         ).read_text(encoding="utf-8")

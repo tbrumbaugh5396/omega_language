@@ -106,7 +106,7 @@
   const POLL_MS = 1000;
 
   function createMesh({ room, api, iceServers, onLocal, onRemote, onLeave,
-                        onState, onError, onMedia }) {
+                        onState, onError, onMedia, onWho, onMeta }) {
     const base = "/api/learn/rtc/" + encodeURIComponent(room);
     const ICE = iceServers && iceServers.length ? iceServers
       : [{ urls: ["stun:stun.l.google.com:19302"] }];
@@ -116,6 +116,44 @@
     let mediaLevel = null;
     let poller = null;
     let stopped = false;
+    let screenTrack = null;     // the display track while sharing
+    let cameraTrack = null;     // what it replaced, to put back
+
+    /* Screen share is the camera's sender carrying a different track.
+       replaceTrack needs no renegotiation, so every peer sees the switch
+       inside a second and nothing about the connection changes. When the
+       browser's own "Stop sharing" is pressed the track ends on its own,
+       and the camera goes back the same way. */
+    async function shareScreen() {
+      if (screenTrack) return true;
+      const disp = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      const track = disp.getVideoTracks()[0];
+      if (!track) return false;
+      screenTrack = track;
+      cameraTrack = local ? local.getVideoTracks()[0] || null : null;
+      for (const p of peers.values()) {
+        const snd = p.pc.getSenders().find((x) => x.track && x.track.kind === "video")
+          || p.pc.getSenders().find((x) => !x.track);
+        if (snd) { try { await snd.replaceTrack(track); } catch (e) { oops(e); } }
+      }
+      for (const id of peers.keys()) send(id, { meta: { screen: true } });
+      api(base + "/mark", { peer: selfId, screen: true }).catch(() => {});
+      if (onLocal) onLocal(new MediaStream([track]));
+      track.onended = () => stopShare();
+      return true;
+    }
+    async function stopShare() {
+      if (!screenTrack) return;
+      const t = screenTrack; screenTrack = null;
+      try { t.stop(); } catch (e) {}
+      for (const p of peers.values()) {
+        const snd = p.pc.getSenders().find((x) => x.track === t || (x.track && x.track.kind === "video"));
+        if (snd) { try { await snd.replaceTrack(cameraTrack); } catch (e) {} }
+      }
+      for (const id of peers.keys()) send(id, { meta: { screen: false } });
+      api(base + "/mark", { peer: selfId, screen: false }).catch(() => {});
+      if (onLocal) onLocal(local);
+    }
 
     const say = (m) => { try { onState && onState(m); } catch (e) {} };
     const oops = (e) => { try { onError && onError(String((e && e.message) || e)); } catch (x) {} };
@@ -139,7 +177,10 @@
       // other; comparing ids gives exactly that
       p = { pc, polite: selfId < peerId, makingOffer: false, ignoreOffer: false };
       peers.set(peerId, p);
-      if (local) for (const t of local.getTracks()) pc.addTrack(t, local);
+      if (local) for (const t of local.getTracks()) {
+        // a peer arriving mid-share gets the screen, not the camera
+        pc.addTrack(t.kind === "video" && screenTrack ? screenTrack : t, local);
+      }
       // whatever we could not SEND we must still declare we want to RECEIVE,
       // or a peer with no camera negotiates a connection carrying nothing
       const sending = new Set((local ? local.getTracks() : []).map((t) => t.kind));
@@ -188,6 +229,9 @@
         } else if (payload.candidate) {
           try { await pc.addIceCandidate(payload.candidate); }
           catch (e) { if (!p.ignoreOffer) throw e; }
+        } else if (payload.meta) {
+          // a fact about the sender, not the media — "this is my screen"
+          onMeta && onMeta(from, payload.meta);
         }
       } catch (e) { oops(e); }
     }
@@ -222,7 +266,10 @@
           if (peers.size !== before) {
             const bps = meshBitrateFor(peers.size);
             for (const p of peers.values()) capBitrate(p.pc, bps);
+            // a newcomer must be told what the others already know
+            if (screenTrack) for (const id of there) send(id, { meta: { screen: true } });
           }
+          if (r.who && onWho) onWho(r.who);
         }
       } catch (e) {
         // a 401 means the session that authorised this call is gone: stop
@@ -250,6 +297,7 @@
         stopped = true;
         if (poller) clearTimeout(poller);
         for (const id of [...peers.keys()]) drop(id);
+        if (screenTrack) { try { screenTrack.stop(); } catch (e) {} screenTrack = null; }
         if (local) { for (const t of local.getTracks()) t.stop(); local = null; }
         mediaLevel = null;
         if (selfId) api(base + "/leave", { peer: selfId }).catch(() => {});
@@ -277,6 +325,8 @@
       },
       get id() { return selfId; },
       get peerIds() { return [...peers.keys()]; },
+      shareScreen, stopShare,
+      get sharing() { return !!screenTrack; },
     };
   }
 
