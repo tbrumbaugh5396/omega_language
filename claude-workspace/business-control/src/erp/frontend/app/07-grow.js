@@ -902,7 +902,8 @@ async function renderFleet() {
           <span class="fl-caps">${t.caps ? `<span class="pill"
             title="capabilities granted from their quote">${t.caps}
             caps</span>` : ""}</span>
-          <span class="fl-hosts dim">${(t.hosts || []).map(esc)
+          <span class="fl-hosts dim" title="${(t.hosts || []).map(esc)
+            .join(" · ")}">${(t.hosts || []).map(esc)
             .join(" · ")}</span>
           <span class="dl-acts fleet-acts">
             ${t.provider ? "<span></span><span></span><span></span>" : `

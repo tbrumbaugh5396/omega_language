@@ -646,9 +646,48 @@ tbody tr:hover { background: rgba(0,0,0,.028); }
 .fl-hosts { font-size: 12px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
 .dl-acts.fleet-acts { grid-template-columns: repeat(3, 98px); }
-@media (max-width: 1000px) {
+/* 1180 and not 1000, which was set where the layout BREAKS rather than
+   where it stops FITTING — about 180px apart, and every laptop in
+   between rendered the tenant name in a 29px column. The row reserves
+   240 for tags, 74 for caps and 306 for seven buttons; with gaps that
+   is 660px gone before the name or the hosts get a pixel, so the two
+   1fr columns only have room worth having past about 1180. Below it
+   the stacked layout is not a compromise, it is the one that can be
+   read. */
+@media (max-width: 1180px) {
   .doc-line.fleet-line { grid-template-columns: minmax(0, 1fr) auto; }
   .fl-tags, .fl-hosts, .fl-caps { grid-column: 1 / -1; }
+}
+/* Narrow, the same pass as the pressure row above it, and the same
+   cause: a later, more specific rule quietly defeating the responsive
+   one. `.dl-acts` collapses to four equal columns at 900px, but
+   `.dl-acts.fleet-acts` pins three at 98px and wins — seven buttons in
+   306px of track inside a 278px box, so a whole column of them stood
+   outside the row it belongs to, and the row stood outside its own
+   list.
+
+   Two equal columns instead of three fixed ones. The buttons are
+   Report, Act as admin, Limits, Capabilities, Move, Suspend and
+   Remove: destructive verbs sitting where a thumb goes, which is a
+   reason to give them honest hit targets rather than to shave them. */
+@media (max-width: 760px) {
+  .doc-line .dl-acts.fleet-acts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* It has a full-width row to itself down here, so it wraps rather
+     than ellipsing. A host list is the one field on this row somebody
+     is reading to type it somewhere else, and half of a hostname is
+     not a shorter hostname. */
+  .fl-hosts { white-space: normal; overflow: visible; }
+  /* 92 + 130 + gaps left 67px for the entry itself, which is the only
+     part of a history line anybody reads it for. */
+  .log-line { grid-template-columns: auto minmax(0, 1fr); }
+  .log-line > :last-child { grid-column: 1 / -1; }
+  /* The node's own head, for the reason its neighbour got one: nowrap
+     squeezed four items into a phone's width until "19 / 25 units"
+     broke across two lines inside a 63px column. Nothing was clipped,
+     so no measurement complained — it was just bad. */
+  .node-card .card-head { flex-wrap: wrap; }
 }
 
 /* The generic list row: a title block on the left, pills and buttons

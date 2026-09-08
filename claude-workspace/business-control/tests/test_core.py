@@ -6209,6 +6209,46 @@ ok("minmax(0, 1fr) minmax(0, 240px) 74px" in
    _ocss.split(".doc-line.fleet-line {")[1][:160],
    "sized and fixed, so it reads down the list rather than across each row")
 
+# The same row on a narrower screen. Its collapse was set at the width
+# where the layout breaks rather than the width where it stops fitting.
+_fl_media = [b for b in _ocss.split("@media") if "fleet-line" in b
+             and "grid-column: 1 / -1" in b]
+ok(_fl_media and "1180px" in _fl_media[0],
+   "the fleet row collapses at 1180 and not at 1000. It reserves 240 "
+   "for tags, 74 for caps and 306 for seven buttons — 660px with the "
+   "gaps, gone before the name or the hosts get a pixel — so at 1001 "
+   "the two 1fr columns were 29px each and every laptop between the "
+   "two rendered the tenant name as three clipped characters")
+# By its condition, not merely by "a chunk mentioning fleet-acts" —
+# splitting on @media hands back the chunk holding the BASE rule first,
+# which is the one this is checked against rather than confused with.
+_fa_media = [b for b in _ocss.split("@media")
+             if "fleet-acts" in b and "760px" in b]
+ok(_fa_media and "repeat(2, minmax(0, 1fr))" in _fa_media[0],
+   "and its seven buttons go two abreast on a phone rather than three "
+   "at a fixed 98px: 306px of track in a 278px box put a whole column "
+   "of them outside the row, and Suspend and Remove are not verbs to "
+   "leave hanging off the edge of a thumb")
+ok(".dl-acts.fleet-acts" in _fa_media[0]
+   and ".doc-line" in _fa_media[0].split(".dl-acts.fleet-acts")[0],
+   "named against its base rather than trusted to file order, which is "
+   "the rule this stylesheet already has a guard for — and which the "
+   "generic .dl-acts collapse at 900px lost to, being both less "
+   "specific and earlier")
+ok('class="fl-hosts dim" title=' in _ops,
+   "a host list that ellipsises carries its full text on the element. "
+   "It is the one field on this row somebody reads in order to type it "
+   "somewhere else, and half a hostname is not a shorter hostname — "
+   "the same rule the verdict cell on the pressure board follows")
+ok(any("white-space: normal" in b for b in _fa_media),
+   "and narrow, where it has a full-width row to itself, it wraps "
+   "instead: nothing to reach for, because nothing is hidden")
+ok(any(".log-line { grid-template-columns: auto minmax(0, 1fr)" in b
+       for b in _ocss.split("@media")),
+   "the history under it stacks too — 92 and 130 fixed left 67px for "
+   "the entry, which is the only part of a history line anybody opens "
+   "it to read")
+
 # Every kind of service drew its own table, and a table sizes its columns
 # to its own contents — so Plans, Bundles and Packs each put the SKU and
 # the price somewhere different.
