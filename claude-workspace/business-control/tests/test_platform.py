@@ -1215,6 +1215,32 @@ ok('${pressMore(r)}</span>' in _bjs
    "and the count of what is not shown sits beside the state pill, never "
    "inside the cell it describes — appended to the end of a clipped line "
    "it was the first thing cut, a signpost lost inside its own fog")
+# The row has to survive a phone. Five columns, three of them sized by
+# their contents, do not.
+_pressrule = _css.split(".doc-line.press-line", 1)[1].split("}", 1)[0]
+ok("1.2fr" in _pressrule and "3fr" in _pressrule,
+   "the wide row gives the name and the verdict the room, and lets the "
+   "pill, the money and the buttons take what they need")
+# The block itself, found by its condition — splitting on @media alone
+# hands back the chunk holding the base rule, which is the one this is
+# meant to be checked against rather than confused with.
+_narrow = [b for b in _css.split("@media")
+           if "press-line" in b and "760px" in b]
+ok(_narrow and "minmax(0, 1fr) auto" in _narrow[0],
+   "and narrow it collapses to two. The pill, the money and two buttons "
+   "have intrinsic widths summing past a phone pane on their own, so "
+   "the fr columns were driven to ZERO — the board whose whole job is "
+   "telling you who to ring rendered neither the who nor the why, and "
+   "overflowed the page doing it")
+ok(len(_narrow) == 1,
+   "at its own breakpoint, because the generic .doc-line collapse is "
+   "both less specific and earlier in the file and never reaches this "
+   "rule — the same trap .fleet-line fell into, which is why that one "
+   "has a breakpoint of its own too")
+ok(any("grid-column: 1 / -1" in b for b in _narrow),
+   "with the verdict spanning the full width rather than sharing a "
+   "line: it is the sentence somebody acts on, and the two-line clamp "
+   "above is only a kindness if the line has width to spend")
 ok("x.peak && x.store_id" in _bjs,
    "and it names real shops only — another lane cannot belong at "
    "not-tied-to-a-location")

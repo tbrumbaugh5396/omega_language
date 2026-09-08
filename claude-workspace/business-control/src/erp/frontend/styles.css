@@ -1672,6 +1672,34 @@ body.lane-on { overflow: hidden; }
 }
 .press-money { text-align: right; font-variant-numeric: tabular-nums;
   white-space: nowrap; color: #7fd6a8; font-weight: 600; }
+/* Narrow, the five columns cannot fit and do not degrade gracefully:
+   the pill, the money and two buttons have intrinsic widths summing to
+   more than a phone pane on their own, so the 1.2fr name and the 3fr
+   verdict were driven to ZERO. The row overflowed the page, and worse,
+   it stopped saying whose install it was or what was wrong — a board
+   whose entire job is telling you who to ring, rendering neither the
+   who nor the why.
+
+   The generic .doc-line collapse at 900px cannot reach this rule: it is
+   both less specific and earlier in the file. .fleet-line fell into the
+   same trap and got its own breakpoint; this is that, for this row. */
+@media (max-width: 760px) {
+  .doc-line.press-line {
+    grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px;
+  }
+  .press-line .press-why { grid-column: 1 / -1; -webkit-line-clamp: 3; }
+  .press-line .press-money { grid-column: 1; text-align: left; }
+  .press-line .dl-acts.press-acts {
+    grid-column: 2; grid-template-columns: repeat(2, auto);
+  }
+  /* And let this board's head wrap. card-head is nowrap, which on a
+     phone squeezed the title to 54px and stacked it one word per line
+     while the sentence beside it kept its room. Scoped to this board
+     rather than loosened globally: card-head is on every card in the
+     app, and a layout change nobody asked for on forty screens is not
+     a bug fix. */
+  #fleet-pressure .card-head { flex-wrap: wrap; }
+}
 .press-money.dim { color: var(--dim); font-weight: 400; }
 .press-state { white-space: nowrap; }
 
