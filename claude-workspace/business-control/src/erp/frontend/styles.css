@@ -124,8 +124,8 @@ body.rail-folded #tabs button { justify-content: center; padding: 9px 0; }
    five columns pushed the whole view past the window, taking the page's
    own action buttons off the right-hand edge with them. Wide content
    scrolls inside itself now, and the page does not scroll sideways. */
-#view { flex: 1; min-width: 0; padding: 18px; max-width: 1080px;
-  animation: viewin .18s ease-out; }
+#view { flex: 1; min-width: 0; --gutter: 18px; padding: var(--gutter);
+  max-width: 1080px; animation: viewin .18s ease-out; }
 @keyframes viewin { from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; } }
 
@@ -134,7 +134,8 @@ h2 { margin: 4px 0 14px; font-size: 21px; font-weight: 600;
 h3 { margin: 18px 0 8px; font-size: 11px; color: var(--dim);
   text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
 .card { background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 16px 18px; margin-bottom: 14px; }
+  border-radius: var(--r); --gutter: 18px; padding: 16px var(--gutter);
+  margin-bottom: 14px; }
 .row { display: flex; gap: 12px; flex-wrap: wrap; }
 .row > .card { flex: 1; min-width: 220px; }
 
@@ -146,7 +147,16 @@ tr:last-child td { border-bottom: none; }
 th { color: var(--dim); font-weight: 600; font-size: 11px;
   text-transform: uppercase; letter-spacing: .5px; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-.tablewrap { overflow-x: auto; margin: 0 -14px; padding: 0 14px; }
+/* A table scrolls to the edge of whatever holds it, then pads its
+   contents back in. That needs the holder's gutter, and the pull was a
+   hardcoded 14px — which matches neither the card's 18 nor a narrow
+   #view's 12. Four pixels short of the card edge, and two pixels PAST
+   the page on a phone, which is a horizontal scrollbar on every screen
+   with a table on it.
+   The gutter is a property of the container, so the container states
+   it and this reads it. */
+.tablewrap { overflow-x: auto; margin: 0 calc(-1 * var(--gutter, 14px));
+  padding: 0 var(--gutter, 14px); }
 
 /* ---------- controls ---------- */
 input, select, textarea { background: var(--panel2); color: var(--text);
@@ -173,12 +183,18 @@ button.btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
 button.btn[aria-busy="true"] { cursor: progress; }
 .pill { display: inline-block; padding: 2px 9px; border-radius: 20px;
   font-size: 12px; background: var(--panel2); color: var(--dim); }
+/* A tinted pill is not a panel. These used the token for the text AND a
+   wash of the same token for the ground, which reads well and measures
+   4.13, 3.49 and 4.26 — the token is chosen against --panel, and the
+   pill does not sit on --panel, it sits on its own tint. So the text
+   goes a notch deeper here. "idle 48d" and "never used" are the two
+   pills on the kiosk table that a manager is scanning for. */
 .pill.ok { background: color-mix(in srgb, var(--good) 14%, var(--panel));
-  color: var(--good); }
+  color: color-mix(in srgb, var(--good) 90%, #000); }
 .pill.warn { background: color-mix(in srgb, var(--warn) 16%, var(--panel));
-  color: var(--warn); }
+  color: color-mix(in srgb, var(--warn) 85%, #000); }
 .pill.bad { background: color-mix(in srgb, var(--bad) 12%, var(--panel));
-  color: var(--bad); }
+  color: color-mix(in srgb, var(--bad) 95%, #000); }
 .big { font-size: 28px; font-weight: 600; letter-spacing: -.02em;
   font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }
@@ -505,7 +521,8 @@ button.rota-head:hover { color: var(--text);
 @media (max-width: 720px) {
   #layout { flex-direction: column; }
   #tabs { display: none; }
-  #view { padding: 14px 12px 84px; max-width: none; }
+  #view { --gutter: 12px; padding: 14px var(--gutter) 84px;
+    max-width: none; }
   #bottomnav { display: flex; position: fixed; bottom: 0; left: 0; right: 0;
     background: var(--panel); border-top: 1px solid var(--line); z-index: 25;
     /* on a light ground a border alone does not lift a bar off the page */
@@ -962,8 +979,11 @@ button.btn[hidden], .btn[hidden] { display: none; }
 .req, .opt { font-size: 10px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; padding: 1px 7px; border-radius: 99px;
   margin-left: 6px; vertical-align: 1px; }
+/* Same tint, same correction as .pill.bad above — it is 10px uppercase
+   on a wash of its own colour, which is the smallest text in the app
+   and was the second-worst measured. */
 .req { background: color-mix(in srgb, var(--bad) 12%, var(--panel));
-  color: var(--bad); }
+  color: color-mix(in srgb, var(--bad) 95%, #000); }
 .opt { background: var(--panel2); color: var(--muted, #8b93a4); }
 
 @media (max-width: 900px) {

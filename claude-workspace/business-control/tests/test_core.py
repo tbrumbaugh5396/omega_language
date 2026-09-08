@@ -6355,15 +6355,60 @@ def _ratio(a, b):
 # scanner's caption — sets a background in its own rule and exempts
 # itself. Nothing has to be trusted, and .disp, which set none, could
 # not have exempted itself no matter what I believed about it.
+# Enough colour arithmetic to follow a rule to its own ground: the
+# palette's own entries, and one color-mix of two of them. Not a CSS
+# engine — just the two forms this stylesheet actually writes.
+_ROOT = dict(_re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{3,6})\s*;",
+                         _ocss.split("}")[0]))
+
+
+def _solve(v):
+    """A colour literal, a var(), or one color-mix — or None."""
+    v = v.strip()
+    if v.startswith("#"):
+        return v
+    _mv = _re.fullmatch(r"var\(\s*(--[\w-]+)\s*\)", v)
+    if _mv:
+        return _ROOT.get(_mv.group(1))
+    _mx = _re.fullmatch(
+        r"color-mix\(in srgb,\s*(.+?)\s+(\d+)%,\s*(.+?)\s*\)", v)
+    if _mx:
+        _a, _p, _b = _solve(_mx.group(1)), int(_mx.group(2)) / 100, _solve(_mx.group(3))
+        if not (_a and _b):
+            return None
+        _ha, _hb = _a.lstrip("#"), _b.lstrip("#")
+        if len(_ha) == 3:
+            _ha = "".join(c * 2 for c in _ha)
+        if len(_hb) == 3:
+            _hb = "".join(c * 2 for c in _hb)
+        return "#" + "".join(
+            "%02x" % round(_p * int(_ha[i:i + 2], 16)
+                           + (1 - _p) * int(_hb[i:i + 2], 16))
+            for i in (0, 2, 4))
+    return None
+
+
+# A rule that sets its own background is measured AGAINST that background
+# rather than excused by having one. Excusing it was a hole big enough to
+# hide the status pills in: .pill.bad tints its ground with 12% of --bad
+# and then writes --bad on it, which is 4.26 and not the 5.07 the token
+# scores on a panel. A token is chosen against one surface and used on
+# another, and only the arithmetic notices.
 _faint = []
 for _m in _re.finditer(r"([^;{}]*)\{([^}]*)\}", _ocss):
     _sel = _m.group(1).strip().splitlines()[-1].strip()
     _body = _m.group(2)
-    if _re.search(r"\bbackground(-color|-image)?:", _body):
-        continue
-    for _cm in _re.finditer(r"(?<!-)\bcolor:\s*(#[0-9a-fA-F]{3,6})", _body):
-        if _ratio(_cm.group(1), "#f6f7f9") < 4.5:
-            _faint.append(f"{_sel} {_cm.group(1)}")
+    _bgm = _re.search(r"(?<!-)\bbackground(?:-color)?:\s*([^;}]+)", _body)
+    if _re.search(r"\bbackground(-image)?:\s*(url|linear-|radial-|repeating)",
+                  _body):
+        continue                      # a gradient or image, not a flat colour
+    _ground = _solve(_bgm.group(1)) if _bgm else "#f6f7f9"
+    if _bgm and _ground is None:
+        continue                      # not resolvable here; not guessed at
+    for _cm in _re.finditer(r"(?<!-)\bcolor:\s*([^;}]+)", _body):
+        _fg = _solve(_cm.group(1))
+        if _fg and _ratio(_fg, _ground) < 4.5:
+            _faint.append(f"{_sel} {_fg} on {_ground}")
 # The rule's own block, to its closing brace — not a fixed slice, which
 # a long enough comment walks straight out of.
 _disp_rule = _ocss.split(".disp {")[1].split("}")[0] if ".disp {" in _ocss else ""
@@ -6380,11 +6425,12 @@ ok("background: var(--panel)" in _disp_rule,
    "own takes whatever the page behind it happens to be, and every "
    "colour chosen against the wrong one is wrong by exactly that much")
 ok(not _faint,
-   "no hardcoded text colour falls below 4.5:1 on a panel. Eight did — "
-   "a salmon and a mint from the same dark-theme era, on the money "
-   f"figure, the busiest location and the +N badge ({_faint[:3]}). They "
-   "read as decoration until you measure them, which is why this "
-   "measures them")
+   "no text colour falls below 4.5:1 against the ground its own rule "
+   f"puts it on ({_faint[:3]}). Eleven did: a salmon and a mint left "
+   "over from a dark-theme era, and then the tinted badges — a pill "
+   "that washes its ground with 12% of the same token it writes in is "
+   "not on a panel any more, and the token was chosen for a panel. All "
+   "of them read as decoration until somebody measures them")
 
 ok(any(".log-line { grid-template-columns: auto minmax(0, 1fr)" in b
        for b in _ocss.split("@media")),
