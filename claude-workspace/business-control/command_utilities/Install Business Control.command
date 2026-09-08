@@ -35,13 +35,19 @@ echo "  ✓ launchers are executable"
 ./.venv/bin/python3 scripts/make_icons.py >/dev/null
 ./.venv/bin/python3 - <<'PY'
 import sys; sys.path.insert(0, "src")
-from backend import db, config
+# erp.backend, not backend: the modules moved when the ERP was split out
+# and this line did not, so a fresh install died here — on `set -e`, at
+# the step that creates the database, before it had ever run once.
+from erp.backend import db, config
 db.init(); cfg = config.load()
 print(f"  ✓ database ready — admin key: {cfg['admin_key']}")
 print("    (enter it in the login screen's 'admin key' field to get the")
 print("     Experiments / Analytics / Admin tabs)")
 PY
 ./.venv/bin/python3 scripts/seed.py | sed 's/^/  ✓ /'
+# A class that is happening right now, so Learning opens on something
+# rather than on an empty register.
+./.venv/bin/python3 scripts/seed_live_class.py 2>/dev/null | sed 's/^/  /'
 
 echo
 read -p "  Create a Desktop app icon too? [y/N] " yn

@@ -109,6 +109,33 @@ has passed, so the failure reads as anything except what it is. That was
 the push flake this repo lived with while the hook took two minutes; at
 seven it is not a flake, it is every push.
 
+## Seeding
+
+`command_utilities/Seed Starter Content.command` is the double-click
+version; by hand it is two scripts:
+
+```bash
+.venv/bin/python scripts/seed.py                 # catalog, stores, 30 days of orders
+.venv/bin/python scripts/seed_live_class.py      # a class that is in session NOW
+```
+
+Both take a tenant (`--tenant lingua` / `lingua`); without one the class
+seed picks whichever tenant `localhost` opens, because seeding a tenant
+nobody looks at is the same as not seeding. Both are safe to re-run.
+
+`seed_live_class.py` exists because half the Learning feature only has a
+surface while a class is running — the register, the check-in door, the
+badge scanner, the wall display's IN PROGRESS. Seeded a course and no
+session, all of those open empty, which reads as broken rather than as
+idle. It leaves three students deliberately unmarked: a register where
+everyone is already ticked demonstrates nothing, because ticking
+somebody is the thing you do on that screen.
+
+It drives `classroom.start_class` and `classroom.do_check_in` rather
+than inserting rows. A seed that writes its own rows is a second
+implementation of the feature and goes stale the first time the real one
+moves.
+
 ## Backups
 
 `scripts/backup.py` archives the whole fleet (pulls from worker nodes) and
