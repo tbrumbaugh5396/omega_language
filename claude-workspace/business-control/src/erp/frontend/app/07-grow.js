@@ -699,6 +699,7 @@ const PRESSURE_WORDS = {
   idle: ["idle tablets", "kiosks switched on, billed, and not touched"],
   settled: ["settled", "was turned away, since resolved"],
   unreachable: ["unreachable", "their node did not answer"],
+  quiet: ["quiet", "nothing pressed against a limit"],
 };
 
 /* One line, and it knows it is one line.
@@ -734,6 +735,23 @@ function pressMore(r) {
    It gets its own line rather than a clause on the end of the verdict,
    because the verdict cell is one line with an ellipsis on it — a
    breakdown appended there is written, truncated, and never read. */
+/* The appeal, on the row of the shop running it.
+   Not a limit and not classified as one — nobody is pressed against a
+   donation target — but this board answers "who should we ring today",
+   and an appeal about to land is that call. */
+function pressFund(r) {
+  const f = r.fund;
+  if (!f) return "";
+  return `<div class="press-fund">
+    <span class="dim">${esc(f.name)}${f.payee
+      ? " · for " + esc(f.payee) : ""}</span>
+    ${f.pct !== null ? `<div class="fund-goal-bar"><i
+      style="width:${f.pct}%" class="${f.passed ? "done" : ""}"></i></div>`
+      : ""}
+    <span class="dim">${esc(f.line)}</span>
+  </div>`;
+}
+
 function pressWhere(r) {
   const out = [];
   for (const l of r.lines || []) {
@@ -766,7 +784,11 @@ async function fleetPressure() {
       <p class="dim">Could not read it: ${esc(e.message)}</p>`;
     return;
   }
-  const live = d.rows.filter((r) => r.worst !== "quiet");
+  // An install with nothing pressed against a limit but an appeal
+  // running has something to say, and this board is the list of things
+  // worth saying. Filtering on pressure alone would have shown the
+  // thermometer on exactly the shops that happened to be short of tills.
+  const live = d.rows.filter((r) => r.worst !== "quiet" || r.fund);
   const chip = (n, k) => n
     ? `<span class="pill ${k === "asking" || k === "over" ? "bad" : ""}"
          title="${PRESSURE_WORDS[k][1]}">${n} ${PRESSURE_WORDS[k][0]}</span>`
@@ -807,7 +829,7 @@ async function fleetPressure() {
             >Limits</button>
           <button class="btn alt sm" data-prep="${esc(r.tenant)}"
             >Report</button></span>
-      </div>${pressWhere(r)}`).join("")}</div>`
+      </div>${pressWhere(r)}${pressFund(r)}`).join("")}</div>`
     : `<p class="dim">Nobody is pressed against a limit and nobody is
        paying for room they never use. This is the quiet answer, not a
        missing one.</p>`}

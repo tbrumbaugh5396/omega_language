@@ -933,13 +933,42 @@ def _rooms_from(con) -> list:
 def _pressure_from(con) -> dict:
     """Never fatal. An install too old to have the refusal table has no
     refusals to report, which is a true statement about it."""
+    out = {}
     try:
         from erp.backend import metering, tenancy as _tn
         from erp.backend.main import _in_use, entitled
-        return {k: metering.pressure(con, k, entitled(k), _in_use(con, k))
-                for k in _tn.LIMIT_KEYS}
+        out = {k: metering.pressure(con, k, entitled(k), _in_use(con, k))
+               for k in _tn.LIMIT_KEYS}
     except Exception:                                        # noqa: BLE001
         return {}
+    # The appeal rides along on the dock that is already visiting every
+    # tenant on every node. It is not a limit and is not classified as
+    # one — nobody is pressed against a donation target — but this board
+    # answers "who should we be ringing today", and a client whose
+    # appeal is about to land, or one that closed short of it, is
+    # exactly that conversation.
+    #
+    # Its own try: an install with no donations capability has no such
+    # table, and a fleet board that goes blank because one shop never
+    # took a donation is worse than one that says nothing about it.
+    try:
+        from storefront.backend import donations as _dn
+        f = _dn.active_fund(con)
+        if f is not None:
+            t = _dn.totals(con, f["id"])
+            pr = _dn.progress(f, t)
+            # Only what the row draws. The raised figure, the target
+            # and the count are already inside the sentence, and this
+            # board has a standing rule against shipping fields nothing
+            # reads — four facts in this feature were measured, stored,
+            # sent and shown to nobody.
+            out["fund"] = {
+                "name": f["name"], "payee": f["payee"] or "",
+                "line": _dn.progress_line(t, pr, bool(f["active"])),
+                "pct": pr["pct"], "passed": pr["passed"]}
+    except Exception:                                        # noqa: BLE001
+        pass
+    return out
 
 
 def tenant_usage(tid: str) -> dict:
@@ -1166,6 +1195,7 @@ def fleet_pressure(u=Depends(admin_user), con=Depends(get_con)):
             "hosts": reg.get("hosts") or [],
             "worst": lines[0]["state"] if lines else "quiet",
             "at_stake_cents": sum(ln["at_stake_cents"] for ln in lines),
+            "fund": pressure.get("fund"),
             "lines": lines})
     rows.sort(key=lambda r: (_PRESSURE_RANK.get(r["worst"], 9),
                              -abs(r["at_stake_cents"])))

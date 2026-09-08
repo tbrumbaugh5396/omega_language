@@ -1103,6 +1103,61 @@ ok(_fp3["idle"] >= 1,
    "having them, not by the installs whose worst problem they are — the "
    "same suppression as an elif, one level up")
 
+# The appeal rides along on the same dock, because the board's question
+# is "who should we ring today" and a shop whose appeal is about to land
+# is that call.
+_dtok = _tn.CURRENT.set("alpha")
+try:
+    _dcon = _dbp.connect()
+    _dcon.execute(
+        "INSERT INTO donation_funds(name,kind,blurb,payee,reference,"
+        "target_cents,active,created_at) VALUES(?,?,?,?,?,?,?,?)",
+        ("Roof appeal", "ours", "", "", "", 10000, 1, _t0.time()))
+    _dfid = _dcon.execute("SELECT id FROM donation_funds WHERE name='Roof "
+                          "appeal'").fetchone()["id"]
+    _dcon.execute(
+        "INSERT INTO orders(user_id,kind,status,region,subtotal_cents,"
+        "total_cents,donation_cents,donation_fund_id,created_at)"
+        " VALUES(1,'web','paid','',0,2500,2500,?,?)", (_dfid, _t0.time()))
+    _dcon.commit()
+    _dcon.close()
+finally:
+    _tn.CURRENT.reset(_dtok)
+_fp4 = c.get("/api/store/admin/fleet/pressure", headers=AA).json()
+_byt = {r["tenant"]: r for r in _fp4["rows"]}
+ok(_byt["alpha"]["fund"] and _byt["alpha"]["fund"]["pct"] == 25,
+   "the fleet row carries the appeal of the shop running it, on the "
+   "dock that is already visiting every tenant on every node — a second "
+   "round trip per install to draw one bar is a board nobody leaves "
+   "open")
+ok(_byt["alpha"]["fund"]["line"] == "$25.00 of $100.00 — 25%, with "
+   "$75.00 to go",
+   "in the same sentence the shop, the donor's receipt and the donor's "
+   "own page carry — four surfaces now, and the provider ringing a "
+   "client about a number that shop has never seen is the failure that "
+   "one function exists to prevent")
+ok(set(_byt["alpha"]["fund"]) == {"name", "payee", "line", "pct",
+                                  "passed"},
+   "and it ships only what the row draws. The raised figure, the target "
+   "and the gift count are already inside the sentence, and this board "
+   "has form: four facts in this feature were measured, stored, sent "
+   "over the wire and shown to nobody")
+ok(_byt["beta"]["fund"] is None,
+   "a shop with no appeal running says so with a null rather than an "
+   "absent key — and an install too old to have the table at all still "
+   "reports its pressure, because a fleet board going blank over one "
+   "shop that never took a donation is a worse trade than saying "
+   "nothing about the donation")
+_fjs = ops_app_js()
+ok("function pressFund" in _fjs and "press-fund" in _fjs,
+   "the row draws it")
+ok('r.worst !== "quiet" || r.fund' in _fjs,
+   "and an install with nothing pressed against a limit but an appeal "
+   "running is still shown. Filtering on pressure alone would have put "
+   "the thermometer on exactly the shops that happened to be short of "
+   "tills, which is not a rule anybody could have guessed from the "
+   "screen")
+
 # Every field the limits screens compute has to reach a reader. Four
 # separate times in this feature a fact was measured, stored, returned
 # over the wire, and shown to nobody — three by a ranking that chose one

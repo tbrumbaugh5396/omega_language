@@ -1827,3 +1827,7 @@ body.lane-on { overflow: hidden; }
   background: var(--accent, #2dd4bf); }
 .fund-goal-bar i.done { background: #7fd6a8; }
 .fund-goal .dim { font-size: .85em; }
+
+.press-fund{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;
+  padding:.15rem 0 .5rem 1.1rem}
+.press-fund .fund-goal-bar{flex:0 0 7rem}
