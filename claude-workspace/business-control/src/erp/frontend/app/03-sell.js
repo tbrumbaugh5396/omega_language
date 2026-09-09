@@ -1165,6 +1165,8 @@ async function renderHours() {
           ${lg.admin && l.state === "pending" ? `
             <button class="btn sm" data-lgok="${l.id}">Accept</button>
             <button class="btn alt sm" data-lgno="${l.id}">Decline</button>` : ""}
+          ${(l.user_id === lg.me || lg.office) && l.state === "pending"
+            ? `<button class="btn alt sm" data-lgedit="${l.id}">Edit</button>` : ""}
           ${l.user_id === lg.me && l.state === "pending"
             ? `<button class="btn alt sm" data-lgcancel="${l.id}">Withdraw</button>` : ""}
         </div></div>`).join("")
@@ -1172,6 +1174,18 @@ async function renderHours() {
           + 'Log hours for anything worked away from the clock.</span></div>'}`
       : ""}`;
   $("#hr-log").onclick = () => loggedHoursForm({});
+  view().querySelectorAll("[data-lgedit]").forEach((b) => b.onclick = () => {
+    const l = lg.entries.find((x) => String(x.id) === b.dataset.lgedit);
+    if (!l) return;
+    const local = (t) => new Date(t * 1000);
+    const two = (n) => String(n).padStart(2, "0");
+    const hm = (d) => `${two(d.getHours())}:${two(d.getMinutes())}`;
+    const d0 = local(l.starts);
+    loggedHoursForm({ id: l.id, kind: l.kind,
+      day: `${d0.getFullYear()}-${two(d0.getMonth() + 1)}-${two(d0.getDate())}`,
+      from: hm(d0), to: hm(local(l.ends)), with_name: l.student || l.with_name,
+      note: l.note });
+  });
   view().querySelectorAll("[data-lgok],[data-lgno],[data-lgcancel]")
     .forEach((b) => b.onclick = async () => {
       const id = b.dataset.lgok || b.dataset.lgno || b.dataset.lgcancel;
@@ -1260,10 +1274,12 @@ function loggedHoursForm(pre) {
     .toISOString().slice(0, 10);
   const KINDS = ["tutoring", "meeting", "preparation", "marking", "training",
                  "other"];
-  modal(`<h3>Log hours</h3>
-    <p class="dim">For anything worked away from the clock. An admin accepts
-      it, and then it counts like a shift — in the worked total and the
-      week's overtime line.</p>
+  modal(`<h3>${pre.id ? "Correct these hours" : "Log hours"}</h3>
+    <p class="dim">${pre.id ? "Still pending, so it is yours to correct. Once "
+      + "accepted it is somebody's signature."
+      : "For anything worked away from the clock. An admin accepts it, and "
+      + "then it counts like a shift — in the worked total and the week's "
+      + "overtime line."}</p>
     <div class="row2">
       <div><label>What</label>
         <select id="lh-kind">${KINDS.map((k) =>
@@ -1282,21 +1298,25 @@ function loggedHoursForm(pre) {
     <input id="lh-note" value="${esc(pre.note || "")}" placeholder="optional">
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
-      <button class="btn" id="lh-save">File it</button></div>`);
+      <button class="btn" id="lh-save">${pre.id ? "Save" : "File it"}</button></div>`);
   $("#lh-save").onclick = async () => {
     const d = $("#lh-day").value, f = $("#lh-from").value, t = $("#lh-to").value;
     if (!d || !f || !t) return toast("a day, a start and an end");
     const starts = new Date(`${d}T${f}`).getTime() / 1000;
     const ends = new Date(`${d}T${t}`).getTime() / 1000;
     try {
-      const r = await api("/api/hours/logged", { body: {
-        kind: $("#lh-kind").value, starts, ends,
-        with_name: $("#lh-with").value.trim(),
-        note: $("#lh-note").value.trim(),
-        student_id: pre.student_id || 0, course_id: pre.course_id || 0,
-        tutoring_id: pre.tutoring_id || 0 } });
+      const r = pre.id
+        ? await api(`/api/hours/logged/${pre.id}`, { method: "PATCH", body: {
+            kind: $("#lh-kind").value, starts, ends,
+            with_name: $("#lh-with").value.trim(), note: $("#lh-note").value.trim() } })
+        : await api("/api/hours/logged", { body: {
+            kind: $("#lh-kind").value, starts, ends,
+            with_name: $("#lh-with").value.trim(),
+            note: $("#lh-note").value.trim(),
+            student_id: pre.student_id || 0, course_id: pre.course_id || 0,
+            tutoring_id: pre.tutoring_id || 0 } });
       closeModal();
-      toast(`${r.hours}h filed — an admin will accept it`);
+      toast(pre.id ? `${r.hours}h — corrected` : `${r.hours}h filed — an admin will accept it`);
       if (typeof renderHours === "function" && S.tab === "hours") renderHours();
       if (pre.after) pre.after();
     } catch (err) { toast(err.message); }

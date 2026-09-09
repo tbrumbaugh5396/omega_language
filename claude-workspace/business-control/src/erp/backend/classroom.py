@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS class_chat (
 );
 CREATE INDEX IF NOT EXISTS class_chat_when ON class_chat(session_id, id);
 
+-- Who taught a session: the lead who opened it and every co-teacher on
+-- the course at that moment. Pay is derived per teacher per session, so
+-- two people in one room are two pay lines, not one.
+CREATE TABLE IF NOT EXISTS session_teachers (
+  session_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  PRIMARY KEY (session_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS pay_rates (
   teacher_id INTEGER PRIMARY KEY,
   hourly_cents INTEGER NOT NULL DEFAULT 0,
@@ -192,6 +201,15 @@ def start_class(con, *, course_id: int, teacher_id: int,
          int(lesson_id) if lesson_id is not None else None,
          "rm-" + secrets.token_hex(4)))    # every class carries a video room
     sid = cur.lastrowid
+    # everybody teaching it, as of now — the lead and the co-teachers.
+    # Written at the start, not derived later: a co-teacher added next
+    # term must not be paid for this term's classes.
+    from .learning import teachers_of
+    for t in teachers_of(con, course_id):
+        con.execute("INSERT OR IGNORE INTO session_teachers(session_id,"
+                    "user_id) VALUES(?,?)", (sid, t["id"]))
+    con.execute("INSERT OR IGNORE INTO session_teachers(session_id,user_id)"
+                " VALUES(?,?)", (sid, teacher_id))
     # every enrolled student gets the word: class is on, check-in is live
     for uid, _name in enrolled(con, course_id):
         notify.push(con, f"{course['name']} is in session",
@@ -284,7 +302,16 @@ def roster(con, session_id: int) -> dict:
         (session_id,)).fetchone()
     room = con.execute("SELECT room FROM class_sessions WHERE id=?",
                        (session_id,)).fetchone()["room"]
+    teachers = [dict(r) for r in con.execute(
+        "SELECT u.id, u.name FROM session_teachers t JOIN users u"
+        " ON u.id=t.user_id WHERE t.session_id=? ORDER BY u.id != ?, u.name",
+        (session_id, s.teacher_id))]
+    if not teachers:
+        lead = con.execute("SELECT id, name FROM users WHERE id=?",
+                           (s.teacher_id,)).fetchone()
+        teachers = [dict(lead)] if lead else []
     return {
+        "teachers": teachers,
         "session": {"id": s.id, "course_id": s.course_id,
                     "teacher_id": s.teacher_id, "started_at": s.started_at,
                     "ended_at": s.ended_at, "status": s.status,
@@ -345,32 +372,50 @@ def _rate(con, teacher_id: int):
             r["minimum_minutes"], r["round_to_min"])
 
 
+def session_teacher_ids(con, session_id: int, lead_id: int) -> list:
+    """Everyone paid for a session: what was written when it opened, or
+    the lead alone for sessions from before that was written."""
+    ids = [r["user_id"] for r in con.execute(
+        "SELECT user_id FROM session_teachers WHERE session_id=?"
+        " ORDER BY user_id != ?, user_id", (session_id, lead_id))]
+    return ids or [lead_id]
+
+
 def pay_lines(con, *, teacher_id: int | None = None, since=None,
               until=None) -> list:
-    """Derive pay for every CLOSED session in range. Nothing is read from a
-    stored amount — the money always traces back to a class that happened."""
-    sql = "SELECT * FROM class_sessions WHERE status IN ('closed','cancelled')"
+    """Derive pay for every CLOSED session in range, one line per teacher
+    who taught it. Nothing is read from a stored amount — the money
+    always traces back to a class that happened."""
+    import dataclasses
+    sql = ("SELECT s.* FROM class_sessions s WHERE s.status IN"
+           " ('closed','cancelled')")
     args = []
     if teacher_id is not None:
-        sql += " AND teacher_id=?"; args.append(teacher_id)
+        sql += (" AND (s.teacher_id=? OR s.id IN (SELECT session_id FROM"
+                " session_teachers WHERE user_id=?))")
+        args += [teacher_id, teacher_id]
     if since is not None:
-        sql += " AND started_at >= ?"; args.append(since)
+        sql += " AND s.started_at >= ?"; args.append(since)
     if until is not None:
-        sql += " AND started_at < ?"; args.append(until)
-    sql += " ORDER BY started_at DESC"
+        sql += " AND s.started_at < ?"; args.append(until)
+    sql += " ORDER BY s.started_at DESC"
     lines = []
     for r in con.execute(sql, args).fetchall():
-        s = _session_from_row(r)
-        rate, minimum, rounding = _rate(con, s.teacher_id)
+        s0 = _session_from_row(r)
         attended = con.execute(
             "SELECT COUNT(*) AS n FROM checkins WHERE session_id=?"
-            " AND status IN ('present','late')", (s.id,)).fetchone()["n"]
+            " AND status IN ('present','late')", (s0.id,)).fetchone()["n"]
         ov = con.execute("SELECT state FROM payroll_overlay WHERE session_id=?",
-                         (s.id,)).fetchone()
-        lines.append(A.pay_for_session(
-            s, rate, students_attended=attended,
-            state=(ov["state"] if ov else A.PAY_PENDING),
-            minimum_minutes=minimum, round_to_min=rounding))
+                         (s0.id,)).fetchone()
+        for tid in session_teacher_ids(con, s0.id, s0.teacher_id):
+            if teacher_id is not None and tid != teacher_id:
+                continue
+            s = dataclasses.replace(s0, teacher_id=tid)
+            rate, minimum, rounding = _rate(con, tid)
+            lines.append(A.pay_for_session(
+                s, rate, students_attended=attended,
+                state=(ov["state"] if ov else A.PAY_PENDING),
+                minimum_minutes=minimum, round_to_min=rounding))
     return lines
 
 
@@ -456,6 +501,40 @@ def ops_end_class(sid: int, user=Depends(current_user), con=Depends(get_con)):
         materials.collect_sfu_tapes(con, row, owner_id=user["id"])
     except Exception:
         pass
+    return roster(con, sid)
+
+
+class SessionTeacherBody(BaseModel):
+    user_id: int
+
+
+@router.post("/api/learning/sessions/{sid}/teachers")
+def ops_session_teacher_add(sid: int, body: SessionTeacherBody,
+                            user=Depends(admin_user), con=Depends(get_con)):
+    """Somebody taught this class who was not on it when it opened — a
+    cover teacher, a co-teacher added afterwards. The office says so,
+    and pay follows."""
+    get_session(con, sid)
+    u = con.execute("SELECT id FROM users WHERE id=? AND active=1",
+                    (body.user_id,)).fetchone()
+    if u is None:
+        raise HTTPException(404, "no such person")
+    con.execute("INSERT OR IGNORE INTO session_teachers(session_id,user_id)"
+                " VALUES(?,?)", (sid, body.user_id))
+    con.commit()
+    return roster(con, sid)
+
+
+@router.delete("/api/learning/sessions/{sid}/teachers/{uid}")
+def ops_session_teacher_drop(sid: int, uid: int, user=Depends(admin_user),
+                             con=Depends(get_con)):
+    s = get_session(con, sid)
+    if uid == s.teacher_id:
+        raise HTTPException(400, "the lead who opened the class is paid for"
+                                 " it — change the course's tutor instead")
+    con.execute("DELETE FROM session_teachers WHERE session_id=? AND user_id=?",
+                (sid, uid))
+    con.commit()
     return roster(con, sid)
 
 

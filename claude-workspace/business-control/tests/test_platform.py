@@ -4279,6 +4279,45 @@ ok(c.delete(f"/api/learning/courses/{_crs}/teachers/{_co['id']}", headers=AA).st
    and c.get(f"/api/learning/courses/{_crs}", headers=CO).status_code == 403,
    "removed, they are out of the room again")
 
+# --- two teachers in one room are two pay lines ---------------------------
+# Its own course: the main one still has a class open for what follows.
+_crs2 = c.post("/api/learning/courses", headers=AA, json={
+    "name": "Pay pairs", "language": "Spanish", "level": "beginner",
+    "teacher_id": _tch["id"]}).json()["id"]
+c.post(f"/api/learning/courses/{_crs2}/teachers", headers=AA, json={"user_id": _co["id"]})
+c.post("/api/learning/payrates", headers=AA, json={
+    "teacher_id": _co["id"], "hourly_cents": 3000, "per_session_cents": 0})
+_ps = c.post("/api/learning/sessions", headers=TT, json={"course_id": _crs2})
+ok(_ps.status_code == 200, "(a class opens with both on the course)")
+_psid = _ps.json()["session"]["id"]
+_ros2 = c.get(f"/api/learning/sessions/{_psid}", headers=TT).json()
+ok([t["name"] for t in _ros2["teachers"]] == [_tch["name"], _co["name"]],
+   "the roster says who taught it: the lead first, the co-teacher beside")
+c.post(f"/api/learning/sessions/{_psid}/close", headers=TT, json={})
+_pay = c.get("/api/learning/payroll", headers=AA).json()
+_who = {t["teacher_id"] for t in _pay["teachers"]
+        if any(l["session_id"] == _psid for l in t["lines"])}
+ok(_who == {_tch["id"], _co["id"]},
+   "and pay is derived per teacher: two lines for one session, not one "
+   "for whoever pressed Start")
+_cot = [t for t in _pay["teachers"] if t["teacher_id"] == _co["id"]][0]
+ok(sum(1 for l in _cot["lines"] if l["session_id"] == _psid) == 1
+   and _cot["amount_cents"] >= 0,
+   "each teacher's own statement carries their line at their own rate")
+c.delete(f"/api/learning/courses/{_crs2}/teachers/{_co['id']}", headers=AA)
+_ps3 = c.post("/api/learning/sessions", headers=TT, json={"course_id": _crs2}).json()
+ok([t["name"] for t in c.get(f"/api/learning/sessions/{_ps3['session']['id']}", headers=TT).json()["teachers"]]
+   == [_tch["name"]],
+   "a co-teacher removed next term is not on next term's classes — who "
+   "taught is written when the class opens, not derived later")
+ok(c.post(f"/api/learning/sessions/{_ps3['session']['id']}/teachers", headers=AA,
+          json={"user_id": _co["id"]}).status_code == 200
+   and len(c.get(f"/api/learning/sessions/{_ps3['session']['id']}", headers=TT).json()["teachers"]) == 2
+   and c.delete(f"/api/learning/sessions/{_ps3['session']['id']}/teachers/{_tch['id']}", headers=AA).status_code == 400,
+   "the office adds a cover teacher to one class by hand, and cannot "
+   "remove the lead who opened it")
+c.post(f"/api/learning/sessions/{_ps3['session']['id']}/close", headers=TT, json={})
+
 # --- prizes worth a line, and why somebody is no longer here -------------
 _spg = c.get(f"/api/students/{_lrn['id']}", headers=TT).json()
 ok("Passed the citizenship test" in _spg["achievement_presets"]
@@ -4317,6 +4356,30 @@ ok(any(r["id"] == _lrn["id"] and r["status"] == "moved" and r["status_label"] ==
 ok(c.post(f"/api/students/{_lrn['id']}/profile", headers=TT, json={
     "fields": {"occupation": "nurse"}}).json()["profile"]["status"] == "moved",
    "correcting the profile does not quietly reset the status")
+_gone = c.post(f"/api/students/{_lrn['id']}/status", headers=TT, json={
+    "status": "left", "note": "told us in June"})
+ok(_gone.status_code == 200 and _gone.json()["signin_closed"]
+   and c.get("/api/learn/me", headers=LN).status_code == 401,
+   "no longer attends closes the door too: every device signed out, "
+   "the old token dead")
+_lrn = c.post("/api/login", headers=HA, json={"name": "Lara Learner",
+                                              "role": "customer"}).json()
+ok("token" not in _lrn or c.get("/api/learn/me", headers={
+    "Authorization": f"Bearer {_lrn.get('token', '')}", **HA}).status_code in (401, 403),
+   "and they cannot simply sign in again while the account is closed")
+_back = c.post(f"/api/students/{_lrn.get('id') or _spg['student']['id']}/status",
+               headers=TT, json={"status": "active"})
+ok(_back.json()["signin_reopened"],
+   "active again reopens it")
+_lrn = c.post("/api/login", headers=HA, json={"name": "Lara Learner",
+                                              "role": "customer"}).json()
+LN = {"Authorization": f"Bearer {_lrn['token']}", **HA}
+ok(c.get("/api/learn/me", headers=LN).status_code == 200, "(and she is back)")
+ok(c.post(f"/api/students/{_lrn['id']}/status", headers=TT, json={
+    "status": "moved", "end_signin": False}).json()["signin_closed"] is False
+   and c.get("/api/learn/me", headers=LN).status_code == 200,
+   "moved away keeps the sign-in unless the office says otherwise — an "
+   "online seat may follow them")
 c.post(f"/api/students/{_lrn['id']}/status", headers=TT, json={"status": "active"})
 ok(c.get(f"/api/students/{_lrn['id']}", headers=TT).json()["profile"]["status"] == "active",
    "and they can be active again — seats are re-added by hand, as a "

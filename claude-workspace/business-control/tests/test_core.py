@@ -1327,6 +1327,99 @@ _pl = c.get("/api/analytics/pnl?days=30", headers=A).json()
 ok(_pl["expenses_cents"] >= 2400 + 4000 + 15000 and _pl["mileage_cents"] >= 875,
    "and the P&L counts them beside labour and trucking — costs the "
    "system could not see until they were logged")
+# --- the limits, lifted: recurring, VAT, assets, home office, edits ------
+import datetime as _dtx
+_ago40 = (_dtx.datetime.now() - _dtx.timedelta(days=40)).replace(hour=12).timestamp()
+_rx = c.post("/api/expenses", headers=A, json={
+    "category": "phone", "amount_cents": 8000, "vendor": "Telco",
+    "spent_at": _ago40, "recurring": "monthly"})
+ok(_rx.status_code == 200 and _rx.json()["next_at"] > _ago40
+   and _rx.json()["next_at"] < time.time(),
+   "a monthly phone bill filed forty days ago is due again already")
+_rxid = _rx.json()["id"]
+_before = len(c.get("/api/expenses", headers=A).json()["expenses"])
+_rolled = c.get("/api/expenses/meta", headers=A).json()["rolled"]
+_after = c.get("/api/expenses", headers=A).json()["expenses"]
+_copies = [e for e in _after if e["recurring_from"] == _rxid]
+ok(_rolled >= 1 and len(_copies) == 1 and _copies[0]["state"] == "pending"
+   and _copies[0]["amount_cents"] == 8000 and _copies[0]["vendor"] == "Telco"
+   and "check the amount" in _copies[0]["note"],
+   "and opening the page files next month's copy — pending, from the "
+   "template, with a note to glance at the amount")
+ok(c.get("/api/expenses/meta", headers=A).json()["rolled"] == 0
+   and len([e for e in c.get("/api/expenses", headers=A).json()["expenses"]
+            if e["recurring_from"] == _rxid]) == 1,
+   "once; opening it again files nothing more until the next month")
+ok(c.patch(f"/api/expenses/{_rxid}", headers=A, json={"recurring": ""}).status_code == 200
+   and c.get("/api/expenses", headers=A).json()["expenses"]
+   and [e for e in c.get("/api/expenses", headers=A).json()["expenses"]
+        if e["id"] == _rxid][0]["next_at"] == 0,
+   "the office stops the series; what is filed stays")
+# edits in place
+_ed = c.post("/api/expenses", headers=DE, json={"category": "fuel", "amount_cents": 4000,
+                                                 "paid_by": "me", "vendor": "Shell"})
+_edid = _ed.json()["id"]
+ok(c.patch(f"/api/expenses/{_edid}", headers=DE, json={"amount_cents": 4500, "note": "typo"}).json()["amount_cents"] == 4500,
+   "a pending claim is corrected in place — no withdraw and refile")
+ok(c.patch(f"/api/expenses/{_edid}", headers=CU, json={"amount_cents": 1}).status_code in (401, 403),
+   "by its filer or the office only")
+c.post(f"/api/expenses/{_edid}/decide", headers=A, json={"state": "approved"})
+ok(c.patch(f"/api/expenses/{_edid}", headers=DE, json={"amount_cents": 9999}).status_code == 409,
+   "once accepted, the amount stands")
+_tx = c.post("/api/trips", headers=DE, json={"distance": 10, "vehicle": "own", "purpose": "x"}).json()
+ok(c.patch(f"/api/trips/{_tx['id']}", headers=DE, json={"distance": 12}).json()["amount_cents"] == 12 * 70
+   and c.patch(f"/api/trips/{_tx['id']}", headers=DE, json={"start_odo": 100, "end_odo": 90}).status_code == 400,
+   "a pending trip is corrected too, and the amount follows the distance")
+_lh = c.post("/api/hours/logged", headers=DE, json={
+    "kind": "meeting", "starts": _ago40, "ends": _ago40 + 3600}).json()
+ok(c.patch(f"/api/hours/logged/{_lh['id']}", headers=DE,
+           json={"ends": _ago40 + 5400, "note": "ran long"}).json()["hours"] == 1.5,
+   "and so are logged hours")
+ok(c.patch(f"/api/hours/logged/{_lh['id']}", headers=CU, json={"note": "x"}).status_code in (401, 403),
+   "by their filer or the office only")
+# assets: written off, not deducted
+_cap = c.post("/api/expenses", headers=A, json={
+    "category": "equipment", "amount_cents": 300000, "vendor": "Laptops R Us"})
+ok(_cap.json()["capitalised"] == 1 and _cap.json()["deductible_cents"] == 0,
+   "equipment at or over the threshold is an asset: nothing deducted now")
+_small = c.post("/api/expenses", headers=A, json={
+    "category": "equipment", "amount_cents": 20000, "vendor": "a keyboard"})
+ok(_small.json()["capitalised"] == 0 and _small.json()["deductible_cents"] == 20000,
+   "a keyboard under it is an expense like any other")
+_sm2 = c.get("/api/expenses/summary", headers=A).json()
+ok(_sm2["capital_cents"] >= 300000 and _sm2["depreciation_cents"] >= 300000 // 5
+   and any(a["vendor"] == "Laptops R Us" and a["this_year_cents"] == 60000 for a in _sm2["assets"]),
+   "the year card shows the purchase capitalised and one fifth of it "
+   "depreciated this year, straight-line over five")
+ok(c.patch(f"/api/expenses/{_cap.json()['id']}", headers=A, json={"capitalised": False}).json()["deductible_cents"] == 300000
+   and c.patch(f"/api/expenses/{_cap.json()['id']}", headers=A, json={"capitalised": True}).status_code == 200,
+   "the office can say otherwise, either way")
+# home office
+c.post("/api/expenses/settings", headers=A, json={"home_office_pct": 10, "home_costs_cents": 2400000})
+_sm3 = c.get("/api/expenses/summary", headers=A).json()
+ok(_sm3["home_office_cents"] == 240000 and "home office" in _sm3["estimate_note"]
+   and _sm3["net_before_tax_cents"] == _sm2["net_before_tax_cents"] - 240000,
+   "ten percent of a 24,000 home is a 2,400 home-office line, and net "
+   "moves by exactly that")
+# VAT
+c.post("/api/expenses/settings", headers=A, json={"tax_regime": "vat", "vat_pct": 20})
+_vx = c.post("/api/expenses", headers=A, json={"category": "software", "amount_cents": 12000})
+ok(_vx.json()["tax_cents"] == 2000 and _vx.json()["deductible_cents"] == 10000
+   and _vx.json()["input_tax_cents"] == 2000,
+   "under VAT a 120 software bill is 100 of cost and 20 of tax to reclaim")
+_sm4 = c.get("/api/expenses/summary", headers=A).json()
+ok(_sm4["vat"] and _sm4["vat"]["input_cents"] >= 2000
+   and _sm4["vat"]["owed_cents"] == _sm4["vat"]["output_cents"] - _sm4["vat"]["input_cents"],
+   "and the year says what is owed: charged on sales less reclaimed on "
+   "purchases")
+ok(c.post("/api/expenses", headers=A, json={"category": "software", "amount_cents": 12000,
+          "tax_cents": 500}).json()["tax_cents"] == 500,
+   "a receipt that says otherwise wins over the rate")
+c.post("/api/expenses/settings", headers=A, json={"tax_regime": "sales_tax", "vat_pct": 0,
+                                                    "home_office_pct": 0})
+ok(c.get("/api/expenses/summary", headers=A).json()["vat"] is None,
+   "back on sales tax, the VAT line is gone")
+
 _xjs = (Path(__file__).parent.parent / "src/erp/frontend/app/17-expenses.js"
         ).read_text(encoding="utf-8")
 ok("async function renderExpenses(" in _xjs and "function expenseForm(" in _xjs

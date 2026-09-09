@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS expenses (
   business_pct INTEGER NOT NULL DEFAULT 100,
   paid_by TEXT NOT NULL DEFAULT 'company',   -- company | me (a claim)
   recurring TEXT DEFAULT '',                 -- '' | monthly | yearly
+  recurring_from INTEGER DEFAULT 0,          -- the entry this was rolled from
+  next_at REAL DEFAULT 0,                    -- when the next copy is due
+  tax_cents INTEGER DEFAULT 0,               -- VAT/GST inside the amount
+  capitalised INTEGER DEFAULT 0,             -- an asset, depreciated, not expensed
   receipt_path TEXT DEFAULT '',
   receipt_name TEXT DEFAULT '',
   state TEXT NOT NULL DEFAULT 'pending',     -- see STATES
@@ -133,8 +137,21 @@ DEFAULT_CATEGORIES = (
 )
 
 
+MIGRATIONS = (
+    "ALTER TABLE expenses ADD COLUMN recurring_from INTEGER DEFAULT 0",
+    "ALTER TABLE expenses ADD COLUMN next_at REAL DEFAULT 0",
+    "ALTER TABLE expenses ADD COLUMN tax_cents INTEGER DEFAULT 0",
+    "ALTER TABLE expenses ADD COLUMN capitalised INTEGER DEFAULT 0",
+)
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    for stmt in MIGRATIONS:
+        try:
+            con.execute(stmt)
+        except Exception:                                    # noqa: BLE001
+            pass
     have = {r["code"] for r in con.execute("SELECT code FROM expense_categories")}
     for i, (code, label, ded, pct, hint) in enumerate(DEFAULT_CATEGORIES):
         if code not in have:
@@ -152,6 +169,7 @@ def settings(cfg) -> dict:
     and rate are whatever the local tax authority publishes, and the
     income-tax percentage is an estimate for a page, not advice."""
     unit = cfg.get("distance_unit", "mi")
+    regime = cfg.get("tax_regime", "sales_tax")
     return {
         "distance_unit": unit if unit in UNITS else "mi",
         "mileage_rate_cents": int(cfg.get("mileage_rate_cents", 70)),
@@ -159,7 +177,54 @@ def settings(cfg) -> dict:
         "tax_year_start_month": int(cfg.get("tax_year_start_month", 1)),
         "sales_tax_bps": int(cfg.get("tax_bps", 0)),
         "currency": cfg.get("currency", "USD"),
+        # sales_tax: what is charged on orders is passed through, and
+        # what is paid on expenses is simply part of the cost.
+        # vat: the tax charged on sales is owed to the authority less the
+        # tax paid on business purchases; both are tracked, and neither
+        # is income or cost.
+        "tax_regime": regime if regime in ("sales_tax", "vat") else "sales_tax",
+        "vat_pct": float(cfg.get("vat_pct", 0)),
+        # A purchase at or above this is an asset, written off over the
+        # years rather than deducted at once.
+        "capitalise_over_cents": int(cfg.get("capitalise_over_cents", 250000)),
+        "depreciation_years": int(cfg.get("depreciation_years", 5)),
+        # The share of the home used for the business, and what the home
+        # costs a year: the deduction is the product, on the year card.
+        "home_office_pct": float(cfg.get("home_office_pct", 0)),
+        "home_costs_cents": int(cfg.get("home_costs_cents", 0)),
     }
+
+
+def home_office_cents(s: dict) -> int:
+    return int(round(s["home_costs_cents"] * s["home_office_pct"] / 100))
+
+
+def depreciation_for(row: dict, s: dict, year_a: float, year_b: float,
+                     cfg) -> int:
+    """Straight-line: a capitalised purchase deducts cost/years in each of
+    the `years` tax years starting with the one it was bought in."""
+    years = max(1, s["depreciation_years"])
+    bought = row["spent_at"]
+    # which tax year was it bought in, relative to the one asked about?
+    y0 = None
+    for k in range(-years, years + 1):
+        a, b = year_bounds_from(cfg, year_a, k)
+        if a <= bought < b:
+            y0 = k
+            break
+    if y0 is None or y0 > 0 or y0 <= -years:
+        return 0
+    return int(round(row["amount_cents"] * max(0, min(100, row["business_pct"]))
+                     / 100 / years))
+
+
+def year_bounds_from(cfg, year_a: float, offset: int) -> tuple:
+    """The bounds of the tax year `offset` years from the one starting at
+    `year_a`."""
+    m = int(cfg.get("tax_year_start_month", 1))
+    m = m if 1 <= m <= 12 else 1
+    y = datetime.fromtimestamp(year_a).year + offset
+    return datetime(y, m, 1).timestamp(), datetime(y + 1, m, 1).timestamp()
 
 
 def year_bounds(cfg, year: int) -> tuple:
@@ -210,20 +275,97 @@ def _cat_map(con) -> dict:
     return {c["code"]: c for c in con.execute("SELECT * FROM expense_categories")}
 
 
-def deductible_cents(row: dict, cat: dict | None) -> int:
+def deductible_cents(row: dict, cat: dict | None, regime: str = "sales_tax") -> int:
+    """The share of an expense the return may take this year. A
+    capitalised purchase takes nothing here — it comes back as
+    depreciation, a year at a time. Under VAT the tax inside the amount
+    is reclaimed separately and is not a cost."""
+    if cat is not None and not cat["deductible"]:
+        return 0
+    if row.get("capitalised"):
+        return 0
+    pct = max(0, min(100, int(row.get("business_pct") or 0)))
+    base = row["amount_cents"]
+    if regime == "vat":
+        base -= int(row.get("tax_cents") or 0)
+    return int(round(max(0, base) * pct / 100))
+
+
+def input_tax_cents(row: dict, cat: dict | None) -> int:
+    """The VAT reclaimable on an expense: the tax inside it, at the
+    business share, on a deductible category."""
     if cat is not None and not cat["deductible"]:
         return 0
     pct = max(0, min(100, int(row.get("business_pct") or 0)))
-    return int(round(row["amount_cents"] * pct / 100))
+    return int(round(int(row.get("tax_cents") or 0) * pct / 100))
 
 
-def _expense_row(r, cats: dict) -> dict:
+def _expense_row(r, cats: dict, regime: str = "sales_tax") -> dict:
     d = dict(r)
     c = cats.get(d["category"])
     d["category_label"] = c["label"] if c else d["category"]
-    d["deductible_cents"] = deductible_cents(d, c)
+    d["deductible_cents"] = deductible_cents(d, c, regime)
+    d["input_tax_cents"] = input_tax_cents(d, c) if regime == "vat" else 0
     d["receipt_url"] = f"/media/{d['receipt_path']}" if d["receipt_path"] else ""
     return d
+
+
+# ── recurring: the next month's bill files itself ─────────────────────────
+
+def _add_period(ts: float, period: str) -> float:
+    d = datetime.fromtimestamp(ts)
+    if period == "yearly":
+        try:
+            return d.replace(year=d.year + 1).timestamp()
+        except ValueError:                       # 29 Feb
+            return d.replace(year=d.year + 1, day=28).timestamp()
+    m = d.month + 1
+    y = d.year + (1 if m > 12 else 0)
+    m = 1 if m > 12 else m
+    for day in (d.day, 30, 29, 28):
+        try:
+            return d.replace(year=y, month=m, day=day).timestamp()
+        except ValueError:
+            continue
+    return ts + 30 * 86400
+
+
+def roll_recurring(con, now: float | None = None) -> int:
+    """File the next copy of every recurring expense whose day has come.
+    Filed as pending, from a template: the phone bill is usually the
+    same and sometimes is not, and somebody should glance at the amount
+    before it is accepted. Withdrawing or declining the copy does not
+    stop the series; setting the template to 'once' does. Idempotent —
+    called on read, so a quiet month with nobody opening the page
+    catches up the day somebody does."""
+    now = now or time.time()
+    made = 0
+    for _ in range(120):                         # never loop forever
+        r = con.execute(
+            "SELECT * FROM expenses WHERE recurring IN ('monthly','yearly')"
+            " AND state IN ('approved','paid','pending')"
+            " AND recurring_from=0 AND next_at>0 AND next_at<=?"
+            " ORDER BY next_at LIMIT 1", (now,)).fetchone()
+        if r is None:
+            break
+        due = r["next_at"]
+        con.execute(
+            "INSERT INTO expenses(user_id,category,vendor,amount_cents,"
+            " spent_at,note,business_pct,paid_by,recurring,recurring_from,"
+            " next_at,tax_cents,capitalised,state,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,'',?,0,?,0,'pending',?)",
+            (r["user_id"], r["category"], r["vendor"], r["amount_cents"], due,
+             (r["note"] + " · " if r["note"] else "")
+             + f"filed from the {r['recurring']} entry #{r['id']} —"
+               f" check the amount",
+             r["business_pct"], r["paid_by"], r["id"], r["tax_cents"],
+             db.now()))
+        con.execute("UPDATE expenses SET next_at=? WHERE id=?",
+                    (_add_period(due, r["recurring"]), r["id"]))
+        made += 1
+    if made:
+        con.commit()
+    return made
 
 
 # ── the year ─────────────────────────────────────────────────────────────────
@@ -234,17 +376,19 @@ COUNTED = ("approved", "paid")
 def summary(con, cfg, year: int) -> dict:
     a, b = year_bounds(cfg, year)
     cats = _cat_map(con)
+    s = settings(cfg)
+    regime = s["tax_regime"]
     income = con.execute(
         "SELECT COALESCE(SUM(subtotal_cents),0) AS s,"
         " COALESCE(SUM(tax_cents),0) AS t, COUNT(*) AS n FROM orders"
         " WHERE created_at>=? AND created_at<? AND status!='cancelled'",
         (a, b)).fetchone()
     by_cat: dict = {}
-    total = deductible = 0
+    total = deductible = input_tax = capital = 0
     for r in con.execute(
             "SELECT * FROM expenses WHERE spent_at>=? AND spent_at<?"
             " AND state IN ('approved','paid')", (a, b)):
-        d = _expense_row(r, cats)
+        d = _expense_row(r, cats, regime)
         k = by_cat.setdefault(d["category"], {
             "code": d["category"], "label": d["category_label"],
             "total_cents": 0, "deductible_cents": 0, "count": 0})
@@ -253,6 +397,25 @@ def summary(con, cfg, year: int) -> dict:
         k["count"] += 1
         total += d["amount_cents"]
         deductible += d["deductible_cents"]
+        input_tax += d["input_tax_cents"]
+        if d["capitalised"]:
+            capital += d["amount_cents"]
+    # Depreciation: every capitalised purchase still inside its life,
+    # whichever year it was bought in, deducts its slice this year.
+    depreciation = 0
+    assets = []
+    for r in con.execute(
+            "SELECT * FROM expenses WHERE capitalised=1"
+            " AND state IN ('approved','paid') ORDER BY spent_at"):
+        slice_ = depreciation_for(dict(r), s, a, b, cfg)
+        if slice_:
+            depreciation += slice_
+            c = cats.get(r["category"])
+            assets.append({"id": r["id"], "vendor": r["vendor"],
+                           "category": c["label"] if c else r["category"],
+                           "bought": r["spent_at"], "cost_cents": r["amount_cents"],
+                           "this_year_cents": slice_})
+    home_office = home_office_cents(s)
     trips = con.execute(
         "SELECT COALESCE(SUM(distance),0) AS d, COALESCE(SUM(amount_cents),0)"
         " AS c, COUNT(*) AS n FROM trips WHERE driven_at>=? AND driven_at<?"
@@ -267,25 +430,38 @@ def summary(con, cfg, year: int) -> dict:
         "SELECT COUNT(*) FROM expenses WHERE state='pending'").fetchone()[0]
     pending_t = con.execute(
         "SELECT COUNT(*) FROM trips WHERE state='pending'").fetchone()[0]
-    s = settings(cfg)
-    net = income["s"] - deductible - trips["c"]
+    output_tax = income["t"]
+    net = (income["s"] - deductible - trips["c"] - depreciation
+           - home_office)
     est = int(round(max(0, net) * s["income_tax_pct"] / 100))
+    parts = ["deductible expenses", "mileage"]
+    if depreciation:
+        parts.append("depreciation")
+    if home_office:
+        parts.append("the home office")
     return {
         "year": year, "from": a, "to": b,
         "income_cents": income["s"], "orders": income["n"],
-        "sales_tax_collected_cents": income["t"],
+        "sales_tax_collected_cents": output_tax,
         "expenses_total_cents": total, "deductible_cents": deductible,
         "by_category": sorted(by_cat.values(),
                               key=lambda k: -k["deductible_cents"]),
         "mileage": {"distance": round(trips["d"], 1), "unit": s["distance_unit"],
                     "amount_cents": trips["c"], "trips": trips["n"]},
+        "capital_cents": capital,
+        "depreciation_cents": depreciation,
+        "assets": assets,
+        "home_office_cents": home_office,
+        "vat": ({"output_cents": output_tax, "input_cents": input_tax,
+                 "owed_cents": output_tax - input_tax}
+                if regime == "vat" else None),
         "net_before_tax_cents": net,
         "estimated_tax_cents": est,
         "estimate_note": (
-            f"{s['income_tax_pct']:g}% of what is left after deductible "
-            f"expenses and mileage. A page's estimate, not a return: your "
-            f"accountant's rules on depreciation, home office and what "
-            f"counts will move it."),
+            f"{s['income_tax_pct']:g}% of what is left after "
+            + ", ".join(parts[:-1]) + f" and {parts[-1]}"
+            + ". A page's estimate, not a return: allowances, thresholds "
+              "and your accountant's judgement will move it."),
         "owed_cents": owed_e + owed_t,
         "pending": pending_e + pending_t,
         "settings": s,
@@ -323,12 +499,13 @@ from . import config as _config  # noqa: E402
 
 @router.get("/api/expenses/meta")
 def meta(user=Depends(current_user), con=Depends(get_con)):
+    rolled = roll_recurring(con)
     trucks = [dict(r) for r in con.execute(
         "SELECT id, name FROM trucks WHERE active=1 ORDER BY name")]
     return {"categories": categories(con), "settings": settings(CFG),
             "office": _office(user), "may_file": _may_file(user),
             "trucks": trucks, "year": current_year(CFG), "me": user["id"],
-            "states": list(STATES)}
+            "states": list(STATES), "rolled": rolled}
 
 
 class SettingsBody(BaseModel):
@@ -336,6 +513,12 @@ class SettingsBody(BaseModel):
     mileage_rate_cents: int | None = None
     income_tax_pct: float | None = None
     tax_year_start_month: int | None = None
+    tax_regime: str | None = None
+    vat_pct: float | None = None
+    capitalise_over_cents: int | None = None
+    depreciation_years: int | None = None
+    home_office_pct: float | None = None
+    home_costs_cents: int | None = None
 
 
 @router.post("/api/expenses/settings")
@@ -358,6 +541,30 @@ def set_settings(body: SettingsBody, user=Depends(current_user),
         if not 1 <= body.tax_year_start_month <= 12:
             raise HTTPException(400, "a month, 1-12")
         CFG["tax_year_start_month"] = int(body.tax_year_start_month)
+    if body.tax_regime is not None:
+        if body.tax_regime not in ("sales_tax", "vat"):
+            raise HTTPException(400, "sales_tax or vat")
+        CFG["tax_regime"] = body.tax_regime
+    if body.vat_pct is not None:
+        if not 0 <= body.vat_pct <= 50:
+            raise HTTPException(400, "a VAT/GST percentage")
+        CFG["vat_pct"] = float(body.vat_pct)
+    if body.capitalise_over_cents is not None:
+        if body.capitalise_over_cents < 0:
+            raise HTTPException(400, "a threshold in cents")
+        CFG["capitalise_over_cents"] = int(body.capitalise_over_cents)
+    if body.depreciation_years is not None:
+        if not 1 <= body.depreciation_years <= 40:
+            raise HTTPException(400, "years, 1-40")
+        CFG["depreciation_years"] = int(body.depreciation_years)
+    if body.home_office_pct is not None:
+        if not 0 <= body.home_office_pct <= 100:
+            raise HTTPException(400, "a share of the home, as a percentage")
+        CFG["home_office_pct"] = float(body.home_office_pct)
+    if body.home_costs_cents is not None:
+        if body.home_costs_cents < 0:
+            raise HTTPException(400, "what the home costs a year, in cents")
+        CFG["home_costs_cents"] = int(body.home_costs_cents)
     _config.save(CFG)
     return {"ok": True, "settings": settings(CFG)}
 
@@ -417,7 +624,8 @@ def list_expenses(mine: int = 0, state: str = "", year: int = 0,
     rows = con.execute(
         q + " ORDER BY e.state='pending' DESC, e.spent_at DESC LIMIT 500",
         tuple(args)).fetchall()
-    return {"expenses": [_expense_row(r, cats) for r in rows],
+    regime = settings(CFG)["tax_regime"]
+    return {"expenses": [_expense_row(r, cats, regime) for r in rows],
             "office": _office(user), "me": user["id"]}
 
 
@@ -431,6 +639,15 @@ class ExpenseBody(BaseModel):
     paid_by: str = "company"
     recurring: str = ""
     user_id: int = 0
+    tax_cents: int | None = None         # VAT inside; None = at the rate
+    capitalised: bool | None = None      # None = by the threshold
+
+
+def _tax_inside(amount_cents: int, s: dict) -> int:
+    """VAT inside a gross amount at the configured rate."""
+    if s["tax_regime"] != "vat" or s["vat_pct"] <= 0:
+        return 0
+    return int(round(amount_cents - amount_cents / (1 + s["vat_pct"] / 100)))
 
 
 @router.post("/api/expenses")
@@ -460,23 +677,106 @@ def add_expense(body: ExpenseBody, user=Depends(current_user),
         uid = body.user_id
     pct = cat["default_pct"] if body.business_pct is None else body.business_pct
     pct = max(0, min(100, int(pct)))
+    s = settings(CFG)
+    tax = _tax_inside(int(body.amount_cents), s) if body.tax_cents is None \
+        else max(0, min(int(body.amount_cents), int(body.tax_cents)))
+    # An asset, not an expense: at or over the threshold, in a category
+    # that buys things that last. The office can say otherwise.
+    cap = (cat["code"] == "equipment"
+           and int(body.amount_cents) >= s["capitalise_over_cents"]) \
+        if body.capitalised is None else bool(body.capitalised)
     # The office's own company-paid expense is a fact, not a claim — it
     # needs no second signature. Everything else waits.
     state = "approved" if (_office(user) and body.paid_by == "company"
                            and uid == user["id"]) else "pending"
+    next_at = _add_period(at, body.recurring) if body.recurring else 0
     cur = con.execute(
         "INSERT INTO expenses(user_id,category,vendor,amount_cents,spent_at,"
-        " note,business_pct,paid_by,recurring,state,decided_by,decided_at,"
-        " created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " note,business_pct,paid_by,recurring,next_at,tax_cents,capitalised,"
+        " state,decided_by,decided_at,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (uid, body.category, body.vendor.strip()[:120], int(body.amount_cents),
          at, body.note.strip()[:400], pct, body.paid_by, body.recurring,
+         next_at, tax, int(cap),
          state, user["name"] if state == "approved" else "",
          db.now() if state == "approved" else 0, db.now()))
     con.commit()
     row = con.execute("SELECT e.*, u.name AS who FROM expenses e JOIN users u"
                       " ON u.id=e.user_id WHERE e.id=?",
                       (cur.lastrowid,)).fetchone()
-    return {"ok": True, **_expense_row(row, cats)}
+    return {"ok": True, **_expense_row(row, cats, s["tax_regime"])}
+
+
+class ExpenseEditBody(BaseModel):
+    category: str | None = None
+    amount_cents: int | None = None
+    spent_at: float | None = None
+    vendor: str | None = None
+    note: str | None = None
+    business_pct: int | None = None
+    paid_by: str | None = None
+    recurring: str | None = None
+    tax_cents: int | None = None
+    capitalised: bool | None = None
+
+
+@router.patch("/api/expenses/{eid}")
+def edit_expense(eid: int, body: ExpenseEditBody, user=Depends(current_user),
+                 con=Depends(get_con)):
+    """Correct a pending entry in place. The office may also correct the
+    series (recurring, capitalised) on an accepted one, since those are
+    the office's facts, not the filer's claim."""
+    r = con.execute("SELECT * FROM expenses WHERE id=?", (eid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such expense")
+    office = _office(user)
+    if r["user_id"] != user["id"] and not office:
+        raise HTTPException(403, "not your expense")
+    money_fields = any(x is not None for x in (
+        body.category, body.amount_cents, body.spent_at, body.business_pct,
+        body.paid_by, body.tax_cents))
+    if r["state"] != "pending" and money_fields:
+        raise HTTPException(409, f"it is {r['state']} — the amount, date and"
+                                 f" share of an accepted entry stand")
+    if r["state"] != "pending" and not office:
+        raise HTTPException(409, f"it is {r['state']}")
+    cats = _cat_map(con)
+    cat = cats.get(body.category if body.category is not None else r["category"])
+    if cat is None:
+        raise HTTPException(400, "pick a category")
+    amount = r["amount_cents"] if body.amount_cents is None else int(body.amount_cents)
+    if amount <= 0:
+        raise HTTPException(400, "an amount")
+    paid_by = r["paid_by"] if body.paid_by is None else body.paid_by
+    if paid_by not in PAID_BY:
+        raise HTTPException(400, "paid by the company, or by you")
+    recurring = r["recurring"] if body.recurring is None else body.recurring
+    if recurring not in RECURRING:
+        raise HTTPException(400, "recurring is monthly, yearly or blank")
+    at = r["spent_at"] if body.spent_at is None else body.spent_at
+    if at > time.time() + 86400:
+        raise HTTPException(400, "an expense is logged after it is paid")
+    pct = r["business_pct"] if body.business_pct is None else max(0, min(100, int(body.business_pct)))
+    s = settings(CFG)
+    tax = r["tax_cents"] if body.tax_cents is None else max(0, min(amount, int(body.tax_cents)))
+    if body.amount_cents is not None and body.tax_cents is None:
+        tax = _tax_inside(amount, s)
+    cap = r["capitalised"] if body.capitalised is None else int(bool(body.capitalised))
+    next_at = r["next_at"]
+    if recurring != r["recurring"] or (body.spent_at is not None and recurring):
+        next_at = _add_period(at, recurring) if recurring else 0
+    con.execute(
+        "UPDATE expenses SET category=?, amount_cents=?, spent_at=?, vendor=?,"
+        " note=?, business_pct=?, paid_by=?, recurring=?, next_at=?,"
+        " tax_cents=?, capitalised=? WHERE id=?",
+        (cat["code"], amount, at,
+         r["vendor"] if body.vendor is None else body.vendor.strip()[:120],
+         r["note"] if body.note is None else body.note.strip()[:400],
+         pct, paid_by, recurring, next_at, tax, cap, eid))
+    con.commit()
+    row = con.execute("SELECT e.*, u.name AS who FROM expenses e JOIN users u"
+                      " ON u.id=e.user_id WHERE e.id=?", (eid,)).fetchone()
+    return {"ok": True, **_expense_row(row, cats, s["tax_regime"])}
 
 
 @router.post("/api/expenses/{eid}/receipt")
@@ -673,6 +973,70 @@ def add_trip(body: TripBody, user=Depends(current_user), con=Depends(get_con)):
                       route_id=0, note=body.note)
 
 
+class TripEditBody(BaseModel):
+    driven_at: float | None = None
+    from_place: str | None = None
+    to_place: str | None = None
+    purpose: str | None = None
+    distance: float | None = None
+    start_odo: float | None = None
+    end_odo: float | None = None
+    vehicle: str | None = None
+    truck_id: int | None = None
+    note: str | None = None
+
+
+@router.patch("/api/trips/{tid}")
+def edit_trip(tid: int, body: TripEditBody, user=Depends(current_user),
+              con=Depends(get_con)):
+    """Correct a pending trip in place; the amount follows the distance
+    at the rate the trip was filed at."""
+    r = con.execute("SELECT * FROM trips WHERE id=?", (tid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such trip")
+    if r["user_id"] != user["id"] and not _office(user):
+        raise HTTPException(403, "not your trip")
+    if r["state"] != "pending":
+        raise HTTPException(409, f"it is {r['state']} — only a pending trip"
+                                 f" is edited")
+    s = settings(CFG)
+    start = r["start_odo"] if body.start_odo is None else body.start_odo
+    end = r["end_odo"] if body.end_odo is None else body.end_odo
+    dist = r["distance"] if body.distance is None else body.distance
+    if body.start_odo is not None or body.end_odo is not None:
+        if start is not None and end is not None:
+            if end < start:
+                raise HTTPException(400, "the odometer does not go backwards")
+            dist = round(end - start, 1)
+    if dist <= 0 or dist > MAX_DISTANCE:
+        raise HTTPException(400, "a distance a car could do in a day")
+    vehicle = r["vehicle"] if body.vehicle is None else body.vehicle
+    if vehicle not in VEHICLES:
+        raise HTTPException(400, "your own vehicle, or the company's")
+    at = r["driven_at"] if body.driven_at is None else body.driven_at
+    if at > time.time() + 86400:
+        raise HTTPException(400, "a trip is logged after it is driven")
+    rate = (r["rate_cents"] if vehicle == "own" and r["vehicle"] == "own"
+            else s["mileage_rate_cents"] if vehicle == "own" else 0)
+    con.execute(
+        "UPDATE trips SET driven_at=?, from_place=?, to_place=?, purpose=?,"
+        " distance=?, start_odo=?, end_odo=?, vehicle=?, truck_id=?,"
+        " rate_cents=?, amount_cents=?, note=? WHERE id=?",
+        (at, r["from_place"] if body.from_place is None else body.from_place.strip()[:120],
+         r["to_place"] if body.to_place is None else body.to_place.strip()[:120],
+         r["purpose"] if body.purpose is None else body.purpose.strip()[:200],
+         round(dist, 1), start, end, vehicle,
+         r["truck_id"] if body.truck_id is None else int(body.truck_id),
+         rate, int(round(dist * rate)),
+         r["note"] if body.note is None else body.note.strip()[:400], tid))
+    con.commit()
+    row = con.execute("SELECT t.*, u.name AS who, k.name AS truck FROM trips t"
+                      " JOIN users u ON u.id=t.user_id"
+                      " LEFT JOIN trucks k ON k.id=t.truck_id WHERE t.id=?",
+                      (tid,)).fetchone()
+    return {"ok": True, **_trip_row(row)}
+
+
 @router.post("/api/trips/from-route/{rid}")
 def trip_from_route(rid: int, user=Depends(current_user),
                     con=Depends(get_con)):
@@ -735,6 +1099,7 @@ def export_csv(year: int = 0, user=Depends(current_user),
     y = year or current_year(CFG)
     a, b = year_bounds(CFG, y)
     cats = _cat_map(con)
+    regime = settings(CFG)["tax_regime"]
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["date", "kind", "category", "who", "vendor_or_route",
@@ -744,8 +1109,9 @@ def export_csv(year: int = 0, user=Depends(current_user),
             "SELECT e.*, u.name AS who FROM expenses e JOIN users u"
             " ON u.id=e.user_id WHERE e.spent_at>=? AND e.spent_at<?"
             " AND e.state IN ('approved','paid') ORDER BY e.spent_at", (a, b)):
-        d = _expense_row(r, cats)
-        w.writerow([date.fromtimestamp(d["spent_at"]).isoformat(), "expense",
+        d = _expense_row(r, cats, regime)
+        w.writerow([date.fromtimestamp(d["spent_at"]).isoformat(),
+                    "asset" if d["capitalised"] else "expense",
                     d["category_label"], d["who"], d["vendor"],
                     f"{d['amount_cents'] / 100:.2f}", d["business_pct"],
                     f"{d['deductible_cents'] / 100:.2f}", d["paid_by"],

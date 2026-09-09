@@ -169,10 +169,12 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
     try:
         from . import expenses as _exp
         cats = _exp._cat_map(con)
+        regime = _exp.settings(cfg)["tax_regime"]
         for r in con.execute(
                 "SELECT * FROM expenses WHERE spent_at>=?"
                 " AND state IN ('approved','paid')", (since,)):
-            expenses_cents += _exp.deductible_cents(dict(r), cats.get(r["category"]))
+            expenses_cents += _exp.deductible_cents(dict(r), cats.get(r["category"]),
+                                                    regime)
         mileage_cents = _q("SELECT COALESCE(SUM(amount_cents),0) FROM trips"
                            " WHERE driven_at>=? AND vehicle='own'"
                            " AND state IN ('approved','paid')", (since,))

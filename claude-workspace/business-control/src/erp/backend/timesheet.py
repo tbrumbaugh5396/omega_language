@@ -621,6 +621,59 @@ def log_hours(body: LoggedBody, user=Depends(current_user),
             "state": "pending"}
 
 
+class LoggedEditBody(BaseModel):
+    kind: str | None = None
+    starts: float | None = None
+    ends: float | None = None
+    note: str | None = None
+    with_name: str | None = None
+
+
+@router.patch("/api/hours/logged/{lid}")
+def edit_logged(lid: int, body: LoggedEditBody, user=Depends(current_user),
+                con=Depends(get_con)):
+    """Correct a pending entry — a wrong end time, a wrong day — without
+    withdrawing and refiling. Once accepted it is somebody's signature;
+    reopen it by declining first."""
+    r = con.execute("SELECT * FROM logged_hours WHERE id=?", (lid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such entry")
+    if r["user_id"] != user["id"] and not _office(user):
+        raise HTTPException(403, "not your entry")
+    if r["state"] != "pending":
+        raise HTTPException(409, f"it is {r['state']} — only a pending entry"
+                                 f" is edited")
+    kind = r["kind"] if body.kind is None else body.kind
+    if kind not in LOGGED_KINDS:
+        raise HTTPException(400, f"kind must be one of {LOGGED_KINDS}")
+    starts = r["starts"] if body.starts is None else body.starts
+    ends = r["ends"] if body.ends is None else body.ends
+    if ends <= starts:
+        raise HTTPException(400, "it cannot end before it starts")
+    hours = round((ends - starts) / 3600, 2)
+    if hours > LOGGED_MAX_HOURS:
+        raise HTTPException(400, f"that is {hours} hours in one entry")
+    if starts > time.time() + 3600:
+        raise HTTPException(400, "hours are logged after they happen")
+    if _period_signed(con, r["user_id"], starts):
+        raise HTTPException(409, "that fortnight is already signed off")
+    clash = con.execute(
+        "SELECT id FROM logged_hours WHERE user_id=? AND id!=? AND state IN"
+        " ('pending','approved') AND starts<? AND ends>?",
+        (r["user_id"], lid, ends, starts)).fetchone()
+    if clash:
+        raise HTTPException(409, "those hours overlap an entry already filed")
+    con.execute(
+        "UPDATE logged_hours SET kind=?, starts=?, ends=?, hours=?, note=?,"
+        " with_name=? WHERE id=?",
+        (kind, starts, ends, hours,
+         r["note"] if body.note is None else body.note.strip()[:400],
+         r["with_name"] if body.with_name is None
+         else body.with_name.strip()[:120], lid))
+    con.commit()
+    return {"ok": True, "id": lid, "hours": hours}
+
+
 class LoggedDecideBody(BaseModel):
     state: str
     note: str = ""

@@ -25,15 +25,26 @@ async function renderExpenses() {
       <button class="btn alt sm" data-xd="${kind}:${r.id}:declined">Decline</button>` : ""}
     ${meta.office && r.state === "approved" && (kind === "e" ? r.paid_by === "me" : r.vehicle === "own")
       ? `<button class="btn sm" data-xd="${kind}:${r.id}:paid">Mark paid</button>` : ""}
+    ${(r.user_id === meta.me || meta.office) && r.state === "pending"
+      ? `<button class="btn alt sm" data-xe="${kind}:${r.id}">Edit</button>` : ""}
     ${r.user_id === meta.me && r.state === "pending"
       ? `<button class="btn alt sm" data-xd="${kind}:${r.id}:withdrawn">Withdraw</button>` : ""}`;
   const expRow = (r) => `<tr>
     <td>${day(r.spent_at)}</td>
     <td><b>${esc(r.category_label)}</b>${r.vendor ? `<div class="dim">${esc(r.vendor)}</div>` : ""}</td>
     <td class="dim">${esc(r.who)}${r.paid_by === "me" ? ' <span class="pill">claim</span>' : ""}${
-      r.recurring ? ` <span class="dim">· ${esc(r.recurring)}</span>` : ""}</td>
-    <td class="num">${money(r.amount_cents)}${r.business_pct !== 100
-      ? `<div class="dim">${r.business_pct}% · ${money(r.deductible_cents)}</div>` : ""}</td>
+      r.recurring ? ` <span class="pill" title="the next copy files itself on ${
+        r.next_at ? day(r.next_at) : "its day"}">${esc(r.recurring)}${
+        r.next_at ? " · next " + day(r.next_at) : ""}</span>${meta.office
+        ? ` <button class="btn alt sm" data-xstop="${r.id}" title="stop the series">stop</button>` : ""}` : ""}${
+      r.recurring_from ? ` <span class="dim">· from #${r.recurring_from}</span>` : ""}${
+      r.capitalised ? ' <span class="pill" title="an asset — written off over the years, not deducted at once">asset</span>' : ""}${
+      meta.office && r.category === "equipment" && r.state !== "pending"
+        ? ` <button class="btn alt sm" data-xcap="${r.id}:${r.capitalised ? 0 : 1}">${
+          r.capitalised ? "expense it" : "capitalise"}</button>` : ""}</td>
+    <td class="num">${money(r.amount_cents)}${r.business_pct !== 100 || r.capitalised
+      ? `<div class="dim">${r.capitalised ? "depreciated" : r.business_pct + "% · " + money(r.deductible_cents)}</div>` : ""}${
+      s.tax_regime === "vat" && r.tax_cents ? `<div class="dim">incl. ${money(r.tax_cents)} VAT</div>` : ""}</td>
     <td class="dim">${esc(r.note || "")}</td>
     <td>${r.receipt_url ? `<a href="${esc(r.receipt_url)}" target="_blank" rel="noopener">receipt</a>`
       : (r.user_id === meta.me || meta.office) ? `<label class="btn alt sm">Add receipt<input type="file"
@@ -84,9 +95,18 @@ async function renderExpenses() {
         ${stat("deductible expenses", money(sum.deductible_cents), `of ${money(sum.expenses_total_cents)} spent`)}
         ${stat("mileage", `${sum.mileage.distance} ${esc(sum.mileage.unit)}`,
           `${money(sum.mileage.amount_cents)} · ${sum.mileage.trips} trip${sum.mileage.trips === 1 ? "" : "s"}`)}
+        ${sum.depreciation_cents || sum.capital_cents ? stat("depreciation", money(sum.depreciation_cents),
+          `${money(sum.capital_cents)} capitalised this year · ${s.depreciation_years}y straight-line`) : ""}
+        ${sum.home_office_cents ? stat("home office", money(sum.home_office_cents),
+          `${s.home_office_pct}% of ${money(s.home_costs_cents)} a year`) : ""}
+        ${sum.vat ? stat("VAT / GST owed", money(sum.vat.owed_cents),
+          `${money(sum.vat.output_cents)} charged − ${money(sum.vat.input_cents)} reclaimable`) : ""}
         ${stat("net before tax", money(sum.net_before_tax_cents))}
         ${stat("estimated tax", money(sum.estimated_tax_cents), `${s.income_tax_pct}% estimate`)}
       </div>
+      ${sum.assets && sum.assets.length ? `<details class="xp-assets"><summary class="dim">Assets being written off (${sum.assets.length})</summary>
+        ${sum.assets.map((a) => `<div class="xp-owed"><span>${esc(a.vendor || a.category)}
+          <span class="dim">· bought ${day(a.bought)} · ${money(a.cost_cents)}</span></span><b>${money(a.this_year_cents)} this year</b></div>`).join("")}</details>` : ""}
       <p class="dim">${esc(sum.estimate_note)}</p>
       <div class="row">
         <div style="flex:2;min-width:min(300px,100%)">
@@ -145,6 +165,22 @@ async function renderExpenses() {
       renderExpenses();
     } catch (err) { toast(err.message); }
   });
+  view().querySelectorAll("[data-xe]").forEach((b) => b.onclick = () => {
+    const [kind, id] = b.dataset.xe.split(":");
+    if (kind === "e") expenseForm(meta, renderExpenses, ex.expenses.find((x) => String(x.id) === id));
+    else tripForm(meta, renderExpenses, tr.trips.find((x) => String(x.id) === id));
+  });
+  view().querySelectorAll("[data-xstop]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Stop this series? What is already filed stays.")) return;
+    try { await api(`/api/expenses/${b.dataset.xstop}`, { method: "PATCH", body: { recurring: "" } }); renderExpenses(); }
+    catch (err) { toast(err.message); }
+  });
+  view().querySelectorAll("[data-xcap]").forEach((b) => b.onclick = async () => {
+    const [id, on] = b.dataset.xcap.split(":");
+    try { await api(`/api/expenses/${id}`, { method: "PATCH", body: { capitalised: on === "1" } }); renderExpenses(); }
+    catch (err) { toast(err.message); }
+  });
+  if (meta.rolled) toast(`${meta.rolled} recurring expense${meta.rolled === 1 ? "" : "s"} filed for you — check the amounts`);
   view().querySelectorAll("[data-xroute]").forEach((b) => b.onclick = async () => {
     try { const r = await api(`/api/trips/from-route/${b.dataset.xroute}`, { body: {} });
       toast(`claimed — ${r.distance} ${r.unit}`); renderExpenses(); }
@@ -168,57 +204,81 @@ async function renderExpenses() {
 /* One thing paid for. The category carries a default business share — a
    phone is half work, a meal usually half allowed — which the person can
    correct. Who paid decides whether it is a fact or a claim. */
-function expenseForm(meta, after) {
+function expenseForm(meta, after, edit) {
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const cats = meta.categories;
-  modal(`<h3>Log an expense</h3>
+  const s = meta.settings;
+  const dstr = (t) => { const d = new Date(t * 1000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+  const e = edit || null;
+  modal(`<h3>${e ? "Correct this expense" : "Log an expense"}</h3>
+    ${e ? '<p class="dim">Still pending, so it is yours to correct. Once accepted, the amount, date and share stand.</p>' : ""}
     <div class="row2">
       <div><label>What for</label>
         <select id="xf-cat">${cats.map((c) => `<option value="${esc(c.code)}" data-pct="${c.default_pct}"
-          data-hint="${esc(c.hint || "")}">${esc(c.label)}</option>`).join("")}</select>
+          data-hint="${esc(c.hint || "")}"${e && e.category === c.code ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select>
         <span class="dim" id="xf-hint"></span></div>
-      <div><label>Amount</label><input id="xf-amt" type="number" min="0.01" step="0.01" placeholder="0.00"></div>
+      <div><label>Amount${s.tax_regime === "vat" ? ' <span class="opt">incl. VAT</span>' : ""}</label>
+        <input id="xf-amt" type="number" min="0.01" step="0.01" placeholder="0.00" value="${e ? (e.amount_cents / 100).toFixed(2) : ""}"></div>
     </div>
     <div class="row2">
-      <div><label>Paid on</label><input id="xf-day" type="date" value="${today}"></div>
+      <div><label>Paid on</label><input id="xf-day" type="date" value="${e ? dstr(e.spent_at) : today}"></div>
       <div><label>Business share <span class="opt">%</span></label>
-        <input id="xf-pct" type="number" min="0" max="100" value="${cats[0] ? cats[0].default_pct : 100}"></div>
+        <input id="xf-pct" type="number" min="0" max="100" value="${e ? e.business_pct : cats[0] ? cats[0].default_pct : 100}"></div>
     </div>
     <div class="row2">
       <div><label>Who paid</label>
-        <select id="xf-paid"><option value="company">The company</option>
-          <option value="me">Me — I want it back</option></select></div>
+        <select id="xf-paid"><option value="company"${e && e.paid_by === "company" ? " selected" : ""}>The company</option>
+          <option value="me"${e && e.paid_by === "me" ? " selected" : ""}>Me — I want it back</option></select></div>
       <div><label>Repeats</label>
-        <select id="xf-rec"><option value="">once</option><option value="monthly">monthly</option>
-          <option value="yearly">yearly</option></select></div>
+        <select id="xf-rec"><option value="">once</option><option value="monthly"${e && e.recurring === "monthly" ? " selected" : ""}>monthly</option>
+          <option value="yearly"${e && e.recurring === "yearly" ? " selected" : ""}>yearly</option></select>
+        <span class="dim">the next copy files itself, pending, for a glance at the amount</span></div>
     </div>
+    ${s.tax_regime === "vat" ? `<div class="row2">
+      <div><label>VAT inside <span class="opt">blank = at ${s.vat_pct}%</span></label>
+        <input id="xf-vat" type="number" min="0" step="0.01" value="${e && e.tax_cents ? (e.tax_cents / 100).toFixed(2) : ""}"></div>
+      <div></div></div>` : ""}
+    <label class="dim" style="display:flex;gap:8px;align-items:center;margin-top:6px" id="xf-cap-row">
+      <input type="checkbox" id="xf-cap"${e && e.capitalised ? " checked" : ""}> An asset — write it off over ${s.depreciation_years} years
+      <span class="dim">(equipment at or over ${money(s.capitalise_over_cents)} is, unless you say otherwise)</span></label>
     <label>Vendor <span class="opt">optional</span></label>
-    <input id="xf-vendor" placeholder="who was paid">
+    <input id="xf-vendor" placeholder="who was paid" value="${e ? esc(e.vendor) : ""}">
     <label>Note <span class="opt">optional</span></label>
-    <input id="xf-note" placeholder="what it was for">
-    <p class="dim">Add the receipt from the list afterwards — a deduction without one is a story.</p>
+    <input id="xf-note" placeholder="what it was for" value="${e ? esc(e.note) : ""}">
+    ${e ? "" : '<p class="dim">Add the receipt from the list afterwards — a deduction without one is a story.</p>'}
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
-      <button class="btn" id="xf-save">File it</button></div>`);
+      <button class="btn" id="xf-save">${e ? "Save" : "File it"}</button></div>`);
   const sel = $("#xf-cat");
+  let touchedCap = !!e;
   const sync = () => {
     const o = sel.options[sel.selectedIndex];
-    $("#xf-pct").value = o.dataset.pct;
+    if (!e) $("#xf-pct").value = o.dataset.pct;
     $("#xf-hint").textContent = o.dataset.hint || "";
+    $("#xf-cap-row").hidden = sel.value !== "equipment";
+    if (!touchedCap) {
+      const amt = Math.round(parseFloat($("#xf-amt").value || "0") * 100);
+      $("#xf-cap").checked = sel.value === "equipment" && amt >= s.capitalise_over_cents;
+    }
   };
-  sel.onchange = sync; sync();
+  sel.onchange = sync; $("#xf-amt").oninput = sync; sync();
+  $("#xf-cap").onchange = () => { touchedCap = true; };
   $("#xf-save").onclick = async () => {
     const amt = Math.round(parseFloat($("#xf-amt").value || "0") * 100);
     if (!amt) return toast("an amount");
+    const vat = $("#xf-vat") && $("#xf-vat").value !== "" ? Math.round(parseFloat($("#xf-vat").value) * 100) : null;
+    const body = {
+      category: sel.value, amount_cents: amt,
+      spent_at: $("#xf-day").value ? new Date($("#xf-day").value + "T12:00").getTime() / 1000 : 0,
+      business_pct: +$("#xf-pct").value, paid_by: $("#xf-paid").value,
+      recurring: $("#xf-rec").value, vendor: $("#xf-vendor").value.trim(),
+      note: $("#xf-note").value.trim(), tax_cents: vat,
+      capitalised: sel.value === "equipment" ? $("#xf-cap").checked : false };
     try {
-      const r = await api("/api/expenses", { body: {
-        category: sel.value, amount_cents: amt,
-        spent_at: $("#xf-day").value ? new Date($("#xf-day").value + "T12:00").getTime() / 1000 : 0,
-        business_pct: +$("#xf-pct").value, paid_by: $("#xf-paid").value,
-        recurring: $("#xf-rec").value, vendor: $("#xf-vendor").value.trim(),
-        note: $("#xf-note").value.trim() } });
+      const r = e ? await api(`/api/expenses/${e.id}`, { method: "PATCH", body })
+                  : await api("/api/expenses", { body });
       closeModal();
-      toast(r.state === "approved" ? "filed" : "filed — the office will accept it");
+      toast(e ? "corrected" : r.state === "approved" ? "filed" : "filed — the office will accept it");
       if (after) after();
     } catch (err) { toast(err.message); }
   };
@@ -227,44 +287,50 @@ function expenseForm(meta, after) {
 /* A trip: distance, or two odometer readings. Own car is reimbursed at the
    rate; a company vehicle's trip is a record — its fuel and wear are
    expenses of their own. */
-function tripForm(meta, after) {
+function tripForm(meta, after, edit) {
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const s = meta.settings;
-  modal(`<h3>Log a trip</h3>
+  const e = edit || null;
+  const dstr = (t) => { const d = new Date(t * 1000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+  const vehVal = e ? (e.vehicle === "own" ? "own" : `company:${e.truck_id || 0}`) : "own";
+  modal(`<h3>${e ? "Correct this trip" : "Log a trip"}</h3>
+    ${e ? '<p class="dim">Still pending, so it is yours to correct; the amount follows the distance.</p>' : ""}
     <div class="row2">
-      <div><label>Day</label><input id="trp-day" type="date" value="${today}"></div>
+      <div><label>Day</label><input id="trp-day" type="date" value="${e ? dstr(e.driven_at) : today}"></div>
       <div><label>Vehicle</label>
-        <select id="trp-veh"><option value="own">My own car — reimburse me at ${(s.mileage_rate_cents / 100).toFixed(2)}/${esc(s.distance_unit)}</option>
-          ${meta.trucks.map((t) => `<option value="company:${t.id}">${esc(t.name)} (company)</option>`).join("")}
-          <option value="company:0">Another company vehicle</option></select></div>
+        <select id="trp-veh"><option value="own"${vehVal === "own" ? " selected" : ""}>My own car — reimburse me at ${(s.mileage_rate_cents / 100).toFixed(2)}/${esc(s.distance_unit)}</option>
+          ${meta.trucks.map((t) => `<option value="company:${t.id}"${vehVal === "company:" + t.id ? " selected" : ""}>${esc(t.name)} (company)</option>`).join("")}
+          <option value="company:0"${vehVal === "company:0" ? " selected" : ""}>Another company vehicle</option></select></div>
     </div>
     <div class="row2">
-      <div><label>From</label><input id="trp-from" placeholder="the office"></div>
-      <div><label>To</label><input id="trp-to" placeholder="a client, a school, a supplier"></div>
+      <div><label>From</label><input id="trp-from" placeholder="the office" value="${e ? esc(e.from_place) : ""}"></div>
+      <div><label>To</label><input id="trp-to" placeholder="a client, a school, a supplier" value="${e ? esc(e.to_place) : ""}"></div>
     </div>
-    <label>Purpose</label><input id="trp-why" placeholder="what the trip was for">
+    <label>Purpose</label><input id="trp-why" placeholder="what the trip was for" value="${e ? esc(e.purpose) : ""}">
     <div class="row2">
       <div><label>Distance <span class="opt">${esc(s.distance_unit)}</span></label>
-        <input id="trp-dist" type="number" min="0" step="0.1"></div>
+        <input id="trp-dist" type="number" min="0" step="0.1" value="${e ? e.distance : ""}"></div>
       <div><label>Or odometer <span class="opt">start → end</span></label>
-        <div style="display:flex;gap:6px"><input id="trp-o1" type="number" step="0.1" placeholder="start">
-          <input id="trp-o2" type="number" step="0.1" placeholder="end"></div></div>
+        <div style="display:flex;gap:6px"><input id="trp-o1" type="number" step="0.1" placeholder="start" value="${e && e.start_odo != null ? e.start_odo : ""}">
+          <input id="trp-o2" type="number" step="0.1" placeholder="end" value="${e && e.end_odo != null ? e.end_odo : ""}"></div></div>
     </div>
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
-      <button class="btn" id="trp-save">File it</button></div>`);
+      <button class="btn" id="trp-save">${e ? "Save" : "File it"}</button></div>`);
   $("#trp-save").onclick = async () => {
     const [veh, tid] = $("#trp-veh").value.split(":");
     const o1 = $("#trp-o1").value, o2 = $("#trp-o2").value;
+    const body = {
+      driven_at: $("#trp-day").value ? new Date($("#trp-day").value + "T12:00").getTime() / 1000 : 0,
+      from_place: $("#trp-from").value.trim(), to_place: $("#trp-to").value.trim(),
+      purpose: $("#trp-why").value.trim(), distance: parseFloat($("#trp-dist").value || "0"),
+      start_odo: o1 === "" ? null : +o1, end_odo: o2 === "" ? null : +o2,
+      vehicle: veh, truck_id: +(tid || 0) };
     try {
-      const r = await api("/api/trips", { body: {
-        driven_at: $("#trp-day").value ? new Date($("#trp-day").value + "T12:00").getTime() / 1000 : 0,
-        from_place: $("#trp-from").value.trim(), to_place: $("#trp-to").value.trim(),
-        purpose: $("#trp-why").value.trim(), distance: parseFloat($("#trp-dist").value || "0"),
-        start_odo: o1 === "" ? null : +o1, end_odo: o2 === "" ? null : +o2,
-        vehicle: veh, truck_id: +(tid || 0) } });
+      const r = e ? await api(`/api/trips/${e.id}`, { method: "PATCH", body })
+                  : await api("/api/trips", { body });
       closeModal();
-      toast(`${r.distance} ${r.unit} filed${r.vehicle === "own" ? " — " + money(r.amount_cents) + " once accepted" : ""}`);
+      toast(`${r.distance} ${r.unit} ${e ? "corrected" : "filed"}${r.vehicle === "own" ? " — " + money(r.amount_cents) + " once accepted" : ""}`);
       if (after) after();
     } catch (err) { toast(err.message); }
   };
@@ -289,6 +355,29 @@ function expenseSettingsForm(meta, after) {
         <select id="xs-month">${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
           .map((m, i) => `<option value="${i + 1}"${s.tax_year_start_month === i + 1 ? " selected" : ""}>${m}</option>`).join("")}</select></div>
     </div>
+    <h4 style="margin:12px 0 4px">Sales tax or VAT</h4>
+    <div class="row2">
+      <div><label>Regime</label>
+        <select id="xs-regime"><option value="sales_tax"${s.tax_regime === "sales_tax" ? " selected" : ""}>Sales tax — charged on orders, passed through</option>
+          <option value="vat"${s.tax_regime === "vat" ? " selected" : ""}>VAT / GST — charged on sales, reclaimed on purchases</option></select></div>
+      <div><label>VAT / GST rate <span class="opt">% inside expense amounts</span></label>
+        <input id="xs-vat" type="number" min="0" max="50" step="0.5" value="${s.vat_pct}"></div>
+    </div>
+    <h4 style="margin:12px 0 4px">Assets</h4>
+    <div class="row2">
+      <div><label>Capitalise equipment at or over</label>
+        <input id="xs-capover" type="number" min="0" step="1" value="${(s.capitalise_over_cents / 100).toFixed(0)}"></div>
+      <div><label>Written off over <span class="opt">years, straight-line</span></label>
+        <input id="xs-years" type="number" min="1" max="40" value="${s.depreciation_years}"></div>
+    </div>
+    <h4 style="margin:12px 0 4px">Home office</h4>
+    <div class="row2">
+      <div><label>Share of the home used for work <span class="opt">%</span></label>
+        <input id="xs-home" type="number" min="0" max="100" step="0.5" value="${s.home_office_pct}"></div>
+      <div><label>What the home costs a year <span class="opt">rent or interest, utilities, insurance</span></label>
+        <input id="xs-homecost" type="number" min="0" step="1" value="${(s.home_costs_cents / 100).toFixed(0)}"></div>
+    </div>
+    <p class="dim">Zero share means no home-office line. Some authorities publish a flat rate instead; use whichever your accountant says.</p>
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="xs-save">Save</button></div>`);
@@ -296,7 +385,12 @@ function expenseSettingsForm(meta, after) {
     try {
       await api("/api/expenses/settings", { body: {
         distance_unit: $("#xs-unit").value, mileage_rate_cents: +$("#xs-rate").value,
-        income_tax_pct: +$("#xs-pct").value, tax_year_start_month: +$("#xs-month").value } });
+        income_tax_pct: +$("#xs-pct").value, tax_year_start_month: +$("#xs-month").value,
+        tax_regime: $("#xs-regime").value, vat_pct: +$("#xs-vat").value,
+        capitalise_over_cents: Math.round(+$("#xs-capover").value * 100),
+        depreciation_years: +$("#xs-years").value,
+        home_office_pct: +$("#xs-home").value,
+        home_costs_cents: Math.round(+$("#xs-homecost").value * 100) } });
       closeModal(); if (after) after();
     } catch (err) { toast(err.message); }
   };

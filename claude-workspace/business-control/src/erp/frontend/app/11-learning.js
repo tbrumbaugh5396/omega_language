@@ -1006,6 +1006,30 @@ async function sessionRoster(sid, cid) {
     </div>
     ${d.roster.map(row).join("")
       || '<div class="card empty"><b>Nobody is enrolled</b></div>'}`;
+  // Who taught it, and so who is paid for it: the lead and whoever was
+  // on the course when it opened; the office corrects it for a cover.
+  view().querySelector(".page-head").insertAdjacentHTML("afterend", `
+    <p class="dim sr-taught">Taught by ${(d.teachers || []).map((t) =>
+      `<b>${esc(t.name)}</b>${S.user && S.user.is_admin && t.id !== d.session.teacher_id
+        ? ` <button class="btn alt sm" data-srtdel="${t.id}" title="not paid for this class">×</button>` : ""}`
+      ).join(", ") || "—"}${S.user && S.user.is_admin
+      ? ` <button class="btn alt sm" id="sr-taught-add">+ someone else taught it</button>` : ""}</p>`);
+  if ($("#sr-taught-add")) $("#sr-taught-add").onclick = async () => {
+    const name = prompt("Who else taught this class? (their name as on the team)");
+    if (!name) return;
+    try {
+      const team = await api("/api/learning/team");
+      const u = team.find((x) => x.name.toLowerCase() === name.trim().toLowerCase());
+      if (!u) return toast("nobody on the team by that name");
+      await api(`/api/learning/sessions/${sid}/teachers`, { body: { user_id: u.id } });
+      sessionRoster(sid, cid);
+    } catch (err) { toast(err.message); }
+  };
+  view().querySelectorAll("[data-srtdel]").forEach((b) => b.onclick = async () => {
+    try { await api(`/api/learning/sessions/${sid}/teachers/${b.dataset.srtdel}`, { method: "DELETE" });
+      sessionRoster(sid, cid); }
+    catch (err) { toast(err.message); }
+  });
   $("#sr-back").onclick = () => learningCourse(cid);
   if ($("#sr-scan")) $("#sr-scan").onclick = async () => {
     // Door mode: the scanner reopens after every card until cancelled —

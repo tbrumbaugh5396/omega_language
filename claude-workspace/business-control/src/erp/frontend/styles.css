@@ -2112,3 +2112,5 @@ body.lane-on { overflow: hidden; }
 .xp-owed { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0;
   border-bottom: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
 .xp-unclaimed { margin-bottom: 12px; }
+.xp-assets { margin: 8px 0; }
+.sr-taught { margin: -6px 0 12px; }

@@ -216,21 +216,33 @@ function studentStatusForm(uid, d, after) {
     <input id="ss-note" placeholder="e.g. moved to Valencia; family in touch">
     <label class="dim" style="display:flex;gap:8px;align-items:center;margin-top:8px">
       <input type="checkbox" id="ss-end" checked> End their seats in every class today</label>
+    <label class="dim" style="display:flex;gap:8px;align-items:center;margin-top:6px" id="ss-signin-row">
+      <input type="checkbox" id="ss-signin"> End their sign-in too
+      <span class="dim">(every device signed out; reopened when they are active again)</span></label>
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="ss-save">Save</button></div>`);
   const sel = $("#ss-status");
   const endRow = $("#ss-end").parentElement;
-  const sync = () => { endRow.hidden = sel.value === "active"; };
+  const signRow = $("#ss-signin-row");
+  const closes = (code) => (d.statuses.find((x) => x.code === code) || {}).closes_signin;
+  const sync = () => {
+    endRow.hidden = sel.value === "active";
+    signRow.hidden = sel.value === "active";
+    $("#ss-signin").checked = !!closes(sel.value);
+  };
   sel.onchange = sync; sync();
   $("#ss-save").onclick = async () => {
     const at = $("#ss-at").value ? new Date($("#ss-at").value + "T12:00").getTime() / 1000 : 0;
     try {
       const r = await api(`/api/students/${uid}/status`, { body: {
         status: sel.value, note: $("#ss-note").value.trim(), at,
-        end_seats: sel.value !== "active" && $("#ss-end").checked } });
+        end_seats: sel.value !== "active" && $("#ss-end").checked,
+        end_signin: sel.value !== "active" ? $("#ss-signin").checked : null } });
       closeModal();
-      toast(r.ended ? `saved — ${r.ended} seat${r.ended === 1 ? "" : "s"} ended` : "saved");
+      toast([r.ended ? `${r.ended} seat${r.ended === 1 ? "" : "s"} ended` : "",
+             r.signin_closed ? "sign-in ended" : "", r.signin_reopened ? "sign-in reopened" : ""]
+        .filter(Boolean).join(" · ") || "saved");
       if (after) after();
     } catch (err) { toast(err.message); }
   };

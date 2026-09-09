@@ -183,12 +183,21 @@ def save_profile(con, uid: int, fields: dict, extra: dict | None,
     return profile_of(con, uid)
 
 
+# The statuses that also close the door: somebody who has died, or has
+# told the school they are not coming back, should not still be able to
+# sign in — a token on a lost phone is a token on a lost phone. Moved
+# and inactive keep their sign-in: an online seat may follow them.
+CLOSES_SIGNIN = ("deceased", "left")
+
+
 def set_status(con, uid: int, status: str, note: str, at: float,
-               by, end_seats: bool) -> dict:
+               by, end_seats: bool, end_signin: bool | None = None) -> dict:
     """Why somebody is no longer here — or that they are back. Written
     to the profile, and to the log, so the timeline says when it changed
     and who said so. Ending their seats is offered, not assumed: a
-    student who moved away may keep a seat in the online class."""
+    student who moved away may keep a seat in the online class. Ending
+    their sign-in follows the status unless the office says otherwise,
+    and coming back to active reopens it."""
     if status not in STATUSES:
         raise HTTPException(400, f"status must be one of {STATUSES}")
     profile_of(con, uid)                       # ensures the row exists
@@ -204,16 +213,38 @@ def set_status(con, uid: int, status: str, note: str, at: float,
         ended = con.execute(
             "UPDATE enrollments SET until=? WHERE user_id=? AND until IS NULL",
             (at, uid)).rowcount
+    closed = False
+    reopened = False
+    if end_signin is None:
+        end_signin = status in CLOSES_SIGNIN
+    if status != "active" and end_signin:
+        import secrets
+        con.execute("UPDATE users SET active=0, token=? WHERE id=?",
+                    (secrets.token_urlsafe(24), uid))
+        con.execute("DELETE FROM login_tokens WHERE user_id=?", (uid,))
+        closed = True
+    elif status == "active":
+        r = con.execute("SELECT active FROM users WHERE id=?", (uid,)).fetchone()
+        if r is not None and not r["active"]:
+            con.execute("UPDATE users SET active=1 WHERE id=?", (uid,))
+            reopened = True
     title = (STATUS_LABELS[status].capitalize() if status != "active"
              else "Active again")
+    tail = []
+    if ended:
+        tail.append(f"{ended} seat{'s' if ended != 1 else ''} ended")
+    if closed:
+        tail.append("sign-in ended")
+    if reopened:
+        tail.append("sign-in reopened")
     con.execute(
         "INSERT INTO student_log(user_id,kind,title,body,at,by_id,by_name,"
         " created_at) VALUES(?,?,?,?,?,?,?,?)",
         (uid, "status", title,
-         note.strip()[:400] + (f" · {ended} seat{'s' if ended != 1 else ''}"
-                               f" ended" if ended else ""),
+         " · ".join([x for x in [note.strip()[:400]] if x] + tail),
          at, by["id"], by["name"], db.now()))
-    return {"status": status, "ended": ended}
+    return {"status": status, "ended": ended, "signin_closed": closed,
+            "signin_reopened": reopened}
 
 
 # ── the record ───────────────────────────────────────────────────────────────
@@ -443,7 +474,8 @@ def student_page(uid: int, user=Depends(current_user), con=Depends(get_con)):
         "timeline": timeline_of(con, uid),
         "log_kinds": list(LOG_KINDS),
         "achievement_presets": list(ACHIEVEMENT_PRESETS),
-        "statuses": [{"code": k, "label": STATUS_LABELS[k]} for k in STATUSES],
+        "statuses": [{"code": k, "label": STATUS_LABELS[k],
+                      "closes_signin": k in CLOSES_SIGNIN} for k in STATUSES],
         "may_edit": True,
         "admin": bool(user["is_admin"]),
     }
@@ -469,6 +501,7 @@ class StatusBody(BaseModel):
     note: str = ""
     at: float = 0
     end_seats: bool = False
+    end_signin: bool | None = None       # None = follow the status
 
 
 @router.post("/api/students/{uid}/status")
@@ -480,7 +513,7 @@ def student_status(uid: int, body: StatusBody, user=Depends(current_user),
     if at > time.time() + 86400:
         raise HTTPException(400, "a status is what is, not what will be")
     out = set_status(con, uid, body.status, body.note, at, user,
-                     body.end_seats)
+                     body.end_seats, body.end_signin)
     con.commit()
     return {"ok": True, **out, "profile": profile_of(con, uid)}
 
