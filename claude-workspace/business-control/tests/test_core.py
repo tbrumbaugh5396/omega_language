@@ -2320,6 +2320,23 @@ ok(_bc3.execute("SELECT COUNT(*) FROM appointment_answers a JOIN"
    "answers are rows, not a blob: 'which dogs are reactive' is a query, "
    "not a grep")
 _bc3.close()
+# --- the account door: a stored token is a claim, not a fact ------------
+_sfj = open("src/storefront/frontend/store.js").read()
+_alive = _sfj.split("async function tokenAlive")[1].split("function signIn(")[0]
+ok('fetch("/api/store/account/orders"' in _alive
+   and 'fetch("/api/whoami"' not in _alive,
+   "the account button checks the stored token before trusting it — "
+   "against a CUSTOMER route, because the office's whoami refuses a "
+   "perfectly good shopper and probing it would sign every customer out "
+   "on every click. Every sign-in mints a fresh token, so a second sign-in "
+   "anywhere left this one stale: the door fetched the orders with it, "
+   "got a 401 body, tried to .map() it, and the modal never opened — "
+   "the only way out was Sign out, the one button that clears the token")
+ok("if (oR.status === 401 || sR.status === 401)" in _sfj,
+   "and the account panel reads the status, not just the body")
+ok(_sfj.index('href="/admin">Store admin') < _sfj.index('href="/ops/">ERP / ops'),
+   "the shop's own admin door is offered before the office's")
+
 ok("intakeForm(" in open("src/storefront/frontend/store.js").read()
    and "bkQuestionRow" in ops_app_js(),
    "the storefront asks the questions after the hold, and the shop edits "

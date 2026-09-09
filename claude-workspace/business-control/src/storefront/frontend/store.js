@@ -1459,8 +1459,32 @@ function acctToken() {
    Account and support used to raise two different modals against the same
    endpoint and the same stored token, which read as two accounts. This is the
    single door; callers say what they want to do once they're through. */
+/* A stored token is a claim, not a fact. Every sign-in mints a fresh one,
+   so a second sign-in anywhere — the checkout, the learner page, the ops
+   app, another tab — leaves this one stale. The account door used to
+   trust it, fetch the orders with it, get a 401 body back and try to
+   .map() it: the modal never opened and nothing said why, and the only
+   way out was Sign out, which is the one button that clears the token.
+   So the claim is checked first, cheaply, and a dead token is thrown
+   away and the sign-in form shown, which is what the button promised. */
+async function tokenAlive() {
+  const t = acctToken();
+  if (!t) return false;
+  try {
+    // A CUSTOMER door, deliberately: /api/whoami is the office's and can
+    // refuse a perfectly good shopper — probing it would sign every
+    // customer out on every click.
+    const r = await fetch("/api/store/account/orders", { headers: { Authorization: "Bearer " + t } });
+    if (r.status !== 401) return true;
+  } catch (e) { return true; }        // offline: not the token's fault
+  localStorage.removeItem("sf_support");
+  SUPPORT.token = null; SUPPORT.me = null;
+  return false;
+}
 function signIn(intro, onDone) {
-  if (acctToken()) { onDone(); return; }
+  tokenAlive().then((ok) => { if (ok) onDone(); else signInForm(intro, onDone); });
+}
+function signInForm(intro, onDone) {
   /* Three honest doors, not one ambiguous one: signing in refuses to mint
      an account from a typo, creating refuses to silently join somebody
      else's, and applying to a programme creates nothing at all — an
@@ -1659,9 +1683,16 @@ function openAccount() {
 
 async function drawAccount() {
   const H = { Authorization: "Bearer " + acctToken() };
-  const [orders, subs] = await Promise.all([
-    (await fetch("/api/store/account/orders", { headers: H })).json(),
-    (await fetch("/api/store/account/subscriptions", { headers: H })).json()]);
+  const [oR, sR] = await Promise.all([
+    fetch("/api/store/account/orders", { headers: H }),
+    fetch("/api/store/account/subscriptions", { headers: H })]);
+  if (oR.status === 401 || sR.status === 401) {
+    // the token died between the check and the call — same answer
+    localStorage.removeItem("sf_support"); SUPPORT.token = null;
+    return signIn("Your session had ended — sign in again.", drawAccount);
+  }
+  const orders = oR.ok ? await oR.json() : [];
+  const subs = sR.ok ? await sR.json() : {};
   let giving = null;
   try {
     giving = await (await fetch("/api/store/account/donations",
@@ -1787,8 +1818,8 @@ async function drawAccount() {
     ${affBlock}
     <p class="dim" style="margin-top:14px;padding-top:12px;
       border-top:1px solid var(--line)">Work here?
-      <a class="text-link" data-crossdoor href="/ops/">ERP / ops →</a> ·
-      <a class="text-link" data-crossdoor href="/admin">Store admin →</a>
+      <a class="text-link" data-crossdoor href="/admin">Store admin →</a> ·
+      <a class="text-link" data-crossdoor href="/ops/">ERP / ops →</a>
       <span class="dim"> — you arrive signed in; each door still checks
         its own keys.</span></p>
     <div class="modal-actions">
