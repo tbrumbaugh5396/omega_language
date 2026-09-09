@@ -4437,6 +4437,107 @@ c.post(f"/api/learning/courses/{_crs}/enroll", headers=AA, json={"user_id": _lrn
 ok(c.get(f"/api/learn/courses/{_crs}", headers=LN).status_code == 200,
    "(re-seated for what follows)")
 
+# --- presentations: written here, recorded here, brought in — and shown --
+_png1 = (b"\x89PNG\r\n\x1a\n" + bytes.fromhex(
+    "0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cfc0f01f0005000102"
+    "0a2db40000000049454e44ae426082"))
+_pd = c.post("/api/presentations", headers=TT, json={"title": "Open evening", "kind": "deck"})
+ok(_pd.status_code == 200 and _pd.json()["kind"] == "deck" and _pd.json()["url"].endswith("/present/" + _pd.json()["token"]),
+   "a teacher starts a deck, and it has a link from the first moment")
+_pid = _pd.json()["id"]
+ok(c.post("/api/presentations", headers=LN, json={"title": "x", "kind": "deck"}).status_code == 403,
+   "a student does not make presentations")
+_sl = c.post(f"/api/presentations/{_pid}", headers=TT, json={
+    "title": "Open evening", "blurb": "For families.",
+    "slides": [{"title": "Why we teach", "lines": ["small classes", "", "real conversation"], "notes": "breathe"},
+               {"title": "The term", "lines": "Mondays 6pm\nThursdays 6pm"},
+               {"title": "Come and see", "lines": [], "notes": "hand out the leaflet"}]})
+ok(_sl.status_code == 200 and len(_sl.json()["slides"]) == 3
+   and _sl.json()["slides"][1]["lines"] == ["Mondays 6pm", "Thursdays 6pm"],
+   "slides are a heading, lines, a picture and notes — lines typed as a "
+   "block become bullets")
+_si = c.post(f"/api/presentations/{_pid}/slides/1/image", headers=TT, content=_png1)
+ok(_si.status_code == 200 and _si.json()["url"].startswith("/media/")
+   and c.get(f"/api/presentations/{_pid}", headers=TT).json()["slides"][1]["image"],
+   "a picture goes on a slide")
+ok(c.post(f"/api/presentations/{_pid}/slides/9/image", headers=TT, content=_png1).status_code == 404,
+   "onto a slide that exists")
+_pp = c.get(f"/present/{_pd.json()['token']}")
+ok(_pp.status_code == 200 and "Why we teach" in _pp.text and "Thursdays 6pm" in _pp.text
+   and 'class="slide"' in _pp.text and "ArrowRight" in _pp.text and "breathe" in _pp.text,
+   "the link opens the deck as slides — no sign-in — with the arrow keys "
+   "and a thumb to move, and the speaker's notes there to switch on")
+_sn = c.post(f"/api/learn/present/{_pd.json()['token']}/seen", headers=HA, json={"visitor_id": "phone-1"})
+c.post(f"/api/learn/present/{_pd.json()['token']}/seen", headers=LN, json={})
+_pl = [x for x in c.get("/api/presentations", headers=TT).json()["presentations"] if x["id"] == _pid][0]
+ok(_sn.status_code == 200 and _pl["viewers"] == 2 and _pl["views"] == 2,
+   "who opened it is counted — a visitor by browser, a student by account")
+_pdf = c.get(f"/api/presentations/{_pid}/export.pdf?notes=1", headers=TT)
+ok(_pdf.status_code == 200 and _pdf.content[:5] == b"%PDF-" and _pdf.headers["content-type"] == "application/pdf"
+   and _pdf.content.count(b"/Type /Page") >= 5,
+   "exported as a PDF: a title page, a page per slide, and the notes at "
+   "the end for the lectern")
+_ppt = c.get(f"/api/presentations/{_pid}/export.pptx", headers=TT)
+import zipfile as _zf, io as _io, xml.dom.minidom as _xdm
+_zz = _zf.ZipFile(_io.BytesIO(_ppt.content))
+ok(_ppt.status_code == 200 and "presentationml" in _ppt.headers["content-type"]
+   and _ppt.headers["content-disposition"].endswith('.pptx"')
+   and "ppt/presentation.xml" in _zz.namelist()
+   and len([n for n in _zz.namelist() if n.startswith("ppt/slides/slide")]) == 4
+   and any(n.startswith("ppt/media/") for n in _zz.namelist())
+   and all(_xdm.parseString(_zz.read(n)) for n in _zz.namelist() if n.endswith((".xml", ".rels")))
+   and b"Why we teach" in _zz.read("ppt/slides/slide2.xml"),
+   "and as a PowerPoint: a real package — content types, a master, a "
+   "layout, a theme, a slide per slide with the picture embedded, every "
+   "part well-formed XML")
+# a recording: what the browser captured, as a film
+_pr = c.post("/api/presentations", headers=TT, json={"title": "The new till", "kind": "recording"}).json()
+_up = c.post(f"/api/presentations/{_pr['id']}/file", headers={**TT, "X-Filename": "screen.webm"},
+             content=b"\x1aE\xdf\xa3" + b"\x00" * 2000)
+ok(_up.status_code == 200 and _up.json()["kind"] == "video",
+   "a screen recording with the presenter's voice arrives as a film")
+_prp = c.get(f"/present/{_pr['token']}")
+ok(_prp.status_code == 200 and "<video" in _prp.text,
+   "and its link plays it")
+# a file brought in
+_pf = c.post("/api/presentations", headers=TT, json={"title": "Old deck", "kind": "file"}).json()
+_pz = _io.BytesIO(); _z2 = _zf.ZipFile(_pz, "w"); _z2.writestr("[Content_Types].xml", "<x/>"); _z2.close()
+_upf = c.post(f"/api/presentations/{_pf['id']}/file", headers={**TT, "X-Filename": "old.pptx"}, content=_pz.getvalue())
+ok(_upf.status_code == 200 and _upf.json()["kind"] == "document" and _upf.json()["path"].endswith(".pptx"),
+   "a PowerPoint made elsewhere is kept as itself")
+ok("Open old.pptx" in c.get(f"/present/{_pf['token']}").text,
+   "and its link hands it over, since a browser cannot draw a deck")
+# attached to a class: on the course page, in the Shared tab, on the stage
+_at = c.post(f"/api/presentations/{_pid}/attach", headers=TT, json={"course_id": _crs})
+ok(_at.status_code == 200,
+   "a deck attached to a class becomes one of its materials, as its PDF")
+_cm = c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["materials"]
+ok(any(m["original"] == "Open evening.pdf" and m["kind"] == "document" for m in _cm),
+   "on the course page for every student")
+_shx = c.get(f"/api/learn/sessions/{_s2}/shared", headers=LN).json()["items"]
+ok(any(i["title"] == "Open evening.pdf" for i in _shx),
+   "and in the session's Shared tab, there to put on")
+_jt2 = c.post(f"/api/learn/rtc/{_rm2}/join", headers=TT, json={}).json()
+_stg = c.post(f"/api/learn/rtc/{_rm2}/mark", headers=TT, json={"peer": _jt2["peer"], "stage": {
+    "id": _pid, "title": "Open evening", "url": f"/present/{_pd.json()['token']}", "kind": "document"}})
+ok(_stg.status_code == 200 and _stg.json()["stage"]["url"].startswith("/present/"),
+   "or put on directly as its own page — the stage accepts a presentation link")
+c.post(f"/api/learn/rtc/{_rm2}/leave", headers=TT, json={"peer": _jt2["peer"]})
+ok(c.delete(f"/api/presentations/{_pf['id']}", headers=LN).status_code == 403
+   and c.delete(f"/api/presentations/{_pf['id']}", headers=TT).status_code == 200
+   and c.get(f"/present/{_pf['token']}").status_code == 404,
+   "its maker removes it, and the link stops")
+_prjs = (Path(__file__).parent.parent / "src/erp/frontend/app/18-presentations.js").read_text()
+ok("getDisplayMedia" in _prjs and "createMediaStreamDestination" in _prjs and "getUserMedia" in _prjs
+   and "createRecorder" in _prjs and 'kind: "recording"' in _prjs,
+   "the ops app records the screen with the voice mixed in — the screen's "
+   "own sound and the microphone into one track — or the camera, or the "
+   "voice alone, through the recorder the class already uses")
+ok("function deckEditor(" in _prjs and "export.pptx" in _prjs and "export.pdf" in _prjs
+   and "/attach" in _prjs and "data-simg" in _prjs,
+   "and writes decks: slides with a picture each, exported as PDF or "
+   "PowerPoint, attached to a class")
+
 # --- the student's card, read at the door and by a classmate -----------
 _card = c.get("/api/learn/me/card", headers=LN).json()
 ok(_card["payload"].startswith("http") and "/p/" in _card["payload"]

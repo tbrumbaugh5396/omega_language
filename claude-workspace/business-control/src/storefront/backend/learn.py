@@ -755,6 +755,131 @@ background:#4634d9;color:#fff;text-decoration:none}}
 </script>""")
 
 
+@router.get("/present/{token}", response_class=HTMLResponse)
+def present_page(token: str, request: Request, con=Depends(get_con)):
+    """A presentation, from a link, on any screen. A deck plays as
+    slides — arrow keys, space, a thumb on a phone, F for full screen,
+    N for the speaker's notes; a recording plays as a film or a sound;
+    a file opens as itself. Who opened it is counted like a training's
+    viewers, by account when signed in and by browser when not."""
+    _require_cap("learning")
+    from erp.backend import presentations as PR
+    r = con.execute("SELECT * FROM presentations WHERE token=?", (token,)).fetchone()
+    if r is None or not r["published"]:
+        return HTMLResponse("<h3>No presentation at this address.</h3>", 404)
+    from erp.backend.main import CFG
+    e = _html.escape
+    shop = CFG.get("brand_name") or "this shop"
+    slides = PR.slides_of(r)
+    m = con.execute("SELECT kind, path, mime, original FROM learning_materials"
+                    " WHERE id=?", (r["material_id"],)).fetchone() if r["material_id"] else None
+    body = ""
+    if r["kind"] == "deck" or (not m and slides):
+        body = '<div id="deck">' + "".join(
+            f'<section class="slide"{" hidden" if i else ""}>'
+            f'<h2>{e(s["title"] or f"Slide {i + 1}")}</h2>'
+            + (f'<div class="row">' if s["image"] else "")
+            + ('<ul>' + "".join(f"<li>{e(ln)}</li>" if ln.strip() else "<li class=gap></li>" for ln in s["lines"]) + "</ul>" if s["lines"] else "")
+            + (f'<img src="/media/{e(s["image"])}" alt="">' if s["image"] else "")
+            + ("</div>" if s["image"] else "")
+            + f'<aside class="notes" hidden>{e(s["notes"])}</aside>'
+            "</section>" for i, s in enumerate(slides)) + "</div>" + (
+            '<div class="bar"><button id="prev" aria-label="previous">&larr;</button>'
+            '<span id="pos"></span><button id="next" aria-label="next">&rarr;</button>'
+            '<button id="full" title="full screen (F)">Full</button>'
+            '<button id="notes" title="speaker notes (N)">Notes</button></div>'
+            if slides else '<p class="k">No slides yet.</p>')
+    elif m and m["kind"] == "video":
+        body = f'<video controls playsinline preload="metadata" src="/media/{e(m["path"])}"></video>'
+    elif m and m["kind"] == "audio":
+        body = f'<audio controls src="/media/{e(m["path"])}"></audio>'
+    elif m and m["kind"] == "image":
+        body = f'<img class="one" src="/media/{e(m["path"])}" alt="">'
+    elif m and m["kind"] == "document":
+        if (m["path"] or "").endswith(".pdf"):
+            body = f'<iframe class="doc" src="/media/{e(m["path"])}" title="{e(r["title"])}"></iframe>'
+        else:
+            body = (f'<p><a class="btn" href="/media/{e(m["path"])}" target="_blank" rel="noopener">'
+                    f'Open {e(m["original"] or "the file")}</a></p>')
+    else:
+        body = '<p class="k">Nothing to show yet — check back shortly.</p>'
+    return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{e(r['title'])} — {e(shop)}</title>
+<style>:root{{color-scheme:light}}
+html,body{{margin:0;height:100%}}
+body{{font:17px/1.5 system-ui,sans-serif;color:#16202b;background:#fff;display:flex;flex-direction:column;min-height:100%}}
+header{{padding:.8rem 1.2rem;display:flex;gap:.8rem;align-items:baseline;flex-wrap:wrap}}
+h1{{font-size:1.1rem;margin:0}} .k{{color:#5b6b7c;font-size:.9rem}}
+main{{flex:1;display:flex;flex-direction:column;padding:0 1.2rem 1rem;min-height:0}}
+#deck{{flex:1;display:flex;min-height:0}}
+.slide{{flex:1;display:flex;flex-direction:column;justify-content:center;padding:3vh 4vw;
+  border:1px solid #e5e7eb;border-radius:1rem;background:#fff;min-height:52vh;box-sizing:border-box}}
+.slide[hidden]{{display:none}}
+.slide h2{{font-size:clamp(1.4rem,3.6vw,2.6rem);margin:0 0 .6em}}
+.slide ul{{font-size:clamp(1rem,2.2vw,1.5rem);margin:0;padding-left:1.2em}} .slide li.gap{{list-style:none;height:.6em}}
+.slide .row{{display:flex;gap:2rem;align-items:flex-start;flex-wrap:wrap}} .slide .row ul{{flex:1;min-width:14rem}}
+.slide img{{max-width:min(45%,520px);max-height:50vh;border-radius:.6rem;object-fit:contain}}
+.notes{{margin-top:1.2em;padding:.8em 1em;background:#fffbe6;border:1px solid #f5d76e;border-radius:.6rem;white-space:pre-wrap;font-size:.95rem}}
+.bar{{display:flex;gap:.5rem;align-items:center;justify-content:center;padding:.7rem 0}}
+.bar button{{font:inherit;padding:.5rem .9rem;border-radius:.5rem;border:1px solid #cbd2dc;background:#fff;cursor:pointer}}
+video,img.one{{width:100%;border-radius:.6rem;background:#000;margin:1rem 0}} audio{{width:100%;margin:1rem 0}}
+.doc{{flex:1;width:100%;min-height:70vh;border:0;border-radius:.6rem;background:#fff}}
+.btn{{display:inline-block;padding:.6rem 1rem;border-radius:.5rem;background:#4634d9;color:#fff;text-decoration:none}}
+.blurb{{white-space:pre-wrap;margin:.4rem 0 0}}
+:fullscreen body,body:fullscreen{{background:#000;color:#fff}}
+</style>
+<header><h1>{e(r['title'])}</h1><span class=k>{e(shop)} · {len(slides)} slide{'s' if len(slides) != 1 else ''}</span><span class=k id=seen></span></header>
+<main>{body}{('<p class=blurb>' + e(r['blurb']) + '</p>') if r['blurb'] else ''}</main>
+<script>
+(function(){{
+  var deck=document.getElementById("deck");
+  if(deck){{
+    var slides=[].slice.call(deck.querySelectorAll(".slide")),i=0,showNotes=/[?&]notes=1/.test(location.search);
+    var pos=document.getElementById("pos");
+    function go(n){{ i=Math.max(0,Math.min(slides.length-1,n)); slides.forEach(function(s,k){{ s.hidden=k!==i; }});
+      pos.textContent=(i+1)+" / "+slides.length; try{{ history.replaceState(null,"","#"+(i+1)); }}catch(e){{}} notes(); }}
+    function notes(){{ slides.forEach(function(s){{ var a=s.querySelector(".notes"); if(a) a.hidden=!showNotes||!a.textContent; }}); }}
+    document.getElementById("prev").onclick=function(){{ go(i-1); }};
+    document.getElementById("next").onclick=function(){{ go(i+1); }};
+    document.getElementById("full").onclick=function(){{ (document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen()); }};
+    document.getElementById("notes").onclick=function(){{ showNotes=!showNotes; notes(); }};
+    document.addEventListener("keydown",function(ev){{
+      if(ev.key==="ArrowRight"||ev.key===" "||ev.key==="PageDown") {{ ev.preventDefault(); go(i+1); }}
+      else if(ev.key==="ArrowLeft"||ev.key==="PageUp") {{ ev.preventDefault(); go(i-1); }}
+      else if(ev.key==="Home") go(0); else if(ev.key==="End") go(slides.length-1);
+      else if(ev.key==="f"||ev.key==="F") document.getElementById("full").click();
+      else if(ev.key==="n"||ev.key==="N") document.getElementById("notes").click();
+    }});
+    var x0=null; deck.addEventListener("touchstart",function(ev){{ x0=ev.touches[0].clientX; }},{{passive:true}});
+    deck.addEventListener("touchend",function(ev){{ if(x0===null) return; var dx=ev.changedTouches[0].clientX-x0; x0=null; if(Math.abs(dx)>40) go(dx<0?i+1:i-1); }});
+    deck.addEventListener("click",function(ev){{ if(ev.target.closest("a,button")) return; go(ev.clientX>innerWidth/2?i+1:i-1); }});
+    var h=parseInt((location.hash||"").slice(1),10); go(isNaN(h)?0:h-1);
+  }}
+  var tok=null; try{{tok=JSON.parse(localStorage.getItem("sf_support")||"{{}}").token;}}catch(e){{}}
+  var vid=localStorage.getItem("sf_vid"); if(!vid){{vid=crypto.randomUUID(); localStorage.setItem("sf_vid",vid);}}
+  fetch("/api/learn/present/{e(token)}/seen",{{method:"POST",headers:Object.assign({{"Content-Type":"application/json"}},
+    tok?{{Authorization:"Bearer "+tok}}:{{}}),body:JSON.stringify({{visitor_id:vid}})}})
+    .then(function(r){{return r.json();}}).then(function(j){{ var s=document.getElementById("seen"); if(s&&j.as) s.textContent="· seen as "+j.as; }}).catch(function(){{}});
+}})();
+</script>""")
+
+
+class PresentSeenBody(BaseModel):
+    visitor_id: str = ""
+
+
+@router.post("/api/learn/present/{token}/seen")
+def present_seen(token: str, body: PresentSeenBody, request: Request,
+                 con=Depends(get_con)):
+    _require_cap("learning")
+    from erp.backend import auth, presentations as PR
+    tok = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    u = auth.user_for_token(con, tok) if tok else None
+    who = f"user:{u['id']}" if u else f"visitor:{(body.visitor_id or 'anon')[:64]}"
+    return PR.mark_seen(con, token, who, u["name"] if u else "")
+
+
 class SeenBody(BaseModel):
     visitor_id: str = ""
 

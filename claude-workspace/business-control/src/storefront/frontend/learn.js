@@ -1748,7 +1748,7 @@
     if (st.kind === "audio") return `<div class="lrn-stage-doc"><b>${t}</b>
         <audio controls autoplay src="${esc(u)}"></audio></div>`;
     if (st.kind === "image") return `<img src="${esc(u)}" alt="${t}">`;
-    if (/\.(pdf|txt|md)$/.test(u.toLowerCase())) return `<iframe src="${esc(u)}#toolbar=0" title="${t}"></iframe>`;
+    if (/\.(pdf|txt|md)$/.test(u.toLowerCase()) || u.startsWith("/present/")) return `<iframe src="${esc(u)}${u.startsWith("/present/") ? "" : "#toolbar=0"}" title="${t}"></iframe>`;
     return `<div class="lrn-stage-doc"><b>${t}</b>
       <p class="lrn-meta">A browser cannot draw this file inside the call. Open it,
         then share that screen so the class sees the slides.</p>

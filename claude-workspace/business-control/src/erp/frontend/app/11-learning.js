@@ -1114,8 +1114,9 @@ function stageHtml(st) {
       <audio controls autoplay src="${esc(u)}"></audio></div>`;
   }
   if (st.kind === "image") return `<img src="${esc(u)}" alt="${t}">`;
-  if (/\.(pdf|txt|md)$/.test(low)) {
-    return `<iframe src="${esc(u)}#toolbar=0" title="${t}"></iframe>`;
+  if (/\.(pdf|txt|md)$/.test(low) || low.startsWith("/present/")) {
+    // a deck presented from its own page, or a document the browser draws
+    return `<iframe src="${esc(u)}${low.startsWith("/present/") ? "" : "#toolbar=0"}" title="${t}"></iframe>`;
   }
   return `<div class="ops-stage-doc"><b>${t}</b>
     <p class="dim">A browser cannot draw this file inside the call. Open

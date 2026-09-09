@@ -76,6 +76,8 @@ def _init_core(tid=None):
         chat.init_tables(con)
         from . import expenses as _exp
         _exp.init_tables(con)
+        from . import presentations as _prs
+        _prs.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -6698,6 +6700,8 @@ from . import students  # noqa: E402  (safe: included late)
 app.include_router(students.router)
 from . import expenses  # noqa: E402  (safe: included late)
 app.include_router(expenses.router)
+from . import presentations  # noqa: E402  (safe: included late)
+app.include_router(presentations.router)
 
 
 @app.exception_handler(404)

@@ -766,7 +766,7 @@ def stage_of(v) -> dict | None:
     if not isinstance(v, dict):
         return None
     url = str(v.get("url") or "")[:300]
-    if not url.startswith("/media/"):
+    if not (url.startswith("/media/") or url.startswith("/present/")):
         return None
     kind = str(v.get("kind") or "document")
     if kind not in STAGE_KINDS:
