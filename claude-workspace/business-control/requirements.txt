@@ -8,3 +8,6 @@ python-liquid>=2.0
 Pillow>=10.0
 python-multipart>=0.0.9
 fpdf2>=2.8
+# Rows in Postgres (optional: only when the install's store is postgres, or
+# BC_STORE=postgres). The SQLite face stays the default and needs nothing.
+psycopg[binary]>=3.2

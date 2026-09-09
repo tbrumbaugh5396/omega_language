@@ -1,6 +1,7 @@
 """Business Control — FastAPI backend. Serves the API and the PWA frontend."""
 import csv
 import time
+import asyncio
 import html as _html
 import secrets as _secrets
 import io
@@ -72,6 +73,7 @@ def _init_core(tid=None):
         _vis.init_tables(con)
         from . import students as _stu
         _stu.init_tables(con)
+        chat.init_tables(con)
         from . import expenses as _exp
         _exp.init_tables(con)
         con.commit()
@@ -2790,7 +2792,7 @@ def all_affiliates(user=Depends(admin_user), con=Depends(get_con)):
         "SELECT a.*, u.name, COALESCE(SUM(r.commission_cents),0) earned,"
         " COUNT(r.id) ref_orders FROM affiliates a JOIN users u ON u.id=a.user_id"
         " LEFT JOIN referrals r ON r.affiliate_id=a.id"
-        " GROUP BY a.id ORDER BY earned DESC").fetchall()
+        " GROUP BY a.id, u.name ORDER BY earned DESC").fetchall()
     return [dict(r) for r in rows]
 
 
@@ -4164,8 +4166,14 @@ def db_backup(user=Depends(admin_user), con=Depends(get_con)):
     if not user["is_admin"]:
         raise HTTPException(403, "owners only")
     blob = dbview.backup_bytes(con)
+    kind = dbview.backup_kind(con)
     audit.record(con, user, "GET", "/api/admin/db/backup.db",
-                 f"downloaded a full backup ({len(blob) // 1024} KB)", 200)
+                 f"downloaded a full backup ({len(blob) // 1024} KB, {kind})", 200)
+    if kind == "postgres":
+        return Response(
+            blob, media_type="application/sql",
+            headers={"Content-Disposition":
+                     'attachment; filename="business-control-backup.sql"'})
     return Response(
         blob, media_type="application/vnd.sqlite3",
         headers={"Content-Disposition":
@@ -4843,6 +4851,8 @@ async def ws_endpoint(websocket: WebSocket, token: str = ""):
         return
     await websocket.accept()
     chat.register(user["id"], websocket)
+    # what other nodes leave for this person, and this node's heartbeat
+    _pump = asyncio.create_task(chat.pump(user["id"], websocket))
     try:
         while True:
             try:
@@ -4876,6 +4886,7 @@ async def ws_endpoint(websocket: WebSocket, token: str = ""):
     except WebSocketDisconnect:
         pass
     finally:
+        _pump.cancel()
         chat.unregister(user["id"], websocket)
         con.close()
         tenancy.CURRENT.reset(_wtok)
@@ -6942,7 +6953,7 @@ async def node_import(tid: str, request: Request):
         fleet.unpack_tenant(tid, blob)
     except (ValueError, Exception) as e:
         raise HTTPException(400, f"shipment refused: {str(e)[:200]}")
-    if not (tenancy.tenant_dir(tid) / "business_control.db").exists():
+    if not fleet.shipment_landed(tid):
         raise HTTPException(400, "shipment carried no database")
     if init_tenant:
         init_tenant(tid)          # idempotent — migrations run on arrival

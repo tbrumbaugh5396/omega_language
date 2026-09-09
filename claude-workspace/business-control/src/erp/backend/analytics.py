@@ -296,7 +296,7 @@ def engagement(con, cfg: dict, days: int = 28) -> dict:
     now = time.time()
     since = now - days * DAY
     rows = con.execute(
-        "SELECT CAST((created_at - ?) / ? AS INTEGER) day, step, COUNT(*) c"
+        "SELECT CAST((created_at - ?) / ? AS INTEGER) AS day, step, COUNT(*) c"
         " FROM events WHERE created_at>=? GROUP BY day, step",
         (since, DAY, since)).fetchall()
     daily = [{"day": i, "total": 0} for i in range(days)]

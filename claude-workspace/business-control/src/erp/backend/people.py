@@ -255,7 +255,7 @@ def customers_list(q: str = "", user=Depends(current_user),
         " WHERE u.role='customer' AND u.erased_at IS NULL"
         "  AND (? = '%%' OR u.name LIKE ? OR u.email LIKE ?)"
         " GROUP BY u.id"
-        " ORDER BY last_order_at IS NULL, last_order_at DESC, u.name"
+        " ORDER BY MAX(o.created_at) IS NULL, MAX(o.created_at) DESC, u.name"
         " LIMIT 500", (like, like, like)).fetchall()
     out = [dict(r) for r in rows]
     if out:

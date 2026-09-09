@@ -187,12 +187,8 @@ def save(data: bytes, *, allow=("image", "audio", "video"),
                             f"too large — the cap is {cap // (1024*1024)} MB")
     token = secrets.token_hex(16)
     rel = f"{token[:2]}/{token}{ext}"
-    dest = os.path.join(uploads_root(), token[:2], token + ext)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    tmp = dest + ".part"
-    with open(tmp, "wb") as f:              # write-then-rename: no half file
-        f.write(data)
-    os.replace(tmp, dest)
+    from . import blobs
+    blobs.put(rel, data, mime)
     return {"path": rel, "mime": mime, "kind": kind, "bytes": len(data)}
 
 
@@ -209,16 +205,11 @@ def record(con, *, saved: dict, owner_id: int, lesson_id=None,
 
 
 def unlink(rel_path: str) -> bool:
-    """Delete a stored file — refusing anything that escapes the root."""
-    root = os.path.abspath(uploads_root())
-    target = os.path.abspath(os.path.join(root, str(rel_path or "")))
-    if not target.startswith(root + os.sep):
+    """Delete a stored file — wherever the store keeps it."""
+    from . import blobs
+    if not rel_path:
         return False
-    try:
-        os.unlink(target)
-        return True
-    except OSError:
-        return False
+    return blobs.delete(str(rel_path))
 
 
 def delete_material(con, mid: int) -> None:

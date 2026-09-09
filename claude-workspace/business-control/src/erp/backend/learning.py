@@ -256,9 +256,8 @@ def teachers_of(con, course_id: int) -> list:
     for r in con.execute(
             "SELECT u.id, u.name, u.photo, t.since FROM course_teachers t"
             " JOIN users u ON u.id=t.user_id WHERE t.course_id=?"
-            " AND (? IS NULL OR u.id != ?) ORDER BY t.since",
-            (course_id, lead["id"] if lead else None,
-             lead["id"] if lead else None)):
+            " AND u.id != ? ORDER BY t.since",
+            (course_id, lead["id"] if lead else -1)):
         out.append({"id": r["id"], "name": r["name"],
                     "photo": r["photo"] or "", "lead": False,
                     "since": r["since"]})

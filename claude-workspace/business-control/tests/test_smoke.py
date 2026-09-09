@@ -39,7 +39,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", choices=PARTS,
                     help="run one part in this terminal, live")
+    ap.add_argument("--store", choices=("sqlite", "postgres"), default=None,
+                    help="where the rows live for this run; postgres starts "
+                         "an embedded server per part (pgserver)")
     args = ap.parse_args()
+    if args.store:
+        os.environ["BC_STORE"] = args.store
 
     if args.only:
         # Live and unbuffered — the debugging mode.

@@ -30,10 +30,11 @@ def push(con, title: str, body: str = "", kind: str = "info",
 
 def for_user(con, user) -> tuple[list[dict], int]:
     rows = con.execute(
-        "SELECT n.*, (r.user_id IS NOT NULL) is_read FROM notifications n"
+        "SELECT n.*, CAST(r.user_id IS NOT NULL AS INTEGER) AS is_read"
+        " FROM notifications n"
         " LEFT JOIN notification_reads r ON r.notification_id=n.id"
         "  AND r.user_id=?"
-        " WHERE n.user_id=? OR (n.user_id IS NULL AND ?)"
+        " WHERE n.user_id=? OR (n.user_id IS NULL AND ? = 1)"
         " ORDER BY n.id DESC LIMIT 60",
         (user["id"], user["id"], 1 if user["is_admin"] else 0)).fetchall()
     items = [dict(r) for r in rows]
@@ -45,7 +46,7 @@ def mark_all_read(con, user) -> None:
     con.execute(
         "INSERT OR IGNORE INTO notification_reads(notification_id, user_id)"
         " SELECT id, ? FROM notifications"
-        " WHERE user_id=? OR (user_id IS NULL AND ?)",
+        " WHERE user_id=? OR (user_id IS NULL AND ? = 1)",
         (user["id"], user["id"], 1 if user["is_admin"] else 0))
     con.commit()
 

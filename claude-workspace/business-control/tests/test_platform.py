@@ -30,53 +30,88 @@ import subprocess as _spm
 from erp.backend import tenancy as _tn
 from erp.backend import chat as _chat
 
+
+def _tenant_con(tid):
+    """A connection to one tenant's rows, wherever they live — the file
+    beside its uploads, or its database on the server. The tests poke
+    fixtures in through this rather than opening the file, so the same
+    poke works under Postgres."""
+    from erp.backend import db as _dbm
+    _tk = _tn.CURRENT.set(tid)
+    try:
+        return _dbm.connect()
+    finally:
+        _tn.CURRENT.reset(_tk)
+
 # --- the split script, against a copy of this very suite's data -----------
-_split_dir = Path(tempfile.mkdtemp(prefix="bc_split_"))
-for _f in ("business_control.db", "config.json"):
-    _srcf = Path(os.environ["BUSINESS_CONTROL_DATA"]) / _f
-    if _srcf.exists():
-        _shm.copy2(_srcf, _split_dir / _f)
-_sp = _spm.run([sys.executable, str(ROOT / "scripts" / "split_tenants.py")],
-               capture_output=True, text=True,
-               env={**os.environ, "BUSINESS_CONTROL_DATA": str(_split_dir)})
-ok(_sp.returncode == 0, f"the split runs clean ({_sp.stderr[-300:]})")
-_zdb = sqlite3.connect(_split_dir / "tenants" / "zenjoy"
-                       / "business_control.db")
-_sdb = sqlite3.connect(_split_dir / "tenants" / "studio"
-                       / "business_control.db")
-ok(_zdb.execute("SELECT COUNT(*) FROM products").fetchone()[0] > 0
-   and _zdb.execute("SELECT COUNT(*) FROM engagements").fetchone()[0] == 0,
-   "zenjoy keeps the shop and loses the pipeline — a client's install must "
-   "not contain the studio's quotes about that client")
-ok(_sdb.execute("SELECT COUNT(*) FROM users WHERE is_admin=1")
-   .fetchone()[0] > 0,
-   "the studio inherits the operators, tokens intact")
 import json as _jn
-_zth = _jn.loads(_zdb.execute(
-    "SELECT v FROM store_meta WHERE k='theme'").fetchone()[0])
-ok(_zth["brand"] == "zenjoy" and "L-theanine" in " ".join(_zth["announce"]),
-   "and zenjoy's theme is written into its own store_meta, so neutralising "
-   "the code default changed nothing its storefront can see")
-_reg = _jn.loads((_split_dir / "tenants.json").read_text())
-ok(_reg["default"] == "studio"
-   and (_split_dir / "business_control.pre-split.db").exists(),
-   "bare localhost is the studio cockpit, and the un-split database stays "
-   "behind as the escape hatch")
-ok(_spm.run([sys.executable, str(ROOT / "scripts" / "split_tenants.py")],
-            capture_output=True, text=True,
-            env={**os.environ,
-                 "BUSINESS_CONTROL_DATA": str(_split_dir)}).returncode == 1,
-   "and it refuses to run twice")
-_zdb.close(); _sdb.close()
+_split_dir = Path(tempfile.mkdtemp(prefix="bc_split_"))
+if os.environ.get("BC_STORE") == "postgres":
+    # The split is a SQLite-file tool: it pulls a legacy single-file
+    # install apart into per-tenant files. Rows in Postgres have no
+    # file to pull apart, so there is nothing for it to prove here.
+    ok(True, "the split is a SQLite-file tool — nothing to split when rows"
+       " live in Postgres")
+else:
+    for _f in ("business_control.db", "config.json"):
+        _srcf = Path(os.environ["BUSINESS_CONTROL_DATA"]) / _f
+        if _srcf.exists():
+            _shm.copy2(_srcf, _split_dir / _f)
+    _sp = _spm.run([sys.executable, str(ROOT / "scripts" / "split_tenants.py")],
+                   capture_output=True, text=True,
+                   env={**os.environ, "BUSINESS_CONTROL_DATA": str(_split_dir)})
+    ok(_sp.returncode == 0, f"the split runs clean ({_sp.stderr[-300:]})")
+    _zdb = sqlite3.connect(_split_dir / "tenants" / "zenjoy"
+                           / "business_control.db")
+    _sdb = sqlite3.connect(_split_dir / "tenants" / "studio"
+                           / "business_control.db")
+    ok(_zdb.execute("SELECT COUNT(*) FROM products").fetchone()[0] > 0
+       and _zdb.execute("SELECT COUNT(*) FROM engagements").fetchone()[0] == 0,
+       "zenjoy keeps the shop and loses the pipeline — a client's install must "
+       "not contain the studio's quotes about that client")
+    ok(_sdb.execute("SELECT COUNT(*) FROM users WHERE is_admin=1")
+       .fetchone()[0] > 0,
+       "the studio inherits the operators, tokens intact")
+    import json as _jn
+    _zth = _jn.loads(_zdb.execute(
+        "SELECT v FROM store_meta WHERE k='theme'").fetchone()[0])
+    ok(_zth["brand"] == "zenjoy" and "L-theanine" in " ".join(_zth["announce"]),
+       "and zenjoy's theme is written into its own store_meta, so neutralising "
+       "the code default changed nothing its storefront can see")
+    _reg = _jn.loads((_split_dir / "tenants.json").read_text())
+    ok(_reg["default"] == "studio"
+       and (_split_dir / "business_control.pre-split.db").exists(),
+       "bare localhost is the studio cockpit, and the un-split database stays "
+       "behind as the escape hatch")
+    ok(_spm.run([sys.executable, str(ROOT / "scripts" / "split_tenants.py")],
+                capture_output=True, text=True,
+                env={**os.environ,
+                     "BUSINESS_CONTROL_DATA": str(_split_dir)}).returncode == 1,
+       "and it refuses to run twice")
+    _zdb.close(); _sdb.close()
 
 # --- the router itself, live in this process ------------------------------
 _tn.create("alpha", hosts=["alpha.test"], default=True)
 _tn.create("beta", hosts=["beta.test"])
 HA = {"host": "alpha.test"}
 HB = {"host": "beta.test"}
-ok((Path(os.environ["BUSINESS_CONTROL_DATA"]) / "tenants" / "alpha"
-    / "business_control.db").exists(),
-   "a tenant minted at runtime has schema immediately")
+def _has_schema(tid):
+    """The tenant answers a query on its own store — a file on disk, or a
+    database on the server — the moment it is minted."""
+    if os.environ.get("BC_STORE") == "postgres":
+        from erp.backend import db as _dbm
+        _tk = _tn.CURRENT.set(tid)
+        try:
+            _cn = _dbm.connect()
+            try:
+                return _cn.execute("SELECT COUNT(*) FROM users").fetchone()[0] >= 0
+            finally:
+                _cn.close()
+        finally:
+            _tn.CURRENT.reset(_tk)
+    return (Path(os.environ["BUSINESS_CONTROL_DATA"]) / "tenants" / tid
+            / "business_control.db").exists()
+ok(_has_schema("alpha"), "a tenant minted at runtime has schema immediately")
 
 _acfg = _jn.loads((_tn.tenant_dir("alpha") / "config.json").read_text())
 _bcfg = _jn.loads((_tn.tenant_dir("beta") / "config.json").read_text())
@@ -502,7 +537,7 @@ def _days_on(ts, n):
 
 _wk = _wks(_now) - 7 * 86400
 import sqlite3 as _sq3
-_hcon = _sq3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_hcon = _tenant_con("alpha")
 for _d in range(5):                                 # Mon-Fri, 45 hours
     _st = _wk + _d * 86400 + 9 * 3600
     _hcon.execute("INSERT INTO shifts(user_id, clock_in, clock_out)"
@@ -1718,7 +1753,7 @@ ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
           json={"id": "gamma", "brand": "Gamma", "node": "node-a",
                 "klass": "growing"}).json()["node"] == "node-a",
    "a client is stood up onto the node you chose")
-ok((_tn.tenant_dir("gamma") / "business_control.db").exists()
+ok(_has_schema("gamma")
    and c.get("/api/products",
              headers={"host": "gamma.localhost"}).status_code == 200,
    "with its own database, answering on its own hostname, immediately")
@@ -1739,7 +1774,7 @@ ok(_hup["hosting_doc"],
    "hosting & infrastructure schedule into it — the authority to run "
    "their business on our platform is a page in their binder, not an "
    "understanding")
-_hcon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_hcon = _tenant_con("alpha")
 _hcon.row_factory = sqlite3.Row
 _hbody = _hcon.execute("SELECT body FROM documents WHERE id=?",
                        (_hup["hosting_doc"],)).fetchone()["body"]
@@ -1794,7 +1829,7 @@ _sus = c.get("/api/products", headers={"host": "gamma.localhost"})
 ok(_sus.status_code == 503 and "suspended" in _sus.json()["detail"],
    "a suspended tenant answers 503, not 404 — the site exists and is "
    "paused, and telling a paused customer 'no such site' is a lie")
-ok((_tn.tenant_dir("gamma") / "business_control.db").exists(),
+ok(_has_schema("gamma"),
    "and not one byte of theirs was touched")
 c.post("/api/store/admin/fleet/tenants/gamma/status", headers=AA,
        json={"status": "active"})
@@ -2004,7 +2039,7 @@ _sup = c.post("/api/store/admin/fleet/tenants", headers=AA,
                     "klass": "micro", "engagement_id": _seid}).json()
 ok(_sup["layout"] == "courses",
    "standing up from a quote applies the starter layout, and says so")
-_scon = sqlite3.connect(_tn.tenant_dir("schoolco") / "business_control.db")
+_scon = _tenant_con("schoolco")
 _stypes = [r[0] for r in _scon.execute(
     "SELECT type FROM page_sections WHERE page_slug='home'"
     " ORDER BY position")]
@@ -2093,7 +2128,7 @@ ok(c.post("/api/store/admin/fleet/tenants", headers=AA,
    "with no quote there is no shape to derive — so the stand-up applies "
    "the PLACEHOLDER, never the factory default that used to put another "
    "business's film on a fresh install's front door")
-_nqcon = sqlite3.connect(_tn.tenant_dir("noquote") / "business_control.db")
+_nqcon = _tenant_con("noquote")
 _nqtypes = [r[0] for r in _nqcon.execute(
     "SELECT type FROM page_sections WHERE page_slug='home'"
     " ORDER BY position")]
@@ -2302,7 +2337,7 @@ ok(c.post("/api/store/admin/designs", headers=AA,
    "and the same name updates it — the library entry is the studio's to "
    "revise")
 
-_bcon0 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bcon0 = _tenant_con("beta")
 _bb_before = _bcon0.execute(
     "SELECT COUNT(*) FROM page_sections WHERE page_slug='home'"
     ).fetchone()[0]
@@ -2313,7 +2348,7 @@ ok("beta" in _push["placed"]
    and _push["skipped"].get("nobody-here") == "no such tenant",
    "a push places onto real tenants and says plainly who was skipped and "
    "why")
-_bcon = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bcon = _tenant_con("beta")
 _bcon.row_factory = sqlite3.Row
 _brow = _bcon.execute("SELECT * FROM page_sections WHERE design_id=?",
                       (_did2,)).fetchone()
@@ -2332,7 +2367,7 @@ _bcon.execute("UPDATE page_sections SET settings=json_set(settings,"
 _bcon.commit()
 c.post(f"/api/store/admin/designs/{_did2}/push", headers=AA,
        json={"tenants": ["beta"]})
-_bcon2 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bcon2 = _tenant_con("beta")
 _bcon2.row_factory = sqlite3.Row
 _beta_rows = [dict(r) for r in _bcon2.execute(
     "SELECT * FROM page_sections WHERE design_id=?", (_did2,))]
@@ -2351,7 +2386,7 @@ ok(_dme["placements"].get("beta", {}).get("n") == 1,
    "the library says where each design lives, counted across the fleet — "
    "reach is visible before anyone pushes again")
 c.request("DELETE", f"/api/store/admin/designs/{_did2}", headers=AA)
-_bcon3 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bcon3 = _tenant_con("beta")
 ok(_bcon3.execute("SELECT COUNT(*) FROM page_sections WHERE design_id=?",
                   (_did2,)).fetchone()[0] == 1,
    "deleting a design from the library leaves its placements standing — "
@@ -2384,7 +2419,7 @@ c.post(f"/api/store/admin/designs/{_dl2}/push", headers=AA,
        json={"tenants": ["beta"], "linked": True})
 c.post(f"/api/store/admin/designs/{_dl2}/push", headers=AA,
        json={"tenants": ["beta"], "linked": False})
-_bc = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc = _tenant_con("beta")
 _bc.row_factory = sqlite3.Row
 _linked, _plain = [dict(r) for r in _bc.execute(
     "SELECT * FROM page_sections WHERE design_id=? ORDER BY id",
@@ -2399,7 +2434,7 @@ _sv = c.post("/api/store/admin/designs", headers=AA,
                                 "height": "short"}}).json()
 ok(_sv["refreshed"].get("beta") == 1,
    "saving over the design refreshes the linked placement and reports it")
-_bc2 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc2 = _tenant_con("beta")
 _bc2.row_factory = sqlite3.Row
 _now = {r["id"]: r["settings"] for r in _bc2.execute(
     "SELECT id, settings FROM page_sections WHERE design_id=?", (_dl2,))}
@@ -2412,7 +2447,7 @@ c.post(f"/api/store/admin/sections/{_linked['id']}",
        headers={**BB},
        json={"settings": {"heading": "Beta's banner now", "text": "v2",
                           "link": "", "media_id": "", "height": "short"}})
-_bc3 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc3 = _tenant_con("beta")
 ok(_bc3.execute("SELECT design_sync FROM page_sections WHERE id=?",
                 (_linked["id"],)).fetchone()[0] == 0,
    "the tenant's first settings edit detaches — enforced at the one "
@@ -2424,7 +2459,7 @@ ok(_bc3.execute("SELECT design_sync FROM page_sections WHERE id=?",
    and c.post(f"/api/store/admin/designs/{_dl2}/push", headers=AA,
               json={"tenants": ["beta"], "linked": True}).json()["placed"],
    "sanity: pushes still place")
-_bc4 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc4 = _tenant_con("beta")
 _third = _bc4.execute(
     "SELECT id FROM page_sections WHERE design_id=? AND design_sync=1",
     (_dl2,)).fetchone()[0]
@@ -2439,7 +2474,7 @@ c.post("/api/store/admin/designs", headers=AA,
        json={"name": "Care banner", "type": "image_banner",
              "settings": {"heading": "We keep it running", "text": "v3",
                           "link": "", "media_id": "", "height": "short"}})
-_bc5 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc5 = _tenant_con("beta")
 ok('"v2"' in _bc5.execute(
        "SELECT settings FROM page_sections WHERE id=?",
        (_linked["id"],)).fetchone()[0],
@@ -2453,7 +2488,7 @@ ok(_pl["n"] == 3 and _pl["linked"] == 1,
    "the board tells the two apart — how many placements, how many still "
    "follow")
 c.request("DELETE", f"/api/store/admin/designs/{_dl2}", headers=AA)
-_bc6 = sqlite3.connect(_tn.tenant_dir("beta") / "business_control.db")
+_bc6 = _tenant_con("beta")
 ok(_bc6.execute("SELECT SUM(design_sync) FROM page_sections WHERE"
                 " design_id=?", (_dl2,)).fetchone()[0] == 0
    and _bc6.execute("SELECT COUNT(*) FROM page_sections WHERE"
@@ -2528,7 +2563,7 @@ ok(c.post("/api/capability-request",
                    "Authorization": f"Bearer {_ptok}"},
           json={"capability": "distribution"}).json()["ok"],
    "a client admin can ask for a capability from their own ops app")
-_acon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon = _tenant_con("alpha")
 _acon.row_factory = sqlite3.Row
 _lead = _acon.execute(
     "SELECT * FROM outreach WHERE name LIKE '%distribution%'"
@@ -2551,7 +2586,7 @@ _buyer = c.post("/api/login", headers=HA,
 _pcat2 = {p["name"]: p for p in
           c.get("/api/store/catalog", headers=HA).json()["products"]}
 if "Pro plan" not in _pcat2:
-    c2 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+    c2 = _tenant_con("alpha")
     c2.execute("INSERT INTO products(sku,name,description,category,"
                "price_cents,case_size,case_price_cents,active)"
                " VALUES('PLAN-PRO2','Pro plan','x','Plans',34900,1,34900,1)")
@@ -2564,7 +2599,7 @@ if "Pro plan" not in _pcat2:
 c.post("/api/store/plans/subscribe",
        headers={"Authorization": f"Bearer {_buyer['token']}", **HA},
        json={"product_id": _pcat2["Pro plan"]["id"]})
-_acon2 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon2 = _tenant_con("alpha")
 ok(_acon2.execute("SELECT 1 FROM outreach WHERE name LIKE"
                   " '%Self Serve%'").fetchone() is not None,
    "a self-serve plan purchase opens a lead on the sales board — a buyer "
@@ -2586,7 +2621,7 @@ ok(c.post(f"/api/store/admin/plans/{_dsub['id']}/tenant", headers=AA,
    "and not to a tenant the fleet doesn't have")
 from erp.backend import payments as _pay2
 from storefront.backend import fleetadmin as _eng2
-_acon3 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon3 = _tenant_con("alpha")
 _acon3.execute("UPDATE store_subscriptions SET payment_ref='sub_dun_1'"
                " WHERE id=?", (_dsub["id"],))
 _acon3.commit(); _acon3.close()
@@ -2977,8 +3012,12 @@ try:
        "standing up onto an addr'd node SHIPS the tenant there")
     ok(not (_tn.tenant_dir("remoteco")).exists(),
        "the provider's copy is gone — data lives in one place")
-    ok((_wdata / "tenants" / "remoteco" / "business_control.db").exists(),
-       "and that place is the worker's own data directory")
+    _PGMODE = os.environ.get("BC_STORE") == "postgres"
+    ok((_wdata / "tenants" / "remoteco" / ("config.json" if _PGMODE
+                                            else "business_control.db")).exists(),
+       "and that place is the worker's own data directory"
+       + (" — its config and uploads; the rows were never on this disk, "
+          "they are in Postgres for both" if _PGMODE else ""))
 
     _direct = _ur.Request(f"http://127.0.0.1:{_wport}/",
                           headers={"Host": "remoteco.localhost"})
@@ -3018,15 +3057,23 @@ try:
     import tarfile as _tf4
     with _tf4.open(_barch) as _bt:
         _bnames = _bt.getnames()
-        ok("tenants/remoteco/business_control.db" in _bnames,
+        ok(("tenants/remoteco/business_control.sql" if _PGMODE
+            else "tenants/remoteco/business_control.db") in _bnames,
            "the archive contains the REMOTE tenant, pulled from its node — "
            "the backup goes to the data, because the data no longer comes "
            "to the backup")
-        _bdb = _bt.extractfile("tenants/remoteco/business_control.db").read()
-    _btmp = Path(tempfile.mktemp()); _btmp.write_bytes(_bdb)
-    ok(sqlite3.connect(_btmp).execute("PRAGMA integrity_check")
-       .fetchone()[0] == "ok",
-       "and the pulled database is a clean snapshot, not a torn live file")
+        _bdb = _bt.extractfile("tenants/remoteco/business_control.sql" if _PGMODE
+                               else "tenants/remoteco/business_control.db").read()
+    if _PGMODE:
+        ok(b"PostgreSQL database dump" in _bdb[:300] and b"CREATE TABLE" in _bdb
+           and b"users" in _bdb,
+           "and the pulled rows are a plain pg_dump with the tenant's tables "
+           "in it — what psql restores")
+    else:
+        _btmp = Path(tempfile.mktemp()); _btmp.write_bytes(_bdb)
+        ok(sqlite3.connect(_btmp).execute("PRAGMA integrity_check")
+           .fetchone()[0] == "ok",
+           "and the pulled database is a clean snapshot, not a torn live file")
     _blast = _jn.loads((_bdir / "last.json").read_text())
     ok(_blast["ok"] and not _blast["failures"],
        "last.json records the success the Platform tab will report")
@@ -3045,7 +3092,8 @@ try:
     ok(not _blast2["ok"] and "ghostco" in _blast2["failures"],
        "with the missing tenant named in last.json")
     with _tf4.open(sorted(_bdir.glob("business-control-*.tar.gz"))[-1]) as _bt2:
-        ok("tenants/remoteco/business_control.db" in _bt2.getnames(),
+        ok(("tenants/remoteco/business_control.sql" if _PGMODE
+            else "tenants/remoteco/business_control.db") in _bt2.getnames(),
            "while everyone reachable is still in the archive — partial "
            "beats nothing")
     _reg9 = _jn.loads(_tn.REGISTRY_PATH.read_text())
@@ -3067,7 +3115,8 @@ try:
        "destroy_cmd is a running server we merely know the address of, "
        "and auto-forgetting it loses the address and key while the "
        "machine runs on")
-    ok((_tn.tenant_dir("remoteco") / "business_control.db").exists()
+    ok((_tn.tenant_dir("remoteco") / ("config.json" if _PGMODE
+                                       else "business_control.db")).exists()
        and not (_wdata / "tenants" / "remoteco").exists(),
        "— here again, gone there: the recall is a move, not a copy")
     ok("Remote Co" in c.get("/", headers={"host": "remoteco.localhost"}
@@ -3210,7 +3259,7 @@ c.post(f"/api/store/admin/engagements/{_ge}/quote", headers=AA,
 c.post("/api/store/admin/fleet/tenants", headers=AA,
        json={"id": "growco", "brand": "Grow Co", "klass": "micro",
              "engagement_id": _ge})
-_gcon = sqlite3.connect(_tn.tenant_dir("growco") / "business_control.db")
+_gcon = _tenant_con("growco")
 _gcon.row_factory = sqlite3.Row
 _gcon.execute("UPDATE page_sections SET settings=json_set(settings,"
               "'$.heading','Operator wrote this') WHERE page_slug='home'"
@@ -3249,7 +3298,7 @@ ok(_gr["added"] == ["events", "subs"]
    == ["events", "payments", "selling", "subs"],
    "granting records the new entitlement and names exactly what was "
    "added")
-_gcon2 = sqlite3.connect(_tn.tenant_dir("growco") / "business_control.db")
+_gcon2 = _tenant_con("growco")
 _gcon2.row_factory = sqlite3.Row
 _gsettings = [r["settings"] for r in _gcon2.execute(
     "SELECT settings FROM page_sections WHERE page_slug='home'")]
@@ -3264,7 +3313,7 @@ _before_n = _gcon2.execute("SELECT COUNT(*) FROM page_sections WHERE"
                            " page_slug='home'").fetchone()[0]
 c.post("/api/store/admin/fleet/tenants/growco/caps", headers=AA,
        json={"caps": ["selling", "payments", "subs", "events"]})
-_gcon3 = sqlite3.connect(_tn.tenant_dir("growco") / "business_control.db")
+_gcon3 = _tenant_con("growco")
 ok(_gcon3.execute("SELECT COUNT(*) FROM page_sections WHERE"
                   " page_slug='home'").fetchone()[0] == _before_n,
    "re-saving the same grant grows nothing — presence is checked, so the "
@@ -3330,7 +3379,7 @@ ok(c.get("/api/me", headers={"host": "actasco.localhost",
 ok(any(e["what"] == "acted as tenant admin" for e in
        c.get("/api/store/admin/fleet", headers=AA).json()["events"]),
    "and the act is on the fleet history")
-_acon5 = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon5 = _tenant_con("alpha")
 ok(_acon5.execute("SELECT 1 FROM engagement_log WHERE engagement_id=?"
                   " AND what LIKE '%opened their ops app%'",
                   (_aa2,)).fetchone() is not None,
@@ -3412,7 +3461,7 @@ ok(">Blog</a>" not in _rhome,
 
 # the trim: untouched scaffolding leaves with its capability;
 # an edited section stays
-_rcon = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+_rcon = _tenant_con("revokeco")
 _rcon.row_factory = sqlite3.Row
 _revents = _rcon.execute(
     "SELECT COUNT(*) FROM page_sections WHERE page_slug='home' AND"
@@ -3423,7 +3472,7 @@ _out_r = c.post("/api/store/admin/fleet/tenants/revokeco/caps", headers=AA,
 ok(_out_r["removed"] == ["events"]
    and "Come find us" in _out_r["trimmed"],
    "revoking takes back the UNTOUCHED scaffolding and says so")
-_rcon2 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+_rcon2 = _tenant_con("revokeco")
 ok(_rcon2.execute(
        "SELECT COUNT(*) FROM page_sections WHERE page_slug='home' AND"
        " settings LIKE '%Come find us%'").fetchone()[0] == 0
@@ -3433,7 +3482,7 @@ ok(_rcon2.execute(
 
 c.post("/api/store/admin/fleet/tenants/revokeco/caps", headers=AA,
        json={"caps": ["selling", "payments", "subs", "events"]})
-_rcon3 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+_rcon3 = _tenant_con("revokeco")
 _rcon3.execute("UPDATE page_sections SET settings=json_set(settings,"
                "'$.body','The operator rewrote this') WHERE"
                " page_slug='home' AND settings LIKE '%Come find us%'")
@@ -3441,7 +3490,7 @@ _rcon3.commit()
 _out_r2 = c.post("/api/store/admin/fleet/tenants/revokeco/caps",
                  headers=AA,
                  json={"caps": ["selling", "payments", "subs"]}).json()
-_rcon4 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+_rcon4 = _tenant_con("revokeco")
 _redited = _rcon4.execute(
     "SELECT enabled FROM page_sections WHERE page_slug='home' AND"
     " settings LIKE '%operator rewrote%'").fetchone()
@@ -3454,7 +3503,7 @@ ok("operator rewrote" not in c.get("/", headers=_RH).text,
 _out_r3 = c.post("/api/store/admin/fleet/tenants/revokeco/caps",
                  headers=AA, json={"caps": ["selling", "payments", "subs",
                                             "events"]}).json()
-_rcon5 = sqlite3.connect(_tn.tenant_dir("revokeco") / "business_control.db")
+_rcon5 = _tenant_con("revokeco")
 ok("Come find us" in (_out_r3["grown"].get("restored") or [])
    and _rcon5.execute(
        "SELECT enabled FROM page_sections WHERE page_slug='home' AND"
@@ -3668,7 +3717,7 @@ _fin = c.get(f"/api/learn/attempts/{_aid2}", headers=LN).json()
 ok(_fin["grade"]["is_final"] and _fin["grade"]["percent"] == 75.0
    and _fin["grade"]["passed"],
    "and only now does the learner see a score — final, with pass/fail")
-_ncon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_ncon = _tenant_con("alpha")
 ok(_ncon.execute("SELECT 1 FROM notifications WHERE kind='learning'"
                  " AND title LIKE 'Quiz to grade%'").fetchone() is not None
    and _ncon.execute("SELECT 1 FROM notifications WHERE kind='learning'"
@@ -3689,7 +3738,7 @@ _crs2 = c.post("/api/learning/courses", headers=AA, json={
     "teacher_id": _tch["id"]}).json()["id"]
 # a first pay-on-delivery order from an unconfirmed address is held, not
 # placed — Lara starts as an established customer, like every order fixture
-_acon = sqlite3.connect(_tn.tenant_dir("alpha") / "business_control.db")
+_acon = _tenant_con("alpha")
 _acon.execute("UPDATE users SET email='lara@example.test',"
               " email_verified_at=? WHERE id=?", (_t0.time(), _lrn["id"]))
 _acon.commit(); _acon.close()

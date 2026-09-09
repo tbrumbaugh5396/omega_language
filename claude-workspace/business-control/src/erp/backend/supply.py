@@ -489,7 +489,7 @@ def unit_costs(con) -> dict:
         " p.case_size FROM bill_of_materials b"
         " JOIN materials m ON m.id=b.material_id"
         " JOIN products p ON p.id=b.product_id"
-        " GROUP BY b.product_id").fetchall()
+        " GROUP BY b.product_id, p.case_size").fetchall()
     out = {}
     for r in rows:
         case = max(1, r["case_size"] or 1)
@@ -905,7 +905,7 @@ def forecast(con, days: int = 30) -> dict:
         " FROM order_items oi JOIN orders o ON o.id=oi.order_id"
         " JOIN products p ON p.id=oi.product_id"
         " WHERE o.created_at>=? AND o.status!='cancelled'"
-        " GROUP BY oi.product_id", (since,)).fetchall()
+        " GROUP BY oi.product_id, p.name, p.case_size", (since,)).fetchall()
     for r in rows:
         rate = r["sold"] / days
         if rate <= 0:

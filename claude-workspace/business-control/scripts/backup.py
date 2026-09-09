@@ -23,6 +23,43 @@ sys.path.insert(0, str(ROOT / "src"))
 from erp.backend import config  # noqa: E402
 
 
+def _pg_dump(tar, td, src_dir: Path, prefix: str) -> None:
+    """A tenant whose rows live in Postgres has no file to snapshot; its
+    rows come out with pg_dump. Silence here would be a backup with a
+    hole in it, so a missing pg_dump is said, not skipped."""
+    import os
+    import shutil
+    import subprocess
+    from erp.backend import db, pgstore
+    st = db.store()
+    if st.get("kind") != "postgres":
+        return
+    tid = src_dir.name if src_dir.name != "data" else None
+    if (src_dir / "tenants").is_dir() and tid is None:
+        tid = None
+    dsn = pgstore._tenant_dsn(st["dsn"], pgstore._dbname(tid))
+    exe = shutil.which("pg_dump")
+    if not exe:
+        try:
+            import pgserver
+            cand = Path(pgserver.__file__).parent / "pginstall" / "bin" / "pg_dump"
+            exe = str(cand) if cand.exists() else None
+        except ImportError:
+            exe = None
+    if not exe:
+        print(f"  ! {prefix or 'root'}: rows are in Postgres and pg_dump is not"
+              f" installed — this archive has no rows", file=sys.stderr)
+        return
+    out = Path(td) / f"{prefix.replace('/', '_') or 'root'}.sql"
+    r = subprocess.run([exe, "--format=plain", "--no-owner", "--dbname", dsn,
+                        "--file", str(out)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  ! {prefix or 'root'}: pg_dump failed: {r.stderr.strip()[:200]}",
+              file=sys.stderr)
+        return
+    tar.add(out, arcname=f"{prefix}business_control.sql")
+
+
 def _snap_dir(tar, td, src_dir: Path, prefix: str) -> None:
     """One data directory into the archive: WAL-safe DB snapshot, config,
     VAPID key, and the uploads that ARE the business records (product
@@ -37,6 +74,8 @@ def _snap_dir(tar, td, src_dir: Path, prefix: str) -> None:
         dst.close()
         src.close()
         tar.add(snap, arcname=f"{prefix}business_control.db")
+    else:
+        _pg_dump(tar, td, src_dir, prefix)
     for name in ("config.json", "vapid_private.pem"):
         p = src_dir / name
         if p.exists():

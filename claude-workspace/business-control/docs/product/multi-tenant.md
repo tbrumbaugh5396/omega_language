@@ -304,6 +304,61 @@ and it exists so the authority to run a business on the platform is a
 signed page, not an understanding. A re-stand-up after a move does not file
 it twice.
 
+## Spanning nodes: a tenant served by more than one machine
+
+Since 2026-09-09. Everything above places a whole tenant on one node,
+because the tenant's state lived on that node: a SQLite file, a
+directory of uploads, and two dicts in the process (the chat hub and
+the video rooms). A second machine serving the same tenant had the
+rows without the files and an empty room with the same name. Three
+things moved so that nodes become interchangeable:
+
+**Rows.** `db.connect()` reads a store: `{"kind": "sqlite"}` (the file,
+as before, the default) or `{"kind": "postgres", "dsn": ...}` — one
+Postgres server, one database per tenant (`bc_<tenant>`), created on
+first touch. The app is not rewritten for it: `erp/backend/pgstore.py`
+answers the sqlite3 calls the app already makes (`?` placeholders,
+rows by name, `lastrowid`, `executescript`, `PRAGMA table_info`,
+`INSERT OR IGNORE/REPLACE`, SQLite's lax `LIKE`, integer casts that
+truncate) and raises Postgres errors as `sqlite3.Error`s so every
+fallback keeps its meaning. A handful of SQLite functions the SQL uses
+are defined in each tenant database (`round(double, int)`, two-argument
+`max`/`min`, `strftime`, `datetime`, `iif`, `instr`). Every statement
+runs in its own savepoint, because SQLite fails a statement and carries
+on while Postgres poisons the transaction, and the migration loop
+depends on carrying on. `BC_STORE=postgres` runs the whole test suite
+against an embedded Postgres (`pgserver`, in `requirements-dev.txt`).
+
+What the Postgres face does not do: FTS5 (product search falls back to
+`ILIKE`, as it already did without FTS5), triggers, and the SQLite
+backup API — a tenant in Postgres is backed up with `pg_dump`, and is
+shipped between nodes by not shipping it: the rows are already
+reachable from every node.
+
+**Files.** `erp/backend/blobs.py` puts uploads in an S3-compatible
+object store (`config.json` key `blobs`, or `BC_BLOBS` as JSON): AWS
+S3, Backblaze B2, Cloudflare R2, MinIO on a box of your own. Keys are
+the relative paths the rows already hold, under `prefix/<tenant>/`, so
+a tenant moved to object storage keeps every row. The client is a
+hundred lines of Signature V4 over urllib. `migrate_local_to_store`
+pushes a node's existing uploads by their rows, once. The learning
+uploads (`/media/<shard>/<name>`) read through it; product images and
+the storefront media pipeline still read local disk and are next.
+
+**In-memory state.** The video rooms (`rtc_peers`, `rtc_mail`) and the
+chat hub's presence and cross-node delivery (`ws_presence`,
+`ws_outbox`) are tables in the tenant's database. A socket still lives
+in one process; every node's socket handler pumps the outbox for its
+own people once a second and heartbeats presence, so a message for
+somebody connected to the other machine lands there. A peer that stops
+polling a room is swept, which the memory version never did. The
+notification sweep and the recurring-expense roll were already on-read
+and idempotent.
+
+**What is still per node.** Kiosks, the clock's geofence, node
+services (translation, the SFU), and the fleet's tar-and-ship of a
+tenant's directory — all of which are about the machine, and stay.
+
 ## The design library — design once, place everywhere
 
 Provider-only, in the theme editor. Select a section on the studio's own

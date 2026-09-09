@@ -212,7 +212,7 @@ def lines(con, days: int = 90, when: float = 0, group: str = "product") -> dict:
         " FROM order_items oi JOIN orders o ON o.id=oi.order_id"
         " LEFT JOIN products p ON p.id=oi.product_id"
         " WHERE o.status!='cancelled' AND o.created_at>=?"
-        " GROUP BY oi.product_id", (since,)).fetchall()
+        " GROUP BY oi.product_id, p.name, p.category", (since,)).fetchall()
     if not rows:
         return {"days": days, "lines": [], "group": group}
     # How often a line is the whole order, which is what attach rate is

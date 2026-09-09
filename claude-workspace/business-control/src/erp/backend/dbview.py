@@ -265,6 +265,9 @@ def backup_bytes(con) -> bytes:
     file is only part of the story and copying it mid-write yields something
     subtly wrong. What comes back is a consistent .db anyone can open.
     """
+    if backup_kind(con) == "postgres":
+        from . import db, pgstore, tenancy
+        return pgstore.dump(db.store()["dsn"], tenancy.CURRENT.get())
     with tempfile.TemporaryDirectory() as tmp:
         dest = pathlib.Path(tmp) / "backup.db"
         out = sqlite3.connect(dest)
@@ -273,3 +276,9 @@ def backup_bytes(con) -> bytes:
         finally:
             out.close()
         return dest.read_bytes()
+
+
+def backup_kind(con) -> str:
+    """What a download of this tenant's rows is: a .db anyone can open,
+    or a pg_dump archive for pg_restore."""
+    return "sqlite" if hasattr(con, "backup") else "postgres"

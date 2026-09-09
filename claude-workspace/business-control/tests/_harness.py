@@ -59,6 +59,31 @@ if _fake:
 # a shared dir across parallel parts would be the flakiest test in the file.
 os.environ["BUSINESS_CONTROL_DATA"] = tempfile.mkdtemp(prefix="bc_test_")
 
+# --- the store, when somebody wants the rows in Postgres ------------------
+# BC_STORE=postgres runs the same suite against a real Postgres: an
+# embedded server (pgserver) started for this part alone, one database per
+# tenant created on demand, gone when the process ends. The app is not
+# told which it is on; that is the point of the test.
+if os.environ.get("BC_STORE") == "postgres" and not os.environ.get("BC_PG_DSN"):
+    import atexit
+    import shutil as _shu
+    import time as _tm2
+    import pgserver as _pgs
+    # A run that is killed never reaches atexit, and an embedded server's
+    # data directory is tens of megabytes; twenty killed runs filled a
+    # disk once. Sweep the ones older than an hour before adding another.
+    _tmp = Path(tempfile.gettempdir())
+    for _old in _tmp.glob("bc_pg_*"):
+        try:
+            if _tm2.time() - _old.stat().st_mtime > 3600:
+                _shu.rmtree(_old, ignore_errors=True)
+        except OSError:
+            pass
+    _pgdir = tempfile.mkdtemp(prefix="bc_pg_")
+    _pgsrv = _pgs.get_server(_pgdir)
+    os.environ["BC_PG_DSN"] = _pgsrv.get_uri()
+    atexit.register(lambda: _pgsrv.cleanup())
+
 from fastapi.testclient import TestClient  # noqa: E402
 from erp.backend.main import app, CFG  # noqa: E402
 

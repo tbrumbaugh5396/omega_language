@@ -1467,6 +1467,178 @@ ok("--host 0.0.0.0" in (Path(__file__).parent.parent
                         / "command_utilities/Start Business Control (HTTPS).command").read_text(),
    "the double-click HTTPS start does the same")
 
+# --- one tenant, two nodes: the hub and the rooms are rows now ------------
+import asyncio as _aio
+from erp.backend import chat as _chat, community as _cmm
+_here = _chat.node_id()
+ok(_here and ":" in _here, "a node knows its own name")
+_conx = _db.connect()
+_conx.execute("INSERT OR REPLACE INTO ws_presence(node,user_id,seen)"
+              " VALUES('other-node:1', ?, ?)", (cust["id"], _t.time()))
+_conx.commit()
+ok(cust["id"] in _chat.online_ids() and cust["id"] not in _chat.local_ids(),
+   "somebody connected to the OTHER node counts as online here — presence "
+   "is a table every node reads, not a dict in one process")
+_aio.run(_chat.send_to([cust["id"]], {"type": "msg", "body": "over the wire"}))
+_mail = _chat.collect(cust["id"])
+ok(len(_mail) == 1 and json.loads(_mail[0])["body"] == "over the wire",
+   "a message for them lands in the outbox, and the node holding their "
+   "socket collects it")
+ok(_chat.collect(cust["id"]) == [], "once")
+_conx.execute("UPDATE ws_presence SET seen=? WHERE node='other-node:1'",
+              (_t.time() - 3600,))
+_conx.commit()
+ok(cust["id"] not in _chat.online_ids(),
+   "a node that stopped saying so an hour ago is not counted — a dead "
+   "machine does not keep its people online")
+_aio.run(_chat.send_to([cust["id"]], {"type": "msg", "body": "to nobody"}))
+ok(_chat.collect(cust["id"]) == [],
+   "and nothing is left in the outbox for somebody connected nowhere")
+_conx.execute("DELETE FROM ws_presence WHERE node='other-node:1'"); _conx.commit()
+# the class's video room is rows too
+_j1 = _cmm._rtc_join("rm-two-nodes", None, {"name": "Ann", "user_id": 1}, con=_conx)
+_j2 = _cmm._rtc_join("rm-two-nodes", None, {"name": "Bob", "user_id": 2}, con=_conx)
+_conx2 = _db.connect()          # a second connection stands in for a second node
+ok([w["name"] for w in _cmm._rtc_poll("rm-two-nodes", _j2["peer"], con=_conx2)["who"]]
+   == ["Ann", "Bob"],
+   "a room joined through one connection is seen whole through another — "
+   "the roster is a table, so a second node has the same room")
+_cmm._rtc_signal("rm-two-nodes", _j2["peer"], _j1["peer"], {"sdp": "offer"}, con=_conx)
+_pl2 = _cmm._rtc_poll("rm-two-nodes", _j2["peer"], con=_conx2)
+ok(_pl2["messages"] == [{"from": _j1["peer"], "payload": {"sdp": "offer"}}],
+   "and a signal posted on one lands in the mailbox read from the other")
+ok(_cmm._rtc_poll("rm-two-nodes", _j2["peer"], con=_conx2)["messages"] == [],
+   "once")
+_conx.execute("UPDATE rtc_peers SET seen=? WHERE room='rm-two-nodes' AND peer=?",
+              (_t.time() - 600, _j1["peer"])); _conx.commit()
+ok([w["name"] for w in _cmm._rtc_poll("rm-two-nodes", _j2["peer"], con=_conx2)["who"]]
+   == ["Bob"],
+   "a peer that stopped polling ten minutes ago is swept from the room — "
+   "the memory version kept its ghosts until a restart")
+_cmm._rtc_leave("rm-two-nodes", _j2["peer"], con=_conx)
+_conx2.close(); _conx.close()
+
+# --- files somewhere every node can reach --------------------------------
+# A fake S3 in this process: four verbs on a dict, checking that every
+# request carries a Signature V4 header. Not AWS; enough to prove the
+# client speaks the protocol and the app never touches a path.
+import threading as _thr
+from http.server import BaseHTTPRequestHandler as _H, HTTPServer as _HS
+_S3STORE: dict = {}
+_S3SEEN: list = []
+class _FakeS3(_H):
+    def log_message(self, *a): pass
+    def _auth(self):
+        a = self.headers.get("Authorization", "")
+        _S3SEEN.append((self.command, self.path, a[:16], self.headers.get("x-amz-content-sha256", "")[:8]))
+        if not (a.startswith("AWS4-HMAC-SHA256 Credential=") and "Signature=" in a
+                and self.headers.get("x-amz-date")):
+            self.send_response(403); self.end_headers(); return False
+        return True
+    def do_PUT(self):
+        if not self._auth(): return
+        n = int(self.headers.get("Content-Length", 0))
+        _S3STORE[self.path] = self.rfile.read(n)
+        self.send_response(200); self.end_headers()
+    def do_GET(self):
+        if not self._auth(): return
+        b = _S3STORE.get(self.path)
+        if b is None: self.send_response(404); self.end_headers(); return
+        self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_HEAD(self):
+        if not self._auth(): return
+        self.send_response(200 if self.path in _S3STORE else 404); self.end_headers()
+    def do_DELETE(self):
+        if not self._auth(): return
+        _S3STORE.pop(self.path, None); self.send_response(204); self.end_headers()
+_s3srv = _HS(("127.0.0.1", 0), _FakeS3)
+_thr.Thread(target=_s3srv.serve_forever, daemon=True).start()
+_s3port = _s3srv.server_address[1]
+from erp.backend import blobs as _blobs, materials as _MAT
+_png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 300
+ok(_blobs.store()["kind"] == "local",
+   "with nothing configured, files live where they always did")
+_savedL = _MAT.save(_png, allow=("image",))
+ok(_blobs.local_path(_savedL["path"]) and _blobs.get(_savedL["path"]) == _png
+   and _MAT.unlink(_savedL["path"]) and _blobs.get(_savedL["path"]) is None,
+   "the local driver writes, reads and deletes the same relative path the "
+   "row holds")
+os.environ["BC_BLOBS"] = json.dumps({"kind": "s3", "endpoint": f"http://127.0.0.1:{_s3port}",
+    "bucket": "bc-files", "region": "us-east-1", "key": "AKIATEST", "secret": "s3cr3t",
+    "prefix": "tenants"})
+try:
+    ok(_blobs.store()["kind"] == "s3", "configured, the store is an object store")
+    _saved = _MAT.save(_png, allow=("image",))
+    _keyp = [k for k in _S3STORE if k.endswith(_saved["path"])]
+    ok(len(_keyp) == 1 and _keyp[0].startswith("/bc-files/tenants/")
+       and _S3STORE[_keyp[0]] == _png,
+       "an upload goes to the bucket under prefix/tenant/path — the same "
+       "relative path the row holds, so a tenant moved to object storage "
+       "keeps every row it had")
+    ok(all(a.startswith("AWS4-HMAC-SHA25") and h for (_, _, a, h) in _S3SEEN),
+       "every request is signed (Signature V4) and carries the payload hash")
+    ok(_blobs.local_path(_saved["path"]) is None and _blobs.get(_saved["path"]) == _png
+       and _blobs.exists(_saved["path"]),
+       "nothing is on this node's disk; the bytes come back from the store")
+    ok(_MAT.unlink(_saved["path"]) and not _blobs.exists(_saved["path"]),
+       "and deleting the row's file deletes the object")
+    # what this node already has on disk goes up once
+    os.environ.pop("BC_BLOBS")
+    _old = _MAT.save(_png, allow=("image",))
+    _conb = _db.connect()
+    _conb.execute("INSERT INTO learning_materials(lesson_id,session_id,owner_id,kind,"
+                  "path,original,mime,bytes,created_at) VALUES(NULL,NULL,1,'image',?,"
+                  "'old.png','image/png',?,?)", (_old["path"], len(_png), _t.time()))
+    _conb.commit()
+    os.environ["BC_BLOBS"] = json.dumps({"kind": "s3", "endpoint": f"http://127.0.0.1:{_s3port}",
+        "bucket": "bc-files", "key": "AKIATEST", "secret": "s3cr3t"})
+    _mig = _blobs.migrate_local_to_store(_conb)
+    ok(_mig["pushed"] == 1 and _blobs.exists(_old["path"]),
+       "a node's existing uploads are pushed into the store by their rows")
+    ok(_blobs.migrate_local_to_store(_conb)["present"] >= 1
+       and _blobs.migrate_local_to_store(_conb)["pushed"] == 0,
+       "and pushing again pushes nothing — the store already has them")
+    _conb.execute("DELETE FROM learning_materials WHERE path=?", (_old["path"],))
+    _conb.commit(); _conb.close()
+finally:
+    os.environ.pop("BC_BLOBS", None)
+    _s3srv.shutdown()
+ok(_blobs.store()["kind"] == "local", "(and back to local for what follows)")
+
+# --- the Postgres face: what the app's SQL becomes ------------------------
+from erp.backend import pgstore as _pgs
+ok(_pgs.translate("SELECT * FROM t WHERE a=? AND b LIKE ? AND c >= 5 %% 2", True)
+   == "SELECT * FROM t WHERE a=%s AND b ILIKE %s AND c >= 5 %%%% 2",
+   "placeholders become %s, SQLite's lax LIKE becomes ILIKE, and a literal "
+   "percent is escaped when parameters ride along")
+ok(_pgs.translate("SELECT 1 WHERE reason LIKE 'order:%'", False)
+   == "SELECT 1 WHERE reason ILIKE 'order:%'",
+   "and left alone when none do")
+ok(_pgs.translate("SELECT CAST((a - ?) / ? AS INTEGER) AS day, CAST(x AS TEXT) FROM t")
+   == "SELECT sqlite_int((a - %s) / %s) AS day, CAST(x AS TEXT) FROM t",
+   "an integer cast truncates the way SQLite's does — a day bucket is "
+   "floor, never round — and other casts pass through")
+ok(_pgs.translate("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, n INTEGER, x REAL, b BLOB)")
+   == "CREATE TABLE IF NOT EXISTS t (id BIGSERIAL PRIMARY KEY, n BIGINT, x DOUBLE PRECISION, b BYTEA)",
+   "the schema's SQLite types become Postgres types, and an INTEGER "
+   "PRIMARY KEY becomes a sequence")
+ok(_pgs.translate("SELECT name FROM u ORDER BY name COLLATE NOCASE LIMIT -1")
+   == "SELECT name FROM u ORDER BY lower(name) LIMIT ALL",
+   "COLLATE NOCASE orders by lower(), and LIMIT -1 means no limit")
+ok(_pgs._split_statements("CREATE TABLE a(x TEXT); -- a; comment\nINSERT INTO a VALUES('semi;colon'); /* b; */ SELECT 1")
+   == ["CREATE TABLE a(x TEXT)", "INSERT INTO a VALUES('semi;colon')", "SELECT 1"],
+   "a script splits on semicolons outside quotes and comments")
+_row = _pgs.Row(("id", "name", "total"), {"id": 0, "name": 1, "total": 2},
+                (7, "x", __import__("decimal").Decimal("12.50")))
+ok(_row["id"] == 7 and _row[1] == "x" and _row["total"] == 12.5 and dict(_row)["name"] == "x"
+   and list(_row) == [7, "x", 12.5] and "name" in _row,
+   "a row answers by name, by position, as a dict and as values — and a "
+   "SUM comes back as a number, not a Decimal")
+_sq = __import__("sqlite3")
+ok(issubclass(_pgs.Error, _sq.Error) and issubclass(_pgs.IntegrityError, _sq.IntegrityError),
+   "its errors ARE sqlite3 errors, so every existing fallback keeps its "
+   "meaning")
+
 # --- every QR the app prints is read by the scanner meant for it --------
 # A code is only as good as the thing that reads it. Each pair below is
 # printed by one screen and scanned by another, and the two are tested
@@ -4220,18 +4392,29 @@ ok(c.get("/api/admin/db/backup.db", headers=A).status_code == 200,
    "nor is the backup path")
 
 _bak = c.get("/api/admin/db/backup.db", headers=A)
-ok(_bak.content[:15] == b"SQLite format 3",
-   "the backup is a real SQLite file, not a dump that might not restore")
+if os.environ.get("BC_STORE") == "postgres":
+    ok(_bak.content.startswith(b"--") and b"PostgreSQL database dump" in _bak.content[:200]
+       and ".sql" in _bak.headers["content-disposition"],
+       "a tenant in Postgres downloads as a plain pg_dump — readable, and "
+       "what psql restores, not a copy of files nobody can open")
+else:
+    ok(_bak.content[:15] == b"SQLite format 3",
+       "the backup is a real SQLite file, not a dump that might not restore")
 import sqlite3 as _sq  # noqa: E402
-_bp = Path(tempfile.mkdtemp()) / "b.db"
-_bp.write_bytes(_bak.content)
-_bcon = _sq.connect(_bp)
-ok(_bcon.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0,
-   "it opens and has the data in it")
-ok(_bcon.execute("SELECT COUNT(*) FROM users WHERE token=?",
-                 (_mytoken,)).fetchone()[0] == 1,
-   "and it keeps the credentials — a redacted backup is not a backup")
-_bcon.close()
+if os.environ.get("BC_STORE") != "postgres":
+    _bp = Path(tempfile.mkdtemp()) / "b.db"
+    _bp.write_bytes(_bak.content)
+    _bcon = _sq.connect(_bp)
+    ok(_bcon.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0,
+       "it opens and has the data in it")
+    ok(_bcon.execute("SELECT COUNT(*) FROM users WHERE token=?",
+                     (_mytoken,)).fetchone()[0] == 1,
+       "and it keeps the credentials — a redacted backup is not a backup")
+    _bcon.close()
+else:
+    ok(b"users" in _bak.content and _mytoken.encode() in _bak.content,
+       "the archive carries the users table and the credentials — a "
+       "redacted backup is not a backup")
 
 ok(c.get("/api/admin/db/users/export.csv", headers=CU).status_code
    in (401, 403), "exporting needs an admin")

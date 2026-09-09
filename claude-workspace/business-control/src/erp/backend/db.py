@@ -375,12 +375,35 @@ CREATE TABLE IF NOT EXISTS outreach_log (
 """
 
 
-def connect() -> sqlite3.Connection:
+def store() -> dict:
+    """Where rows live. `{"kind": "sqlite"}` — the file beside the tenant's
+    uploads, the default and the whole of the app until 2026-09. Or
+    `{"kind": "postgres", "dsn": ...}` — one Postgres server, one database
+    per tenant, reachable from every node, which is what lets a tenant be
+    served by more than one machine. Read from the environment first
+    (BC_STORE / BC_PG_DSN: the test harness and a node's service file),
+    then the install's config.json `store` key."""
+    import os
+    kind = os.environ.get("BC_STORE")
+    if kind:
+        return {"kind": kind, "dsn": os.environ.get("BC_PG_DSN", "")}
+    try:
+        st = config.load().get("store") or {}
+    except Exception:                                        # noqa: BLE001
+        st = {}
+    return st if st.get("kind") else {"kind": "sqlite"}
+
+
+def connect():
     # check_same_thread=False: FastAPI enters/exits sync dependencies on
     # different threadpool threads; each request still gets its own connection.
     # Resolved per call, not at import: the path is the tenant. In legacy
     # single-tenant mode tenancy.db_path() is exactly the old DB_PATH.
     from . import tenancy
+    st = store()
+    if st.get("kind") == "postgres":
+        from . import pgstore
+        return pgstore.connect(st["dsn"], tenancy.CURRENT.get())
     con = sqlite3.connect(tenancy.db_path(), timeout=10,
                           check_same_thread=False)
     con.row_factory = sqlite3.Row

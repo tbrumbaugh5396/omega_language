@@ -126,7 +126,7 @@ def convs_for(con, user) -> list[dict]:
                         "SELECT id FROM users WHERE active=1 AND"
                         " (is_admin=1 OR role IN ('employee','owner'))"
                         + (" AND id IN (%s)" % ",".join(map(str, ids))
-                           if ids else " AND 0")).fetchone()
+                           if ids else " AND 1=0")).fetchone()
                     staff_online = row2["id"] if row2 else 0
                 d["call_target"] = staff_online or None
         last = con.execute(
@@ -152,6 +152,46 @@ def add_message(con, conv_id: int, user, body: str) -> dict:
 
 # ---------- live socket hub ----------
 
+# ── who is on, and how a message reaches a socket on another machine ──────
+# A websocket lives in one process. When a tenant is served by two nodes,
+# the person you are messaging may be connected to the other one. So the
+# hub is two things now: the sockets this process holds (delivered to at
+# once, as before), and two tables in the tenant's database — presence
+# (who is on which node, heartbeated) and an outbox (what is waiting for
+# somebody not connected here). Every node's socket handler pumps the
+# outbox for its own people once a second. On one node none of that is
+# visible; on two, a message still lands.
+
+WS_TABLES = """
+CREATE TABLE IF NOT EXISTS ws_presence (
+  node TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  seen REAL NOT NULL,
+  PRIMARY KEY (node, user_id)
+);
+CREATE TABLE IF NOT EXISTS ws_outbox (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  payload TEXT NOT NULL,
+  at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ws_outbox_who ON ws_outbox(user_id, id);
+"""
+PRESENCE_SEC = 60          # a node that has not said so in a minute is gone
+OUTBOX_SEC = 60            # a message nobody collected in a minute is dropped
+
+
+def node_id() -> str:
+    import os
+    import socket
+    return os.environ.get("BC_NODE") or f"{socket.gethostname()}:{os.getpid()}"
+
+
+def init_tables(con):
+    con.executescript(WS_TABLES)
+    con.commit()
+
+
 def _key(user_id: int):
     """(tenant, user id). Bare ids collide across tenants — two businesses
     each with a user 3 must not receive each other's messages or calls."""
@@ -159,8 +199,27 @@ def _key(user_id: int):
     return (tenancy.CURRENT.get(), user_id)
 
 
+def _own_con():
+    return db.connect()
+
+
 def register(user_id: int, ws) -> None:
     HUB.setdefault(_key(user_id), set()).add(ws)
+    heartbeat(user_id)
+
+
+def heartbeat(user_id: int) -> None:
+    """Say this person is connected here, now."""
+    import time
+    con = _own_con()
+    try:
+        con.execute("INSERT OR REPLACE INTO ws_presence(node,user_id,seen)"
+                    " VALUES(?,?,?)", (node_id(), user_id, time.time()))
+        con.commit()
+    except Exception:                                        # noqa: BLE001
+        pass
+    finally:
+        con.close()
 
 
 def unregister(user_id: int, ws) -> None:
@@ -168,22 +227,111 @@ def unregister(user_id: int, ws) -> None:
     HUB.get(k, set()).discard(ws)
     if not HUB.get(k):
         HUB.pop(k, None)
+        con = _own_con()
+        try:
+            con.execute("DELETE FROM ws_presence WHERE node=? AND user_id=?",
+                        (node_id(), user_id))
+            con.commit()
+        except Exception:                                    # noqa: BLE001
+            pass
+        finally:
+            con.close()
 
 
-def online_ids() -> list[int]:
+def local_ids() -> list[int]:
     from . import tenancy
     tid = tenancy.CURRENT.get()
     return [uid for (t, uid) in HUB.keys() if t == tid]
 
 
+def online_ids() -> list[int]:
+    """Connected here, or connected to any node that has said so lately."""
+    import time
+    ids = set(local_ids())
+    con = _own_con()
+    try:
+        for r in con.execute("SELECT DISTINCT user_id FROM ws_presence"
+                             " WHERE seen>=?", (time.time() - PRESENCE_SEC,)):
+            ids.add(r["user_id"])
+    except Exception:                                        # noqa: BLE001
+        pass
+    finally:
+        con.close()
+    return sorted(ids)
+
+
 async def send_to(user_ids: list[int], payload: dict) -> None:
+    """Here at once; elsewhere through the outbox. A person with a socket
+    on this node and another on a second node gets it on both, which is
+    what having two tabs open means."""
+    import time
     data = json.dumps(payload)
     dead = []
+    remote = []
     for uid in user_ids:
-        for ws in list(HUB.get(_key(uid), ())):
+        socks = list(HUB.get(_key(uid), ()))
+        for ws in socks:
             try:
                 await ws.send_text(data)
             except Exception:
                 dead.append((uid, ws))
+        remote.append(uid)
     for uid, ws in dead:
         unregister(uid, ws)
+    if remote:
+        con = _own_con()
+        try:
+            here = node_id()
+            elsewhere = {r["user_id"] for r in con.execute(
+                "SELECT DISTINCT user_id FROM ws_presence WHERE node!=? AND"
+                " seen>=?", (here, time.time() - PRESENCE_SEC))}
+            now = time.time()
+            for uid in remote:
+                if uid in elsewhere:
+                    con.execute("INSERT INTO ws_outbox(user_id,payload,at)"
+                                " VALUES(?,?,?)", (uid, data, now))
+            con.commit()
+        except Exception:                                    # noqa: BLE001
+            pass
+        finally:
+            con.close()
+
+
+def collect(user_id: int) -> list[str]:
+    """What other nodes left for this person; taken once, and stale mail
+    swept on the way."""
+    import time
+    con = _own_con()
+    try:
+        con.execute("DELETE FROM ws_outbox WHERE at<?", (time.time() - OUTBOX_SEC,))
+        rows = con.execute("SELECT id, payload FROM ws_outbox WHERE user_id=?"
+                           " ORDER BY id LIMIT 100", (user_id,)).fetchall()
+        if rows:
+            con.execute("DELETE FROM ws_outbox WHERE user_id=? AND id<=?",
+                        (user_id, rows[-1]["id"]))
+        con.commit()
+        return [r["payload"] for r in rows]
+    except Exception:                                        # noqa: BLE001
+        return []
+    finally:
+        con.close()
+
+
+async def pump(user_id: int, ws, every: float = 1.0) -> None:
+    """Runs beside a socket for its whole life: delivers what other nodes
+    left, and keeps presence fresh."""
+    import time
+    last_beat = time.time()
+    try:
+        while True:
+            await asyncio.sleep(every)
+            for data in await asyncio.to_thread(collect, user_id):
+                try:
+                    await ws.send_text(data)
+                except Exception:
+                    return
+            if time.time() - last_beat > PRESENCE_SEC / 3:
+                await asyncio.to_thread(heartbeat, user_id)
+                last_beat = time.time()
+    except asyncio.CancelledError:
+        return

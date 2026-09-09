@@ -50,6 +50,26 @@ part file directly). Shared prologue lives in `tests/_harness.py` — a
 part must build all of its own state; never lean on another part's.
 Still run the full suite in background with output to a file.
 
+## Where the rows live
+
+Since 2026-09-09 a tenant's rows can live in Postgres instead of the
+SQLite file: `db.connect()` reads the store from `BC_STORE`/`BC_PG_DSN`
+or config.json's `store` key, and `erp/backend/pgstore.py` answers the
+sqlite3 calls the app makes (see docs/product/multi-tenant.md, "Spanning
+nodes"). Files can live in an S3-compatible store the same way
+(`erp/backend/blobs.py`, config `blobs` / `BC_BLOBS`).
+
+```bash
+PYTHONPATH=src .venv/bin/python tests/test_smoke.py --store postgres
+```
+
+runs the whole suite against an embedded Postgres (`pgserver`, in
+requirements-dev.txt; one server per part, ~10s to start). It is not
+the default gate — SQLite is — but any SQL that only SQLite accepts
+(a bare `GROUP BY`, `rowid`, a boolean as `AND 1`, `SUM(x > 0)`) shows
+up there and nowhere else. When a new query fails only under Postgres,
+fix the query if it is loose SQL and the adapter if it is an idiom.
+
 ## Dates
 
 The suite is green on the day you run it, which is a weaker claim than it

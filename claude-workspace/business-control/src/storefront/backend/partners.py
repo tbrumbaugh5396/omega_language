@@ -477,7 +477,7 @@ def admin_archive_event(eid: int, body: ArchiveBody, u=Depends(admin_user),
     if con.execute("SELECT 1 FROM store_events WHERE id=?",
                    (eid,)).fetchone() is None:
         raise HTTPException(404, "no such event")
-    con.execute("UPDATE store_events SET archived=?, active=CASE WHEN ?"
+    con.execute("UPDATE store_events SET archived=?, active=CASE WHEN ? = 1"
                 " THEN 0 ELSE active END WHERE id=?",
                 (1 if body.archived else 0, 1 if body.archived else 0, eid))
     con.commit()

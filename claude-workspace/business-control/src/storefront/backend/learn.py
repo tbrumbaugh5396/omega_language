@@ -25,7 +25,7 @@ import time
 import html as _html
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+from fastapi.responses import (Response, FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse)
 from pydantic import BaseModel
 
@@ -446,7 +446,7 @@ def rtc_join(room: str, body: RtcBody, user=Depends(current_customer),
     _require_cap("learning")
     _member(con, user)
     out = CM._rtc_join(room, body.peer or None,
-                       {"name": user["name"], "user_id": user["id"]})
+                       {"name": user["name"], "user_id": user["id"]}, con=con)
     out["actor"] = {"id": user["id"], "name": user["name"]}
     return out
 
@@ -484,8 +484,8 @@ def rtc_mark(room: str, body: RtcMarkBody, user=Depends(current_customer),
         if body.stage is not None and CM.stage_of(body.stage) is None:
             raise HTTPException(400, "the stage shows this install's own"
                                      " files — a /media/ path")
-    CM._rtc_mark(room, body.peer, **flags)
-    return {"ok": True, "stage": CM.stage_in(room)}
+    CM._rtc_mark(room, body.peer, con=con, **flags)
+    return {"ok": True, "stage": CM.stage_in(room, con=con)}
 
 
 @router.post("/api/learn/rtc/{room}/signal")
@@ -493,7 +493,7 @@ def rtc_signal(room: str, body: RtcBody, user=Depends(current_customer),
                con=Depends(get_con)):
     _require_cap("learning")
     _member(con, user)
-    CM._rtc_signal(room, body.to, body.peer, body.payload)
+    CM._rtc_signal(room, body.to, body.peer, body.payload, con=con)
     return {"ok": True}
 
 
@@ -502,14 +502,14 @@ def rtc_poll(room: str, peer: str = "", user=Depends(current_customer),
              con=Depends(get_con)):
     _require_cap("learning")
     _member(con, user)
-    return CM._rtc_poll(room, peer)
+    return CM._rtc_poll(room, peer, con=con)
 
 
 @router.post("/api/learn/rtc/{room}/leave")
 def rtc_leave(room: str, body: RtcBody, user=Depends(current_customer),
               con=Depends(get_con)):
     _require_cap("learning")
-    CM._rtc_leave(room, body.peer)
+    CM._rtc_leave(room, body.peer, con=con)
     return {"ok": True}
 
 
@@ -775,7 +775,8 @@ def training_seen(token: str, body: SeenBody, request: Request,
     now = time.time()
     con.execute("INSERT INTO training_views(training_id,who,name,first_at,last_at,views)"
                 " VALUES(?,?,?,?,?,1) ON CONFLICT(training_id,who) DO UPDATE SET"
-                " last_at=excluded.last_at, views=views+1, name=excluded.name",
+                " last_at=excluded.last_at, views=training_views.views+1,"
+                " name=excluded.name",
                 (t["id"], who, name, now, now))
     con.commit()
     return {"ok": True, "as": name or "this browser"}
@@ -1205,11 +1206,17 @@ def serve_media(shard: str, name: str, con=Depends(get_con)):
     if not re.fullmatch(r"[0-9a-f]{2}", shard) \
             or not re.fullmatch(r"[0-9a-f]{32}\.[a-z0-9]{2,5}", name):
         raise HTTPException(404, "no such file")
-    path = os.path.join(MAT.uploads_root(), shard, name)
-    if not os.path.isfile(path):
-        raise HTTPException(404, "no such file")
+    from erp.backend import blobs
+    rel = f"{shard}/{name}"
+    path = blobs.local_path(rel)
+    body = None
+    if path is None:
+        # Not on this node's disk: the object store, or nowhere.
+        body = blobs.get(rel)
+        if body is None:
+            raise HTTPException(404, "no such file")
     r = con.execute("SELECT mime, kind, original FROM learning_materials"
-                    " WHERE path=?", (f"{shard}/{name}",)).fetchone()
+                    " WHERE path=?", (rel,)).fetchone()
     headers = {"X-Content-Type-Options": "nosniff",
                "Cache-Control": "private, max-age=31536000, immutable"}
     if r and r["kind"] == "document" and r["original"]:
@@ -1217,9 +1224,10 @@ def serve_media(shard: str, name: str, con=Depends(get_con)):
         # out under, not a hex token.
         safe = re.sub(r"[^\w.\- ]", "_", r["original"])[:120]
         headers["Content-Disposition"] = f'inline; filename="{safe}"'
-    return FileResponse(path, media_type=(r["mime"] if r else
-                                          "application/octet-stream"),
-                        headers=headers)
+    mime = r["mime"] if r else "application/octet-stream"
+    if body is not None:
+        return Response(body, media_type=mime, headers=headers)
+    return FileResponse(path, media_type=mime, headers=headers)
 
 
 # ── the public door: programmes + registration ───────────────────────────────

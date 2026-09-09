@@ -170,7 +170,7 @@ def _clean_questions(qs: list) -> list:
 def answers_of(con, aid: int) -> list:
     return [dict(r) for r in con.execute(
         "SELECT q_key AS key, label, answer FROM appointment_answers"
-        " WHERE appointment_id=? ORDER BY rowid", (aid,))]
+        " WHERE appointment_id=? ORDER BY q_key", (aid,))]
 
 
 def intake_missing(con, aid: int) -> list:

@@ -353,11 +353,24 @@ def pack_tenant(tid: str) -> bytes:
     snapshot is self-contained, so the -wal/-shm siblings stay out."""
     import sqlite3
     import tempfile
-    from . import tenancy
+    from . import db, tenancy
     d = tenancy.tenant_dir(tid)
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         with tempfile.TemporaryDirectory() as td:
+            if db.store().get("kind") == "postgres":
+                # Rows in Postgres never travel with a shipment — every
+                # node reaches them — but a pack is also a backup, and a
+                # backup with no rows is a hole. A plain pg_dump rides
+                # along, ignored on import, kept in the archive.
+                from . import pgstore
+                try:
+                    dump = pgstore.dump(db.store()["dsn"], tid)
+                    dp = Path(td) / "business_control.sql"
+                    dp.write_bytes(dump)
+                    tf.add(dp, arcname="./business_control.sql")
+                except Exception as e:                       # noqa: BLE001
+                    log("pack without rows", f"{tid}: {e}", "system")
             for p in sorted(d.rglob("*")):
                 rel = p.relative_to(d)
                 name = str(rel)
@@ -379,6 +392,17 @@ def pack_tenant(tid: str) -> bytes:
                 else:
                     tf.add(p, arcname=f"./{name}")
     return buf.getvalue()
+
+
+def shipment_landed(tid: str) -> bool:
+    """Did a shipment leave a tenant here? With rows in a file, the file;
+    with rows in Postgres, the tenant's config — the rows never travel,
+    they are already reachable from every node."""
+    from . import db, tenancy
+    d = tenancy.tenant_dir(tid)
+    if (d / "business_control.db").exists():
+        return True
+    return db.store().get("kind") == "postgres" and (d / "config.json").exists()
 
 
 def unpack_tenant(tid: str, blob: bytes) -> None:
@@ -429,7 +453,7 @@ def recall_tenant(tid: str, node_id: str, actor: str = "") -> None:
                    timeout=300.0)
     unpack_tenant(tid, r.content)
     from . import tenancy
-    if not (tenancy.tenant_dir(tid) / "business_control.db").exists():
+    if not shipment_landed(tid):
         raise RuntimeError(f"recall of '{tid}' unpacked no database — "
                            f"the node's copy is untouched")
     _node_call(node_id, "DELETE", f"/api/node/tenants/{tid}")

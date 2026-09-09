@@ -447,7 +447,7 @@ def stop_lines(con, store_id: int) -> list:
             " LEFT JOIN products p ON p.id=oi.product_id"
             " WHERE o.store_id=? AND o.status IN"
             "  ('paid','confirmed','shipped','part_delivered')"
-            " GROUP BY oi.product_id", (store_id,)):
+            " GROUP BY oi.product_id, p.name", (store_id,)):
         out.append({"product_id": it["product_id"], "qty": float(it["qty"]),
                     "name": it["name"], "orders": it["orders"]})
     return out

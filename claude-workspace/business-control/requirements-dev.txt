@@ -1,0 +1,4 @@
+# Test-time only. An embedded Postgres so `BC_STORE=postgres` runs the
+# same suite against the real thing with nothing installed on the machine.
+-r requirements.txt
+pgserver>=0.1

@@ -34,6 +34,7 @@ Rooms are keyed by tenant: two schools sharing a process must never share a
 mailbox.
 """
 
+import json
 import secrets
 import threading
 import time
@@ -113,6 +114,7 @@ CREATE TABLE IF NOT EXISTS community_prefs (
 
 def init_tables(con):
     con.executescript(TABLES)
+    con.executescript(RTC_TABLES)
     con.commit()
 
 
@@ -433,7 +435,7 @@ def contacts(con, actor) -> dict:
         "      OR (b.blocker_id=u.id AND b.blocked_id=?))"
         " AND NOT EXISTS (SELECT 1 FROM ghosts g WHERE g.owner_id=u.id"
         "                 AND g.hidden_from_id=?)"
-        " ORDER BY last_at IS NULL, last_at DESC, u.name COLLATE NOCASE",
+        " ORDER BY last_at DESC NULLS LAST, u.name COLLATE NOCASE",
         (me, me, me, me, me, me, me, me, me)).fetchall()
     out = {"accepted": [], "incoming": [], "outgoing": [],
            "blocked": [dict(r) for r in con.execute(
@@ -618,58 +620,139 @@ def report(con, actor, person_id: int, reason: str, *,
 
 
 # ── live video signaling ─────────────────────────────────────────────────────
-# room -> {peer_id: [msg, ...]}, keyed by tenant so two schools sharing a
-# process never share a mailbox. In-memory on purpose.
+# A room's mailboxes and its roster were dicts in this process, which
+# meant a room lived on one node: the second machine serving the same
+# tenant had an empty room with the same name. They are rows now, in the
+# tenant's own database, so every node reads the same room. Polled, as
+# before — a mailbox is a mailbox whether it is memory or a table.
+#
+# A peer that stops polling for STALE_SEC (a closed tab, a dead phone)
+# is swept when anybody next touches the room, which is what the memory
+# version never did — a room nobody cleaned kept its ghosts until the
+# process restarted.
 
-_ROOMS: dict = {}
-# room -> {peer_id: {"name", "user_id", "at", "screen"}}. Peers were ids only,
-# so a tile in a call was a hex string and nobody could say who was in
-# the room — the one question everybody in a room has.
-_WHO: dict = {}
-_LOCK = threading.Lock()
+RTC_TABLES = """
+CREATE TABLE IF NOT EXISTS rtc_peers (
+  room TEXT NOT NULL,
+  peer TEXT NOT NULL,
+  name TEXT DEFAULT '',
+  user_id INTEGER DEFAULT 0,
+  at REAL NOT NULL,                 -- joined
+  seen REAL NOT NULL,               -- last poll
+  screen INTEGER DEFAULT 0,
+  stage TEXT DEFAULT '',            -- JSON, or ''
+  PRIMARY KEY (room, peer)
+);
+CREATE TABLE IF NOT EXISTS rtc_mail (
+  id INTEGER PRIMARY KEY,
+  room TEXT NOT NULL,
+  to_peer TEXT NOT NULL,
+  from_peer TEXT NOT NULL,
+  payload TEXT NOT NULL,            -- JSON
+  at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rtc_mail_box ON rtc_mail(room, to_peer, id);
+"""
+STALE_SEC = 90
 
 
-def _room_key(room: str) -> tuple:
-    return (tenancy.CURRENT.get(), str(room)[:64])
+def _rtc_con(con):
+    """Callers inside a request hand their connection in; the older
+    signature had none, and tests still call these bare."""
+    if con is not None:
+        return con, False
+    from . import db
+    return db.connect(), True
 
 
-def _who_list(key: tuple) -> list:
-    return [{"peer": pid, **w} for pid, w in _WHO.get(key, {}).items()]
+def _sweep(con, room: str) -> None:
+    cut = time.time() - STALE_SEC
+    gone = [r["peer"] for r in con.execute(
+        "SELECT peer FROM rtc_peers WHERE room=? AND seen<?", (room, cut))]
+    for pid in gone:
+        con.execute("DELETE FROM rtc_peers WHERE room=? AND peer=?", (room, pid))
+        con.execute("DELETE FROM rtc_mail WHERE room=? AND to_peer=?", (room, pid))
 
 
-def _rtc_join(room: str, peer: str | None, who: dict | None = None) -> dict:
+def _who_list(con, room: str) -> list:
+    out = []
+    for r in con.execute(
+            "SELECT peer, name, user_id, at, screen, stage FROM rtc_peers"
+            " WHERE room=? ORDER BY at", (room,)):
+        st = None
+        if r["stage"]:
+            try:
+                st = json.loads(r["stage"])
+            except ValueError:
+                st = None
+        out.append({"peer": r["peer"], "name": r["name"] or "",
+                    "user_id": r["user_id"] or 0, "at": r["at"],
+                    "screen": bool(r["screen"]), "stage": st})
+    return out
+
+
+def _peers(con, room: str, but: str) -> list:
+    return [r["peer"] for r in con.execute(
+        "SELECT peer FROM rtc_peers WHERE room=? AND peer!=? ORDER BY at",
+        (room, but))]
+
+
+def _rtc_join(room: str, peer: str | None, who: dict | None = None,
+              con=None) -> dict:
     peer = peer or secrets.token_hex(6)
-    key = _room_key(room)
-    with _LOCK:
-        r = _ROOMS.setdefault(key, {})
-        if peer not in r and len(r) >= MESH_MAX:
+    room = str(room)[:64]
+    con, own = _rtc_con(con)
+    try:
+        _sweep(con, room)
+        here = con.execute("SELECT 1 FROM rtc_peers WHERE room=? AND peer=?",
+                           (room, peer)).fetchone()
+        n = con.execute("SELECT COUNT(*) FROM rtc_peers WHERE room=?",
+                        (room,)).fetchone()[0]
+        if not here and n >= MESH_MAX:
             raise HTTPException(403, f"the call is full — the mesh carries"
                                      f" {MESH_MAX} people at most")
-        r.setdefault(peer, [])
-        if who:
-            _WHO.setdefault(key, {})[peer] = {
-                "name": who.get("name", ""), "user_id": who.get("user_id", 0),
-                "at": time.time(), "screen": False, "stage": None}
-        peers = [p for p in r if p != peer]
-        roster = _who_list(key)
-    return {"peer": peer, "peers": peers, "who": roster}
+        now = time.time()
+        if here:
+            con.execute("UPDATE rtc_peers SET seen=? WHERE room=? AND peer=?",
+                        (now, room, peer))
+            if who:
+                con.execute("UPDATE rtc_peers SET name=?, user_id=? WHERE"
+                            " room=? AND peer=?",
+                            (who.get("name", ""), who.get("user_id", 0),
+                             room, peer))
+        else:
+            con.execute(
+                "INSERT INTO rtc_peers(room,peer,name,user_id,at,seen,screen,"
+                " stage) VALUES(?,?,?,?,?,?,0,'')",
+                (room, peer, (who or {}).get("name", ""),
+                 (who or {}).get("user_id", 0), now, now))
+        con.commit()
+        return {"peer": peer, "peers": _peers(con, room, peer),
+                "who": _who_list(con, room)}
+    finally:
+        if own:
+            con.close()
 
 
-def _rtc_mark(room: str, peer: str, **flags) -> None:
+def _rtc_mark(room: str, peer: str, con=None, **flags) -> None:
     """A fact about a peer the others should see — sharing a screen, or
     what they have put on for the room to watch. Flags are booleans;
-    `stage` is the one exception, a small dict (or None to take it off)
-    describing the file on the stage, kept on the presenter's seat so it
-    leaves the room when they do."""
-    key = _room_key(room)
-    with _LOCK:
-        w = _WHO.get(key, {}).get(peer)
-        if w:
-            for k, v in flags.items():
-                if k == "stage":
-                    w["stage"] = stage_of(v)
-                else:
-                    w[k] = bool(v)
+    `stage` is the one exception, a small dict (or None to take it off)."""
+    room = str(room)[:64]
+    con, own = _rtc_con(con)
+    try:
+        for k, v in flags.items():
+            if k == "stage":
+                st = stage_of(v)
+                con.execute("UPDATE rtc_peers SET stage=? WHERE room=? AND"
+                            " peer=?", (json.dumps(st) if st else "", room, peer))
+            elif k == "screen":
+                con.execute("UPDATE rtc_peers SET screen=? WHERE room=? AND"
+                            " peer=?", (1 if v else 0, room, peer))
+        con.commit()
+    finally:
+        if own:
+            con.close()
 
 
 STAGE_KINDS = ("video", "audio", "image", "document")
@@ -693,44 +776,73 @@ def stage_of(v) -> dict | None:
             "url": url, "kind": kind, "at": time.time()}
 
 
-def stage_in(room: str) -> dict | None:
+def stage_in(room: str, con=None) -> dict | None:
     """What is on in a room right now, whoever put it there."""
-    key = _room_key(room)
-    with _LOCK:
-        for w in _WHO.get(key, {}).values():
+    con, own = _rtc_con(con)
+    try:
+        for w in _who_list(con, str(room)[:64]):
             if w.get("stage"):
                 return w["stage"]
-    return None
+        return None
+    finally:
+        if own:
+            con.close()
 
 
-def _rtc_signal(room: str, to: str, from_peer: str, payload) -> None:
-    key = _room_key(room)
-    with _LOCK:
-        r = _ROOMS.setdefault(key, {})
-        if to not in r:
+def _rtc_signal(room: str, to: str, from_peer: str, payload, con=None) -> None:
+    room = str(room)[:64]
+    con, own = _rtc_con(con)
+    try:
+        if not con.execute("SELECT 1 FROM rtc_peers WHERE room=? AND peer=?",
+                           (room, to)).fetchone():
             raise HTTPException(404, f"peer {to} is not in the room")
-        r[to].append({"from": from_peer, "payload": payload})
+        con.execute("INSERT INTO rtc_mail(room,to_peer,from_peer,payload,at)"
+                    " VALUES(?,?,?,?,?)",
+                    (room, to, from_peer, json.dumps(payload), time.time()))
+        con.commit()
+    finally:
+        if own:
+            con.close()
 
 
-def _rtc_poll(room: str, peer: str) -> dict:
-    key = _room_key(room)
-    with _LOCK:
-        r = _ROOMS.setdefault(key, {})
-        msgs = r.get(peer, [])
-        r[peer] = []
-        peers = [p for p in r if p != peer]
-        roster = _who_list(key)
-    return {"messages": msgs, "peers": peers, "who": roster}
+def _rtc_poll(room: str, peer: str, con=None) -> dict:
+    room = str(room)[:64]
+    con, own = _rtc_con(con)
+    try:
+        _sweep(con, room)
+        con.execute("UPDATE rtc_peers SET seen=? WHERE room=? AND peer=?",
+                    (time.time(), room, peer))
+        rows = con.execute(
+            "SELECT id, from_peer, payload FROM rtc_mail WHERE room=? AND"
+            " to_peer=? ORDER BY id LIMIT 200", (room, peer)).fetchall()
+        msgs = []
+        for r in rows:
+            try:
+                msgs.append({"from": r["from_peer"],
+                             "payload": json.loads(r["payload"])})
+            except ValueError:
+                continue
+        if rows:
+            con.execute("DELETE FROM rtc_mail WHERE room=? AND to_peer=? AND"
+                        " id<=?", (room, peer, rows[-1]["id"]))
+        con.commit()
+        return {"messages": msgs, "peers": _peers(con, room, peer),
+                "who": _who_list(con, room)}
+    finally:
+        if own:
+            con.close()
 
 
-def _rtc_leave(room: str, peer: str) -> None:
-    key = _room_key(room)
-    with _LOCK:
-        _ROOMS.get(key, {}).pop(peer, None)
-        _WHO.get(key, {}).pop(peer, None)
-        if not _ROOMS.get(key):
-            _ROOMS.pop(key, None)
-            _WHO.pop(key, None)
+def _rtc_leave(room: str, peer: str, con=None) -> None:
+    room = str(room)[:64]
+    con, own = _rtc_con(con)
+    try:
+        con.execute("DELETE FROM rtc_peers WHERE room=? AND peer=?", (room, peer))
+        con.execute("DELETE FROM rtc_mail WHERE room=? AND to_peer=?", (room, peer))
+        con.commit()
+    finally:
+        if own:
+            con.close()
 
 
 def rtc_config(cfg) -> dict:

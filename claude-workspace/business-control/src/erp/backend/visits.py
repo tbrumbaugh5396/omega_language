@@ -117,14 +117,14 @@ def touch(con, fp: str, *, ip: str, ua: str, path: str = "",
         args.append(fp)
         con.execute(f"UPDATE devices SET {', '.join(sets)} WHERE fp=?", args)
     con.execute("INSERT INTO device_days(fp,day,hits) VALUES(?,?,1)"
-                " ON CONFLICT(fp,day) DO UPDATE SET hits=hits+1", (fp, day))
+                " ON CONFLICT(fp,day) DO UPDATE SET hits=device_days.hits+1", (fp, day))
     if ip:
         con.execute("INSERT INTO device_ips(fp,ip,last_seen,hits) VALUES(?,?,?,1)"
                     " ON CONFLICT(fp,ip) DO UPDATE SET last_seen=excluded.last_seen,"
-                    " hits=hits+1", (fp, ip[:64], now))
+                    " hits=device_ips.hits+1", (fp, ip[:64], now))
     if path:
         con.execute("INSERT INTO visit_paths(day,path,hits) VALUES(?,?,1)"
-                    " ON CONFLICT(day,path) DO UPDATE SET hits=hits+1",
+                    " ON CONFLICT(day,path) DO UPDATE SET hits=visit_paths.hits+1",
                     (day, path[:120]))
 
 
