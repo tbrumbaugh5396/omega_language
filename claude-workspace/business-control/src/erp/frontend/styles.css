@@ -1416,11 +1416,69 @@ tr.sub td { border-bottom: none; padding-top: 1px; padding-bottom: 1px;
   border-radius: 14px; z-index: 300; display: flex; flex-direction: column;
   box-shadow: 0 12px 40px rgba(0, 0, 0, .45); }
 .ops-call-head { display: flex; gap: 10px; align-items: center;
-  padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .ops-call-grid { display: grid; gap: 8px; padding: 12px; overflow-y: auto;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .ops-call-grid video { width: 100%; border-radius: 10px; background: #000;
   aspect-ratio: 4 / 3; object-fit: cover; }
+.ops-call-body { display: flex; min-height: 0; flex: 1; }
+.ops-call-body .ops-call-grid { flex: 1; align-content: start; min-width: 0; }
+.ops-call-side { width: min(340px, 42vw); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; min-height: 0; }
+.ops-call-side[hidden] { display: none; }
+.ops-call-side code { word-break: break-all; }
+.ops-tile { position: relative; }
+.ops-tile.screen video { object-fit: contain; }
+.ops-tile-name { position: absolute; left: 8px; bottom: 8px; font-size: 12px;
+  padding: 2px 8px; border-radius: 999px; background: #111; color: #fff; }
+/* the stage: what the room is watching, a full row above the faces */
+.ops-stage { grid-column: 1 / -1; min-width: 0; max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px; display: flex; flex-direction: column;
+  gap: 6px; }
+.ops-stage[hidden] { display: none; }
+.ops-stage-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ops-stage video, .ops-stage img, .ops-stage iframe { width: 100%;
+  max-height: 46vh; border-radius: 8px; background: #000; border: 0;
+  object-fit: contain; aspect-ratio: auto; }
+.ops-stage iframe { height: 46vh; background: #fff; }
+.ops-stage-doc { display: flex; flex-direction: column; gap: 6px;
+  align-items: flex-start; }
+.ops-stage-doc audio { width: 100%; }
+.ops-ptabs { display: flex; gap: 2px; padding: 8px 10px 0;
+  border-bottom: 1px solid var(--line); }
+.ops-ptab { padding: 6px 10px; border-radius: 8px 8px 0 0; cursor: pointer;
+  font-size: 13px; opacity: .7; }
+.ops-ptab.on { opacity: 1; background: var(--line); }
+.ops-ptab b { font-weight: 600; margin-left: 4px; }
+.ops-pane { display: flex; flex-direction: column; min-height: 0; flex: 1;
+  padding: 10px; }
+.ops-pane[hidden] { display: none; }
+.ops-chat { flex: 1; overflow-y: auto; min-height: 120px; max-height: 40vh;
+  display: flex; flex-direction: column; gap: 8px; }
+.ops-msg { font-size: 14px; line-height: 1.35; }
+.ops-msg b { font-size: 13px; }
+.ops-msg.mine b { color: var(--accent); }
+.ops-msg a { word-break: break-all; }
+.ops-say { display: flex; gap: 6px; margin-top: 8px; }
+.ops-say input { flex: 1; min-width: 0; }
+.ops-person { display: flex; gap: 8px; align-items: center; padding: 6px 0;
+  border-bottom: 1px solid var(--line); font-size: 14px; flex-wrap: wrap; }
+.ops-dot { width: 8px; height: 8px; border-radius: 50%; background: #3ccf8e;
+  flex: none; }
+.ops-shared { display: flex; gap: 10px; align-items: center; padding: 8px 0;
+  border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ops-shared a { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ops-attach { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.ops-invite { margin-top: 8px; }
+@media (max-width: 720px) {
+  .ops-call-body { flex-direction: column; overflow-y: auto; }
+  .ops-call-body .ops-call-grid { overflow: visible; flex: none; }
+  .ops-call-side { width: auto; border-left: 0; border-top: 1px solid var(--line);
+    flex: none; }
+  .ops-chat { max-height: 32vh; }
+  #ops-call { max-height: 88vh; }
+}
 
 /* the roster's faces: attendance is a staff sheet, and a face beside the
    name is what a door check actually uses */

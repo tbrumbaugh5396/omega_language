@@ -1658,23 +1658,33 @@
         ? who.map((w) => `<div class="lrn-person">
             <span class="lrn-dot"></span><b>${esc(w.name || "someone")}</b>
             ${w.user_id === me ? '<span class="lrn-meta">you</span>' : ""}
-            ${w.screen ? '<span class="pill-live">sharing screen</span>' : ""}</div>`).join("")
+            ${w.screen ? '<span class="pill-live">sharing screen</span>' : ""}
+            ${w.stage ? '<span class="pill-live">presenting</span>' : ""}</div>`).join("")
         : `<p class="lrn-meta">${opts.inCall ? "just you so far" : "nobody is on the video call"}</p>`;
     }
     async function drawShared() {
       let items = [];
       try { items = (await api(`/api/learn/sessions/${s.id}/shared`)).items || []; }
       catch (e) { items = []; }
+      const canPut = !!(opts.putOn && s.may_mark);
       host.querySelector("#lp-shared").innerHTML = (items.length
-        ? items.map((m) => `<a class="lrn-shared" href="${esc(m.url)}" target="_blank"
-            rel="noopener">${esc(m.title || m.name || "file")}
-            <span class="lrn-meta">${esc(m.kind || "")}</span></a>`).join("")
+        ? items.map((m) => `<div class="lrn-shared"><a href="${esc(m.url)}" target="_blank"
+            rel="noopener">${esc(m.title || m.name || "file")}</a>
+            <span class="lrn-meta">${esc(m.kind || "")}${m.course ? " · course" : ""}</span>
+            ${canPut ? `<button class="lrn-btn sm" data-puton="${m.id}">Put on</button>` : ""}
+            </div>`).join("")
         : `<p class="lrn-meta">Nothing shared for this class yet.</p>`)
         + `<p class="lrn-meta" style="margin-top:8px"><a href="#courses"
             data-course="${s.course_id}">Course materials &rarr;</a></p>`;
       const l = host.querySelector("[data-course]");
       if (l) l.onclick = (e) => { e.preventDefault(); location.hash = "courses";
         setTimeout(() => course(s.course_id), 50); };
+      host.querySelectorAll("[data-puton]").forEach((b) => b.onclick = async () => {
+        const m = items.find((x) => String(x.id) === b.dataset.puton);
+        if (!m) return;
+        try { await opts.putOn({ id: m.id, title: m.title, url: m.url, kind: m.kind }); }
+        catch (err) { toast(err.message); }
+      });
       if (s.may_mark) {
         const sh = host.querySelector("#lp-shared");
         sh.insertAdjacentHTML("beforeend", `<div class="lrn-attach"><label class="lrn-btn sm">
@@ -1690,6 +1700,23 @@
 
   /* ── the call overlay ─────────────────────────────────────────────────── */
   let MESH = null;
+  /* What is on the stage: one file the whole room watches, put there by
+     the teacher from the Shared tab. A film plays in the call; a picture
+     or a PDF shows in it; a deck the browser cannot draw (a .pptx) opens
+     beside the call with a nudge to share the screen it is on, which is
+     the honest answer to "put the PowerPoint on" in a browser. */
+  function stageHtml(st) {
+    const u = st.url || "", t = esc(st.title || "file");
+    if (st.kind === "video") return `<video controls autoplay playsinline src="${esc(u)}"></video>`;
+    if (st.kind === "audio") return `<div class="lrn-stage-doc"><b>${t}</b>
+        <audio controls autoplay src="${esc(u)}"></audio></div>`;
+    if (st.kind === "image") return `<img src="${esc(u)}" alt="${t}">`;
+    if (/\.(pdf|txt|md)$/.test(u.toLowerCase())) return `<iframe src="${esc(u)}#toolbar=0" title="${t}"></iframe>`;
+    return `<div class="lrn-stage-doc"><b>${t}</b>
+      <p class="lrn-meta">A browser cannot draw this file inside the call. Open it,
+        then share that screen so the class sees the slides.</p>
+      <a class="lrn-btn sm" href="${esc(u)}" target="_blank" rel="noopener">Open ${t}</a></div>`;
+  }
   async function openCall(room, title, expected, session) {
     if (MESH) { alert("You're already in a call — leave it first."); return; }
     if (!window.LinguaMesh) { alert("The call module didn't load."); return; }
@@ -1724,7 +1751,9 @@
         <button class="lrn-btn sm primary" id="call-leave">Leave</button>
       </div>
       <div class="lrn-call-body">
-        <div class="lrn-call-grid" id="call-grid"></div>
+        <div class="lrn-call-grid" id="call-grid">
+          <div class="lrn-stage" id="call-stage" hidden></div>
+        </div>
         <div class="lrn-call-side" id="call-side" hidden></div>
       </div>
       <p class="lrn-meta" id="call-media" style="margin:4px 12px"></p>
@@ -1733,6 +1762,27 @@
     const grid = ov.querySelector("#call-grid");
     const NAMES = new Map();      // peer id -> name, from the room's roster
     const SCREEN = new Set();     // peers currently sharing a screen
+    const stageEl = ov.querySelector("#call-stage");
+    let onStage = null;           // what the room is watching, by id+url
+    const showStage = (st, mine) => {
+      const key = st ? `${st.id}:${st.url}` : "";
+      if (key === (onStage || "")) return;
+      onStage = key || null;
+      if (!st) { stageEl.hidden = true; stageEl.innerHTML = ""; return; }
+      stageEl.hidden = false;
+      stageEl.innerHTML = `<div class="lrn-stage-head"><b>${esc(st.title || "on now")}</b>
+          <span class="lrn-meta">on for the class</span><span style="flex:1"></span>
+          ${mine ? '<button class="lrn-btn sm" id="call-takeoff">Take off</button>' : ""}
+        </div>${stageHtml(st)}`;
+      const off = stageEl.querySelector("#call-takeoff");
+      if (off) off.onclick = () => putOn(null);
+    };
+    const putOn = async (item) => {
+      if (!MESH || !MESH.id) { toast("join the call first"); return; }
+      await api(`/api/learn/rtc/${room}/mark`,
+        item ? { peer: MESH.id, stage: item } : { peer: MESH.id, stage_off: true });
+      showStage(item, true);        // the room's next poll carries it to everybody
+    };
     const tile = (id) => {
       let w = grid.querySelector(`[data-tile="${id}"]`);
       if (!w) {
@@ -1768,9 +1818,12 @@
         SCREEN.delete(id);
       },
       onWho: (who) => {
+        let st = null, mine = false;
         for (const w of who) { NAMES.set(w.peer, w.name);
-          if (w.screen) SCREEN.add(w.peer); else if (w.peer !== MESH.id) SCREEN.delete(w.peer); }
+          if (w.screen) SCREEN.add(w.peer); else if (w.peer !== MESH.id) SCREEN.delete(w.peer);
+          if (w.stage && !st) { st = w.stage; mine = w.peer === MESH.id; } }
         for (const id of NAMES.keys()) label(id);
+        showStage(st, mine);
         if (panel) panel.people(who);
       },
       onMeta: (id, meta) => {
@@ -1825,14 +1878,14 @@
       side.hidden = !side.hidden;
       e.target.textContent = side.hidden ? "Chat" : "Hide chat";
       if (!side.hidden && !panel && session) {
-        panel = classPanel(side, session, { me: MYID, share: true, inCall: true });
+        panel = classPanel(side, session, { me: MYID, share: true, inCall: true, putOn });
       }
     };
     try { await MESH.join(); }
     catch (err) { alert(err.message); close(); }
     // the panel shows the room's people from the first poll on
     if (session) { side.hidden = false; ov.querySelector("#call-panel").textContent = "Hide chat";
-      panel = classPanel(side, session, { me: MYID, share: true, inCall: true }); }
+      panel = classPanel(side, session, { me: MYID, share: true, inCall: true, putOn }); }
   }
 
   /* ── the device beacon: this page is its own shell ──────────────────── */

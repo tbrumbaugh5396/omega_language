@@ -449,18 +449,39 @@ def rtc_join(room: str, body: RtcBody, user=Depends(current_customer),
 
 class RtcMarkBody(BaseModel):
     peer: str = ""
-    screen: bool = False
+    screen: bool | None = None
+    # What this peer has put on for the room: {id, title, url, kind}.
+    # `stage` absent = no change; `stage_off` = take it off.
+    stage: dict | None = None
+    stage_off: bool = False
 
 
 @router.post("/api/learn/rtc/{room}/mark")
 def rtc_mark(room: str, body: RtcMarkBody, user=Depends(current_customer),
              con=Depends(get_con)):
     """Sharing a screen is said to the room, so the tile can be labelled
-    and the people list can show who is presenting."""
+    and the people list can show who is presenting. Putting a file on
+    the stage is said the same way — and only by the door: a class's
+    stage is the teacher's, not anybody's who wandered into the call."""
     _require_cap("learning")
     _member(con, user)
-    CM._rtc_mark(room, body.peer, screen=body.screen)
-    return {"ok": True}
+    flags = {}
+    if body.screen is not None:
+        flags["screen"] = body.screen
+    if body.stage is not None or body.stage_off:
+        s = con.execute("SELECT id FROM class_sessions WHERE room=?"
+                        " AND status='open'", (room,)).fetchone()
+        if s is not None:
+            _, is_door = _class_and_seat(con, user, s["id"])
+            if not is_door:
+                raise HTTPException(403, "only the teacher or staff put"
+                                         " something on for the class")
+        flags["stage"] = None if body.stage_off else body.stage
+        if body.stage is not None and CM.stage_of(body.stage) is None:
+            raise HTTPException(400, "the stage shows this install's own"
+                                     " files — a /media/ path")
+    CM._rtc_mark(room, body.peer, **flags)
+    return {"ok": True, "stage": CM.stage_in(room)}
 
 
 @router.post("/api/learn/rtc/{room}/signal")
@@ -1297,7 +1318,7 @@ def learn_page(con=Depends(get_con)):
  .lrn-live{{border:1px solid currentColor;border-radius:10px;padding:12px 16px;margin:12px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap}}
  .lrn-badges{{display:flex;gap:8px;flex-wrap:wrap}}
  .lrn-badge{{border:1px solid rgba(127,127,127,.4);border-radius:999px;padding:4px 12px;font-size:.9em}}
- .lrn-tabs{{display:flex;gap:4px;margin-bottom:18px;border-bottom:1px solid rgba(127,127,127,.25)}}
+ .lrn-tabs{{display:flex;gap:4px;margin-bottom:18px;border-bottom:1px solid rgba(127,127,127,.25);flex-wrap:wrap}}
  .lrn-tab{{padding:8px 18px;cursor:pointer;border-radius:8px 8px 0 0}}
  .lrn-tab.on{{font-weight:700;border:1px solid rgba(127,127,127,.25);border-bottom-color:transparent}}
  .lrn-search input{{width:100%;max-width:420px;padding:10px;border-radius:8px;border:1px solid rgba(127,127,127,.4);background:none;color:inherit}}
@@ -1318,7 +1339,7 @@ def learn_page(con=Depends(get_con)):
  #lrn-call{{position:fixed;inset:auto 12px 12px 12px;max-height:70vh;background:var(--bg,#111);color:inherit;border:1px solid rgba(127,127,127,.4);border-radius:14px;z-index:200;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.4)}}
  .lrn-call-head{{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid rgba(127,127,127,.25);flex-wrap:wrap}}
  .lrn-call-side code{{word-break:break-all}}
- .lrn-call-grid{{display:grid;gap:8px;padding:12px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));overflow-y:auto}}
+ .lrn-call-grid{{min-width:0;display:grid;gap:8px;padding:12px;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));overflow-y:auto}}
  .lrn-call-grid video{{width:100%;border-radius:10px;background:#000;aspect-ratio:4/3;object-fit:cover}}
  .lrn-call-body{{display:flex;min-height:0;flex:1}}
  .lrn-call-body .lrn-call-grid{{flex:1;align-content:start}}
@@ -1338,7 +1359,14 @@ def learn_page(con=Depends(get_con)):
  .lrn-say{{display:flex;gap:6px;margin-top:8px}} .lrn-say input{{flex:1;min-width:0}}
  .lrn-person{{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid rgba(127,127,127,.15);font-size:14px}}
  .lrn-dot{{width:8px;height:8px;border-radius:50%;background:#3ccf8e;flex:none}}
- .lrn-shared{{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.15)}}
+ .lrn-shared{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.15);flex-wrap:wrap}}
+ .lrn-shared a{{flex:1;min-width:0;overflow-wrap:anywhere}}
+ .lrn-stage{{grid-column:1/-1;min-width:0;max-width:100%;border:1px solid rgba(127,127,127,.3);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:6px}}
+ .lrn-stage[hidden]{{display:none}}
+ .lrn-stage-head{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
+ .lrn-call-grid .lrn-stage video,.lrn-stage img,.lrn-stage iframe{{width:100%;max-height:46vh;border-radius:8px;background:#000;border:0;object-fit:contain;aspect-ratio:auto}}
+ .lrn-stage iframe{{height:46vh;background:#fff}}
+ .lrn-stage-doc{{display:flex;flex-direction:column;gap:6px;align-items:flex-start}} .lrn-stage-doc audio{{width:100%}}
  .lrn-panel-host{{border:1px solid rgba(127,127,127,.25);border-radius:12px;margin:0 0 14px;display:flex;flex-direction:column}}
  .lrn-tut-day{{display:flex;gap:8px;align-items:center;padding:3px 0}} .lrn-tut-day label{{min-width:60px}}
  .lrn-reg{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.2)}}
@@ -1352,7 +1380,7 @@ def learn_page(con=Depends(get_con)):
  .lrn-post p{{margin:0;white-space:pre-wrap}}
  .lrn-attach{{display:flex;gap:8px;align-items:center;margin:8px 0}}
  .lrn-file{{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid rgba(127,127,127,.15)}}
- @media (max-width:720px){{ .lrn-call-body{{flex-direction:column}} .lrn-call-side{{width:auto;border-left:0;border-top:1px solid rgba(127,127,127,.25)}} #lrn-call{{max-height:88vh}} }}
+ @media (max-width:720px){{ .lrn-call-body{{flex-direction:column;overflow-y:auto}} .lrn-call-body .lrn-call-grid{{overflow:visible;flex:none}} .lrn-call-side{{width:auto;border-left:0;border-top:1px solid rgba(127,127,127,.25);flex:none}} .lrn-chat{{max-height:32vh}} #lrn-call{{max-height:88vh}} }}
  .lrn-cal{{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;max-width:420px}}
  .lrn-cal .dow{{font-size:.75em;opacity:.6;text-align:center;padding:2px 0}}
  .lrn-cal .day{{text-align:center;padding:6px 0;border-radius:8px;border:1px solid transparent}}

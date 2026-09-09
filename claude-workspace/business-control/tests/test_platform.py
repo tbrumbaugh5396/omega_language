@@ -4176,6 +4176,54 @@ ok(not any(w["peer"] == _jrm["peer"] for w in
            c.get(f"/api/learn/rtc/{_rm2}/poll?peer=zz", headers=TT).json()["who"]),
    "leaving takes your name off the list with your seat")
 
+# --- the stage: one file the whole room watches ----------------------------
+_jt = c.post(f"/api/learn/rtc/{_rm2}/join", headers=TT, json={}).json()
+_jl = c.post(f"/api/learn/rtc/{_rm2}/join", headers=LN, json={}).json()
+_st = c.post(f"/api/learn/rtc/{_rm2}/mark", headers=TT,
+             json={"peer": _jt["peer"], "stage": {"id": 7, "title": "week1.mp4",
+                   "url": "/media/learning/week1.mp4", "kind": "video"}})
+ok(_st.status_code == 200 and _st.json()["stage"]["title"] == "week1.mp4",
+   "the teacher puts a film on for the class from the Shared tab")
+_pw = c.get(f"/api/learn/rtc/{_rm2}/poll?peer={_jl['peer']}", headers=LN).json()
+_pres = [w for w in _pw["who"] if w.get("stage")]
+ok(len(_pres) == 1 and _pres[0]["peer"] == _jt["peer"]
+   and _pres[0]["stage"]["url"] == "/media/learning/week1.mp4"
+   and _pres[0]["stage"]["kind"] == "video",
+   "and the learner's next poll carries it — the stage rides the roster "
+   "everybody already polls, no second channel")
+ok(c.post(f"/api/learn/rtc/{_rm2}/mark", headers=LN,
+          json={"peer": _jl["peer"], "stage": {"id": 1, "title": "x",
+                "url": "/media/learning/x.mp4", "kind": "video"}}).status_code == 403,
+   "a student cannot put something on — a class's stage is the teacher's")
+ok(c.post(f"/api/learn/rtc/{_rm2}/mark", headers=TT,
+          json={"peer": _jt["peer"], "stage": {"id": 1, "title": "x",
+                "url": "https://elsewhere.example/x.mp4", "kind": "video"}}).status_code == 400,
+   "and the stage shows this install's own files only — a foreign url is "
+   "refused rather than pushed into every participant's poll")
+ok(_cm.stage_of({"url": "/media/a.bin", "kind": "weird", "title": "t" * 500})["kind"]
+   == "document" and len(_cm.stage_of({"url": "/media/a.bin"})["title"]) == 0,
+   "an unknown kind is a document and a title is bounded")
+ok(c.post(f"/api/learn/rtc/{_rm2}/mark", headers=TT,
+          json={"peer": _jt["peer"], "stage_off": True}).json()["stage"] is None,
+   "taking it off leaves the room with nothing on")
+c.post(f"/api/learn/rtc/{_rm2}/mark", headers=TT,
+       json={"peer": _jt["peer"], "stage": {"id": 7, "title": "week1.mp4",
+             "url": "/media/learning/week1.mp4", "kind": "video"}})
+ok(any(w.get("stage") for w in
+       c.get(f"/api/learn/rtc/{_rm2}/poll?peer={_jl['peer']}", headers=LN).json()["who"])
+   and c.post(f"/api/learn/rtc/{_rm2}/mark", headers=TT,
+              json={"peer": _jt["peer"], "screen": True}).status_code == 200
+   and any(w.get("stage") and w.get("screen") for w in
+           c.get(f"/api/learn/rtc/{_rm2}/poll?peer={_jl['peer']}", headers=LN).json()["who"]),
+   "marking a screen does not knock the stage off — the two facts are "
+   "independent, and a mark that does not mention the stage leaves it")
+c.post(f"/api/learn/rtc/{_rm2}/leave", headers=TT, json={"peer": _jt["peer"]})
+ok(not any(w.get("stage") for w in
+           c.get(f"/api/learn/rtc/{_rm2}/poll?peer={_jl['peer']}", headers=LN).json()["who"]),
+   "and the presenter leaving takes the stage with their seat — a film "
+   "nobody is presenting does not play to an empty chair")
+c.post(f"/api/learn/rtc/{_rm2}/leave", headers=LN, json={"peer": _jl["peer"]})
+
 ok(c.post(f"/api/learn/sessions/{_s2}/chat", headers=LN,
           json={"body": "is this the right room?"}).status_code == 200,
    "a learner in the class says something in text")
@@ -4365,6 +4413,23 @@ ok(any(m["original"] == "week1.pptx" for m in
 ok(any(i.get("course") for i in c.get(
     f"/api/learn/sessions/{_cls2['session']['id']}/shared", headers=LN).json()["items"]),
    "and in every session's Shared tab, so it is there to put on")
+_ojs = (Path(__file__).parent.parent / "src/erp/frontend/app/11-learning.js"
+        ).read_text(encoding="utf-8")
+_ljs0 = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
+         ).read_text(encoding="utf-8")
+ok(all(k in _ojs for k in ("shareScreen()", "opsc-invite", "opsClassPanel(",
+                           "/chat?since=", "onWho:", "ops-tile-name"))
+   and "ops-call" in _ojs,
+   "the teacher's call on the ops side has what the learner's has — screen "
+   "share, an invite link, chat, a people list, names on the tiles — one "
+   "room seen from both sides, not a poorer one for the person running it")
+ok('data-puton' in _ojs and 'stage_off' in _ojs and "opsc-stage" in _ojs
+   and 'data-puton' in _ljs0 and "call-stage" in _ljs0 and "stage_off" in _ljs0,
+   "and both sides carry the stage: Put on from the Shared tab, Take off, "
+   "and a place in the grid where what is on plays")
+ok("cannot draw this file" in _ojs and "cannot draw this file" in _ljs0,
+   "a deck the browser cannot draw says so and points at screen share, "
+   "rather than a blank stage")
 
 # --- a one-time training: a film and a link -------------------------------
 _tr = c.post("/api/learning/trainings", headers=AA,

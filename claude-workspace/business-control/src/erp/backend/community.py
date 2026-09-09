@@ -649,19 +649,58 @@ def _rtc_join(room: str, peer: str | None, who: dict | None = None) -> dict:
         if who:
             _WHO.setdefault(key, {})[peer] = {
                 "name": who.get("name", ""), "user_id": who.get("user_id", 0),
-                "at": time.time(), "screen": False}
+                "at": time.time(), "screen": False, "stage": None}
         peers = [p for p in r if p != peer]
         roster = _who_list(key)
     return {"peer": peer, "peers": peers, "who": roster}
 
 
 def _rtc_mark(room: str, peer: str, **flags) -> None:
-    """A fact about a peer the others should see — sharing a screen."""
+    """A fact about a peer the others should see — sharing a screen, or
+    what they have put on for the room to watch. Flags are booleans;
+    `stage` is the one exception, a small dict (or None to take it off)
+    describing the file on the stage, kept on the presenter's seat so it
+    leaves the room when they do."""
     key = _room_key(room)
     with _LOCK:
         w = _WHO.get(key, {}).get(peer)
         if w:
-            w.update({k: bool(v) for k, v in flags.items()})
+            for k, v in flags.items():
+                if k == "stage":
+                    w["stage"] = stage_of(v)
+                else:
+                    w[k] = bool(v)
+
+
+STAGE_KINDS = ("video", "audio", "image", "document")
+
+
+def stage_of(v) -> dict | None:
+    """The stage as the room carries it: id, title, url, kind — and no
+    more, so a presenter cannot push an arbitrary blob into every
+    participant's poll. A url that is not one of this install's media
+    paths is refused rather than trusted; the stage shows OUR files."""
+    if not isinstance(v, dict):
+        return None
+    url = str(v.get("url") or "")[:300]
+    if not url.startswith("/media/"):
+        return None
+    kind = str(v.get("kind") or "document")
+    if kind not in STAGE_KINDS:
+        kind = "document"
+    return {"id": int(v.get("id") or 0),
+            "title": str(v.get("title") or "")[:160],
+            "url": url, "kind": kind, "at": time.time()}
+
+
+def stage_in(room: str) -> dict | None:
+    """What is on in a room right now, whoever put it there."""
+    key = _room_key(room)
+    with _LOCK:
+        for w in _WHO.get(key, {}).values():
+            if w.get("stage"):
+                return w["stage"]
+    return None
 
 
 def _rtc_signal(room: str, to: str, from_peer: str, payload) -> None:

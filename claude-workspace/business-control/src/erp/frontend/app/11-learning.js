@@ -1073,6 +1073,156 @@ function loadCallScript(src, ready) {
   });
 }
 
+/* What is on the stage: one file the whole room watches, put there by the
+   teacher from the Shared tab. A film or a recording plays in the call; a
+   picture or a PDF shows in it; a deck the browser cannot draw (a .pptx)
+   opens beside the call with a nudge to share the screen it is on, which
+   is the honest answer to "put the PowerPoint on" in a browser. */
+function stageHtml(st) {
+  const u = st.url || "";
+  const low = u.toLowerCase();
+  const t = esc(st.title || "file");
+  if (st.kind === "video") {
+    return `<video controls autoplay playsinline src="${esc(u)}"></video>`;
+  }
+  if (st.kind === "audio") {
+    return `<div class="ops-stage-doc"><b>${t}</b>
+      <audio controls autoplay src="${esc(u)}"></audio></div>`;
+  }
+  if (st.kind === "image") return `<img src="${esc(u)}" alt="${t}">`;
+  if (/\.(pdf|txt|md)$/.test(low)) {
+    return `<iframe src="${esc(u)}#toolbar=0" title="${t}"></iframe>`;
+  }
+  return `<div class="ops-stage-doc"><b>${t}</b>
+    <p class="dim">A browser cannot draw this file inside the call. Open
+      it, then share that screen so the class sees the slides.</p>
+    <a class="btn alt sm" href="${esc(u)}" target="_blank" rel="noopener">Open ${t}</a>
+  </div>`;
+}
+
+/* The side panel of a class call on the ops side: what is said, who is
+   here, what is shared. Same three tabs the learner's page has, on the
+   same endpoints — the teacher and the students must never see two
+   different rooms. */
+function opsClassPanel(host, sid, room, opts) {
+  const me = (S.user && S.user.id) || 0;
+  let since = 0, timer = null, who = [], stopped = false;
+  host.innerHTML = `
+    <div class="ops-ptabs">
+      <span class="ops-ptab on" data-p="chat">Chat</span>
+      <span class="ops-ptab" data-p="people">People <b id="opsp-count"></b></span>
+      <span class="ops-ptab" data-p="shared">Shared</span>
+    </div>
+    <div class="ops-pane" data-pane="chat">
+      <div class="ops-chat" id="opsp-chat"><p class="dim">nothing said yet</p></div>
+      <form class="ops-say" id="opsp-say"><input placeholder="say something to the class"
+        maxlength="2000" autocomplete="off"><button class="btn sm">Send</button></form>
+    </div>
+    <div class="ops-pane" data-pane="people" hidden><div id="opsp-people"></div></div>
+    <div class="ops-pane" data-pane="shared" hidden><div id="opsp-shared"></div>
+      <p class="dim ops-invite">Class link, for anyone in the course:<br>
+        <code id="opsp-link">${esc(opts.link || "")}</code>
+        <button class="btn alt sm" id="opsp-copy">Copy</button></p>
+    </div>`;
+  host.querySelectorAll(".ops-ptab").forEach((t) => t.onclick = () => {
+    host.querySelectorAll(".ops-ptab").forEach((x) => x.classList.toggle("on", x === t));
+    host.querySelectorAll(".ops-pane").forEach((x) =>
+      x.hidden = x.dataset.pane !== t.dataset.p);
+  });
+  const chatEl = host.querySelector("#opsp-chat");
+  const when = (t) => new Date(t * 1000).toLocaleTimeString([],
+    { hour: "2-digit", minute: "2-digit" });
+  async function pull() {
+    if (stopped) return;
+    try {
+      const r = await api(`/api/learn/sessions/${sid}/chat?since=${since}`);
+      if (r.messages.length) {
+        if (since === 0) chatEl.innerHTML = "";
+        for (const m of r.messages) {
+          since = Math.max(since, m.id);
+          const d = document.createElement("div");
+          d.className = "ops-msg" + (m.user_id === r.me ? " mine" : "");
+          d.innerHTML = `<b>${esc(m.name)}</b> <span class="dim">${when(m.at)}</span>
+            <div>${esc(m.body).replace(/(https?:\/\/[^\s<]+)/g,
+              '<a href="$1" target="_blank" rel="noopener">$1</a>')}</div>`;
+          chatEl.appendChild(d);
+        }
+        chatEl.scrollTop = chatEl.scrollHeight;
+      }
+    } catch (e) { /* the class may have ended; the next pull says so */ }
+    timer = setTimeout(pull, 2000);
+  }
+  host.querySelector("#opsp-say").onsubmit = async (e) => {
+    e.preventDefault();
+    const inp = e.target.querySelector("input");
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = "";
+    try { await api(`/api/learn/sessions/${sid}/chat`, { body: { body: text } }); }
+    catch (err) { toast(err.message); }
+    clearTimeout(timer); pull();
+  };
+  host.querySelector("#opsp-copy").onclick = async () => {
+    try {
+      if (navigator.share) await navigator.share({ title: opts.title, url: opts.link });
+      else { await navigator.clipboard.writeText(opts.link); toast("link copied"); }
+    } catch (e) { /* the sheet was dismissed */ }
+  };
+  function drawPeople(list) {
+    who = list || who;
+    const c = host.querySelector("#opsp-count"); if (c) c.textContent = who.length || "";
+    host.querySelector("#opsp-people").innerHTML = who.length
+      ? who.map((w) => `<div class="ops-person">
+          <span class="ops-dot"></span><b>${esc(w.name || "someone")}</b>
+          ${w.user_id === me ? '<span class="dim">you</span>' : ""}
+          ${w.screen ? '<span class="pill">sharing screen</span>' : ""}
+          ${w.stage ? '<span class="pill">presenting</span>' : ""}</div>`).join("")
+      : '<p class="dim">just you so far</p>';
+  }
+  async function drawShared() {
+    let items = [];
+    try { items = (await api(`/api/learn/sessions/${sid}/shared`)).items || []; }
+    catch (e) { items = []; }
+    const sh = host.querySelector("#opsp-shared");
+    sh.innerHTML = (items.length
+      ? items.map((m) => `<div class="ops-shared">
+          <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title || "file")}</a>
+          <span class="dim">${esc(m.kind || "")}${m.course ? " · course" : ""}</span>
+          <button class="btn alt sm" data-puton="${m.id}">Put on</button>
+        </div>`).join("")
+      : '<p class="dim">Nothing shared for this class yet.</p>')
+      + `<div class="ops-attach"><label class="btn alt sm">Share a file
+          <input type="file" id="opsp-file" hidden></label>
+          <span class="dim" id="opsp-file-note"></span></div>`;
+    sh.querySelectorAll("[data-puton]").forEach((b) => b.onclick = async () => {
+      const m = items.find((x) => String(x.id) === b.dataset.puton);
+      if (!m || !opts.putOn) return;
+      try { await opts.putOn({ id: m.id, title: m.title, url: m.url, kind: m.kind }); }
+      catch (err) { toast(err.message); }
+    });
+    const inp = sh.querySelector("#opsp-file");
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      const note = sh.querySelector("#opsp-file-note");
+      note.textContent = "uploading…";
+      try {
+        const r = await fetch(`/api/learning/sessions/${sid}/material`, {
+          method: "POST",
+          headers: { "Content-Type": f.type || "application/octet-stream",
+                     "X-Filename": f.name,
+                     Authorization: "Bearer " + S.user.token },
+          body: f });
+        if (!r.ok) throw new Error((await r.json()).detail || "upload failed");
+        drawShared();
+      } catch (err) { note.textContent = err.message; }
+    };
+  }
+  drawPeople([]); drawShared(); pull();
+  return { people: drawPeople, shared: drawShared,
+           stop() { stopped = true; clearTimeout(timer); } };
+}
+
 async function classCall(room, title, opts) {
   const { sid = null, expected = 0 } = opts || {};
   if (RTC_CALL) return toast("You're already in a call — leave it first.");
@@ -1091,31 +1241,69 @@ async function classCall(room, title, opts) {
   } catch (e) { /* no sfu module: the mesh carries on */ }
   const STREAMS = new Map();          // for the class recorder's compositor
   let composer = null, callRec = null;
+  const link = sid ? `${location.origin}/learn?join=${sid}` : location.href;
   const ov = document.createElement("div");
   ov.id = "ops-call";
   ov.innerHTML = `<div class="ops-call-head">
       <b>${esc(title || "Class video")}</b>
       <span class="dim" id="opsc-state">connecting…</span>
       <span style="flex:1"></span>
+      <button class="btn alt sm" id="opsc-share" title="show your screen to the class">Share screen</button>
+      <button class="btn alt sm" id="opsc-invite" title="copy a link that opens this class">Invite</button>
+      ${sid ? '<button class="btn alt sm" id="opsc-panel">Hide chat</button>' : ""}
       ${sid ? '<button class="btn alt sm" id="opsc-rec">Record class</button>' : ""}
       <button class="btn alt sm" id="opsc-mic">Mute</button>
       <button class="btn alt sm" id="opsc-cam">Camera off</button>
       <button class="btn sm" id="opsc-leave">Leave</button>
     </div>
-    <div class="ops-call-grid" id="opsc-grid"></div>`;
+    <div class="ops-call-body">
+      <div class="ops-call-grid" id="opsc-grid">
+        <div class="ops-stage" id="opsc-stage" hidden></div>
+      </div>
+      <div class="ops-call-side" id="opsc-side" ${sid ? "" : "hidden"}></div>
+    </div>`;
   document.body.appendChild(ov);
   const grid = $("#opsc-grid");
+  const stageEl = $("#opsc-stage");
+  const NAMES = new Map();      // peer id -> name, from the room's roster
+  const SCREEN = new Set();     // peers currently sharing a screen
+  let onStage = null;           // what the room is watching, by id+url
   const tile = (id) => {
-    let v = grid.querySelector(`[data-peer="${id}"]`);
-    if (!v) {
-      v = document.createElement("video");
+    let w = grid.querySelector(`[data-tile="${id}"]`);
+    if (!w) {
+      w = document.createElement("div");
+      w.className = "ops-tile"; w.dataset.tile = id;
+      const v = document.createElement("video");
       v.dataset.peer = id;
       v.autoplay = true;
       v.playsInline = true;
       if (id === "me") v.muted = true;
-      grid.appendChild(v);
+      w.appendChild(v);
+      const lab = document.createElement("span");
+      lab.className = "ops-tile-name"; lab.textContent = id === "me" ? "you" : "…";
+      w.appendChild(lab);
+      grid.appendChild(w);
     }
-    return v;
+    return w.querySelector("video");
+  };
+  const label = (id) => {
+    const w = grid.querySelector(`[data-tile="${id}"]`); if (!w) return;
+    const n = id === "me" ? "you" : (NAMES.get(id) || "…");
+    w.querySelector(".ops-tile-name").textContent = SCREEN.has(id) ? n + " · screen" : n;
+    w.classList.toggle("screen", SCREEN.has(id));
+  };
+  const showStage = (st, mine) => {
+    const key = st ? `${st.id}:${st.url}` : "";
+    if (key === (onStage || "")) return;
+    onStage = key || null;
+    if (!st) { stageEl.hidden = true; stageEl.innerHTML = ""; return; }
+    stageEl.hidden = false;
+    stageEl.innerHTML = `<div class="ops-stage-head"><b>${esc(st.title || "on now")}</b>
+        <span class="dim">on for the class</span><span style="flex:1"></span>
+        ${mine ? '<button class="btn alt sm" id="opsc-takeoff">Take off</button>' : ""}
+      </div>${stageHtml(st)}`;
+    const off = $("#opsc-takeoff");
+    if (off) off.onclick = () => putOn(null);
   };
   const meshApi = async (path, body) => {
     const r = await fetch(path, {
@@ -1130,14 +1318,38 @@ async function classCall(room, title, opts) {
     }
     return r.json();
   };
+  const putOn = async (item) => {
+    if (!RTC_CALL || !RTC_CALL.id) return toast("join the call first");
+    await meshApi(`/api/learn/rtc/${room}/mark`,
+      item ? { peer: RTC_CALL.id, stage: item } : { peer: RTC_CALL.id, stage_off: true });
+    // the room's next poll carries it to everybody; show it here at once
+    showStage(item, true);
+  };
+  let panel = null;
   RTC_CALL = makeCall({
     room, api: meshApi, iceServers: cfg.ice_servers,
     onLocal: (s) => { tile("me").srcObject = s; STREAMS.set("me", s); },
-    onRemote: (id, s) => { tile(id).srcObject = s; STREAMS.set(id, s); },
+    onRemote: (id, s) => { tile(id).srcObject = s; STREAMS.set(id, s); label(id); },
     onLeave: (id) => {
       STREAMS.delete(id);
-      const v = grid.querySelector(`[data-peer="${id}"]`);
-      if (v) v.remove();
+      SCREEN.delete(id);
+      const w = grid.querySelector(`[data-tile="${id}"]`);
+      if (w) w.remove();
+    },
+    onWho: (who) => {
+      let st = null, mine = false;
+      for (const w of who) {
+        NAMES.set(w.peer, w.name);
+        if (w.screen) SCREEN.add(w.peer); else if (w.peer !== RTC_CALL.id) SCREEN.delete(w.peer);
+        if (w.stage && !st) { st = w.stage; mine = w.peer === RTC_CALL.id; }
+      }
+      for (const id of NAMES.keys()) label(id);
+      showStage(st, mine);
+      if (panel) panel.people(who);
+    },
+    onMeta: (id, meta) => {
+      if (meta.screen) SCREEN.add(id); else SCREEN.delete(id);
+      label(id);
     },
     onState: (m) => { const el = $("#opsc-state"); if (el) el.textContent = m; },
     onMedia: (got) => { if (got.detail) toast(got.detail); },
@@ -1199,6 +1411,7 @@ async function classCall(room, title, opts) {
   const close = () => {
     if (callRec) stopRecording(true);
     if (composer) { composer.stop(); composer = null; }
+    if (panel) panel.stop();
     if (RTC_CALL) RTC_CALL.leave();
     RTC_CALL = null;
     ov.remove();
@@ -1212,7 +1425,31 @@ async function classCall(room, title, opts) {
     const on = RTC_CALL && RTC_CALL.toggle("video");
     e.target.textContent = on ? "Camera off" : "Camera on";
   };
-  try { await RTC_CALL.join(); } catch (e) { toast(e.message); close(); }
+  const shareBtn = $("#opsc-share");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    shareBtn.disabled = true; shareBtn.title = "this browser cannot share a screen";
+  }
+  shareBtn.onclick = async () => {
+    if (!RTC_CALL) return;
+    try {
+      if (RTC_CALL.sharing) { await RTC_CALL.stopShare(); shareBtn.textContent = "Share screen"; }
+      else if (await RTC_CALL.shareScreen()) { shareBtn.textContent = "Stop sharing"; }
+    } catch (e) { toast(e.message || "could not share"); }
+  };
+  $("#opsc-invite").onclick = async () => {
+    try {
+      if (navigator.share) await navigator.share({ title, url: link });
+      else { await navigator.clipboard.writeText(link);
+             toast("link copied — anyone in the course can join with it"); }
+    } catch (e) {}
+  };
+  const side = $("#opsc-side");
+  if ($("#opsc-panel")) $("#opsc-panel").onclick = (e) => {
+    side.hidden = !side.hidden;
+    e.target.textContent = side.hidden ? "Chat" : "Hide chat";
+  };
+  try { await RTC_CALL.join(); } catch (e) { toast(e.message); return close(); }
+  if (sid) panel = opsClassPanel(side, sid, room, { title, link, putOn });
 }
 
 async function lessonForm(cid, lid) {
