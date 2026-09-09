@@ -1428,6 +1428,45 @@ ok("async function renderExpenses(" in _xjs and "function expenseForm(" in _xjs
    "the Expenses screen files, lists, accepts, claims routes, keeps "
    "receipts and hands the year to the accountant")
 
+# --- the wifi: links that point at the door that is actually open --------
+import importlib.util as _ilu
+_ln = _ilu.spec_from_file_location("bc_launch", Path(__file__).parent.parent / "scripts/launch.py")
+_lnm = _ilu.module_from_spec(_ln); _ln.loader.exec_module(_lnm)
+ok("IP:192.168.1.50" in _lnm.cert_sans("192.168.1.50")
+   and "DNS:localhost" in _lnm.cert_sans("192.168.1.50")
+   and "DNS:*.localhost" in _lnm.cert_sans("192.168.1.50")
+   and "IP:127.0.0.1" not in _lnm.cert_sans("127.0.0.1").replace("IP:127.0.0.1", "", 1),
+   "the self-signed cert names the machine's wifi address beside "
+   "localhost — a cert that names only localhost makes every phone call "
+   "the site an impostor")
+ok(_lnm.cert_covers(Path("/nonexistent/cert.pem"), "10.0.0.9") is False
+   or not __import__("shutil").which("openssl"),
+   "and a cert that does not name the current address is made again")
+_env0 = {k: os.environ.get(k) for k in ("BC_SCHEME", "BC_PORT")}
+os.environ["BC_SCHEME"] = "https"; os.environ["BC_PORT"] = "8443"
+_lu = base_url()
+for k, v in _env0.items():
+    if v is None: os.environ.pop(k, None)
+    else: os.environ[k] = v
+ok(_lu.startswith("https://") and _lu.endswith(":8443"),
+   "an HTTPS server on 8443 hands out https links on 8443 — QR codes and "
+   "class invites point at the door that is open, not at plain http on "
+   "the default port")
+ok(base_url().startswith("http://") and not base_url().startswith("https"),
+   "and without the launcher's word, links are plain http on the "
+   "configured port as before")
+_lj = json.loads((Path(__file__).parent.parent / ".claude/launch.json").read_text())
+_pv = [c for c in _lj["configurations"] if c["name"] == "business-control"][0]
+_hs = [c for c in _lj["configurations"] if c["name"] == "business-control-https"]
+ok("0.0.0.0" in _pv["runtimeArgs"] and _hs and "--https" in _hs[0]["runtimeArgs"]
+   and "0.0.0.0" in _hs[0]["runtimeArgs"] and _hs[0]["url"].startswith("https://"),
+   "the preview binds every interface so a phone on the wifi reaches it, "
+   "and an HTTPS preview stands beside it for the camera and the home "
+   "screen")
+ok("--host 0.0.0.0" in (Path(__file__).parent.parent
+                        / "command_utilities/Start Business Control (HTTPS).command").read_text(),
+   "the double-click HTTPS start does the same")
+
 # --- every QR the app prints is read by the scanner meant for it --------
 # A code is only as good as the thing that reads it. Each pair below is
 # printed by one screen and scanned by another, and the two are tested

@@ -20,6 +20,16 @@
   SQLite WAL handles the two dev processes.
 
 - The server binds `127.0.0.1`; curl that address, not `localhost` (IPv6).
+  **Since 2026-09-09 the preview (`business-control` in launch.json) binds
+  `0.0.0.0`**, so a phone on the same wifi reaches it at
+  `http://<mac ip>:8860` (`ipconfig getifaddr en0`). A bare IP opens the
+  *default* tenant; to test another tenant from a phone, add the IP to
+  that tenant's `hosts` in `data/tenants.json` (an exact alias wins).
+  `business-control-https` is the same on 8443 with a self-signed cert
+  that names the LAN IP (regenerated when the address changes) — needed
+  for the camera scanner and Add-to-Home-Screen on a phone; accept the
+  warning once. The launcher exports `BC_SCHEME`/`BC_PORT`, and every
+  outward link (QR, invite, sign-in) is built from them.
 
 ## Tests
 

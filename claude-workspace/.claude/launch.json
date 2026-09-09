@@ -33,7 +33,9 @@
       "runtimeArgs": [
         "business-control/scripts/launch.py",
         "--port",
-        "8860"
+        "8860",
+        "--host",
+        "0.0.0.0"
       ],
       "port": 8860,
       "autoPort": false
@@ -118,6 +120,21 @@
         "8700"
       ],
       "port": 8700
+    },
+    {
+      "name": "business-control-https",
+      "runtimeExecutable": "business-control/.venv/bin/python3",
+      "runtimeArgs": [
+        "business-control/scripts/launch.py",
+        "--port",
+        "8443",
+        "--host",
+        "0.0.0.0",
+        "--https"
+      ],
+      "port": 8443,
+      "autoPort": false,
+      "url": "https://localhost:8443"
     }
   ]
 }

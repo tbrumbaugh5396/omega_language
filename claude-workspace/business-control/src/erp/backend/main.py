@@ -585,7 +585,11 @@ def set_payments(body: PaymentsBody, user=Depends(admin_user)):
 # ---------- QR codes & QR sign-in ----------
 
 def lan_url() -> str:
-    """Best-guess LAN address so QR codes work from phones on the same wifi."""
+    """Best-guess LAN address so QR codes work from phones on the same
+    wifi. The scheme and port are the running server's own — the
+    launcher exports them — so an HTTPS server hands out https links and
+    a server on another port hands out that port; a link that points at
+    a door nobody opened is a QR that does not work."""
     ip = "127.0.0.1"
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -594,7 +598,9 @@ def lan_url() -> str:
         s.close()
     except Exception:
         pass
-    return f"http://{ip}:{CFG.get('port', 8860)}"
+    scheme = os.environ.get("BC_SCHEME") or "http"
+    port = os.environ.get("BC_PORT") or CFG.get("port", 8860)
+    return f"{scheme}://{ip}:{port}"
 
 
 def base_url() -> str:

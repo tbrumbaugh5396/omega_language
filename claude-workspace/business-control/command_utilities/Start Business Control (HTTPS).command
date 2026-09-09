@@ -12,4 +12,7 @@ BASE="https://127.0.0.1:$PORT"
 # launcher would report a healthy server as unreachable.
 bc_exit_if_running "$BASE" "-k" "$PORT"
 bc_wait_then_open "$BASE" "-k" &
-exec python3 scripts/launch.py --port "$PORT" --https
+# On every interface: the point of HTTPS here is a phone on the same wifi
+# installing the app and using its camera, and a phone cannot reach
+# 127.0.0.1. The launcher prints the wifi address to open on it.
+exec python3 scripts/launch.py --port "$PORT" --https --host 0.0.0.0

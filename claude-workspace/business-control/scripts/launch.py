@@ -9,6 +9,48 @@ sys.path.insert(0, str(ROOT / "src"))
 VENV_BIN = ROOT / ".venv" / "bin"
 
 
+def lan_ip() -> str:
+    """The address this machine has on its network — what a phone on the
+    same wifi types. Best guess by asking the routing table, never a
+    packet sent."""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:                                        # noqa: BLE001
+        return "127.0.0.1"
+
+
+def cert_sans(ip: str) -> str:
+    """Every name the self-signed cert should answer to: localhost, the
+    loopback, and the LAN address — the one a phone actually uses. A cert
+    that names only localhost makes every phone's browser call the site
+    an impostor."""
+    names = ["DNS:localhost", "DNS:*.localhost", "IP:127.0.0.1"]
+    if ip and ip != "127.0.0.1":
+        names.append(f"IP:{ip}")
+    return ",".join(names)
+
+
+def cert_covers(cert: Path, ip: str) -> bool:
+    """Does the cert on disk already name this address? Read from the
+    certificate itself; a note beside it could be wrong."""
+    import shutil
+    import subprocess
+    if not shutil.which("openssl"):
+        return True
+    try:
+        out = subprocess.run(["openssl", "x509", "-in", str(cert), "-noout",
+                              "-text"], capture_output=True, text=True,
+                             check=True).stdout
+    except subprocess.CalledProcessError:
+        return False
+    return ip == "127.0.0.1" or f"IP Address:{ip}" in out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=None)
@@ -39,11 +81,14 @@ def main() -> int:
         import subprocess
         subprocess.run([sys.executable, str(ROOT / "scripts" / "make_icons.py")])
 
+    ip = lan_ip()
     ssl_args = {}
     if args.https:
         certdir = config.DATA_DIR / "certs"
         cert, key = certdir / "cert.pem", certdir / "key.pem"
-        if not (cert.exists() and key.exists()):
+        # Made once, and made again when the machine's address has moved
+        # since — a cert that names last week's wifi is no use on this one.
+        if not (cert.exists() and key.exists()) or not cert_covers(cert, ip):
             import shutil
             import subprocess
             if not shutil.which("openssl"):
@@ -54,16 +99,24 @@ def main() -> int:
                 ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                  "-keyout", str(key), "-out", str(cert), "-days", "825",
                  "-subj", "/CN=business-control.local",
-                 "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
+                 "-addext", "subjectAltName=" + cert_sans(ip)],
                 check=True, capture_output=True)
-            print(f"generated self-signed cert in {certdir}")
+            print(f"generated self-signed cert in {certdir} for {cert_sans(ip)}")
         ssl_args = {"ssl_certfile": str(cert), "ssl_keyfile": str(key)}
+    # The app builds every outward link — QR codes, class invites, sign-in
+    # links — from these, so an HTTPS server hands out https links and a
+    # server on an unusual port hands out that port.
+    os.environ["BC_SCHEME"] = "https" if args.https else "http"
+    os.environ["BC_PORT"] = str(port)
 
     pidfile = config.DATA_DIR / "server.pid"
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     pidfile.write_text(str(os.getpid()))
     scheme = "https" if args.https else "http"
     print(f"Business Control → {scheme}://{args.host}:{port}  (pid {os.getpid()})")
+    if args.host in ("0.0.0.0", "::") and ip != "127.0.0.1":
+        print(f"  on the wifi → {scheme}://{ip}:{port}   (phones on the same "
+              f"network; tenants by host alias, see CLAUDE.md)")
     try:
         uvicorn.run("erp.backend.main:app", host=args.host, port=port,
                     log_level="info", **ssl_args)
