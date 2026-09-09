@@ -499,8 +499,8 @@ def set_product_image(pid: int, body: ImageBody, user=Depends(admin_user),
         raise HTTPException(400, "image too large (2 MB max)")
     if raw[:2] not in IMAGE_MAGIC:
         raise HTTPException(400, "not a recognized image")
-    UPLOADS().mkdir(parents=True, exist_ok=True)
-    (UPLOADS() / f"product_{pid}").write_bytes(raw)
+    from . import blobs
+    blobs.put(f"product_{pid}", raw, IMAGE_MAGIC.get(raw[:2], "image/jpeg"))
     con.execute("UPDATE products SET image=1 WHERE id=?", (pid,))
     con.commit()
     return {"ok": True}
@@ -508,10 +508,10 @@ def set_product_image(pid: int, body: ImageBody, user=Depends(admin_user),
 
 @app.get("/media/product/{pid}")
 def product_image(pid: int, con=Depends(get_con)):
-    f = UPLOADS() / f"product_{pid}"
-    if not f.exists():
+    from . import blobs
+    from storefront.backend import api as store_api
+    if not blobs.exists(f"product_{pid}"):
         # Newer uploads live in the storefront media pipeline.
-        from storefront.backend import api as store_api
         alt = store_api.primary_media_file(con, pid)
         if alt is None:
             raise HTTPException(404, "no image")
@@ -519,11 +519,11 @@ def product_image(pid: int, con=Depends(get_con)):
         # and mislabelling a PNG here is what puts a white box behind a can.
         # must-revalidate, not immutable: this path always means "the
         # current primary image", so it has to notice when that changes.
-        return FileResponse(
-            alt, media_type=store_api.MIME.get(alt.suffix, "image/jpeg"),
-            headers={"Cache-Control": "no-cache"})
-    raw2 = f.read_bytes()[:2]
-    return FileResponse(f, media_type=IMAGE_MAGIC.get(raw2, "image/jpeg"))
+        return store_api.media_response(
+            alt, store_api.MIME.get("." + alt.rsplit(".", 1)[-1], "image/jpeg"),
+            {"Cache-Control": "no-cache"})
+    raw_all = blobs.get(f"product_{pid}") or b""
+    return Response(raw_all, media_type=IMAGE_MAGIC.get(raw_all[:2], "image/jpeg"))
 
 
 class TrackingBody(BaseModel):
@@ -5657,8 +5657,8 @@ def field_photo(body: VisitPhotoBody, user=Depends(current_user),
     if raw[:2] not in IMAGE_MAGIC:
         raise HTTPException(400, "not a recognised image")
     tok = fieldwork.new_token()
-    UPLOADS().mkdir(parents=True, exist_ok=True)
-    (UPLOADS() / f"visit_{tok}").write_bytes(raw)
+    from . import blobs
+    blobs.put(f"visit_{tok}", raw, IMAGE_MAGIC.get(raw[:2], "image/jpeg"))
     con.execute(
         "INSERT INTO visit_media(visit_id,step_id,token,kind,caption,lat,lng,"
         " accuracy_m,taken_at,bytes,mime,created_at)"
@@ -5675,10 +5675,11 @@ def field_photo(body: VisitPhotoBody, user=Depends(current_user),
 def visit_photo(token: str, user=Depends(current_user), con=Depends(get_con)):
     r = con.execute("SELECT mime FROM visit_media WHERE token=?",
                     (token,)).fetchone()
-    f = UPLOADS() / f"visit_{token}"
-    if r is None or not f.exists():
+    from . import blobs
+    body = blobs.get(f"visit_{token}") if r is not None else None
+    if body is None:
         raise HTTPException(404, "no such picture")
-    return Response(f.read_bytes(), media_type=r["mime"] or "image/jpeg",
+    return Response(body, media_type=r["mime"] or "image/jpeg",
                     headers={"Cache-Control": "private, max-age=86400"})
 
 

@@ -395,13 +395,21 @@ def shape(con, r) -> dict:
     c = con.execute("SELECT name FROM courses WHERE id=?",
                     (r["course_id"],)).fetchone() if r["course_id"] else None
     d["course"] = c["name"] if c else ""
+    # the lessons it is on: a deck's PDF or a recording, as lesson material
+    d["lessons"] = [dict(x) for x in con.execute(
+        "SELECT l.id, l.title FROM learning_materials m JOIN lessons l"
+        " ON l.id=m.lesson_id WHERE m.presentation_id=? ORDER BY l.position",
+        (r["id"],))]
     return d
 
 
 @router.get("/api/presentations")
-def list_presentations(user=Depends(current_user), con=Depends(get_con)):
+def list_presentations(course_id: int = 0, user=Depends(current_user),
+                       con=Depends(get_con)):
     _require_staff(con, user)
-    rows = con.execute("SELECT * FROM presentations ORDER BY updated_at DESC").fetchall()
+    rows = con.execute(
+        "SELECT * FROM presentations" + (" WHERE course_id=?" if course_id else "")
+        + " ORDER BY updated_at DESC", (course_id,) if course_id else ()).fetchall()
     courses = [dict(r) for r in con.execute(
         "SELECT id, name FROM courses WHERE active=1 ORDER BY name")]
     return {"presentations": [shape(con, r) for r in rows], "courses": courses,
@@ -557,36 +565,78 @@ def export_pptx(pid: int, user=Depends(current_user), con=Depends(get_con)):
 
 
 class AttachBody(BaseModel):
-    course_id: int
+    course_id: int = 0
+    lesson_id: int = 0
 
 
 @router.post("/api/presentations/{pid}/attach")
 def attach(pid: int, body: AttachBody, user=Depends(current_user),
            con=Depends(get_con)):
-    """Make it one of a class's materials: on the course page, in every
-    session's Shared tab, on the stage. A deck goes as its PDF; a
-    recording or a file goes as itself."""
+    """Make it part of a class's information: as a course material — on
+    the course page, in every session's Shared tab, on the stage — or
+    as material on one lesson, where it sits with that lesson's drills.
+    A deck goes as its PDF (made now, so the lesson keeps what was
+    presented); a recording or a file goes as itself. Attaching again
+    moves it rather than doubling it."""
     _require_staff(con, user)
     r = _get(con, pid)
-    if not con.execute("SELECT 1 FROM courses WHERE id=?",
-                       (body.course_id,)).fetchone():
+    course_id, lesson_id = body.course_id or 0, body.lesson_id or 0
+    if lesson_id:
+        les = con.execute("SELECT course_id FROM lessons WHERE id=?",
+                          (lesson_id,)).fetchone()
+        if les is None:
+            raise HTTPException(404, "no such lesson")
+        course_id = les["course_id"]
+    if not course_id or not con.execute("SELECT 1 FROM courses WHERE id=?",
+                                        (course_id,)).fetchone():
         raise HTTPException(404, "no such course")
     from . import materials as MAT
+    # one place at a time: an earlier attachment of this deck's PDF goes
+    old_pdf = [x["id"] for x in con.execute(
+        "SELECT id FROM learning_materials WHERE presentation_id=?", (pid,))]
     if r["kind"] == "deck":
         blob = pdf_bytes(r["title"], slides_of(r), image_bytes=_image_reader())
         saved = MAT.save(blob, allow=("document",), filename=f"{r['title']}.pdf")
         mid = MAT.record(con, saved=saved, owner_id=user["id"],
-                         original=f"{r['title']}.pdf", course_id=body.course_id)
+                         original=f"{r['title']}.pdf",
+                         course_id=None if lesson_id else course_id,
+                         lesson_id=lesson_id or None)
+        for oid in old_pdf:
+            MAT.delete_material(con, oid)
     elif r["material_id"]:
-        con.execute("UPDATE learning_materials SET course_id=? WHERE id=?",
-                    (body.course_id, r["material_id"]))
+        con.execute("UPDATE learning_materials SET course_id=?, lesson_id=?"
+                    " WHERE id=?",
+                    (None if lesson_id else course_id, lesson_id or None,
+                     r["material_id"]))
         mid = r["material_id"]
     else:
         raise HTTPException(409, "nothing to attach yet — upload or record first")
+    con.execute("UPDATE learning_materials SET presentation_id=? WHERE id=?",
+                (pid, mid))
     con.execute("UPDATE presentations SET course_id=?, updated_at=? WHERE id=?",
-                (body.course_id, time.time(), pid))
+                (course_id, time.time(), pid))
     con.commit()
-    return {"ok": True, "material_id": mid, "course_id": body.course_id}
+    return {"ok": True, "material_id": mid, "course_id": course_id,
+            "lesson_id": lesson_id}
+
+
+@router.post("/api/presentations/{pid}/detach")
+def detach(pid: int, user=Depends(current_user), con=Depends(get_con)):
+    """Off the class and its lessons; the presentation and its link stay."""
+    _require_staff(con, user)
+    r = _get(con, pid)
+    from . import materials as MAT
+    for x in con.execute("SELECT id, kind FROM learning_materials WHERE"
+                         " presentation_id=?", (pid,)).fetchall():
+        if r["kind"] == "deck":
+            MAT.delete_material(con, x["id"])          # the PDF was made for it
+        else:
+            con.execute("UPDATE learning_materials SET course_id=NULL,"
+                        " lesson_id=NULL WHERE id=?", (x["id"],))
+    con.execute("UPDATE presentations SET course_id=0, updated_at=? WHERE id=?",
+                (time.time(), pid))
+    con.commit()
+    return {"ok": True}
 
 
 # ── the player's door: seen ──────────────────────────────────────────────────

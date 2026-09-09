@@ -2121,3 +2121,6 @@ body.lane-on { overflow: hidden; }
 .pr-meter { font-variant-numeric: tabular-nums; }
 .pr-thumb { max-width: 100%; max-height: 160px; border-radius: 8px; display: block; margin: 4px 0; }
 .pr-slide textarea, .pr-slide input { width: 100%; box-sizing: border-box; }
+.cl-pr-row { display: flex; gap: 8px; align-items: center; padding: 5px 0;
+  border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.cl-pr-row b { flex: 1; min-width: 120px; }

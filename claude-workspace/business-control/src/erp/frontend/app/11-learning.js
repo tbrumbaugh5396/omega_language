@@ -1485,7 +1485,11 @@ async function lessonForm(cid, lid) {
     : m.kind === "video"
       ? `<video controls preload="metadata" src="/media/${m.path}"
           style="max-width:100%;border-radius:8px"></video>`
-      : `<img src="/media/${m.path}" style="max-width:100%;border-radius:8px">`;
+      : m.kind === "document"
+        ? `<a href="/media/${m.path}" target="_blank" rel="noopener">${esc(m.original || "document")}</a>
+           <span class="dim">${m.presentation_id ? "· from a presentation" : ""}</span>`
+        : `<img src="/media/${m.path}" style="max-width:100%;border-radius:8px">`;
+  const prs = l ? await api("/api/presentations").catch(() => ({ presentations: [] })) : { presentations: [] };
   modal(`<h3>${l ? "Edit lesson" : "New lesson"}</h3>
     <label>Title</label><input id="lf-title" value="${esc((l && l.title) || "")}">
     <label>Body <span class="dim">(markdown: # headings, **bold**, - lists,
@@ -1502,6 +1506,12 @@ async function lessonForm(cid, lid) {
         <button class="btn alt sm" id="lf-recaudio">Record audio drill</button>
         <button class="btn alt sm" id="lf-recvideo">Record video drill</button>
         <span class="dim" id="lf-recstate"></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <select id="lf-pr"><option value="">attach a presentation to this lesson…</option>${
+          prs.presentations.map((x) => `<option value="${x.id}">${esc(x.title)} · ${esc(x.kind)}</option>`).join("")}</select>
+        <button class="btn alt sm" id="lf-pr-add">Attach</button>
+        <span class="dim">a deck goes as its PDF; a recording as itself</span>
       </div>` : ""}
     <div class="modal-acts">
       ${l ? '<button class="btn alt" id="lf-del" style="margin-right:auto">Delete</button>' : ""}
@@ -1541,6 +1551,13 @@ async function lessonForm(cid, lid) {
         await rec.start();
         btn.textContent = "Stop and attach";
       } catch (err) { state(err.message); rec = null; }
+    };
+    $("#lf-pr-add").onclick = async () => {
+      const id = +$("#lf-pr").value;
+      if (!id) return toast("pick a presentation");
+      try { await api(`/api/presentations/${id}/attach`, { body: { lesson_id: l.id } });
+        closeModal(); lessonForm(cid, l.id); }
+      catch (err) { toast(err.message); }
     };
     $("#lf-recaudio").onclick = (e) => recDrill("audio", e.target);
     $("#lf-recvideo").onclick = (e) => recDrill("video", e.target);

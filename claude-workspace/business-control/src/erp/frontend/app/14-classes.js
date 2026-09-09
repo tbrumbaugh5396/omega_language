@@ -123,6 +123,9 @@ async function clOpen(cid) {
   const sched = await api(`/api/learning/classes`).then((r) =>
     (r.classes.find((c) => c.id === cid) || {}).schedule || []).catch(() => []);
   const mats = (d.materials || []);
+  const prs = await api("/api/presentations").catch(() => ({ presentations: [] }));
+  const here = prs.presentations.filter((x) => x.course_id === cid);
+  const elsewhere = prs.presentations.filter((x) => x.course_id !== cid);
   const seats = d.enrollments || [];
   const inNow = seats.filter((e) => !e.until);
   view().innerHTML = `
@@ -180,6 +183,20 @@ async function clOpen(cid) {
           seats.filter((e) => e.until).map((e) => `<div class="dim">${esc(e.name)} · ${fmtDate(e.since)} – ${fmtDate(e.until)}</div>`).join("")}</details>` : ""}
       </div>
       <div class="card" style="flex:1;min-width:min(260px,100%)">
+        <div class="card-head"><b>Presentations</b>
+          <span class="chips"><select id="cl-pr"><option value="">attach one…</option>${
+            elsewhere.map((x) => `<option value="${x.id}">${esc(x.title)} · ${esc(x.kind)}</option>`).join("")}</select>
+            <button class="btn sm" id="cl-pr-add">Attach</button></span></div>
+        <p class="dim">A deck, a recording or a file made on the Presentations tab, attached
+          here as the class's information — on the course page, in the Shared tab, on the stage.</p>
+        ${here.length ? here.map((x) => `<div class="cl-pr-row">
+          <b>${esc(x.title)}</b> <span class="dim">${esc(x.kind)}${x.lessons.length
+            ? " · on " + x.lessons.map((l) => esc(l.title)).join(", ") : ""}</span>
+          <span class="chips"><a class="btn alt sm" href="${esc(x.url)}${x.kind === "deck" ? "?notes=1" : ""}" target="_blank" rel="noopener">Present</a>
+            <button class="btn alt sm" data-prdetach="${x.id}">Detach</button></span></div>`).join("")
+          : `<p class="dim">None attached yet.</p>`}
+      </div>
+      <div class="card" style="flex:1;min-width:min(260px,100%)">
         <div class="card-head"><b>Files for the class</b>
           <label class="btn alt sm">Upload<input type="file" hidden id="cl-file"></label></div>
         <p class="dim">Slides, films, PDFs — shown on the course page and in every session's Shared tab.</p>
@@ -234,6 +251,16 @@ async function clOpen(cid) {
   });
   view().querySelectorAll("[data-clend]").forEach((b) => b.onclick = async () => {
     try { await api(`/api/learning/enrollments/${b.dataset.clend}/end`, { body: {} }); clOpen(cid); }
+    catch (err) { toast(err.message); }
+  });
+  $("#cl-pr-add").onclick = async () => {
+    const id = +$("#cl-pr").value;
+    if (!id) return toast("pick a presentation");
+    try { await api(`/api/presentations/${id}/attach`, { body: { course_id: cid } }); toast("attached"); clOpen(cid); }
+    catch (err) { toast(err.message); }
+  };
+  view().querySelectorAll("[data-prdetach]").forEach((b) => b.onclick = async () => {
+    try { await api(`/api/presentations/${b.dataset.prdetach}/detach`, { body: {} }); clOpen(cid); }
     catch (err) { toast(err.message); }
   });
   const fi = $("#cl-file");

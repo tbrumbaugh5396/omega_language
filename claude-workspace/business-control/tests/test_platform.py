@@ -4523,6 +4523,35 @@ _stg = c.post(f"/api/learn/rtc/{_rm2}/mark", headers=TT, json={"peer": _jt2["pee
 ok(_stg.status_code == 200 and _stg.json()["stage"]["url"].startswith("/present/"),
    "or put on directly as its own page — the stage accepts a presentation link")
 c.post(f"/api/learn/rtc/{_rm2}/leave", headers=TT, json={"peer": _jt2["peer"]})
+# as a class's information: on the class page, and on one lesson of it
+ok([x["id"] for x in c.get(f"/api/presentations?course_id={_crs}", headers=TT).json()["presentations"]]
+   == [_pid],
+   "the class page lists the presentations attached to it, and only those")
+_l1x = c.get(f"/api/learning/courses/{_crs}", headers=TT).json()["lessons"][0]["id"]
+_la = c.post(f"/api/presentations/{_pid}/attach", headers=TT, json={"lesson_id": _l1x})
+ok(_la.status_code == 200 and _la.json()["lesson_id"] == _l1x,
+   "the deck attaches to a lesson instead — the lesson's own material, "
+   "as its PDF")
+_lm = c.get(f"/api/learning/lessons/{_l1x}", headers=TT).json()["materials"]
+ok(any(m["original"] == "Open evening.pdf" for m in _lm)
+   and not any(m["original"] == "Open evening.pdf" for m in
+               c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["materials"]),
+   "and it moved: on the lesson now, no longer doubled as a course "
+   "material")
+ok([l["id"] for l in c.get(f"/api/presentations/{_pid}", headers=TT).json()["lessons"]] == [_l1x],
+   "the presentation says which lesson it is on")
+ok(c.post(f"/api/presentations/{_pid}/detach", headers=TT, json={}).status_code == 200
+   and not any(m["original"] == "Open evening.pdf" for m in
+               c.get(f"/api/learning/lessons/{_l1x}", headers=TT).json()["materials"])
+   and c.get(f"/present/{_pd.json()['token']}").status_code == 200,
+   "detached, the PDF made for the lesson goes and the presentation and "
+   "its link stay")
+_cljs = (Path(__file__).parent.parent / "src/erp/frontend/app/14-classes.js").read_text()
+_lnjs = (Path(__file__).parent.parent / "src/erp/frontend/app/11-learning.js").read_text()
+ok("Presentations" in _cljs and "cl-pr-add" in _cljs and "data-prdetach" in _cljs
+   and "lf-pr-add" in _lnjs and "lesson_id: l.id" in _lnjs,
+   "the class page carries a Presentations card — attach, present, detach "
+   "— and a lesson's editor attaches one to that lesson")
 ok(c.delete(f"/api/presentations/{_pf['id']}", headers=LN).status_code == 403
    and c.delete(f"/api/presentations/{_pf['id']}", headers=TT).status_code == 200
    and c.get(f"/present/{_pf['token']}").status_code == 404,

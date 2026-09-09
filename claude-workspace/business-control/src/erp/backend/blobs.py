@@ -230,6 +230,36 @@ def local_path(rel: str):
     return driver().path(rel)
 
 
+def _local_keys(con, table: str, column: str) -> list:
+    """The store keys a table's rows name — the learning uploads by their
+    path, the product media by id and extension (plus the sizes made
+    from each), the legacy product art and the visit photos by id."""
+    if table == "product_media":
+        keys = []
+        for r in con.execute("SELECT id, ext FROM product_media WHERE ext != ''"):
+            keys.append(f"media/{r['id']}.{r['ext']}")
+            for suffix in ("lg", "th"):
+                for ext in ("png", "jpg"):
+                    keys.append(f"media/{r['id']}_{suffix}.{ext}")
+        return keys
+    if table == "products":
+        return [f"product_{r['id']}" for r in con.execute(
+            "SELECT id FROM products WHERE image=1")]
+    if table == "visit_media":
+        return [f"visit_{r['token']}" for r in con.execute(
+            "SELECT token FROM visit_media")]
+    return [r[0] for r in con.execute(f"SELECT DISTINCT {column} FROM {table}")]
+
+
+ALL_STORES = (("learning_materials", "path"), ("product_media", ""),
+              ("products", ""), ("visit_media", ""))
+
+
+def migrate_all(con=None) -> dict:
+    """Every store this node keeps on disk, pushed once."""
+    return {t: migrate_local_to_store(con, t, c) for t, c in ALL_STORES}
+
+
 def migrate_local_to_store(con=None, table: str = "learning_materials",
                            column: str = "path") -> dict:
     """Push every file the rows name from this node's disk into the
@@ -243,8 +273,7 @@ def migrate_local_to_store(con=None, table: str = "learning_materials",
     if d.kind != "s3":
         return {**out, "note": "the store is local; nothing to push"}
     try:
-        for r in con.execute(f"SELECT DISTINCT {column} FROM {table}"):
-            rel = r[0]
+        for rel in _local_keys(con, table, column):
             if not rel:
                 continue
             if d.exists(rel):

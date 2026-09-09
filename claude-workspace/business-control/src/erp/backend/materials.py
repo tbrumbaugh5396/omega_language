@@ -112,11 +112,17 @@ CREATE TABLE IF NOT EXISTS training_views (
 def init_tables(con):
     con.executescript(TABLES)
     con.executescript(TRAINING_TABLES)
-    try:
+    for stmt in (
         # A film or a deck for the whole class, not one lesson of it.
-        con.execute("ALTER TABLE learning_materials ADD COLUMN course_id INTEGER")
-    except Exception:                                        # noqa: BLE001
-        pass
+        "ALTER TABLE learning_materials ADD COLUMN course_id INTEGER",
+        # Which presentation a material came from, so attaching again
+        # moves it rather than doubling it.
+        "ALTER TABLE learning_materials ADD COLUMN presentation_id INTEGER",
+    ):
+        try:
+            con.execute(stmt)
+        except Exception:                                    # noqa: BLE001
+            pass
     con.commit()
 
 

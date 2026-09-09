@@ -1600,6 +1600,39 @@ try:
        "and pushing again pushes nothing — the store already has them")
     _conb.execute("DELETE FROM learning_materials WHERE path=?", (_old["path"],))
     _conb.commit(); _conb.close()
+    # the shop's own pictures go the same way — a real picture, since the
+    # pipeline makes two sizes from it and a header alone will not decode
+    import base64 as _b64, io as _iob
+    from PIL import Image as _Img
+    _buf = _iob.BytesIO(); _Img.new("RGBA", (64, 48), (200, 30, 30, 255)).save(_buf, "PNG")
+    _png_real = _buf.getvalue()
+    _pm = c.post("/api/store/admin/media", headers=A, json={
+        "product_id": pid, "data_url": "data:image/png;base64," + _b64.b64encode(_png_real).decode(),
+        "alt": "the can"})
+    ok(_pm.status_code == 200 and _pm.json()["kind"] == "image",
+       "a product picture uploads through the storefront pipeline")
+    _mid = _pm.json()["id"]
+    _keys = [k for k in _S3STORE if f"/media/{_mid}" in k]
+    ok(any(k.endswith(f"media/{_mid}.png") for k in _keys)
+       and any(f"media/{_mid}_lg." in k for k in _keys) and any(f"media/{_mid}_th." in k for k in _keys),
+       "the original and both sizes land in the bucket — nothing on this "
+       "node's disk")
+    _mf = c.get(f"/media/m/{_mid}")
+    _mt = c.get(f"/media/m/{_mid}/thumb")
+    ok(_mf.status_code == 200 and _mf.headers["content-type"].startswith("image/")
+       and _mt.status_code == 200 and len(_mt.content) > 0,
+       "and the shop serves the picture and its thumbnail from the store")
+    ok(c.get(f"/media/product/{pid}").status_code == 200,
+       "the legacy product-art route finds the pipeline's picture the same way")
+    _vp = c.post("/api/field/photo", headers=A, json={"visit_id": 0, "step_id": 0, "kind": "shelf",
+                 "data_url": "data:image/png;base64," + _b64.b64encode(_png_real).decode()})
+    if _vp.status_code == 200:
+        ok(c.get(_vp.json()["url"], headers=A).status_code == 200
+           and any(k.endswith("visit_" + _vp.json()["token"]) for k in _S3STORE),
+           "a visit photo too — filed in the store, served from it")
+    ok(c.delete(f"/api/store/admin/media/{_mid}", headers=A).status_code == 200
+       and not any(f"/media/{_mid}" in k for k in _S3STORE),
+       "deleting the media deletes every size from the bucket")
 finally:
     os.environ.pop("BC_BLOBS", None)
     _s3srv.shutdown()
@@ -5515,7 +5548,7 @@ ok('class="btn-pill primary show-cta"' in _home,
    "the film slide carries its call to action")
 
 # Cut-out product art on a coloured slide is the whole reason this matters.
-ok("def has_alpha" in _apisrc and 'f"{mid}_{suffix}.png"' in _apisrc,
+ok("def has_alpha" in _apisrc and 'f"media/{mid}_{suffix}.png"' in _apisrc,
    "transparent art keeps its alpha through the derivative step")
 ok('f\'/media/m/{r["mid"]}\'' in _sectsrc,
    "slides link the immutable media id, not the mutable product pointer")

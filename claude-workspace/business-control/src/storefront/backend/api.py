@@ -340,9 +340,11 @@ def has_alpha(im) -> bool:
     return lo < 250
 
 
-def make_derivatives(mid: int, ext: str) -> None:
-    """Write _lg and _th beside the original. No-op without Pillow — the
-    original is then served for every size (correct, just heavier).
+def make_derivatives(mid: int, ext: str, raw: bytes | None = None) -> None:
+    """Write _lg and _th beside the original — wherever files live: this
+    node's disk, or the object store every node reaches. No-op without
+    Pillow — the original is then served for every size (correct, just
+    heavier).
 
     Cut-out product renders stay PNG. Flattening them onto white produced a
     JPEG with a white rectangle baked in, which is invisible on a white page
@@ -354,10 +356,15 @@ def make_derivatives(mid: int, ext: str) -> None:
         from PIL import Image
     except ImportError:
         return
-    src = MEDIA_DIR() / f"{mid}.{ext}"
+    import io as _io
+    from erp.backend import blobs
+    if raw is None:
+        raw = blobs.get(f"media/{mid}.{ext}")
+    if not raw:
+        return
     for suffix, edge, quality in DERIVS:
         try:
-            with Image.open(src) as im:
+            with Image.open(_io.BytesIO(raw)) as im:
                 im.seek(0)                        # animated gif → first frame
                 keep = has_alpha(im)
                 im = im.convert("RGBA" if keep else "RGB")
@@ -371,25 +378,54 @@ def make_derivatives(mid: int, ext: str) -> None:
                     if bbox:
                         im = im.crop(bbox)
                 im.thumbnail((edge, edge), Image.LANCZOS)
+                out = _io.BytesIO()
                 if keep:
-                    im.save(MEDIA_DIR() / f"{mid}_{suffix}.png", "PNG",
-                            optimize=True)
+                    im.save(out, "PNG", optimize=True)
+                    blobs.put(f"media/{mid}_{suffix}.png", out.getvalue(), "image/png")
                 else:
-                    im.save(MEDIA_DIR() / f"{mid}_{suffix}.jpg", "JPEG",
-                            quality=quality, optimize=True)
+                    im.save(out, "JPEG", quality=quality, optimize=True)
+                    blobs.put(f"media/{mid}_{suffix}.jpg", out.getvalue(), "image/jpeg")
         except Exception:
             pass
 
 
 # Derivatives are looked up in this order everywhere, so one helper decides
 # it rather than three routes each guessing.
+def media_key(mid: int, suffix: str, ext: str = "") -> str | None:
+    """The store key of the best file for a size — the derivative when it
+    exists, the original otherwise — or None when there is nothing."""
+    from erp.backend import blobs
+    for k in (f"media/{mid}_{suffix}.png", f"media/{mid}_{suffix}.jpg"):
+        if blobs.exists(k):
+            return k
+    if ext and blobs.exists(f"media/{mid}.{ext}"):
+        return f"media/{mid}.{ext}"
+    return None
+
+
+def media_response(key: str, media_type: str, headers: dict):
+    """The bytes for a key: straight off this node's disk when they are
+    here, fetched from the store when they are not."""
+    from erp.backend import blobs
+    path = blobs.local_path(key)
+    if path:
+        return FileResponse(path, media_type=media_type, headers=headers)
+    body = blobs.get(key)
+    if body is None:
+        raise HTTPException(404, "file missing")
+    return Response(body, media_type=media_type, headers=headers)
+
+
 def derivative(mid: int, suffix: str, ext: str = ""):
-    for cand in (MEDIA_DIR() / f"{mid}_{suffix}.png",
-                 MEDIA_DIR() / f"{mid}_{suffix}.jpg"):
-        if cand.exists():
-            return cand
-    orig = MEDIA_DIR() / f"{mid}.{ext}" if ext else None
-    return orig if orig and orig.exists() else None
+    """Kept for callers that want a path: the file on this node's disk,
+    or None when it lives elsewhere. New code asks media_key()."""
+    from erp.backend import blobs
+    from pathlib import Path as _P
+    k = media_key(mid, suffix, ext)
+    if not k:
+        return None
+    pth = blobs.local_path(k)
+    return _P(pth) if pth else None
 
 
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
@@ -739,13 +775,14 @@ def page_rows(con, slug: str):
 
 
 def primary_media_file(con, product_id: int):
-    """Best on-disk image for a product (used by the legacy ERP art route)."""
+    """The store key of a product's best image (the legacy ERP art route
+    serves it through media_response)."""
     row = con.execute(
         "SELECT id, ext FROM product_media WHERE product_id=? AND kind='image'"
         " ORDER BY position, id LIMIT 1", (product_id,)).fetchone()
     if row is None:
         return None
-    return derivative(row["id"], "lg", row["ext"])
+    return media_key(row["id"], "lg", row["ext"])
 
 
 def ensure_search_index(con, force_rebuild: bool = False) -> bool:
@@ -1101,16 +1138,17 @@ def media_file(mid: int, con=Depends(get_con)):
     m = con.execute("SELECT * FROM product_media WHERE id=?", (mid,)).fetchone()
     if m is None:
         raise HTTPException(404, "no such media")
+    from erp.backend import blobs
     if m["kind"] == "video":
-        f = MEDIA_DIR() / f"{mid}.{m['ext']}"
-        if not f.exists():
+        k = f"media/{mid}.{m['ext']}"
+        if not blobs.exists(k):
             raise HTTPException(404, "video is an external embed")
-        return FileResponse(f, media_type=VIDEO_MIME.get(m["ext"], "video/mp4"))
-    f = derivative(mid, "lg", m["ext"])
-    if f is None:
+        return media_response(k, VIDEO_MIME.get(m["ext"], "video/mp4"), {})
+    k = media_key(mid, "lg", m["ext"])
+    if k is None:
         raise HTTPException(404, "file missing")
-    return FileResponse(f, media_type=MIME.get(f.suffix, "image/jpeg"),
-                        headers={"Cache-Control": "public, max-age=31536000"})
+    return media_response(k, MIME.get("." + k.rsplit(".", 1)[-1], "image/jpeg"),
+                          {"Cache-Control": "public, max-age=31536000"})
 
 
 @router.get("/media/m/{mid}/thumb")
@@ -1118,14 +1156,14 @@ def media_thumb(mid: int, con=Depends(get_con)):
     m = con.execute("SELECT * FROM product_media WHERE id=?", (mid,)).fetchone()
     if m is None:
         raise HTTPException(404, "no such media")
-    th = derivative(mid, "th")
-    if th is not None:
-        return FileResponse(th, media_type=MIME.get(th.suffix, "image/jpeg"),
-                            headers={"Cache-Control": "public, max-age=31536000"})
-    orig = MEDIA_DIR() / f"{mid}.{m['ext']}"
-    if m["kind"] == "image" and orig.exists():
-        return FileResponse(orig,
-                            headers={"Cache-Control": "public, max-age=31536000"})
+    from erp.backend import blobs
+    k = media_key(mid, "th")
+    if k is not None:
+        return media_response(k, MIME.get("." + k.rsplit(".", 1)[-1], "image/jpeg"),
+                              {"Cache-Control": "public, max-age=31536000"})
+    if m["kind"] == "image" and blobs.exists(f"media/{mid}.{m['ext']}"):
+        return media_response(f"media/{mid}.{m['ext']}", MIME.get("." + m["ext"], "image/jpeg"),
+                              {"Cache-Control": "public, max-age=31536000"})
     # Video (embed or un-posterable upload): borrow the product's primary
     # image, else a self-contained film-strip placeholder. Never a 404, so
     # galleries and cards can point here unconditionally.
@@ -2645,10 +2683,11 @@ def add_media(body: MediaBody, u=Depends(admin_user), con=Depends(get_con)):
          body.alt.strip()[:200], nxt, db.now()))
     mid = cur.lastrowid
     if raw is not None:
-        MEDIA_DIR().mkdir(parents=True, exist_ok=True)
-        (MEDIA_DIR() / f"{mid}.{ext}").write_bytes(raw)
+        from erp.backend import blobs
+        blobs.put(f"media/{mid}.{ext}", raw,
+                  MIME.get("." + ext, VIDEO_MIME.get(ext, "application/octet-stream")))
         if kind == "image":
-            make_derivatives(mid, ext)
+            make_derivatives(mid, ext, raw)
     # Keep the ERP's legacy art flag in step with the primary image.
     if kind == "image" and nxt == 0 and body.product_id:
         con.execute("UPDATE products SET image=1 WHERE id=?",
@@ -2701,12 +2740,10 @@ def delete_media(mid: int, u=Depends(admin_user), con=Depends(get_con)):
     m = con.execute("SELECT * FROM product_media WHERE id=?", (mid,)).fetchone()
     if m is None:
         raise HTTPException(404, "no such media")
-    for f in (MEDIA_DIR() / f"{mid}.{m['ext']}", MEDIA_DIR() / f"{mid}_lg.jpg",
-              MEDIA_DIR() / f"{mid}_th.jpg"):
-        try:
-            f.unlink(missing_ok=True)
-        except OSError:
-            pass
+    from erp.backend import blobs
+    for k in (f"media/{mid}.{m['ext']}", f"media/{mid}_lg.jpg", f"media/{mid}_lg.png",
+              f"media/{mid}_th.jpg", f"media/{mid}_th.png"):
+        blobs.delete(k)
     con.execute("DELETE FROM product_media WHERE id=?", (mid,))
     left = con.execute(
         "SELECT kind FROM product_media WHERE product_id=?"
