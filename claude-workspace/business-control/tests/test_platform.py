@@ -4224,6 +4224,139 @@ ok(not any(w.get("stage") for w in
    "nobody is presenting does not play to an empty chair")
 c.post(f"/api/learn/rtc/{_rm2}/leave", headers=LN, json={"peer": _jl["peer"]})
 
+# --- how the student can meet, and a second teacher in the room ---------
+_ask = c.post(f"/api/learn/courses/{_crs}/tutoring", headers=LN, json={
+    "note": "the subjunctive", "mode": "remote",
+    "availability": [{"weekday": 1, "from_min": 18 * 60, "to_min": 19 * 60}]})
+ok(_ask.status_code == 200, "a student asks for tutoring, saying they can "
+   "only do it remotely")
+_asks = c.get("/api/learning/tutoring", headers=TT).json()["requests"]
+_mine = [a for a in _asks if a["user_id"] == _lrn["id"]]
+ok(_mine and _mine[0]["mode"] == "remote" and _mine[0]["how"] == "remotely",
+   "and the tutor's list says so in words — a free Tuesday in the "
+   "building is not a match for a student who can only do video")
+ok(c.post(f"/api/learn/courses/{_crs}/tutoring", headers=LN, json={
+    "note": "x", "mode": "carrier pigeon"}).status_code == 200
+   and [a for a in c.get("/api/learning/tutoring", headers=TT).json()["requests"]
+        if a["user_id"] == _lrn["id"]][0]["mode"] == "either",
+   "an unknown mode is 'either', not an error at the student")
+ok([t["mode"] for t in c.get(f"/api/learn/courses/{_crs}", headers=LN).json()
+    ["my_tutoring"]][0] == "either",
+   "and the student's own view of the ask carries it back")
+
+_co = c.post("/api/login", headers=HA, json={"name": "Cora Coteacher",
+                                              "role": "employee"}).json()
+CO = {"Authorization": f"Bearer {_co['token']}", **HA}
+ok(c.get(f"/api/learning/courses/{_crs}", headers=CO).status_code == 403
+   and not any(x["id"] == _crs for x in c.get("/api/learning/classes", headers=CO).json()["classes"]),
+   "a teacher who is not on the course cannot open it and does not see it "
+   "on Classes")
+ok(c.post(f"/api/learning/courses/{_crs}/teachers", headers=TT,
+          json={"user_id": _co["id"]}).status_code == 403,
+   "adding a teacher is the office's act, not the lead's")
+_addt = c.post(f"/api/learning/courses/{_crs}/teachers", headers=AA,
+               json={"user_id": _co["id"]})
+ok(_addt.status_code == 200 and [t["name"] for t in _addt.json()["teachers"]]
+   == [_tch["name"], _co["name"]] and _addt.json()["teachers"][0]["lead"],
+   "the office adds a second teacher: the lead stays first and stays "
+   "the lead")
+ok(c.get(f"/api/learning/courses/{_crs}", headers=CO).status_code == 200
+   and any(x["id"] == _crs for x in c.get("/api/learning/classes", headers=CO).json()["classes"]),
+   "and the second teacher opens the course and sees it on Classes")
+ok(any(a["user_id"] == _lrn["id"] for a in
+       c.get("/api/learning/tutoring", headers=CO).json()["requests"]),
+   "takes its tutoring asks")
+_cls_row = [x for x in c.get("/api/learning/classes", headers=AA).json()["classes"] if x["id"] == _crs][0]
+ok(_cls_row["tutor"] == f"{_tch['name']} & {_co['name']}",
+   "and the class row names both")
+ok(c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["teacher"]
+   == f"{_tch['name']} & {_co['name']}",
+   "as does the student's course page")
+ok(c.post(f"/api/learning/courses/{_crs}/teachers", headers=AA,
+          json={"user_id": _lrn["id"]}).status_code == 400,
+   "a student cannot be made a teacher by the back door")
+ok(c.delete(f"/api/learning/courses/{_crs}/teachers/{_co['id']}", headers=AA).status_code == 200
+   and c.get(f"/api/learning/courses/{_crs}", headers=CO).status_code == 403,
+   "removed, they are out of the room again")
+
+# --- prizes worth a line, and why somebody is no longer here -------------
+_spg = c.get(f"/api/students/{_lrn['id']}", headers=TT).json()
+ok("Passed the citizenship test" in _spg["achievement_presets"]
+   and "Started a business" in _spg["achievement_presets"]
+   and "Read a chapter of a book" in _spg["achievement_presets"]
+   and len(_spg["achievement_presets"]) >= 9,
+   "the page offers the achievements a school actually records — a new "
+   "job, a promotion, a licence, a citizenship test, a book read — as a "
+   "menu, so two teachers file the same thing the same way")
+ok([x["code"] for x in _spg["statuses"]]
+   == ["active", "inactive", "left", "moved", "deceased"]
+   and _spg["profile"]["status"] == "active",
+   "and the ways somebody stops being here, with active the default")
+_seats_before = len([e for e in _spg["seats"] if not e["until"]])
+ok(_seats_before >= 1, "(the student holds a seat to end)")
+_st = c.post(f"/api/students/{_lrn['id']}/status", headers=TT, json={
+    "status": "moved", "note": "to Valencia", "end_seats": True,
+    "at": time.time() - 2 * 86400})
+ok(_st.status_code == 200 and _st.json()["ended"] == _seats_before
+   and _st.json()["profile"]["status_label"] == "moved away",
+   "marking them moved away ends every seat they held, dated when it "
+   "happened, and says so in words")
+_spg2 = c.get(f"/api/students/{_lrn['id']}", headers=TT).json()
+ok(_spg2["profile"]["status"] == "moved"
+   and any(e["kind"] == "log:status" and "Moved away" in e["title"]
+           and "to Valencia" in e["body"] and "seat" in e["body"]
+           for e in _spg2["timeline"]),
+   "the timeline records it, with the reason and the seats it ended")
+ok(not _spg2["courses"], "and they are in no course now")
+ok(c.post(f"/api/students/{_lrn['id']}/status", headers=TT, json={
+    "status": "vanished"}).status_code == 400,
+   "an unknown status is refused")
+ok(any(r["id"] == _lrn["id"] and r["status"] == "moved" and r["status_label"] == "moved away"
+       for r in c.get("/api/customers", headers=AA).json()),
+   "the customer book says it beside the name")
+ok(c.post(f"/api/students/{_lrn['id']}/profile", headers=TT, json={
+    "fields": {"occupation": "nurse"}}).json()["profile"]["status"] == "moved",
+   "correcting the profile does not quietly reset the status")
+c.post(f"/api/students/{_lrn['id']}/status", headers=TT, json={"status": "active"})
+ok(c.get(f"/api/students/{_lrn['id']}", headers=TT).json()["profile"]["status"] == "active",
+   "and they can be active again — seats are re-added by hand, as a "
+   "return is a decision")
+c.post(f"/api/learning/courses/{_crs}/enroll", headers=AA, json={"user_id": _lrn["id"]})
+ok(c.get(f"/api/learn/courses/{_crs}", headers=LN).status_code == 200,
+   "(re-seated for what follows)")
+
+# --- the student's card, read at the door and by a classmate -----------
+_card = c.get("/api/learn/me/card", headers=LN).json()
+ok(_card["payload"].startswith("http") and "/p/" in _card["payload"]
+   and _card["plain"].startswith("bc:person:"),
+   "a student's ID card prints a URL — an iPhone camera opens it — and "
+   "carries the plain bc:person: form for the app's own scanner")
+for _form, _why in ((_card["payload"], "the URL the card prints"),
+                    (_card["plain"], "the bc:person: form"),
+                    (_card["uid"], "the bare code a USB scanner types")):
+    _rs = c.post(f"/api/learning/sessions/{_s2}/scan", headers=TT,
+                 json={"code": _form})
+    ok(_rs.status_code == 200 and _rs.json()["student"]["name"] == _lrn["name"],
+       f"the teacher's door scanner reads {_why} and marks the student in")
+ok(c.post(f"/api/learning/sessions/{_s2}/scan", headers=TT,
+          json={"code": "bc:clock:not-a-card"}).status_code == 400,
+   "and an employee badge held up at the door is refused as not an ID "
+   "card, not marked as some student")
+_hs = c.post("/api/learn/people/scan", headers=TT, json={"payload": _card["payload"]})
+ok(_hs.status_code == 200,
+   "a classmate's scanner reads the same card for the handshake")
+_bk0 = c.post("/api/learning/library/items", headers=TT,
+              json={"name": "QR test reader", "kind": "book", "copies": 1}).json()
+_lbl = c.get(f"/api/learning/library/items/{_bk0['id']}/qr", headers=TT).json()
+ok(_lbl["payload"].startswith("bc:item:"),
+   "a library label prints as bc:item:<code>")
+_ls = c.post("/api/learning/library/scan", headers=TT, json={"payload": _lbl["payload"]})
+ok(_ls.status_code == 200 and _ls.json()["id"] == _bk0["id"],
+   "and the desk's scanner pulls the item straight up")
+ok(c.post("/api/learning/library/scan", headers=TT,
+          json={"payload": _card["plain"]}).status_code in (400, 404),
+   "a student card at the lending desk is not a book")
+
 # --- hours the clock never saw: logged, and worth nothing until accepted --
 import datetime as _dt
 _yday = _dt.datetime.combine(_dt.date.today() - _dt.timedelta(days=1),

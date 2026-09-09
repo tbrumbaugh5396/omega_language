@@ -2106,3 +2106,6 @@ body.lane-on { overflow: hidden; }
   font-variant-numeric: tabular-nums; }
 .stu-tl-main { flex: 1; min-width: 200px; }
 .stu-kind { min-width: 74px; text-align: center; }
+.cl-cot-row { display: flex; gap: 8px; align-items: center; padding: 5px 0;
+  border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.btn.alt.on { outline: 2px solid var(--accent); outline-offset: 1px; }

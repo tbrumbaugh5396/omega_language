@@ -1189,6 +1189,57 @@ ok(all("where" in sh for sh in _allsh),
 ok(any(sh["where"] for sh in _allsh),
    "and a punch made at a registered kiosk names the tablet: 'kiosk: "
    "Front door' is a thing a manager can go and stand next to")
+# --- every QR the app prints is read by the scanner meant for it --------
+# A code is only as good as the thing that reads it. Each pair below is
+# printed by one screen and scanned by another, and the two are tested
+# as a pair, so a change to either side that breaks the round trip
+# fails here rather than at a door with a queue behind it.
+_qr = c.get("/api/qr.svg?data=" + "bc:clock:demo")
+ok(_qr.status_code == 200 and "<svg" in _qr.text and "<path" in _qr.text,
+   "the printer: /api/qr.svg draws a real QR as an SVG path")
+ok(c.get("/api/qr.svg?data=" + "x" * 600).status_code == 400,
+   "and refuses a payload no phone camera would read")
+_bdg = c.post("/api/me/badge", headers=A).json()
+ok(_bdg["token"].startswith("bc:clock:"),
+   "an employee badge prints as bc:clock:<token>, which nothing else "
+   "prints — a badge cannot be mistaken for an ID card")
+_pch = c.post("/api/clock/badge", json={"token": _bdg["token"]})
+ok(_pch.status_code == 200 and _pch.json()["name"] == admin["name"],
+   f"and the clock reads it: scan the badge, you are on the clock"
+   f" ({_pch.status_code} {_pch.text[:80]})")
+c.post("/api/clock/badge", json={"token": _bdg["token"]})    # and off again
+ok(c.post("/api/clock/badge", json={"token": "bc:person:" + "0" * 32}).status_code == 404
+   and c.post("/api/clock/badge", json={"token": "https://example.com/x"}).status_code == 404,
+   "a student card or a stray link held up to the clock is refused, not "
+   "punched in as somebody")
+_sq = c.post("/api/me/qr", headers=A).json()
+import re as _re
+ok(_re.match(r"^https?://[^/]+/qr-login/[\w-]+$", _sq["url"]),
+   "a sign-in QR is a link of exactly the shape the scanner accepts — "
+   "/qr-login/<token> on this origin, nothing else navigates")
+_sqp = c.get("/qr-login/" + _sq["url"].rsplit("/", 1)[1], follow_redirects=False)
+ok(_sqp.status_code in (200, 302, 303, 307) and "expired" not in _sqp.text.lower(),
+   "and scanning it lands you signed in")
+_trk = c.post(f"/api/trucks/{tid}/checkin", headers=A, json={})
+ok(_trk.status_code == 200 and _re.match(r"^bc:truck:\d+$", f"bc:truck:{tid}"),
+   "a truck's tag is bc:truck:<id>, and the scan screen's check-in reads it")
+_qsj = (Path(__file__).parent.parent / "src/storefront/frontend/qr-scan.js"
+        ).read_text(encoding="utf-8")
+ok("qrs-typed" in _qsj and "loadJsQR" in _qsj and "/vendor/jsqr.js" in _qsj
+   and "willReadFrequently" in _qsj,
+   "the scanner has two roads besides the browser's own detector: a "
+   "typed field that a USB scanner or a read-out code lands in, and a "
+   "software decoder for the browsers with no detector — Safari on every "
+   "iPhone and iPad, and Firefox — so a door run from an iPad is not a "
+   "door that cannot scan")
+_vj = c.get("/vendor/jsqr.js")
+ok(_vj.status_code == 200 and "jsQR" in _vj.text[:4000]
+   and "Apache License" in _vj.text[:3000],
+   "and the decoder is served from this install with its licence, not "
+   "fetched from somebody's CDN at the door")
+ok("Type the code in instead, or open" not in _qsj,
+   "the old dead end — 'type it in' with nowhere to type — is gone")
+
 _ojs = ops_app_js()
 ok("sh.where" in _ojs and "not checked" in _ojs,
    "a punch with no location says so rather than leaving a blank cell — "

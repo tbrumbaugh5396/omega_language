@@ -19,3 +19,9 @@
   border-radius: 9px; padding: 10px 22px; font-size: 15px; cursor: pointer;
   font-family: inherit; }
 .qrs-cancel:hover { border-color: #8a6ff0; }
+.qrs-typed { display: flex; gap: 6px; margin: 0 0 10px; }
+.qrs-typed input { flex: 1; min-width: 0; background: #14171e; color: #eceef4;
+  border: 1px solid #333a48; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.qrs-typed button { background: #232833; color: #eceef4; border: 1px solid #333a48;
+  border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+.qrs-typed button:hover { border-color: #8a6ff0; }

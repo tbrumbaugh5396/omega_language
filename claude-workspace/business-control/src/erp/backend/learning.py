@@ -83,6 +83,17 @@ CREATE TABLE IF NOT EXISTS tutoring_requests (
 );
 CREATE INDEX IF NOT EXISTS tutoring_course ON tutoring_requests(course_id, state);
 
+-- A second teacher in the room. `courses.teacher_id` stays the lead —
+-- the name on the door, the one payroll and the roster default to —
+-- and these are the others who teach it too: they see it on Classes,
+-- edit its content, run its register and take its tutoring asks.
+CREATE TABLE IF NOT EXISTS course_teachers (
+  course_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  since REAL NOT NULL,
+  PRIMARY KEY (course_id, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS enrollments (
   id INTEGER PRIMARY KEY,
   course_id INTEGER NOT NULL,
@@ -191,7 +202,14 @@ CREATE TABLE IF NOT EXISTS student_achievements (
 # existed need them added explicitly.
 MIGRATIONS = (
     "ALTER TABLE quiz_responses ADD COLUMN material_id INTEGER",
+    # How the student can meet: in person, remotely, or either. A tutor
+    # with a free Tuesday in the building and a student who can only do
+    # video is a match on paper and not in fact.
+    "ALTER TABLE tutoring_requests ADD COLUMN mode TEXT DEFAULT 'either'",
 )
+TUTORING_MODES = ("in_person", "remote", "either")
+MODE_LABELS = {"in_person": "in person", "remote": "remotely",
+               "either": "in person or remotely"}
 
 
 def init_tables(con):
@@ -211,7 +229,40 @@ def may_edit(con, user, course_id: int) -> bool:
         return True
     r = con.execute("SELECT teacher_id FROM courses WHERE id=?",
                     (course_id,)).fetchone()
-    return bool(r and r["teacher_id"] == user["id"])
+    if r and r["teacher_id"] == user["id"]:
+        return True
+    return con.execute("SELECT 1 FROM course_teachers WHERE course_id=?"
+                       " AND user_id=?", (course_id, user["id"])).fetchone() \
+        is not None
+
+
+def teaches_ids(con, user_id: int) -> list:
+    """Every course this person teaches, as lead or beside the lead."""
+    return [r["id"] for r in con.execute(
+        "SELECT id FROM courses WHERE teacher_id=? UNION"
+        " SELECT course_id FROM course_teachers WHERE user_id=?",
+        (user_id, user_id))]
+
+
+def teachers_of(con, course_id: int) -> list:
+    """The lead first, then the others, each saying which they are."""
+    out = []
+    lead = con.execute(
+        "SELECT u.id, u.name, u.photo FROM courses c JOIN users u"
+        " ON u.id=c.teacher_id WHERE c.id=?", (course_id,)).fetchone()
+    if lead:
+        out.append({"id": lead["id"], "name": lead["name"],
+                    "photo": lead["photo"] or "", "lead": True})
+    for r in con.execute(
+            "SELECT u.id, u.name, u.photo, t.since FROM course_teachers t"
+            " JOIN users u ON u.id=t.user_id WHERE t.course_id=?"
+            " AND (? IS NULL OR u.id != ?) ORDER BY t.since",
+            (course_id, lead["id"] if lead else None,
+             lead["id"] if lead else None)):
+        out.append({"id": r["id"], "name": r["name"],
+                    "photo": r["photo"] or "", "lead": False,
+                    "since": r["since"]})
+    return out
 
 
 def enrolled_in(con, course_id: int, user_id: int) -> bool:
@@ -883,6 +934,7 @@ def ops_course_detail(cid: int, user=Depends(current_user),
     if not may_edit(con, user, cid):
         raise HTTPException(403, "you do not teach this course")
     d = dict(c)
+    d["teachers"] = teachers_of(con, cid)
     d["lessons"] = [dict(r) for r in con.execute(
         "SELECT id, title, position, published, updated_at FROM lessons"
         " WHERE course_id=? ORDER BY position, id", (cid,)).fetchall()]
@@ -969,10 +1021,11 @@ def ops_classes(user=Depends(current_user), con=Depends(get_con)):
             "SELECT c.*, u.name AS tutor FROM courses c"
             " LEFT JOIN users u ON u.id=c.teacher_id"
             " ORDER BY c.active DESC, c.name").fetchall():
-        if not user["is_admin"] and c["teacher_id"] != user["id"]:
+        if not user["is_admin"] and not may_edit(con, user, c["id"]):
             continue
         d = dict(c)
-        d["tutor"] = c["tutor"] or ""
+        d["teachers"] = teachers_of(con, c["id"])
+        d["tutor"] = " & ".join(t["name"] for t in d["teachers"])
         d["enrolled"] = con.execute(
             "SELECT COUNT(*) FROM enrollments WHERE course_id=? AND"
             " (until IS NULL OR until>?)", (c["id"], now)).fetchone()[0]
@@ -1065,6 +1118,41 @@ def ops_set_tutor(cid: int, body: TutorBody, user=Depends(admin_user),
     return {"ok": True}
 
 
+class CoTeacherBody(BaseModel):
+    user_id: int
+
+
+@router.post("/api/learning/courses/{cid}/teachers")
+def ops_add_teacher(cid: int, body: CoTeacherBody, user=Depends(admin_user),
+                    con=Depends(get_con)):
+    """A second teacher in the room. Sees the class, edits it, runs the
+    register, takes its tutoring asks. The lead stays the lead."""
+    if con.execute("SELECT 1 FROM courses WHERE id=?", (cid,)).fetchone() is None:
+        raise HTTPException(404, "course not found")
+    u = con.execute("SELECT id, role, is_admin FROM users WHERE id=? AND active=1",
+                    (body.user_id,)).fetchone()
+    if u is None:
+        raise HTTPException(404, "no such person")
+    if not (u["is_admin"] or u["role"] in ("teacher", "employee", "owner",
+                                           "director", "volunteer")):
+        raise HTTPException(400, "a teacher is a member of staff — make"
+                                 " them one first")
+    con.execute("INSERT OR IGNORE INTO course_teachers(course_id,user_id,"
+                "since) VALUES(?,?,?)", (cid, body.user_id, time.time()))
+    con.commit()
+    return {"ok": True, "teachers": teachers_of(con, cid)}
+
+
+@router.delete("/api/learning/courses/{cid}/teachers/{uid}")
+def ops_drop_teacher(cid: int, uid: int, user=Depends(admin_user),
+                     con=Depends(get_con)):
+    """Leaves the room; keeps every session they taught."""
+    con.execute("DELETE FROM course_teachers WHERE course_id=? AND user_id=?",
+                (cid, uid))
+    con.commit()
+    return {"ok": True, "teachers": teachers_of(con, cid)}
+
+
 @router.post("/api/learning/courses/{cid}/end")
 def ops_end_class(cid: int, user=Depends(admin_user), con=Depends(get_con)):
     """A class that has run its course. Nothing is deleted: the seats are
@@ -1119,6 +1207,8 @@ def tutoring_rows(con, course_ids=None, state: str = "") -> list:
         r["when"] = " · ".join(
             f"{WEEKDAYS[int(a.get('weekday', 0)) % 7]} {_hm(int(a.get('from_min', 0)))}"
             f"–{_hm(int(a.get('to_min', 0)))}" for a in r["availability"]) or "any time"
+        r["mode"] = r.get("mode") or "either"
+        r["how"] = MODE_LABELS.get(r["mode"], r["mode"])
     return rows
 
 
@@ -1131,8 +1221,7 @@ def ops_tutoring(state: str = "open", user=Depends(current_user),
     if user["is_admin"] or CM.is_staff(con, user) or user["role"] in ("employee", "volunteer"):
         ids = None
     else:
-        ids = [r["id"] for r in con.execute(
-            "SELECT id FROM courses WHERE teacher_id=?", (user["id"],))]
+        ids = teaches_ids(con, user["id"])
     return {"requests": tutoring_rows(con, ids, state if state != "all" else ""),
             "note": "Availability is what the student said, as weekday "
                     "windows — the same shape as the rota, so a free "

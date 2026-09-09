@@ -45,10 +45,11 @@ async function renderClasses() {
     <h3 style="margin-top:18px">Asking for tutoring
       <span class="dim" style="font-weight:400">· ${asks.length} open</span></h3>
     ${asks.length ? `<div class="card"><table>
-      <thead><tr><th>who</th><th>class</th><th>when they can</th><th>what they said</th><th></th></tr></thead>
+      <thead><tr><th>who</th><th>class</th><th>how</th><th>when they can</th><th>what they said</th><th></th></tr></thead>
       <tbody>${asks.map((r) => `<tr>
         <td><b>${esc(r.who)}</b>${r.email ? `<span class="dim"> ${esc(r.email)}</span>` : ""}</td>
         <td>${esc(r.course)}</td>
+        <td><span class="pill${r.mode === "remote" ? " warn" : ""}">${esc(r.how || "either")}</span></td>
         <td class="dim">${esc(r.when)}</td>
         <td>${esc(r.note || "—")}</td>
         <td class="row-acts">
@@ -142,6 +143,16 @@ async function clOpen(cid) {
         <select id="cl-tutor"><option value="0">nobody yet</option>${staff.map((u) =>
           `<option value="${u.id}" ${u.id === d.teacher_id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select>
         <p class="dim" style="margin:6px 0 0">The tutor changes; the class does not. The old tutor keeps every session they taught.</p>
+        <div class="card-head" style="margin-top:12px"><b>Also teaching it</b>
+          <span class="chips"><select id="cl-cot"><option value="">add a teacher…</option>${
+            staff.filter((u) => u.id !== d.teacher_id && !(d.teachers || []).some((t) => t.id === u.id)).map((u) =>
+              `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select>
+            <button class="btn sm" id="cl-cot-add">Add</button></span></div>
+        ${(d.teachers || []).filter((t) => !t.lead).length
+          ? (d.teachers || []).filter((t) => !t.lead).map((t) => `<div class="cl-cot-row">
+              <b>${esc(t.name)}</b> <span class="dim">since ${fmtDate(t.since)}</span>
+              <button class="btn alt sm" data-cotdel="${t.id}">remove</button></div>`).join("")
+          : `<p class="dim">Nobody else yet. A second teacher sees the class, edits it, runs the register and takes its tutoring asks.</p>`}
       </div>
       <div class="card" style="flex:2;min-width:min(300px,100%)">
         <div class="card-head"><b>When it meets</b>
@@ -186,6 +197,16 @@ async function clOpen(cid) {
     </div>`;
   $("#cl-back").onclick = renderClasses;
   $("#cl-learning").onclick = () => learningCourse(cid);
+  $("#cl-cot-add").onclick = async () => {
+    const uid = +$("#cl-cot").value;
+    if (!uid) return toast("pick somebody");
+    try { await api(`/api/learning/courses/${cid}/teachers`, { body: { user_id: uid } }); clOpen(cid); }
+    catch (err) { toast(err.message); }
+  };
+  view().querySelectorAll("[data-cotdel]").forEach((b) => b.onclick = async () => {
+    try { await api(`/api/learning/courses/${cid}/teachers/${b.dataset.cotdel}`, { method: "DELETE" }); clOpen(cid); }
+    catch (err) { toast(err.message); }
+  });
   $("#cl-tutor").onchange = async (e) => {
     try { await api(`/api/learning/courses/${cid}/tutor`, { body: { teacher_id: +e.target.value } }); toast("tutor changed"); }
     catch (err) { toast(err.message); }

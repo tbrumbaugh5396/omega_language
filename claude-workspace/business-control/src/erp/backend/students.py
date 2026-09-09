@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS student_profiles (
   needs TEXT DEFAULT '',                 -- accessibility, health, anything to know
   notes TEXT DEFAULT '',
   extra TEXT DEFAULT '{}',               -- JSON {label: value} for the rest
+  status TEXT DEFAULT 'active',          -- see STATUSES
+  status_note TEXT DEFAULT '',
+  status_at REAL DEFAULT 0,
   updated_at REAL DEFAULT 0,
   updated_by TEXT DEFAULT ''
 );
@@ -69,11 +72,34 @@ PROFILE_FIELDS = ("birth_date", "gender", "nationality", "origin",
                   "occupation", "phone", "address", "guardian",
                   "emergency_contact", "goals", "needs", "notes")
 LONG_FIELDS = ("education", "goals", "needs", "notes", "address")
-LOG_KINDS = ("achievement", "milestone", "note", "concern")
+LOG_KINDS = ("achievement", "milestone", "note", "concern", "status")
+
+# Achievements worth a line that the system cannot see for itself. A
+# menu rather than a blank, so two teachers file the same thing the
+# same way and a report can count them.
+ACHIEVEMENT_PRESETS = (
+    "New job", "Promotion at work", "Certification at work",
+    "Started a business", "Passed a professional exam",
+    "Passed the citizenship test", "Got a driver's licence",
+    "Read a chapter of a book", "Read a book",
+)
+
+# Why somebody is no longer here, when they are not. `active` is the
+# default and the only state that means "expect them in class".
+STATUSES = ("active", "inactive", "left", "moved", "deceased")
+STATUS_LABELS = {"active": "active", "inactive": "inactive",
+                 "left": "no longer attends", "moved": "moved away",
+                 "deceased": "passed away"}
 
 
 def init_tables(con):
     con.executescript(TABLES)
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(student_profiles)")}
+    for col, ddl in (("status", "TEXT DEFAULT 'active'"),
+                     ("status_note", "TEXT DEFAULT ''"),
+                     ("status_at", "REAL DEFAULT 0")):
+        if col not in cols:
+            con.execute(f"ALTER TABLE student_profiles ADD COLUMN {col} {ddl}")
     con.commit()
 
 
@@ -105,8 +131,12 @@ def profile_of(con, uid: int) -> dict:
     r = con.execute("SELECT * FROM student_profiles WHERE user_id=?",
                     (uid,)).fetchone()
     out = {k: "" for k in PROFILE_FIELDS}
-    out.update({"extra": {}, "updated_at": 0, "updated_by": ""})
+    out.update({"extra": {}, "updated_at": 0, "updated_by": "",
+                "status": "active", "status_note": "", "status_at": 0})
     if r is not None:
+        out["status"] = r["status"] or "active"
+        out["status_note"] = r["status_note"] or ""
+        out["status_at"] = r["status_at"] or 0
         for k in PROFILE_FIELDS:
             out[k] = r[k] or ""
         try:
@@ -118,6 +148,7 @@ def profile_of(con, uid: int) -> dict:
         out["updated_at"] = r["updated_at"] or 0
         out["updated_by"] = r["updated_by"] or ""
     out["age"] = _age(out["birth_date"])
+    out["status_label"] = STATUS_LABELS.get(out["status"], out["status"])
     return out
 
 
@@ -150,6 +181,39 @@ def save_profile(con, uid: int, fields: dict, extra: dict | None,
         (uid, *[cur[k] for k in PROFILE_FIELDS],
          json.dumps(cur["extra"]), time.time(), by[:120]))
     return profile_of(con, uid)
+
+
+def set_status(con, uid: int, status: str, note: str, at: float,
+               by, end_seats: bool) -> dict:
+    """Why somebody is no longer here — or that they are back. Written
+    to the profile, and to the log, so the timeline says when it changed
+    and who said so. Ending their seats is offered, not assumed: a
+    student who moved away may keep a seat in the online class."""
+    if status not in STATUSES:
+        raise HTTPException(400, f"status must be one of {STATUSES}")
+    profile_of(con, uid)                       # ensures the row exists
+    con.execute(
+        "INSERT INTO student_profiles(user_id,status,status_note,status_at,"
+        " updated_at,updated_by) VALUES(?,?,?,?,?,?)"
+        " ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,"
+        " status_note=excluded.status_note, status_at=excluded.status_at,"
+        " updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+        (uid, status, note.strip()[:400], at, time.time(), by["name"][:120]))
+    ended = 0
+    if end_seats and status != "active":
+        ended = con.execute(
+            "UPDATE enrollments SET until=? WHERE user_id=? AND until IS NULL",
+            (at, uid)).rowcount
+    title = (STATUS_LABELS[status].capitalize() if status != "active"
+             else "Active again")
+    con.execute(
+        "INSERT INTO student_log(user_id,kind,title,body,at,by_id,by_name,"
+        " created_at) VALUES(?,?,?,?,?,?,?,?)",
+        (uid, "status", title,
+         note.strip()[:400] + (f" · {ended} seat{'s' if ended != 1 else ''}"
+                               f" ended" if ended else ""),
+         at, by["id"], by["name"], db.now()))
+    return {"status": status, "ended": ended}
 
 
 # ── the record ───────────────────────────────────────────────────────────────
@@ -378,6 +442,8 @@ def student_page(uid: int, user=Depends(current_user), con=Depends(get_con)):
         "logged_achievements": logged,
         "timeline": timeline_of(con, uid),
         "log_kinds": list(LOG_KINDS),
+        "achievement_presets": list(ACHIEVEMENT_PRESETS),
+        "statuses": [{"code": k, "label": STATUS_LABELS[k]} for k in STATUSES],
         "may_edit": True,
         "admin": bool(user["is_admin"]),
     }
@@ -396,6 +462,27 @@ def student_profile_save(uid: int, body: ProfileBody,
     out = save_profile(con, uid, body.fields, body.extra, by=user["name"])
     con.commit()
     return {"ok": True, "profile": out}
+
+
+class StatusBody(BaseModel):
+    status: str = "active"
+    note: str = ""
+    at: float = 0
+    end_seats: bool = False
+
+
+@router.post("/api/students/{uid}/status")
+def student_status(uid: int, body: StatusBody, user=Depends(current_user),
+                   con=Depends(get_con)):
+    _require_office(user)
+    _student(con, uid)
+    at = body.at or time.time()
+    if at > time.time() + 86400:
+        raise HTTPException(400, "a status is what is, not what will be")
+    out = set_status(con, uid, body.status, body.note, at, user,
+                     body.end_seats)
+    con.commit()
+    return {"ok": True, **out, "profile": profile_of(con, uid)}
 
 
 class LogBody(BaseModel):

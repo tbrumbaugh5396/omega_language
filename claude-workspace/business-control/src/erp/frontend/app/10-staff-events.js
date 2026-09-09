@@ -31,7 +31,8 @@ async function renderCustomers(q) {
         <div class="doc-main"><b>${esc(r.name)}</b>
           <span class="dim">${[r.email, r.region].filter(Boolean)
             .map(esc).join(" · ") || "no contact on file"}${
-            r.active ? "" : " · deactivated"}</span></div>
+            r.active ? "" : " · deactivated"}${r.status && r.status !== "active"
+            ? ` · <span class="pill warn">${esc(r.status_label || r.status)}</span>` : ""}</span></div>
         <span class="dim">${r.orders} order${r.orders === 1 ? "" : "s"}
           · ${money(r.spent_cents)}${r.last_order_at
             ? ` · last ${fmtAgo(r.last_order_at)}` : ""}</span>

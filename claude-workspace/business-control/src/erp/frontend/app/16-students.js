@@ -38,13 +38,16 @@ async function studentPage(uid, back) {
   view().innerHTML = `
     <div class="page-head">
       <div><h2>${st.photo ? `<img class="roster-face" src="/media/${esc(st.photo)}" alt="">` : ""}
-          ${esc(st.name)}${st.active ? "" : ' <span class="pill bad">deactivated</span>'}</h2>
+          ${esc(st.name)}${st.active ? "" : ' <span class="pill bad">deactivated</span>'}${
+          p.status !== "active" ? ` <span class="pill warn" title="${esc(p.status_note)}">${esc(p.status_label)}${
+            p.status_at ? " · " + fmtDate(p.status_at) : ""}</span>` : ""}</h2>
         <p class="dim">${esc(st.role)} since ${fmtDate(st.created_at)}${
           st.email ? " · " + esc(st.email) : ""}${p.phone ? " · " + esc(p.phone) : ""}${
           p.age != null ? " · " + p.age : ""}${p.nationality ? " · " + esc(p.nationality) : ""}${
           p.native_language ? " · speaks " + esc(p.native_language) : ""}</p></div>
       <div class="top-actions">
         <button class="btn alt" id="stu-back">&larr; Back</button>
+        <button class="btn alt" id="stu-status" title="no longer attends, moved, passed away, inactive — or back">Status</button>
         <button class="btn alt" id="stu-note">Add a note</button>
         <button class="btn" id="stu-ach">Log an achievement</button>
       </div>
@@ -115,8 +118,9 @@ async function studentPage(uid, back) {
       </li>`).join("")}</ul>` : '<p class="dim">Nothing yet.</p>'}
     </div>`;
   $("#stu-back").onclick = () => back ? back() : renderCustomers();
-  $("#stu-note").onclick = () => studentLogForm(uid, "note", () => studentPage(uid, back));
-  $("#stu-ach").onclick = () => studentLogForm(uid, "achievement", () => studentPage(uid, back));
+  $("#stu-note").onclick = () => studentLogForm(uid, "note", () => studentPage(uid, back), d);
+  $("#stu-ach").onclick = () => studentLogForm(uid, "achievement", () => studentPage(uid, back), d);
+  $("#stu-status").onclick = () => studentStatusForm(uid, d, () => studentPage(uid, back));
   const extraRow = (k, v) => {
     const div = document.createElement("div");
     div.className = "stu-extra";
@@ -153,10 +157,14 @@ async function studentPage(uid, back) {
 
 /* Something staff noticed and wrote down. Dated when it happened, not
    when it was typed — a prize won in March is a March fact. */
-function studentLogForm(uid, kind, after) {
+function studentLogForm(uid, kind, after, d) {
   const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
     .toISOString().slice(0, 10);
+  const presets = (d && d.achievement_presets) || [];
   modal(`<h3>${kind === "achievement" ? "Log an achievement" : "Add to the log"}</h3>
+    ${presets.length ? `<p class="dim">Pick one, or write your own below.</p>
+      <div class="chips" id="sl-presets">${presets.map((t) =>
+        `<button type="button" class="btn alt sm" data-preset="${esc(t)}">${esc(t)}</button>`).join("")}</div>` : ""}
     <div class="row2">
       <div><label>Kind</label><select id="sl-kind">${
         ["achievement", "milestone", "note", "concern"].map((k) =>
@@ -171,6 +179,11 @@ function studentLogForm(uid, kind, after) {
     <div class="modal-foot">
       <button class="btn alt" data-close>Cancel</button>
       <button class="btn" id="sl-save">Save</button></div>`);
+  document.querySelectorAll("[data-preset]").forEach((b) => b.onclick = () => {
+    $("#sl-title").value = b.dataset.preset;
+    $("#sl-kind").value = "achievement";
+    document.querySelectorAll("[data-preset]").forEach((x) => x.classList.toggle("on", x === b));
+  });
   $("#sl-save").onclick = async () => {
     const title = $("#sl-title").value.trim();
     if (!title) return toast("say what it was");
@@ -179,6 +192,45 @@ function studentLogForm(uid, kind, after) {
       await api(`/api/students/${uid}/log`, { body: {
         kind: $("#sl-kind").value, title, body: $("#sl-body").value.trim(), at } });
       closeModal();
+      if (after) after();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+/* Why somebody is no longer here — no longer attends, moved away, passed
+   away, gone quiet — or that they are back. Ending their seats is offered,
+   not assumed: a student who moved may keep the online class. */
+function studentStatusForm(uid, d, after) {
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 10);
+  const cur = d.profile.status || "active";
+  modal(`<h3>Status</h3>
+    <p class="dim">Now: <b>${esc(d.profile.status_label)}</b>${d.profile.status_note
+      ? ` — ${esc(d.profile.status_note)}` : ""}</p>
+    <div class="row2">
+      <div><label>Status</label><select id="ss-status">${d.statuses.map((x) =>
+        `<option value="${x.code}"${x.code === cur ? " selected" : ""}>${esc(x.label)}</option>`).join("")}</select></div>
+      <div><label>Since</label><input id="ss-at" type="date" value="${today}"></div>
+    </div>
+    <label>Why, or anything to know <span class="opt">optional</span></label>
+    <input id="ss-note" placeholder="e.g. moved to Valencia; family in touch">
+    <label class="dim" style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <input type="checkbox" id="ss-end" checked> End their seats in every class today</label>
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="ss-save">Save</button></div>`);
+  const sel = $("#ss-status");
+  const endRow = $("#ss-end").parentElement;
+  const sync = () => { endRow.hidden = sel.value === "active"; };
+  sel.onchange = sync; sync();
+  $("#ss-save").onclick = async () => {
+    const at = $("#ss-at").value ? new Date($("#ss-at").value + "T12:00").getTime() / 1000 : 0;
+    try {
+      const r = await api(`/api/students/${uid}/status`, { body: {
+        status: sel.value, note: $("#ss-note").value.trim(), at,
+        end_seats: sel.value !== "active" && $("#ss-end").checked } });
+      closeModal();
+      toast(r.ended ? `saved — ${r.ended} seat${r.ended === 1 ? "" : "s"} ended` : "saved");
       if (after) after();
     } catch (err) { toast(err.message); }
   };

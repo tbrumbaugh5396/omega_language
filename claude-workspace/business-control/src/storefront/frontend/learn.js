@@ -1445,6 +1445,12 @@
     host.innerHTML = `<form id="lrn-tut-form">
       <label class="lrn-meta">What would help?<br>
         <textarea name="note" rows="3" style="width:100%" placeholder="e.g. the past tense — I keep mixing it up"></textarea></label>
+      <p class="lrn-meta" style="margin:10px 0 4px">How can you meet?</p>
+      <div class="lrn-tut-how">
+        <label><input type="radio" name="mode" value="either" checked> In person or remotely</label>
+        <label><input type="radio" name="mode" value="in_person"> In person only</label>
+        <label><input type="radio" name="mode" value="remote"> Remotely only (video call)</label>
+      </div>
       <p class="lrn-meta" style="margin:10px 0 4px">When could you do it? Tick days and give a window.</p>
       <div id="lrn-tut-days">${DAYS.map((d, i) => `<div class="lrn-tut-day">
         <label><input type="checkbox" name="d${i}"> ${d}</label>
@@ -1462,7 +1468,8 @@
       const availability = DAYS.map((_, i) => f[`d${i}`].checked
         ? { weekday: i, from_min: mins(f[`f${i}`].value), to_min: mins(f[`t${i}`].value) } : null).filter(Boolean);
       try {
-        await api(`/api/learn/courses/${cid}/tutoring`, { note: f.note.value, availability });
+        await api(`/api/learn/courses/${cid}/tutoring`, { note: f.note.value, availability,
+          mode: (f.querySelector("[name=mode]:checked") || {}).value || "either" });
         toast("asked — the tutor has it"); course(cid);
       } catch (err) { document.getElementById("lrn-tut-msg").textContent = err.message; }
     };

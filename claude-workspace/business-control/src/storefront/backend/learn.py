@@ -104,7 +104,8 @@ def my_courses(user=Depends(current_customer), con=Depends(get_con)):
             " WHERE c.active=1 ORDER BY c.name").fetchall():
         d = {k: r[k] for k in ("id", "name", "language", "level", "blurb",
                                "product_id")}
-        d["teacher"] = r["teacher_name"] or ""
+        d["teachers"] = L.teachers_of(con, r["id"])
+        d["teacher"] = " & ".join(t["name"] for t in d["teachers"])
         # A course you teach is yours too. Without this a teacher on the
         # learner page saw her own course in the catalogue with "Ask to
         # join", because the teacher's surface used to be ops alone —
@@ -177,8 +178,11 @@ def course_view(cid: int, user=Depends(current_customer),
             "may_edit": L.may_edit(con, user, cid),
             "materials": MAT.of_course(con, cid),
             "schedule": L.schedule_of(con, cid),
+            "teachers": L.teachers_of(con, cid),
+            "teacher": " & ".join(t["name"] for t in L.teachers_of(con, cid)),
             "my_tutoring": [dict(r) for r in con.execute(
-                "SELECT id, state, note, reply, created_at FROM tutoring_requests"
+                "SELECT id, state, note, reply, mode, created_at"
+                " FROM tutoring_requests"
                 " WHERE course_id=? AND user_id=? ORDER BY id DESC LIMIT 3",
                 (cid, user["id"]))],
             "lessons": lessons, "quizzes": quizzes,
@@ -633,6 +637,7 @@ def class_say(sid: int, body: ChatBody, user=Depends(current_customer),
 class TutoringBody(BaseModel):
     note: str = ""
     availability: list = []
+    mode: str = "either"            # in_person | remote | either
 
 
 @router.post("/api/learn/courses/{cid}/tutoring")
@@ -645,6 +650,7 @@ def ask_tutoring(cid: int, body: TutoringBody, user=Depends(current_customer),
     if not L.enrolled_in(con, cid, user["id"]):
         raise HTTPException(403, "you are not in this course")
     slots = []
+    mode = body.mode if body.mode in L.TUTORING_MODES else "either"
     for a in body.availability[:14]:
         try:
             wd, f, t = int(a.get("weekday", 0)), int(a.get("from_min", 0)), int(a.get("to_min", 0))
@@ -658,14 +664,16 @@ def ask_tutoring(cid: int, body: TutoringBody, user=Depends(current_customer),
                     " user_id=? AND state='open'", (cid, user["id"])).fetchone()
     if r:
         con.execute("UPDATE tutoring_requests SET note=?, availability=?,"
-                    " updated_at=? WHERE id=?",
-                    (body.note.strip()[:1000], _j.dumps(slots), now, r["id"]))
+                    " mode=?, updated_at=? WHERE id=?",
+                    (body.note.strip()[:1000], _j.dumps(slots), mode, now,
+                     r["id"]))
         rid = r["id"]
     else:
         cur = con.execute(
             "INSERT INTO tutoring_requests(course_id,user_id,note,availability,"
-            "state,created_at,updated_at) VALUES(?,?,?,?,'open',?,?)",
-            (cid, user["id"], body.note.strip()[:1000], _j.dumps(slots), now, now))
+            "mode,state,created_at,updated_at) VALUES(?,?,?,?,?,'open',?,?)",
+            (cid, user["id"], body.note.strip()[:1000], _j.dumps(slots), mode,
+             now, now))
         rid = cur.lastrowid
         c = con.execute("SELECT name, teacher_id FROM courses WHERE id=?", (cid,)).fetchone()
         from erp.backend import notify
@@ -1342,6 +1350,7 @@ def learn_page(con=Depends(get_con)):
  .lrn-about{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px 12px}}
  .lrn-about .wide{{grid-column:1/-1}} .lrn-about label{{display:block;font-size:12px;opacity:.75;text-transform:capitalize}}
  .lrn-about input,.lrn-about textarea{{width:100%;box-sizing:border-box}}
+ .lrn-tut-how{{display:flex;flex-direction:column;gap:4px}} .lrn-tut-how label{{display:flex;gap:6px;align-items:center}}
  .lrn-tut-day{{display:flex;gap:8px;align-items:center;padding:3px 0}} .lrn-tut-day label{{min-width:60px}}
  .lrn-reg{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.2)}}
  .lrn-reg img{{width:34px;height:34px;border-radius:50%;object-fit:cover;background:rgba(127,127,127,.2)}}

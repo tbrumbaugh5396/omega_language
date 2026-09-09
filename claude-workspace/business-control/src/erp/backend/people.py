@@ -257,7 +257,16 @@ def customers_list(q: str = "", user=Depends(current_user),
         " GROUP BY u.id"
         " ORDER BY last_order_at IS NULL, last_order_at DESC, u.name"
         " LIMIT 500", (like, like, like)).fetchall()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    if out:
+        from . import students as ST
+        st = {r["user_id"]: (r["status"] or "active") for r in con.execute(
+            "SELECT user_id, status FROM student_profiles WHERE status"
+            " IS NOT NULL AND status != 'active'")}
+        for r in out:
+            r["status"] = st.get(r["id"], "active")
+            r["status_label"] = ST.STATUS_LABELS.get(r["status"], r["status"])
+    return out
 
 
 @router.get("/api/customers/{uid}")
