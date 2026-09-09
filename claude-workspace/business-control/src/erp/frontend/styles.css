@@ -2124,3 +2124,11 @@ body.lane-on { overflow: hidden; }
 .cl-pr-row { display: flex; gap: 8px; align-items: center; padding: 5px 0;
   border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .cl-pr-row b { flex: 1; min-width: 120px; }
+
+/* A row of figures at the top of a ledger screen — spend, reviews,
+   applicants by stage. Cards, not a table: a figure is read at a glance and
+   a table is read along a row. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px; margin-bottom: 14px; }
+.tile { display: flex; flex-direction: column; gap: 2px; }
+.tile b { font-size: 1.35em; }

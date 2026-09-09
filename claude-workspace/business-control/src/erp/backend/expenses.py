@@ -128,6 +128,8 @@ DEFAULT_CATEGORIES = (
     ("insurance", "Insurance", 1, 100, ""),
     ("fees", "Professional fees", 1, 100, "accountant, lawyer, licences"),
     ("marketing", "Marketing", 1, 100, ""),
+    ("advertising", "Advertising", 1, 100,
+     "ad platforms, print, sponsorships — the ad ledger files here"),
     ("training", "Training & books", 1, 100, ""),
     ("bank", "Bank & payment fees", 1, 100, ""),
     ("materials", "Teaching materials", 1, 100, ""),

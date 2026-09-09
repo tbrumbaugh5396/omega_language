@@ -216,6 +216,18 @@ they describe. A module they didn't ask for is a module they won't open.
 | google_calendar | ☐ | ☐ | Published shifts, client milestones and ticket due dates in the calendar people already have open |
 | google_drive | ☐ | ☐ | Signed documents filed to Drive — scoped so it can only see what it put there |
 | gmail | ☐ | ☐ | Invoices and portal links sent from your own address, not a no-reply |
+| Google Forms (`google_forms`) | ☐ | ☐ | Form responses pulled or pushed in; each becomes an enquiry, a student or a customer |
+| Network for Good (`network4good`) | ☐ | ☐ | Gifts arrive by webhook or CSV; every donor lands in the address book |
+| GED Manager (`gedmanager`) | ☐ | ☐ | Score report CSV onto each student's record; a pass is an achievement. No API exists — import only |
+| NorthStar (`northstar`) | ☐ | ☐ | Digital-literacy results CSV onto each learner's record. No API exists — import only |
+| Meta ads (`meta_ads`) | ☐ | ☐ | Facebook and Instagram campaign spend and results, read into the ad ledger |
+| Google Ads (`google_ads`) | ☐ | ☐ | YouTube and Search campaign spend and results, read into the ledger |
+| TikTok / LinkedIn / X / Reddit / Snapchat ads (`tiktok_ads`, `linkedin_ads`, `x_ads`, `reddit_ads`, `snapchat_ads`) | ☐ | ☐ | Same: read only, nothing bought from here. Twitch is typed — no API |
+| Indeed / ZipRecruiter / LinkedIn Jobs (`indeed`, `ziprecruiter`, `linkedin_jobs`) | ☐ | ☐ | They read our job feed and post applications back; nobody takes a posting by API |
+| Greenhouse / Workable (`greenhouse`, `workable`) | ☐ | ☐ | Candidates and their stage pulled onto the hiring board |
+| Uber Eats / DoorDash (`ubereats`, `doordash`) | ☐ | ☐ | Our menu pushed; their orders in the queue by SKU. Partner accounts must be approved first |
+| Google Business Profile (`google_business`) | ☐ | ☐ | Listing read and written; reviews read and answered |
+| Yelp (`yelp`) | ☐ | ☐ | Listing and latest review excerpts read; Yelp takes no reply or edit by API |
 | Your own | ☐ | ☐ | Any service with an https URL and a key: declared on the Integrations tab, joins the same event list and log |
 | Other: ______ | ☐ | ☐ | Assess separately — a new connector is a line item |
 

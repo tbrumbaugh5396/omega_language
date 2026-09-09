@@ -71,6 +71,8 @@ decision](ecommerce-architecture-decision.md#8-decisions-still-open), unresolved
 2. **Who owns inventory truth — ERP or Shopify?** Wanting Shopify to own it is a signal the ERP is further from done than it looks.
 3. **Who owns the customer record?** Pick a winner up front, or spend a year reconciling duplicate customers by email.
 
+- [connections.md](connections.md) — the second wave of outside connections: ad platforms, job boards, delivery apps, listings and reviews, forms and score imports, and what each one honestly can and cannot do
+
 ## Build it
 
 | Document | What it tracks |

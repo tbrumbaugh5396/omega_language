@@ -42,84 +42,126 @@ const opsIcon = (n, cls = "") =>
 
 
 const TABS = [
+  /* The rail is grouped by what a person is doing, not by which module
+     the code lives in. Eight groups of five or six beat five groups where
+     Operate held seventeen — a list that long is scanned, not read, and
+     Presentations sat between Classes and Devices for no reason anyone
+     could say. Order inside a group is the order of a working day:
+     the thing you open first, first. */
+
+  // Money in.
   { id: "shop", label: "Shop", icon: "cart", group: "Sell", roles: "*" },
   { id: "till", label: "Till", icon: "card", group: "Sell",
     roles: ["admin", "employee", "cashier"], perm: "till" },
   { id: "orders", label: "Orders", icon: "box", group: "Sell", roles: "*" },
+  { id: "bookings", label: "Bookings", icon: "calendar", group: "Sell",
+    roles: ["admin", "employee"] },
   { id: "customers", label: "Customers", icon: "users", group: "Sell",
     roles: ["admin", "employee"] },
   { id: "promos", label: "Promos", icon: "megaphone", group: "Sell",
     roles: ["admin", "employee"] },
+  { id: "marketplaces", label: "Delivery apps", icon: "truck", group: "Sell",
+    roles: ["admin"] },
   { id: "clients", label: "Clients (B2B)", icon: "handshake", group: "Sell",
     roles: ["admin"], perm: "documents" },
   // The fleet lives next to the clients it deploys — burying the platform
   // at the bottom of Company meant the operator never saw it.
   { id: "fleet", label: "Platform", icon: "shield2", group: "Sell",
     roles: ["admin"], provider: true },
-  { id: "clock", label: "Time Clock", icon: "clock", group: "Operate", roles: "*" },
-  { id: "stores", label: "Stores", icon: "pin", group: "Operate",
+
+  // Things, and where they are.
+  { id: "inventory", label: "Inventory", icon: "store", group: "Stock & supply",
     roles: ["admin", "employee", "distributor"] },
-  { id: "inventory", label: "Inventory", icon: "store", group: "Operate",
+  { id: "stores", label: "Stores", icon: "pin", group: "Stock & supply",
     roles: ["admin", "employee", "distributor"] },
-  { id: "field", label: "Field", icon: "pin", group: "Operate",
-    roles: ["admin", "employee", "cashier"] },
-  { id: "routes", label: "Routes", icon: "truck", group: "Operate",
-    roles: ["admin", "employee"] },
-  { id: "supply", label: "Sourcing", icon: "tools", group: "Operate",
+  { id: "supply", label: "Sourcing", icon: "tools", group: "Stock & supply",
     roles: ["admin"], perm: "supply" },
-  { id: "outreach", label: "Outreach", icon: "handshake", group: "Operate",
+  { id: "routes", label: "Routes", icon: "truck", group: "Stock & supply",
     roles: ["admin", "employee"] },
-  { id: "learning", label: "Learning", icon: "pen", group: "Operate",
+  { id: "field", label: "Field", icon: "pin", group: "Stock & supply",
+    roles: ["admin", "employee", "cashier"] },
+
+  // A working day: clock in, see the rota, do the board, log the rest.
+  { id: "clock", label: "Time Clock", icon: "clock", group: "Work", roles: "*" },
+  { id: "rota", label: "Rota", icon: "calendar", group: "Work",
+    roles: ["admin", "employee", "teacher", "volunteer"] },
+  { id: "hours", label: "Hours", icon: "clock", group: "Work",
     roles: ["admin", "employee", "teacher"] },
-  { id: "nutrition", label: "Nutrition", icon: "bag", group: "Operate",
+  { id: "board", label: "Board", icon: "list", group: "Work",
+    roles: ["admin", "employee", "teacher"] },
+  { id: "calendar", label: "Calendar", icon: "calendar", group: "Work",
+    roles: ["admin", "employee", "teacher"] },
+  { id: "scan", label: "Scan", icon: "camera", group: "Work", roles: "*" },
+  { id: "expenses", label: "Expenses", icon: "file", group: "Work",
+    roles: ["admin", "employee", "teacher", "volunteer", "cashier", "distributor"] },
+
+  // The classroom, and what is taught in it.
+  { id: "learning", label: "Learning", icon: "pen", group: "Teach",
+    roles: ["admin", "employee", "teacher"] },
+  { id: "classes", label: "Classes", icon: "users", group: "Teach",
+    roles: ["admin", "employee", "teacher"] },
+  { id: "rooms", label: "Rooms", icon: "calendar", group: "Teach",
+    roles: ["admin", "employee", "teacher"] },
+  { id: "presentations", label: "Presentations", icon: "file", group: "Teach",
+    roles: ["admin", "employee", "teacher"] },
+  { id: "nutrition", label: "Nutrition", icon: "bag", group: "Teach",
     roles: ["admin", "employee"] },
-  { id: "scan", label: "Scan", icon: "camera", group: "Operate", roles: "*" },
+
+  // Finding the next customer, and keeping the last one.
+  { id: "outreach", label: "Outreach", icon: "handshake", group: "Grow",
+    roles: ["admin", "employee"] },
+  { id: "email", label: "Email", icon: "megaphone", group: "Grow",
+    roles: ["admin"] },
+  { id: "ads", label: "Advertising", icon: "megaphone", group: "Grow",
+    roles: ["admin", "employee"] },
+  { id: "listings", label: "Listings & reviews", icon: "pin", group: "Grow",
+    roles: ["admin", "employee"] },
   { id: "feed", label: "Feed", icon: "feed", group: "Grow", roles: "*" },
   { id: "affiliates", label: "Affiliates", icon: "link", group: "Grow", roles: "*" },
+  { id: "events", label: "Events", icon: "calendar", group: "Grow",
+    roles: ["admin", "employee"] },
+  { id: "intake", label: "Forms, gifts & results", icon: "file", group: "Grow",
+    roles: ["admin", "employee"] },
   { id: "experiments", label: "Experiments", icon: "flask", group: "Grow",
     roles: ["admin"] },
   { id: "analytics", label: "Analytics", icon: "chart", group: "Grow",
     roles: ["admin"] },
-  { id: "events", label: "Events", icon: "calendar", group: "Grow",
-    roles: ["admin", "employee"] },
-  // Work and dates, where the work is. The board is what everyone is
-  // doing; the calendar is everything this business has a date for, laid
-  // over each other for once.
-  { id: "rota", label: "Rota", icon: "calendar", group: "Operate",
-    roles: ["admin", "employee", "teacher", "volunteer"] },
-  { id: "hours", label: "Hours", icon: "clock", group: "Operate",
-    roles: ["admin", "employee", "teacher"] },
-  { id: "board", label: "Board", icon: "list", group: "Operate",
-    roles: ["admin", "employee", "teacher"] },
-  { id: "calendar", label: "Calendar", icon: "calendar", group: "Operate",
-    roles: ["admin", "employee", "teacher"] },
-  { id: "email", label: "Email", icon: "megaphone", group: "Grow",
+
+  // The people who work here.
+  { id: "staff", label: "Team & access", icon: "users", group: "Team",
     roles: ["admin"] },
+  { id: "hiring", label: "Hiring", icon: "users", group: "Team",
+    roles: ["admin"] },
+  { id: "chat", label: "Chat", icon: "chat", group: "Team", roles: "*" },
+  { id: "kiosks", label: "Clock kiosks", icon: "clock", group: "Team",
+    roles: ["admin"] },
+  { id: "profile", label: "My profile", icon: "user", group: "Team",
+    roles: "*" },
+
+  // The company itself: its paperwork, its bill, its machines, its record.
   { id: "docs", label: "Documents", icon: "file", group: "Company",
     roles: ["admin", "employee"] },
-  { id: "staff", label: "Team & access", icon: "users", group: "Company",
+  { id: "plan", label: "What you pay for", icon: "card", group: "Company",
     roles: ["admin"] },
-  { id: "kiosks", label: "Clock kiosks", icon: "clock", group: "Company",
-    roles: ["admin"] },
-  { id: "rooms", label: "Rooms", icon: "calendar", group: "Operate",
-    roles: ["admin", "employee", "teacher"] },
-  { id: "bookings", label: "Bookings", icon: "calendar", group: "Sell",
-    roles: ["admin", "employee"] },
-  { id: "classes", label: "Classes", icon: "users", group: "Operate",
-    roles: ["admin", "employee", "teacher"] },
-  { id: "presentations", label: "Presentations", icon: "file", group: "Operate",
-    roles: ["admin", "employee", "teacher"] },
   { id: "devices", label: "Devices", icon: "shield2", group: "Company",
     roles: ["admin"] },
-  { id: "expenses", label: "Expenses", icon: "file", group: "Company",
-    roles: ["admin", "employee", "teacher", "volunteer", "cashier", "distributor"] },
+  { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
+    roles: ["admin"] },
+  { id: "dbview", label: "Database", icon: "list", group: "Company",
+    roles: ["admin"] },
+  { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
+  { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
+
   // Every connection lives in one group. Four of them earned bespoke
   // screens because they do more than connect — Slack reads channels,
   // Trello syncs cards — and the rest share one screen whose whole story
-  // is "is it connected, what has it carried, and can I test it". Which
-  // is a screen, and belongs where a person looks for it rather than
-  // three clicks inside a list. The list itself leads, because that is
-  // where a connection is set up and where your own ones are declared.
+  // is "is it connected, what has it carried, and can I test it". The
+  // list itself leads, because that is where a connection is set up and
+  // where your own ones are declared. The connections that belong to a
+  // working screen — the ad platforms, the job boards, the delivery apps,
+  // the listings, the forms — are set up ON that screen rather than here,
+  // because thirty rail entries is a list nobody scans; they are all still
+  // on the All connections page.
   { id: "integrations", label: "All connections", icon: "link",
     group: "Connections", roles: ["admin"] },
   { id: "website", label: "Your website", icon: "link",
@@ -148,17 +190,6 @@ const TABS = [
     group: "Connections", roles: ["admin"] },
   { id: "ig-laceup", label: "LaceUp", icon: "truck",
     group: "Connections", roles: ["admin"] },
-  { id: "plan", label: "What you pay for", icon: "card", group: "Company",
-    roles: ["admin"] },
-  { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
-    roles: ["admin"] },
-  { id: "dbview", label: "Database", icon: "list", group: "Company",
-    roles: ["admin"] },
-  { id: "profile", label: "My profile", icon: "user", group: "Company",
-    roles: "*" },
-  { id: "chat", label: "Chat", icon: "chat", group: "Company", roles: "*" },
-  { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
-  { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
 ];
 /* Which purchased capability each tab belongs to. Tabs with no entry are
    core — part of Platform Core, on for everyone. The ids are the price
@@ -178,6 +209,8 @@ const TAB_CAP = {
   integrations: "api", discord: "api", slack: "api", trello: "api",
   dropbox: "api",
   audit: "infosec",
+  ads: "marketing", listings: "marketing", hiring: "workforce",
+  marketplaces: "selling",
 };
 const CAP_LABEL = {
   selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
@@ -195,8 +228,8 @@ const capLocked = (t) => {
   return !!(need && Array.isArray(caps) && !caps.includes(need));
 };
 
-const NAV_GROUPS = ["Sell", "Operate", "Grow", "Company",
-                    "Connections"];
+const NAV_GROUPS = ["Sell", "Stock & supply", "Work", "Teach", "Grow",
+                    "Team", "Company", "Connections"];
 // Where each staff job lands after sign-in.
 const JOB_HOME = { driver: "routes", dsd: "routes", warehouse: "inventory",
   sales_rep: "outreach", ambassador: "feed", event_staff: "promos" };
@@ -418,6 +451,8 @@ async function render() {
     staff: renderStaff, events: renderEvents, customers: renderCustomers,
     kiosks: renderKiosks, enrol: renderEnrol, rooms: renderRooms,
     bookings: renderBookings, classes: renderClasses, devices: renderDevices, expenses: renderExpenses, presentations: renderPresentations,
+    ads: renderAds, listings: renderListings, hiring: renderHiring,
+    marketplaces: renderMarketplaces, intake: renderIntake,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

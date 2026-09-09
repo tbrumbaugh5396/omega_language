@@ -373,6 +373,7 @@ PROVIDERS = {
             # Without these Google issues no refresh token and the
             # connection dies the first time the hour is up.
             "extra_auth": {"access_type": "offline", "prompt": "consent"},
+            "app_group": "google",
         },
         "fields": [],
         "events": ["gate.passed", "ticket.created"],
@@ -392,6 +393,7 @@ PROVIDERS = {
             # Without these Google issues no refresh token and the
             # connection dies the first time the hour is up.
             "extra_auth": {"access_type": "offline", "prompt": "consent"},
+            "app_group": "google",
         },
         "fields": [],
         "events": ["document.signed"],
@@ -410,6 +412,7 @@ PROVIDERS = {
             # Without these Google issues no refresh token and the
             # connection dies the first time the hour is up.
             "extra_auth": {"access_type": "offline", "prompt": "consent"},
+            "app_group": "google",
         },
         "fields": [],
         "events": [],
@@ -429,6 +432,366 @@ PROVIDERS = {
     },
 }
 
+
+# ---------- the second wave: five families, each with a working screen ----------
+# These are declared in the same table as the first eleven, because a
+# credential is a credential and the log is the log. What differs is that
+# each family has a screen of its own — an ad ledger, a hiring board, a
+# delivery menu, a listing, an intake tray — and that is where the
+# connection is set up. The domain code lives in ads.py, hiring.py,
+# marketplaces.py, listings.py and intake.py; they register their checks
+# and handlers into the dicts below at import.
+#
+# Honesty, family by family:
+#   * Ad platforms are READ. Spend, impressions and clicks come in; nothing
+#     here buys media. Twitch has no self-serve API at all (its ads are
+#     bought through Amazon Ads), so it is a column in the ledger that is
+#     typed, not pulled.
+#   * Job boards INGEST a feed we publish and POST applications back. None
+#     of Indeed, ZipRecruiter or LinkedIn offers a write API for postings.
+#   * Delivery apps take a menu and send orders. Both need a partner
+#     account approved by the platform before a credential exists.
+#   * Google can read and reply to its reviews; Yelp's public API returns
+#     three excerpts and takes no reply — that is the API, not a limit
+#     we chose.
+#   * GED Manager and NorthStar have no API. Their score reports are CSV
+#     exports, so those two are import routes and nothing else.
+_GOOGLE = {"authorize": "https://accounts.google.com/o/oauth2/v2/auth",
+           "token": "https://oauth2.googleapis.com/token",
+           "extra_auth": {"access_type": "offline", "prompt": "consent"},
+           "app_group": "google"}
+
+PROVIDERS.update({
+    # --- intake: what outside forms, funders and testing services send ---
+    "google_forms": {
+        "label": "Google Forms", "family": "intake",
+        "blurb": "Bring form responses in as enquiries, students or "
+                 "customers instead of reading them in a spreadsheet.",
+        "auth": "oauth2", "inbound": True,
+        "oauth": {**_GOOGLE,
+                  "scope": "https://www.googleapis.com/auth/forms.responses.readonly "
+                           "https://www.googleapis.com/auth/forms.body.readonly"},
+        "fields": [],
+        "settings_fields": [
+            {"k": "form_ids", "label": "Form IDs",
+             "hint": "Comma separated. The long id in the form's edit URL "
+                     "(docs.google.com/forms/d/THIS/edit)."}],
+        "events": [], "actions": ["pull_forms"],
+        "does": "Pulls every response from the forms you list, keeps each "
+                "one once, and lets you turn a response into an enquiry, a "
+                "student or a customer with the answers attached. An Apps "
+                "Script trigger can also push each submission the moment "
+                "it lands — the snippet is on the intake screen.",
+    },
+    "network4good": {
+        "label": "Network for Good", "family": "intake",
+        "blurb": "Gifts made on your Network for Good page, in the "
+                 "ledger here.",
+        "auth": "inbound",
+        "fields": [], "events": [],
+        "does": "Receives a gift as it is made, from a Network for Good "
+                "(Bonterra) notification or a Zapier step, and imports the "
+                "donations CSV export for everything before that. Each "
+                "donor becomes a customer so the thank-you and the next "
+                "ask go through the same address book.",
+    },
+    "gedmanager": {
+        "label": "GED Manager", "family": "intake",
+        "blurb": "Test scores from GED Manager on each student's record.",
+        "auth": "inbound",
+        "fields": [], "events": [],
+        "does": "Imports the score report CSV that GED Manager exports. "
+                "A test taker is matched to a student by email, then by "
+                "name; each subject result lands on their record, and a "
+                "pass is logged as an achievement. GED Manager publishes "
+                "no API, so this is the direction that exists.",
+    },
+    "northstar": {
+        "label": "NorthStar Digital Literacy", "family": "intake",
+        "blurb": "Assessment results and certificates from NorthStar on "
+                 "each learner's record.",
+        "auth": "inbound",
+        "fields": [], "events": [],
+        "does": "Imports the results CSV a NorthStar location admin can "
+                "export. Each module result lands on the learner's record "
+                "and a certificate is logged as an achievement. NorthStar "
+                "publishes no API, so this is the direction that exists.",
+    },
+
+    # --- advertising: read what each platform spent and got ---
+    "meta_ads": {
+        "label": "Meta (Facebook & Instagram) ads", "family": "ads",
+        "blurb": "Campaigns and spend from the Meta ad account.",
+        "auth": "oauth2",
+        "oauth": {"authorize": "https://www.facebook.com/v19.0/dialog/oauth",
+                  "token": "https://graph.facebook.com/v19.0/oauth/access_token",
+                  "scope": "ads_read business_management",
+                  "token_auth": "body"},
+        "fields": [],
+        "settings_fields": [
+            {"k": "ad_account_id", "label": "Ad account ID",
+             "hint": "Digits only, or act_ and the digits — from Ads "
+                     "Manager, account overview."}],
+        "events": [], "actions": ["pull_ads"],
+        "does": "Reads each campaign's status, budget, spend, impressions "
+                "and clicks for the last thirty days into the ad ledger. "
+                "Facebook and Instagram placements are one account, so one "
+                "connection covers both.",
+    },
+    "google_ads": {
+        "label": "Google Ads (YouTube & Search)", "family": "ads",
+        "blurb": "Campaigns and spend from Google Ads, YouTube included.",
+        "auth": "oauth2",
+        "oauth": {**_GOOGLE,
+                  "scope": "https://www.googleapis.com/auth/adwords"},
+        "fields": [],
+        "settings_fields": [
+            {"k": "customer_id", "label": "Customer ID",
+             "hint": "The ten digits at the top right of Google Ads, "
+                     "with or without dashes."},
+            {"k": "developer_token", "label": "Developer token",
+             "secret": True,
+             "hint": "From the API Center of a manager account. A test "
+                     "token only sees test accounts."}],
+        "events": [], "actions": ["pull_ads"],
+        "does": "Reads campaign spend, impressions and clicks for the last "
+                "thirty days into the ad ledger. YouTube campaigns are "
+                "Google Ads campaigns, so they arrive with the rest.",
+    },
+    "tiktok_ads": {
+        "label": "TikTok ads", "family": "ads",
+        "blurb": "Campaigns and spend from TikTok for Business.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "token", "label": "Access token", "secret": True,
+             "hint": "TikTok for Business → Developer → your app → "
+                     "authorise the advertiser, then copy the long-lived "
+                     "token it issues."},
+            {"k": "advertiser_id", "label": "Advertiser ID",
+             "hint": "From the advertiser switcher in Ads Manager."}],
+        "events": [], "actions": ["pull_ads"],
+        "does": "Reads campaign spend, impressions and clicks for the last "
+                "thirty days into the ad ledger.",
+    },
+    "linkedin_ads": {
+        "label": "LinkedIn ads", "family": "ads",
+        "blurb": "Campaigns and spend from a LinkedIn ad account.",
+        "auth": "oauth2",
+        "oauth": {"authorize": "https://www.linkedin.com/oauth/v2/authorization",
+                  "token": "https://www.linkedin.com/oauth/v2/accessToken",
+                  "scope": "r_ads r_ads_reporting",
+                  "token_auth": "body"},
+        "fields": [],
+        "settings_fields": [
+            {"k": "account_id", "label": "Ad account ID",
+             "hint": "Digits, from Campaign Manager's account URL."}],
+        "events": [], "actions": ["pull_ads"],
+        "does": "Reads campaign spend, impressions and clicks for the last "
+                "thirty days into the ad ledger.",
+    },
+    "x_ads": {
+        "label": "X (Twitter) ads", "family": "ads",
+        "blurb": "Campaigns and spend from an X ads account.",
+        "auth": "oauth2",
+        "oauth": {"authorize": "https://x.com/i/oauth2/authorize",
+                  "token": "https://api.x.com/2/oauth2/token",
+                  "scope": "tweet.read users.read offline.access",
+                  "pkce": True},
+        "fields": [],
+        "settings_fields": [
+            {"k": "ads_account_id", "label": "Ads account ID",
+             "hint": "From ads.x.com, in the account URL."}],
+        "events": [], "actions": ["pull_ads"],
+        "does": "Reads campaign spend, impressions and clicks for the last "
+                "thirty days into the ad ledger. Reading the Ads API needs "
+                "Ads API access approved for your developer app; the "
+                "connection itself works without it, the pull does not.",
+    },
+    "reddit_ads": {
+        "label": "Reddit ads", "family": "ads",
+        "blurb": "Campaigns and spend from a Reddit ad account.",
+        "auth": "oauth2",
+        "oauth": {"authorize": "https://www.reddit.com/api/v1/authorize",
+                  "token": "https://www.reddit.com/api/v1/access_token",
+                  "scope": "adsread",
+                  "extra_auth": {"duration": "permanent"}},
+        "fields": [],
+        "settings_fields": [
+            {"k": "ad_account_id", "label": "Ad account ID",
+             "hint": "From ads.reddit.com, in the account URL."}],
+        "events": [], "actions": ["pull_ads"],
+        "does": "Reads campaign spend, impressions and clicks for the last "
+                "thirty days into the ad ledger.",
+    },
+    "snapchat_ads": {
+        "label": "Snapchat ads", "family": "ads",
+        "blurb": "Campaigns and spend from a Snapchat ad account.",
+        "auth": "oauth2",
+        "oauth": {"authorize": "https://accounts.snapchat.com/login/oauth2/authorize",
+                  "token": "https://accounts.snapchat.com/login/oauth2/access_token",
+                  "scope": "snapchat-marketing-api",
+                  "token_auth": "body"},
+        "fields": [],
+        "settings_fields": [
+            {"k": "ad_account_id", "label": "Ad account ID",
+             "hint": "From Ads Manager, in the account URL."}],
+        "events": [], "actions": ["pull_ads"],
+        "does": "Reads campaign spend, impressions and swipes for the last "
+                "thirty days into the ad ledger.",
+    },
+
+    # --- hiring: the boards take our feed and send people back ---
+    "indeed": {
+        "label": "Indeed", "family": "hiring",
+        "blurb": "Your open jobs on Indeed; applications back here.",
+        "auth": "inbound",
+        "fields": [], "events": [],
+        "does": "Indeed reads the job feed this system publishes and lists "
+                "every open posting; Indeed Apply posts each application "
+                "to the address here, so it lands on the hiring board with "
+                "the CV attached. Indeed publishes no API for writing a "
+                "posting — the feed is how every board takes them.",
+    },
+    "ziprecruiter": {
+        "label": "ZipRecruiter", "family": "hiring",
+        "blurb": "Your open jobs on ZipRecruiter; applications back here.",
+        "auth": "inbound",
+        "fields": [], "events": [],
+        "does": "Reads the same job feed and posts applications back to "
+                "the address here.",
+    },
+    "linkedin_jobs": {
+        "label": "LinkedIn Jobs", "family": "hiring",
+        "blurb": "Your open jobs on LinkedIn; applications back here.",
+        "auth": "inbound",
+        "fields": [], "events": [],
+        "does": "LinkedIn's job feed ingestion reads the same feed. "
+                "Applications made on LinkedIn come back through the "
+                "address here when Apply Connect is enabled on your "
+                "company page; otherwise they arrive as email, which the "
+                "board takes by hand.",
+    },
+    "greenhouse": {
+        "label": "Greenhouse", "family": "hiring",
+        "blurb": "Candidates from Greenhouse on the hiring board.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "api_key", "label": "Harvest API key", "secret": True,
+             "hint": "Greenhouse → Dev Center → API Credential Management "
+                     "→ Harvest, with candidates and applications read."}],
+        "events": [], "actions": ["pull_candidates"],
+        "does": "Pulls candidates and their stage into the hiring board, "
+                "so a person hired in Greenhouse gets an account and an "
+                "onboarding list here without being typed twice.",
+    },
+    "workable": {
+        "label": "Workable", "family": "hiring",
+        "blurb": "Candidates from Workable on the hiring board.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "subdomain", "label": "Subdomain",
+             "hint": "The bit before .workable.com."},
+            {"k": "token", "label": "Access token", "secret": True,
+             "hint": "Workable → Settings → Integrations → Access token."}],
+        "events": [], "actions": ["pull_candidates"],
+        "does": "Pulls candidates and their stage into the hiring board.",
+    },
+
+    # --- delivery apps: a menu out, orders in ---
+    "ubereats": {
+        "label": "Uber Eats", "family": "delivery",
+        "blurb": "Your menu on Uber Eats; their orders in the kitchen "
+                 "queue here.",
+        "auth": "api_token", "inbound": True,
+        "fields": [
+            {"k": "client_id", "label": "Client ID",
+             "hint": "From developer.uber.com, the app your Uber Eats "
+                     "partner manager approved for the Eats APIs."},
+            {"k": "client_secret", "label": "Client secret", "secret": True},
+            {"k": "store_id", "label": "Store ID",
+             "hint": "The UUID of the store in Uber Eats Manager."}],
+        "events": ["product.created", "product.updated"],
+        "actions": ["push_menu", "store_status"],
+        "does": "Pushes the products you mark as on the menu, with prices, "
+                "as the store's Uber Eats menu, and re-pushes when a "
+                "product changes. Orders Uber sends to the address here "
+                "become orders in the queue, matched by SKU, and are "
+                "accepted back to Uber. The store can be paused and "
+                "resumed from here.",
+    },
+    "doordash": {
+        "label": "DoorDash", "family": "delivery",
+        "blurb": "Your menu on DoorDash; their orders in the kitchen "
+                 "queue here.",
+        "auth": "api_token", "inbound": True,
+        "fields": [
+            {"k": "developer_id", "label": "Developer ID",
+             "hint": "From the DoorDash Developer Portal, in the keys for "
+                     "your Marketplace integration."},
+            {"k": "key_id", "label": "Key ID"},
+            {"k": "signing_secret", "label": "Signing secret", "secret": True},
+            {"k": "location_id", "label": "Location ID",
+             "hint": "Your store's id in the Marketplace integration."}],
+        "events": ["product.created", "product.updated"],
+        "actions": ["push_menu", "store_status"],
+        "does": "Pushes the menu to DoorDash and re-pushes when a product "
+                "changes. Orders DoorDash sends to the address here become "
+                "orders in the queue, matched by SKU, and are confirmed "
+                "back. The store can be deactivated and reactivated from "
+                "here.",
+    },
+
+    # --- listings and reviews ---
+    "google_business": {
+        "label": "Google Business Profile", "family": "listings",
+        "blurb": "What Google Maps and Search say about you, and the "
+                 "reviews under it.",
+        "auth": "oauth2",
+        "oauth": {**_GOOGLE,
+                  "scope": "https://www.googleapis.com/auth/business.manage"},
+        "fields": [],
+        "settings_fields": [
+            {"k": "location", "label": "Location",
+             "hint": "Filled in when you pick one after connecting; "
+                     "locations/… from the Business Profile."},
+            {"k": "place_id", "label": "Place ID",
+             "hint": "Optional. Makes the review link customers get open "
+                     "the review box directly. Find it with Google's "
+                     "Place ID finder."}],
+        "events": [], "actions": ["pull_listing", "push_listing",
+                                  "pull_reviews", "reply_review"],
+        "does": "Reads the listing — hours, phone, website, address — into "
+                "the profile here and writes your edits back. Pulls every "
+                "review into the inbox and posts replies from here.",
+    },
+    "yelp": {
+        "label": "Yelp", "family": "listings",
+        "blurb": "Your Yelp listing and its latest reviews.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "api_key", "label": "API key", "secret": True,
+             "hint": "yelp.com/developers → Manage app → API key."},
+            {"k": "business_id", "label": "Business ID or alias",
+             "hint": "The bit after yelp.com/biz/ in your page's URL."}],
+        "events": [], "actions": ["pull_listing", "pull_reviews"],
+        "does": "Reads the listing and the three most recent review "
+                "excerpts Yelp's public API returns into the inbox. Yelp "
+                "offers no API for replying or for editing the listing; "
+                "the inbox links each review to its page so the reply is "
+                "one click away, not zero.",
+    },
+})
+
+# Registries the family modules fill at import: how to check a credential,
+# how to verify an OAuth connection, what to do with a POST, what to do
+# with a CSV. Kept as dicts rather than if-chains so a family can be
+# added without editing the function that dispatches to it.
+CHECKS: dict = {}          # name -> fn(creds) -> (ok, account | error)
+VERIFIERS: dict = {}       # name -> fn(con, token, creds) -> (ok, detail)
+INBOUND: dict = {}         # name -> fn(con, body) -> dict
+IMPORTS: dict = {}         # name -> fn(con, rows, filename) -> dict
+DELIVERS: dict = {}        # name -> fn(con, event, payload, creds) -> (ok, d)
+
 # Events any provider may care about. Kept here so the screen can explain
 # what a connection will actually do.
 EVENT_LABELS = {
@@ -440,6 +803,8 @@ EVENT_LABELS = {
     "document.signed": "a document is signed",
     "gate.passed": "a client project passes a gate",
     "direction.chosen": "a client chooses a brand direction",
+    "product.created": "a product is added",
+    "product.updated": "a product changes",
 }
 
 
@@ -588,6 +953,15 @@ def status(con) -> dict:
             "connected_at": r["connected_at"] if r else 0,
             "inbound_ready": bool(i),
             "received": i["received"] if i else 0,
+            "family": p.get("family", ""),
+            "inbound": receives(p),
+            "settings_fields": [dict(f) for f in p.get("settings_fields", [])],
+            # non-secret settings only; a secret settings field lives in
+            # credentials and is reported as present, never as itself
+            "settings": {k: v for k, v in settings(con, name).items()
+                         if not str(k).startswith("_")},
+            "settings_have": [f["k"] for f in p.get("settings_fields", [])
+                              if f.get("secret") and creds(con, name).get(f["k"])],
         })
     recent = [dict(r) for r in con.execute(
         "SELECT * FROM integration_log ORDER BY id DESC LIMIT 40").fetchall()]
@@ -677,6 +1051,8 @@ def check(name: str, c: dict) -> tuple:
         data = d.get("data", {}) if isinstance(d, dict) else {}
         return True, data.get("company_name") or data.get("name") or dom
 
+    if name in CHECKS:
+        return CHECKS[name](c)
     return False, "no check for that provider"
 
 
@@ -729,7 +1105,39 @@ def verify(con, name: str, cfg: dict) -> tuple:
             info = (d.get("CompanyInfo") or {})
             return True, info.get("CompanyName", realm)
         return False, str(d)
+    if name in VERIFIERS:
+        return VERIFIERS[name](con, tok, c)
     return False, "no check for that provider"
+
+
+def save_settings(con, name: str, fields: dict) -> dict:
+    """Settings a connection needs after it exists: which ad account,
+    which forms, which location. Non-secret ones are settings; a secret
+    one (a developer token) goes into credentials and is never read
+    back. A connection that isn't there yet can't take settings."""
+    p = provider(name)
+    row = con.execute("SELECT * FROM integrations WHERE provider=? AND"
+                      " active=1", (name,)).fetchone()
+    if row is None:
+        raise HTTPException(400, f"connect {p['label']} first")
+    cur_s = json.loads(row["settings"] or "{}")
+    cur_c = json.loads(row["credentials"] or "{}")
+    known = {f["k"]: f for f in p.get("settings_fields", [])}
+    for k, v in (fields or {}).items():
+        if k not in known:
+            continue
+        v = str(v or "").strip()
+        if known[k].get("secret"):
+            if v:
+                cur_c[k] = v
+        else:
+            cur_s[k] = v
+    con.execute("UPDATE integrations SET settings=?, credentials=?"
+                " WHERE provider=?",
+                (json.dumps(cur_s), json.dumps(cur_c), name))
+    con.commit()
+    log(con, name, "settings", True, ", ".join(sorted(fields or {})))
+    return {"ok": True, "settings": cur_s}
 
 
 def disconnect(con, name: str) -> dict:
@@ -742,11 +1150,58 @@ def disconnect(con, name: str) -> dict:
 
 # ---------- OAuth ----------
 
+def app_for(cfg: dict, name: str) -> dict:
+    """The registered OAuth app for a provider.
+
+    Google is one app and six consents: a business that registered a
+    client for Calendar should not register the same client again for
+    Forms. So a provider may name an app_group, and the first app saved
+    for any member of the group serves them all. A provider's own entry
+    still wins, for the business that did register two."""
+    apps = cfg.get("integration_apps") or {}
+    own = apps.get(name) or {}
+    if own.get("client_id"):
+        return own
+    group = (PROVIDERS.get(name, {}).get("oauth") or {}).get("app_group")
+    if group:
+        for other, pp in PROVIDERS.items():
+            if (pp.get("oauth") or {}).get("app_group") == group \
+                    and (apps.get(other) or {}).get("client_id"):
+                return apps[other]
+    return {}
+
+
+def _pkce_pair() -> tuple:
+    import hashlib
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    return verifier, challenge
+
+
+def _token_headers_body(p: dict, app: dict, form: dict) -> tuple:
+    """How this provider wants the client identified at the token
+    endpoint: HTTP Basic is the RFC default and what Dropbox, Intuit,
+    Google, Reddit and X accept; Meta, LinkedIn and Snapchat want the
+    id and secret as form fields instead."""
+    headers = {"Content-Type": "application/x-www-form-urlencoded",
+               "Accept": "application/json"}
+    if (p.get("oauth") or {}).get("token_auth") == "body":
+        form = {**form, "client_id": app.get("client_id", ""),
+                "client_secret": app.get("client_secret", "")}
+    else:
+        basic = base64.b64encode(
+            f"{app.get('client_id','')}:{app.get('client_secret','')}".encode()
+        ).decode()
+        headers["Authorization"] = f"Basic {basic}"
+    return headers, urllib.parse.urlencode(form).encode()
+
+
 def oauth_url(con, name: str, cfg: dict, redirect: str, state: str) -> str:
     p = provider(name)
     if p["auth"] != "oauth2":
         raise HTTPException(400, f"{p['label']} doesn't use OAuth")
-    app = (cfg.get("integration_apps") or {}).get(name) or {}
+    app = app_for(cfg, name)
     if not app.get("client_id"):
         raise HTTPException(
             400, f"register an app with {p['label']} first and save its "
@@ -755,23 +1210,30 @@ def oauth_url(con, name: str, cfg: dict, redirect: str, state: str) -> str:
     q = {"client_id": app["client_id"], "response_type": "code",
          "redirect_uri": redirect, "state": state,
          "scope": p["oauth"]["scope"], **p["oauth"].get("extra_auth", {})}
+    if p["oauth"].get("pkce"):
+        verifier, challenge = _pkce_pair()
+        con.execute("INSERT OR REPLACE INTO store_meta(k,v) VALUES(?,?)",
+                    (f"oauth_pkce:{name}", verifier))
+        con.commit()
+        q["code_challenge"] = challenge
+        q["code_challenge_method"] = "S256"
     return p["oauth"]["authorize"] + "?" + urllib.parse.urlencode(q)
 
 
 def oauth_exchange(con, name: str, cfg: dict, code: str, redirect: str,
                    extra: dict | None = None) -> dict:
     p = provider(name)
-    app = (cfg.get("integration_apps") or {}).get(name) or {}
-    basic = base64.b64encode(
-        f"{app.get('client_id','')}:{app.get('client_secret','')}".encode()
-    ).decode()
-    body = urllib.parse.urlencode({
-        "grant_type": "authorization_code", "code": code,
-        "redirect_uri": redirect}).encode()
-    ok, d = _req(p["oauth"]["token"], "POST",
-                 {"Authorization": f"Basic {basic}",
-                  "Content-Type": "application/x-www-form-urlencoded",
-                  "Accept": "application/json"}, body)
+    app = app_for(cfg, name)
+    form = {"grant_type": "authorization_code", "code": code,
+            "redirect_uri": redirect}
+    if p["oauth"].get("pkce"):
+        row = con.execute("SELECT v FROM store_meta WHERE k=?",
+                          (f"oauth_pkce:{name}",)).fetchone()
+        con.execute("DELETE FROM store_meta WHERE k=?", (f"oauth_pkce:{name}",))
+        con.commit()
+        form["code_verifier"] = row["v"] if row else ""
+    headers, body = _token_headers_body(p, app, form)
+    ok, d = _req(p["oauth"]["token"], "POST", headers, body)
     if not ok or not isinstance(d, dict) or not d.get("access_token"):
         raise HTTPException(400, f"{p['label']} wouldn't issue a token: {d}")
     expires = time.time() + int(d.get("expires_in") or 3600) - 60
@@ -808,17 +1270,10 @@ def access_token(con, name: str, cfg: dict) -> str:
     if not c.get("refresh_token"):
         return c.get("access_token", "")
     p = provider(name)
-    app = (cfg.get("integration_apps") or {}).get(name) or {}
-    basic = base64.b64encode(
-        f"{app.get('client_id','')}:{app.get('client_secret','')}".encode()
-    ).decode()
-    ok, d = _req(p["oauth"]["token"], "POST",
-                 {"Authorization": f"Basic {basic}",
-                  "Content-Type": "application/x-www-form-urlencoded",
-                  "Accept": "application/json"},
-                 urllib.parse.urlencode({
-                     "grant_type": "refresh_token",
-                     "refresh_token": c["refresh_token"]}).encode())
+    app = app_for(cfg, name)
+    headers, body = _token_headers_body(p, app, {
+        "grant_type": "refresh_token", "refresh_token": c["refresh_token"]})
+    ok, d = _req(p["oauth"]["token"], "POST", headers, body)
     if ok and isinstance(d, dict) and d.get("access_token"):
         c["access_token"] = d["access_token"]
         if d.get("refresh_token"):
@@ -844,7 +1299,8 @@ def receives(p: dict) -> bool:
     happen. Both need a key, which is why this is a question about the
     provider rather than about its auth kind.
     """
-    return p["auth"] == "inbound" or bool(p.get("syncs"))
+    return (p["auth"] == "inbound" or bool(p.get("syncs"))
+            or bool(p.get("inbound")))
 
 
 def inbound_key(con, name: str, rotate: bool = False) -> str:
@@ -1107,6 +1563,13 @@ def _deliver(con, name: str, event: str, d: dict, c: dict) -> tuple:
             return ok and ok2, f"{detail2 if not ok2 else 'filed with the file'}"
         return ok, "filed (no attachment on the document)"
 
+    if name == "ubereats":
+        return DELIVERS[name](con, event, d, c)
+    if name == "doordash":
+        return DELIVERS[name](con, event, d, c)
+
+    if name in DELIVERS:
+        return DELIVERS[name](con, event, d, c)
     return True, "connected, nothing to send for this event"
 
 

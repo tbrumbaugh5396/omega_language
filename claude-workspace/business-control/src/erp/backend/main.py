@@ -78,6 +78,10 @@ def _init_core(tid=None):
         _exp.init_tables(con)
         from . import presentations as _prs
         _prs.init_tables(con)
+        from . import ads as _ads, hiring as _hir, intake as _ink
+        from . import listings as _lst, marketplaces as _mkt
+        for _m in (_ads, _hir, _mkt, _lst, _ink):
+            _m.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -3702,9 +3706,8 @@ def integrations_status(user=Depends(admin_user), con=Depends(get_con)):
     d = integrations.status(con)
     # Which OAuth apps have had their client id and secret saved. The secret
     # itself never appears here.
-    apps = CFG.get("integration_apps") or {}
     for p in d["providers"]:
-        p["app_ready"] = bool((apps.get(p["name"]) or {}).get("client_id"))
+        p["app_ready"] = bool(integrations.app_for(CFG, p["name"]).get("client_id"))
     d["custom"] = integrations.custom_status(con)
     d["event_labels"] = integrations.EVENT_LABELS
     have = {x["name"] for x in d["custom"]}
@@ -3812,6 +3815,19 @@ class ConnectBody(BaseModel):
 def integrations_connect(name: str, body: ConnectBody,
                          user=Depends(admin_user), con=Depends(get_con)):
     return integrations.connect(con, name, body.fields)
+
+
+class SettingsBody(BaseModel):
+    fields: dict = {}
+
+
+@app.post("/api/admin/integrations/{name}/settings")
+def integrations_settings(name: str, body: SettingsBody, user=Depends(admin_user),
+                          con=Depends(get_con)):
+    """What a connection needs after it exists: which ad account, which
+    forms, which store. Kept apart from connecting because the token is
+    verified once and these change."""
+    return integrations.save_settings(con, name, body.fields)
 
 
 @app.delete("/api/admin/integrations/{name}")
@@ -4026,6 +4042,11 @@ async def inbound(name: str, request: Request, con=Depends(get_con)):
     if name in ("trello", "pipedrive"):
         return integrations.handle_push(con, name, body if isinstance(
             body, dict) else {})
+    # A family with its own reader — an application, a form response, a
+    # gift, a delivery order — takes the body whole. Orders are the
+    # fallback because LaceUp was first.
+    if name in integrations.INBOUND:
+        return integrations.INBOUND[name](con, body)
 
     rows = body if isinstance(body, list) else body.get("orders") or [body]
     made, skipped = [], []
@@ -4097,6 +4118,8 @@ async def integrations_import(name: str, file: UploadFile = File(...),
     integrations.provider(name)
     raw = (await file.read()).decode("utf-8-sig", errors="replace")
     reader = csv.DictReader(io.StringIO(raw))
+    if name in integrations.IMPORTS:
+        return integrations.IMPORTS[name](con, list(reader), file.filename or "")
     grouped: dict = {}
     for r in reader:
         ref = (r.get("reference") or r.get("order") or "1").strip()
@@ -6703,6 +6726,9 @@ from . import expenses  # noqa: E402  (safe: included late)
 app.include_router(expenses.router)
 from . import presentations  # noqa: E402  (safe: included late)
 app.include_router(presentations.router)
+from . import ads, hiring, intake, listings, marketplaces  # noqa: E402  (safe: included late)
+for _fam in (ads, hiring, marketplaces, listings, intake):
+    app.include_router(_fam.router)
 
 
 @app.exception_handler(404)

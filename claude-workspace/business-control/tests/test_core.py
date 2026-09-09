@@ -5394,12 +5394,25 @@ _ACTION_IMPL = {
     "store_backup": "def dropbox_upload(",
     "browse": "def dropbox_list(",
     "cards": "def trello_cards(",
+    # the second wave: declared in the registry, implemented in a family module
+    "pull_forms": "def pull_forms(",
+    "pull_ads": "def pull(con, platform: str)",
+    "pull_candidates": "def pull_candidates(",
+    "push_menu": "def push_menu(",
+    "store_status": "def set_status(con, name: str, is_open: bool)",
+    "pull_listing": "def pull_google(con)",
+    "push_listing": "def push_google(con)",
+    "pull_reviews": "def pull_google_reviews(",
+    "reply_review": "def reply_google(",
 }
+_src_families = _src_ig + "".join(
+    Path(f"src/erp/backend/{m}.py").read_text()
+    for m in ("ads", "hiring", "marketplaces", "listings", "intake"))
 for _n, _pd in _ig.PROVIDERS.items():
     for _a in _pd.get("actions", []):
         ok(_a in _ACTION_IMPL,
            f"{_n} declares the known action {_a!r}")
-        ok(_ACTION_IMPL.get(_a, "\0") in _src_ig,
+        ok(_ACTION_IMPL.get(_a, "\0") in _src_families,
            f"and {_n}'s {_a} has an implementation behind it")
 ok("store_backup" in _ig.PROVIDERS["dropbox"]["actions"],
    "Dropbox declares that it stores the backup")
@@ -5931,8 +5944,14 @@ _prov = Path("src/erp/backend/integrations.py").read_text()
 _pnames = re.findall(r'^    "([a-z_]+)": \{', _prov, re.M)
 ok(len(_pnames) >= 11, f"the registry carries every provider ({len(_pnames)})")
 _navd = set(re.findall(r'\{ id: "([\w:-]+)"', _ops))
+# A provider in a family is reached through its family's screen — the ad
+# platforms on Advertising, the boards on Hiring — which is the place a
+# person looks for it. Thirty rail entries is a list nobody scans.
+_FAMILY_TAB = {"intake": "intake", "ads": "ads", "hiring": "hiring",
+               "delivery": "marketplaces", "listings": "listings"}
 _missing = [n for n in _pnames
-            if n not in _navd and f"ig-{n}" not in _navd]
+            if n not in _navd and f"ig-{n}" not in _navd
+            and _FAMILY_TAB.get(_ig.PROVIDERS[n].get("family", "")) not in _navd]
 ok(not _missing,
    f"every connection has a place in the navigation of its own ({_missing})")
 ok("renderOneIntegration" in _ops,
@@ -7558,5 +7577,528 @@ for _kind, _rx in (("function", r"^(?:async )?function (\w+)\("),
             _dups[f"{_kind} {_nm}"] = sorted(_files)
 ok(not _dups,
    f"no function, const or id is defined in two part files ({_dups})")
+
+
+# ===== the second wave of connections: five families, each with a screen =====
+# Twenty providers arrived at once — forms, funders, testing services, seven
+# ad platforms, five hiring systems, two delivery apps, two listings. The
+# registry is the same table; what is new is that each family has a working
+# screen the connection is set up on, and a module that does the work.
+import base64 as _b64  # noqa: E402
+import hmac as _hmac  # noqa: E402
+import hashlib as _hashlib  # noqa: E402
+from collections import Counter as _Counter  # noqa: E402
+from erp.backend import ads as _ads, hiring as _hir, intake as _ink  # noqa: E402
+from erp.backend import listings as _lst, marketplaces as _mkt  # noqa: E402
+
+_st2 = c.get("/api/admin/integrations", headers=A).json()
+_fam = {p["name"]: p for p in _st2["providers"]}
+_WAVE = {"google_forms": "intake", "network4good": "intake", "gedmanager": "intake",
+         "northstar": "intake", "meta_ads": "ads", "google_ads": "ads",
+         "tiktok_ads": "ads", "linkedin_ads": "ads", "x_ads": "ads",
+         "reddit_ads": "ads", "snapchat_ads": "ads", "indeed": "hiring",
+         "ziprecruiter": "hiring", "linkedin_jobs": "hiring", "greenhouse": "hiring",
+         "workable": "hiring", "ubereats": "delivery", "doordash": "delivery",
+         "google_business": "listings", "yelp": "listings"}
+for _n, _f in _WAVE.items():
+    ok(_n in _fam and _fam[_n]["family"] == _f, f"{_n} is offered, in the {_f} family")
+ok("credentials" not in json.dumps(_st2) and "developer_token" not in json.dumps(
+    {k: v for k, v in _st2.items() if k != "providers"}),
+   "the status payload still carries no credential")
+ok(all("settings_fields" in p and "settings" in p for p in _st2["providers"]),
+   "every provider reports the settings it takes after connecting")
+
+# The rail: eight groups, each a working area, none longer than a screen.
+_tabs_src = _ops[_ops.index("const TABS = ["):_ops.index("\n];", _ops.index("const TABS = ["))]
+_cnt = _Counter(re.findall(r'group: "([^"]+)"', _tabs_src))
+ok(set(_cnt) == {"Sell", "Stock & supply", "Work", "Teach", "Grow", "Team",
+                 "Company", "Connections"},
+   f"the rail is eight groups by what a person is doing ({sorted(_cnt)})")
+ok(max(v for k, v in _cnt.items() if k != "Connections") <= 10,
+   "and no working group holds more than ten screens — Operate held seventeen")
+ok('NAV_GROUPS = ["Sell", "Stock & supply", "Work", "Teach", "Grow",\n'
+   '                    "Team", "Company", "Connections"]' in _ops,
+   "in that order, Sell first so the default landing is still the shop")
+for _t, _grp in (("ads", "Grow"), ("listings", "Grow"), ("hiring", "Team"),
+                 ("marketplaces", "Sell"), ("intake", "Grow"),
+                 ("presentations", "Teach"), ("expenses", "Work"),
+                 ("inventory", "Stock & supply")):
+    _row = re.search(rf'\{{ id: "{_t}",[^}}]*\}}', _ops).group(0)
+    ok(f'group: "{_grp}"' in _row, f"{_t} sits in {_grp}")
+ok(all(f"{_t}: render" in _ops for _t in ("ads", "listings", "hiring",
+                                          "marketplaces", "intake")),
+   "and each new screen is routed")
+ok("function connectionCards" in _ops and _ops.count("connectionCards(") >= 6,
+   "one card helper draws a family's connections on its own screen")
+ok(all(f'"ig-{_n}"' not in _ops for _n in _WAVE),
+   "the second wave adds no rail entries of its own — thirty is a list nobody scans")
+
+# Honesty, stated in the registry rather than discovered later.
+ok(any(p["provider"] is None and "Amazon Ads" in p.get("note", "") for p in _ads.PLATFORMS),
+   "Twitch is typed, and the ledger says why")
+ok("no API for replying" in _ig.PROVIDERS["yelp"]["does"], "Yelp says it takes no reply")
+ok(all(_ig.PROVIDERS[n]["auth"] == "inbound" for n in ("gedmanager", "northstar")),
+   "GED Manager and NorthStar are import routes, because that is what exists")
+ok(all(_ig.PROVIDERS[n]["auth"] == "inbound" for n in ("indeed", "ziprecruiter", "linkedin_jobs")),
+   "the job boards ingest a feed and post back; none takes a posting by API")
+ok(all(_ig.receives(_ig.PROVIDERS[n]) for n in ("ubereats", "doordash", "google_forms")),
+   "a provider that also pushes to us gets a key even though it connects outbound")
+
+# --- OAuth machinery the wave needed: a shared Google app, body-auth, PKCE ---
+_apps_cfg = {"integration_apps": {"google_calendar": {"client_id": "gcid", "client_secret": "gsec"}}}
+ok(_ig.app_for(_apps_cfg, "google_forms").get("client_id") == "gcid",
+   "one registered Google app serves every Google consent")
+ok(not _ig.app_for(_apps_cfg, "meta_ads"), "and does not leak to Meta")
+# through the real door, so the proxied per-tenant config is what the
+# authorize route reads
+c.post("/api/admin/integrations/google_calendar/app", headers=A,
+       json={"client_id": "gcid", "client_secret": "gsec"})
+c.post("/api/admin/integrations/x_ads/app", headers=A,
+       json={"client_id": "xcid", "client_secret": "xsec"})
+ok(next(p for p in c.get("/api/admin/integrations", headers=A).json()["providers"]
+        if p["name"] == "google_business")["app_ready"],
+   "and the status says Google Business Profile is ready to connect")
+_r = c.get("/api/admin/integrations/google_forms/authorize", headers=A)
+ok(_r.status_code == 200 and "forms.responses.readonly" in _r.json()["url"]
+   and "access_type=offline" in _r.json()["url"],
+   "Google Forms authorises with the forms scopes and an offline token")
+_r = c.get("/api/admin/integrations/x_ads/authorize", headers=A)
+ok(_r.status_code == 200 and "code_challenge_method=S256" in _r.json()["url"],
+   "X demands PKCE and gets it")
+_h1, _b1 = _ig._token_headers_body(_ig.PROVIDERS["meta_ads"], {"client_id": "a", "client_secret": "b"},
+                                    {"grant_type": "authorization_code"})
+ok("Authorization" not in _h1 and b"client_secret=b" in _b1, "Meta gets the secret as a form field")
+_h2, _b2 = _ig._token_headers_body(_ig.PROVIDERS["reddit_ads"], {"client_id": "a", "client_secret": "b"},
+                                    {"grant_type": "authorization_code"})
+ok(_h2.get("Authorization", "").startswith("Basic ") and b"client_secret" not in _b2,
+   "Reddit gets HTTP Basic, the RFC default")
+
+# A plain customer, minted here: whatever earlier tests did to Carl's
+# account is not this block's concern.
+_wc = c.post("/api/login", json={"name": "Wave Customer", "region": "West"}).json()
+_WCU = {"Authorization": f"Bearer {_wc['token']}"}
+
+# --- advertising: the ledger ---
+ok(c.get("/api/ads", headers=_WCU).status_code == 403, "the ledger is an office screen")
+_r = c.post("/api/ads/manual", headers=A, json={
+    "platform": "twitch", "name": "Autumn stream", "spend_cents": 12000,
+    "impressions": 40000, "clicks": 320, "results": 4})
+ok(_r.status_code == 200, "a Twitch run is typed into the ledger")
+_led = c.get("/api/ads", headers=A).json()
+ok(_led["total_cents"] == 12000 and _led["campaigns"][0]["source"] == "manual"
+   and _led["campaigns"][0]["cpc_cents"] == 37,
+   "and counts in the total with its cost per click worked out")
+ok(c.post("/api/ads/twitch/pull", headers=A).status_code == 400,
+   "a typed platform cannot be pulled")
+ok(c.post("/api/ads/meta_ads/pull", headers=A).status_code == 400,
+   "nor an unconnected one")
+_r = c.post("/api/ads/twitch/expense", headers=A)
+ok(_r.status_code == 200 and _r.json()["amount_cents"] == 12000, "spend files as an expense")
+_exp = c.get("/api/expenses", headers=A).json()
+_exp_rows = _exp if isinstance(_exp, list) else _exp.get("expenses", [])
+ok(any(e["category"] == "advertising" and e["amount_cents"] == 12000
+       and e["state"] == "approved" for e in _exp_rows),
+   "in the advertising category, approved, because the office filed a company cost")
+ok(c.post("/api/ads/other/expense", headers=A).status_code == 400,
+   "and nothing files when nothing was spent")
+
+_real_req2 = _ig._req
+_calls = []
+def _fake_req(url, method="GET", headers=None, body=None, timeout=15):
+    _calls.append((method, url, headers or {}, body))
+    if "user/info" in url:
+        return True, {"code": 0, "data": {"display_name": "Lingua Ads"}}
+    if "report/integrated" in url:
+        return True, {"code": 0, "data": {"list": [
+            {"dimensions": {"campaign_id": "c1"},
+             "metrics": {"campaign_name": "Fall enrolment", "spend": "42.50",
+                         "impressions": "1000", "clicks": "80", "conversion": "3"}}]}}
+    return False, "unexpected " + url
+_ig._req = _fake_req
+_r = c.post("/api/admin/integrations/tiktok_ads/connect", headers=A,
+            json={"fields": {"token": "tok", "advertiser_id": "adv1"}})
+ok(_r.status_code == 200 and "Lingua Ads" in _r.json()["account"],
+   "TikTok connects when its user endpoint answers")
+_r = c.post("/api/ads/tiktok_ads/pull", headers=A)
+ok(_r.status_code == 200 and _r.json()["pulled"] == 1, "and its report pulls")
+c.post("/api/ads/tiktok_ads/pull", headers=A)
+_led = c.get("/api/ads", headers=A).json()
+_tk = next(p for p in _led["platforms"] if p["key"] == "tiktok_ads")
+ok(_tk["connected"] and _tk["totals"]["spend_cents"] == 4250 and _tk["totals"]["clicks"] == 80
+   and _tk["totals"]["campaigns"] == 1,
+   "into the ledger in cents, once, however often it is pulled")
+ok(any("Access-Token" in h for _, u, h, _ in _calls if "report" in u),
+   "with the token in the header TikTok reads")
+_r = c.post("/api/admin/integrations/tiktok_ads/settings", headers=A, json={"fields": {"nope": "x"}})
+ok(_r.status_code == 200 and "nope" not in _r.json()["settings"],
+   "settings only take the fields the provider declared")
+ok(c.post("/api/admin/integrations/meta_ads/settings", headers=A,
+          json={"fields": {"ad_account_id": "1"}}).status_code == 400,
+   "and not before the connection exists")
+
+# --- hiring ---
+ok(c.get("/api/hiring", headers=_WCU).status_code == 403, "hiring is an office screen")
+_r = c.post("/api/hiring/postings", headers=A, json={
+    "title": "Evening class assistant", "kind": "part_time", "location": "Springfield, IL",
+    "pay_text": "$18/hr", "description": "Greet, register, set up.", "state": "open"})
+ok(_r.status_code == 200 and _r.json()["slug"] == "evening-class-assistant",
+   "a posting gets a slug from its title")
+_slug = _r.json()["slug"]
+_pid_job = _r.json()["id"]
+ok("Evening class assistant" in c.get("/jobs").text, "open postings are a public page")
+ok(f'action="/api/jobs/{_slug}/apply' in c.get(f"/jobs/{_slug}").text,
+   "each with a form that applies")
+_feed = c.get("/jobs.xml")
+ok(_feed.status_code == 200 and "xml" in _feed.headers["content-type"]
+   and f"<referencenumber><![CDATA[{_pid_job}]]>" in _feed.text
+   and "<jobtype><![CDATA[Part time]]>" in _feed.text,
+   "and the feed the boards ingest carries the posting in Indeed's shape")
+_r = c.post(f"/api/jobs/{_slug}/apply", data={"name": "Verify Applicant",
+            "email": "verify@example.com", "phone": "555", "cover": "hi"},
+            files={"resume": ("cv.txt", b"my cv", "text/plain")})
+ok(_r.status_code == 200, "anyone can apply from the page")
+_aid = _r.json()["applicant_id"]
+_r2 = c.post(f"/api/jobs/{_slug}/apply", data={"name": "Verify Applicant",
+             "email": "verify@example.com"})
+ok(_r2.json()["applicant_id"] == _aid, "applying twice is one applicant")
+_r = c.get(f"/api/hiring/applicants/{_aid}/resume", headers=A)
+ok(_r.status_code == 200 and _r.content == b"my cv", "the CV went through the blob store and comes back")
+_key = c.post("/api/admin/integrations/indeed/inbound-key", headers=A).json()["key"]
+ok(c.post("/api/inbound/indeed", headers={"X-API-Key": "wrong"}, json={}).status_code == 401,
+   "a board with the wrong key is refused")
+_ind = {"id": "ind-1", "applicant": {"fullName": "Indeed Person", "email": "ind@example.com",
+                                    "phoneNumber": "555-1", "resume": {"file": {
+                                        "fileName": "ip.pdf",
+                                        "data": _b64.b64encode(b"%PDF-1.4 x").decode()}}},
+        "job": {"jobId": str(_pid_job)}}
+_r = c.post("/api/inbound/indeed", headers={"X-API-Key": _key}, json=_ind)
+ok(_r.status_code == 200, "Indeed Apply posts an application")
+_aid2 = _r.json()["applicant_id"]
+ok(c.post("/api/inbound/indeed", headers={"X-API-Key": _key}, json=_ind).json()["applicant_id"] == _aid2,
+   "and a retried webhook is the same applicant")
+_hp = c.get("/api/hiring", headers=A).json()
+_ap = {a["id"]: a for a in _hp["applicants"]}
+ok(_ap[_aid2]["source"] == "indeed" and _ap[_aid2]["posting_id"] == _pid_job
+   and _ap[_aid2]["resume_name"] == "ip.pdf" and _ap[_aid]["source"] == "page",
+   "both sit on one board, each saying where it came from")
+ok(_hp["postings"][0]["open_applicants"] == 2, "the posting counts its open applicants")
+ok(c.patch(f"/api/hiring/applicants/{_aid}", headers=A, json={"stage": "interview"}).status_code == 200
+   and c.patch(f"/api/hiring/applicants/{_aid}", headers=A, json={"stage": "hired"}).status_code == 400,
+   "stages move by hand except hired, which is a button that does more")
+ok(c.post(f"/api/hiring/applicants/{_aid}/hire", headers=A, json={"role": "customer"}).status_code == 400,
+   "a hire is staff of some kind")
+_r = c.post(f"/api/hiring/applicants/{_aid}/hire", headers=A,
+            json={"role": "employee", "job": "general", "employment": "employee"})
+ok(_r.status_code == 200 and _r.json()["user_id"], "hiring opens an account")
+_new_uid = _r.json()["user_id"]
+_u = c.get("/api/admin/users", headers=A).json()
+_u = _u if isinstance(_u, list) else _u.get("users", [])
+ok(any(u["id"] == _new_uid and u["role"] == "employee" and u["name"] == "Verify Applicant"
+       for u in _u), "with the role the office chose")
+_ob = c.get(f"/api/hiring/onboarding/{_new_uid}", headers=A).json()["tasks"]
+ok(len(_ob) == len(_hir.ONBOARDING) and not any(t["done_at"] for t in _ob),
+   "and a first-week list, all still to do")
+ok(c.post(f"/api/hiring/onboarding/{_ob[0]['id']}/done", headers=A).json()["done"] is True,
+   "which the office ticks")
+ok(c.post(f"/api/hiring/applicants/{_aid}/hire", headers=A,
+          json={"role": "employee"}).json().get("already"),
+   "hiring twice is once")
+c.post("/api/hiring/postings", headers=A, json={
+    "id": _pid_job, "title": "Evening class assistant", "state": "closed"})
+ok(c.post(f"/api/jobs/{_slug}/apply", data={"name": "Late"}).status_code == 404
+   and "evening-class-assistant" not in c.get("/jobs.xml").text,
+   "a closed posting takes no application and leaves the feed")
+
+def _gh_req(url, method="GET", headers=None, body=None, timeout=15):
+    if "candidates?per_page=1" in url:
+        return True, []
+    if "/applications" in url:
+        return True, [{"id": 901, "candidate_id": 77, "current_stage": {"name": "Onsite Interview"},
+                       "jobs": [{"name": "Teacher"}]}]
+    if "/candidates/77" in url:
+        return True, {"first_name": "Green", "last_name": "House",
+                      "email_addresses": [{"value": "gh@example.com"}], "phone_numbers": []}
+    return False, "unexpected " + url
+_ig._req = _gh_req
+_r = c.post("/api/admin/integrations/greenhouse/connect", headers=A, json={"fields": {"api_key": "k"}})
+ok(_r.status_code == 200, "Greenhouse connects with a Harvest key")
+_r = c.post("/api/hiring/greenhouse/pull", headers=A)
+ok(_r.status_code == 200 and _r.json()["new"] == 1, "and pulls its candidates")
+_gh = next(a for a in c.get("/api/hiring", headers=A).json()["applicants"] if a["source"] == "greenhouse")
+ok(_gh["name"] == "Green House" and _gh["stage"] == "interview" and _gh["email"] == "gh@example.com",
+   "with their stage folded into ours")
+
+# --- delivery apps ---
+_prod = c.get("/api/products").json()[0]
+ok(c.post("/api/marketplaces/ubereats/push", headers=A).status_code == 400,
+   "a menu cannot be pushed to an app that is not connected")
+_r = c.post("/api/marketplaces/ubereats/menu", headers=A, json={"product_ids": [_prod["id"]]})
+ok(_r.status_code == 200 and _r.json()["listed"] == 1, "a product is marked as on the menu")
+_sent = {}
+def _uber_req(url, method="GET", headers=None, body=None, timeout=15):
+    if "oauth/v2/token" in url:
+        return True, {"access_token": "ut", "expires_in": 3600}
+    if url.endswith("/eats/stores/store-1"):
+        return True, {"name": "Lingua Kitchen"}
+    if "/menus" in url:
+        _sent["menu"] = json.loads(body)
+        return True, {}
+    if "/status" in url:
+        _sent["status"] = json.loads(body)
+        return True, {}
+    if "accept_pos_order" in url:
+        _sent["accepted"] = url
+        return True, {}
+    return False, "unexpected " + url
+_ig._req = _uber_req
+_r = c.post("/api/admin/integrations/ubereats/connect", headers=A, json={"fields": {
+    "client_id": "cid", "client_secret": "sec", "store_id": "store-1"}})
+ok(_r.status_code == 200 and _r.json()["account"] == "Lingua Kitchen",
+   "Uber Eats connects by client credentials and names the store")
+_r = c.post("/api/marketplaces/ubereats/push", headers=A)
+ok(_r.status_code == 200 and _r.json()["items"] == 1, "the menu pushes")
+_item = _sent["menu"]["items"][0]
+ok(_item["id"] == _prod["sku"] and _item["external_data"] == _prod["sku"]
+   and _item["price_info"]["price"] == _prod["price_cents"],
+   "each item carries our SKU as its id, so the order line needs no mapping")
+ok(c.post("/api/marketplaces/ubereats/status", headers=A, json={"open": False}).json()["open"] is False
+   and _sent["status"]["status"] == "PAUSED", "the store pauses")
+_ukey = c.post("/api/admin/integrations/ubereats/inbound-key", headers=A).json()["key"]
+_ord = {"id": "ub-1", "cart": {"items": [{"external_data": _prod["sku"],
+        "quantity": {"in_sellable_unit": {"quantity": 2}}}]},
+        "eater": {"first_name": "Uber", "last_name": "Eater"}}
+_r = c.post(f"/api/inbound/ubereats?key={_ukey}", json=_ord)
+ok(_r.status_code == 200 and _r.json()["order_id"], "an Uber order becomes an order in the queue")
+_oid = _r.json()["order_id"]
+ok("ub-1" in _sent.get("accepted", ""), "and is accepted back to Uber")
+ok(c.post(f"/api/inbound/ubereats?key={_ukey}", json=_ord).json().get("already"),
+   "a retried order notification is the same order")
+_mp = c.get("/api/marketplaces", headers=A).json()["providers"][0]
+ok(_mp["orders"][0]["order_id"] == _oid and _mp["orders"][0]["state"] == "accepted"
+   and _mp["open"] is False, "the screen shows the order and the paused store")
+_r = c.post(f"/api/inbound/ubereats?key={_ukey}", json={"id": "ub-2", "cart": {"items": [
+    {"external_data": "NO-SUCH-SKU", "quantity": 1}]}})
+ok(_r.status_code == 400 and "NO-SUCH-SKU" in _r.text, "an unknown SKU fails loudly, not silently")
+_ccon = _db.connect()
+_cr = _ig.creds(_ccon, "ubereats")
+ok(_ig._deliver(_ccon, "ubereats", "product.updated", {"id": _prod["id"]}, _cr)[1].startswith("menu re-pushed"),
+   "a product change re-pushes the menu it is on")
+ok(_ig._deliver(_ccon, "ubereats", "product.updated", {"id": 999999}, _cr)[1] == "not on this menu",
+   "and leaves one it is not on alone")
+_ccon.close()
+_jwt = _mkt.dd_jwt({"developer_id": "dev", "key_id": "kid",
+                    "signing_secret": _b64.urlsafe_b64encode(b"secret").decode().rstrip("=")})
+_hd, _pl, _sg = _jwt.split(".")
+_pad = lambda x: x + "=" * (-len(x) % 4)
+ok(json.loads(_b64.urlsafe_b64decode(_pad(_hd)))["dd-ver"] == "DD-JWT-V1"
+   and json.loads(_b64.urlsafe_b64decode(_pad(_pl)))["iss"] == "dev"
+   and _b64.urlsafe_b64decode(_pad(_sg)) == _hmac.new(b"secret", f"{_hd}.{_pl}".encode(), _hashlib.sha256).digest(),
+   "DoorDash's JWT is HS256 over the developer id and key id, signed with the decoded secret")
+
+# --- listings and reviews ---
+ok(c.get("/api/listings", headers=_WCU).status_code == 403, "listings are staff screens")
+_r = c.post("/api/listings/profile", headers=A, json={
+    "phone": "555-0100", "website": "https://example.test",
+    "hours": {"mon": [["09:00", "17:00"]], "tue": [["09:00", "12:00"], ["13:00", "17:00"]],
+              "wed": [["bad"]], "xxx": [["09:00", "17:00"]]}})
+ok(_r.status_code == 200 and _r.json()["hours"] == {"mon": [["09:00", "17:00"]],
+                                                     "tue": [["09:00", "12:00"], ["13:00", "17:00"]]},
+   "the profile keeps well-formed hours and drops the rest")
+ok(c.post("/api/listings/ask", headers=A, json={"email": "x@example.com"}).status_code == 400,
+   "asking for a review needs somewhere to send them")
+c.post("/api/listings/profile", headers=A, json={"maps_url": "https://maps.app.goo.gl/abc"})
+_r = c.post("/api/listings/ask", headers=A, json={"email": "x@example.com", "name": "Xan Yu"})
+ok(_r.status_code == 200 and _r.json()["link"] == "https://maps.app.goo.gl/abc",
+   "and sends the Maps link when there is no place id")
+ok(c.get("/api/listings", headers=A).json()["requests"][0]["to_email"] == "x@example.com",
+   "logged as asked")
+_gcon = _db.connect()
+_ig.save(_gcon, "google_business", {"access_token": "gt", "refresh_token": ""}, "Lingua",
+         {"location": "locations/1", "_account": "accounts/9", "place_id": "PLACE"}, time.time() + 3600)
+_gcon.close()
+_gsent = {}
+def _g_req(url, method="GET", headers=None, body=None, timeout=15):
+    if url.endswith("/reviews?pageSize=50"):
+        return True, {"reviews": [
+            {"reviewId": "r1", "reviewer": {"displayName": "Pat"}, "starRating": "FIVE",
+             "comment": "Lovely", "createTime": "2026-09-01T10:00:00Z"},
+            {"reviewId": "r2", "reviewer": {"displayName": "Sam"}, "starRating": "TWO",
+             "comment": "Slow", "createTime": "2026-09-02T10:00:00Z",
+             "reviewReply": {"comment": "Sorry", "updateTime": "2026-09-03T10:00:00Z"}}]}
+    if "/reviews/r1/reply" in url:
+        _gsent["reply"] = json.loads(body)
+        return True, {}
+    if "updateMask=" in url:
+        _gsent["push"] = (url, json.loads(body))
+        return True, {}
+    if "readMask=" in url:
+        return True, {"title": "Lingua School", "phoneNumbers": {"primaryPhone": "555-9"},
+                      "websiteUri": "https://lingua.test", "regularHours": {"periods": [
+                          {"openDay": "MONDAY", "openTime": {"hours": 9}, "closeTime": {"hours": 17}}]},
+                      "storefrontAddress": {"addressLines": ["1 High St"], "locality": "Springfield",
+                                            "administrativeArea": "IL", "postalCode": "62701",
+                                            "regionCode": "US"}}
+    if "/businesses/lingua-springfield/reviews" in url:
+        return True, {"reviews": [{"id": "y1", "user": {"name": "Yelper"}, "rating": 4,
+                                   "text": "Good", "url": "https://yelp.test/r/y1",
+                                   "time_created": "2026-09-04 10:00:00"}]}
+    if url.endswith("/businesses/lingua-springfield"):
+        return True, {"name": "Lingua (Yelp)", "display_phone": "555-1", "rating": 4.5,
+                      "review_count": 12, "url": "https://yelp.test/biz", "location": {
+                          "display_address": ["1 High St", "Springfield"]}, "hours": [], "categories": []}
+    return False, "unexpected " + url
+_ig._req = _g_req
+_r = c.post("/api/listings/google_business/pull", headers=A)
+ok(_r.status_code == 200 and _r.json()["name"] == "Lingua School" and _r.json()["postal"] == "62701"
+   and _r.json()["hours"] == {"mon": [["09:00", "17:00"]]},
+   "the Google listing pulls into the profile, hours included")
+_r = c.post("/api/listings/google_business/push", headers=A)
+ok(_r.status_code == 200 and "regularHours" in _gsent["push"][0]
+   and _gsent["push"][1]["regularHours"]["periods"][0]["openDay"] == "MONDAY"
+   and "title" not in _gsent["push"][1],
+   "and pushes back the fields Google lets an API change, not the name")
+ok(c.post("/api/listings/google_business/reviews/pull", headers=A).json()["pulled"] == 2,
+   "Google reviews pull into the inbox")
+_lp = c.get("/api/listings", headers=A).json()
+ok(_lp["summary"]["google_business"]["n"] == 2 and _lp["summary"]["google_business"]["unanswered"] == 1
+   and _lp["summary"]["google_business"]["avg"] == 3.5,
+   "counted, averaged, and the unanswered one flagged")
+_rv = next(r for r in _lp["reviews"] if r["external_id"] == "r1")
+ok(c.post(f"/api/listings/reviews/{_rv['id']}/reply", headers=A, json={"text": "Thank you"}).status_code == 200
+   and _gsent["reply"] == {"comment": "Thank you"},
+   "a reply goes to Google through the same API")
+ok(c.get("/api/listings", headers=A).json()["review_link"].endswith("placeid=PLACE"),
+   "with a place id the review link opens the review box")
+_r = c.post("/api/admin/integrations/yelp/connect", headers=A, json={"fields": {
+    "api_key": "yk", "business_id": "lingua-springfield"}})
+ok(_r.status_code == 200 and _r.json()["account"] == "Lingua (Yelp)", "Yelp connects with an API key")
+_r = c.post("/api/listings/yelp/pull", headers=A)
+ok(_r.status_code == 200 and _r.json()["review_count"] == 12
+   and c.get("/api/listings", headers=A).json()["profile"]["name"] == "Lingua School",
+   "Yelp's listing is pulled beside ours, not into ours — it cannot be pushed back")
+ok(c.post("/api/listings/yelp/reviews/pull", headers=A).json()["pulled"] == 1, "Yelp reviews pull")
+_yv = next(r for r in c.get("/api/listings", headers=A).json()["reviews"] if r["provider"] == "yelp")
+_r = c.post(f"/api/listings/reviews/{_yv['id']}/reply", headers=A, json={"text": "hi"})
+ok(_r.status_code == 400 and "Yelp" in _r.text, "and a Yelp reply is refused with the reason")
+
+# --- intake: forms, gifts, results ---
+ok(c.get("/api/intake", headers=_WCU).status_code == 403, "intake is a staff screen")
+_fk = c.post("/api/admin/integrations/google_forms/inbound-key", headers=A).json()["key"]
+_push = {"form_id": "f1", "form_title": "Interest form", "responses": [
+    {"id": "r1", "submitted_at": "2026-09-08T10:00:00",
+     "answers": {"Your name": "Form Person", "Email address": "form@example.com",
+                 "Phone": "555-2", "Which class?": "Evening ESL", "City": "Springfield"}}]}
+ok(c.post("/api/inbound/google_forms", headers={"X-API-Key": _fk}, json=_push).json()["received"] == 1,
+   "an Apps Script trigger pushes a response")
+c.post("/api/inbound/google_forms", headers={"X-API-Key": _fk}, json=_push)
+_ik = c.get("/api/intake", headers=A).json()
+ok(len([r for r in _ik["responses"] if r["form_id"] == "f1"]) == 1
+   and _ik["responses"][0]["name"] == "Form Person" and _ik["responses"][0]["email"] == "form@example.com",
+   "kept once, with the person read out of the answers by what the questions mean")
+ok("X-API-Key" in _ik["apps_script"] and _fk in _ik["apps_script"],
+   "and the snippet on the screen carries the address and key")
+_rid = _ik["responses"][0]["id"]
+_r = c.post(f"/api/intake/forms/{_rid}/as", headers=A, json={"kind": "student"})
+ok(_r.status_code == 200 and _r.json()["id"], "a response becomes a student")
+_sid = _r.json()["id"]
+_sp = c.get(f"/api/students/{_sid}", headers=A).json()
+ok(_sp["profile"]["phone"] == "555-2" and _sp["profile"]["extra"].get("Which class?") == "Evening ESL",
+   "with the answers on their profile")
+ok(any("Signed up via Interest form" in t.get("title", "") for t in _sp.get("timeline", [])),
+   "and the form on their timeline")
+ok(c.post(f"/api/intake/forms/{_rid}/as", headers=A, json={"kind": "enquiry"}).json().get("already") == "student",
+   "handled once")
+c.post("/api/inbound/google_forms", headers={"X-API-Key": _fk}, json={
+    "form_id": "f1", "responses": [{"id": "r2", "answers": {"Name": "Partner Co", "Email": "p@co.test"}}]})
+_rid2 = next(r["id"] for r in c.get("/api/intake", headers=A).json()["responses"] if r["external_id"] == "r2")
+_r = c.post(f"/api/intake/forms/{_rid2}/as", headers=A, json={"kind": "enquiry"})
+_ocon = _db.connect()
+ok(_r.status_code == 200 and _ocon.execute("SELECT name FROM outreach WHERE id=?",
+                                            (_r.json()["id"],)).fetchone()["name"] == "Partner Co",
+   "or an enquiry on the sales board")
+_ocon.close()
+
+_gk = c.post("/api/admin/integrations/network4good/inbound-key", headers=A).json()["key"]
+_r = c.post("/api/inbound/network4good", headers={"X-API-Key": _gk}, json={
+    "transaction_id": "nfg-1", "donor_name": "Generous Giver", "email": "giver@example.com",
+    "amount": "50.00", "designation": "Scholarships", "recurring": "Monthly", "date": "09/01/2026"})
+ok(_r.status_code == 200 and _r.json()["received"] == 1, "a Network for Good gift arrives")
+_csv = ("Donor First Name,Donor Last Name,Email,Donation Amount,Donation Date,Designation,Transaction ID\n"
+        "Quiet,Helper,quiet@example.com,$25.00,09/03/2026,General,nfg-2\n"
+        "Generous,Giver,giver@example.com,50.00,09/01/2026,Scholarships,nfg-1\n"
+        "No,Amount,,,09/03/2026,,nfg-3\n")
+_r = c.post("/api/admin/integrations/network4good/import", headers=A,
+            files={"file": ("gifts.csv", _csv.encode(), "text/csv")})
+ok(_r.status_code == 200 and _r.json()["imported"] == 2 and len(_r.json()["skipped"]) == 1,
+   "and the CSV export imports, skipping a row with no amount")
+_ik = c.get("/api/intake", headers=A).json()
+ok(_ik["gift_totals"]["cents"] == 7500 and _ik["gift_totals"]["n"] == 2 and _ik["gift_totals"]["donors"] == 2,
+   "the same transaction twice is one gift; two donors gave seventy-five dollars")
+ok(any(g["recurring"] for g in _ik["gifts"] if g["external_id"] == "nfg-1"), "monthly read as recurring")
+ok(any(u["name"] == "Generous Giver" and u["role"] == "donor" for u in
+       (lambda x: x if isinstance(x, list) else x.get("users", []))(c.get("/api/admin/users", headers=A).json())),
+   "and each donor is in the address book as a donor")
+
+_ged = ("Student Name,Email,Test Subject,Scaled Score,Test Date,Status\n"
+        f"{_wc['name']},,Reasoning Through Language Arts,158,08/20/2026,Passed\n"
+        f"{_wc['name']},,Mathematical Reasoning,140,08/22/2026,Not Passed\n"
+        "Nobody Known,nobody@example.com,Science,170,08/22/2026,Passed\n")
+_r = c.post("/api/admin/integrations/gedmanager/import", headers=A,
+            files={"file": ("ged.csv", _ged.encode(), "text/csv")})
+ok(_r.status_code == 200 and _r.json()["imported"] == 3 and _r.json()["matched"] == 2,
+   "a GED Manager score report imports, matching the student by name")
+_tl = c.get(f"/api/students/{_wc['id']}", headers=A).json()
+_titles = [t.get("title", "") for t in _tl.get("timeline", [])]
+ok(any("Passed GED Reasoning Through Language Arts" in t for t in _titles)
+   and any("GED Mathematical Reasoning: 140" in t for t in _titles),
+   "a pass is an achievement on their record and a miss is a milestone")
+_ik = c.get("/api/intake", headers=A).json()
+_un = next(t for t in _ik["results"] if not t["user_id"])
+ok(_un["taker"] == "Nobody Known" and _un["certificate"] == "College Ready" and _ik["unmatched"] == 1,
+   "an unknown taker is kept unmatched, never guessed, and 170 is college-ready")
+ok(c.post(f"/api/intake/results/{_un['id']}/match", headers=A, json={"user_id": _wc["id"]}).status_code == 200
+   and c.get("/api/intake", headers=A).json()["unmatched"] == 0, "until the office says whose it is")
+_ns = ("Learner,Email,Module,Score %,Passed,Date,Certificate\n"
+       f"{_wc['name']},,Basic Computer Skills,92,Yes,09/05/2026,Yes\n")
+_r = c.post("/api/admin/integrations/northstar/import", headers=A,
+            files={"file": ("ns.csv", _ns.encode(), "text/csv")})
+ok(_r.status_code == 200 and _r.json()["matched"] == 1, "a NorthStar results export imports")
+ok(any("NorthStar: Basic Computer Skills" in t for t in
+       [x.get("title", "") for x in c.get(f"/api/students/{_wc['id']}", headers=A).json().get("timeline", [])]),
+   "and the certificate is an achievement")
+ok(c.post("/api/admin/integrations/gedmanager/import", headers=A,
+          files={"file": ("ged.csv", _ged.encode(), "text/csv")}).json()["imported"] == 3
+   and len([t for t in c.get("/api/intake", headers=A).json()["results"] if t["provider"] == "gedmanager"]) == 3,
+   "importing the same report twice adds nothing")
+
+_fcon = _db.connect()
+_ig.save(_fcon, "google_forms", {"access_token": "ft", "refresh_token": ""}, "forms",
+         {"form_ids": "F9"}, time.time() + 3600)
+_fcon.close()
+def _forms_req(url, method="GET", headers=None, body=None, timeout=15):
+    if url.endswith("/forms/F9"):
+        return True, {"info": {"title": "Placement"}, "items": [
+            {"title": "Full name", "questionItem": {"question": {"questionId": "q1"}}},
+            {"title": "Email", "questionItem": {"question": {"questionId": "q2"}}}]}
+    if url.endswith("/forms/F9/responses"):
+        return True, {"responses": [{"responseId": "resp1", "createTime": "2026-09-07T09:00:00Z",
+                                     "answers": {"q1": {"textAnswers": {"answers": [{"value": "Pulled Person"}]}},
+                                                 "q2": {"textAnswers": {"answers": [{"value": "pulled@example.com"}]}}}}]}
+    return False, "unexpected " + url
+_ig._req = _forms_req
+_r = c.post("/api/intake/forms/pull", headers=A)
+ok(_r.status_code == 200 and _r.json()["new"] == 1, "Google Forms responses pull by form id")
+ok(c.post("/api/intake/forms/pull", headers=A).json()["new"] == 0, "once")
+ok(any(r["name"] == "Pulled Person" and r["form_title"] == "Placement" and r["email"] == "pulled@example.com"
+       for r in c.get("/api/intake", headers=A).json()["responses"]),
+   "with the question ids turned back into their titles")
+_ig._req = _real_req2
+
+# --- documentation ---
+_cdoc = Path("docs/product/connections.md").read_text()
+ok(all(w in _cdoc for w in ("Twitch", "Yelp", "GED Manager", "NorthStar", "jobs.xml", "Uber Eats")),
+   "the connections doc covers every family and every honest limit")
+ok("connections.md" in Path("docs/product/README.md").read_text(),
+   "and the product README points at it")
 
 done("core")
