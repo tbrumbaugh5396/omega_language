@@ -1189,6 +1189,152 @@ ok(all("where" in sh for sh in _allsh),
 ok(any(sh["where"] for sh in _allsh),
    "and a punch made at a registered kiosk names the tablet: 'kiosk: "
    "Front door' is a thing a manager can go and stand next to")
+# --- money out: expenses, mileage, and the year ---------------------------
+_xm = c.get("/api/expenses/meta", headers=A).json()
+ok(_xm["office"] and _xm["may_file"] and len(_xm["categories"]) >= 15
+   and any(k["code"] == "phone" and k["default_pct"] == 50 for k in _xm["categories"])
+   and any(k["code"] == "hosting" for k in _xm["categories"])
+   and any(k["code"] == "vehicle" for k in _xm["categories"]),
+   "the books open with the categories a return has lines for — phone, "
+   "hosting, vehicle wear, fuel, fees — each with a default business share")
+ok(c.get("/api/expenses/meta", headers=DE).json()["may_file"]
+   and not c.get("/api/expenses/meta", headers=DE).json()["office"],
+   "a driver may file; the office decides")
+ok(c.post("/api/expenses/settings", headers=A, json={
+    "distance_unit": "mi", "mileage_rate_cents": 70, "income_tax_pct": 20,
+    "tax_year_start_month": 1}).status_code == 200,
+   "the office sets the rate, the unit, the tax-year start and the "
+   "estimate percentage")
+ok(c.post("/api/expenses/settings", headers=A, json={"distance_unit": "furlongs"}).status_code == 400
+   and c.post("/api/expenses/settings", headers=DE, json={"mileage_rate_cents": 1}).status_code == 403,
+   "in a real unit, and only the office")
+_yr = _xm["year"]
+_x1 = c.post("/api/expenses", headers=A, json={
+    "category": "hosting", "amount_cents": 2400, "vendor": "Hostco",
+    "note": "the site, monthly", "recurring": "monthly"})
+ok(_x1.status_code == 200 and _x1.json()["state"] == "approved"
+   and _x1.json()["deductible_cents"] == 2400,
+   "the office's own company-paid expense is a fact, not a claim — "
+   "accepted as filed, fully deductible")
+_x2 = c.post("/api/expenses", headers=A, json={
+    "category": "phone", "amount_cents": 8000, "vendor": "Telco"})
+ok(_x2.json()["business_pct"] == 50 and _x2.json()["deductible_cents"] == 4000,
+   "a phone bill takes the category's default share: half of it counts")
+_x3 = c.post("/api/expenses", headers=DE, json={
+    "category": "vehicle", "amount_cents": 15000, "vendor": "Tyre place",
+    "paid_by": "me", "note": "a tyre on the van"})
+ok(_x3.status_code == 200 and _x3.json()["state"] == "pending"
+   and _x3.json()["paid_by"] == "me",
+   "a driver who paid for a tyre files a claim, and it waits")
+_x3id = _x3.json()["id"]
+ok(c.post("/api/expenses", headers=DE, json={"category": "personal",
+          "amount_cents": 5000, "paid_by": "me"}).json()["deductible_cents"] == 0,
+   "a personal expense is kept for the record and deducts nothing")
+_xr = [c.post("/api/expenses", headers=DE, json={"category": "unicorns", "amount_cents": 1}).status_code,
+       c.post("/api/expenses", headers=DE, json={"category": "fuel", "amount_cents": 0}).status_code,
+       c.post("/api/expenses", headers=CU, json={"category": "fuel", "amount_cents": 100}).status_code]
+ok(_xr[0] == 400 and _xr[1] == 400 and _xr[2] in (401, 403),
+   f"an unknown category, no amount, or a customer are refused ({_xr})")
+_rc = c.post(f"/api/expenses/{_x3id}/receipt", headers={**DE, "X-Filename": "tyre.png"},
+             content=b"\x89PNG\r\n\x1a\n" + b"\x00" * 400)
+ok(_rc.status_code == 200 and _rc.json()["receipt_url"].startswith("/media/"),
+   "the receipt goes with it, as a photo or a PDF")
+ok([e for e in c.get("/api/expenses?state=pending", headers=A).json()["expenses"]
+    if e["id"] == _x3id][0]["receipt_url"]
+   and c.get("/api/expenses", headers=DE).json()["expenses"]
+   and all(e["user_id"] == c.get("/api/expenses/meta", headers=DE).json()["me"]
+           for e in c.get("/api/expenses", headers=DE).json()["expenses"]),
+   "the office sees the queue with the receipt; the driver sees only "
+   "their own")
+ok(c.post(f"/api/expenses/{_x3id}/decide", headers=DE, json={"state": "approved"}).status_code == 403
+   and c.post(f"/api/expenses/{_x3id}/decide", headers=A, json={"state": "paid"}).status_code == 409,
+   "the driver cannot accept their own claim, and nothing is paid before "
+   "it is accepted")
+ok(c.post(f"/api/expenses/{_x3id}/decide", headers=A, json={"state": "approved"}).json()["state"] == "approved",
+   "the office accepts the tyre")
+# trips: own car at the rate; a company vehicle as a record
+_t1 = c.post("/api/trips", headers=DE, json={
+    "from_place": "depot", "to_place": "Northeast client", "purpose": "delivery",
+    "distance": 12.5, "vehicle": "own"})
+ok(_t1.status_code == 200 and _t1.json()["rate_cents"] == 70
+   and _t1.json()["amount_cents"] == 875 and _t1.json()["unit"] == "mi"
+   and _t1.json()["state"] == "pending",
+   "12.5 miles in the driver's own car at 70 cents is 8.75 owed, pending")
+_t2 = c.post("/api/trips", headers=DE, json={
+    "purpose": "parts run", "start_odo": 41200, "end_odo": 41236.4, "vehicle": "own"})
+ok(_t2.json()["distance"] == 36.4, "or two odometer readings, and the "
+   "distance is the difference")
+ok(c.post("/api/trips", headers=DE, json={"start_odo": 100, "end_odo": 90,
+          "vehicle": "own"}).status_code == 400
+   and c.post("/api/trips", headers=DE, json={"distance": 5000, "vehicle": "own"}).status_code == 400
+   and c.post("/api/trips", headers=DE, json={"distance": 5, "vehicle": "spaceship"}).status_code == 400,
+   "an odometer that goes backwards, a trip across a continent, and a "
+   "vehicle that is neither are refused")
+_t3 = c.post("/api/trips", headers=DE, json={"distance": 20, "vehicle": "company",
+                                             "truck_id": tid, "purpose": "run"})
+ok(_t3.json()["amount_cents"] == 0 and _t3.json()["truck"],
+   "a company vehicle's trip is a record of distance — its fuel and wear "
+   "are expenses of their own, and nothing is owed to the driver")
+# a finished route is a trip already measured
+_rr = c.post("/api/routes/plan", headers=A, json={"truck_id": tid, "region": "Northeast"}).json()
+c.post(f"/api/routes/{_rr['id']}/status", headers=A, json={"status": "done"})
+_unc = c.get("/api/trips", headers=DE).json()["unclaimed_routes"]
+ok(any(r["id"] == _rr["id"] for r in _unc),
+   "the driver's finished route waits to be claimed")
+_fr = c.post(f"/api/trips/from-route/{_rr['id']}", headers=DE)
+ok(_fr.status_code == 200 and _fr.json()["route_id"] == _rr["id"]
+   and _fr.json()["vehicle"] == "company" and _fr.json()["distance"] > 0
+   and _fr.json()["purpose"].startswith("route:"),
+   "and one tap files it — its km, its truck, its date — with no "
+   "odometer typed twice")
+ok(c.post(f"/api/trips/from-route/{_rr['id']}", headers=DE).status_code == 409,
+   "and not twice")
+_tl = c.get("/api/trips?state=pending", headers=A).json()["trips"]
+for _tp in _tl:
+    c.post(f"/api/trips/{_tp['id']}/decide", headers=A, json={"state": "approved"})
+# the year
+_sm = c.get(f"/api/expenses/summary?year={_yr}", headers=A).json()
+ok(_sm["deductible_cents"] >= 2400 + 4000 + 15000
+   and _sm["expenses_total_cents"] > _sm["deductible_cents"]
+   and any(k["code"] == "phone" and k["deductible_cents"] == 4000 for k in _sm["by_category"]),
+   "the year adds up what was accepted, by category, at the business share")
+ok(_sm["mileage"]["unit"] == "mi" and _sm["mileage"]["amount_cents"] >= 875
+   and _sm["mileage"]["distance"] >= 12.5 + 36.4 + 20,
+   "mileage: the distance driven and the money it is worth")
+ok(_sm["owed_cents"] >= 15000 + 875 + int(36.4 * 70)
+   and any(o["cents"] >= 15000 for o in _sm["owed"]),
+   "what is owed to people, by person — the tyre and the own-car miles, "
+   "not the company vehicle's")
+ok(_sm["income_cents"] >= 0 and "sales_tax_collected_cents" in _sm
+   and _sm["estimated_tax_cents"] == int(round(max(0, _sm["net_before_tax_cents"]) * 0.2))
+   and "not a return" in _sm["estimate_note"],
+   "income, the sales tax collected, net before tax, and an estimate that "
+   "says it is one")
+_csv = c.get(f"/api/expenses/export.csv?year={_yr}", headers=A)
+ok(_csv.status_code == 200 and _csv.headers["content-type"].startswith("text/csv")
+   and "Hostco" in _csv.text and "Tyre place" in _csv.text and "trip" in _csv.text
+   and "deductible" in _csv.text.splitlines()[0],
+   "and the accountant gets a CSV: one line per accepted thing, deductible "
+   "share worked out")
+ok(c.get("/api/expenses/summary", headers=DE).status_code == 403
+   and c.get("/api/expenses/export.csv", headers=DE).status_code == 403,
+   "the year is the office's")
+ok(c.post(f"/api/expenses/{_x3id}/decide", headers=A, json={"state": "paid"}).json()["state"] == "paid"
+   and not any(o["cents"] >= 15000 for o in
+               c.get(f"/api/expenses/summary?year={_yr}", headers=A).json()["owed"]),
+   "paid, the tyre leaves what is owed")
+_pl = c.get("/api/analytics/pnl?days=30", headers=A).json()
+ok(_pl["expenses_cents"] >= 2400 + 4000 + 15000 and _pl["mileage_cents"] >= 875,
+   "and the P&L counts them beside labour and trucking — costs the "
+   "system could not see until they were logged")
+_xjs = (Path(__file__).parent.parent / "src/erp/frontend/app/17-expenses.js"
+        ).read_text(encoding="utf-8")
+ok("async function renderExpenses(" in _xjs and "function expenseForm(" in _xjs
+   and "function tripForm(" in _xjs and "from-route" in _xjs and "export.csv" in _xjs
+   and "Owed to people" in _xjs and "receipt" in _xjs,
+   "the Expenses screen files, lists, accepts, claims routes, keeps "
+   "receipts and hands the year to the accountant")
+
 # --- every QR the app prints is read by the scanner meant for it --------
 # A code is only as good as the thing that reads it. Each pair below is
 # printed by one screen and scanned by another, and the two are tested

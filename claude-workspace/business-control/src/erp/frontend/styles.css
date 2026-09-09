@@ -2109,3 +2109,6 @@ body.lane-on { overflow: hidden; }
 .cl-cot-row { display: flex; gap: 8px; align-items: center; padding: 5px 0;
   border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .btn.alt.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.xp-owed { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0;
+  border-bottom: 1px solid var(--line); align-items: center; flex-wrap: wrap; }
+.xp-unclaimed { margin-bottom: 12px; }

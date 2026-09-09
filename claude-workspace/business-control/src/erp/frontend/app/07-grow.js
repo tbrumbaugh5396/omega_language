@@ -564,6 +564,8 @@ function pnlTable(p) {
     ${p.contractor_cents ? row(`Contractor routes (${p.contractor_routes})`,
       p.contractor_cents, 1) : ""}
     ${row(`Trucking (${p.logistics_km} km)`, p.logistics_cents, 1)}
+    ${p.expenses_cents ? row("Expenses filed (business share)", p.expenses_cents, 1) : ""}
+    ${p.mileage_cents ? row("Mileage reimbursed", p.mileage_cents, 1) : ""}
     <tr><td><b>Net</b></td><td style="text-align:right"
       class="${p.net_cents < 0 ? "low" : ""}"><b>${money(p.net_cents)}</b>
       (${p.margin_pct}%)</td></tr>

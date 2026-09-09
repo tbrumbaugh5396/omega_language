@@ -62,7 +62,8 @@ function syncRoute() {
 addEventListener("hashchange", () => { if (applyRoute()) render(); });
 addEventListener("popstate", () => { if (applyRoute()) render(); });
 const view = () => $("#view");
-const money = (c) => "$" + (c / 100).toFixed(2);
+// A loss reads as "-$8.75", the way a bank prints it, not "$-8.75".
+const money = (c) => (c < 0 ? "-$" : "$") + (Math.abs(c) / 100).toFixed(2);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g,
   (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 

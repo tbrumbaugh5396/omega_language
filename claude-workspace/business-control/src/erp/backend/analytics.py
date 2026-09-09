@@ -160,8 +160,27 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
                               if ledger_unknown else 0)
     labor = int(hours * cfg.get("hourly_wage_cents", 1800))
     logistics_cost = int(km * cfg.get("cost_per_km_cents", 85))
+    # What was filed as spent, and accepted: the phone bill, the hosting,
+    # the tyre, the miles somebody drove in their own car. The system
+    # could not see these until they were logged; now they are costs
+    # like any other, at the business share of each.
+    expenses_cents = 0
+    mileage_cents = 0
+    try:
+        from . import expenses as _exp
+        cats = _exp._cat_map(con)
+        for r in con.execute(
+                "SELECT * FROM expenses WHERE spent_at>=?"
+                " AND state IN ('approved','paid')", (since,)):
+            expenses_cents += _exp.deductible_cents(dict(r), cats.get(r["category"]))
+        mileage_cents = _q("SELECT COALESCE(SUM(amount_cents),0) FROM trips"
+                           " WHERE driven_at>=? AND vehicle='own'"
+                           " AND state IN ('approved','paid')", (since,))
+    except Exception:                                        # noqa: BLE001
+        pass
     gross = revenue - cogs
-    net = gross - commissions - labor - logistics_cost - contractor
+    net = (gross - commissions - labor - logistics_cost - contractor
+           - expenses_cents - mileage_cents)
     by_region = con.execute(
         "SELECT region, COALESCE(SUM(subtotal_cents),0) revenue_cents"
         " FROM orders WHERE created_at>=? AND status!='cancelled'"
@@ -192,6 +211,7 @@ def pnl(con, cfg: dict, days: int = 30) -> dict:
             "labor_hours": round(hours, 1), "labor_cents": labor,
             "contractor_routes": len(crows), "contractor_cents": contractor,
             "logistics_km": round(km, 1), "logistics_cents": logistics_cost,
+            "expenses_cents": expenses_cents, "mileage_cents": mileage_cents,
             "net_cents": net,
             "margin_pct": round(net / revenue * 100, 1) if revenue else 0.0,
             "by_region": [dict(r) for r in by_region],

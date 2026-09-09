@@ -72,6 +72,8 @@ def _init_core(tid=None):
         _vis.init_tables(con)
         from . import students as _stu
         _stu.init_tables(con)
+        from . import expenses as _exp
+        _exp.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -6677,6 +6679,8 @@ from . import timesheet  # noqa: E402  (safe: included late)
 app.include_router(timesheet.router)
 from . import students  # noqa: E402  (safe: included late)
 app.include_router(students.router)
+from . import expenses  # noqa: E402  (safe: included late)
+app.include_router(expenses.router)
 
 
 @app.exception_handler(404)
