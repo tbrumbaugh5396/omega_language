@@ -68,6 +68,8 @@ def _init_core(tid=None):
         _fw.init_tables(con)
         from . import daybook as _dbk
         _dbk.init_tables(con)
+        from . import visits as _vis
+        _vis.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -121,6 +123,41 @@ async def audit_edits(request: Request, call_next):
     finally:
         con.close()
     return response
+
+@app.middleware("http")
+async def note_page_loads(request: Request, call_next):
+    """A human arriving on a page leaves an address and a user-agent, and
+    that is a device sighting even before the page's own script reports
+    the rest. Only page loads — never the API — so this costs one small
+    write per page, not one per click. Added before resolve_tenant so it
+    runs inside the tenant context (last-added is outermost)."""
+    response = await call_next(request)
+    try:
+        from . import visits as _vis
+        if response.status_code < 400 and _vis.is_page(
+                request.method, request.url.path,
+                request.headers.get("accept", "")):
+            ua = request.headers.get("user-agent", "")
+            ip = _client_ip(request)
+            # Without the beacon's facts, the fingerprint is ua + address:
+            # coarse, but the beacon a moment later refines the same row
+            # only if it carries the same facts — so this is a separate,
+            # scriptless device until then, which is honest.
+            fp = _vis.fingerprint(ua, "", "", "", "", "ip:" + ip)
+            con = db.connect()
+            try:
+                _vis.touch(con, fp, ip=ip, ua=ua, path=request.url.path,
+                           surface=("ops" if request.url.path.startswith("/ops")
+                                    else "admin" if request.url.path.startswith("/admin")
+                                    else "learn" if request.url.path.startswith("/learn")
+                                    else "storefront"))
+                con.commit()
+            finally:
+                con.close()
+    except Exception:                                        # noqa: BLE001
+        pass                          # a log must never cost a page
+    return response
+
 
 @app.middleware("http")
 async def resolve_tenant(request: Request, call_next):
@@ -6597,6 +6634,8 @@ app.include_router(store_gov.router)
 app.include_router(store_partners.router)
 app.include_router(store_donations.router)
 app.include_router(store_bookings.router)
+from . import visits as _visits  # noqa: E402
+_visits.register(app, get_con, admin_user, _client_ip)
 app.include_router(store_offers.router)
 app.include_router(store_pixels.router)
 app.include_router(store_support.router)

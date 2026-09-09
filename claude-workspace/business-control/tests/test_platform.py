@@ -4299,6 +4299,117 @@ ok(c.post(f"/api/learn/courses/{_crs}/threads", headers=LN,
           json={"title": "  ", "body": ""}).status_code == 400,
    "a thread needs a title")
 
+# --- a class: a course with a clock, a tutor, and a door that stays open ---
+_sch = c.post(f"/api/learning/courses/{_crs}/schedule", headers=TT, json={
+    "slots": [{"weekday": 1, "from_min": 1080, "to_min": 1170},
+              {"weekday": 3, "from_min": 1080, "to_min": 1170}]})
+ok(_sch.status_code == 200 and len(_sch.json()["schedule"]) == 2,
+   "a class meets Tuesdays and Thursdays at six — rows, one per weekly "
+   "slot, not a string somebody has to parse")
+ok(c.post(f"/api/learning/courses/{_crs}/schedule", headers=TT, json={
+    "slots": [{"weekday": 8, "from_min": 0, "to_min": 60}]}).status_code == 400,
+   "and there is no eighth day")
+_clist = c.get("/api/learning/classes", headers=TT).json()["classes"]
+_mine_c = [x for x in _clist if x["id"] == _crs][0]
+ok(_mine_c["when"].startswith("Tue 18:00") and _mine_c["enrolled"] >= 2,
+   "the Classes list says when it meets and who is in it now")
+ok(c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["schedule"][0]["weekday"] == 1,
+   "and the learner's course page says the same")
+_sub = c.post("/api/login", headers=HA, json={"name": "Sub Teacher",
+                                             "role": "employee"}).json()
+ok(c.post(f"/api/learning/courses/{_crs}/tutor", headers=AA,
+          json={"teacher_id": _sub["id"]}).status_code == 200
+   and c.get(f"/api/learning/courses/{_crs}", headers=AA).json()["teacher_id"]
+   == _sub["id"],
+   "the tutor changes and the class does not — same people, same times, "
+   "same history")
+ok(c.post(f"/api/learning/courses/{_crs}/tutor", headers=AA,
+          json={"teacher_id": _tch["id"]}).status_code == 200,
+   "and changes back")
+
+# --- asking for more --------------------------------------------------------
+_ask = c.post(f"/api/learn/courses/{_crs}/tutoring", headers=LN, json={
+    "note": "the past tense",
+    "availability": [{"weekday": 2, "from_min": 1020, "to_min": 1140},
+                     {"weekday": 9, "from_min": 0, "to_min": 10}]})
+ok(_ask.status_code == 200, "a student asks for tutoring and says when they could")
+_asks = c.get("/api/learning/tutoring", headers=TT).json()["requests"]
+_a0 = [r for r in _asks if r["id"] == _ask.json()["id"]][0]
+ok(_a0["when"] == "Wed 17:00–19:00" and _a0["note"] == "the past tense",
+   "the tutor sees who is asking, what for, and when — the bad day was "
+   "dropped, the good one kept")
+ok(c.post(f"/api/learn/courses/{_crs}/tutoring", headers=LN, json={
+    "note": "the past tense, and ser vs estar", "availability": []}).json()["id"]
+   == _ask.json()["id"],
+   "asking twice is the same ask, updated, not a second row in the queue")
+ok(c.post(f"/api/learn/courses/{_crs}/tutoring", headers=_SG,
+          json={"note": "x"}).status_code == 403,
+   "and only somebody in the course may ask")
+ok(c.post(f"/api/learning/tutoring/{_a0['id']}/state", headers=TT,
+          json={"state": "taken", "reply": "Wednesday at five"}).status_code == 200
+   and c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["my_tutoring"][0]
+   ["reply"] == "Wednesday at five",
+   "the tutor takes it with a word back, and the student sees the word")
+ok(c.post(f"/api/learning/tutoring/{_a0['id']}/state", headers=_SG,
+          json={"state": "done"}).status_code in (401, 403),
+   "a stranger cannot answer for the class")
+
+# --- files for the whole class ---------------------------------------------
+_deck = c.post(f"/api/learning/courses/{_crs}/material", headers={
+    **TT, "X-Filename": "week1.pptx"}, content=b"PK\x03\x04" + b"\x00" * 40)
+ok(_deck.status_code == 200 and _deck.json()["kind"] == "document",
+   "a deck for the class as a whole, not one lesson of it")
+ok(any(m["original"] == "week1.pptx" for m in
+       c.get(f"/api/learn/courses/{_crs}", headers=LN).json()["materials"]),
+   "on the course page for every student")
+ok(any(i.get("course") for i in c.get(
+    f"/api/learn/sessions/{_cls2['session']['id']}/shared", headers=LN).json()["items"]),
+   "and in every session's Shared tab, so it is there to put on")
+
+# --- a one-time training: a film and a link -------------------------------
+_tr = c.post("/api/learning/trainings", headers=AA,
+             json={"title": "The new till", "blurb": "Watch before Friday."})
+ok(_tr.status_code == 200, "a training is made")
+_trid = _tr.json()["id"]
+ok(c.post(f"/api/learning/trainings/{_trid}/film", headers={
+    **AA, "X-Filename": "demo.webm"},
+    content=b"\x1aE\xdf\xa3" + b"v" * 5000).status_code == 200,
+   "and its film goes up")
+_trs = c.get("/api/learning/trainings", headers=AA).json()["trainings"]
+_tr0 = [t for t in _trs if t["id"] == _trid][0]
+_ttok = _tr0["url"].rsplit("/", 1)[1]
+_page = c.get(f"/training/{_ttok}")
+ok(_page.status_code == 200 and "<video" in _page.text
+   and "The new till" in _page.text,
+   "the link opens the film with no sign-in — nobody enrols; the link is "
+   "the door")
+ok(c.post(f"/api/learn/training/{_ttok}/seen", json={"visitor_id": "v-a"}).json()["as"]
+   == "this browser"
+   and c.post(f"/api/learn/training/{_ttok}/seen", headers=LN,
+              json={"visitor_id": "v-a"}).json()["as"] == _lrn["name"],
+   "who watched is counted by account when signed in, by browser when not")
+_tr1 = [t for t in c.get("/api/learning/trainings", headers=AA).json()["trainings"]
+        if t["id"] == _trid][0]
+ok(_tr1["viewers"] == 2 and any(w["name"] == _lrn["name"] for w in _tr1["watched_by"]),
+   "and the office sees the list")
+ok(c.get("/training/nosuch").status_code == 404, "a mistyped link opens nothing")
+
+# --- ending a class -------------------------------------------------------
+_endc = c.post("/api/learning/courses", headers=AA, json={
+    "name": "Short course", "teacher_id": _tch["id"]}).json()["id"]
+c.post(f"/api/learning/courses/{_endc}/enroll", headers=AA, json={"user_id": _lrn["id"]})
+c.post(f"/api/learning/courses/{_endc}/schedule", headers=AA,
+       json={"slots": [{"weekday": 0, "from_min": 600, "to_min": 660}]})
+_e = c.post(f"/api/learning/courses/{_endc}/end", headers=AA, json={})
+ok(_e.status_code == 200 and _e.json()["seats_ended"] == 1,
+   "ending a class closes every seat today")
+_ended = [x for x in c.get("/api/learning/classes", headers=AA).json()["classes"]
+          if x["id"] == _endc][0]
+ok(not _ended["active"] and _ended["enrolled"] == 0 and _ended["left"] == 1
+   and _ended["when"] == "no set time",
+   "takes it off the week, and archives it — nothing deleted, the seat "
+   "that ended is still on record")
+
 c.post(f"/api/learning/sessions/{_cls2['session']['id']}/close", headers=TT)
 _ljs = (Path(__file__).parent.parent / "src/storefront/frontend/learn.js"
         ).read_text(encoding="utf-8")

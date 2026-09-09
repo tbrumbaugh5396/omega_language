@@ -50,6 +50,39 @@ CREATE TABLE IF NOT EXISTS courses (
   created_at REAL NOT NULL
 );
 
+-- When a class meets, week in week out. A class is a course with a
+-- clock: the same people, the same tutor until the tutor changes, the
+-- same Tuesday at six until somebody moves it. Rows, one per weekly
+-- slot, so a class that meets twice a week is two rows and not a
+-- string somebody has to parse.
+CREATE TABLE IF NOT EXISTS class_schedule (
+  id INTEGER PRIMARY KEY,
+  course_id INTEGER NOT NULL,
+  weekday INTEGER NOT NULL,             -- 0 = Monday
+  from_min INTEGER NOT NULL,
+  to_min INTEGER NOT NULL,
+  room_id INTEGER DEFAULT 0,
+  note TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS class_schedule_course ON class_schedule(course_id);
+
+-- A student asking for more. Their availability rides with the ask as
+-- weekday windows — the same shape the staff rota uses — so a tutor
+-- with a free Tuesday afternoon can see at a glance who could take it.
+CREATE TABLE IF NOT EXISTS tutoring_requests (
+  id INTEGER PRIMARY KEY,
+  course_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  note TEXT DEFAULT '',
+  availability TEXT DEFAULT '[]',       -- JSON [{weekday,from_min,to_min}]
+  state TEXT NOT NULL DEFAULT 'open',   -- open | taken | done | declined
+  taken_by INTEGER DEFAULT 0,
+  reply TEXT DEFAULT '',
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tutoring_course ON tutoring_requests(course_id, state);
+
 CREATE TABLE IF NOT EXISTS enrollments (
   id INTEGER PRIMARY KEY,
   course_id INTEGER NOT NULL,
@@ -867,6 +900,9 @@ def ops_course_detail(cid: int, user=Depends(current_user),
     open_s = classroom.open_session_for_course(con, cid)
     d["open_session_id"] = open_s.id if open_s else None
     d["sessions"] = classroom.sessions_for_course(con, cid, limit=15)
+    from . import materials as _mat          # lazy for the same reason
+    d["materials"] = _mat.of_course(con, cid)
+    d["schedule"] = schedule_of(con, cid)
     return d
 
 
@@ -899,6 +935,237 @@ def ops_unenroll(eid: int, user=Depends(admin_user), con=Depends(get_con)):
     con.execute("UPDATE enrollments SET until=? WHERE id=? AND until IS NULL",
                 (time.time(), eid))
     con.commit()
+    return {"ok": True}
+
+
+# ── classes: a course with a clock, a tutor, and a door that stays open ──
+# The Learning tab is about content — lessons, quizzes, grading. A class
+# is about people and time: who teaches it this term, who is in it this
+# week, when it meets, and whether it is still running. Same rows
+# underneath (courses, enrollments, class_sessions); a different desk.
+
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def schedule_of(con, cid: int) -> list:
+    return [dict(r) for r in con.execute(
+        "SELECT s.id, s.weekday, s.from_min, s.to_min, s.room_id, s.note,"
+        " COALESCE(r.name,'') AS room FROM class_schedule s"
+        " LEFT JOIN rooms r ON r.id=s.room_id"
+        " WHERE s.course_id=? ORDER BY s.weekday, s.from_min", (cid,))]
+
+
+def _hm(m: int) -> str:
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+@router.get("/api/learning/classes")
+def ops_classes(user=Depends(current_user), con=Depends(get_con)):
+    """Every class, as a class: tutor, who is in it now, when it meets,
+    whether a session is open, and whether it is still running."""
+    now = time.time()
+    rows = []
+    for c in con.execute(
+            "SELECT c.*, u.name AS tutor FROM courses c"
+            " LEFT JOIN users u ON u.id=c.teacher_id"
+            " ORDER BY c.active DESC, c.name").fetchall():
+        if not user["is_admin"] and c["teacher_id"] != user["id"]:
+            continue
+        d = dict(c)
+        d["tutor"] = c["tutor"] or ""
+        d["enrolled"] = con.execute(
+            "SELECT COUNT(*) FROM enrollments WHERE course_id=? AND"
+            " (until IS NULL OR until>?)", (c["id"], now)).fetchone()[0]
+        d["left"] = con.execute(
+            "SELECT COUNT(*) FROM enrollments WHERE course_id=? AND until"
+            " IS NOT NULL AND until<=?", (c["id"], now)).fetchone()[0]
+        d["schedule"] = schedule_of(con, c["id"])
+        d["when"] = " · ".join(f"{WEEKDAYS[x['weekday']]} {_hm(x['from_min'])}"
+                               f"–{_hm(x['to_min'])}"
+                               + (f" in {x['room']}" if x["room"] else "")
+                               for x in d["schedule"]) or "no set time"
+        o = con.execute("SELECT id FROM class_sessions WHERE course_id=? AND"
+                        " status='open'", (c["id"],)).fetchone()
+        d["open_session_id"] = o["id"] if o else None
+        d["held"] = con.execute("SELECT COUNT(*) FROM class_sessions WHERE"
+                                " course_id=?", (c["id"],)).fetchone()[0]
+        d["asking"] = con.execute(
+            "SELECT COUNT(*) FROM tutoring_requests WHERE course_id=? AND"
+            " state='open'", (c["id"],)).fetchone()[0] \
+            if con.execute("SELECT 1 FROM sqlite_master WHERE name="
+                           "'tutoring_requests'").fetchone() else 0
+        rows.append(d)
+    return {"classes": rows,
+            "note": "A class is a course with a clock. The tutor can change, "
+                    "people join and leave while it runs, and it runs until "
+                    "you end it."}
+
+
+class SlotBody(BaseModel):
+    weekday: int = 0
+    from_min: int = 1080
+    to_min: int = 1170
+    room_id: int = 0
+    note: str = ""
+
+
+class ScheduleBody(BaseModel):
+    slots: list[SlotBody] = []
+
+
+@router.post("/api/learning/courses/{cid}/schedule")
+def ops_set_schedule(cid: int, body: ScheduleBody, user=Depends(current_user),
+                     con=Depends(get_con)):
+    """The whole week at once — replaced, not merged, so what is on the
+    screen is what is true. A slot that names a room is checked against
+    the room's timetable for the next occurrence, and refused if the
+    room is taken then; that is the moment somebody would want to know."""
+    if not may_edit(con, user, cid):
+        raise HTTPException(403, "you do not teach this course")
+    if con.execute("SELECT 1 FROM courses WHERE id=?", (cid,)).fetchone() is None:
+        raise HTTPException(404, "course not found")
+    for sl in body.slots:
+        if not 0 <= sl.weekday <= 6:
+            raise HTTPException(400, "weekday is 0 (Monday) to 6 (Sunday)")
+        if not 0 <= sl.from_min < sl.to_min <= 24 * 60:
+            raise HTTPException(400, "a slot has to end after it starts, "
+                                     "inside one day")
+    if len(body.slots) > 14:
+        raise HTTPException(400, "fourteen slots a week is a timetable, not "
+                                 "a class")
+    con.execute("DELETE FROM class_schedule WHERE course_id=?", (cid,))
+    for sl in body.slots:
+        con.execute("INSERT INTO class_schedule(course_id,weekday,from_min,"
+                    "to_min,room_id,note) VALUES(?,?,?,?,?,?)",
+                    (cid, sl.weekday, sl.from_min, sl.to_min,
+                     max(0, sl.room_id), sl.note.strip()[:200]))
+    con.commit()
+    return {"ok": True, "schedule": schedule_of(con, cid)}
+
+
+class TutorBody(BaseModel):
+    teacher_id: int = 0
+
+
+@router.post("/api/learning/courses/{cid}/tutor")
+def ops_set_tutor(cid: int, body: TutorBody, user=Depends(admin_user),
+                  con=Depends(get_con)):
+    """The tutor changes; the class does not. Students, schedule, history
+    all stay — only the name on the door moves, and the previous one
+    keeps every session they taught."""
+    if con.execute("SELECT 1 FROM courses WHERE id=?", (cid,)).fetchone() is None:
+        raise HTTPException(404, "course not found")
+    if body.teacher_id and con.execute(
+            "SELECT 1 FROM users WHERE id=? AND active=1",
+            (body.teacher_id,)).fetchone() is None:
+        raise HTTPException(404, "no such person")
+    con.execute("UPDATE courses SET teacher_id=? WHERE id=?",
+                (body.teacher_id or None, cid))
+    con.commit()
+    return {"ok": True}
+
+
+@router.post("/api/learning/courses/{cid}/end")
+def ops_end_class(cid: int, user=Depends(admin_user), con=Depends(get_con)):
+    """A class that has run its course. Nothing is deleted: the seats are
+    ended today, the schedule is cleared so it stops appearing on the
+    week, an open session is closed, and the course is archived — every
+    transcript, attendance and recording keeps its footing. Delete is
+    for a class that never happened, and is a separate door."""
+    if con.execute("SELECT 1 FROM courses WHERE id=?", (cid,)).fetchone() is None:
+        raise HTTPException(404, "course not found")
+    now = time.time()
+    ended = con.execute("UPDATE enrollments SET until=? WHERE course_id=? AND"
+                        " until IS NULL", (now, cid)).rowcount
+    con.execute("DELETE FROM class_schedule WHERE course_id=?", (cid,))
+    o = con.execute("SELECT id FROM class_sessions WHERE course_id=? AND"
+                    " status='open'", (cid,)).fetchone()
+    if o:
+        from . import classroom
+        classroom.end_class(con, session_id=o["id"], actor_id=user["id"])
+    try:
+        con.execute("UPDATE room_bookings SET state='cancelled' WHERE"
+                    " course_id=? AND starts>? AND state='booked'", (cid, now))
+    except Exception:                                        # noqa: BLE001
+        pass
+    con.execute("UPDATE courses SET active=0 WHERE id=?", (cid,))
+    con.commit()
+    return {"ok": True, "seats_ended": ended}
+
+
+def tutoring_rows(con, course_ids=None, state: str = "") -> list:
+    where, args = [], []
+    if course_ids is not None:
+        if not course_ids:
+            return []
+        where.append(f"t.course_id IN ({','.join('?' * len(course_ids))})")
+        args += list(course_ids)
+    if state:
+        where.append("t.state=?"); args.append(state)
+    rows = [dict(r) for r in con.execute(
+        "SELECT t.*, COALESCE(u.name,'') AS who, COALESCE(u.email,'') AS email,"
+        " c.name AS course, COALESCE(k.name,'') AS taken_by_name"
+        " FROM tutoring_requests t JOIN courses c ON c.id=t.course_id"
+        " LEFT JOIN users u ON u.id=t.user_id LEFT JOIN users k ON k.id=t.taken_by"
+        + (" WHERE " + " AND ".join(where) if where else "")
+        + " ORDER BY CASE t.state WHEN 'open' THEN 0 ELSE 1 END, t.created_at DESC"
+        " LIMIT 300", args)]
+    import json as _j
+    for r in rows:
+        try:
+            r["availability"] = _j.loads(r["availability"] or "[]")
+        except ValueError:
+            r["availability"] = []
+        r["when"] = " · ".join(
+            f"{WEEKDAYS[int(a.get('weekday', 0)) % 7]} {_hm(int(a.get('from_min', 0)))}"
+            f"–{_hm(int(a.get('to_min', 0)))}" for a in r["availability"]) or "any time"
+    return rows
+
+
+@router.get("/api/learning/tutoring")
+def ops_tutoring(state: str = "open", user=Depends(current_user),
+                 con=Depends(get_con)):
+    """Who is asking for more help, across the courses this person may
+    see — every course for an admin or staff, their own for a tutor."""
+    from . import community as CM
+    if user["is_admin"] or CM.is_staff(con, user) or user["role"] in ("employee", "volunteer"):
+        ids = None
+    else:
+        ids = [r["id"] for r in con.execute(
+            "SELECT id FROM courses WHERE teacher_id=?", (user["id"],))]
+    return {"requests": tutoring_rows(con, ids, state if state != "all" else ""),
+            "note": "Availability is what the student said, as weekday "
+                    "windows — the same shape as the rota, so a free "
+                    "Tuesday afternoon can be matched by eye."}
+
+
+class TutoringStateBody(BaseModel):
+    state: str = "taken"
+    reply: str = ""
+
+
+@router.post("/api/learning/tutoring/{rid}/state")
+def ops_tutoring_state(rid: int, body: TutoringStateBody,
+                       user=Depends(current_user), con=Depends(get_con)):
+    r = con.execute("SELECT * FROM tutoring_requests WHERE id=?", (rid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such request")
+    from . import community as CM
+    if not (may_edit(con, user, r["course_id"]) or CM.is_staff(con, user)
+            or user["role"] in ("employee", "volunteer")):
+        raise HTTPException(403, "not your class to answer for")
+    if body.state not in ("open", "taken", "done", "declined"):
+        raise HTTPException(400, "state is open, taken, done or declined")
+    con.execute("UPDATE tutoring_requests SET state=?, taken_by=?, reply=?,"
+                " updated_at=? WHERE id=?",
+                (body.state, user["id"] if body.state in ("taken", "done") else r["taken_by"],
+                 body.reply.strip()[:1000] or r["reply"], time.time(), rid))
+    con.commit()
+    if body.reply.strip() or body.state != r["state"]:
+        from . import notify
+        notify.push(con, "About your tutoring request",
+                    body.reply.strip() or f"marked {body.state}",
+                    kind="learning", user_id=r["user_id"])
     return {"ok": True}
 
 

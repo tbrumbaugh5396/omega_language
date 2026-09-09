@@ -438,12 +438,37 @@
         <ul class="lrn-list">${d.quizzes.map((q) =>
         `<li><a href="#" data-q="${q.id}">${esc(q.title)}</a>
           <span class="lrn-meta">${q.attempt ? q.attempt.state : ""}</span></li>`).join("")}</ul>` : ""}
+      ${(d.schedule || []).length ? `<h3>When it meets</h3>
+        <p>${d.schedule.map((x) => `${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"][x.weekday]} ${
+          String(Math.floor(x.from_min / 60)).padStart(2, "0")}:${String(x.from_min % 60).padStart(2, "0")}–${
+          String(Math.floor(x.to_min / 60)).padStart(2, "0")}:${String(x.to_min % 60).padStart(2, "0")}${
+          x.room ? " in " + esc(x.room) : ""}`).join(" · ")}</p>` : ""}
+      ${(d.materials || []).length ? `<h3>Materials</h3>
+        ${d.materials.map((m) => `<div class="lrn-file">
+          <a href="/media/${esc(m.path)}" target="_blank" rel="noopener">${esc(m.original || m.kind)}</a>
+          <span class="lrn-meta">${esc(m.kind)}</span></div>`).join("")}` : ""}
+      ${!d.may_edit ? `<h3>Need more help?</h3>
+        <div id="lrn-tutoring">${(d.my_tutoring || []).some((r) => r.state === "open")
+          ? `<p class="lrn-meta">You've asked for tutoring — the tutor has it.
+             <button class="lrn-btn sm" id="lrn-tut-withdraw">Withdraw</button></p>`
+          : (d.my_tutoring || [])[0] && d.my_tutoring[0].reply
+            ? `<p class="lrn-meta">Last time: ${esc(d.my_tutoring[0].state)}${d.my_tutoring[0].reply ? " — " + esc(d.my_tutoring[0].reply) : ""}</p>
+               <button class="lrn-btn" id="lrn-tut-ask">Ask for tutoring</button>`
+            : `<button class="lrn-btn" id="lrn-tut-ask">Ask for tutoring</button>`}</div>` : ""}
       <h3>Discussion</h3>
       <div id="lrn-board"><p class="lrn-meta">Loading…</p></div>
       <h3>Calendar</h3>
       <div id="lrn-cal-box"><p class="lrn-meta">Loading the calendar…</p></div>`;
     document.getElementById("lrn-back").onclick = home;
     boardList(cid, document.getElementById("lrn-board"));
+    const ask = document.getElementById("lrn-tut-ask");
+    if (ask) ask.onclick = () => tutoringForm(cid);
+    const wd = document.getElementById("lrn-tut-withdraw");
+    if (wd) wd.onclick = async () => {
+      const open = (d.my_tutoring || []).find((r) => r.state === "open");
+      try { await api(`/api/learn/tutoring/${open.id}/withdraw`, {}); course(cid); }
+      catch (err) { toast(err.message); }
+    };
     calendar(cid).catch(() => {
       const box = document.getElementById("lrn-cal-box");
       if (box) box.innerHTML = "";
@@ -1383,6 +1408,36 @@
     });
   }
 
+  /* ── asking for tutoring: what you need, and when you could ──────────── */
+  function tutoringForm(cid) {
+    const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const host = document.getElementById("lrn-tutoring");
+    host.innerHTML = `<form id="lrn-tut-form">
+      <label class="lrn-meta">What would help?<br>
+        <textarea name="note" rows="3" style="width:100%" placeholder="e.g. the past tense — I keep mixing it up"></textarea></label>
+      <p class="lrn-meta" style="margin:10px 0 4px">When could you do it? Tick days and give a window.</p>
+      <div id="lrn-tut-days">${DAYS.map((d, i) => `<div class="lrn-tut-day">
+        <label><input type="checkbox" name="d${i}"> ${d}</label>
+        <input type="time" name="f${i}" value="17:00"> <span class="lrn-meta">to</span>
+        <input type="time" name="t${i}" value="19:00"></div>`).join("")}</div>
+      <p class="lrn-meta" id="lrn-tut-msg"></p>
+      <button class="lrn-btn primary" type="submit">Send</button>
+      <button class="lrn-btn" type="button" id="lrn-tut-cancel">Cancel</button>
+    </form>`;
+    const mins = (v) => { const [h, m] = String(v || "0:0").split(":").map(Number); return h * 60 + (m || 0); };
+    document.getElementById("lrn-tut-cancel").onclick = () => course(cid);
+    document.getElementById("lrn-tut-form").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const availability = DAYS.map((_, i) => f[`d${i}`].checked
+        ? { weekday: i, from_min: mins(f[`f${i}`].value), to_min: mins(f[`t${i}`].value) } : null).filter(Boolean);
+      try {
+        await api(`/api/learn/courses/${cid}/tutoring`, { note: f.note.value, availability });
+        toast("asked — the tutor has it"); course(cid);
+      } catch (err) { document.getElementById("lrn-tut-msg").textContent = err.message; }
+    };
+  }
+
   /* ── the register: the teacher's sheet, on the page they are already on ──
      Four states per student, the same four the ops roster has, through the
      same door route — so a teacher in the room with a phone need not go
@@ -1779,6 +1834,24 @@
     if (session) { side.hidden = false; ov.querySelector("#call-panel").textContent = "Hide chat";
       panel = classPanel(side, session, { me: MYID, share: true, inCall: true }); }
   }
+
+  /* ── the device beacon: this page is its own shell ──────────────────── */
+  try {
+    if (Date.now() - (+sessionStorage.getItem("sf_beacon_at") || 0) >= 30 * 60 * 1000) {
+      sessionStorage.setItem("sf_beacon_at", String(Date.now()));
+      let vid = localStorage.getItem("sf_vid");
+      if (!vid) { vid = crypto.randomUUID(); localStorage.setItem("sf_vid", vid); }
+      fetch("/api/device", { method: "POST", keepalive: true,
+        headers: { "Content-Type": "application/json",
+                   ...(token() ? { Authorization: "Bearer " + token() } : {}) },
+        body: JSON.stringify({ visitor_id: vid, surface: "learn",
+          tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "",
+          lang: navigator.language || "", platform: navigator.platform || "",
+          screen: `${screen.width}x${screen.height}@${devicePixelRatio || 1}`,
+          touch: (navigator.maxTouchPoints || 0) > 0, path: location.pathname }) })
+        .catch(() => {});
+    }
+  } catch (e) {}
 
   /* ── boot ─────────────────────────────────────────────────────────────── */
   if (!token()) { needSignIn(); return; }

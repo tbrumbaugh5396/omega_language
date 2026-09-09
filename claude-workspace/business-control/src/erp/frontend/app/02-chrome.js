@@ -105,6 +105,10 @@ const TABS = [
     roles: ["admin", "employee", "teacher"] },
   { id: "bookings", label: "Bookings", icon: "calendar", group: "Sell",
     roles: ["admin", "employee"] },
+  { id: "classes", label: "Classes", icon: "users", group: "Operate",
+    roles: ["admin", "employee", "teacher"] },
+  { id: "devices", label: "Devices", icon: "shield2", group: "Company",
+    roles: ["admin"] },
   // Every connection lives in one group. Four of them earned bespoke
   // screens because they do more than connect — Slack reads channels,
   // Trello syncs cards — and the rest share one screen whose whole story
@@ -158,7 +162,7 @@ const TABS = [
    at stand-up and the lock shown here can never speak different names. */
 const TAB_CAP = {
   shop: "selling", orders: "selling", customers: "selling",
-  bookings: "selling",
+  bookings: "selling", classes: "learning",
   promos: "marketing", email: "marketing", experiments: "marketing",
   clients: "crm", outreach: "crm",
   clock: "workforce", staff: "workforce",
@@ -409,7 +413,7 @@ async function render() {
     docs: renderDocs, clients: renderClients,
     staff: renderStaff, events: renderEvents, customers: renderCustomers,
     kiosks: renderKiosks, enrol: renderEnrol, rooms: renderRooms,
-    bookings: renderBookings,
+    bookings: renderBookings, classes: renderClasses, devices: renderDevices,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

@@ -2320,6 +2320,46 @@ ok(_bc3.execute("SELECT COUNT(*) FROM appointment_answers a JOIN"
    "answers are rows, not a blob: 'which dogs are reactive' is a query, "
    "not a grep")
 _bc3.close()
+# --- devices: who has been here, and roughly where they are --------------
+_UA_PHONE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+ok(c.post("/api/device", headers={"User-Agent": _UA_PHONE}, json={
+    "visitor_id": "vis-dv", "tz": "Europe/Madrid", "lang": "es-ES",
+    "screen": "390x844@3", "platform": "iPhone", "touch": True,
+    "surface": "storefront"}).status_code == 200,
+   "a browser reports what it is: timezone, language, screen, platform")
+c.post("/api/device", headers={"User-Agent": _UA_PHONE}, json={
+    "visitor_id": "vis-dv", "tz": "Europe/Madrid", "lang": "es-ES",
+    "screen": "390x844@3", "platform": "iPhone", "touch": True,
+    "surface": "storefront"})
+c.get("/learn", headers={"Accept": "text/html",
+                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/120.0"})
+c.get("/api/products", headers={"Accept": "application/json",
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0) Chrome/120.0"})
+_dv = c.get("/api/admin/devices?days=1", headers=A).json()["devices"]
+_ph = [d for d in _dv if d["visitor_id"] == "vis-dv"]
+ok(len(_ph) == 1 and _ph[0]["hits"] == 2 and _ph[0]["browser"] == "Safari"
+   and _ph[0]["os"] == "iOS" and _ph[0]["tz"] == "Europe/Madrid",
+   "the same browser coming back is one device with a growing count, not "
+   "a new row every time — read as Safari on iOS, clock in Madrid")
+_win = [d for d in _dv if d["os"] == "Windows"]
+ok(len(_win) == 1 and _win[0]["surface"] == "learn" and not _win[0]["visitor_id"],
+   "a page load with no script at all is still a sighting — address and "
+   "user-agent are enough — while an API call is not: one write per "
+   "page, not one per click")
+_an = c.get("/api/admin/devices/analysis?days=1", headers=A).json()
+ok(_an["devices"] >= 2 and any(x["k"] == "Europe/Madrid" for x in _an["by_tz"])
+   and any(x["k"] == "iOS" for x in _an["by_os"])
+   and any(p["path"] == "/learn" for p in _an["paths"]),
+   "the analysis counts by timezone, system, and page — where a browser's "
+   "clock and keyboard think it is, said as a guess and never a claim")
+ok(c.get("/api/admin/devices", headers={"Authorization": "Bearer nope"}
+         ).status_code == 401, "and it is the office's to read, not the shop's")
+ok("deviceBeacon" in open("src/storefront/frontend/store.js").read()
+   and "opsDeviceBeacon" in ops_app_js() and "renderDevices" in ops_app_js(),
+   "the storefront and the office both report in, and the office has "
+   "the screen to read it on")
+
 # --- the account door: a stored token is a claim, not a fact ------------
 _sfj = open("src/storefront/frontend/store.js").read()
 _alive = _sfj.split("async function tokenAlive")[1].split("function signIn(")[0]

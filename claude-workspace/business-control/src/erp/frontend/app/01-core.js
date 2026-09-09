@@ -803,3 +803,29 @@ function editRow(kind, row, refresh) {
     } catch (e) { toast(e.message); }
   };
 }
+
+
+/* The office's browsers are devices too — a staff laptop that signs in
+   from a new address is exactly the kind of thing the Devices tab is
+   for. Same beacon as the storefront, marked as the ops surface. */
+(function opsDeviceBeacon() {
+  try {
+    const key = "bc_beacon_at";
+    if (Date.now() - (+sessionStorage.getItem(key) || 0) < 30 * 60 * 1000) return;
+    sessionStorage.setItem(key, String(Date.now()));
+    let vid = localStorage.getItem("sf_vid");
+    if (!vid) { vid = crypto.randomUUID(); localStorage.setItem("sf_vid", vid); }
+    const tok = localStorage.getItem("token")
+      || (() => { try { return JSON.parse(localStorage.getItem("bc_user") || "{}").token; } catch { return null; } })();
+    fetch("/api/device", { method: "POST", keepalive: true,
+      headers: { "Content-Type": "application/json",
+                 ...(tok ? { Authorization: "Bearer " + tok } : {}) },
+      body: JSON.stringify({
+        visitor_id: vid, surface: "ops",
+        tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "",
+        lang: navigator.language || "", platform: navigator.platform || "",
+        screen: `${screen.width}x${screen.height}@${devicePixelRatio || 1}`,
+        touch: (navigator.maxTouchPoints || 0) > 0, path: location.pathname }) })
+      .catch(() => {});
+  } catch (e) {}
+})();

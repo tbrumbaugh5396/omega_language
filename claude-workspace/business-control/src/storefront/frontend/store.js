@@ -79,6 +79,27 @@ function buildPickers() {
 // ---------- visitor id + funnel/pixel events ----------
 const VID = localStorage.getItem("sf_vid") || crypto.randomUUID();
 localStorage.setItem("sf_vid", VID);
+/* What this browser is, said once per visit: timezone, language, screen,
+   platform. Enough to recognise the same device next week and to say
+   roughly where it is; nothing that identifies a person. */
+(function deviceBeacon(surface) {
+  try {
+    const key = "sf_beacon_at";
+    if (Date.now() - (+sessionStorage.getItem(key) || 0) < 30 * 60 * 1000) return;
+    sessionStorage.setItem(key, String(Date.now()));
+    const tok = (() => { try { return JSON.parse(localStorage.getItem("sf_support") || "{}").token; } catch { return null; } })();
+    fetch("/api/device", { method: "POST", keepalive: true,
+      headers: { "Content-Type": "application/json",
+                 ...(tok ? { Authorization: "Bearer " + tok } : {}) },
+      body: JSON.stringify({
+        visitor_id: VID, surface,
+        tz: (Intl.DateTimeFormat().resolvedOptions() || {}).timeZone || "",
+        lang: navigator.language || "", platform: navigator.platform || "",
+        screen: `${screen.width}x${screen.height}@${devicePixelRatio || 1}`,
+        touch: (navigator.maxTouchPoints || 0) > 0, path: location.pathname }) })
+      .catch(() => {});
+  } catch (e) {}
+})("storefront");
 const qs = new URLSearchParams(location.search);
 // Affiliate attribution with an expiry window — a click shouldn't earn
 // commission forever. Window comes from the server (default 30 days).

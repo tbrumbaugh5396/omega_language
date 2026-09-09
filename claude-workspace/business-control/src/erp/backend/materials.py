@@ -29,6 +29,7 @@ import os
 import secrets
 import time
 
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from . import tenancy
@@ -81,9 +82,49 @@ CREATE INDEX IF NOT EXISTS learning_materials_session
 """
 
 
+TRAINING_TABLES = """
+-- A one-time training: a film and a link. Not a course — nobody enrols,
+-- there is no register, the link IS the door. For "here is the new
+-- system, everybody watch this by Friday", which is a thing that
+-- happens far more often than a curriculum does.
+CREATE TABLE IF NOT EXISTS trainings (
+  id INTEGER PRIMARY KEY,
+  token TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  blurb TEXT DEFAULT '',
+  material_id INTEGER DEFAULT 0,
+  created_by INTEGER,
+  active INTEGER DEFAULT 1,
+  created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS training_views (
+  training_id INTEGER NOT NULL,
+  who TEXT NOT NULL,                 -- user:<id> or visitor:<vid>
+  name TEXT DEFAULT '',
+  first_at REAL NOT NULL,
+  last_at REAL NOT NULL,
+  views INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (training_id, who)
+);
+"""
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    con.executescript(TRAINING_TABLES)
+    try:
+        # A film or a deck for the whole class, not one lesson of it.
+        con.execute("ALTER TABLE learning_materials ADD COLUMN course_id INTEGER")
+    except Exception:                                        # noqa: BLE001
+        pass
     con.commit()
+
+
+def of_course(con, course_id: int) -> list:
+    return [dict(r) for r in con.execute(
+        "SELECT id, kind, path, original, mime, bytes, created_at"
+        " FROM learning_materials WHERE course_id=? ORDER BY id DESC",
+        (int(course_id),)).fetchall()]
 
 
 # ── the store ────────────────────────────────────────────────────────────────
@@ -156,13 +197,14 @@ def save(data: bytes, *, allow=("image", "audio", "video"),
 
 
 def record(con, *, saved: dict, owner_id: int, lesson_id=None,
-           session_id=None, original: str = "") -> int:
+           session_id=None, original: str = "", course_id=None) -> int:
     cur = con.execute(
         "INSERT INTO learning_materials(lesson_id,session_id,owner_id,kind,"
-        " path,original,mime,bytes,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        " path,original,mime,bytes,created_at,course_id)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
         (lesson_id, session_id, owner_id, saved["kind"], saved["path"],
          str(original or "")[:200], saved["mime"], saved["bytes"],
-         time.time()))
+         time.time(), course_id))
     return cur.lastrowid
 
 
@@ -288,6 +330,112 @@ async def ops_lesson_material(lid: int, request: Request,
                  original=name)
     con.commit()
     return {"id": mid, **saved}
+
+
+@router.post("/api/learning/courses/{cid}/material")
+async def ops_course_material(cid: int, request: Request,
+                              user=Depends(current_user),
+                              con=Depends(get_con)):
+    """A deck or a film for the class as a whole — the slides you put
+    on every week, the recording of the intro — rather than a drill on
+    one lesson. Shows on the course page and in every session's Shared
+    tab."""
+    if con.execute("SELECT 1 FROM courses WHERE id=?", (cid,)).fetchone() is None:
+        raise HTTPException(404, "course not found")
+    if not may_edit(con, user, cid):
+        raise HTTPException(403, "you do not teach this course")
+    data = await read_upload(request)
+    name = request.headers.get("x-filename", "")
+    saved = save(data, allow=("image", "audio", "video", "document"),
+                 filename=name)
+    mid = record(con, saved=saved, owner_id=user["id"], course_id=cid,
+                 original=name)
+    con.commit()
+    return {"id": mid, **saved}
+
+
+# ── trainings: a film and a link ─────────────────────────────────────────────
+
+class TrainingBody(BaseModel):
+    title: str = ""
+    blurb: str = ""
+    active: bool = True
+
+
+@router.get("/api/learning/trainings")
+def ops_trainings(user=Depends(current_user), con=Depends(get_con)):
+    from .main import base_url
+    rows = [dict(r) for r in con.execute(
+        "SELECT t.*, COALESCE(u.name,'') AS by_name, m.kind, m.path, m.original,"
+        " (SELECT COUNT(*) FROM training_views v WHERE v.training_id=t.id) AS viewers,"
+        " (SELECT COALESCE(SUM(views),0) FROM training_views v WHERE v.training_id=t.id) AS views"
+        " FROM trainings t LEFT JOIN users u ON u.id=t.created_by"
+        " LEFT JOIN learning_materials m ON m.id=t.material_id"
+        " ORDER BY t.created_at DESC")]
+    for r in rows:
+        r["url"] = f"{base_url()}/training/{r['token']}"
+        r["watched_by"] = [dict(v) for v in con.execute(
+            "SELECT name, who, views, last_at FROM training_views"
+            " WHERE training_id=? ORDER BY last_at DESC LIMIT 100", (r["id"],))]
+    return {"trainings": rows,
+            "note": "A training is a film and a link. Nobody enrols; the "
+                    "link is the door. Who opened it is counted by account "
+                    "when signed in and by browser when not."}
+
+
+@router.post("/api/learning/trainings")
+def ops_training_create(body: TrainingBody, user=Depends(current_user),
+                        con=Depends(get_con)):
+    from . import community as CM
+    if not (user["is_admin"] or CM.is_staff(con, user)):
+        raise HTTPException(403, "staff make trainings")
+    if not body.title.strip():
+        raise HTTPException(400, "a training needs a title")
+    import secrets as _sec
+    cur = con.execute(
+        "INSERT INTO trainings(token,title,blurb,created_by,active,created_at)"
+        " VALUES(?,?,?,?,?,?)",
+        (_sec.token_urlsafe(12), body.title.strip()[:160],
+         body.blurb.strip()[:2000], user["id"], 1 if body.active else 0,
+         time.time()))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+@router.post("/api/learning/trainings/{tid}/film")
+async def ops_training_film(tid: int, request: Request,
+                            user=Depends(current_user), con=Depends(get_con)):
+    """The film itself (or a deck, or a PDF): raw bytes, one per
+    training, replacing whatever was there."""
+    t = con.execute("SELECT * FROM trainings WHERE id=?", (tid,)).fetchone()
+    if t is None:
+        raise HTTPException(404, "no such training")
+    from . import community as CM
+    if not (user["is_admin"] or CM.is_staff(con, user)):
+        raise HTTPException(403, "staff make trainings")
+    data = await read_upload(request)
+    name = request.headers.get("x-filename", "")
+    saved = save(data, allow=("video", "audio", "document", "image"),
+                 filename=name)
+    mid = record(con, saved=saved, owner_id=user["id"], original=name)
+    if t["material_id"]:
+        delete_material(con, t["material_id"])
+    con.execute("UPDATE trainings SET material_id=? WHERE id=?", (mid, tid))
+    con.commit()
+    return {"ok": True, "material_id": mid, **saved}
+
+
+@router.post("/api/learning/trainings/{tid}")
+def ops_training_update(tid: int, body: TrainingBody,
+                        user=Depends(current_user), con=Depends(get_con)):
+    from . import community as CM
+    if not (user["is_admin"] or CM.is_staff(con, user)):
+        raise HTTPException(403, "staff make trainings")
+    con.execute("UPDATE trainings SET title=?, blurb=?, active=? WHERE id=?",
+                (body.title.strip()[:160] or "Training", body.blurb.strip()[:2000],
+                 1 if body.active else 0, tid))
+    con.commit()
+    return {"ok": True}
 
 
 @router.post("/api/learning/sessions/{sid}/material")

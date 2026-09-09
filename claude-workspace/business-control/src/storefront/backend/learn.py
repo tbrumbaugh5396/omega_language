@@ -22,6 +22,7 @@ and — when the course names a product — a link to buy the seat.
 import os
 import re
 import time
+import html as _html
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
@@ -174,6 +175,12 @@ def course_view(cid: int, user=Depends(current_customer),
     return {"course": {k: c[k] for k in ("id", "name", "language", "level",
                                          "blurb")},
             "may_edit": L.may_edit(con, user, cid),
+            "materials": MAT.of_course(con, cid),
+            "schedule": L.schedule_of(con, cid),
+            "my_tutoring": [dict(r) for r in con.execute(
+                "SELECT id, state, note, reply, created_at FROM tutoring_requests"
+                " WHERE course_id=? AND user_id=? ORDER BY id DESC LIMIT 3",
+                (cid, user["id"]))],
             "lessons": lessons, "quizzes": quizzes,
             "progress": L.course_progress(con, cid, user["id"]),
             "session": session,
@@ -600,6 +607,151 @@ def class_say(sid: int, body: ChatBody, user=Depends(current_customer),
     return {"ok": True, "id": cur.lastrowid}
 
 
+# ── asking for more: tutoring ────────────────────────────────────────────────
+
+class TutoringBody(BaseModel):
+    note: str = ""
+    availability: list = []
+
+
+@router.post("/api/learn/courses/{cid}/tutoring")
+def ask_tutoring(cid: int, body: TutoringBody, user=Depends(current_customer),
+                 con=Depends(get_con)):
+    """A student asks for extra help, saying when they could take it.
+    One open ask per person per course — asking twice is the same ask,
+    updated, not a second row in somebody's queue."""
+    _require_cap("learning")
+    if not L.enrolled_in(con, cid, user["id"]):
+        raise HTTPException(403, "you are not in this course")
+    slots = []
+    for a in body.availability[:14]:
+        try:
+            wd, f, t = int(a.get("weekday", 0)), int(a.get("from_min", 0)), int(a.get("to_min", 0))
+        except (AttributeError, ValueError, TypeError):
+            continue
+        if 0 <= wd <= 6 and 0 <= f < t <= 24 * 60:
+            slots.append({"weekday": wd, "from_min": f, "to_min": t})
+    import json as _j
+    now = time.time()
+    r = con.execute("SELECT id FROM tutoring_requests WHERE course_id=? AND"
+                    " user_id=? AND state='open'", (cid, user["id"])).fetchone()
+    if r:
+        con.execute("UPDATE tutoring_requests SET note=?, availability=?,"
+                    " updated_at=? WHERE id=?",
+                    (body.note.strip()[:1000], _j.dumps(slots), now, r["id"]))
+        rid = r["id"]
+    else:
+        cur = con.execute(
+            "INSERT INTO tutoring_requests(course_id,user_id,note,availability,"
+            "state,created_at,updated_at) VALUES(?,?,?,?,'open',?,?)",
+            (cid, user["id"], body.note.strip()[:1000], _j.dumps(slots), now, now))
+        rid = cur.lastrowid
+        c = con.execute("SELECT name, teacher_id FROM courses WHERE id=?", (cid,)).fetchone()
+        from erp.backend import notify
+        notify.push(con, f"{user['name']} is asking for tutoring",
+                    f"{c['name']} — see Classes", kind="learning",
+                    user_id=c["teacher_id"] or None)
+    con.commit()
+    return {"ok": True, "id": rid}
+
+
+@router.post("/api/learn/tutoring/{rid}/withdraw")
+def withdraw_tutoring(rid: int, user=Depends(current_customer),
+                      con=Depends(get_con)):
+    _require_cap("learning")
+    con.execute("UPDATE tutoring_requests SET state='declined', reply='withdrawn',"
+                " updated_at=? WHERE id=? AND user_id=? AND state='open'",
+                (time.time(), rid, user["id"]))
+    con.commit()
+    return {"ok": True}
+
+
+# ── a training: the link is the door ─────────────────────────────────────────
+
+@router.get("/training/{token}", response_class=HTMLResponse)
+def training_page(token: str, request: Request, con=Depends(get_con)):
+    """One film, one page, no sign-in. Who watched is counted by account
+    when the browser carries one, by visitor id when it does not, so the
+    office can see the list without anybody having to register to watch
+    a five-minute demo."""
+    _require_cap("learning")
+    t = con.execute("SELECT t.*, m.kind, m.path, m.mime, m.original FROM trainings t"
+                    " LEFT JOIN learning_materials m ON m.id=t.material_id"
+                    " WHERE t.token=?", (token,)).fetchone()
+    if t is None or not t["active"]:
+        return HTMLResponse("<h3>No training at this address.</h3>", 404)
+    from erp.backend.main import CFG
+    e = _html.escape
+    shop = CFG.get("brand_name") or "this shop"
+    media = ""
+    if t["kind"] == "video":
+        media = f'<video controls playsinline preload="metadata" src="/media/{e(t["path"])}"></video>'
+    elif t["kind"] == "audio":
+        media = f'<audio controls src="/media/{e(t["path"])}"></audio>'
+    elif t["kind"] == "image":
+        media = f'<img src="/media/{e(t["path"])}" alt="">'
+    elif t["kind"] == "document":
+        media = (f'<p><a class="btn" href="/media/{e(t["path"])}" target="_blank" rel="noopener">'
+                 f'Open {e(t["original"] or "the file")}</a></p>')
+    else:
+        media = '<p class="k">The film is not up yet — check back shortly.</p>'
+    return HTMLResponse(f"""<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>{e(t['title'])} — {e(shop)}</title>
+<style>:root{{color-scheme:light}}
+body{{font:16px/1.55 system-ui,sans-serif;max-width:48rem;margin:4vh auto;
+padding:0 1.2rem;color:#16202b;background:#fff}}
+h1{{font-size:1.5rem;margin:0 0 .2rem}} .k{{color:#5b6b7c;font-size:.92rem}}
+video,img{{width:100%;border-radius:.6rem;background:#000;margin:1rem 0}}
+audio{{width:100%;margin:1rem 0}}
+.btn{{display:inline-block;padding:.6rem 1rem;border-radius:.5rem;
+background:#4634d9;color:#fff;text-decoration:none}}
+.blurb{{white-space:pre-wrap}}
+</style>
+<h1>{e(t['title'])}</h1>
+<p class=k>{e(shop)} · a training</p>
+{media}
+<p class=blurb>{e(t['blurb'])}</p>
+<p class=k id=seen></p>
+<script>
+(function(){{
+  var tok=null; try{{tok=JSON.parse(localStorage.getItem("sf_support")||"{{}}").token;}}catch(e){{}}
+  var vid=localStorage.getItem("sf_vid"); if(!vid){{vid=crypto.randomUUID(); localStorage.setItem("sf_vid",vid);}}
+  fetch("/api/learn/training/{e(token)}/seen",{{method:"POST",headers:Object.assign({{"Content-Type":"application/json"}},
+    tok?{{Authorization:"Bearer "+tok}}:{{}}),body:JSON.stringify({{visitor_id:vid}})}})
+    .then(function(r){{return r.json();}}).then(function(j){{
+      var s=document.getElementById("seen"); if(s&&j.as) s.textContent="Counted as watched by "+j.as+".";
+    }}).catch(function(){{}});
+}})();
+</script>""")
+
+
+class SeenBody(BaseModel):
+    visitor_id: str = ""
+
+
+@router.post("/api/learn/training/{token}/seen")
+def training_seen(token: str, body: SeenBody, request: Request,
+                  con=Depends(get_con)):
+    _require_cap("learning")
+    t = con.execute("SELECT id FROM trainings WHERE token=? AND active=1",
+                    (token,)).fetchone()
+    if t is None:
+        raise HTTPException(404, "no such training")
+    from erp.backend import auth
+    tok = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    u = auth.user_for_token(con, tok) if tok else None
+    who = f"user:{u['id']}" if u else f"visitor:{(body.visitor_id or 'anon')[:64]}"
+    name = u["name"] if u else ""
+    now = time.time()
+    con.execute("INSERT INTO training_views(training_id,who,name,first_at,last_at,views)"
+                " VALUES(?,?,?,?,?,1) ON CONFLICT(training_id,who) DO UPDATE SET"
+                " last_at=excluded.last_at, views=views+1, name=excluded.name",
+                (t["id"], who, name, now, now))
+    con.commit()
+    return {"ok": True, "as": name or "this browser"}
+
+
 # ── the course board ─────────────────────────────────────────────────────────
 
 def _seat(con, user, cid: int):
@@ -717,6 +869,11 @@ def class_shared(sid: int, user=Depends(current_customer),
                       "title": m["original"] or m["kind"],
                       "url": f"/media/{m['path']}", "bytes": m["bytes"],
                       "at": m["created_at"]})
+    for m in MAT.of_course(con, s["course_id"]):
+        items.append({"id": m["id"], "kind": m["kind"],
+                      "title": m["original"] or f"course {m['kind']}",
+                      "url": f"/media/{m['path']}", "bytes": m["bytes"],
+                      "at": m["created_at"], "course": True})
     if s["lesson_id"]:
         for m in con.execute(
                 "SELECT id, kind, path, original, bytes, created_at"
@@ -1183,6 +1340,7 @@ def learn_page(con=Depends(get_con)):
  .lrn-dot{{width:8px;height:8px;border-radius:50%;background:#3ccf8e;flex:none}}
  .lrn-shared{{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.15)}}
  .lrn-panel-host{{border:1px solid rgba(127,127,127,.25);border-radius:12px;margin:0 0 14px;display:flex;flex-direction:column}}
+ .lrn-tut-day{{display:flex;gap:8px;align-items:center;padding:3px 0}} .lrn-tut-day label{{min-width:60px}}
  .lrn-reg{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.2)}}
  .lrn-reg img{{width:34px;height:34px;border-radius:50%;object-fit:cover;background:rgba(127,127,127,.2)}}
  .lrn-reg .lrn-regbtns{{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}}

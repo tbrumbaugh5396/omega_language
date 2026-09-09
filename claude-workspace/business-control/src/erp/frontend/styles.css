@@ -1999,3 +1999,30 @@ body.lane-on { overflow: hidden; }
   .bk-qrow { grid-template-columns: minmax(0, 1fr) auto; }
   .bk-qrow [data-qchoices] { grid-column: 1 / -1; }
 }
+
+/* Classes: name, when, how many, open. */
+.doc-line.cl-line { grid-template-columns: 1.3fr 1.4fr auto auto; }
+.cl-when { font-size: .9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-count { white-space: nowrap; }
+.cl-slot { display: grid; grid-template-columns: auto auto auto auto minmax(0, 1fr) auto;
+  gap: 6px; align-items: center; margin: 6px 0; }
+.cl-link { font-size: .8em; word-break: break-all; }
+@media (max-width: 760px) {
+  .doc-line.cl-line { grid-template-columns: minmax(0, 1fr) auto; row-gap: 6px; }
+  .cl-line .cl-when { grid-column: 1 / -1; white-space: normal; }
+  .cl-slot { grid-template-columns: 1fr 1fr; }
+}
+/* Devices: bars that read as a list. */
+.dv-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center;
+  padding: 3px 0; font-size: .9em; position: relative; }
+.dv-bar i { display: block; grid-column: 1 / -1; height: 4px; background: var(--accent); border-radius: 2px; opacity: .55; }
+.dv-k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-days { display: flex; gap: 3px; align-items: flex-end; height: 90px; }
+.dv-day { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+.dv-day i { display: block; width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; min-height: 2px; }
+.dv-day small { font-size: 9px; color: var(--dim); margin-top: 2px; }
+.dv-q { margin-left: 10px; max-width: 280px; }
+/* A picker in a card head wraps under the title on a phone rather than
+   pushing the card past the page. */
+.cl-people .card-head { flex-wrap: wrap; }
+#cl-who { max-width: 100%; min-width: 0; }
