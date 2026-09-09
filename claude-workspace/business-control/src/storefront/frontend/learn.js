@@ -909,8 +909,9 @@
 
   /* ── Profile: who I am, my ID card, my loans, my data ─────────────────── */
   async function profileView() {
-    let card = null, loans = [], me = null;
+    let card = null, loans = [], me = null, prof = null;
     try { me = await api("/api/learn/me"); } catch (e) {}
+    try { prof = await api("/api/learn/me/profile"); } catch (e) {}
     try { card = await api("/api/learn/me/card"); } catch (e) {}
     try { loans = await api("/api/learn/loans"); } catch (e) {}
     const day = (t) => t ? new Date(t * 1000).toLocaleDateString() : "";
@@ -953,6 +954,25 @@
             missing.</p>
         </div>
       </div>` : ""}
+      ${prof ? `<h3>About me</h3>
+      <p class="lrn-meta">What the school knows about you, as you may see
+        and correct it. Fill in what you are happy to share — where you
+        are from, what you already speak, what you have studied — it helps
+        the teacher place you. Nothing here is required.</p>
+      <div class="lrn-about">${prof.fields.map((k) => {
+        const long = ["education", "goals", "needs", "address"].includes(k);
+        const lab = k.replace(/_/g, " ");
+        return long
+          ? `<div class="wide"><label>${lab}</label><textarea data-af="${k}" rows="2">${esc(prof.profile[k] || "")}</textarea></div>`
+          : `<div><label>${lab}${k === "birth_date" && prof.profile.age != null
+              ? ` <span class="lrn-meta">· ${prof.profile.age}</span>` : ""}</label>
+            <input data-af="${k}" value="${esc(prof.profile[k] || "")}"${
+              k === "birth_date" ? ' type="date"' : k === "phone" ? ' type="tel"' : ""}></div>`;
+      }).join("")}</div>
+      ${Object.keys(prof.profile.extra || {}).length ? `<p class="lrn-meta">The school also has on file: ${
+        Object.entries(prof.profile.extra).map(([k, v]) => `<b>${esc(k)}</b> ${esc(v)}`).join(" · ")}</p>` : ""}
+      <p><button class="lrn-btn sm" id="pr-about-save">Save</button>
+        <span class="lrn-meta" id="pr-about-note"></span></p>` : ""}
       ${card ? `<h3>My ID card</h3>
       <div class="lrn-idcard">
         <img src="/api/qr.svg?data=${encodeURIComponent(card.payload)}"
@@ -986,6 +1006,16 @@
           email: document.getElementById("pr-email").value.trim() });
         alert("Saved.");
       } catch (err) { alert(err.message); }
+    };
+    const ab = document.getElementById("pr-about-save");
+    if (ab) ab.onclick = async () => {
+      const fields = {};
+      root.querySelectorAll("[data-af]").forEach((el) => { fields[el.dataset.af] = el.value; });
+      const note = document.getElementById("pr-about-note");
+      try {
+        await api("/api/learn/me/profile", { fields });
+        note.textContent = "saved";
+      } catch (err) { note.textContent = err.message; }
     };
     const pf = document.getElementById("pr-photo");
     if (pf) pf.onclick = () =>

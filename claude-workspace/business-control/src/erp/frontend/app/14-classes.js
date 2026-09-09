@@ -54,7 +54,8 @@ async function renderClasses() {
         <td class="row-acts">
           <button class="btn alt sm" data-tq="${r.id}:taken">I'll take it</button>
           <button class="btn alt sm" data-tq="${r.id}:done">Done</button>
-          <button class="btn alt sm" data-tq="${r.id}:declined">Decline</button></td>
+          <button class="btn alt sm" data-tq="${r.id}:declined">Decline</button>
+          <button class="btn alt sm" data-tqlog="${r.id}" title="file the hours you spent — an admin accepts them">Log hours</button></td>
       </tr>`).join("")}</tbody></table></div>`
       : `<p class="dim">Nobody is asking right now. Students ask from their course page, with the times they could do.</p>`}
 
@@ -84,6 +85,12 @@ async function renderClasses() {
     const reply = state === "declined" ? (prompt("A word back to them (optional)") || "") : "";
     try { await api(`/api/learning/tutoring/${id}/state`, { body: { state, reply } }); renderClasses(); }
     catch (e) { toast(e.message); }
+  });
+  view().querySelectorAll("[data-tqlog]").forEach((b) => b.onclick = () => {
+    const r = asks.find((x) => String(x.id) === b.dataset.tqlog);
+    if (!r) return;
+    loggedHoursForm({ kind: "tutoring", tutoring_id: r.id, student_id: r.user_id || 0,
+      course_id: r.course_id || 0, with_name: r.who, note: r.course });
   });
   view().querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.copy); toast("link copied"); } catch (e) { toast(b.dataset.copy); }
@@ -153,7 +160,7 @@ async function clOpen(cid) {
               `<option value="${u.id}">${esc(u.name)}${u.role === "customer" ? "" : " · " + esc(u.role)}</option>`).join("")}</select>
             <button class="btn sm" id="cl-add">Add</button></span></div>
         ${inNow.length ? `<table><thead><tr><th>who</th><th>since</th><th>progress</th><th></th></tr></thead>
-          <tbody>${inNow.map((e) => `<tr><td><b>${esc(e.name)}</b></td>
+          <tbody>${inNow.map((e) => `<tr><td><a href="#/customers/${e.user_id}" class="cl-link" data-stu="${e.user_id}"><b>${esc(e.name)}</b></a></td>
             <td class="dim">${fmtDate(e.since)}</td>
             <td class="dim">${e.progress ? e.progress.percent + "%" : ""}</td>
             <td class="row-acts"><button class="btn alt sm" data-clend="${e.id}">Leaves today</button></td></tr>`).join("")}
@@ -201,6 +208,9 @@ async function clOpen(cid) {
     try { await api(`/api/learning/courses/${cid}/enroll`, { body: { user_id: uid } }); clOpen(cid); }
     catch (err) { toast(err.message); }
   };
+  view().querySelectorAll("[data-stu]").forEach((a) => a.onclick = (e) => {
+    e.preventDefault(); studentPage(+a.dataset.stu, () => clOpen(cid));
+  });
   view().querySelectorAll("[data-clend]").forEach((b) => b.onclick = async () => {
     try { await api(`/api/learning/enrollments/${b.dataset.clend}/end`, { body: {} }); clOpen(cid); }
     catch (err) { toast(err.message); }

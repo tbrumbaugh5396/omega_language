@@ -4224,6 +4224,188 @@ ok(not any(w.get("stage") for w in
    "nobody is presenting does not play to an empty chair")
 c.post(f"/api/learn/rtc/{_rm2}/leave", headers=LN, json={"peer": _jl["peer"]})
 
+# --- hours the clock never saw: logged, and worth nothing until accepted --
+import datetime as _dt
+_yday = _dt.datetime.combine(_dt.date.today() - _dt.timedelta(days=1),
+                             _dt.time(17, 0)).timestamp()
+_lg = c.post("/api/hours/logged", headers=TT, json={
+    "kind": "tutoring", "starts": _yday, "ends": _yday + 5400,
+    "student_id": _lrn["id"], "course_id": _crs, "note": "past tense, again"})
+ok(_lg.status_code == 200 and _lg.json()["hours"] == 1.5
+   and _lg.json()["state"] == "pending",
+   "a tutor files an hour and a half of tutoring from yesterday — it is "
+   "filed, and it is pending: self-reported time does not count itself")
+_lgid = _lg.json()["id"]
+_h0 = c.get("/api/hours", headers=TT).json()
+ok(_h0["logged_hours"] == 0 and _h0["pending_logged"] == 1
+   and _h0["worked_hours"] == 0,
+   "and until somebody says yes it is in no total — the timesheet shows "
+   "it waiting, not worked")
+ok(c.post(f"/api/hours/logged/{_lgid}/decide", headers=TT,
+          json={"state": "approved"}).status_code == 403,
+   "the person who filed it cannot accept it, and neither can a teacher")
+ok(c.post(f"/api/hours/logged/{_lgid}/decide", headers=LN,
+          json={"state": "withdrawn"}).status_code == 403,
+   "only the filer withdraws it")
+ok(c.post("/api/hours/logged", headers=LN, json={
+    "kind": "tutoring", "starts": _yday, "ends": _yday + 3600}).status_code == 403,
+   "a student has no hours to log")
+ok(c.post("/api/hours/logged", headers=TT, json={
+    "kind": "tutoring", "starts": _yday + 1800, "ends": _yday + 7200}).status_code == 409,
+   "and the same person cannot file hours that overlap what they already "
+   "filed — twice-filed time is the first thing an admin would catch")
+ok(c.post("/api/hours/logged", headers=TT, json={
+    "kind": "marking", "starts": _yday, "ends": _yday + 20 * 3600}).status_code == 400
+   and c.post("/api/hours/logged", headers=TT, json={
+    "kind": "marking", "starts": time.time() + 7 * 86400,
+    "ends": time.time() + 7 * 86400 + 3600}).status_code == 400,
+   "twenty hours in one entry, or hours next week, are refused with a "
+   "reason rather than filed for somebody to wonder at")
+_lgl = c.get("/api/hours/logged", headers=AA).json()
+ok(_lgl["admin"] and _lgl["pending"] == 1
+   and _lgl["entries"][0]["student"] == _lrn["name"]
+   and _lgl["entries"][0]["course"] and _lgl["entries"][0]["kind"] == "tutoring",
+   "the admin's list carries who it was with and which class, by name")
+ok(c.get("/api/hours/logged", headers=TT).json()["entries"][0]["id"] == _lgid
+   and c.get("/api/hours/logged", headers=LN).json()["entries"] == [],
+   "the tutor sees their own; a student sees nothing")
+_dc = c.post(f"/api/hours/logged/{_lgid}/decide", headers=AA,
+             json={"state": "approved", "note": "thanks"})
+ok(_dc.status_code == 200 and _dc.json()["state"] == "approved",
+   "an admin accepts it")
+_h1 = c.get("/api/hours", headers=TT).json()
+ok(_h1["logged_hours"] == 1.5 and _h1["worked_hours"] == 1.5
+   and _h1["paid_hours"] == 1.5 and _h1["pending_logged"] == 0
+   and _h1["logged"][0]["student"] == _lrn["name"],
+   "and now it is worked time — in the worked total, the paid total, and "
+   "listed with the shifts, because payroll does not care whether an hour "
+   "came through a clock or a form")
+ok(any(r["user_id"] == _tch["id"] and r["logged_hours"] == 1.5
+       for r in c.get("/api/hours/everyone", headers=AA).json()["rows"]),
+   "the payroll screen shows the tutor with it, though they never punched")
+ok(c.post(f"/api/hours/logged/{_lgid}/decide", headers=AA,
+          json={"state": "approved"}).status_code == 409,
+   "accepting it twice is refused, not silently rewritten")
+_ntf = c.get("/api/notifications", headers=TT).json()
+ok(any("Logged hours approved" in (n.get("title") or "") for n in
+       (_ntf if isinstance(_ntf, list) else _ntf.get("items") or _ntf.get("notifications") or [])),
+   "and the tutor is told, by name")
+# a signed fortnight is closed to changes underneath it
+_ps = _yday - 20 * 86400
+c.post("/api/hours/approve", headers=AA, json={
+    "user_id": _tch["id"], "period_start": _ps, "period_end": _yday + 86400,
+    "approve": True})
+ok(c.post("/api/hours/logged", headers=TT, json={
+    "kind": "meeting", "starts": _yday - 3 * 86400,
+    "ends": _yday - 3 * 86400 + 3600}).status_code == 409,
+   "once the fortnight is signed off, nothing new is filed into it — a "
+   "logged hour landing under a signature would change a number somebody "
+   "put their name to")
+c.post("/api/hours/approve", headers=AA, json={
+    "user_id": _tch["id"], "period_start": _ps, "period_end": _yday + 86400,
+    "approve": False})
+_lg2 = c.post("/api/hours/logged", headers=TT, json={
+    "kind": "meeting", "starts": _yday - 3 * 86400,
+    "ends": _yday - 3 * 86400 + 3600}).json()
+ok(c.post(f"/api/hours/logged/{_lg2['id']}/decide", headers=TT,
+          json={"state": "withdrawn"}).json()["state"] == "withdrawn",
+   "reopened, it is filed; and the filer can withdraw their own while it "
+   "is pending")
+ok(c.post(f"/api/hours/logged/{_lg2['id']}/decide", headers=AA,
+          json={"state": "approved"}).status_code == 200,
+   "an admin may still accept a withdrawn one on reflection — the "
+   "decision is the admin's")
+
+# --- the student as a person, and as a record ------------------------------
+_sp = c.get(f"/api/students/{_lrn['id']}", headers=TT)
+ok(_sp.status_code == 200 and _sp.json()["student"]["name"] == _lrn["name"]
+   and "profile" in _sp.json() and "summary" in _sp.json()
+   and "timeline" in _sp.json() and "courses" in _sp.json(),
+   "a teacher opens a student's page: who they are, where they stand, "
+   "and everything that happened")
+ok(c.get(f"/api/students/{_lrn['id']}", headers=LN).status_code == 403,
+   "a student does not open another student's page")
+_pf = c.post(f"/api/students/{_lrn['id']}/profile", headers=TT, json={
+    "fields": {"birth_date": "2001-03-15", "nationality": "Brazilian",
+               "origin": "Recife, Brazil", "native_language": "Portuguese",
+               "other_languages": "Spanish (B1)",
+               "education": "Secondary school in Recife; two years of nursing.",
+               "occupation": "care worker", "goals": "IELTS 6.5 by spring"},
+    "extra": {"Visa": "student, to 2027", "How they found us": "a friend"}})
+ok(_pf.status_code == 200 and _pf.json()["profile"]["nationality"] == "Brazilian"
+   and _pf.json()["profile"]["age"] is not None
+   and _pf.json()["profile"]["extra"]["Visa"] == "student, to 2027",
+   "the office fills in who they are — age from a birth date, where they "
+   "are from, what they speak, what they studied — and the questions this "
+   "school asks that the next one does not, as a bag of its own")
+ok(c.post(f"/api/students/{_lrn['id']}/profile", headers=TT, json={
+    "fields": {"nationality": "Brazilian-Portuguese"}}).json()["profile"]["origin"]
+   == "Recife, Brazil",
+   "correcting one field leaves the others as they were")
+ok(c.post(f"/api/students/{_lrn['id']}/profile", headers=TT, json={
+    "fields": {"birth_date": "not a date"}}).status_code == 400,
+   "and a birth date that is not one is refused")
+_mp = c.get("/api/learn/me/profile", headers=LN).json()
+ok(_mp["profile"]["origin"] == "Recife, Brazil" and "notes" not in _mp["profile"]
+   and _mp["profile"]["extra"]["Visa"],
+   "the student sees their own profile — all of it but the office's notes")
+ok(c.post("/api/learn/me/profile", headers=LN, json={
+    "fields": {"occupation": "nurse", "notes": "sneaky"}}).status_code == 200
+   and c.get(f"/api/students/{_lrn['id']}", headers=TT).json()["profile"]["occupation"] == "nurse"
+   and c.get(f"/api/students/{_lrn['id']}", headers=TT).json()["profile"]["notes"] == "",
+   "and corrects it themselves — their occupation changes, the office's "
+   "notes do not")
+_ach = c.post(f"/api/students/{_lrn['id']}/log", headers=TT, json={
+    "kind": "achievement", "title": "Won the class speaking prize",
+    "body": "unanimous", "at": time.time() - 30 * 86400})
+ok(_ach.status_code == 200, "a teacher logs an achievement, dated when it "
+   "happened")
+c.post(f"/api/students/{_lrn['id']}/log", headers=TT, json={
+    "kind": "concern", "title": "Missed two weeks", "body": "family"})
+ok(c.post(f"/api/students/{_lrn['id']}/log", headers=TT,
+          json={"kind": "prize", "title": "x"}).status_code == 400
+   and c.post(f"/api/students/{_lrn['id']}/log", headers=TT,
+              json={"kind": "note", "title": "  "}).status_code == 400,
+   "an unknown kind and an empty entry are refused")
+_sp2 = c.get(f"/api/students/{_lrn['id']}", headers=TT).json()
+ok(any(a["title"] == "Won the class speaking prize" for a in _sp2["logged_achievements"])
+   and _sp2["summary"]["achievements"] >= 1,
+   "and it is on the page under achievements, counted")
+_kinds = {e["kind"] for e in _sp2["timeline"]}
+ok("log:achievement" in _kinds and "log:concern" in _kinds
+   and "enrolled" in _kinds and "class" in _kinds and "session" in _kinds,
+   "the timeline carries what staff wrote beside what the tables recorded "
+   "— the seat, the classes, the tutoring hour — each saying which it is")
+ok(_sp2["timeline"] == sorted(_sp2["timeline"], key=lambda e: -e["at"]),
+   "newest first")
+_su = _sp2["summary"]
+ok(_su["classes_marked"] >= 1 and _su["attendance_pct"] is not None
+   and _su["courses"] >= 1,
+   "the numbers at the top: attendance, scores, progress, derived from "
+   "the record rather than kept")
+ok(c.get("/api/learn/record", headers=LN).json()["totals"]["classes_attended"]
+   == _su["classes_attended"],
+   "and the learner's own transcript reads the same record, so the two "
+   "cannot disagree")
+_lid = [e for e in _sp2["timeline"] if e["kind"] == "log:concern"][0]["id"]
+ok(c.delete(f"/api/students/{_lrn['id']}/log/{_lid}", headers=TT).status_code == 200
+   and not any(e.get("id") == _lid for e in
+               c.get(f"/api/students/{_lrn['id']}", headers=TT).json()["timeline"]),
+   "its author removes an entry")
+_ojs2 = (Path(__file__).parent.parent / "src/erp/frontend/app/16-students.js"
+         ).read_text(encoding="utf-8")
+_hjs = (Path(__file__).parent.parent / "src/erp/frontend/app/03-sell.js"
+        ).read_text(encoding="utf-8")
+ok("async function studentPage(" in _ojs2 and "data-pf" in _ojs2
+   and "Timeline" in _ojs2 and "Log an achievement" in _ojs2
+   and "studentPage(" in (Path(__file__).parent.parent / "src/erp/frontend/app/14-classes.js").read_text()
+   and "studentPage(" in (Path(__file__).parent.parent / "src/erp/frontend/app/10-staff-events.js").read_text(),
+   "the ops app has the page, reached from the customer book and from a "
+   "class's people")
+ok("function loggedHoursForm(" in _hjs and "/api/hours/logged" in _hjs
+   and "data-lgok" in _hjs and "awaiting approval" in _hjs,
+   "and the Hours screen files, lists and accepts logged hours")
+
 ok(c.post(f"/api/learn/sessions/{_s2}/chat", headers=LN,
           json={"body": "is this the right room?"}).status_code == 200,
    "a learner in the class says something in text")

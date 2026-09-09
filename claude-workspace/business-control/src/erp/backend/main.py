@@ -70,6 +70,8 @@ def _init_core(tid=None):
         _dbk.init_tables(con)
         from . import visits as _vis
         _vis.init_tables(con)
+        from . import students as _stu
+        _stu.init_tables(con)
         con.commit()
         con.close()
     finally:
@@ -6673,6 +6675,8 @@ from . import tickets  # noqa: E402  (safe: included late)
 app.include_router(tickets.router)
 from . import timesheet  # noqa: E402  (safe: included late)
 app.include_router(timesheet.router)
+from . import students  # noqa: E402  (safe: included late)
+app.include_router(students.router)
 
 
 @app.exception_handler(404)

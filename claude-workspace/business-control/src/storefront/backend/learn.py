@@ -1024,68 +1024,39 @@ def me_signout_all(user=Depends(current_customer), con=Depends(get_con)):
 
 @router.get("/api/learn/record")
 def my_record(user=Depends(current_customer), con=Depends(get_con)):
-    """The student's whole standing in one answer: per-course progress,
-    attendance and every FINAL quiz result — derived on read like all
-    grades here, so the record can never disagree with the data. The
-    client turns this into the printable transcript and certificates;
-    the server hands over facts, not stationery."""
+    """The student's whole standing in one answer — the same `record_of`
+    the office's student page reads, so the transcript a learner prints
+    and the page a teacher looks at can never disagree. The client turns
+    this into the printable transcript and certificates; the server
+    hands over facts, not stationery."""
     _require_cap("learning")
-    from erp.backend import assessment as A
-    courses = []
-    for c in con.execute(
-            "SELECT c.*, u.name AS teacher_name FROM courses c"
-            " LEFT JOIN users u ON u.id=c.teacher_id"
-            " WHERE c.active=1 ORDER BY c.name").fetchall():
-        if not L.enrolled_in(con, c["id"], user["id"]):
-            continue
-        progress = L.course_progress(con, c["id"], user["id"])
-        results = []
-        for q in con.execute(
-                "SELECT id, title, pass_mark FROM quizzes WHERE course_id=?"
-                " AND published=1 ORDER BY id", (c["id"],)).fetchall():
-            best = None
-            for a in con.execute(
-                    "SELECT id, graded_at FROM quiz_attempts WHERE quiz_id=?"
-                    " AND user_id=? AND state='graded'",
-                    (q["id"], user["id"])).fetchall():
-                g = A.grade_attempt(L.questions(con, q["id"]),
-                                    L.responses(con, a["id"]),
-                                    pass_mark=q["pass_mark"])
-                if g["is_final"] and (best is None
-                                      or g["percent"] > best["percent"]):
-                    best = {"quiz": q["title"], "percent": g["percent"],
-                            "passed": g["passed"],
-                            "pass_mark": q["pass_mark"],
-                            "graded_at": a["graded_at"]}
-            if best:
-                results.append(best)
-        att = CR.attendance_of(con, c["id"], user["id"])
-        complete = (progress["percent"] == 100
-                    and progress["lessons_total"]
-                    + progress["quizzes_total"] > 0)
-        courses.append({
-            "id": c["id"], "name": c["name"],
-            "language": c["language"] or "", "level": c["level"] or "",
-            "teacher": c["teacher_name"] or "",
-            "progress": progress, "attendance": att,
-            "results": results, "complete": complete})
-    attended = con.execute(
-        "SELECT COUNT(*) AS n FROM checkins WHERE student_id=?"
-        " AND status IN ('present','late')", (user["id"],)).fetchone()["n"]
-    return {
-        "student": {"id": user["id"], "name": user["name"],
-                    "email": user["email"] or ""},
-        "school": brand_name(con),
-        "generated_at": time.time(),
-        "courses": courses,
-        "achievements": L.achievements_of(con, user["id"]),
-        "totals": {"courses": len(courses), "classes_attended": attended,
-                   "quizzes_passed": sum(
-                       1 for c in courses for r in c["results"]
-                       if r["passed"]),
-                   "completed_courses": sum(
-                       1 for c in courses if c["complete"])},
-    }
+    from erp.backend import students as ST
+    out = ST.record_of(con, user)
+    out["school"] = brand_name(con)
+    return out
+
+
+@router.get("/api/learn/me/profile")
+def my_profile(user=Depends(current_customer), con=Depends(get_con)):
+    """What the school knows about me, as I may see and correct it."""
+    _require_cap("learning")
+    from erp.backend import students as ST
+    return {"profile": ST.self_view(con, user["id"]),
+            "fields": list(ST.SELF_FIELDS)}
+
+
+class MyProfileBody(BaseModel):
+    fields: dict = {}
+
+
+@router.post("/api/learn/me/profile")
+def my_profile_save(body: MyProfileBody, user=Depends(current_customer),
+                    con=Depends(get_con)):
+    _require_cap("learning")
+    from erp.backend import students as ST
+    out = ST.self_save(con, user["id"], body.fields, by=user["name"])
+    con.commit()
+    return {"ok": True, "profile": out}
 
 
 # ── discovery: ask to join a course you can see ──────────────────────────────
@@ -1368,6 +1339,9 @@ def learn_page(con=Depends(get_con)):
  .lrn-stage iframe{{height:46vh;background:#fff}}
  .lrn-stage-doc{{display:flex;flex-direction:column;gap:6px;align-items:flex-start}} .lrn-stage-doc audio{{width:100%}}
  .lrn-panel-host{{border:1px solid rgba(127,127,127,.25);border-radius:12px;margin:0 0 14px;display:flex;flex-direction:column}}
+ .lrn-about{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px 12px}}
+ .lrn-about .wide{{grid-column:1/-1}} .lrn-about label{{display:block;font-size:12px;opacity:.75;text-transform:capitalize}}
+ .lrn-about input,.lrn-about textarea{{width:100%;box-sizing:border-box}}
  .lrn-tut-day{{display:flex;gap:8px;align-items:center;padding:3px 0}} .lrn-tut-day label{{min-width:60px}}
  .lrn-reg{{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(127,127,127,.2)}}
  .lrn-reg img{{width:34px;height:34px;border-radius:50%;object-fit:cover;background:rgba(127,127,127,.2)}}

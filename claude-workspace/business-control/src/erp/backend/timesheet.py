@@ -35,6 +35,10 @@ router = APIRouter()
 # list nobody can hold in their head is a list people file wrongly.
 LEAVE_KINDS = ("holiday", "sick", "unpaid", "bereavement", "other")
 LEAVE_STATES = ("requested", "approved", "declined", "cancelled")
+LOGGED_KINDS = ("tutoring", "meeting", "preparation", "marking", "training",
+                "other")
+LOGGED_STATES = ("pending", "approved", "declined", "withdrawn")
+LOGGED_MAX_HOURS = 16
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS time_off (
@@ -56,6 +60,31 @@ CREATE INDEX IF NOT EXISTS time_off_who ON time_off(user_id, starts);
 /* A signature on a period, not a flag on a row. "Approved" has to say who
    and when and what the number was when they said it, or it is worth
    nothing the first time somebody disputes a cheque. */
+-- Hours the clock never saw. A tutoring hour in a cafe, a parents'
+-- meeting, an evening of marking: worked, owed, and not a shift anybody
+-- punched. Filed after the fact by the person who worked it, and worth
+-- nothing until an admin says yes — a self-reported hour that counts
+-- itself is how a timesheet stops being trusted.
+CREATE TABLE IF NOT EXISTS logged_hours (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'tutoring',   -- see LOGGED_KINDS
+  starts REAL NOT NULL,
+  ends REAL NOT NULL,
+  hours REAL NOT NULL,
+  note TEXT DEFAULT '',
+  with_name TEXT DEFAULT '',               -- who it was with, in words
+  student_id INTEGER DEFAULT 0,            -- and as a person, when known
+  course_id INTEGER DEFAULT 0,
+  tutoring_id INTEGER DEFAULT 0,           -- the ask it answered, if one
+  state TEXT NOT NULL DEFAULT 'pending',   -- see LOGGED_STATES
+  decided_by TEXT DEFAULT '',
+  decided_at REAL DEFAULT 0,
+  decided_note TEXT DEFAULT '',
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS logged_hours_who ON logged_hours(user_id, starts);
+
 CREATE TABLE IF NOT EXISTS timesheet_approvals (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -223,6 +252,25 @@ def hours_for(con, uid: int, a: float, b: float) -> dict:
         worked += sh["hours"]
         wk = _week_start(sh["clock_in"])
         by_week[wk] = by_week.get(wk, 0.0) + sh["hours"]
+    # Approved logged hours are worked hours: they land in the same total
+    # and the same week's overtime line, because payroll does not care
+    # whether an hour came through a clock or a form, only whether
+    # somebody with authority said it happened.
+    logged = [dict(r) for r in con.execute(
+        "SELECT l.*, u.name AS student FROM logged_hours l"
+        " LEFT JOIN users u ON u.id=l.student_id"
+        " WHERE l.user_id=? AND l.state='approved'"
+        " AND l.starts>=? AND l.starts<? ORDER BY l.starts", (uid, a, b))]
+    logged_hours = 0.0
+    for lg in logged:
+        logged_hours += lg["hours"] or 0
+        wk = _week_start(lg["starts"])
+        by_week[wk] = by_week.get(wk, 0.0) + (lg["hours"] or 0)
+    worked += logged_hours
+    pending_logged = con.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(hours),0) AS h FROM logged_hours"
+        " WHERE user_id=? AND state='pending' AND starts>=? AND starts<?",
+        (uid, a, b)).fetchone()
     line = _ot_line()
     overtime = round(sum(max(0.0, h - line) for h in by_week.values()), 2)
     leave = [dict(r) for r in con.execute(
@@ -232,6 +280,9 @@ def hours_for(con, uid: int, a: float, b: float) -> dict:
     return {"shifts": shifts, "worked_hours": round(worked, 2),
             "overtime_hours": overtime,
             "regular_hours": round(worked - overtime, 2),
+            "logged": logged, "logged_hours": round(logged_hours, 2),
+            "pending_logged": pending_logged["n"],
+            "pending_logged_hours": round(pending_logged["h"], 2),
             "leave": leave, "leave_hours": leave_hours,
             "paid_hours": round(worked + leave_hours, 2),
             "overtime_after": line}
@@ -275,7 +326,8 @@ def everyone(from_ts: float = 0, to_ts: float = 0,
     rows = []
     for p in people:
         h = hours_for(con, p["id"], a, b)
-        if not (h["worked_hours"] or h["leave_hours"] or h["shifts"]):
+        if not (h["worked_hours"] or h["leave_hours"] or h["shifts"]
+                or h["pending_logged"]):
             continue
         rows.append({"user_id": p["id"], "name": p["name"],
                      "role": p["role"], "job": p["job"],
@@ -451,6 +503,172 @@ def decide_leave(rid: int, body: DecideBody, user=Depends(current_user),
                     user_id=r["user_id"])
     except Exception:                                        # noqa: BLE001
         pass
+    return {"ok": True, "state": body.state}
+
+
+# ---------- logged hours: worked, unpunched, and awaiting a yes ----------
+
+def _period_signed(con, uid: int, at: float) -> bool:
+    """Is the fortnight this moment falls in already signed off? A
+    logged hour landing in a signed period would change a number
+    somebody has put their name to."""
+    return con.execute(
+        "SELECT 1 FROM timesheet_approvals WHERE user_id=?"
+        " AND period_start<=? AND period_end>?", (uid, at, at)).fetchone() \
+        is not None
+
+
+def _may_log(user) -> bool:
+    """Staff log hours; a customer account has none to log."""
+    return bool(user["is_admin"] or user["role"] in (
+        "employee", "teacher", "volunteer", "director", "owner"))
+
+
+class LoggedBody(BaseModel):
+    kind: str = "tutoring"
+    starts: float
+    ends: float
+    note: str = ""
+    with_name: str = ""
+    student_id: int = 0
+    course_id: int = 0
+    tutoring_id: int = 0
+    user_id: int = 0            # the office may file on somebody's behalf
+
+
+def _logged_row(r) -> dict:
+    d = dict(r)
+    d["hours"] = round(d["hours"] or 0, 2)
+    return d
+
+
+@router.get("/api/hours/logged")
+def list_logged(mine: int = 0, state: str = "", from_ts: float = 0,
+                to_ts: float = 0, user=Depends(current_user),
+                con=Depends(get_con)):
+    """Mine always; everybody's if the office may see it. The pending
+    ones first, because those are the ones waiting on somebody."""
+    q = ("SELECT l.*, u.name AS who, s.name AS student, c.name AS course"
+         " FROM logged_hours l JOIN users u ON u.id=l.user_id"
+         " LEFT JOIN users s ON s.id=l.student_id"
+         " LEFT JOIN courses c ON c.id=l.course_id")
+    where, args = [], []
+    if mine or not _office(user):
+        where.append("l.user_id=?"); args.append(user["id"])
+    if state in LOGGED_STATES:
+        where.append("l.state=?"); args.append(state)
+    if from_ts:
+        where.append("l.starts>=?"); args.append(from_ts)
+    if to_ts:
+        where.append("l.starts<?"); args.append(to_ts)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    rows = con.execute(
+        q + " ORDER BY l.state='pending' DESC, l.starts DESC LIMIT 400",
+        tuple(args)).fetchall()
+    return {"entries": [_logged_row(r) for r in rows],
+            "kinds": list(LOGGED_KINDS), "office": _office(user),
+            "admin": bool(user["is_admin"]), "me": user["id"],
+            "pending": sum(1 for r in rows if r["state"] == "pending")}
+
+
+@router.post("/api/hours/logged")
+def log_hours(body: LoggedBody, user=Depends(current_user),
+              con=Depends(get_con)):
+    """File hours the clock did not see. They wait for an admin."""
+    if not _may_log(user):
+        raise HTTPException(403, "only staff log hours")
+    if body.kind not in LOGGED_KINDS:
+        raise HTTPException(400, f"kind must be one of {LOGGED_KINDS}")
+    if body.ends <= body.starts:
+        raise HTTPException(400, "it cannot end before it starts")
+    hours = round((body.ends - body.starts) / 3600, 2)
+    if hours > LOGGED_MAX_HOURS:
+        raise HTTPException(400, f"that is {hours} hours in one entry —"
+                                 f" file a day at a time")
+    if body.starts > time.time() + 3600:
+        raise HTTPException(400, "hours are logged after they happen, not"
+                                 " before")
+    uid = user["id"]
+    if body.user_id and body.user_id != user["id"]:
+        _require_office(user)
+        uid = body.user_id
+    if _period_signed(con, uid, body.starts):
+        raise HTTPException(409, "that fortnight is already signed off —"
+                                 " reopen it first")
+    clash = con.execute(
+        "SELECT id FROM logged_hours WHERE user_id=? AND state IN"
+        " ('pending','approved') AND starts<? AND ends>?",
+        (uid, body.ends, body.starts)).fetchone()
+    if clash:
+        raise HTTPException(409, "those hours overlap an entry already"
+                                 " filed")
+    student = body.student_id or 0
+    with_name = body.with_name.strip()[:120]
+    if student and not with_name:
+        r = con.execute("SELECT name FROM users WHERE id=?",
+                        (student,)).fetchone()
+        with_name = r["name"] if r else ""
+    cur = con.execute(
+        "INSERT INTO logged_hours(user_id,kind,starts,ends,hours,note,"
+        " with_name,student_id,course_id,tutoring_id,state,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,'pending',?)",
+        (uid, body.kind, body.starts, body.ends, hours,
+         body.note.strip()[:400], with_name, student, body.course_id or 0,
+         body.tutoring_id or 0, db.now()))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid, "hours": hours,
+            "state": "pending"}
+
+
+class LoggedDecideBody(BaseModel):
+    state: str
+    note: str = ""
+
+
+@router.post("/api/hours/logged/{lid}/decide")
+def decide_logged(lid: int, body: LoggedDecideBody,
+                  user=Depends(current_user), con=Depends(get_con)):
+    """Approve or decline — an admin's act, by name. Withdraw is the
+    filer's own, while it is still pending."""
+    r = con.execute("SELECT * FROM logged_hours WHERE id=?",
+                    (lid,)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such entry")
+    if body.state not in ("approved", "declined", "withdrawn"):
+        raise HTTPException(400, "state must be approved, declined or"
+                                 " withdrawn")
+    if body.state == "withdrawn":
+        if r["user_id"] != user["id"] and not user["is_admin"]:
+            raise HTTPException(403, "only the person who filed it"
+                                     " withdraws it")
+        if r["state"] != "pending":
+            raise HTTPException(409, f"it is already {r['state']}")
+    else:
+        if not user["is_admin"]:
+            raise HTTPException(403, "an admin accepts logged hours")
+        if r["state"] == body.state:
+            raise HTTPException(409, f"it is already {r['state']}")
+        if _period_signed(con, r["user_id"], r["starts"]):
+            raise HTTPException(409, "that fortnight is signed off —"
+                                     " reopen it before changing what"
+                                     " is in it")
+    con.execute("UPDATE logged_hours SET state=?, decided_by=?,"
+                " decided_at=?, decided_note=? WHERE id=?",
+                (body.state, user["name"], db.now(),
+                 body.note.strip()[:300], lid))
+    con.commit()
+    if body.state != "withdrawn":
+        from . import notify
+        try:
+            notify.push(con, f"Logged hours {body.state}",
+                        f"{user['name']} {body.state} your {r['hours']:g}h"
+                        f" of {r['kind']}"
+                        + (f": {body.note.strip()[:200]}"
+                           if body.note.strip() else "."),
+                        kind="info", user_id=r["user_id"])
+        except Exception:                                    # noqa: BLE001
+            pass
     return {"ok": True, "state": body.state}
 
 

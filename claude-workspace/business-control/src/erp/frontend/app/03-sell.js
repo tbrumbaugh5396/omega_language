@@ -1039,6 +1039,7 @@ async function renderHours() {
   const mine = await api(`/api/hours${qs}`);
   const all = await api(`/api/hours/everyone${qs}`).catch(() => null);
   const off = await api("/api/time-off").catch(() => null);
+  const lg = await api("/api/hours/logged").catch(() => null);
   const day = (t) => new Date(t * 1000).toLocaleDateString(undefined,
     { month: "short", day: "numeric" });
   const clock = (t) => t ? new Date(t * 1000).toLocaleTimeString(undefined,
@@ -1056,6 +1057,12 @@ async function renderHours() {
           overtime</span>` : ""}
         ${r.leave_hours ? `<span class="pill">${r.leave_hours}h leave</span>`
           : ""}
+        ${r.logged_hours ? `<span class="pill" title="hours filed after the
+          fact and accepted by an admin — in the worked total">${
+          r.logged_hours}h logged</span>` : ""}
+        ${r.pending_logged ? `<span class="pill warn" title="filed, not yet
+          accepted — not in any total until somebody says yes">${
+          r.pending_logged} awaiting approval</span>` : ""}
         <span class="pill ${r.approved ? "ok" : ""}">${r.approved
           ? "approved by " + esc(r.approved.approved_by) : "not approved"}
         </span>
@@ -1079,7 +1086,17 @@ async function renderHours() {
           <td>${r.approved ? "" : `<button class="btn alt sm"
             data-hrfix="${sh.id}:${sh.clock_in}:${sh.clock_out || 0}"
             >Fix</button>`}</td>
-        </tr>`).join("") || '<tr><td colspan="7" class="dim">no shifts</td>'
+        </tr>`).join("")
+        + (r.logged || []).map((l) => `<tr>
+          <td>${day(l.starts)}</td><td>${clock(l.starts)}</td>
+          <td>${clock(l.ends)}</td><td>${l.hours}</td>
+          <td class="dim">logged · ${esc(l.kind)}</td>
+          <td class="dim">${esc([l.student || l.with_name, l.note]
+            .filter(Boolean).join(" · "))}</td>
+          <td><span class="pill ok" title="accepted by ${esc(l.decided_by)}"
+            >accepted</span></td>
+        </tr>`).join("")
+        || '<tr><td colspan="7" class="dim">no shifts</td>'
           + "</tr>"}</tbody></table></div>
     </div>`;
   view().innerHTML = `
@@ -1092,6 +1109,9 @@ async function renderHours() {
       <div class="top-actions">
         <button class="btn alt" id="hr-prev">&larr; earlier</button>
         <button class="btn alt" id="hr-next">later &rarr;</button>
+        <button class="btn alt" id="hr-log" title="hours the clock never
+          saw — a tutoring session, a meeting, an evening of marking">Log
+          hours</button>
         <button class="btn" id="hr-off">${opsIcon("calendar", "btn-ic")}
           Ask for time off</button>
       </div>
@@ -1124,7 +1144,48 @@ async function renderHours() {
         </div></div>`).join("")
         : '<div class="card empty"><b>Nothing booked</b><span class="dim">'
           + 'Holiday, sick days and unpaid leave all land here, and approved '
-          + 'hours count toward the period.</span></div>'}` : ""}`;
+          + 'hours count toward the period.</span></div>'}` : ""}
+    ${lg ? `<h3>Logged hours${lg.pending ? ` <span class="pill warn">${
+        lg.pending} awaiting approval</span>` : ""}</h3>
+      <p class="dim">Hours worked away from the clock — a tutoring session,
+        a parents' meeting, marking at home. Filed by the person who worked
+        them, worth nothing until an admin accepts them, and then in the
+        worked total like any shift.</p>
+      ${lg.entries.length ? lg.entries.map((l) => `<div class="card">
+        <div class="doc-top">
+          <div class="doc-main"><b>${esc(l.who)} — ${l.hours}h ${esc(l.kind)}</b>
+            <span class="dim">${day(l.starts)} ${clock(l.starts)}–${clock(l.ends)}${
+              l.student || l.with_name ? " · with " + esc(l.student || l.with_name) : ""}${
+              l.course ? " · " + esc(l.course) : ""}${
+              l.note ? " · " + esc(l.note) : ""}</span></div>
+          <span class="pill ${l.state === "approved" ? "ok"
+            : l.state === "declined" ? "bad" : l.state === "pending" ? "warn" : ""}">${
+            esc(l.state)}${l.decided_by ? " · " + esc(l.decided_by) : ""}${
+            l.decided_note ? " · " + esc(l.decided_note) : ""}</span>
+          ${lg.admin && l.state === "pending" ? `
+            <button class="btn sm" data-lgok="${l.id}">Accept</button>
+            <button class="btn alt sm" data-lgno="${l.id}">Decline</button>` : ""}
+          ${l.user_id === lg.me && l.state === "pending"
+            ? `<button class="btn alt sm" data-lgcancel="${l.id}">Withdraw</button>` : ""}
+        </div></div>`).join("")
+        : '<div class="card empty"><b>Nothing logged</b><span class="dim">'
+          + 'Log hours for anything worked away from the clock.</span></div>'}`
+      : ""}`;
+  $("#hr-log").onclick = () => loggedHoursForm({});
+  view().querySelectorAll("[data-lgok],[data-lgno],[data-lgcancel]")
+    .forEach((b) => b.onclick = async () => {
+      const id = b.dataset.lgok || b.dataset.lgno || b.dataset.lgcancel;
+      const state = b.dataset.lgok ? "approved"
+        : b.dataset.lgno ? "declined" : "withdrawn";
+      let note = "";
+      if (state === "declined") {
+        note = prompt("Why not? (they will see this)") || "";
+      }
+      try {
+        await api(`/api/hours/logged/${id}/decide`, { body: { state, note } });
+        renderHours();
+      } catch (err) { toast(err.message); }
+    });
   $("#hr-prev").onclick = () => { HRS_FROM = from - 14 * 86400; renderHours(); };
   $("#hr-next").onclick = () => { HRS_FROM = from + 14 * 86400; renderHours(); };
   $("#hr-off").onclick = () => timeOffForm();
@@ -1181,6 +1242,63 @@ function shiftFixForm(sid, cin, cout) {
       await api(`/api/hours/shift/${sid}`, { method: "PATCH", body: {
         clock_in: val("#sf-in") || cin, clock_out: val("#sf-out") } });
       closeModal(); renderHours();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+/* Hours the clock never saw. A tutor meets a student in a cafe; a
+   teacher sits through a parents' evening; somebody marks at home. Those
+   are worked hours with no punch, and a timesheet that cannot hold them
+   is one that gets settled by text message. Filed here, they wait for an
+   admin — self-reported time that counts itself is how a timesheet stops
+   being trusted. `pre` prefills from wherever the hours came from: a
+   tutoring ask carries its student and course. */
+function loggedHoursForm(pre) {
+  pre = pre || {};
+  const now = new Date();
+  const dstr = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 10);
+  const KINDS = ["tutoring", "meeting", "preparation", "marking", "training",
+                 "other"];
+  modal(`<h3>Log hours</h3>
+    <p class="dim">For anything worked away from the clock. An admin accepts
+      it, and then it counts like a shift — in the worked total and the
+      week's overtime line.</p>
+    <div class="row2">
+      <div><label>What</label>
+        <select id="lh-kind">${KINDS.map((k) =>
+          `<option${k === (pre.kind || "tutoring") ? " selected" : ""}>${k}</option>`
+          ).join("")}</select></div>
+      <div><label>Day</label>
+        <input id="lh-day" type="date" value="${esc(pre.day || dstr(now))}"></div>
+    </div>
+    <div class="row2">
+      <div><label>From</label><input id="lh-from" type="time" value="${esc(pre.from || "")}"></div>
+      <div><label>To</label><input id="lh-to" type="time" value="${esc(pre.to || "")}"></div>
+    </div>
+    <label>With <span class="opt">who it was for, if anyone</span></label>
+    <input id="lh-with" value="${esc(pre.with_name || "")}" placeholder="a student, a parent, the team">
+    <label>Anything they should know</label>
+    <input id="lh-note" value="${esc(pre.note || "")}" placeholder="optional">
+    <div class="modal-foot">
+      <button class="btn alt" data-close>Cancel</button>
+      <button class="btn" id="lh-save">File it</button></div>`);
+  $("#lh-save").onclick = async () => {
+    const d = $("#lh-day").value, f = $("#lh-from").value, t = $("#lh-to").value;
+    if (!d || !f || !t) return toast("a day, a start and an end");
+    const starts = new Date(`${d}T${f}`).getTime() / 1000;
+    const ends = new Date(`${d}T${t}`).getTime() / 1000;
+    try {
+      const r = await api("/api/hours/logged", { body: {
+        kind: $("#lh-kind").value, starts, ends,
+        with_name: $("#lh-with").value.trim(),
+        note: $("#lh-note").value.trim(),
+        student_id: pre.student_id || 0, course_id: pre.course_id || 0,
+        tutoring_id: pre.tutoring_id || 0 } });
+      closeModal();
+      toast(`${r.hours}h filed — an admin will accept it`);
+      if (typeof renderHours === "function" && S.tab === "hours") renderHours();
+      if (pre.after) pre.after();
     } catch (err) { toast(err.message); }
   };
 }

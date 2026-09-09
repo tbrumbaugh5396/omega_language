@@ -6,7 +6,7 @@ async function renderCustomers(q) {
   if (S.deepId) {                    // #/customers/12 — card over list
     const _id = S.deepId;
     S.deepId = null;
-    renderCustomers().then(() => customerCard(_id));
+    studentPage(_id);                // the whole page, not a card over a list
     return;
   }
   if (location.hash.startsWith("#/customers/"))
@@ -55,7 +55,7 @@ async function renderCustomers(q) {
     el.setSelectionRange(el.value.length, el.value.length);
   }
   view().querySelectorAll("[data-cust]").forEach((b) => b.onclick =
-    () => customerCard(+b.dataset.cust));
+    () => studentPage(+b.dataset.cust, () => renderCustomers(q)));
 }
 
 async function customerCard(uid) {
