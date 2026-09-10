@@ -1562,8 +1562,8 @@ function signInForm(intro, onDone) {
         <p class="dim" style="margin-top:14px;padding-top:12px;
           border-top:1px solid var(--line)">On the team — teaching,
           coaching, running the place?
-          <a class="text-link" href="/ops/">Team sign-in →</a> ·
-          <a class="text-link" href="/admin">Store admin →</a></p>`);
+          <a class="text-link" href="/admin">Store admin →</a> ·
+          <a class="text-link" href="/ops/">Team sign-in →</a></p>`);
       on("#si-scan", async () => {
         const msg = $("#si-msg");
         if (msg) msg.textContent = "";

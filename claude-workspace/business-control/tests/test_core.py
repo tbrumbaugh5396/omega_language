@@ -2908,8 +2908,14 @@ ok('fetch("/api/store/account/orders"' in _alive
    "the only way out was Sign out, the one button that clears the token")
 ok("if (oR.status === 401 || sR.status === 401)" in _sfj,
    "and the account panel reads the status, not just the body")
-ok(_sfj.index('href="/admin">Store admin') < _sfj.index('href="/ops/">ERP / ops'),
-   "the shop's own admin door is offered before the office's")
+# Both places the two doors are offered together, checked separately:
+# reading one block's admin link against the other's office link is
+# satisfied by file order alone, and passed while the sign-in modal
+# listed them the other way round.
+for _door in (_sfj.split("On the team — teaching")[1][:400],
+              _sfj.split("Work here?")[1][:400]):
+    ok(_door.index('href="/admin"') < _door.index('href="/ops/"'),
+       "the shop's own admin door is offered before the office's")
 
 ok("intakeForm(" in open("src/storefront/frontend/store.js").read()
    and "bkQuestionRow" in ops_app_js(),
