@@ -104,6 +104,8 @@ const TABS = [
     roles: ["admin", "employee", "teacher"] },
   { id: "presentations", label: "Presentations", icon: "file", group: "Teach",
     roles: ["admin", "employee", "teacher"] },
+  { id: "results", label: "Test results", icon: "chart", group: "Teach",
+    roles: ["admin", "employee", "teacher"] },
   { id: "nutrition", label: "Nutrition", icon: "bag", group: "Teach",
     roles: ["admin", "employee"] },
 
@@ -120,7 +122,7 @@ const TABS = [
   { id: "affiliates", label: "Affiliates", icon: "link", group: "Grow", roles: "*" },
   { id: "events", label: "Events", icon: "calendar", group: "Grow",
     roles: ["admin", "employee"] },
-  { id: "intake", label: "Forms, gifts & results", icon: "file", group: "Grow",
+  { id: "intake", label: "Forms & gifts", icon: "file", group: "Grow",
     roles: ["admin", "employee"] },
   { id: "experiments", label: "Experiments", icon: "flask", group: "Grow",
     roles: ["admin"] },
@@ -211,12 +213,13 @@ const TAB_CAP = {
   audit: "infosec",
   ads: "marketing", listings: "marketing", hiring: "workforce",
   marketplaces: "selling",
-  // Forms, gifts and results straddles three: gifts are fundraising,
-  // the score imports are learning, a form response becomes a CRM
-  // enquiry. It is sold as fundraising, that being the row a tenant
-  // buys this screen for — so a shop with Learning and no Fundraising
-  // sees it greyed, and imports its GED results after a plan change.
-  intake: "fundraising",
+  // One screen held forms, gifts and score imports, so it had to be
+  // sold as one thing, and a school on Learning without Fundraising
+  // could not reach the GED results it bought Learning for. Two
+  // screens, two rows: gifts are fundraising, scores are learning. A
+  // form response is CRM-ish and stays with the gifts, being the
+  // smaller half of a smaller argument.
+  intake: "fundraising", results: "learning",
 };
 const CAP_LABEL = {
   selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
@@ -459,6 +462,7 @@ async function render() {
     bookings: renderBookings, classes: renderClasses, devices: renderDevices, expenses: renderExpenses, presentations: renderPresentations,
     ads: renderAds, listings: renderListings, hiring: renderHiring,
     marketplaces: renderMarketplaces, intake: renderIntake,
+    results: renderResults,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

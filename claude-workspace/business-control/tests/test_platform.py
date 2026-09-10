@@ -2554,10 +2554,12 @@ _caplab = dict(re.findall(r'(\w+): "([^"]+)"',
 _unnamed = sorted({v for v in _tabcap.values()} - set(_caplab))
 ok(not _unnamed,
    f"every gated capability has a label for the locked panel ({_unnamed})")
-ok(_tabcap.get("intake") == "fundraising",
-   "the forms, gifts and results screen is sold as fundraising — it "
-   "straddles learning and CRM too, and the gifts are the row a tenant "
-   "buys it for")
+ok(_tabcap.get("intake") == "fundraising"
+   and _tabcap.get("results") == "learning",
+   "forms and gifts are sold as fundraising, the score imports as "
+   "learning. They shared a screen and so had to share a row, which "
+   "left a school on Learning unable to reach the GED results it had "
+   "bought Learning for")
 _unpriced = [_cp for _cp in sorted(set(_tabcap.values()))
              if c.get(f"/api/capability-info/{_cp}",
                       headers={"host": "partialco.localhost"}).status_code != 200]

@@ -559,6 +559,9 @@ from .main import base_url, current_user, get_con  # noqa: E402  (safe: included
 
 @router.get("/api/intake")
 def intake_page(user=Depends(current_user), con=Depends(get_con)):
+    """Forms and gifts. The score imports used to be here too, and are
+    now their own screen: a school buys Learning for those and has no
+    reason to buy Fundraising to reach them."""
     if not _may_see(user):
         raise HTTPException(403, "an office screen")
     status = {p["name"]: p for p in IG.status(con)["providers"]
@@ -574,21 +577,36 @@ def intake_page(user=Depends(current_user), con=Depends(get_con)):
         r["answers"] = json.loads(r["answers"] or "{}")
     gifts = [dict(r) for r in con.execute(
         "SELECT * FROM gifts ORDER BY at DESC LIMIT 200").fetchall()]
-    results = [dict(r) for r in con.execute(
-        "SELECT t.*, u.name AS student FROM test_results t LEFT JOIN users u ON u.id=t.user_id"
-        " ORDER BY t.taken_at DESC LIMIT 300").fetchall()]
     tot = con.execute("SELECT COALESCE(SUM(amount_cents),0) AS c, COUNT(*) AS n,"
                       " COUNT(DISTINCT COALESCE(NULLIF(email,''), donor)) AS donors"
                       " FROM gifts").fetchone()
     return {"connections": list(status.values()),
-            "responses": resp, "gifts": gifts, "results": results,
+            "responses": resp, "gifts": gifts,
             "gift_totals": {"cents": tot["c"], "n": tot["n"], "donors": tot["donors"]},
-            "unmatched": sum(1 for r in results if not r["user_id"]),
             "forms_inbound_url": f"{base}/api/inbound/google_forms",
             "gifts_inbound_url": f"{base}/api/inbound/network4good",
             "apps_script": APPS_SCRIPT % (f"{base}/api/inbound/google_forms",
                                           key["key"] if key else "<key from the connection card>"),
             "gifts_key_ready": bool(gk)}
+
+
+@router.get("/api/results")
+def results_page(user=Depends(current_user), con=Depends(get_con)):
+    """What a learner passed somewhere else. Its own screen, under
+    Learning, because that is the capability a school actually buys —
+    and teaching staff read it, which the gifts ledger is not for."""
+    if not _may_see(user):
+        raise HTTPException(403, "an office screen")
+    status = {p["name"]: p for p in IG.status(con)["providers"]
+              if p.get("family") == "results"}
+    results = [dict(r) for r in con.execute(
+        "SELECT t.*, u.name AS student FROM test_results t LEFT JOIN users u ON u.id=t.user_id"
+        " ORDER BY t.taken_at DESC LIMIT 300").fetchall()]
+    passed = sum(1 for r in results if r["passed"])
+    return {"connections": list(status.values()), "results": results,
+            "unmatched": sum(1 for r in results if not r["user_id"]),
+            "passed": passed,
+            "learners": len({r["user_id"] for r in results if r["user_id"]})}
 
 
 @router.post("/api/intake/forms/pull")

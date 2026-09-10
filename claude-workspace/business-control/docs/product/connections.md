@@ -10,7 +10,8 @@ is used.
 
 | Family | Screen (rail group) | Providers | Module |
 |---|---|---|---|
-| Intake | Forms, gifts & results (Grow) | Google Forms, Network for Good, GED Manager, NorthStar | `intake.py` |
+| Intake | Forms & gifts (Grow) | Google Forms, Network for Good | `intake.py` |
+| Results | Test results (Teach) | GED Manager, NorthStar | `intake.py` |
 | Advertising | Advertising (Grow) | Meta (Facebook & Instagram), Google Ads (YouTube & Search), TikTok, LinkedIn, X, Reddit, Snapchat; Twitch typed | `ads.py` |
 | Hiring | Hiring (Team) | Indeed, ZipRecruiter, LinkedIn Jobs, Greenhouse, Workable | `hiring.py` |
 | Delivery | Delivery apps (Sell) | Uber Eats, DoorDash | `marketplaces.py` |
@@ -92,7 +93,8 @@ every module that asks it:
 | Listings & reviews | `settings`, `marketing`, `content` |
 | Hiring | `settings`, `workforce` |
 | Delivery apps | `settings` only |
-| Forms, gifts & results | `settings`, `customers` |
+| Forms & gifts | `settings`, `customers` |
+| Test results | `settings`, `customers` |
 
 The owner and any admin always pass. Delivery apps is deliberately the
 narrow one: the obvious reading is that its menu is the product list, so
@@ -101,21 +103,35 @@ every employee, and the screen also connects a partner API and pauses the
 storefront on it. Following the catalogue there would hand a Saturday hire
 the switch that stops delivery revenue.
 
-Advertising, Listings and Forms additionally let any employee *read* the
-screen without a grant; acting on it takes one.
+Advertising, Listings, Forms and Test results additionally let any
+employee or teacher *read* the screen without a grant; acting on it takes
+one. Test results is deliberately readable by teaching staff, who are the
+people it is about.
 
 ## What each screen is sold as
 
-Four of the five belong to a capability the tenant already buys for other
-reasons: Advertising and Listings to Marketing, Hiring to Workforce,
-Delivery apps to Selling. **Forms, gifts & results is sold as
-Fundraising**, and that is a choice rather than a fact — it straddles
-three rows. Its gifts are fundraising, its GED and NorthStar imports are
-learning, and a form response that becomes an enquiry is CRM. Gifts are
-the row a tenant buys the screen for, so that is where it sits. The
-consequence to know: a school on Learning without Fundraising sees the
-screen greyed and imports its score reports after a plan change, not
-before.
+| Screen | Capability |
+|---|---|
+| Advertising | Marketing |
+| Listings & reviews | Marketing |
+| Hiring | Workforce |
+| Delivery apps | Selling |
+| Forms & gifts | Fundraising |
+| Test results | Learning |
+
+Forms, gifts and score imports began as one screen, which meant they had
+to be sold as one capability, and the only defensible pick was
+Fundraising. That left a school on Learning unable to reach the GED
+results it had bought Learning for — the screen greyed, its own data
+behind a plan change it had no other reason to make. A capability
+boundary running through the middle of a screen is a sign the screen is
+two screens, so it became two.
+
+What is left of the argument is small: a form response that becomes an
+enquiry is CRM-ish and sits with the gifts under Fundraising. That is a
+choice rather than a fact, but nothing is stranded by it — a tenant
+without Fundraising loses a tray it was not collecting into anyway,
+rather than losing the record of what its learners passed.
 
 ## Machinery the wave added
 

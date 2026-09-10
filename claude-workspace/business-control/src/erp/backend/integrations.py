@@ -496,7 +496,7 @@ PROVIDERS.update({
                 "ask go through the same address book.",
     },
     "gedmanager": {
-        "label": "GED Manager", "family": "intake",
+        "label": "GED Manager", "family": "results",
         "blurb": "Test scores from GED Manager on each student's record.",
         "auth": "inbound",
         "fields": [], "events": [],
@@ -507,7 +507,7 @@ PROVIDERS.update({
                 "no API, so this is the direction that exists.",
     },
     "northstar": {
-        "label": "NorthStar Digital Literacy", "family": "intake",
+        "label": "NorthStar Digital Literacy", "family": "results",
         "blurb": "Assessment results and certificates from NorthStar on "
                  "each learner's record.",
         "auth": "inbound",

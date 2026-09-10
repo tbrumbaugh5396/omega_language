@@ -5954,7 +5954,8 @@ _navd = set(re.findall(r'\{ id: "([\w:-]+)"', _ops))
 # platforms on Advertising, the boards on Hiring — which is the place a
 # person looks for it. Thirty rail entries is a list nobody scans.
 _FAMILY_TAB = {"intake": "intake", "ads": "ads", "hiring": "hiring",
-               "delivery": "marketplaces", "listings": "listings"}
+               "delivery": "marketplaces", "listings": "listings",
+               "results": "results"}
 _missing = [n for n in _pnames
             if n not in _navd and f"ig-{n}" not in _navd
             and _FAMILY_TAB.get(_ig.PROVIDERS[n].get("family", "")) not in _navd]
@@ -7599,8 +7600,9 @@ from erp.backend import listings as _lst, marketplaces as _mkt  # noqa: E402
 
 _st2 = c.get("/api/admin/integrations", headers=A).json()
 _fam = {p["name"]: p for p in _st2["providers"]}
-_WAVE = {"google_forms": "intake", "network4good": "intake", "gedmanager": "intake",
-         "northstar": "intake", "meta_ads": "ads", "google_ads": "ads",
+_WAVE = {"google_forms": "intake", "network4good": "intake",
+         "gedmanager": "results",
+         "northstar": "results", "meta_ads": "ads", "google_ads": "ads",
          "tiktok_ads": "ads", "linkedin_ads": "ads", "x_ads": "ads",
          "reddit_ads": "ads", "snapchat_ads": "ads", "indeed": "hiring",
          "ziprecruiter": "hiring", "linkedin_jobs": "hiring", "greenhouse": "hiring",
@@ -7694,7 +7696,7 @@ _om = c.post("/api/login", json={"name": "Office Manager",
                                  "role": "employee"}).json()
 _OM = {"Authorization": "Bearer " + _om["token"]}
 _NEW_SCREENS = ("/api/ads", "/api/hiring", "/api/marketplaces",
-                "/api/listings", "/api/intake")
+                "/api/listings", "/api/intake", "/api/results")
 ok(all(c.get(_p, headers=_OM).status_code == 403 for _p in
        ("/api/hiring", "/api/marketplaces")),
    "a member of staff with no grant runs none of the new screens")
@@ -8089,6 +8091,19 @@ ok(_r.status_code == 200 and _ocon.execute("SELECT name FROM outreach WHERE id=?
    "or an enquiry on the sales board")
 _ocon.close()
 
+# The screens are split, and each carries only its own: a school buys
+# Learning for the score imports and must not need Fundraising to reach
+# them. One screen could only ever be sold as one capability.
+ok("results" not in c.get("/api/intake", headers=A).json()
+   and "gifts" not in c.get("/api/results", headers=A).json(),
+   "forms and gifts on one screen, scores on another, neither carrying "
+   "the other's rows")
+ok({p["name"] for p in c.get("/api/results", headers=A).json()["connections"]}
+   == {"gedmanager", "northstar"}
+   and {p["name"] for p in c.get("/api/intake", headers=A).json()["connections"]}
+   == {"google_forms", "network4good"},
+   "and each offering only the connections that feed it")
+
 _gk = c.post("/api/admin/integrations/network4good/inbound-key", headers=A).json()["key"]
 _r = c.post("/api/inbound/network4good", headers={"X-API-Key": _gk}, json={
     "transaction_id": "nfg-1", "donor_name": "Generous Giver", "email": "giver@example.com",
@@ -8123,12 +8138,12 @@ _titles = [t.get("title", "") for t in _tl.get("timeline", [])]
 ok(any("Passed GED Reasoning Through Language Arts" in t for t in _titles)
    and any("GED Mathematical Reasoning: 140" in t for t in _titles),
    "a pass is an achievement on their record and a miss is a milestone")
-_ik = c.get("/api/intake", headers=A).json()
-_un = next(t for t in _ik["results"] if not t["user_id"])
-ok(_un["taker"] == "Nobody Known" and _un["certificate"] == "College Ready" and _ik["unmatched"] == 1,
+_rk = c.get("/api/results", headers=A).json()
+_un = next(t for t in _rk["results"] if not t["user_id"])
+ok(_un["taker"] == "Nobody Known" and _un["certificate"] == "College Ready" and _rk["unmatched"] == 1,
    "an unknown taker is kept unmatched, never guessed, and 170 is college-ready")
 ok(c.post(f"/api/intake/results/{_un['id']}/match", headers=A, json={"user_id": _wc["id"]}).status_code == 200
-   and c.get("/api/intake", headers=A).json()["unmatched"] == 0, "until the office says whose it is")
+   and c.get("/api/results", headers=A).json()["unmatched"] == 0, "until the office says whose it is")
 _ns = ("Learner,Email,Module,Score %,Passed,Date,Certificate\n"
        f"{_wc['name']},,Basic Computer Skills,92,Yes,09/05/2026,Yes\n")
 _r = c.post("/api/admin/integrations/northstar/import", headers=A,
@@ -8139,7 +8154,7 @@ ok(any("NorthStar: Basic Computer Skills" in t for t in
    "and the certificate is an achievement")
 ok(c.post("/api/admin/integrations/gedmanager/import", headers=A,
           files={"file": ("ged.csv", _ged.encode(), "text/csv")}).json()["imported"] == 3
-   and len([t for t in c.get("/api/intake", headers=A).json()["results"] if t["provider"] == "gedmanager"]) == 3,
+   and len([t for t in c.get("/api/results", headers=A).json()["results"] if t["provider"] == "gedmanager"]) == 3,
    "importing the same report twice adds nothing")
 
 _fcon = _db.connect()

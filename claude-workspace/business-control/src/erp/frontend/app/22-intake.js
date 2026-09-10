@@ -1,17 +1,23 @@
-// ---------- forms, gifts and results ----------
-/* Three trays of things that arrive from outside as records: form
-   responses, gifts, test results. Each row can become the thing it was
-   really about. */
+// ---------- forms and gifts ----------
+/* Two trays of things that arrive from outside as records: form
+   responses and gifts. Each row can become the thing it was really
+   about — an enquiry, a student, a customer, a donor.
+
+   Score imports were a third tray here until they became their own
+   screen under Teach: one screen could only be sold as one capability,
+   and a school on Learning without Fundraising could not reach the GED
+   results it had bought Learning for. */
 async function renderIntake() {
   const d = await api("/api/intake");
   const admin = S.user.is_admin || S.user.role === "admin" || S.user.role === "owner";
   const forms = d.connections.find((c) => c.name === "google_forms") || {};
   view().innerHTML = `
     <div class="page-head">
-      <div><h2>Forms, gifts & results</h2>
+      <div><h2>Forms & gifts</h2>
         <p class="dim">What arrives from outside as records: the answers to a
-          form, the gifts made to you, the tests your learners pass elsewhere.
-          Each row can be turned into the thing it was about.</p></div>
+          form and the gifts made to you. Each row can be turned into the
+          thing it was about. Test results have a screen of their own,
+          under Teach.</p></div>
       <div class="top-actions">
         ${admin ? `<button class="btn alt" id="ink-gift">Log a gift by hand</button>
           ${forms.connected ? '<button class="btn" id="ink-pull">Pull form responses</button>' : ""}` : ""}
@@ -22,8 +28,6 @@ async function renderIntake() {
         <span class="dim">${d.responses.filter((r) => !r.handled_as).length} not yet handled</span></div>
       <div class="card tile"><span class="dim">Gifts</span><b>${money(d.gift_totals.cents)}</b>
         <span class="dim">${d.gift_totals.n} gift${d.gift_totals.n === 1 ? "" : "s"} from ${d.gift_totals.donors} donor${d.gift_totals.donors === 1 ? "" : "s"}</span></div>
-      <div class="card tile"><span class="dim">Test results</span><b>${d.results.length}</b>
-        <span class="dim">${d.unmatched ? `${d.unmatched} not matched to a student` : "all matched"}</span></div>
     </div>
     <h3>Form responses</h3>
     ${d.responses.length ? `<div class="card"><div class="tablewrap"><table>
@@ -48,18 +52,6 @@ async function renderIntake() {
         <td class="dim">${esc(g.fund || "")}</td><td class="dim">${fmtDate(g.at)}</td>
         <td class="dim">${esc(g.provider)}</td></tr>`).join("")}</tbody></table></div></div>`
       : emptyState("card", "No gifts recorded", "Point Network for Good at the address below, import its CSV, or log one by hand.")}
-    <h3>Test results</h3>
-    ${d.results.length ? `<div class="card"><div class="tablewrap"><table>
-      <thead><tr><th>taker</th><th>student</th><th>test</th><th>score</th><th>when</th></tr></thead>
-      <tbody>${d.results.map((t) => `<tr>
-        <td>${esc(t.taker)}<br><span class="dim">${esc(t.email || "")}</span></td>
-        <td>${t.user_id ? `<a href="#/student/${t.user_id}">${esc(t.student)}</a>`
-          : admin ? `<button class="btn alt sm" data-inkmatch="${t.id}">Match</button>` : '<span class="pill warn">unmatched</span>'}</td>
-        <td>${esc(t.provider === "gedmanager" ? "GED" : "NorthStar")} · ${esc(t.subject)}</td>
-        <td><span class="pill ${t.passed ? "ok" : ""}">${t.score}${t.max_score ? " / " + t.max_score : ""}${t.passed ? " · pass" : ""}</span>
-          ${t.certificate ? `<span class="dim">${esc(t.certificate)}</span>` : ""}</td>
-        <td class="dim">${fmtDate(t.taken_at)}</td></tr>`).join("")}</tbody></table></div></div>`
-      : emptyState("pen", "No results imported", "Export the score report from GED Manager or NorthStar and import it on the cards below.")}
     ${admin ? `<h3>Where it comes from</h3>
     <div class="card">
       <b>Google Forms, as it lands</b>
@@ -69,17 +61,11 @@ async function renderIntake() {
       <textarea readonly rows="8" style="font-family:monospace;font-size:12px">${esc(d.apps_script)}</textarea>
     </div>
     <div class="card">
-      <b>CSV exports</b>
-      <p class="dim">GED Manager and NorthStar export score reports; Network for
-        Good exports donations. Pick the file and the source. Columns are read by
-        what they mean, so an export with different headings still lands.</p>
-      <div class="row2">
-        <div><label>Source</label><select id="ink-src">
-          <option value="gedmanager">GED Manager score report</option>
-          <option value="northstar">NorthStar results</option>
-          <option value="network4good">Network for Good donations</option></select></div>
-        <div><label>File</label><input type="file" id="ink-csv" accept=".csv"></div>
-      </div>
+      <b>The donations export</b>
+      <p class="dim">Network for Good exports a CSV of gifts. Columns are read
+        by what they mean, so an export with different headings still lands.
+        Score reports import on the Test results screen.</p>
+      <label>File</label><input type="file" id="ink-csv" accept=".csv">
       <div id="ink-csvout"></div>
     </div>
     <div id="ink-cxn"></div>` : ""}`;
@@ -95,23 +81,6 @@ async function renderIntake() {
       const r = await api(`/api/intake/forms/${b.dataset.inkas}/as`, { body: { kind: b.dataset.kind } });
       toast(`now ${b.dataset.kind} #${r.id}`); renderIntake();
     } catch (e) { toast(e.message); }
-  });
-  view().querySelectorAll("[data-inkmatch]").forEach((b) => b.onclick = async () => {
-    const t = d.results.find((x) => x.id === +b.dataset.inkmatch);
-    const people = await api("/api/customers?q=" + encodeURIComponent((t.email || t.taker || "").split(" ")[0])).catch(() => []);
-    const list = Array.isArray(people) ? people : (people.customers || []);
-    modal(`<h3>Whose result is this?</h3>
-      <p class="dim">${esc(t.taker)} ${esc(t.email || "")} — ${esc(t.subject)}, ${t.score}</p>
-      <div class="chips">${list.slice(0, 12).map((u) => `<button class="btn alt sm" data-inkpick="${u.id}">${esc(u.name)}${u.email ? " · " + esc(u.email) : ""}</button>`).join("")
-        || '<span class="dim">Nobody similar found. Search on Customers, then match by id below.</span>'}</div>
-      <label>Or a student id</label><input id="ink-uid" type="number">
-      <p><button class="btn" id="ink-match">Match</button></p>`);
-    const go = async (uid) => {
-      try { await api(`/api/intake/results/${t.id}/match`, { body: { user_id: uid } }); closeModal(); renderIntake(); }
-      catch (e) { toast(e.message); }
-    };
-    modalBody().querySelectorAll("[data-inkpick]").forEach((p) => p.onclick = () => go(+p.dataset.inkpick));
-    $("#ink-match").onclick = () => go(+$("#ink-uid").value);
   });
   if ($("#ink-pull")) $("#ink-pull").onclick = async () => {
     try { const r = await api("/api/intake/forms/pull", { method: "POST" }); toast(`${r.new} new from ${r.forms} form(s)`); renderIntake(); }
@@ -144,14 +113,14 @@ async function renderIntake() {
     if (!f) return;
     const fd = new FormData(); fd.append("file", f);
     try {
-      const r = await fetch(`/api/admin/integrations/${$("#ink-src").value}/import`, {
+      const r = await fetch("/api/admin/integrations/network4good/import", {
         method: "POST", headers: { Authorization: "Bearer " + S.user.token }, body: fd });
       const out = await r.json();
       if (!r.ok) throw new Error(out.detail || "import failed");
-      $("#ink-csvout").innerHTML = `<p class="dim">Imported ${out.imported}${"matched" in out ? `, ${out.matched} matched to a student` : ""}.${
+      $("#ink-csvout").innerHTML = `<p class="dim">Imported ${out.imported}.${
         out.skipped.length ? ` Skipped ${out.skipped.length}: ` + out.skipped.map((s) => esc(`row ${s.row} — ${s.why}`)).join("; ") : ""}</p>`;
       renderIntake();
     } catch (err) { toast(err.message); }
   };
-  connectionCards(["google_forms", "network4good", "gedmanager", "northstar"], renderIntake, $("#ink-cxn"));
+  connectionCards(["google_forms", "network4good"], renderIntake, $("#ink-cxn"));
 }
