@@ -30,11 +30,11 @@ reported and audited. **It gives no advice, checks no limit, and files
 nothing** — a screen that implied otherwise would be worse than a
 spreadsheet, because a spreadsheet does not look like it has checked.
 
-On the map: it is drawn from what the install actually knows, projected
-here, with no tiles and no outside service. That is a deliberate limit —
-there is no basemap, so a jurisdiction is where somebody said it is —
-and it is the reason the page works on a laptop with no internet and
-sends nothing anywhere.
+On the map: Leaflet, vendored, over OpenStreetMap tiles when the machine
+is online and a bundled outline of every country when it is not. The
+outline shows every country and the register holds only the watched
+ones, so the map stays a map and the register stays a register. A watched
+place with no boundary of its own is a pin where somebody said it is.
 """
 import json
 import time
