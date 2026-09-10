@@ -19,6 +19,13 @@
   when done (`lsof -ti:8861 | xargs kill`). Both servers share `data/` —
   SQLite WAL handles the two dev processes.
 
+- **A running server does not pick up new code.** Add a route, and the
+  preview started this morning answers 404 on it — which reads as a bug
+  in the new screen and has been reported as one three times. Restart the
+  preview after adding a route, or start it with `--reload`, which
+  watches `src/` only and restarts on a save. Reload is off by default
+  because a restart drops every websocket (the classroom, the chat, the
+  call) and because a save mid-edit can restart on a half-written file.
 - The server binds `127.0.0.1`; curl that address, not `localhost` (IPv6).
   **Since 2026-09-09 the preview (`business-control` in launch.json) binds
   `0.0.0.0`**, so a phone on the same wifi reaches it at

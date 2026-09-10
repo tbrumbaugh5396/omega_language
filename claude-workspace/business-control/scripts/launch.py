@@ -55,6 +55,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument(
+        "--reload", action="store_true",
+        help="restart when a source file under src/ changes. Off by "
+             "default because a restart drops every websocket, and "
+             "because a save mid-edit can restart on a half-written "
+             "file. On, a new route works without anybody "
+             "remembering to restart — which is the failure this "
+             "exists for: a screen added after the server started "
+             "answers 404 and reads as a bug in the screen.")
     ap.add_argument("--https", action="store_true",
                     help="serve TLS with a self-signed cert (needed for PWA "
                          "install from other devices; expect a browser warning)")
@@ -117,6 +126,13 @@ def main() -> int:
     if args.host in ("0.0.0.0", "::") and ip != "127.0.0.1":
         print(f"  on the wifi → {scheme}://{ip}:{port}   (phones on the same "
               f"network; tenants by host alias, see CLAUDE.md)")
+    if args.reload:
+        # Watch the source only. Watching the whole tree means every order,
+        # every uploaded photo and every WAL checkpoint restarts the
+        # server, which is worse than not reloading at all.
+        ssl_args["reload"] = True
+        ssl_args["reload_dirs"] = [str(ROOT / "src")]
+        print("  reloading on changes under src/ — websockets drop on each")
     try:
         uvicorn.run("erp.backend.main:app", host=args.host, port=port,
                     log_level="info", **ssl_args)
