@@ -4024,6 +4024,8 @@ ok('id: "supply"' in _ops and 'id: "audit"' in _ops and 'id: "dbview"' in _ops,
    "and each has a tab")
 
 
+from erp.backend import auth  # noqa: E402
+
 # --- PINs are hashed ---
 # The threat is a stolen copy of the database. The pepper lives in the config
 # file, so the four-digit space can't be enumerated from the dump alone.
@@ -4034,7 +4036,19 @@ _row = _con_p.execute(
     (c.get("/api/me", headers=A).json()["id"],)).fetchone()
 ok(not (_row["pin"] or "").strip(), "no PIN is stored in plaintext")
 ok(len(_row["pin_hash"]) == 64, "a PIN is stored as a hash")
-ok("8342" not in _row["pin_hash"], "and the digits are not in it")
+# What this is really asserting is that the stored value cannot be
+# reproduced without the pepper. It used to assert that the four digits
+# were not a substring of the hash, which is true of a hex string about
+# 999 times in 1000 and fails the other time for no reason anybody could
+# reproduce — the exact shape of flake this repo's date audit exists to
+# stamp out.
+_bare = __import__("hashlib").sha256(b"8342").hexdigest()
+ok(_row["pin_hash"] != _bare,
+   "and it is not the bare hash of the PIN, which four digits would not "
+   "survive being")
+ok(_row["pin_hash"] != auth.hash_pin("8342", "some other pepper"),
+   "the pepper is what makes the four-digit space unenumerable from a "
+   "stolen copy of the database")
 ok(_con_p.execute("SELECT COUNT(*) n FROM users WHERE pin LIKE '%8342%'"
                   ).fetchone()["n"] == 0,
    "the PIN appears nowhere in the users table")
@@ -8257,7 +8271,9 @@ ok(all("WRITES" in _mcps.description_for(t) if hasattr(_mcps, "description_for")
 
 # Nothing that spends, publishes or cannot be undone, even with writes on.
 _offered = {f"{t['method']} {t['path']}" for t in _mcpt.TOOLS}
-for _forbidden in ("POST /api/accounting/journals",
+for _forbidden in ("POST /api/payroll/runs/{rid}/paid",
+                   "POST /api/payroll/rates",
+                   "POST /api/accounting/journals",
                    "POST /api/treasury/transfer",
                    "POST /api/automation/rules",
                    "POST /api/orders",
@@ -8613,6 +8629,291 @@ for _cap, _tab in (("accounting", "accounting"), ("treasury", "treasury"),
 ok('"Money"' in _ops and "Books" in _ops and "Cash & holdings" in _ops,
    "the books and the bank are their own group rather than more of "
    "Company, which was already seven deep")
+
+
+
+def _dbcon():
+    """A connection for the checks that read tables directly."""
+    return _db.connect()
+
+
+
+# ===== finance, payroll and onboarding ==================================
+# The last three the price book sold without building. Payroll is the one
+# that has to be right: a payslip is the document somebody disputes.
+from erp.backend import finance as _fin  # noqa: E402
+from erp.backend import onboarding as _onb  # noqa: E402
+from erp.backend import payroll as _pay  # noqa: E402
+
+# --- no two modules may own the same table name ---
+# This is not decoration. classroom.py already owned a table called
+# pay_rates, keyed on teacher_id; payroll's first version declared its own
+# with the same name, CREATE TABLE IF NOT EXISTS did nothing at all and
+# said nothing about it, and the index that followed failed on a column
+# the other module's table has never had. The same collision between the
+# storefront's api_keys and the ERP's had been live and unnoticed: every
+# call to the public /api/v1 answered 500 on a missing `active`.
+_owners: dict = {}
+for _f in Path("src").rglob("*.py"):
+    # The open bracket matters: without it this matches the phrase
+    # inside the comments explaining the collisions it exists to catch.
+    for _m in _re3.finditer(r"CREATE TABLE IF NOT EXISTS (\w+)\s*\(",
+                            _f.read_text(errors="replace")):
+        _owners.setdefault(_m.group(1), set()).add(_f.name)
+_shared = {t: sorted(fs) for t, fs in _owners.items() if len(fs) > 1}
+ok(not _shared,
+   f"no table name is declared by two modules ({_shared}) — the second "
+   "declaration is silently ignored and the two disagree forever after")
+ok(len(_owners) > 200, f"and the check saw the whole schema ({len(_owners)})")
+
+# The bug that guard was written for, checked at the front door too.
+_r = c.get("/api/v1/products", headers={"Authorization": "Bearer sk_live_nope"})
+ok(_r.status_code == 401,
+   "the public API refuses an unknown key rather than failing on its own "
+   "schema")
+
+# --- payroll ---
+ok(c.get("/api/payroll", headers=_WCU).status_code == 403,
+   "payroll is the office's")
+_ded = [
+    {"code": "tax", "label": "Income tax", "kind": "percent",
+     "rate_bps": 2000, "side": "employee", "position": 1},
+    {"code": "pension", "label": "Pension", "kind": "percent",
+     "rate_bps": 500, "side": "employee", "of_remaining": True, "position": 2},
+    {"code": "er", "label": "Employer contribution", "kind": "percent",
+     "rate_bps": 300, "side": "employer", "position": 3},
+]
+for _d in _ded:
+    ok(c.post("/api/payroll/deductions", headers=A, json=_d).status_code == 200,
+       f"a deduction is configured: {_d['label']}")
+ok(c.post("/api/payroll/deductions", headers=A, json={
+    "code": "bad", "label": "Over a hundred percent", "kind": "percent",
+    "rate_bps": 20000}).status_code == 400,
+   "and cannot take more than everything")
+_lines, _taken, _employer = _pay._apply(10000, _pay.deductions(_dbcon()))
+ok([x["amount_cents"] for x in _lines] == [2000, 400, 300],
+   "a percentage of gross, then a percentage of WHAT IS LEFT, then an "
+   "employer cost — compounding in the order the operator set, which is "
+   "why the order is a field")
+ok(_taken == 2400 and _employer == 300,
+   "the employer's share is on top of the wage, not out of it")
+_, _t2, _ = _pay._apply(1000, [{"code": "x", "label": "Huge", "kind": "fixed",
+                                "rate_bps": 0, "amount_cents": 999999,
+                                "side": "employee", "of_remaining": 0}])
+ok(_t2 == 1000, "and nothing takes more off somebody than they earned")
+
+# Somebody who actually worked. Shifts are written directly because the
+# clock is another test's subject; what matters here is that payroll reads
+# the same hours the timesheet does.
+_emp = c.post("/api/login", json={"name": "Payroll Person",
+                                  "role": "employee"}).json()
+_pcon = _db.connect()
+_pcon.execute("UPDATE users SET employment='employee' WHERE id=?", (_emp["id"],))
+_p_from = _t0.time() - 20 * 86400
+for _i in range(3):
+    _in = _p_from + _i * 86400 + 9 * 3600
+    _pcon.execute("INSERT INTO shifts(user_id,clock_in,clock_out) VALUES(?,?,?)",
+                  (_emp["id"], _in, _in + 8 * 3600))
+_pcon.commit()
+_pcon.close()
+ok(c.post("/api/payroll/rates", headers=A, json={
+    "user_id": _emp["id"], "kind": "hourly", "rate_cents": 2000,
+    "overtime_bps": 15000, "effective_from": _p_from - 86400}
+   ).status_code == 200, "a rate is set, dated from when it applies")
+ok(c.post("/api/payroll/rates", headers=A, json={
+    "user_id": _emp["id"], "rate_cents": 2000, "overtime_bps": 5000}
+   ).status_code == 400,
+   "and overtime cannot be worth less than the hour it was")
+
+_run = c.post("/api/payroll/runs", headers=A, json={
+    "label": "Test period", "period_start": _p_from - 86400,
+    "period_end": _t0.time()}).json()["id"]
+_r = c.post("/api/payroll/runs", headers=A, json={
+    "label": "Overlapping", "period_start": _p_from,
+    "period_end": _t0.time() - 86400})
+ok(_r.status_code == 400 and "twice" in _r.text,
+   "two runs over the same hours would pay them twice, so the second is "
+   "refused")
+ok(c.post(f"/api/payroll/runs/{_run}/approve", headers=A,
+          json={}).status_code == 400,
+   "an unbuilt run approves nothing and must not look as if it did")
+_b = c.post(f"/api/payroll/runs/{_run}/build", headers=A).json()
+ok(_b["payslips"] >= 1, "building works out the payslips")
+_rd = c.get(f"/api/payroll/runs/{_run}", headers=A).json()
+_slip = next(s for s in _rd["payslips"] if s["user_id"] == _emp["id"])
+ok(_slip["regular_hours"] == 24.0 and _slip["gross_cents"] == 48000,
+   f"24 hours at $20 is $480 gross ({_slip['regular_hours']}h, "
+   f"{_slip['gross_cents']})")
+ok(_slip["net_cents"] == 48000 - 9600 - 1920,
+   "less 20% tax and 5% of what is left")
+ok(_slip["employer_cents"] == 1440,
+   "with the employer's 3% recorded beside it rather than inside it")
+ok(sum(l["amount_cents"] for l in _slip["lines"]) == _slip["gross_cents"],
+   "and the lines add up to the gross, so the working is visible")
+_before_build = _slip["gross_cents"]
+ok(c.post(f"/api/payroll/runs/{_run}/build", headers=A).json()["payslips"]
+   == _b["payslips"], "a draft rebuilds without duplicating anybody")
+
+ok(c.post(f"/api/payroll/runs/{_run}/paid", headers=A,
+          json={}).status_code == 400, "a run is approved before it is paid")
+ok(c.post(f"/api/payroll/runs/{_run}/approve", headers=A,
+          json={}).status_code == 200, "approving freezes it")
+ok(c.post(f"/api/payroll/runs/{_run}/build", headers=A).status_code == 400,
+   "and an approved run does not rebuild — a payslip from March must "
+   "still say in June what it said in March")
+_mine = c.get("/api/payroll/mine", headers={
+    "Authorization": "Bearer " + _emp["token"]}).json()["payslips"]
+ok(len(_mine) == 1 and _mine[0]["gross_cents"] == _before_build
+   and _mine[0]["lines"],
+   "the person paid sees their own payslip in full, working included — a "
+   "number somebody cannot see the working of is one they cannot dispute")
+_r = c.post(f"/api/payroll/runs/{_run}/paid", headers=A, json={})
+ok(_r.status_code == 200 and _r.json()["journal_id"],
+   "marking it paid puts it in the books, which approving did not")
+_j = c.get(f"/api/accounting/journals/{_r.json()['journal_id']}",
+           headers=A).json()
+_by_acct = {}
+for _l in _j["lines"]:
+    _by_acct[_l["account"]] = _by_acct.get(_l["account"], 0) \
+        + _l["debit_cents"] - _l["credit_cents"]
+ok(_by_acct.get("6100", 0) == _rd["gross_cents"] + _rd["employer_cents"],
+   "the wage and the employer's share are both a cost")
+ok(_by_acct.get("2210", 0) == -(_rd["deductions_cents"] + _rd["employer_cents"]),
+   "what was held back is owed onward, not earned")
+ok(_by_acct.get("1010", 0) == -_rd["net_cents"],
+   "and only the net actually left the bank")
+ok(c.get("/api/accounting", headers=A).json()["trial_balance"]["balanced"],
+   "the books still balance with payroll in them")
+ok(c.post(f"/api/payroll/runs/{_run}/cancel", headers=A).status_code == 400,
+   "a paid run is history — it is reversed in the books, not cancelled here")
+
+# --- finance ---
+ok(c.get("/api/finance", headers=_WCU).status_code == 403,
+   "the finances are the office's")
+_fp = c.get("/api/finance", headers=A).json()
+ok("rows" in _fp["receivables"] and "aged" in _fp["receivables"],
+   "what is owed to us is derived from the orders, aged by how long it "
+   "has been owed")
+_fcon = _db.connect()
+_owed = _fcon.execute(
+    "SELECT COALESCE(SUM(total_cents),0) AS c FROM orders WHERE"
+    " payment_status IN ('on_terms','unpaid') AND status<>'cancelled'"
+    ).fetchone()["c"]
+ok(_fp["receivables"]["total_cents"] == _owed,
+   "and it IS the orders, not a second copy that can drift from them")
+ok(sum(_fp["receivables"]["aged"].values())
+   == _fp["receivables"]["total_cents"],
+   "every pound owed sits in exactly one age bucket")
+_fcon.close()
+
+_bud = c.post("/api/finance/budgets", headers=A, json={
+    "label": "Test year", "starts": _t0.time() - 180 * 86400,
+    "ends": _t0.time() + 180 * 86400}).json()["id"]
+ok(c.post("/api/finance/budgets", headers=A, json={
+    "label": "Backwards", "starts": _t0.time(),
+    "ends": _t0.time() - 86400}).status_code == 400,
+   "a budget ends after it starts")
+ok(c.post(f"/api/finance/budgets/{_bud}/lines", headers=A, json={
+    "account": "9999", "amount_cents": 100}).status_code == 400,
+   "a budget line is planned against an account the actual can land in, "
+   "or the two can never be compared")
+c.post(f"/api/finance/budgets/{_bud}/lines", headers=A,
+       json={"account": "4000", "amount_cents": 10_000_00})
+c.post(f"/api/finance/budgets/{_bud}/lines", headers=A,
+       json={"account": "6100", "amount_cents": 100_00})
+_bv = c.get(f"/api/finance/budgets/{_bud}", headers=A).json()
+_sales = next(l for l in _bv["lines"] if l["account"] == "4000")
+_wages = next(l for l in _bv["lines"] if l["account"] == "6100")
+ok(_sales["actual_cents"] == next(
+    b["balance_cents"] for b in _acc.balances(
+        _dbcon(), since=_bv["starts"], upto=_bv["ends"]) if b["code"] == "4000"),
+   "the actual comes from the ledger, so budget and books cannot drift "
+   "into two definitions of a cost")
+ok(_wages["actual_cents"] > _wages["planned_cents"] and not _wages["on_track"],
+   "spending more than planned on wages is off track")
+ok(_sales["actual_cents"] < _sales["planned_cents"] and not _sales["on_track"],
+   "and so is earning LESS than planned — one subtraction cannot mean "
+   "both, so the sign follows the kind of account")
+c.post(f"/api/finance/budgets/{_bud}/lines", headers=A,
+       json={"account": "4000", "amount_cents": 1})
+ok(len(c.get(f"/api/finance/budgets/{_bud}", headers=A).json()["lines"]) == 2,
+   "a line for an account already budgeted replaces it rather than "
+   "doubling it")
+_fc = c.get("/api/finance", headers=A).json()["forecast"]
+ok(len(_fc["weeks"]) == 12 and _fc["weeks"][0]["closing_cents"] is not None,
+   "the forecast runs a quarter ahead")
+ok("not a prediction" in _fc["note"],
+   "and says on the screen that it is arithmetic on the rows already "
+   "here, not a promise anybody made")
+
+# --- onboarding ---
+ok(c.get("/api/onboarding", headers=_WCU).status_code == 403,
+   "onboarding is the office's")
+_ob = c.get("/api/onboarding", headers=A).json()
+ok(_ob["templates"] and _ob["templates"][0]["steps"],
+   "the built-in list is seeded as an editable template — an empty "
+   "template editor teaches nobody what a template is for")
+ok([s["title"] for s in _ob["templates"][0]["steps"]]
+   == [t[0] for t in _hir.ONBOARDING],
+   "and it is the list hiring already used, so nothing changed for an "
+   "install that never opens this screen")
+_tpl = c.post("/api/onboarding/templates", headers=A, json={
+    "name": "Driver", "role": "employee"}).json()["id"]
+c.post(f"/api/onboarding/templates/{_tpl}/steps", headers=A, json={
+    "title": "Licence on file", "tab": "docs", "days_after": 0,
+    "needs_document": True})
+c.post(f"/api/onboarding/templates/{_tpl}/steps", headers=A, json={
+    "title": "Van walkaround", "tab": "routes", "days_after": 2})
+ok(c.post(f"/api/onboarding/templates/{_tpl}/steps", headers=A, json={
+    "title": "Too far off", "days_after": 999}).status_code == 400,
+   "a step falls due between the start day and a year in")
+_started = c.post("/api/onboarding/start", headers=A, json={
+    "user_id": _emp["id"], "template_id": _tpl,
+    "starts": _t0.time() - 5 * 86400}).json()
+ok(_started["steps"] == 2, "starting somebody writes their list")
+ok(c.post("/api/onboarding/start", headers=A, json={
+    "user_id": _emp["id"], "template_id": _tpl}).json().get("already"),
+   "and starting the same one twice would leave two of every step, so it "
+   "does not")
+_ob = c.get("/api/onboarding", headers=A).json()
+_j = next(j for j in _ob["journeys"] if j["user_id"] == _emp["id"])
+ok(_j["overdue"] == 2 and _j["total"] == 2,
+   "dates count from THEIR start date, so a list begun late is late")
+ok(_j["waiting_on_documents"] == 1,
+   "and a step that needs a document says so before anybody ticks it")
+_doc_task = next(t for t in _j["tasks"] if t["needs_document"])
+_r = c.post(f"/api/onboarding/tasks/{_doc_task['id']}/done", headers=A, json={})
+ok(_r.status_code == 400 and "waiting on a document" in _r.text,
+   "'we asked for their right-to-work' and 'we have it' are different "
+   "states, and only one of them ticks")
+ok(c.post(f"/api/onboarding/tasks/{_doc_task['id']}/done", headers=A,
+          json={"document_id": 1}).status_code == 200,
+   "with one attached it ticks")
+_plain = next(t for t in _j["tasks"] if not t["needs_document"])
+c.post(f"/api/onboarding/tasks/{_plain['id']}/done", headers=A, json={})
+_ob = c.get("/api/onboarding", headers=A).json()
+_j = next(j for j in _ob["journeys"] if j["user_id"] == _emp["id"])
+ok(_j["complete"] and _j["completed_at"],
+   "and the journey finishes when its last step does")
+_theirs = c.get("/api/onboarding/mine", headers={
+    "Authorization": "Bearer " + _emp["token"]}).json()["journeys"]
+ok(_theirs and _theirs[0]["total"] == 2,
+   "a new starter can see what is expected of them without asking the "
+   "person who set it up")
+
+# Hiring hands off to a template when the role has one, and keeps its own
+# list otherwise, so an install that never opens Onboarding is unchanged.
+_hsrc = Path("src/erp/backend/hiring.py").read_text()
+ok("_ob.template_for(con, role)" in _hsrc and "if not started:" in _hsrc,
+   "hiring uses the role's template when there is one and its built-in "
+   "list when there is not")
+
+# --- the three are reachable ---
+for _cap in ("finance", "payroll", "onboarding"):
+    ok(f'{_cap}: "{_cap}"' in _ops, f"{_cap} is gated on the capability it "
+                                    "is sold as")
+    ok(_re3.search(rf'\{{ id: "{_cap}",[^}}]*group: "\w', _ops),
+       f"and {_cap} has a place in the navigation")
 
 
 done("core")

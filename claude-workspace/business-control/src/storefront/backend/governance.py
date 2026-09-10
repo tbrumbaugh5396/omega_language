@@ -13,16 +13,16 @@ from .api import admin_user, get_con
 
 router = APIRouter()
 
+# audit_log is NOT declared here. erp/backend/audit.py owns it, and this
+# module writes to it: the ERP's audit screen and the store admin's are two
+# views of one history, which is the point.
+#
+# It used to be declared in both, with a `status` column in one and not the
+# other. Whichever ran its CREATE TABLE IF NOT EXISTS first won and the
+# other's columns never existed. The ERP happened to win on every install,
+# so this was harmless — and would have stopped being harmless the first
+# time the order changed. A table has one owner.
 TABLES = """
-CREATE TABLE IF NOT EXISTS audit_log (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER,
-  actor TEXT DEFAULT '',
-  action TEXT NOT NULL,                    -- POST /api/store/admin/products
-  entity TEXT DEFAULT '',
-  detail TEXT DEFAULT '',
-  created_at REAL NOT NULL
-);
 CREATE INDEX IF NOT EXISTS audit_log_time ON audit_log(created_at DESC);
 """
 
@@ -117,6 +117,9 @@ PATH_RULES = [
 
 
 def init_tables(con):
+    # audit.py owns the table; make sure it is there before indexing it.
+    from erp.backend import audit as _au
+    _au.init_tables(con)
     con.executescript(TABLES)
     for stmt in MIGRATIONS:
         try:

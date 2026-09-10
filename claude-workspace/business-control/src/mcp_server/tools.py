@@ -278,6 +278,32 @@ TOOLS = [
         "method": "GET", "path": "/api/automation",
     },
 
+    {
+        "name": "bc_owed",
+        "summary": "What is owed to the business and what it owes: unpaid "
+                   "orders aged by how long, reimbursements due to staff, "
+                   "purchase orders still to arrive, plus the budget "
+                   "against actual and a cash forecast. The forecast is "
+                   "arithmetic on existing rows, not a prediction.",
+        "method": "GET", "path": "/api/finance",
+    },
+    {
+        "name": "bc_payroll",
+        "summary": "Pay runs with their state and totals, everybody's "
+                   "rate, and who is on the payroll without one. No tax "
+                   "tables exist here — the deductions are rates the "
+                   "business typed, so do not present them as correct for "
+                   "any jurisdiction.",
+        "method": "GET", "path": "/api/payroll",
+    },
+    {
+        "name": "bc_onboarding",
+        "summary": "Who is partway through onboarding, what is overdue, "
+                   "what is waiting on a document, and the templates each "
+                   "role starts on.",
+        "method": "GET", "path": "/api/onboarding",
+    },
+
     # ---------- writing: additive, reversible, off by default ----------
     {
         "name": "bc_add_ticket",
@@ -402,6 +428,11 @@ EXCLUDED = {
     "POST /api/automation/rules": "a rule is a standing instruction — an "
                                   "agent writing one is an agent granting "
                                   "itself an action it was not given",
+    "POST /api/payroll/runs/{rid}/approve": "freezes what people are paid",
+    "POST /api/payroll/runs/{rid}/paid": "says the money has gone, and "
+                                         "puts it in the books",
+    "POST /api/payroll/rates": "what somebody is paid is not an agent's "
+                               "decision",
     "DELETE *": "nothing here deletes",
     "POST /api/admin/*": "settings, staff, permissions and keys",
     "/api/store/admin/*": "the shop front's own admin",

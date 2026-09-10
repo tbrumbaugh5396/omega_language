@@ -134,6 +134,8 @@ const TABS = [
     roles: ["admin"] },
   { id: "hiring", label: "Hiring", icon: "users", group: "Team",
     roles: ["admin"] },
+  { id: "onboarding", label: "Onboarding", icon: "list", group: "Team",
+    roles: ["admin", "employee"] },
   { id: "chat", label: "Chat", icon: "chat", group: "Team", roles: "*" },
   { id: "kiosks", label: "Clock kiosks", icon: "clock", group: "Team",
     roles: ["admin"] },
@@ -147,6 +149,10 @@ const TABS = [
   { id: "accounting", label: "Books", icon: "list", group: "Money",
     roles: ["admin", "employee"] },
   { id: "treasury", label: "Cash & holdings", icon: "card", group: "Money",
+    roles: ["admin", "employee"] },
+  { id: "finance", label: "Owed & planned", icon: "chart", group: "Money",
+    roles: ["admin", "employee"] },
+  { id: "payroll", label: "Payroll", icon: "users", group: "Money",
     roles: ["admin", "employee"] },
 
   // The company itself: its paperwork, its bill, its machines, its record.
@@ -234,7 +240,8 @@ const TAB_CAP = {
   // smaller half of a smaller argument.
   intake: "fundraising", results: "learning",
   accounting: "accounting", treasury: "treasury", legal: "legal",
-  automation: "automation",
+  automation: "automation", finance: "finance", payroll: "payroll",
+  onboarding: "onboarding",
 };
 const CAP_LABEL = {
   selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
@@ -243,7 +250,8 @@ const CAP_LABEL = {
   events: "Events", affiliates: "Affiliates", comms: "Comms",
   learning: "Learning", nutrition: "Nutrition", fundraising: "Fundraising",
   accounting: "Accounting", treasury: "Treasury & investments",
-  legal: "Legal", automation: "Automation",
+  legal: "Legal", automation: "Automation", finance: "Finance",
+  payroll: "Payroll", onboarding: "Onboarding",
   api: "API & data platform", infosec: "InfoSec",
 };
 // null caps = everything on: legacy installs, the provider, and any tenant
@@ -481,7 +489,8 @@ async function render() {
     marketplaces: renderMarketplaces, intake: renderIntake,
     results: renderResults, accounting: renderBooks,
     treasury: renderTreasury, legal: renderLegal,
-    automation: renderAutomations,
+    automation: renderAutomations, finance: renderFinance,
+    payroll: renderPayroll, onboarding: renderOnboarding,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

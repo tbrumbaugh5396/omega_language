@@ -59,7 +59,7 @@ def api_key(request: Request, authorization: str = Header(default=""),
     if not raw:
         raise HTTPException(401, "provide an API key: Authorization: Bearer "
                                  "sk_live_… or X-API-Key")
-    row = con.execute("SELECT * FROM api_keys WHERE key_hash=? AND active=1",
+    row = con.execute("SELECT * FROM store_api_keys WHERE key_hash=? AND active=1",
                       (hash_key(raw),)).fetchone()
     if row is None:
         raise HTTPException(401, "invalid or revoked API key")
@@ -71,7 +71,7 @@ def api_key(request: Request, authorization: str = Header(default=""),
     if len(dq) >= RATE_PER_MIN:
         raise HTTPException(429, f"rate limit: {RATE_PER_MIN} requests/minute")
     dq.append(now)
-    con.execute("UPDATE api_keys SET last_used_at=?, calls=calls+1 WHERE id=?",
+    con.execute("UPDATE store_api_keys SET last_used_at=?, calls=calls+1 WHERE id=?",
                 (db.now(), row["id"]))
     con.commit()
     return row

@@ -158,7 +158,13 @@ CREATE TABLE IF NOT EXISTS page_sections (
 );
 CREATE INDEX IF NOT EXISTS page_sections_slug
   ON page_sections(page_slug, position);
-CREATE TABLE IF NOT EXISTS api_keys (
+/* The PUBLIC API's keys (sk_live_…), which are not the ERP's keys.
+   erp/backend/apikeys.py owns a table called api_keys holding
+   account-bound bck_ keys with entirely different columns, and whichever
+   module ran its CREATE TABLE IF NOT EXISTS first silently won. The ERP
+   won on every install, so /api/v1 answered every request with a 500 on
+   a missing `active` column. Two different things needed two names. */
+CREATE TABLE IF NOT EXISTS store_api_keys (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
   key_hash TEXT UNIQUE NOT NULL,           -- sha256; the secret is shown once
@@ -2608,7 +2614,7 @@ def list_keys(u=Depends(admin_user), con=Depends(get_con)):
     from .public_api import SCOPES
     return {"keys": [dict(r) for r in con.execute(
         "SELECT id,name,prefix,scopes,active,last_used_at,calls,created_at"
-        " FROM api_keys ORDER BY id DESC").fetchall()],
+        " FROM store_api_keys ORDER BY id DESC").fetchall()],
         "scopes": SCOPES}
 
 
@@ -2620,7 +2626,7 @@ def create_key(body: KeyBody, u=Depends(admin_user), con=Depends(get_con)):
         raise HTTPException(400, "pick at least one scope")
     raw, hashed, prefix = mint_key()
     con.execute(
-        "INSERT INTO api_keys(name,key_hash,prefix,scopes,created_at)"
+        "INSERT INTO store_api_keys(name,key_hash,prefix,scopes,created_at)"
         " VALUES(?,?,?,?,?)",
         (body.name.strip()[:60] or "app key", hashed, prefix,
          ",".join(scopes), db.now()))
@@ -2632,7 +2638,7 @@ def create_key(body: KeyBody, u=Depends(admin_user), con=Depends(get_con)):
 
 @router.delete("/api/store/admin/keys/{kid}")
 def revoke_key(kid: int, u=Depends(admin_user), con=Depends(get_con)):
-    con.execute("UPDATE api_keys SET active=0 WHERE id=?", (kid,))
+    con.execute("UPDATE store_api_keys SET active=0 WHERE id=?", (kid,))
     con.commit()
     return {"ok": True}
 

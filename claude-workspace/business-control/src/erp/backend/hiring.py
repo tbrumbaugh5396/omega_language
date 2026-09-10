@@ -394,9 +394,22 @@ def hire(con, cfg, applicant_id: int, by, *, role: str, job: str,
          secrets.token_urlsafe(24), db.now()))
     uid = cur.lastrowid
     now = time.time()
-    for i, (title, tab) in enumerate(ONBOARDING):
-        con.execute("INSERT INTO onboarding_tasks(user_id,title,tab,position,"
-                    " created_at) VALUES(?,?,?,?,?)", (uid, title, tab, i, now))
+    # A template for this role if the business has written one, and the
+    # built-in list otherwise — so an install that never opens Onboarding
+    # behaves exactly as it did before templates existed.
+    started = False
+    try:
+        from . import onboarding as _ob
+        if _ob.template_for(con, role) is not None:
+            _ob.start(con, uid, 0, now)
+            started = True
+    except Exception:                                        # noqa: BLE001
+        started = False
+    if not started:
+        for i, (title, tab) in enumerate(ONBOARDING):
+            con.execute("INSERT INTO onboarding_tasks(user_id,title,tab,"
+                        " position,created_at) VALUES(?,?,?,?,?)",
+                        (uid, title, tab, i, now))
     con.execute("UPDATE applicants SET stage='hired', user_id=?, updated_at=?"
                 " WHERE id=?", (uid, now, applicant_id))
     con.commit()

@@ -53,7 +53,18 @@ Things to know before touching them:
 - **Automation actions are a closed list.** Adding one that spends,
   publishes or mails a customer defeats the point; a rule that wants that
   wants a ticket.
-- Still sold and still unbuilt: **Finance, Payroll, Onboarding**.
+- `finance.py` derives receivables and payables from existing rows and
+  never stores them; only the budget is stored. `payroll.py` reads
+  `timesheet.hours_for` rather than counting hours again, freezes figures
+  on approval, and posts to the ledger only on payment. `onboarding.py`
+  owns the templates and adds columns to hiring's `onboarding_tasks`, so
+  it inits AFTER hiring.
+- **A table has one owner.** The suite asserts no table name is declared
+  by two modules: `CREATE TABLE IF NOT EXISTS` on a taken name does
+  nothing silently. That guard caught payroll trying to take `pay_rates`
+  from classroom.py, and found two live collisions — `api_keys`, which
+  had been 500ing every `/api/v1` call, and `audit_log`.
+- Every capability in the price book now has something behind it.
 
 ## The agent door
 

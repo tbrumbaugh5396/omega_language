@@ -108,6 +108,7 @@ CHART = [
     ("2000", "Money we owe", "liability", 1),
     ("2100", "Sales tax owed", "liability", 1),
     ("2200", "Owed to staff", "liability", 1),
+    ("2210", "Payroll deductions owed", "liability", 1),
     ("3000", "Owner's capital", "equity", 1),
     ("3100", "Retained earnings", "equity", 1),
     ("4000", "Sales", "income", 1),
@@ -117,6 +118,7 @@ CHART = [
     ("4900", "Other income", "income", 1),
     ("5000", "Cost of goods sold", "expense", 1),
     ("6000", "Operating expenses", "expense", 1),
+    ("6100", "Wages and salaries", "expense", 1),
     ("6900", "Depreciation", "expense", 1),
 ]
 # Where an expense category lands. Anything unmapped goes to 6000, which
