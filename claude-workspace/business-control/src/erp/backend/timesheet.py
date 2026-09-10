@@ -26,7 +26,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 from .main import CFG, current_user, get_con
 
 router = APIRouter()
@@ -192,14 +192,10 @@ def _week_start(ts: float) -> float:
 
 def _office(user) -> bool:
     """Who may look at everybody's hours and sign them off. The owner, an
-    admin, and anyone the permissions grid has given the money areas —
-    which is how an office manager gets it without being made an owner."""
-    if user["is_admin"] or user["role"] == "owner":
-        return True
-    perms = (user["permissions"] or "").split(",")
-    return any(p.strip() in ("*", "settings", "finance", "workforce")
-               for p in perms)
-
+    admin, and anyone the permissions grid has given the money or people
+    areas — which is how an office manager gets it without being made an
+    owner."""
+    return auth.office(user, "settings", "finance", "workforce")
 
 def _require_office(user) -> None:
     if not _office(user):

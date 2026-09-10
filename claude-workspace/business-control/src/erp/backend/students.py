@@ -25,7 +25,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS student_profiles (
@@ -106,10 +106,11 @@ def init_tables(con):
 def _office(user) -> bool:
     """Who reads and edits a student's record: the office, and the
     teaching staff. A volunteer at the door sees the register, not
-    somebody's schooling."""
-    return bool(user["is_admin"] or user["role"] in (
-        "employee", "teacher", "director", "owner"))
-
+    somebody's schooling. Not the same question the other modules ask —
+    teaching staff are here by their job, not by a grant — so the shared
+    predicate answers only the office half of it."""
+    return (auth.office(user)
+            or user["role"] in ("employee", "teacher", "director"))
 
 def _require_office(user) -> None:
     if not _office(user):

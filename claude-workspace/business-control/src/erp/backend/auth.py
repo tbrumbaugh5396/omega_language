@@ -240,3 +240,30 @@ def user_json(u) -> dict:
             "has_password": bool(u["password_hash"]),
             "requested_role": u["requested_role"] or "",
             "is_admin": bool(u["is_admin"]), "token": u["token"]}
+
+
+# ---------- who speaks for the office ----------
+
+def office(user, *areas: str) -> bool:
+    """Does this person answer for the office on one of these areas?
+
+    The owner and any admin always do. Everybody else does when the
+    permissions grid has granted them one of the areas named — which is
+    how an office manager signs off hours, approves an expense or
+    answers a review without being made an owner. `permitted()` in main
+    says the same thing about a single screen; this is the predicate
+    form, for the modules that ask the question in several places.
+
+    It lives here because it was written eight times. Two of those
+    copies read `user["permissions"]` directly and so missed the role
+    defaults; five checked the admin bit alone, which is how the person
+    trusted to approve an expense could not open the hiring board at
+    all. Naming the areas at each call site keeps that readable: a
+    module says which grants it accepts, rather than inheriting a list
+    from somewhere else.
+    """
+    if user["is_admin"] or user["role"] == "owner":
+        return True
+    from storefront.backend import governance      # avoids a cycle
+    have = governance.granted(user)
+    return any(a in have for a in ("*",) + areas)

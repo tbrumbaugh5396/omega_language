@@ -33,7 +33,7 @@ import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 from . import integrations as IG
 
 TABLES = """
@@ -105,8 +105,9 @@ def _window() -> tuple:
 
 
 def _office(user) -> bool:
-    return bool(user["is_admin"] or user["role"] in ("admin", "owner"))
-
+    """The ledger is marketing's money: whoever runs the campaigns, and
+    whoever answers for what they cost."""
+    return auth.office(user, "settings", "marketing", "finance")
 
 def _may_see(user) -> bool:
     return _office(user) or user["role"] in ("employee",)

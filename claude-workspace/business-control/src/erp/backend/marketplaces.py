@@ -29,7 +29,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 from . import integrations as IG
 
 TABLES = """
@@ -81,8 +81,17 @@ def init_tables(con):
 
 
 def _office(user) -> bool:
-    return bool(user["is_admin"] or user["role"] in ("admin", "owner"))
+    """Settings, and only settings.
 
+    The tempting reading is that the menu is the product list, so the
+    products grant should run it. But that grant is a role default for
+    every employee, and this screen does more than tick which products
+    are listed: it connects a partner API and it pauses the storefront
+    on it. Following the catalogue here would hand a Saturday hire the
+    switch that stops delivery revenue. The menu follows the shop's
+    configuration, not its catalogue.
+    """
+    return auth.office(user, "settings")
 
 # ---------- credentials ----------
 

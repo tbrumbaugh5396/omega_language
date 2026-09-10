@@ -33,7 +33,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
-from . import blobs, db
+from . import auth, blobs, db
 from . import integrations as IG
 
 TABLES = """
@@ -112,8 +112,8 @@ def init_tables(con):
 
 
 def _office(user) -> bool:
-    return bool(user["is_admin"] or user["role"] in ("admin", "owner"))
-
+    """Hiring is a staff matter, which the grid keeps under settings."""
+    return auth.office(user, "settings", "workforce")
 
 def _slug(title: str, con) -> str:
     base = "".join(ch if ch.isalnum() else "-" for ch in title.lower()).strip("-")

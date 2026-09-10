@@ -32,7 +32,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 from . import integrations as IG
 
 TABLES = """
@@ -98,8 +98,9 @@ def init_tables(con):
 
 
 def _office(user) -> bool:
-    return bool(user["is_admin"] or user["role"] in ("admin", "owner"))
-
+    """Form responses, gifts and results all become people, so this is
+    the customer-list grant."""
+    return auth.office(user, "settings", "customers")
 
 def _may_see(user) -> bool:
     return _office(user) or user["role"] in ("employee", "teacher")

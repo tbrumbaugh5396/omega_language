@@ -80,6 +80,30 @@ heading, matched to a student by email then by exact name, a pass logged
 as an achievement and a miss as a milestone. A row that matches nobody is
 kept unmatched until the office says whose it is.
 
+## Who can run them
+
+Not only the owner. Each screen names the permission-grid areas it
+accepts, and `auth.office(user, *areas)` answers the question once for
+every module that asks it:
+
+| Screen | Grants that open it |
+|---|---|
+| Advertising | `settings`, `marketing`, `finance` |
+| Listings & reviews | `settings`, `marketing`, `content` |
+| Hiring | `settings`, `workforce` |
+| Delivery apps | `settings` only |
+| Forms, gifts & results | `settings`, `customers` |
+
+The owner and any admin always pass. Delivery apps is deliberately the
+narrow one: the obvious reading is that its menu is the product list, so
+the `products` grant should run it — but that grant is a role default for
+every employee, and the screen also connects a partner API and pauses the
+storefront on it. Following the catalogue there would hand a Saturday hire
+the switch that stops delivery revenue.
+
+Advertising, Listings and Forms additionally let any employee *read* the
+screen without a grant; acting on it takes one.
+
 ## Machinery the wave added
 
 - `PROVIDERS[name]["family"]`, `inbound: True` (a provider that connects

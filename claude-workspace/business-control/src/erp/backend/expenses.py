@@ -34,7 +34,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from . import db
+from . import auth, db
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS expense_categories (
@@ -248,11 +248,7 @@ def current_year(cfg) -> int:
 # ── who ──────────────────────────────────────────────────────────────────────
 
 def _office(user) -> bool:
-    if user["is_admin"] or user["role"] == "owner":
-        return True
-    perms = (user["permissions"] or "").split(",")
-    return any(p.strip() in ("*", "settings", "finance") for p in perms)
-
+    return auth.office(user, "settings", "finance")
 
 def _require_office(user) -> None:
     if not _office(user):

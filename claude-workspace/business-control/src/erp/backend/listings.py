@@ -25,7 +25,7 @@ import urllib.parse
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import db, mailer
+from . import auth, db, mailer
 from . import integrations as IG
 
 TABLES = """
@@ -93,8 +93,9 @@ def init_tables(con):
 
 
 def _office(user) -> bool:
-    return bool(user["is_admin"] or user["role"] in ("admin", "owner"))
-
+    """A listing is the shop's public copy and a review is a reply in
+    its name, so this is the marketing and content grant."""
+    return auth.office(user, "settings", "marketing", "content")
 
 def _may_see(user) -> bool:
     return _office(user) or user["role"] == "employee"

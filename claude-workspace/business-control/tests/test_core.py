@@ -7684,6 +7684,71 @@ ok(_h2.get("Authorization", "").startswith("Basic ") and b"client_secret" not in
 _wc = c.post("/api/login", json={"name": "Wave Customer", "region": "West"}).json()
 _WCU = {"Authorization": f"Bearer {_wc['token']}"}
 
+# --- the office manager reaches all of it, without being made an owner ---
+# The five screens above each began by checking the admin bit alone, while
+# the older money and people screens honoured the permissions grid. So the
+# person trusted to approve an expense and sign off everybody's hours could
+# not open the hiring board at all, and could read the ad ledger but do
+# nothing on it. One predicate now, named areas per module.
+_om = c.post("/api/login", json={"name": "Office Manager",
+                                 "role": "employee"}).json()
+_OM = {"Authorization": "Bearer " + _om["token"]}
+_NEW_SCREENS = ("/api/ads", "/api/hiring", "/api/marketplaces",
+                "/api/listings", "/api/intake")
+ok(all(c.get(_p, headers=_OM).status_code == 403 for _p in
+       ("/api/hiring", "/api/marketplaces")),
+   "a member of staff with no grant runs none of the new screens")
+c.post(f"/api/store/admin/staff/{_om['id']}/permissions", headers=A,
+       json={"permissions": ["settings"]})
+_shut = [_p for _p in _NEW_SCREENS if c.get(_p, headers=_OM).status_code != 200]
+ok(not _shut,
+   f"the settings grant opens every one of them, as it already opened the "
+   f"books and the timesheet ({_shut})")
+_omr = c.post("/api/ads/manual", headers=_OM, json={
+    "platform": "other", "name": "Office manager's flyer", "spend_cents": 500})
+ok(_omr.status_code == 200,
+   "and it acts, rather than only looking — a screen you may open and not "
+   "use is the same 403 one click later")
+ok(c.get("/api/admin/db", headers=_OM).status_code == 403,
+   "the grant still doesn't leak into anything else")
+
+# A narrower grant stays narrow: marketing runs the campaigns and the
+# listing, and does not thereby run the books or the hiring.
+_mk = c.post("/api/login", json={"name": "Marketing Hand",
+                                 "role": "employee"}).json()
+_MK = {"Authorization": "Bearer " + _mk["token"]}
+c.post(f"/api/store/admin/staff/{_mk['id']}/permissions", headers=A,
+       json={"permissions": ["marketing"]})
+_mkr = c.post("/api/ads/manual", headers=_MK, json={
+    "platform": "other", "name": "Spring cards", "spend_cents": 100})
+ok(_mkr.status_code == 200
+   and c.post("/api/listings/profile", headers=_MK,
+              json={"category": "Language school"}).status_code == 200,
+   "the marketing grant runs the ad ledger and the listing")
+ok(c.get("/api/hiring", headers=_MK).status_code == 403,
+   "and not the hiring board")
+# Those two proved the grant by writing, so take the rows back out: the
+# ledger's own totals are checked below and a test that leaves a figure
+# behind makes the next one lie.
+for _rid in (_omr.json()["id"], _mkr.json()["id"]):
+    c.delete(f"/api/ads/{_rid}", headers=A)
+ok(c.get("/api/ads", headers=A).json()["total_cents"] == 0,
+   "and the ledger is as empty as it was before they proved it")
+
+# Written once. Eight copies is how the five drifted from the three in the
+# first place, and two of those three read the column directly and so
+# never saw a role default.
+_auth_src = Path("src/erp/backend/auth.py").read_text()
+ok("def office(user, *areas" in _auth_src
+   and "governance.granted(user)" in _auth_src,
+   "the predicate lives in one place and resolves grants through "
+   "governance, role defaults included")
+for _m in ("expenses", "timesheet", "ads", "hiring", "listings",
+           "marketplaces", "intake", "students"):
+    _msrc = Path(f"src/erp/backend/{_m}.py").read_text()
+    ok("auth.office(" in _msrc and '["permissions"]' not in _msrc,
+       f"{_m} asks it rather than keeping a copy")
+
 # --- advertising: the ledger ---
 ok(c.get("/api/ads", headers=_WCU).status_code == 403, "the ledger is an office screen")
 _r = c.post("/api/ads/manual", headers=A, json={
