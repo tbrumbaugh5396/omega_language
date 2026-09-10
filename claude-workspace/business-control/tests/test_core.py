@@ -9237,16 +9237,59 @@ _census_shape = {"result": {"addressMatches": [{
                                      "GEOID": "2502790"}],
         "Census Tracts": [{"NAME": "Census Tract 303", "GEOID": "25025030300"}],
     }}]}}
+# TIGERweb, in the shape the Census actually serves: a service lists its
+# layers once per vintage with shuffling ids, and a query returns GeoJSON.
+_tiger_layers = {"State_County": [(0, "States"), (1, "Counties"),
+                                  (2, "States"), (3, "Counties")],
+                 "Legislative": [(0, "120th Congressional Districts"),
+                                 (1, "2026 State Legislative Districts - Upper"),
+                                 (2, "2026 State Legislative Districts - Lower"),
+                                 (4, "119th Congressional Districts"),
+                                 (5, "2024 State Legislative Districts - Upper"),
+                                 (6, "2024 State Legislative Districts - Lower")],
+                 "Places_CouSub_ConCity_SubMCD": [(4, "Incorporated Places")],
+                 "School": [(0, "Unified School Districts")]}
+_tiger_hits = []
+def _census_req(url, method="GET", headers=None, body=None, timeout=15):
+    if "geocoding.geo.census.gov" in url:
+        return True, _census_shape
+    if "tigerweb.geo.census.gov" in url and "MapServer?f=json" in url:
+        svc = url.split("/TIGERweb/")[1].split("/")[0]
+        return True, {"layers": [{"id": i, "name": n}
+                                 for i, n in _tiger_layers.get(svc, [])]}
+    if "tigerweb.geo.census.gov" in url and "/query?" in url:
+        _tiger_hits.append(url)
+        geoid = url.split("GEOID%3D%27")[1].split("%27")[0]
+        return True, {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"GEOID": geoid},
+             "geometry": {"type": "Polygon", "coordinates": [
+                 [[-71.2, 42.3], [-71.0, 42.3], [-71.0, 42.4], [-71.2, 42.4],
+                  [-71.2, 42.3]]]}}]}
+    return False, "unexpected " + url
 _real_req3 = _ig._req
-_ig._req = lambda url, method="GET", headers=None, body=None, timeout=15: (
-    (True, _census_shape) if "geocoding.geo.census.gov" in url
-    else (False, "unexpected " + url))
+_ig._req = _census_req
 _r = c.post("/api/civics/find", headers=A, json={"address": "1 City Hall Plaza, Boston, MA"})
 ok(_r.status_code == 200 and _r.json()["matched"].startswith("1 CITY HALL"),
    "an address is placed by the Census geocoder, which needs no key")
 ok(len(_r.json()["jurisdictions"]) == 8,
    "and the whole stack comes back: country, state, county, city, the "
    "congressional district, both state chambers and the school district")
+ok(len(_r.json()["boundaries"]["drawn"]) == 7 and not _r.json()["boundaries"]["failed"],
+   "and every Census-placed one is outlined straight away, from the "
+   "Census's own map service — the country is not, having no GEOID")
+ok(any("Legislative/MapServer/4/" in u for u in _tiger_hits),
+   "the congressional district is drawn from the 119th Congress's layer, "
+   "the vintage that PLACED it, not from the 120th that sits first in the "
+   "service — ids there shuffle per vintage and are resolved by name")
+ok(any("Legislative/MapServer/5/" in u for u in _tiger_hits)
+   and any("Legislative/MapServer/6/" in u for u in _tiger_hits),
+   "and each state chamber from its own layer")
+ok(any("School/MapServer/0/" in u for u in _tiger_hits),
+   "the school district from the School service, which is what the "
+   "Census calls it")
+ok(all("maxAllowableOffset" in u for u in _tiger_hits),
+   "every outline asked for simplified, so a coastline is hundreds of "
+   "points rather than tens of thousands")
 ok(_r.json()["state_fips"] == "25" and _r.json()["district"] == "8",
    "with the state and district the keyed sources start from")
 _cv = c.get("/api/civics", headers=A).json()
@@ -9264,8 +9307,23 @@ _n = len(_cv["jurisdictions"])
 c.post("/api/civics/find", headers=A, json={"address": "1 City Hall Plaza, Boston, MA"})
 ok(len(c.get("/api/civics", headers=A).json()["jurisdictions"]) == _n,
    "finding twice adds nothing twice")
+_bos_full = next(j for j in c.get("/api/civics", headers=A).json()["map"]["jurisdictions"]
+                 if j["id"] == _bos["id"])
+ok(isinstance(_bos_full["boundary"], dict) and _bos_full["boundary"]["type"] == "Polygon",
+   "and the outline is stored on the row as geometry the map draws")
+_typed = c.post("/api/civics/jurisdictions", headers=A, json={
+    "name": "Typed Town", "level": "city", "lat": 42.0, "lng": -71.0}).json()["id"]
+_r = c.post(f"/api/civics/jurisdictions/{_typed}/boundary", headers=A)
+ok(_r.status_code == 400 and "typed" in _r.text,
+   "a place somebody typed has no Census outline, and the refusal says "
+   "to paste one instead")
+_n_hits = len(_tiger_hits)
+ok(c.post("/api/civics/boundaries", headers=A).json()["drawn"] == []
+   and len(_tiger_hits) == _n_hits,
+   "drawing again asks the Census for nothing — an outline it already "
+   "has is not fetched twice")
 ok(_civ._layer(_census_shape["result"]["addressMatches"][0]["geographies"],
-               "Legislative Districts", "Upper")["NAME"] == "First Suffolk District",
+               "Legislative Districts", "Upper")[1]["NAME"] == "First Suffolk District",
    "layers are matched by what they mean — the Census names them by "
    "vintage, and the 120th Congress must not break the parser")
 ok(_civ._state_code("25") == "MA" and _civ._state_code("06") == "CA",

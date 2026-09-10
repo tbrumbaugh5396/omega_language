@@ -232,6 +232,8 @@ async function civPanel(d, jid) {
       ? `<p class="dim">Nothing recorded under it yet. ${d.admin
           ? "Track a measure, add an agreement or an election, and pick this place." : ""}</p>` : ""}
     ${d.admin ? `<div class="chips" style="margin-top:10px">
+      ${(x.code || "").startsWith("census:") && !x.boundary
+        ? `<button class="btn alt sm" data-civoutline="${x.id}">Draw its outline</button>` : ""}
       <button class="btn alt sm" data-civaddunder="${x.id}">Add a place inside it</button>
       <button class="btn alt sm" data-civagree="${x.id}">Add an agreement</button>
     </div>` : ""}`;
@@ -239,6 +241,15 @@ async function civPanel(d, jid) {
     civSelect(d, +b.dataset.civgo));
   panel.querySelectorAll("[data-civaddunder]").forEach((b) => b.onclick = () =>
     civPlaceForm(d, +b.dataset.civaddunder));
+  panel.querySelectorAll("[data-civoutline]").forEach((b) => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Asking the Census…";
+    try {
+      const r = await api(`/api/civics/jurisdictions/${b.dataset.civoutline}/boundary`,
+                          { method: "POST" });
+      toast(`outlined, ${r.points} points`);
+      renderCivics();
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = "Draw its outline"; }
+  });
   panel.querySelectorAll("[data-civagree]").forEach((b) => b.onclick = () =>
     civAgreementForm(d, null, +b.dataset.civagree));
 }
@@ -354,6 +365,7 @@ async function renderCivics() {
           each is doing. ${esc(d.disclaimer)}</p></div>
       <div class="top-actions">
         ${d.admin ? `<button class="btn alt" id="civ-find">Find my jurisdictions</button>
+        <button class="btn alt" id="civ-draw">Draw the boundaries</button>
         <button class="btn alt" id="civ-place">Add a place</button>
         <button class="btn" id="civ-measure">Track something</button>` : ""}
       </div>
@@ -483,6 +495,16 @@ async function renderCivics() {
     renderCivics();
   });
 
+  if ($("#civ-draw")) $("#civ-draw").onclick = async () => {
+    const b = $("#civ-draw"); b.disabled = true; b.textContent = "Asking the Census…";
+    try {
+      const r = await api("/api/civics/boundaries", { method: "POST" });
+      toast(r.drawn.length ? `${r.drawn.length} outline(s) drawn`
+        : r.failed.length ? `none drawn — ${r.failed[0].why}`
+        : "every Census-placed jurisdiction already has its outline");
+      renderCivics();
+    } catch (e) { toast(e.message); b.disabled = false; b.textContent = "Draw the boundaries"; }
+  };
   if ($("#civ-find")) $("#civ-find").onclick = () => {
     modal(`<h3>Find my jurisdictions</h3>
       <p class="dim">The US Census Bureau's geocoder places an address and
@@ -507,8 +529,10 @@ async function renderCivics() {
             return `${k}: ${v.ok === false ? esc(v.why) : (v.new || 0) + " new"}`;
           }).filter(Boolean).join(" · ");
         } catch (e) { reps = e.message; }
+        const drawn = r.boundaries ? r.boundaries.drawn.length : 0;
         $("#civ-findout").innerHTML = `<b>${esc(r.matched)}</b> — ${r.jurisdictions.length}
-          jurisdictions on the register.${reps ? "<br>Officials — " + reps : ""}`;
+          jurisdictions on the register${drawn ? `, ${drawn} outlined` : ""}.${
+          reps ? "<br>Officials — " + reps : ""}`;
         setTimeout(() => { closeModal(); CIV_SEL = r.jurisdictions[r.jurisdictions.length - 1] || 0; renderCivics(); }, 1800);
       } catch (e) { $("#civ-findout").innerHTML = `<span class="low">${esc(e.message)}</span>`; b.disabled = false; }
     };

@@ -307,6 +307,18 @@ on, and the point. Its layers are named by vintage, so the parser finds
 them by what they mean and survives the next redistricting. US only, and
 it says so rather than guessing.
 
+**The outlines come from the same place.** Once an address is placed,
+each county, city, district and school district is drawn from the
+Census's TIGERweb map service — the TIGER/Line shapefiles, served one
+feature at a time by the GEOID the finder already stored, so an install
+holds the counties it watches rather than all three thousand. Each is
+asked for simplified to about two hundred metres, which is invisible at
+any zoom a county is looked at and turns a coastline of forty thousand
+points into a few hundred. The service lists each layer once per vintage
+with ids that shuffle, so a layer is resolved by name at call time, and
+a district placed by the 119th Congress's map is drawn from the 119th
+Congress's map rather than the newest one. Keyless, like the geocoder.
+
 **Who holds the offices needs keys.** Open States finds the state
 legislators for the point; Congress.gov finds the two senators and the
 representative for the district. Both start from what the Census gave
@@ -348,9 +360,11 @@ like it has checked.
 - **Invoicing**: no payment link. A customer reads the invoice and pays
   however they already pay; nothing here takes a card.
 - **Civics**: no statute text, no compliance checking, and no data below
-  the state line except what somebody types. Tiles need the network;
-  the country outline does not. Treaties and blocs are typed, because no
-  free source of them is trustworthy enough to seed as fact.
+  the state line except what somebody types. Tiles and the Census
+  outlines need the network to fetch; the country outline does not. A
+  typed place has no Census outline and takes a pasted one. Treaties and
+  blocs are typed, because no free source of them is trustworthy enough
+  to seed as fact.
 - **Leaving**: it closes what this install controls. Accounts in other
   systems are somebody's list item, not something this can revoke.
 

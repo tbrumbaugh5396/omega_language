@@ -86,8 +86,11 @@ Things to know before touching them:
   public domain) when not. The register holds only WATCHED places; the
   outline shows every country and clicking one offers to watch it.
   Finding the stack for an address is keyless (`find_jurisdictions`, the
-  US Census geocoder); who holds the offices is keyed (Open States by
-  point, Congress.gov by state). **Google Civic is not offered**: its
+  US Census geocoder), and so are the outlines (`fetch_boundary`, the
+  Census TIGERweb map service, one feature per GEOID, simplified). TIGERweb
+  layer IDS SHUFFLE per vintage — resolve them by name, never hardcode.
+  Who holds the offices is keyed (Open States by point, Congress.gov by
+  state). **Google Civic is not offered**: its
   representatives endpoint was turned down in April 2025. Do not add it
   back from memory.
 - **Adding a capability touches six places**: the price book table, the

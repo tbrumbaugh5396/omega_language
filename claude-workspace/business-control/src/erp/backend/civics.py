@@ -191,6 +191,10 @@ CREATE INDEX IF NOT EXISTS agreement_parties_j ON agreement_parties(jurisdiction
 MIGRATIONS = [
     # ISO code lets a watched country be matched to the map's own outline.
     "ALTER TABLE jurisdictions ADD COLUMN iso TEXT DEFAULT ''",
+    # The Census layer a row came from, by the geocoder's own name for it
+    # ("119th Congressional Districts"), so the boundary is fetched from
+    # the SAME vintage that placed the address rather than the newest one.
+    "ALTER TABLE jurisdictions ADD COLUMN census_layer TEXT DEFAULT ''",
 ]
 
 # In order from the top of the stack to the bottom. A bloc is a treaty
@@ -502,11 +506,13 @@ def _layer(geos: dict, *needles: str):
     """The Census names its layers by vintage — '119th Congressional
     Districts', '2024 State Legislative Districts - Upper' — so a layer is
     found by what it means, not by its exact name, and the parser survives
-    the next census and the next redistricting."""
+    the next census and the next redistricting. Returns (layer name, row):
+    the name is kept, because the boundary later comes from the layer of
+    the same name and vintage."""
     for key, rows in geos.items():
         k = key.lower()
         if all(n.lower() in k for n in needles) and rows:
-            return rows[0]
+            return key, rows[0]
     return None
 
 
@@ -548,22 +554,23 @@ def find_jurisdictions(con, address: str) -> dict:
     lng = float((m.get("coordinates") or {}).get("x") or 0)
     geos = m.get("geographies") or {}
 
-    def put(level, row, parent_id, name=None):
-        if row is None:
+    def put(level, hit, parent_id, name=None):
+        if hit is None:
             return 0
+        layer_name, row = hit
         nm = (name or row.get("NAME") or row.get("BASENAME") or "").strip()
         code = f"census:{row.get('GEOID', '')}"
         have = con.execute("SELECT id FROM jurisdictions WHERE code=?",
                            (code,)).fetchone()
         if have:
-            con.execute("UPDATE jurisdictions SET watching=1, parent_id="
-                        "CASE WHEN parent_id=0 THEN ? ELSE parent_id END"
-                        " WHERE id=?", (parent_id, have["id"]))
+            con.execute("UPDATE jurisdictions SET watching=1, census_layer=?,"
+                        " parent_id=CASE WHEN parent_id=0 THEN ? ELSE parent_id"
+                        " END WHERE id=?", (layer_name, parent_id, have["id"]))
             return have["id"]
         cur = con.execute(
             "INSERT INTO jurisdictions(name,level,parent_id,code,lat,lng,"
-            " watching,created_at) VALUES(?,?,?,?,?,?,1,?)",
-            (nm[:120], level, parent_id, code, lat, lng, db.now()))
+            " watching,census_layer,created_at) VALUES(?,?,?,?,?,?,1,?,?)",
+            (nm[:120], level, parent_id, code, lat, lng, layer_name, db.now()))
         return cur.lastrowid
 
     us = con.execute("SELECT id FROM jurisdictions WHERE level='country' AND"
@@ -586,10 +593,127 @@ def find_jurisdictions(con, address: str) -> dict:
     found = [x for x in (us_id, state, county, city, cd, upper, lower, school) if x]
     IG.log(con, "census", "find_jurisdictions", True,
            f"{len(found)} for {m.get('matchedAddress', address)[:80]}")
+    drawn = fill_boundaries(con, found)
     return {"ok": True, "matched": m.get("matchedAddress", ""),
+            "boundaries": drawn,
             "lat": lat, "lng": lng, "jurisdictions": found,
-            "state_fips": (_layer(geos, "States") or {}).get("GEOID", ""),
-            "district": (_layer(geos, "Congressional") or {}).get("BASENAME", "")}
+            "state_fips": ((_layer(geos, "States") or ("", {}))[1]).get("GEOID", ""),
+            "district": ((_layer(geos, "Congressional") or ("", {}))[1]).get("BASENAME", "")}
+
+
+TIGERWEB = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb"
+# Which TIGERweb map service holds each kind of layer. The layer ID inside
+# a service is NOT fixed — the same "Counties" appears once per vintage,
+# and the ids shuffle when a vintage is added — so ids are resolved by
+# name at call time and cached for the life of the process.
+TIGER_SERVICES = ("State_County", "Legislative",
+                  "Places_CouSub_ConCity_SubMCD", "School")
+_TIGER_LAYERS: dict = {}
+# How much a boundary may be simplified, in degrees. Two thousandths is
+# about two hundred metres, which is invisible at any zoom a county or a
+# district is looked at and turns a forty-thousand-point coastline into a
+# few hundred.
+TIGER_OFFSET = 0.002
+
+
+def _tiger_layers(service: str) -> list:
+    if service in _TIGER_LAYERS:
+        return _TIGER_LAYERS[service]
+    ok, d = IG._req(f"{TIGERWEB}/{service}/MapServer?f=json", timeout=20)
+    layers = [(l.get("id"), l.get("name", "")) for l in
+              (d.get("layers") or [])] if ok and isinstance(d, dict) else []
+    _TIGER_LAYERS[service] = layers
+    return layers
+
+
+def _tiger_layer_for(census_layer: str, level: str) -> tuple:
+    """(service, layer id) for a jurisdiction. The geocoder's own layer
+    name is tried first, so a district placed by the 119th Congress's
+    map is drawn from the 119th Congress's map, not the 120th's; then
+    the newest layer whose name means the same thing."""
+    wants = {"state": ("State_County", ("States",)),
+             "county": ("State_County", ("Counties",)),
+             "city": ("Places_CouSub_ConCity_SubMCD", ("Incorporated Places",)),
+             "school": ("School", ("Unified",)),
+             "district": ("Legislative", ())}
+    if level not in wants:
+        return "", None
+    service, needles = wants[level]
+    if level == "district":
+        cl = census_layer.lower()
+        needles = (("Congressional",) if "congress" in cl
+                   else ("Legislative", "Upper") if "upper" in cl
+                   else ("Legislative", "Lower") if "lower" in cl
+                   else ("Congressional",))
+    layers = _tiger_layers(service)
+    for lid, name in layers:
+        if name == census_layer:
+            return service, lid
+    for lid, name in layers:
+        if all(n.lower() in name.lower() for n in needles):
+            return service, lid
+    return service, None
+
+
+def fetch_boundary(con, jid: int) -> dict:
+    """The outline of one jurisdiction, from the Census's own map service,
+    stored on the row. Keyless, like the geocoder; the shapes are the
+    TIGER/Line files, served one feature at a time so an install holds
+    the counties it watches rather than all three thousand."""
+    j = con.execute("SELECT * FROM jurisdictions WHERE id=?", (jid,)).fetchone()
+    if j is None:
+        raise HTTPException(404, "no such jurisdiction")
+    if not (j["code"] or "").startswith("census:"):
+        raise HTTPException(400, "only a place the Census placed has a "
+                                 "Census outline — this one was typed, so "
+                                 "paste a boundary on it instead")
+    geoid = j["code"].split(":", 1)[1]
+    service, lid = _tiger_layer_for(j["census_layer"] or "", j["level"])
+    if lid is None:
+        raise HTTPException(400, f"TIGERweb has no layer for a {j['level']}")
+    q = urllib.parse.urlencode({
+        "where": f"GEOID='{geoid}'", "outFields": "GEOID,NAME",
+        "f": "geojson", "outSR": "4326",
+        "maxAllowableOffset": TIGER_OFFSET, "geometryPrecision": "3"})
+    ok, d = IG._req(f"{TIGERWEB}/{service}/MapServer/{lid}/query?{q}",
+                    timeout=40)
+    if not ok:
+        raise HTTPException(400, f"TIGERweb said: {d}")
+    feats = (d.get("features") or []) if isinstance(d, dict) else []
+    if not feats or not feats[0].get("geometry"):
+        raise HTTPException(404, f"TIGERweb has no outline for GEOID {geoid} "
+                                 f"in {service}")
+    geom = feats[0]["geometry"]
+    con.execute("UPDATE jurisdictions SET boundary=? WHERE id=?",
+                (json.dumps(geom, separators=(",", ":")), jid))
+    con.commit()
+    n = sum(len(r) for poly in (geom["coordinates"]
+                                if geom["type"] == "MultiPolygon"
+                                else [geom["coordinates"]]) for r in poly)
+    return {"ok": True, "id": jid, "points": n, "type": geom["type"]}
+
+
+def fill_boundaries(con, ids: list | None = None) -> dict:
+    """Every Census-placed jurisdiction that has no outline yet. Each is
+    its own request and its own failure: a county TIGERweb cannot find
+    must not stop the state behind it."""
+    rows = con.execute(
+        "SELECT id FROM jurisdictions WHERE code LIKE 'census:%' AND"
+        " (boundary='' OR boundary IS NULL)" +
+        (" AND id IN (" + ",".join("?" * len(ids)) + ")" if ids else ""),
+        tuple(ids) if ids else ()).fetchall()
+    done, failed = [], []
+    for r in rows:
+        try:
+            done.append(fetch_boundary(con, r["id"])["id"])
+        except HTTPException as e:
+            failed.append({"id": r["id"], "why": str(e.detail)})
+        except Exception as e:                               # noqa: BLE001
+            failed.append({"id": r["id"], "why": str(e)[:200]})
+    if done or failed:
+        IG.log(con, "census", "boundaries", not failed,
+               f"{len(done)} drawn" + (f", {len(failed)} not" if failed else ""))
+    return {"drawn": done, "failed": failed}
 
 
 def _state_code(fips: str) -> str:
@@ -1194,6 +1318,19 @@ def civics_find(body: FindBody, user=Depends(current_user),
     official public service, so there is nothing to connect first."""
     _require(user)
     return find_jurisdictions(con, body.address)
+
+
+@router.post("/api/civics/boundaries")
+def civics_boundaries(user=Depends(current_user), con=Depends(get_con)):
+    """Draw every Census-placed jurisdiction that has no outline yet."""
+    _require(user)
+    return fill_boundaries(con)
+
+
+@router.post("/api/civics/jurisdictions/{jid}/boundary")
+def civics_boundary(jid: int, user=Depends(current_user), con=Depends(get_con)):
+    _require(user)
+    return fetch_boundary(con, jid)
 
 
 class RepsBody(BaseModel):
