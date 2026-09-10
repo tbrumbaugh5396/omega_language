@@ -2136,8 +2136,20 @@ body.lane-on { overflow: hidden; }
 /* The policy map. Drawn from the install's own rows: no tiles, no outside
    service, so it works on a laptop with no internet and sends nothing
    anywhere. The colours are the app's, not a cartographer's — this is a
-   diagram of what the business is inside, not a map of the world. */
-.civ-wrap { padding: 0; overflow: hidden; }
+   diagram of what the business is inside, not a map of the world.
+
+   Each level's colour is a custom property because it is needed twice, in
+   two languages: `fill` paints an SVG shape and does nothing whatever to
+   an HTML element, so the legend's swatches were transparent while the
+   map itself was correct. One definition, used by both. */
+.civ-wrap { padding: 0; overflow: hidden;
+  --civ-country: color-mix(in srgb, var(--accent) 55%, var(--text));
+  --civ-state: color-mix(in srgb, var(--accent) 75%, var(--text));
+  --civ-county: var(--accent);
+  --civ-district: color-mix(in srgb, var(--warn) 80%, var(--accent));
+  --civ-city: var(--accent);
+  --civ-ward: var(--accent);
+  --civ-other: var(--accent); }
 .civ-map { display: block; width: 100%; height: 46vh; min-height: 260px;
   touch-action: none; cursor: grab; background: var(--panel2); }
 .civ-map:active { cursor: grabbing; }
@@ -2152,14 +2164,31 @@ body.lane-on { overflow: hidden; }
   vector-effect: non-scaling-stroke; cursor: pointer; }
 .civ-dot.off { fill: var(--dim); }
 .civ-dot.on { fill: var(--good); stroke-width: 3; }
-.civ-country { fill: color-mix(in srgb, var(--accent) 55%, var(--text)); }
-.civ-state { fill: color-mix(in srgb, var(--accent) 75%, var(--text)); }
-.civ-district { fill: color-mix(in srgb, var(--warn, #b8860b) 80%, var(--accent)); }
+.civ-country { fill: var(--civ-country); }
+.civ-state { fill: var(--civ-state); }
+.civ-county { fill: var(--civ-county); }
+.civ-district { fill: var(--civ-district); }
+.civ-city { fill: var(--civ-city); }
 .civ-place { fill: var(--text); stroke: var(--panel); stroke-width: 1.5;
   vector-effect: non-scaling-stroke; }
 .civ-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
   padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; }
 .civ-key { display: inline-flex; gap: 5px; align-items: center;
   color: var(--dim); }
-.civ-key i { width: 10px; height: 10px; border-radius: 50%; display: block; }
-.civ-key i.civ-place { border-radius: 0; }
+/* The swatch is an HTML element, so it takes a background rather than a
+   fill. Same variables, so it cannot say a different colour from the map. */
+.civ-key i { width: 10px; height: 10px; border-radius: 50%; display: block;
+  background: var(--accent); }
+.civ-key i.civ-country { background: var(--civ-country); }
+.civ-key i.civ-state { background: var(--civ-state); }
+.civ-key i.civ-county { background: var(--civ-county); }
+.civ-key i.civ-district { background: var(--civ-district); }
+.civ-key i.civ-city { background: var(--civ-city); }
+.civ-key i.civ-place { border-radius: 0; background: var(--text); }
+/* Nothing to draw. An empty rectangle where a map should be reads as a
+   broken map, so the panel says what would put something in it. */
+.civ-blank { display: flex; align-items: center; justify-content: center;
+  min-height: 260px; height: 46vh; padding: 24px; text-align: center;
+  background: var(--panel2); }
+.civ-blank div { max-width: 42ch; }
+.civ-blank b { display: block; margin-bottom: 6px; }

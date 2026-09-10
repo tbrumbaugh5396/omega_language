@@ -9196,6 +9196,24 @@ ok(not any(w in _civ_map_src.lower() for w in
    "it works on a laptop with no internet and sends nothing out")
 ok("<svg" in _civ_map_src and "civProject" in _civ_map_src,
    "it is an SVG this file draws, from the install's own rows")
+ok("civ-blank" in _civ_map_src,
+   "and when there is nothing to draw it says so — a fresh install knows "
+   "no jurisdictions and has no place with a position, and an empty "
+   "rectangle where a map should be reads as a broken map")
+
+# `fill` paints an SVG shape and does nothing whatever to an HTML element.
+# The legend's swatches are <i> tags, so they were transparent while the
+# map itself was correct — the kind of mistake that looks like a missing
+# feature rather than a wrong property.
+_civ_css = _css[_css.index("/* The policy map."):]
+for _lvl in ("country", "state", "district", "place"):
+    ok(f"background: var(--civ-{_lvl})" in _civ_css
+       or f".civ-key i.civ-{_lvl} {{ background:" in _civ_css
+       or f"i.civ-{_lvl} {{ border-radius: 0; background:" in _civ_css,
+       f"the legend's {_lvl} swatch takes a background, not a fill")
+ok("--civ-country:" in _civ_css and "fill: var(--civ-country)" in _civ_css,
+   "and each level's colour is defined once and used by both, so the key "
+   "cannot say a different colour from the map")
 ok("drag.moved" in _civ_js,
    "a drag that ends on a shape does not also select it, or the map picks "
    "something new every time somebody moves it")

@@ -58,6 +58,20 @@ const CIV_R = { country: 13, state: 10, county: 8, district: 7, city: 6,
   ward: 5, other: 5 };
 
 function civMap(m) {
+  // An empty rectangle where a map should be reads as a broken map, and
+  // this one is empty on the honest day: a fresh install knows no
+  // jurisdictions and has no place with a position on it. Say what would
+  // put something there instead of drawing nothing convincingly.
+  if (!m.jurisdictions.length && !m.places.length) {
+    return `<div class="civ-blank"><div>
+      <b>Nothing to draw yet.</b>
+      <span class="dim">The map plots the jurisdictions you are watching
+        and your own places. Add a place — a city, a county, a state —
+        with a latitude and longitude, and it appears here. Your shops
+        arrive on their own once they have coordinates, which they get on
+        the Stores screen.</span>
+    </div></div>`;
+  }
   const vb = CIV_VIEW || civBounds(m);
   const marks = m.jurisdictions.filter((j) => j.lat !== null && j.lng !== null);
   return `<svg id="civ-svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}"
@@ -171,11 +185,14 @@ async function renderCivics() {
     <div class="card civ-wrap">
       ${civMap(d.map)}
       <div class="civ-legend">
-        <span class="dim">Scroll to zoom, drag to move, click to filter.</span>
+        <span class="dim">${d.map.jurisdictions.length || d.map.places.length
+          ? "Scroll to zoom, drag to move, click to filter."
+          : "The map fills in as you add places."}</span>
         ${d.levels.map((l) => `<span class="civ-key"><i class="civ-dot civ-${l.k}"></i>${esc(l.label)}</span>`).join("")}
         <span class="civ-key"><i class="civ-place"></i>your places</span>
         ${CIV_SEL ? `<button class="btn alt sm" id="civ-all">Show everything</button>` : ""}
-        <button class="btn alt sm" id="civ-fit">Fit</button>
+        ${d.map.jurisdictions.length || d.map.places.length
+          ? '<button class="btn alt sm" id="civ-fit">Fit</button>' : ""}
       </div>
       ${sel ? `<p class="dim">Filtered to <b>${esc(sel.name)}</b> ·
         ${esc(levelOf[sel.level] || sel.level)}${sel.population
@@ -257,7 +274,10 @@ async function renderCivics() {
 
   civWire(d.map);
   if ($("#civ-all")) $("#civ-all").onclick = () => { CIV_SEL = 0; renderCivics(); };
-  $("#civ-fit").onclick = () => { CIV_VIEW = null; renderCivics(); };
+  if ($("#civ-fit")) $("#civ-fit").onclick = () => {
+    CIV_VIEW = null;
+    renderCivics();
+  };
 
   if ($("#civ-place")) $("#civ-place").onclick = () => {
     modal(`<h3>Add a place</h3>
