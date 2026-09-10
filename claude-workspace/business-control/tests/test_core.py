@@ -7619,13 +7619,13 @@ ok(all("settings_fields" in p and "settings" in p for p in _st2["providers"]),
 # The rail: eight groups, each a working area, none longer than a screen.
 _tabs_src = _ops[_ops.index("const TABS = ["):_ops.index("\n];", _ops.index("const TABS = ["))]
 _cnt = _Counter(re.findall(r'group: "([^"]+)"', _tabs_src))
-ok(set(_cnt) == {"Sell", "Stock & supply", "Work", "Teach", "Grow", "Team",
-                 "Company", "Connections"},
-   f"the rail is eight groups by what a person is doing ({sorted(_cnt)})")
+ok(set(_cnt) == {"Sell", "Stock & supply", "Work", "Teach", "Grow", "Money",
+                 "Team", "Company", "Connections"},
+   f"the rail is grouped by what a person is doing ({sorted(_cnt)})")
 ok(max(v for k, v in _cnt.items() if k != "Connections") <= 10,
    "and no working group holds more than ten screens — Operate held seventeen")
 ok('NAV_GROUPS = ["Sell", "Stock & supply", "Work", "Teach", "Grow",\n'
-   '                    "Team", "Company", "Connections"]' in _ops,
+   '                    "Money", "Team", "Company", "Connections"]' in _ops,
    "in that order, Sell first so the default landing is still the shop")
 for _t, _grp in (("ads", "Grow"), ("listings", "Grow"), ("hiring", "Team"),
                  ("marketplaces", "Sell"), ("intake", "Grow"),
@@ -8257,7 +8257,10 @@ ok(all("WRITES" in _mcps.description_for(t) if hasattr(_mcps, "description_for")
 
 # Nothing that spends, publishes or cannot be undone, even with writes on.
 _offered = {f"{t['method']} {t['path']}" for t in _mcpt.TOOLS}
-for _forbidden in ("POST /api/orders",
+for _forbidden in ("POST /api/accounting/journals",
+                   "POST /api/treasury/transfer",
+                   "POST /api/automation/rules",
+                   "POST /api/orders",
                    "POST /api/orders/{oid}/confirm-payment",
                    "POST /api/expenses/{eid}/decide",
                    "POST /api/hours/approve",
@@ -8309,6 +8312,307 @@ ok('print(f"[business-control mcp] {msg}", file=sys.stderr' in _src_mcp,
 ok("BC_MCP_KEY" in _src_mcp and "Bearer" in _src_mcp,
    "and it carries the app's own API key, so there is no second "
    "authorization model to drift from the first")
+
+
+
+# ===== the four that were priced and unbuilt ===========================
+# Accounting, Treasury, Legal and Automation were rows in the price book
+# with nothing behind them: a quote could be built that a customer could
+# not be delivered. These are them.
+from erp.backend import accounting as _acc  # noqa: E402
+from erp.backend import automation as _aut  # noqa: E402
+from erp.backend import legal as _lgl  # noqa: E402
+from erp.backend import treasury as _tre  # noqa: E402
+
+# --- accounting: a ledger, which is a stronger claim than a report ---
+_ac = c.get("/api/accounting", headers=A).json()
+ok(len(_ac["accounts"]) >= 15 and any(a["code"] == "1010" for a in _ac["accounts"]),
+   "a chart of accounts is seeded — an empty one is a screen nobody can "
+   "start from")
+ok(c.get("/api/accounting", headers=_WCU).status_code == 403,
+   "the books are the office's")
+
+_r = c.post("/api/accounting/journals", headers=A, json={"memo": "lopsided",
+            "lines": [{"account": "1010", "debit_cents": 500},
+                      {"account": "4000", "credit_cents": 400}]})
+ok(_r.status_code == 400 and "balance" in _r.text,
+   "a journal that does not balance is refused — that refusal is what "
+   "makes a trial balance mean anything")
+_r = c.post("/api/accounting/journals", headers=A, json={"memo": "owner puts in",
+            "lines": [{"account": "1010", "debit_cents": 100000},
+                      {"account": "3000", "credit_cents": 100000}]})
+ok(_r.status_code == 200, "a balanced one posts")
+_jid = _r.json()["id"]
+ok(c.post("/api/accounting/journals", headers=A, json={"memo": "x", "lines": [
+    {"account": "9999", "debit_cents": 1}, {"account": "1010", "credit_cents": 1}]}
+   ).status_code == 400, "and only to accounts that exist")
+
+_r = c.post("/api/accounting/sync", headers=A)
+ok(_r.status_code == 200 and _r.json()["posted"] > 0,
+   "the orders and expenses already recorded post themselves")
+_first = _r.json()["posted"]
+ok(c.post("/api/accounting/sync", headers=A).json()["posted"] == 0,
+   "and posting again posts nothing twice — the key is (source, id), so a "
+   "run that half failed is safe to repeat")
+_ac = c.get("/api/accounting", headers=A).json()
+ok(_ac["trial_balance"]["balanced"],
+   f"the trial balance balances ({_ac['trial_balance']['out_by_cents']} out)")
+ok(_ac["statements"]["sheet_balanced"],
+   "and so does what the business holds against what it owes and owns")
+ok(_ac["unposted"] == {"orders": 0, "expenses": 0},
+   "nothing is left that the books do not know about")
+
+# A discount is the full sale and an amount given away, not a smaller
+# sale. Posted anywhere else it is invisible, and "what is the
+# discounting costing us" becomes unanswerable.
+_dcon = _db.connect()
+_dsum = _dcon.execute(
+    "SELECT COALESCE(SUM(discount_cents),0) AS c FROM orders WHERE"
+    " payment_status IN ('paid','cod')").fetchone()["c"]
+if _dsum:
+    _d45 = next(b for b in _acc.balances(_dcon) if b["code"] == "4500")
+    ok(_d45["debit_cents"] == _dsum,
+       "every discount given lands in its own account, not buried in other "
+       "income")
+ok(any(a["code"] == "4500" for a in _ac["accounts"]),
+   "which exists in the chart whether or not anything has been discounted")
+_dcon.close()
+
+_r = c.post(f"/api/accounting/journals/{_jid}/reverse", headers=A, json={})
+ok(_r.status_code == 200, "a journal is corrected by reversal")
+_rev = _r.json()["id"]
+_jd = c.get(f"/api/accounting/journals/{_rev}", headers=A).json()
+_orig = c.get(f"/api/accounting/journals/{_jid}", headers=A).json()
+ok(_orig["reversed_by"] == _rev and _jd["reverses"] == _jid,
+   "each pointing at the other, so the history a return was filed from "
+   "stays where it was")
+ok(sorted((l["account"], l["debit_cents"], l["credit_cents"])
+          for l in _jd["lines"])
+   == sorted((l["account"], l["credit_cents"], l["debit_cents"])
+             for l in _orig["lines"]),
+   "and the correction is the mirror of it, line for line")
+ok(c.post(f"/api/accounting/journals/{_jid}/reverse", headers=A,
+          json={}).status_code == 400, "reversed once is enough")
+
+_ledger = c.get("/api/accounting/ledger/1010", headers=A).json()
+ok(_ledger["rows"] and "running_cents" in _ledger["rows"][0],
+   "an account opens as a running statement, which is how a difference is "
+   "found rather than merely noticed")
+
+_yr = _t0.time()
+_r = c.post("/api/accounting/periods", headers=A,
+            json={"label": "last year", "starts": _yr - 700 * 86400,
+                  "ends": _yr - 400 * 86400})
+_pid_per = _r.json()["id"]
+ok(c.post(f"/api/accounting/periods/{_pid_per}/close", headers=A,
+          json={}).status_code == 200, "a period closes when it balances")
+_r = c.post("/api/accounting/journals", headers=A, json={
+    "at": _yr - 500 * 86400, "memo": "backdated",
+    "lines": [{"account": "1010", "debit_cents": 100},
+              {"account": "4000", "credit_cents": 100}]})
+ok(_r.status_code == 400 and "closed" in _r.text,
+   "and afterwards refuses anything dated inside it — a year you filed "
+   "from must not be able to change")
+
+# --- treasury: where the money is, and how long it lasts ---
+ok(c.get("/api/treasury", headers=_WCU).status_code == 403,
+   "the money is the office's too")
+_a1 = c.post("/api/treasury/accounts", headers=A, json={
+    "name": "Current", "kind": "bank", "balance_cents": 400000,
+    "reserved_cents": 50000, "reserved_for": "sales tax",
+    "ledger_account": "1010"}).json()["id"]
+_a2 = c.post("/api/treasury/accounts", headers=A, json={
+    "name": "Deposit", "kind": "savings", "balance_cents": 100000}).json()["id"]
+_tr = c.get("/api/treasury", headers=A).json()
+ok(_tr["total_cents"] == 500000 and _tr["free_cents"] == 450000,
+   "money set aside is still in the account and is not free to spend — "
+   "which is the whole reason a treasury screen is not a bank balance")
+ok(c.post("/api/treasury/accounts", headers=A, json={
+    "name": "Bad", "ledger_account": "9999"}).status_code == 400,
+   "a cash account can only name a ledger account that exists")
+_r = c.post("/api/treasury/transfer", headers=A, json={
+    "from_id": _a1, "to_id": _a2, "amount_cents": 75000, "memo": "sweep"})
+ok(_r.status_code == 200, "money moves between your own accounts")
+_tr = c.get("/api/treasury", headers=A).json()
+_bal = {a["name"]: a["balance_cents"] for a in _tr["accounts"]}
+ok(_bal["Current"] == 325000 and _bal["Deposit"] == 175000
+   and _tr["total_cents"] == 500000,
+   "both sides move and the total does not — a transfer is not income")
+ok(len([m for m in _tr["movements"] if m["memo"] == "sweep"]) == 2,
+   "and it leaves a trail on both accounts, because a balance that can be "
+   "changed with no record is a number nobody can argue with")
+ok(c.post("/api/treasury/transfer", headers=A, json={
+    "from_id": _a1, "to_id": _a1, "amount_cents": 100}).status_code == 400,
+   "not to itself")
+ok(c.post("/api/treasury/transfer", headers=A, json={
+    "from_id": _a1, "to_id": _a2, "amount_cents": -5}).status_code == 400,
+   "and not a negative amount, which is a transfer the other way wearing a "
+   "disguise")
+_rec = {r["name"]: r for r in _tr["reconciliation"]}
+ok("Current" in _rec and _rec["Current"]["difference_cents"] ==
+   _rec["Current"]["stated_cents"] - _rec["Current"]["ledger_cents"],
+   "an account linked to the books reports the difference between the two "
+   "rather than quietly preferring one")
+_h = c.post("/api/treasury/holdings", headers=A, json={
+    "name": "Index fund", "kind": "fund", "cost_cents": 300000,
+    "value_cents": 341000}).json()["id"]
+_tr = c.get("/api/treasury", headers=A).json()
+ok(_tr["holdings"][0]["gain_cents"] == 41000,
+   "a holding carries what was paid and what it is worth, and the "
+   "difference between them")
+ok(c.delete(f"/api/treasury/holdings/{_h}", headers=A).status_code == 200
+   and not c.get("/api/treasury", headers=A).json()["holdings"],
+   "and closing one stops it counting")
+
+# --- legal: the diary above the filing cabinet ---
+ok(c.get("/api/legal", headers=_WCU).status_code == 403, "the register too")
+_soon = _t0.time() + 40 * 86400
+_r = c.post("/api/legal/matters", headers=A, json={
+    "kind": "contract", "title": "Unit 4 lease", "counterparty": "Harbour",
+    "ends": _soon, "notice_days": 30, "renews": "auto", "risk": "high"})
+ok(_r.status_code == 200, "a matter goes on the register")
+_mid = _r.json()["id"]
+ok(c.post("/api/legal/matters", headers=A, json={
+    "title": "No end", "notice_days": 30}).status_code == 400,
+   "a notice period counts back from an end date, so it cannot exist "
+   "without one")
+ok(c.post("/api/legal/matters", headers=A, json={
+    "title": "Backwards", "starts": _soon, "ends": _soon - 86400}
+   ).status_code == 400, "and nothing ends before it starts")
+_lg = c.get("/api/legal", headers=A).json()
+_m = next(m for m in _lg["matters"] if m["id"] == _mid)
+ok(abs(_m["decide_by"] - (_soon - 30 * 86400)) < 2,
+   "the date to decide by is the end minus the notice, which is the fact "
+   "the filing cabinet never held")
+ok(_m["needs_attention"], "and a decision inside its notice period is flagged")
+_past = _t0.time() - 10 * 86400
+_oid = c.post("/api/legal/obligations", headers=A, json={
+    "matter_id": _mid, "what": "Quarterly fire inspection", "due": _past,
+    "every_months": 3}).json()["id"]
+_lg = c.get("/api/legal", headers=A).json()
+_kinds = {x["kind"] for x in _lg["diary"]}
+ok({"obligation", "decide", "ends"} <= _kinds,
+   "the diary holds obligations, decisions and endings together — a lease "
+   "break and a licence renewal are the same kind of problem")
+ok(any(x["overdue"] for x in _lg["diary"]) and _lg["counts"]["overdue"] == 1,
+   "and says which is already late")
+ok(_lg["diary"] == sorted(_lg["diary"], key=lambda x: x["at"]),
+   "in date order, which is the only order a diary has")
+_r = c.post(f"/api/legal/obligations/{_oid}/done", headers=A, json={})
+ok(_r.status_code == 200 and _r.json()["next_id"],
+   "marking a repeating obligation done opens the next one")
+_lg = c.get("/api/legal", headers=A).json()
+_next = next(o for o in _lg["obligations"] if o["id"] == _r.json()["next_id"])
+ok(abs(_next["due"] - _lgl._add_months(_past, 3)) < 2,
+   "three calendar months on, not ninety days — a quarterly filing due on "
+   "the 31st is due on the 30th of a short month")
+ok(c.post(f"/api/legal/obligations/{_oid}/done", headers=A,
+          json={}).status_code == 400, "and done once is done")
+_before_n = len(c.get("/api/legal", headers=A).json()["obligations"])
+ok(_before_n == 2,
+   "the next one only appears on completion — a diary pre-filled with a "
+   "year of rows is a diary whose overdue count means nothing")
+
+# --- automation: when this happens, do that ---
+ok(c.get("/api/automation", headers=_WCU).status_code == 403,
+   "automations are an owner's screen")
+ok(c.post("/api/automation/rules", headers=A, json={
+    "name": "x", "event": "moon.rose", "action": "notify",
+    "config": {"title": "t"}}).status_code == 400,
+   "a rule cannot wait for an event nothing raises")
+_r = c.post("/api/automation/rules", headers=A, json={
+    "name": "x", "event": "order.paid", "action": "refund", "config": {}})
+ok(_r.status_code == 400 and "spends" in _r.text,
+   "nor do anything outside the list, and the refusal says why the list is "
+   "short")
+ok(c.post("/api/automation/rules", headers=A, json={
+    "name": "no title", "event": "order.paid", "action": "ticket",
+    "config": {}}).status_code == 400,
+   "an action without what it needs is refused at the door, not at the "
+   "first event")
+_rid = c.post("/api/automation/rules", headers=A, json={
+    "name": "Big order needs a call", "event": "order.paid",
+    "conditions": [{"field": "total_cents", "op": "gt", "value": "5000"}],
+    "action": "ticket", "config": {"title": "Call about order {id}"},
+    "cooldown_sec": 0}).json()["id"]
+_r = c.post(f"/api/automation/rules/{_rid}/test", headers=A,
+            json={"payload": {"id": 9, "total_cents": 100}})
+ok(_r.json()["matched"] is False,
+   "a payload the conditions do not match runs nothing")
+_before_t = len(c.get("/api/tickets", headers=A).json().get("tickets", []))
+_r = c.post(f"/api/automation/rules/{_rid}/test", headers=A,
+            json={"payload": {"id": 9, "total_cents": 9900}})
+ok(_r.json()["matched"] and _r.json()["ok"], "one that does, acts")
+_tk = c.get("/api/tickets", headers=A).json().get("tickets", [])
+ok(any(t["title"] == "Call about order 9" for t in _tk),
+   "and {id} in the text becomes the id from the event — a headline that "
+   "cannot say which order it is about makes the reader open every order")
+
+_acon = _db.connect()
+# A cooldown is time since the LAST run, so there has to have been one.
+# The test route deliberately does not set it — testing a rule is not
+# using up its allowance.
+_acon.execute("UPDATE automation_rules SET cooldown_sec=3600, last_run=?"
+              " WHERE id=?", (_t0.time(), _rid))
+_acon.commit()
+_n_before = _acon.execute("SELECT COUNT(*) AS n FROM tickets").fetchone()["n"]
+_aut.run_for(_acon, "order.paid", {"id": 10, "total_cents": 9900})
+_n_after = _acon.execute("SELECT COUNT(*) AS n FROM tickets").fetchone()["n"]
+ok(_n_after == _n_before,
+   "a cooldown holds the next one back, so a busy Saturday cannot turn one "
+   "rule into a thousand")
+ok("cooldown" in _acon.execute(
+    "SELECT detail FROM automation_runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()["detail"],
+   "and says so in the log rather than looking like nothing happened")
+_acon.execute("UPDATE automation_rules SET cooldown_sec=0, last_run=0"
+              " WHERE id=?", (_rid,))
+_acon.commit()
+_n_before = _acon.execute("SELECT COUNT(*) AS n FROM tickets").fetchone()["n"]
+_aut.run_for(_acon, "order.paid", {"id": 11, "total_cents": 9900})
+ok(_acon.execute("SELECT COUNT(*) AS n FROM tickets").fetchone()["n"]
+   == _n_before + 1,
+   "an event straight off the bus reaches the rules")
+_aut.run_for(_acon, "order.paid", {"id": 12, "total_cents": 10})
+ok(_acon.execute("SELECT COUNT(*) AS n FROM tickets").fetchone()["n"]
+   == _n_before + 1, "and the conditions still gate it there")
+_acon.close()
+
+_r = c.post("/api/automation/rules", headers=A, json={
+    "name": "webhook one", "event": "ticket.created", "action": "webhook",
+    "config": {"url": "https://example.invalid/hook", "token": "s3cret"}})
+_wid = _r.json()["id"]
+_aut_page = c.get("/api/automation", headers=A).json()
+_wr = next(r for r in _aut_page["rules"] if r["id"] == _wid)
+ok(_wr["has_token"] and "s3cret" not in json.dumps(_aut_page),
+   "a rule may carry a token and the screen is told only that it has one")
+ok(c.delete(f"/api/automation/rules/{_wid}", headers=A).status_code == 200,
+   "and a rule can be removed")
+
+ok(_aut.matches([{"field": "a.b", "op": "eq", "value": "x"}],
+                {"a": {"b": "x"}}),
+   "a condition reaches into the event by a dotted name, so a rule can "
+   "test a field this module has never heard of")
+ok(not _aut.matches([{"field": "a.b", "op": "eq", "value": "x"}], {"a": {}}),
+   "and a field that is not there matches nothing rather than everything")
+
+_src_bus = Path("src/storefront/backend/api.py").read_text()
+ok("_fan_automation" in _src_bus
+   and _src_bus.index("_fan_automation") < _src_bus.index("def fire_webhooks")
+   or "_fan_automation" in _src_bus.split("for fan in (")[1][:120],
+   "the rules ride the same event bus as Discord and the integrations, "
+   "which is what makes a failing rule unable to fail the order")
+
+# --- and the four are reachable, which was the whole point ---
+for _cap, _tab in (("accounting", "accounting"), ("treasury", "treasury"),
+                   ("legal", "legal"), ("automation", "automation")):
+    _row = re.search(rf'\{{ id: "{_tab}",[^}}]*\}}', _ops).group(0)
+    ok('group: "' in _row, f"{_cap} has a place in the navigation")
+    ok(f'{_tab}: "{_cap}"' in _ops,
+       f"and is gated on the {_cap} capability it is sold as")
+ok('"Money"' in _ops and "Books" in _ops and "Cash & holdings" in _ops,
+   "the books and the bank are their own group rather than more of "
+   "Company, which was already seven deep")
 
 
 done("core")

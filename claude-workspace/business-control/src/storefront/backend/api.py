@@ -986,7 +986,7 @@ def fire_webhooks(event: str, payload: dict):
     Webhook bodies are HMAC-SHA256 signed (X-Store-Signature) with the
     store's webhook secret so receivers can verify authenticity.
     """
-    for fan in (_fan_discord, _fan_integrations):
+    for fan in (_fan_discord, _fan_integrations, _fan_automation):
         try:
             fan(event, payload)
         except Exception:
@@ -996,6 +996,15 @@ def fire_webhooks(event: str, payload: dict):
 def _fan_discord(event: str, payload: dict) -> None:
     from . import discord as _dc
     _dc.emit(event, payload)
+
+
+def _fan_automation(event: str, payload: dict) -> None:
+    """The business's own rules, on the same bus as everything else. Last
+    in the list because it is the newest, not because it matters least —
+    the fan-out swallows each listener's failure separately, so the order
+    decides nothing."""
+    from erp.backend import automation as _au
+    _au.emit(event, payload)
 
 
 def _fan_integrations(event: str, payload: dict) -> None:

@@ -80,7 +80,9 @@ def _init_core(tid=None):
         _prs.init_tables(con)
         from . import ads as _ads, hiring as _hir, intake as _ink
         from . import listings as _lst, marketplaces as _mkt
-        for _m in (_ads, _hir, _mkt, _lst, _ink):
+        from . import accounting as _acc, automation as _aut
+        from . import legal as _lgl, treasury as _tre
+        for _m in (_ads, _hir, _mkt, _lst, _ink, _acc, _tre, _lgl, _aut):
             _m.init_tables(con)
         con.commit()
         con.close()
@@ -6727,7 +6729,9 @@ app.include_router(expenses.router)
 from . import presentations  # noqa: E402  (safe: included late)
 app.include_router(presentations.router)
 from . import ads, hiring, intake, listings, marketplaces  # noqa: E402  (safe: included late)
-for _fam in (ads, hiring, marketplaces, listings, intake):
+from . import accounting, automation, legal, treasury  # noqa: E402  (safe: included late)
+for _fam in (ads, hiring, marketplaces, listings, intake,
+             accounting, treasury, legal, automation):
     app.include_router(_fam.router)
 
 

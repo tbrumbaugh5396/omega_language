@@ -140,6 +140,15 @@ const TABS = [
   { id: "profile", label: "My profile", icon: "user", group: "Team",
     roles: "*" },
 
+  // The books and the bank. Their own group rather than more of Company,
+  // which was already seven deep — and because "where is the money and
+  // what did we earn" is a question somebody sits down to ask, not one
+  // they stumble on between the audit log and the device list.
+  { id: "accounting", label: "Books", icon: "list", group: "Money",
+    roles: ["admin", "employee"] },
+  { id: "treasury", label: "Cash & holdings", icon: "card", group: "Money",
+    roles: ["admin", "employee"] },
+
   // The company itself: its paperwork, its bill, its machines, its record.
   { id: "docs", label: "Documents", icon: "file", group: "Company",
     roles: ["admin", "employee"] },
@@ -150,6 +159,10 @@ const TABS = [
   { id: "audit", label: "Audit log", icon: "shield2", group: "Company",
     roles: ["admin"] },
   { id: "dbview", label: "Database", icon: "list", group: "Company",
+    roles: ["admin"] },
+  { id: "legal", label: "Legal register", icon: "shield2", group: "Company",
+    roles: ["admin", "employee"] },
+  { id: "automation", label: "Automations", icon: "flask", group: "Company",
     roles: ["admin"] },
   { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
   { id: "admin", label: "Admin", icon: "gear", group: "Company", roles: ["admin"] },
@@ -220,6 +233,8 @@ const TAB_CAP = {
   // form response is CRM-ish and stays with the gifts, being the
   // smaller half of a smaller argument.
   intake: "fundraising", results: "learning",
+  accounting: "accounting", treasury: "treasury", legal: "legal",
+  automation: "automation",
 };
 const CAP_LABEL = {
   selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
@@ -227,6 +242,8 @@ const CAP_LABEL = {
   distribution: "Distribution", intelligence: "Intelligence",
   events: "Events", affiliates: "Affiliates", comms: "Comms",
   learning: "Learning", nutrition: "Nutrition", fundraising: "Fundraising",
+  accounting: "Accounting", treasury: "Treasury & investments",
+  legal: "Legal", automation: "Automation",
   api: "API & data platform", infosec: "InfoSec",
 };
 // null caps = everything on: legacy installs, the provider, and any tenant
@@ -238,7 +255,7 @@ const capLocked = (t) => {
 };
 
 const NAV_GROUPS = ["Sell", "Stock & supply", "Work", "Teach", "Grow",
-                    "Team", "Company", "Connections"];
+                    "Money", "Team", "Company", "Connections"];
 // Where each staff job lands after sign-in.
 const JOB_HOME = { driver: "routes", dsd: "routes", warehouse: "inventory",
   sales_rep: "outreach", ambassador: "feed", event_staff: "promos" };
@@ -462,7 +479,9 @@ async function render() {
     bookings: renderBookings, classes: renderClasses, devices: renderDevices, expenses: renderExpenses, presentations: renderPresentations,
     ads: renderAds, listings: renderListings, hiring: renderHiring,
     marketplaces: renderMarketplaces, intake: renderIntake,
-    results: renderResults,
+    results: renderResults, accounting: renderBooks,
+    treasury: renderTreasury, legal: renderLegal,
+    automation: renderAutomations,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

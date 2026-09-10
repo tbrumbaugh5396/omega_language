@@ -237,6 +237,47 @@ TOOLS = [
         "method": "GET", "path": "/api/presentations",
     },
 
+    # ---------- the books, the bank, the register ----------
+    {
+        "name": "bc_trial_balance",
+        "summary": "The ledger's trial balance and this year's income "
+                   "statement and balance sheet. Unlike the profit and "
+                   "loss above, this comes from double-entry books that "
+                   "must balance — if 'balanced' is false, nothing derived "
+                   "from it should be quoted.",
+        "method": "GET", "path": "/api/accounting",
+    },
+    {
+        "name": "bc_account_ledger",
+        "summary": "Every entry that touched one account, with a running "
+                   "balance. How a difference is found rather than merely "
+                   "noticed.",
+        "method": "GET", "path": "/api/accounting/ledger/{code}",
+        "path_params": {"code": {"type": "string",
+                                 "description": "four-digit account code"}},
+        "required": ["code"],
+    },
+    {
+        "name": "bc_cash_position",
+        "summary": "What is in each account, what is set aside, what is "
+                   "free, the holdings, and the runway. Runway is "
+                   "arithmetic on the past — quote it as a projection.",
+        "method": "GET", "path": "/api/treasury",
+    },
+    {
+        "name": "bc_legal_register",
+        "summary": "Contracts, policies, licences and filings with the "
+                   "dates that matter, plus the diary of what falls due. "
+                   "It records decisions somebody made; it is not advice.",
+        "method": "GET", "path": "/api/legal",
+    },
+    {
+        "name": "bc_automations",
+        "summary": "The business's own rules, what each listens for, and "
+                   "how its recent runs went.",
+        "method": "GET", "path": "/api/automation",
+    },
+
     # ---------- writing: additive, reversible, off by default ----------
     {
         "name": "bc_add_ticket",
@@ -352,6 +393,15 @@ EXCLUDED = {
     "POST /api/marketplaces/{name}/status": "pauses or resumes taking "
                                             "delivery orders",
     "POST /api/ads/{platform}/expense": "files a cost as already approved",
+    "POST /api/accounting/journals": "posting to the books is bookkeeping, "
+                                     "and a wrong entry is corrected by a "
+                                     "reversal somebody has to understand",
+    "POST /api/accounting/periods/{pid}/close": "closes a year against "
+                                                "further posting",
+    "POST /api/treasury/transfer": "moves money between real accounts",
+    "POST /api/automation/rules": "a rule is a standing instruction — an "
+                                  "agent writing one is an agent granting "
+                                  "itself an action it was not given",
     "DELETE *": "nothing here deletes",
     "POST /api/admin/*": "settings, staff, permissions and keys",
     "/api/store/admin/*": "the shop front's own admin",

@@ -31,6 +31,30 @@
   warning once. The launcher exports `BC_SCHEME`/`BC_PORT`, and every
   outward link (QR, invite, sign-in) is built from them.
 
+## The books, the bank, the register and the rules
+
+Four capabilities the price book sold with nothing behind them, built
+2026-09-09: `accounting.py` (double entry), `treasury.py` (cash and
+holdings), `legal.py` (matters and a diary), `automation.py` (rules on
+the event bus). Screens: Books and Cash & holdings in a new **Money**
+rail group, Legal register and Automations in Company. See
+docs/product/finance-and-rules.md.
+
+Things to know before touching them:
+
+- **The ledger posts by derivation, not inline.** `accounting.sync()`
+  walks orders and expenses with no journal yet, keyed on
+  `(source, source_id)`. Never add an inline post at a call site: a
+  payment that succeeds while its posting throws is the failure mode the
+  whole design avoids.
+- **Corrections reverse.** There is no journal edit and there must not be.
+- **Discounts have their own account** (4500). Burying them in other
+  income balances fine and is silently wrong.
+- **Automation actions are a closed list.** Adding one that spends,
+  publishes or mails a customer defeats the point; a rule that wants that
+  wants a ticket.
+- Still sold and still unbuilt: **Finance, Payroll, Onboarding**.
+
 ## The agent door
 
 `src/mcp_server/` is a Model Context Protocol server: JSON-RPC over stdio,

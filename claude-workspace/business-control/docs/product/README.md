@@ -71,6 +71,7 @@ decision](ecommerce-architecture-decision.md#8-decisions-still-open), unresolved
 2. **Who owns inventory truth — ERP or Shopify?** Wanting Shopify to own it is a signal the ERP is further from done than it looks.
 3. **Who owns the customer record?** Pick a winner up front, or spend a year reconciling duplicate customers by email.
 
+- [finance-and-rules.md](finance-and-rules.md) — the ledger, the cash position, the legal diary and the rules engine: what each does, what it deliberately stops short of, and which capabilities are still sold without being built
 - [agent.md](agent.md) — wiring Claude or any MCP client into an install: the key, the tool list, and the three walls that decide what an agent can actually reach
 - [connections.md](connections.md) — the second wave of outside connections: ad platforms, job boards, delivery apps, listings and reviews, forms and score imports, and what each one honestly can and cannot do
 
