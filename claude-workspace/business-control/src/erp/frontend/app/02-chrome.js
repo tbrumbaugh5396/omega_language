@@ -211,13 +211,19 @@ const TAB_CAP = {
   audit: "infosec",
   ads: "marketing", listings: "marketing", hiring: "workforce",
   marketplaces: "selling",
+  // Forms, gifts and results straddles three: gifts are fundraising,
+  // the score imports are learning, a form response becomes a CRM
+  // enquiry. It is sold as fundraising, that being the row a tenant
+  // buys this screen for — so a shop with Learning and no Fundraising
+  // sees it greyed, and imports its GED results after a plan change.
+  intake: "fundraising",
 };
 const CAP_LABEL = {
   selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
   workforce: "Workforce", inventory: "Inventory", sourcing: "Sourcing",
   distribution: "Distribution", intelligence: "Intelligence",
   events: "Events", affiliates: "Affiliates", comms: "Comms",
-  learning: "Learning", nutrition: "Nutrition",
+  learning: "Learning", nutrition: "Nutrition", fundraising: "Fundraising",
   api: "API & data platform", infosec: "InfoSec",
 };
 // null caps = everything on: legacy installs, the provider, and any tenant

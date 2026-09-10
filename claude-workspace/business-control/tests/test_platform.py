@@ -2543,6 +2543,27 @@ ok('"selling"' in _appjs.split("TAB_CAP")[1][:900]
    "the tab→capability map speaks the price book's own ids, and null "
    "caps unlocks everything")
 
+# Every capability a tab is gated on must have a name to show while it
+# is locked, and be a capability the price book can quote. Without the
+# first the panel offers to sell you "fundraising"; without the second it
+# offers no price at all.
+_tabcap = dict(re.findall(r'(\w+): "(\w+)"',
+                          _appjs.split("const TAB_CAP = {")[1].split("};")[0]))
+_caplab = dict(re.findall(r'(\w+): "([^"]+)"',
+                          _appjs.split("const CAP_LABEL = {")[1].split("};")[0]))
+_unnamed = sorted({v for v in _tabcap.values()} - set(_caplab))
+ok(not _unnamed,
+   f"every gated capability has a label for the locked panel ({_unnamed})")
+ok(_tabcap.get("intake") == "fundraising",
+   "the forms, gifts and results screen is sold as fundraising — it "
+   "straddles learning and CRM too, and the gifts are the row a tenant "
+   "buys it for")
+_unpriced = [_cp for _cp in sorted(set(_tabcap.values()))
+             if c.get(f"/api/capability-info/{_cp}",
+                      headers={"host": "partialco.localhost"}).status_code != 200]
+ok(not _unpriced,
+   f"and the price book can quote every one of them ({_unpriced})")
+
 _ci = c.get("/api/capability-info/distribution",
             headers={"host": "partialco.localhost"}).json()
 ok(_ci["name"] == "Distribution" and _ci["price"] == 50

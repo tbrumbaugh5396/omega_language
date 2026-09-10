@@ -104,6 +104,19 @@ the switch that stops delivery revenue.
 Advertising, Listings and Forms additionally let any employee *read* the
 screen without a grant; acting on it takes one.
 
+## What each screen is sold as
+
+Four of the five belong to a capability the tenant already buys for other
+reasons: Advertising and Listings to Marketing, Hiring to Workforce,
+Delivery apps to Selling. **Forms, gifts & results is sold as
+Fundraising**, and that is a choice rather than a fact — it straddles
+three rows. Its gifts are fundraising, its GED and NorthStar imports are
+learning, and a form response that becomes an enquiry is CRM. Gifts are
+the row a tenant buys the screen for, so that is where it sits. The
+consequence to know: a school on Learning without Fundraising sees the
+screen greyed and imports its score reports after a plan change, not
+before.
+
 ## Machinery the wave added
 
 - `PROVIDERS[name]["family"]`, `inbound: True` (a provider that connects
