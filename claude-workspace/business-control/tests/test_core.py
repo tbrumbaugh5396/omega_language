@@ -8187,4 +8187,128 @@ ok(all(w in _cdoc for w in ("Twitch", "Yelp", "GED Manager", "NorthStar", "jobs.
 ok("connections.md" in Path("docs/product/README.md").read_text(),
    "and the product README points at it")
 
+
+# ===== the agent's door: every tool points at a route that exists =======
+# An MCP server is a promise made in a schema and kept by an HTTP call,
+# and nothing checks the join. The first version of it offered a ticket
+# tool whose body said `topic` while the route wanted `title`, which is
+# invisible until a model tries it and reads back "a ticket needs a
+# title" — a failure the model then reports as a broken business rather
+# than a broken tool. So the whole catalogue is checked against the app's
+# own OpenAPI document, which is generated from the routes themselves.
+import importlib as _il  # noqa: E402
+_mcpt = _il.import_module("mcp_server.tools")
+_mcps = _il.import_module("mcp_server.server")
+_spec = c.get("/openapi.json").json()
+_paths = _spec["paths"]
+
+ok(len(_mcpt.TOOLS) >= 25,
+   f"the agent is offered a curated list, not all {len(_paths)} paths")
+ok(len({t["name"] for t in _mcpt.TOOLS}) == len(_mcpt.TOOLS),
+   "no tool name means two things")
+
+for _t in _mcpt.TOOLS:
+    _p, _m = _t["path"], _t["method"].lower()
+    ok(_p in _paths, f"{_t['name']} points at a route that exists ({_p})")
+    ok(_m in _paths.get(_p, {}),
+       f"{_t['name']} uses a method that route answers ({_m.upper()} {_p})")
+    _op = _paths[_p][_m]
+
+    # Path placeholders must be declared, or the URL is built with a
+    # literal {uid} in it and the app 404s on a route it does have.
+    _holes = set(re.findall(r"\{(\w+)\}", _p))
+    ok(_holes == set(_t.get("path_params") or {}),
+       f"{_t['name']} declares exactly the path parameters its route has "
+       f"({_holes})")
+    ok(_holes <= set(_t.get("required") or []),
+       f"{_t['name']} requires every part of its own URL")
+
+    # Body fields must be fields the route's model accepts. FastAPI drops
+    # unknown keys silently, so a misspelled one is a value that vanishes.
+    if _t.get("body"):
+        _rb = _op.get("requestBody")
+        ok(_rb is not None, f"{_t['name']} sends a body to a route that takes one")
+        _ref = _rb["content"]["application/json"]["schema"].get("$ref", "")
+        _model = _spec["components"]["schemas"].get(_ref.split("/")[-1], {})
+        _extra = sorted(set(_t["body"]) - set(_model.get("properties", {})))
+        ok(not _extra,
+           f"{_t['name']} sends only fields its route accepts (stray: {_extra})")
+
+    # Query parameters likewise.
+    if _t.get("query"):
+        _known = {q["name"] for q in _op.get("parameters", [])}
+        _stray = sorted(set(_t["query"]) - _known)
+        ok(not _stray, f"{_t['name']} passes known query parameters ({_stray})")
+
+# Writing is a decision the operator makes, not one the model makes.
+_reads = [t for t in _mcpt.TOOLS if not t.get("write")]
+_writes = [t for t in _mcpt.TOOLS if t.get("write")]
+ok(_reads and _writes, "the catalogue has both, and knows which is which")
+ok(all(t["method"] == "GET" for t in _reads),
+   "nothing marked read-only can change anything, whatever it is called")
+ok(all(t["method"] != "GET" for t in _writes), "and vice versa")
+ok(len(_mcps.offered({"writes": False})) == len(_reads)
+   and len(_mcps.offered({"writes": True})) == len(_mcpt.TOOLS),
+   "a server started read-only does not even LIST the write tools — a "
+   "tool a model can see is a tool it will eventually try")
+ok(all("WRITES" in _mcps.description_for(t) if hasattr(_mcps, "description_for")
+       else "WRITES" in _mcpt.description_for(t) for t in _writes),
+   "and each write tool says so in the sentence the model actually reads")
+
+# Nothing that spends, publishes or cannot be undone, even with writes on.
+_offered = {f"{t['method']} {t['path']}" for t in _mcpt.TOOLS}
+for _forbidden in ("POST /api/orders",
+                   "POST /api/orders/{oid}/confirm-payment",
+                   "POST /api/expenses/{eid}/decide",
+                   "POST /api/hours/approve",
+                   "POST /api/hiring/applicants/{aid}/hire",
+                   "POST /api/listings/reviews/{rid}/reply",
+                   "POST /api/listings/ask",
+                   "POST /api/marketplaces/{name}/push"):
+    ok(_forbidden not in _offered,
+       f"the agent cannot {_forbidden} — irreversible, public or it moves "
+       f"money, and a person stays in that loop")
+    ok(_forbidden in _mcpt.EXCLUDED,
+       f"and the omission is written down as a decision ({_forbidden})")
+ok(not any(t["method"] == "DELETE" for t in _mcpt.TOOLS),
+   "nothing the agent can reach deletes anything")
+ok(not any(t["path"].startswith("/api/admin/") for t in _mcpt.TOOLS),
+   "nor touches settings, staff, permissions or keys")
+
+# The transport: stdout is protocol, and a refusal must reach the model.
+_ini = _mcps.handle({"writes": False}, {"jsonrpc": "2.0", "id": 1,
+                                        "method": "initialize",
+                                        "params": {"protocolVersion": "2025-06-18"}})
+ok(_ini["result"]["protocolVersion"] == "2025-06-18"
+   and "tools" in _ini["result"]["capabilities"],
+   "the handshake answers in the version the client asked for")
+ok(_mcps.handle({"writes": False},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"}) is None,
+   "a notification gets no reply, which is what makes it a notification")
+_bad = _mcps.handle({"writes": False, "key": "", "url": "", "host": ""},
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                     "params": {"name": "bc_log_expense", "arguments": {}}})
+ok(_bad["result"]["isError"] is True
+   and "read-only" in _bad["result"]["content"][0]["text"],
+   "a refused tool comes back as a readable result, not a protocol error "
+   "— the model has to read it to do anything about it")
+_unknown = _mcps.handle({"writes": True, "key": "", "url": "", "host": ""},
+                        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                         "params": {"name": "bc_nope", "arguments": {}}})
+ok(_unknown["result"]["isError"] is True,
+   "and so does a tool that does not exist")
+ok(_mcps.handle({"writes": False},
+                {"jsonrpc": "2.0", "id": 4, "method": "resources/list"}
+                )["result"] == {"resources": [], "resourceTemplates": []},
+   "clients probe for resources whether or not we offered them, and an "
+   "error in their log reads as a fault")
+_src_mcp = Path("src/mcp_server/server.py").read_text()
+ok('print(f"[business-control mcp] {msg}", file=sys.stderr' in _src_mcp,
+   "every human word goes to stderr: a stray line on stdout is a parse "
+   "error at the client and a server that appears to hang")
+ok("BC_MCP_KEY" in _src_mcp and "Bearer" in _src_mcp,
+   "and it carries the app's own API key, so there is no second "
+   "authorization model to drift from the first")
+
+
 done("core")

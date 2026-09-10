@@ -31,6 +31,32 @@
   warning once. The launcher exports `BC_SCHEME`/`BC_PORT`, and every
   outward link (QR, invite, sign-in) is built from them.
 
+## The agent door
+
+`src/mcp_server/` is a Model Context Protocol server: JSON-RPC over stdio,
+in front of one install, offering a hand-picked slice of the API rather
+than all of it.
+
+```bash
+PYTHONPATH=src BC_MCP_KEY=bck_… python3 -m mcp_server
+```
+
+Reads are always offered; writes need `BC_MCP_WRITES=1` and are limited to
+additive, reversible acts. Anything that spends money, publishes, or
+cannot be undone is left out on purpose and listed in `EXCLUDED` in
+`tools.py`. Authorisation is NOT done there — the key is bound to an
+account and every call goes through the app's own permission check, so
+binding the key narrowly is the real control. See docs/product/agent.md.
+
+**stdout is protocol.** A `print` in that package is a parse error at the
+client; log to stderr.
+
+The suite checks every tool against the app's generated OpenAPI document:
+the path exists, the method is answered, path placeholders are declared
+and required, and body and query fields are ones the route accepts. That
+guard exists because the first version sent `topic` to a route that wanted
+`title`, which FastAPI drops silently.
+
 ## Tests
 
 `PYTHONPATH=src .venv/bin/python tests/test_smoke.py` — script-style,
