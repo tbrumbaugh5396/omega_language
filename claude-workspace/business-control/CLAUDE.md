@@ -80,9 +80,16 @@ Things to know before touching them:
   and it must stay that way: account off, PIN and badge forgotten, token
   rotated, API keys revoked, future shifts dropped. Never turn it into a
   checklist line.
-- `civics.py` is the Civics & policy capability. Its map is an SVG drawn
-  in `31-civics.js` from the install's own rows — no tiles, no CDN, no
-  network. A test asserts the map function loads nothing.
+- `civics.py` is the Civics & policy capability. Its map is Leaflet,
+  vendored under `storefront/frontend/vendor/leaflet/`, over OpenStreetMap
+  tiles when online and a bundled `countries-110m.geojson` (Natural Earth,
+  public domain) when not. The register holds only WATCHED places; the
+  outline shows every country and clicking one offers to watch it.
+  Finding the stack for an address is keyless (`find_jurisdictions`, the
+  US Census geocoder); who holds the offices is keyed (Open States by
+  point, Congress.gov by state). **Google Civic is not offered**: its
+  representatives endpoint was turned down in April 2025. Do not add it
+  back from memory.
 - **Adding a capability touches six places**: the price book table, the
   parser's count in `pricebook.py`, `CAP_NAMES`, `TAB_CAP` and
   `CAP_LABEL`, the client capability menu, and the sales deck's price

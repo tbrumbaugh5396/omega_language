@@ -1,0 +1,5 @@
+countries-110m.geojson is derived from Natural Earth (naturalearthdata.com),
+ne_110m_admin_0_countries, which is in the public domain. Properties were
+reduced to name, ISO codes, continent, subregion and population estimate,
+and coordinates rounded to two decimal places (about a kilometre), which
+is well inside the 1:110m scale's own accuracy.

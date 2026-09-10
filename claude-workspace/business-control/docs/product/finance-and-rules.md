@@ -274,33 +274,53 @@ software offering an opinion about it.
 
 ## Civics & policy
 
-A business sits inside a stack of jurisdictions at once — a city, a
-county, a state, a congressional district, a country — and any of them
-can change a rule that costs it money. The information exists in a dozen
-places, none of which knows the business is there.
+A business sits inside a stack of jurisdictions at once — a treaty bloc,
+a country, a state, a county, a congressional district, a city, a school
+district, a ward, a homeowners' association — and any of them can change
+a rule that reaches it. The information exists in a dozen places, none
+of which knows the business is there.
 
 Jurisdictions in a tree, each with a point and optionally a boundary.
+**Agreements** between them — a treaty, a trade pact, a defence alliance,
+membership of a body — as rows of their own, because a country can be
+party to fifty and an agreement has parties rather than a parent.
 Officials, so "who do we call" has an answer. Measures — bills,
 ordinances, rules, ballot questions — with the business's **own position
 and its own note on what it would do to them**, because tracking
 something without that is a news feed. Elections, because a date is what
-everything hangs off.
+everything hangs off. Click any place and the panel beside the map is
+that place: what it is inside, what is inside it, what it has agreed,
+who runs it, what it is deciding, when it next votes.
 
-**The map is drawn here.** No tiles, no outside service, nothing sent
-anywhere: an SVG projected from the install's own rows, with the
-business's own places plotted beside the jurisdictions. Scroll to zoom
-toward the pointer, drag to move, click to filter everything below. The
-limit is real and worth stating: there is no basemap, so a jurisdiction
-is where somebody said it is. The gain is that the page works on a laptop
-with no internet.
+**The map is Leaflet, vendored.** OpenStreetMap tiles when the machine
+is online; a bundled outline of every country when it is not, so the page
+never goes grey and the top of the stack is clickable with no network. The
+register holds only the places being watched — the outline shows every
+country, and clicking one that is not watched offers to watch it — which
+is how the map stays a map and the register stays a register.
 
-Three sources can fill it in, each needing its own key: Open States for
-US state legislatures, Congress.gov for the federal one, Google Civic for
-who represents an address. None covers everything. Below the state line
-most places publish nothing an API can read, which is why typing a
-measure in by hand is a first-class path rather than a fallback. A
-refresh never overwrites the position or the note — those are the
-business's, not the source's.
+**Finding the stack needs no key.** The US Census Bureau's geocoder is an
+official public service: give it a street, city and state and it returns
+the state, county, city, congressional district, both state chambers and
+the school district, each with the FIPS code every other US dataset joins
+on, and the point. Its layers are named by vintage, so the parser finds
+them by what they mean and survives the next redistricting. US only, and
+it says so rather than guessing.
+
+**Who holds the offices needs keys.** Open States finds the state
+legislators for the point; Congress.gov finds the two senators and the
+representative for the district. Both start from what the Census gave
+back. A refresh never overwrites the business's own position or note.
+
+**Google's Civic Information API is not offered**, and an earlier version
+of this doc said it was. Google turned down its representatives and
+divisions endpoints in April 2025. A connector to them would fail on the
+first real key, and offering one was a mistake.
+
+Below the state line most places publish nothing an API can read, which
+is why typing a measure in by hand is a first-class path rather than a
+fallback. An HOA's board is entered as officials, its rules as measures
+of kind *rule*, its annual meeting as an election.
 
 ### The giving register
 
@@ -328,7 +348,9 @@ like it has checked.
 - **Invoicing**: no payment link. A customer reads the invoice and pays
   however they already pay; nothing here takes a card.
 - **Civics**: no statute text, no compliance checking, and no data below
-  the state line except what somebody types. The map has no basemap.
+  the state line except what somebody types. Tiles need the network;
+  the country outline does not. Treaties and blocs are typed, because no
+  free source of them is trustworthy enough to seed as fact.
 - **Leaving**: it closes what this install controls. Accounts in other
   systems are somebody's list item, not something this can revoke.
 

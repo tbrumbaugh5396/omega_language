@@ -1,172 +1,360 @@
 // ---------- policy and elections ----------
-/* A business sits inside a stack of jurisdictions at once, and every one
-   of them can change a rule that costs it money. This holds what those
-   are, who runs them, what they are currently doing about it, and when
-   the next election is — with a register of political giving kept apart,
-   because that one is a disclosure record and nothing else.
+/* A business sits inside a stack of jurisdictions at once, from a treaty
+   bloc down to a homeowners' association, and every one of them can
+   change a rule that reaches it. This is the map of that stack and the
+   register behind it: click any place and the panel beside the map is
+   that place — what it is inside, what is inside it, what it has agreed
+   with others, who runs it, what it is deciding, when it next votes.
 
-   The map is drawn here, from what the install knows: no tiles, no
-   outside service, nothing sent anywhere. That is a real limit — there
-   is no basemap, so a jurisdiction is where somebody said it is — and it
-   is why the page works on a laptop with no internet. */
+   The map is Leaflet, vendored rather than fetched. Underneath it are
+   OpenStreetMap tiles when the machine is online and a bundled outline of
+   every country when it is not, so the page never goes grey and the top
+   of the stack is clickable with no network at all. The register holds
+   only the places this business is watching: the outline layer shows
+   every country, and clicking one that is not yet watched offers to
+   watch it, which is how the map stays a map and the register stays a
+   register. */
 
-let CIV_SEL = 0;      // the jurisdiction filtering everything below
-let CIV_VIEW = null;  // {x, y, w, h} of the map's viewBox, for pan and zoom
+let CIV_SEL = 0;          // the jurisdiction the panel is showing
+let CIV_MAP = null;       // the Leaflet map, kept across renders
+let CIV_LAYERS = {};      // what is drawn on it, so it can be redrawn
+let CIV_WORLD = null;     // the bundled countries, loaded once
 
-const civProject = (lat, lng) => ({
-  // Equirectangular, with latitude stretched by the cosine of the middle
-  // of the data. A plain lat/lng plot squashes anything far from the
-  // equator sideways, and a map of one county is entirely "far from the
-  // equator".
-  x: lng * 100,
-  y: -lat * 100,
-});
+const CIV_LEVEL_ZOOM = { bloc: 2, country: 4, state: 6, county: 8,
+  district: 8, city: 11, school: 10, ward: 13, hoa: 15, other: 9 };
 
-function civBounds(m) {
+async function civReady() {
+  await loadCallScript("/vendor/leaflet/leaflet.js", () => !!window.L);
+  if (!document.getElementById("civ-leaflet-css")) {
+    const l = document.createElement("link");
+    l.id = "civ-leaflet-css";
+    l.rel = "stylesheet";
+    l.href = "/vendor/leaflet/leaflet.css";
+    document.head.appendChild(l);
+  }
+  if (!CIV_WORLD) {
+    try {
+      CIV_WORLD = await (await fetch("/vendor/countries-110m.geojson")).json();
+    } catch (e) { CIV_WORLD = { type: "FeatureCollection", features: [] }; }
+  }
+}
+
+function civCentroid(geom) {
+  // The middle of the biggest ring, which is where a label goes. A true
+  // centroid of France lands in the Atlantic because of Guiana.
+  let best = null;
+  const rings = geom.type === "Polygon" ? [geom.coordinates[0]]
+    : geom.type === "MultiPolygon" ? geom.coordinates.map((p) => p[0]) : [];
+  rings.forEach((ring) => {
+    if (!best || ring.length > best.length) best = ring;
+  });
+  if (!best) return null;
+  let x = 0, y = 0;
+  best.forEach(([lng, lat]) => { x += lng; y += lat; });
+  return { lat: y / best.length, lng: x / best.length };
+}
+
+function civDraw(d) {
+  const L = window.L;
+  const m = d.map;
+  const host = document.getElementById("civ-leaflet");
+  if (!host) return;
+  if (!CIV_MAP || CIV_MAP._container !== host) {
+    if (CIV_MAP) { try { CIV_MAP.remove(); } catch (e) { /* gone */ } }
+    CIV_MAP = L.map(host, { worldCopyJump: true, minZoom: 1, maxZoom: 18,
+      zoomControl: true, attributionControl: true });
+    // Tiles when online. When the request fails the layer simply stays
+    // blank, and the outline layer underneath is what the page shows.
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+      crossOrigin: true }).addTo(CIV_MAP);
+    CIV_MAP.on("click", () => {
+      // The map itself: clear the selection. A click on a shape stops
+      // propagation before it gets here.
+      if (CIV_SEL) { CIV_SEL = 0; civPanel(d, null); civRestyle(d); }
+    });
+  }
+  Object.values(CIV_LAYERS).forEach((ly) => { try { CIV_MAP.removeLayer(ly); } catch (e) { /* */ } });
+  CIV_LAYERS = {};
+  const watchedIso = {};
+  m.jurisdictions.forEach((j) => { if (j.iso) watchedIso[j.iso.toUpperCase()] = j; });
+
+  // Every country, from the bundled outline. Clickable whether or not it
+  // is watched: an unwatched one offers to become watched.
+  CIV_LAYERS.world = L.geoJSON(CIV_WORLD, {
+    style: (f) => {
+      const j = watchedIso[(f.properties.iso2 || "").toUpperCase()]
+        || watchedIso[(f.properties.iso3 || "").toUpperCase()];
+      return { className: "civ-country-outline" + (j ? " watched" : "")
+        + (j && j.id === CIV_SEL ? " on" : ""), weight: 1 };
+    },
+    onEachFeature: (f, layer) => {
+      const p = f.properties;
+      layer.bindTooltip(p.name, { sticky: true });
+      layer.on("click", (e) => {
+        L.DomEvent.stopPropagation(e);
+        const j = watchedIso[(p.iso2 || "").toUpperCase()]
+          || watchedIso[(p.iso3 || "").toUpperCase()];
+        if (j) { civSelect(d, j.id); return; }
+        civOfferWatch(d, p, civCentroid(f.geometry));
+      });
+    },
+  }).addTo(CIV_MAP);
+
+  // Watched jurisdictions with their own boundary.
+  m.jurisdictions.filter((j) => j.boundary).forEach((j) => {
+    CIV_LAYERS["b" + j.id] = L.geoJSON(j.boundary, {
+      style: { className: "civ-area" + (j.id === CIV_SEL ? " on" : ""), weight: 1.5 },
+      onEachFeature: (f, layer) => {
+        layer.bindTooltip(j.name, { sticky: true });
+        layer.on("click", (e) => { L.DomEvent.stopPropagation(e); civSelect(d, j.id); });
+      },
+    }).addTo(CIV_MAP);
+  });
+
+  // Watched jurisdictions as pins, sized by level, and the business's own
+  // places as squares.
+  const pin = (cls, size) => L.divIcon({ className: "", iconSize: [size, size],
+    html: `<div class="${cls}" style="width:${size}px;height:${size}px"></div>` });
+  const sizes = { bloc: 22, country: 18, state: 15, county: 13, district: 12,
+    city: 11, school: 10, ward: 9, hoa: 9, other: 9 };
+  const group = L.layerGroup();
+  m.jurisdictions.filter((j) => j.lat !== null && j.lng !== null && !j.iso)
+    .forEach((j) => {
+      const mk = L.marker([j.lat, j.lng], {
+        icon: pin(`civ-pin civ-${j.level}${j.id === CIV_SEL ? " on" : ""}${j.watching ? "" : " off"}`,
+                  sizes[j.level] || 10),
+        title: j.name });
+      mk.bindTooltip(`${j.name} · ${j.level}`);
+      mk.on("click", (e) => { L.DomEvent.stopPropagation(e); civSelect(d, j.id); });
+      group.addLayer(mk);
+    });
+  m.places.forEach((p) => {
+    const mk = L.marker([p.lat, p.lng], { icon: pin("civ-place", 10), title: p.name });
+    mk.bindTooltip(`${p.name}${p.city ? " · " + p.city : ""} — yours`);
+    group.addLayer(mk);
+  });
+  CIV_LAYERS.pins = group.addTo(CIV_MAP);
+  setTimeout(() => CIV_MAP.invalidateSize(), 50);
+}
+
+function civRestyle(d) { civDraw(d); }
+
+function civFit(d) {
+  const m = d.map;
   const pts = [];
   m.jurisdictions.forEach((j) => {
-    if (j.lat !== null && j.lng !== null) pts.push(civProject(j.lat, j.lng));
-    if (j.boundary) civRings(j.boundary).forEach((ring) =>
-      ring.forEach(([lng, lat]) => pts.push(civProject(lat, lng))));
+    if (j.lat !== null && j.lng !== null) pts.push([j.lat, j.lng]);
   });
-  m.places.forEach((p) => pts.push(civProject(p.lat, p.lng)));
-  if (!pts.length) return { x: -18000, y: -5000, w: 36000, h: 18000 };
-  const xs = pts.map((p) => p.x);
-  const ys = pts.map((p) => p.y);
-  const pad = Math.max(120, (Math.max(...xs) - Math.min(...xs)) * 0.15,
-                       (Math.max(...ys) - Math.min(...ys)) * 0.15);
-  return { x: Math.min(...xs) - pad, y: Math.min(...ys) - pad,
-           w: (Math.max(...xs) - Math.min(...xs)) + pad * 2,
-           h: (Math.max(...ys) - Math.min(...ys)) + pad * 2 };
+  m.places.forEach((p) => pts.push([p.lat, p.lng]));
+  if (pts.length > 1) CIV_MAP.fitBounds(pts, { padding: [30, 30], maxZoom: 10 });
+  else if (pts.length === 1) CIV_MAP.setView(pts[0], 9);
+  else CIV_MAP.setView([20, 0], 2);
 }
 
-function civRings(geom) {
-  if (!geom || !geom.coordinates) return [];
-  if (geom.type === "Polygon") return geom.coordinates;
-  if (geom.type === "MultiPolygon") return geom.coordinates.flat();
-  return [];
-}
-
-function civPath(geom) {
-  return civRings(geom).map((ring) => ring.map(([lng, lat], i) => {
-    const p = civProject(lat, lng);
-    return `${i ? "L" : "M"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
-  }).join(" ") + " Z").join(" ");
-}
-
-const CIV_R = { country: 13, state: 10, county: 8, district: 7, city: 6,
-  ward: 5, other: 5 };
-
-function civMap(m) {
-  // An empty rectangle where a map should be reads as a broken map, and
-  // this one is empty on the honest day: a fresh install knows no
-  // jurisdictions and has no place with a position on it. Say what would
-  // put something there instead of drawing nothing convincingly.
-  if (!m.jurisdictions.length && !m.places.length) {
-    return `<div class="civ-blank"><div>
-      <b>Nothing to draw yet.</b>
-      <span class="dim">The map plots the jurisdictions you are watching
-        and your own places. Add a place — a city, a county, a state —
-        with a latitude and longitude, and it appears here. Your shops
-        arrive on their own once they have coordinates, which they get on
-        the Stores screen.</span>
-    </div></div>`;
+async function civSelect(d, jid) {
+  CIV_SEL = jid;
+  civRestyle(d);
+  const j = d.map.jurisdictions.find((x) => x.id === jid);
+  if (j && j.lat !== null && j.lng !== null && CIV_MAP) {
+    const z = Math.max(CIV_MAP.getZoom(), CIV_LEVEL_ZOOM[j.level] || 6);
+    CIV_MAP.flyTo([j.lat, j.lng], z, { duration: 0.6 });
   }
-  const vb = CIV_VIEW || civBounds(m);
-  const marks = m.jurisdictions.filter((j) => j.lat !== null && j.lng !== null);
-  return `<svg id="civ-svg" viewBox="${vb.x} ${vb.y} ${vb.w} ${vb.h}"
-      preserveAspectRatio="xMidYMid meet" class="civ-map" role="img"
-      aria-label="The jurisdictions this business sits in, and its own places">
-    <rect x="${vb.x}" y="${vb.y}" width="${vb.w}" height="${vb.h}"
-      class="civ-bg"></rect>
-    ${m.jurisdictions.filter((j) => j.boundary).map((j) =>
-      `<path d="${civPath(j.boundary)}" class="civ-area${
-        CIV_SEL === j.id ? " on" : ""}" data-civpick="${j.id}"><title>${
-        esc(j.name)}</title></path>`).join("")}
-    ${m.places.map((p) => {
-      const q = civProject(p.lat, p.lng);
-      const r = Math.max(vb.w, vb.h) / 110;
-      return `<rect x="${(q.x - r / 2).toFixed(1)}" y="${(q.y - r / 2).toFixed(1)}"
-        width="${r.toFixed(1)}" height="${r.toFixed(1)}" class="civ-place"
-        ><title>${esc(p.name)}${p.city ? " · " + esc(p.city) : ""}</title></rect>`;
-    }).join("")}
-    ${marks.map((j) => {
-      const q = civProject(j.lat, j.lng);
-      const r = (CIV_R[j.level] || 6) * Math.max(vb.w, vb.h) / 1600;
-      return `<circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}"
-        r="${Math.max(1.5, r).toFixed(1)}"
-        class="civ-dot civ-${esc(j.level)}${CIV_SEL === j.id ? " on" : ""}${
-          j.watching ? "" : " off"}" data-civpick="${j.id}"
-        ><title>${esc(j.name)} · ${esc(j.level)}</title></circle>`;
-    }).join("")}
-  </svg>`;
+  await civPanel(d, jid);
 }
 
-function civWire(m) {
-  const svg = $("#civ-svg");
-  if (!svg) return;
-  const box = () => CIV_VIEW || civBounds(m);
-  const apply = (v) => {
-    CIV_VIEW = v;
-    svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+function civOfferWatch(d, p, at) {
+  const panel = document.getElementById("civ-panel");
+  if (!panel) return;
+  panel.innerHTML = `<b>${esc(p.long || p.name)}</b>
+    <div class="dim">${esc(p.continent || "")}${p.region ? " · " + esc(p.region) : ""}${
+      p.pop ? " · about " + Number(p.pop).toLocaleString() + " people" : ""}</div>
+    <p class="dim">Not on the register yet. Watching it puts it in the
+      stack, so its treaties, its measures and its elections have somewhere
+      to go.</p>
+    ${d.admin ? `<button class="btn sm" id="civ-watch">Watch ${esc(p.name)}</button>` : ""}`;
+  if ($("#civ-watch")) $("#civ-watch").onclick = async () => {
+    try {
+      const r = await api("/api/civics/watch", { body: {
+        iso: p.iso2 || p.iso3 || "", name: p.long || p.name,
+        lat: at ? at.lat : 0, lng: at ? at.lng : 0 } });
+      CIV_SEL = r.id;
+      renderCivics();
+    } catch (e) { toast(e.message); }
   };
-  svg.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const v = box();
-    const k = e.deltaY > 0 ? 1.15 : 1 / 1.15;
-    const r = svg.getBoundingClientRect();
-    // Zoom toward the pointer rather than the middle, so the thing you
-    // are looking at stays where you are looking.
-    const fx = (e.clientX - r.left) / r.width;
-    const fy = (e.clientY - r.top) / r.height;
-    apply({ x: v.x + v.w * fx * (1 - k), y: v.y + v.h * fy * (1 - k),
-            w: v.w * k, h: v.h * k });
-  }, { passive: false });
-  let drag = null;
-  svg.addEventListener("pointerdown", (e) => {
-    drag = { x: e.clientX, y: e.clientY, v: box(), moved: false };
-    svg.setPointerCapture(e.pointerId);
-  });
-  svg.addEventListener("pointermove", (e) => {
-    if (!drag) return;
-    const r = svg.getBoundingClientRect();
-    const dx = (e.clientX - drag.x) / r.width * drag.v.w;
-    const dy = (e.clientY - drag.y) / r.height * drag.v.h;
-    if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
-    apply({ ...drag.v, x: drag.v.x - dx, y: drag.v.y - dy });
-  });
-  svg.addEventListener("pointerup", (e) => {
-    const wasDrag = drag && drag.moved;
-    drag = null;
-    // A drag that ends on a shape must not also select it, or the map
-    // reselects something every time somebody moves it.
-    if (wasDrag) return;
-    const hit = e.target.closest("[data-civpick]");
-    if (!hit) return;
-    CIV_SEL = CIV_SEL === +hit.dataset.civpick ? 0 : +hit.dataset.civpick;
-    renderCivics();
-  });
+}
+
+async function civPanel(d, jid) {
+  const panel = document.getElementById("civ-panel");
+  if (!panel) return;
+  if (!jid) {
+    panel.innerHTML = `<div class="civ-hint">Click a country, a pin or a
+      boundary. What opens here is that place: what it is inside, what is
+      inside it, what it has agreed with others, who runs it, what it is
+      deciding and when it next votes.</div>`;
+    return;
+  }
+  let x;
+  try { x = await api(`/api/civics/jurisdictions/${jid}/detail`); }
+  catch (e) { panel.innerHTML = `<p class="low">${esc(e.message)}</p>`; return; }
+  const posPill = { support: "ok", oppose: "bad", watch: "", neutral: "" };
+  const crumbs = x.ancestors.map((a) =>
+    `<button data-civgo="${a.id}">${esc(a.name)}</button>`).join(" › ");
+  panel.innerHTML = `
+    ${crumbs ? `<div class="crumbs">${crumbs} ›</div>` : ""}
+    <b>${esc(x.name)}</b> <span class="dim">${esc(x.level_label)}${
+      x.population ? " · " + Number(x.population).toLocaleString() + " people" : ""}${
+      x.watching ? "" : " · not watching"}</span>
+    ${x.note ? `<p class="dim">${esc(x.note)}</p>` : ""}
+    ${x.children.length ? `<h4>Inside it</h4><ul>${x.children.map((k) =>
+      `<li><button data-civgo="${k.id}" class="btn alt sm">${esc(k.name)}</button>
+        <span class="dim">${esc(k.level)}</span></li>`).join("")}</ul>` : ""}
+    ${x.agreements.length ? `<h4>Agreements it is party to</h4><ul>${x.agreements.map((a) =>
+      `<li><b>${esc(a.name)}</b> <span class="dim">${esc(a.kind_label)} · ${esc(a.status.replace(/_/g, " "))}</span>
+        ${a.parties.length > 1 ? `<br><span class="dim">with ${a.parties.filter((q) => q.id !== x.id)
+          .map((q) => esc(q.name)).join(", ")}</span>` : ""}
+        ${a.why ? `<br><span class="dim">${esc(a.why)}</span>` : ""}
+        <span class="pill ${posPill[a.position] || ""}">${esc(a.position)}</span></li>`).join("")}</ul>` : ""}
+    ${x.officials.length ? `<h4>Who runs it</h4><ul>${x.officials.map((o) =>
+      `<li><b>${esc(o.name)}</b> <span class="dim">${esc(o.office)}${o.party ? " · " + esc(o.party) : ""}</span>
+        ${o.email || o.phone ? `<br><span class="dim">${esc(o.email || "")}${o.phone ? " " + esc(o.phone) : ""}</span>` : ""}
+        ${o.url ? ` <a href="${esc(o.url)}" target="_blank" rel="noopener">page</a>` : ""}</li>`).join("")}</ul>` : ""}
+    ${x.measures.length ? `<h4>What it is deciding</h4><ul>${x.measures.map((mm) =>
+      `<li><b>${esc(mm.ref || "")}</b> ${esc(mm.title)}
+        <span class="pill">${esc(mm.status.replace(/_/g, " "))}</span>
+        <span class="pill ${posPill[mm.position] || ""}">${esc(mm.position)}</span>
+        ${mm.why ? `<br><span class="dim">${esc(mm.why)}</span>` : ""}</li>`).join("")}</ul>` : ""}
+    ${x.elections.length ? `<h4>Elections</h4><ul>${x.elections.map((e) =>
+      `<li>${fmtDate(e.at)} — ${esc(e.name)} <span class="dim">${esc(e.kind)}</span></li>`).join("")}</ul>` : ""}
+    ${x.given_cents ? `<h4>Given under its rules</h4><p>${money(x.given_cents)}</p>` : ""}
+    ${!x.children.length && !x.agreements.length && !x.officials.length
+      && !x.measures.length && !x.elections.length
+      ? `<p class="dim">Nothing recorded under it yet. ${d.admin
+          ? "Track a measure, add an agreement or an election, and pick this place." : ""}</p>` : ""}
+    ${d.admin ? `<div class="chips" style="margin-top:10px">
+      <button class="btn alt sm" data-civaddunder="${x.id}">Add a place inside it</button>
+      <button class="btn alt sm" data-civagree="${x.id}">Add an agreement</button>
+    </div>` : ""}`;
+  panel.querySelectorAll("[data-civgo]").forEach((b) => b.onclick = () =>
+    civSelect(d, +b.dataset.civgo));
+  panel.querySelectorAll("[data-civaddunder]").forEach((b) => b.onclick = () =>
+    civPlaceForm(d, +b.dataset.civaddunder));
+  panel.querySelectorAll("[data-civagree]").forEach((b) => b.onclick = () =>
+    civAgreementForm(d, null, +b.dataset.civagree));
+}
+
+function civPlaceForm(d, parentId) {
+  const parent = d.jurisdictions.find((j) => j.id === parentId);
+  modal(`<h3>Add a place${parent ? " inside " + esc(parent.name) : ""}</h3>
+    <p class="dim">A bloc, a country, a state, a county, a district, a city,
+      a school district, a ward or a homeowners' association. The point
+      puts it on the map; a boundary is optional and is a GeoJSON geometry.</p>
+    <div class="row2">
+      <div><label>Name</label><input id="civ-name"></div>
+      <div><label>Level</label><select id="civ-level">${d.levels.map((l) =>
+        `<option value="${l.k}" ${!parent && l.k === "city" ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select></div>
+    </div>
+    <div class="row2">
+      <div><label>Latitude</label><input id="civ-lat" type="number" step="any"
+        value="${parent && parent.lat !== null ? parent.lat : ""}"></div>
+      <div><label>Longitude</label><input id="civ-lng" type="number" step="any"
+        value="${parent && parent.lng !== null ? parent.lng : ""}"></div>
+    </div>
+    <div class="row2">
+      <div><label>Inside</label><select id="civ-parent"><option value="0">—</option>
+        ${d.jurisdictions.map((j) => `<option value="${j.id}" ${j.id === parentId ? "selected" : ""}>${esc(j.name)}</option>`).join("")}</select></div>
+      <div><label>Population</label><input id="civ-pop" type="number" min="0"></div>
+    </div>
+    <label>Boundary <span class="dim">(GeoJSON geometry, optional)</span></label>
+    <textarea id="civ-geo" rows="3"></textarea>
+    <label>Note</label><input id="civ-jnote" placeholder="what this one decides for us">
+    <p><button class="btn" id="civ-psave">Add</button></p>`, "wide");
+  $("#civ-psave").onclick = async () => {
+    let boundary = null;
+    const raw = $("#civ-geo").value.trim();
+    if (raw) {
+      try { boundary = JSON.parse(raw); } catch (err) { toast("that boundary is not JSON"); return; }
+    }
+    try {
+      const r = await api("/api/civics/jurisdictions", { body: {
+        name: $("#civ-name").value, level: $("#civ-level").value,
+        parent_id: +$("#civ-parent").value,
+        lat: $("#civ-lat").value === "" ? null : +$("#civ-lat").value,
+        lng: $("#civ-lng").value === "" ? null : +$("#civ-lng").value,
+        population: +$("#civ-pop").value || 0, note: $("#civ-jnote").value, boundary } });
+      closeModal(); CIV_SEL = r.id; renderCivics();
+    } catch (e) { toast(e.message); }
+  };
+}
+
+function civAgreementForm(d, a, partyId) {
+  const chosen = new Set(a ? [] : partyId ? [partyId] : []);
+  modal(`<h3>${a ? "Edit" : "Add"} an agreement</h3>
+    <p class="dim">A treaty, a trade pact, a defence alliance, membership
+      of a body. Not a place — something two or more places agreed, so it
+      has parties rather than a parent.</p>
+    <div class="row2">
+      <div><label>Name</label><input id="civ-aname" value="${esc(a ? a.name : "")}"
+        placeholder="USMCA"></div>
+      <div><label>Kind</label><select id="civ-akind">${d.agreement_kinds.map((k) =>
+        `<option value="${k.k}" ${a && a.kind === k.k ? "selected" : ""}>${esc(k.label)}</option>`).join("")}</select></div>
+    </div>
+    <div class="row2">
+      <div><label>Status</label><select id="civ-astatus">${["proposed", "signed", "in_force", "suspended", "ended"].map((k) =>
+        `<option value="${k}" ${(a ? a.status : "in_force") === k ? "selected" : ""}>${k.replace(/_/g, " ")}</option>`).join("")}</select></div>
+      <div><label>In force from</label><input id="civ-aforce" type="date"
+        value="${a && a.in_force_at ? new Date(a.in_force_at * 1000).toISOString().slice(0, 10) : ""}"></div>
+    </div>
+    <label>Parties <span class="dim">(at least two)</span></label>
+    <div class="perm-grid">${d.jurisdictions.filter((j) => ["bloc", "country", "state"].includes(j.level) || chosen.has(j.id)).map((j) =>
+      `<label class="perm"><input type="checkbox" data-civparty="${j.id}" ${chosen.has(j.id) ? "checked" : ""}>
+        <span><b>${esc(j.name)}</b><small>${esc(j.level)}</small></span></label>`).join("")
+      || '<span class="dim">Watch some countries first — an agreement is between places.</span>'}</div>
+    <div class="row2">
+      <div><label>We are</label><select id="civ-apos">${d.positions.map((k) =>
+        `<option value="${k}" ${a && a.position === k ? "selected" : ""}>${k}</option>`).join("")}</select></div>
+      <div><label>Impact on us</label><select id="civ-aimpact">${d.impacts.map((k) =>
+        `<option value="${k}" ${a && a.impact === k ? "selected" : ""}>${k}</option>`).join("")}</select></div>
+    </div>
+    <label>What it does to us</label><textarea id="civ-awhy" rows="2">${esc(a ? a.why : "")}</textarea>
+    <label>Summary</label><textarea id="civ-asum" rows="2">${esc(a ? a.summary : "")}</textarea>
+    <label>Link</label><input id="civ-aurl" value="${esc(a ? a.url : "")}">
+    <p><button class="btn" id="civ-asave">Save</button></p>`, "wide");
+  $("#civ-asave").onclick = async () => {
+    const parties = [...modalBody().querySelectorAll("[data-civparty]:checked")]
+      .map((c) => ({ jurisdiction_id: +c.dataset.civparty, role: "party" }));
+    try {
+      await api("/api/civics/agreements", { body: {
+        id: a ? a.id : 0, name: $("#civ-aname").value, kind: $("#civ-akind").value,
+        status: $("#civ-astatus").value,
+        in_force_at: $("#civ-aforce").value ? new Date($("#civ-aforce").value).getTime() / 1000 : 0,
+        position: $("#civ-apos").value, impact: $("#civ-aimpact").value,
+        why: $("#civ-awhy").value, summary: $("#civ-asum").value,
+        url: $("#civ-aurl").value, parties } });
+      closeModal(); renderCivics();
+    } catch (e) { toast(e.message); }
+  };
 }
 
 async function renderCivics() {
   const d = await api("/api/civics");
-  const admin = S.user.is_admin || S.user.role === "admin"
-    || S.user.role === "owner";
+  d.admin = S.user.is_admin || S.user.role === "admin" || S.user.role === "owner";
   const sel = d.jurisdictions.find((j) => j.id === CIV_SEL);
   const inScope = (x) => !CIV_SEL || x.jurisdiction_id === CIV_SEL;
   const measures = d.measures.filter(inScope);
   const elections = d.elections.filter(inScope);
-  const officials = d.officials.filter(inScope);
   const giving = d.contributions.filter(inScope);
-  const levelOf = Object.fromEntries(d.levels.map((l) => [l.k, l.label]));
   const posPill = { support: "ok", oppose: "bad", watch: "", neutral: "" };
+  const hasAny = d.map.jurisdictions.length || d.map.places.length;
   view().innerHTML = `
     <div class="page-head">
       <div><h2>Policy & elections</h2>
-        <p class="dim">The places this business sits inside and what they
-          are doing about it. ${esc(d.disclaimer)}</p></div>
+        <p class="dim">The places this business sits inside, from a treaty
+          bloc down to the association that decides the signage, and what
+          each is doing. ${esc(d.disclaimer)}</p></div>
       <div class="top-actions">
-        ${admin ? `<button class="btn alt" id="civ-place">Add a place</button>
+        ${d.admin ? `<button class="btn alt" id="civ-find">Find my jurisdictions</button>
+        <button class="btn alt" id="civ-place">Add a place</button>
         <button class="btn" id="civ-measure">Track something</button>` : ""}
       </div>
     </div>
@@ -183,20 +371,18 @@ async function renderCivics() {
         <span class="dim">${d.undisclosed ? d.undisclosed + " without a filing reference" : "all referenced"}</span></div>
     </div>
     <div class="card civ-wrap">
-      ${civMap(d.map)}
-      <div class="civ-legend">
-        <span class="dim">${d.map.jurisdictions.length || d.map.places.length
-          ? "Scroll to zoom, drag to move, click to filter."
-          : "The map fills in as you add places."}</span>
-        ${d.levels.map((l) => `<span class="civ-key"><i class="civ-dot civ-${l.k}"></i>${esc(l.label)}</span>`).join("")}
-        <span class="civ-key"><i class="civ-place"></i>your places</span>
-        ${CIV_SEL ? `<button class="btn alt sm" id="civ-all">Show everything</button>` : ""}
-        ${d.map.jurisdictions.length || d.map.places.length
-          ? '<button class="btn alt sm" id="civ-fit">Fit</button>' : ""}
+      <div class="civ-split">
+        <div id="civ-leaflet" class="civ-map"></div>
+        <div id="civ-panel" class="civ-panel"></div>
       </div>
-      ${sel ? `<p class="dim">Filtered to <b>${esc(sel.name)}</b> ·
-        ${esc(levelOf[sel.level] || sel.level)}${sel.population
-          ? ` · population ${sel.population.toLocaleString()}` : ""}</p>` : ""}
+      <div class="civ-legend">
+        <span class="dim">${hasAny ? "Click a place to open it. Scroll to zoom, drag to move."
+          : "Every country is clickable. Find my jurisdictions puts your own stack on it."}</span>
+        ${d.levels.map((l) => `<span class="civ-key"><i class="civ-${l.k}"></i>${esc(l.label)}</span>`).join("")}
+        <span class="civ-key"><i class="civ-place"></i>your places</span>
+        ${CIV_SEL ? '<button class="btn alt sm" id="civ-all">Show everything</button>' : ""}
+        ${hasAny ? '<button class="btn alt sm" id="civ-fit">Fit</button>' : ""}
+      </div>
     </div>
     <h3>What is moving${sel ? " in " + esc(sel.name) : ""}</h3>
     ${measures.length ? `<div class="card"><div class="tablewrap"><table>
@@ -212,11 +398,26 @@ async function renderCivics() {
         <td class="dim">${m.last_action_at ? fmtDate(m.last_action_at) : ""}
           ${m.last_action ? `<br>${esc(m.last_action.slice(0, 70))}` : ""}</td>
         <td class="chips"><button class="btn alt sm" data-civm="${m.id}">Open</button>
-          ${admin ? `<button class="btn alt sm" data-civmedit="${m.id}">Edit</button>` : ""}</td>
+          ${d.admin ? `<button class="btn alt sm" data-civmedit="${m.id}">Edit</button>` : ""}</td>
       </tr>`).join("")}</tbody></table></div></div>`
       : emptyState("pin", "Nothing tracked here yet",
           "Add a bill, an ordinance or a ballot question, and say what it "
           + "would do to you — tracking one without that is a news feed.")}
+    <h3>Agreements${sel ? " involving " + esc(sel.name) : ""}</h3>
+    ${(sel ? d.agreements.filter((a) => true) : d.agreements).length ? `<div class="card"><div class="tablewrap"><table>
+      <thead><tr><th>agreement</th><th>kind</th><th>parties</th><th>status</th><th>we say</th><th></th></tr></thead>
+      <tbody>${d.agreements.map((a) => `<tr>
+        <td><b>${esc(a.name)}</b>${a.why ? `<br><span class="dim">${esc(a.why)}</span>` : ""}</td>
+        <td class="dim">${esc((d.agreement_kinds.find((k) => k.k === a.kind) || {}).label || a.kind)}</td>
+        <td>${a.parties}</td>
+        <td><span class="pill">${esc(a.status.replace(/_/g, " "))}</span></td>
+        <td><span class="pill ${posPill[a.position] || ""}">${esc(a.position)}</span></td>
+        <td class="chips">${d.admin ? `<button class="btn alt sm" data-civaedit="${a.id}">Edit</button>
+          <button class="btn alt sm" data-civadel="${a.id}">Remove</button>` : ""}</td>
+      </tr>`).join("")}</tbody></table></div></div>`
+      : `<div class="card"><p class="dim">No agreements recorded. A treaty, a
+        trade pact or an alliance goes here, between the places it binds.</p>
+        ${d.admin ? '<button class="btn alt sm" id="civ-agree">Add an agreement</button>' : ""}</div>`}
     <h3>Elections</h3>
     ${elections.length ? `<div class="card"><div class="tablewrap"><table>
       <thead><tr><th>when</th><th>what</th><th>where</th><th>registration closes</th></tr></thead>
@@ -226,20 +427,10 @@ async function renderCivics() {
         <td class="dim">${esc(e.jurisdiction || "")}</td>
         <td class="dim">${e.registration_deadline ? fmtDate(e.registration_deadline) : "—"}</td>
       </tr>`).join("")}</tbody></table></div>
-      ${admin ? `<div class="chips" style="margin-top:8px">
+      ${d.admin ? `<div class="chips" style="margin-top:8px">
         <button class="btn alt sm" id="civ-election">Add an election</button></div>` : ""}</div>`
       : `<div class="card"><p class="dim">No elections on the calendar.</p>
-        ${admin ? '<button class="btn alt sm" id="civ-election">Add one</button>' : ""}</div>`}
-    ${officials.length ? `<h3>Who to call</h3>
-    <div class="card"><div class="tablewrap"><table>
-      <thead><tr><th>who</th><th>office</th><th>where</th><th>reach them</th></tr></thead>
-      <tbody>${officials.map((o) => `<tr>
-        <td><b>${esc(o.name)}</b>${o.party ? `<br><span class="dim">${esc(o.party)}</span>` : ""}</td>
-        <td>${esc(o.office)}${o.district ? `<span class="dim"> ${esc(o.district)}</span>` : ""}</td>
-        <td class="dim">${esc(o.jurisdiction || "")}</td>
-        <td class="dim">${esc(o.email || "")}${o.phone ? "<br>" + esc(o.phone) : ""}
-          ${o.url ? `<br><a href="${esc(o.url)}" target="_blank" rel="noopener">page</a>` : ""}</td>
-      </tr>`).join("")}</tbody></table></div></div>` : ""}
+        ${d.admin ? '<button class="btn alt sm" id="civ-election">Add one</button>' : ""}</div>`}
     <h3>Political giving</h3>
     <div class="card">
       <p class="dim">A disclosure record. Nothing here checks a
@@ -258,65 +449,68 @@ async function renderCivics() {
           <td>${x.disclosure_ref ? esc(x.disclosure_ref)
             : '<span class="pill warn">not referenced</span>'}</td>
         </tr>`).join("")}</tbody></table></div>` : '<p class="dim">Nothing recorded.</p>'}
-      ${admin ? `<div class="chips" style="margin-top:10px">
+      ${d.admin ? `<div class="chips" style="margin-top:10px">
         <button class="btn alt sm" id="civ-give">Record giving</button>
         <a class="btn alt sm" href="/api/civics/contributions.csv?token=${
           encodeURIComponent(S.user.token)}">Export for a filing</a>
       </div>` : ""}
     </div>
-    ${admin ? `<h3>Where the information comes from</h3>
-    <p class="dim">None of these covers everything. Open States is US state
-      legislatures, Congress.gov is the federal one, and Google Civic
-      answers who represents an address. Below the state line most places
-      publish nothing an API can read, which is why typing a measure in by
-      hand is a first-class path here rather than a fallback.</p>
+    ${d.admin ? `<h3>Where the information comes from</h3>
+    <p class="dim">The stack itself comes from the US Census Bureau's
+      geocoder, which needs no key: Find my jurisdictions asks it. Who holds
+      each office comes from the two below, each needing a key of its own.
+      Neither covers everything, and below the state line most places
+      publish nothing an API can read — typing a measure in by hand is a
+      first-class path here rather than a fallback.</p>
     <div id="civ-cxn"></div>` : ""}`;
 
-  civWire(d.map);
+  try { await civReady(); civDraw(d); } catch (e) {
+    $("#civ-leaflet").innerHTML = `<div class="civ-blank"><div><b>The map
+      could not load.</b><span class="dim">${esc(e.message)}</span></div></div>`;
+  }
+  if (CIV_MAP) {
+    if (CIV_SEL) civSelect(d, CIV_SEL); else { civFit(d); civPanel(d, null); }
+  }
   if ($("#civ-all")) $("#civ-all").onclick = () => { CIV_SEL = 0; renderCivics(); };
-  if ($("#civ-fit")) $("#civ-fit").onclick = () => {
-    CIV_VIEW = null;
+  if ($("#civ-fit")) $("#civ-fit").onclick = () => civFit(d);
+  if ($("#civ-place")) $("#civ-place").onclick = () => civPlaceForm(d, 0);
+  if ($("#civ-agree")) $("#civ-agree").onclick = () => civAgreementForm(d, null, 0);
+  view().querySelectorAll("[data-civaedit]").forEach((b) => b.onclick = async () =>
+    civAgreementForm(d, await api(`/api/civics/agreements/${b.dataset.civaedit}`), 0));
+  view().querySelectorAll("[data-civadel]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Remove this agreement from the register?")) return;
+    await api(`/api/civics/agreements/${b.dataset.civadel}`, { method: "DELETE" });
     renderCivics();
-  };
+  });
 
-  if ($("#civ-place")) $("#civ-place").onclick = () => {
-    modal(`<h3>Add a place</h3>
-      <p class="dim">A city, county, district, state or country this
-        business is inside. The point puts it on the map; a boundary is
-        optional and comes from a GeoJSON geometry if you have one.</p>
-      <div class="row2">
-        <div><label>Name</label><input id="civ-name"></div>
-        <div><label>Level</label><select id="civ-level">${d.levels.map((l) =>
-          `<option value="${l.k}">${esc(l.label)}</option>`).join("")}</select></div>
-      </div>
-      <div class="row2">
-        <div><label>Latitude</label><input id="civ-lat" type="number" step="any"></div>
-        <div><label>Longitude</label><input id="civ-lng" type="number" step="any"></div>
-      </div>
-      <div class="row2">
-        <div><label>Inside</label><select id="civ-parent"><option value="0">—</option>
-          ${d.jurisdictions.map((j) => `<option value="${j.id}">${esc(j.name)}</option>`).join("")}</select></div>
-        <div><label>Population</label><input id="civ-pop" type="number" min="0"></div>
-      </div>
-      <label>Boundary <span class="dim">(a GeoJSON geometry, optional)</span></label>
-      <textarea id="civ-geo" rows="3" placeholder='{"type":"Polygon","coordinates":[[[...]]]}'></textarea>
-      <p><button class="btn" id="civ-psave">Add</button></p>`, "wide");
-    $("#civ-psave").onclick = async () => {
-      let boundary = null;
-      const raw = $("#civ-geo").value.trim();
-      if (raw) {
-        try { boundary = JSON.parse(raw); }
-        catch (err) { toast("that boundary is not JSON"); return; }
-      }
+  if ($("#civ-find")) $("#civ-find").onclick = () => {
+    modal(`<h3>Find my jurisdictions</h3>
+      <p class="dim">The US Census Bureau's geocoder places an address and
+        says what it is inside: state, county, city, congressional district,
+        both state chambers, the school district. No key, no account. US
+        addresses only, and it wants a street, a city and a state.</p>
+      <label>Address</label><input id="civ-addr" placeholder="12 Main St, Springfield, IL 62701">
+      <p><button class="btn" id="civ-findgo">Find</button></p>
+      <p id="civ-findout" class="dim"></p>`);
+    $("#civ-findgo").onclick = async () => {
+      const b = $("#civ-findgo"); b.disabled = true;
+      $("#civ-findout").textContent = "asking the Census Bureau…";
       try {
-        await api("/api/civics/jurisdictions", { body: {
-          name: $("#civ-name").value, level: $("#civ-level").value,
-          parent_id: +$("#civ-parent").value,
-          lat: $("#civ-lat").value === "" ? null : +$("#civ-lat").value,
-          lng: $("#civ-lng").value === "" ? null : +$("#civ-lng").value,
-          population: +$("#civ-pop").value || 0, boundary } });
-        closeModal(); CIV_VIEW = null; renderCivics();
-      } catch (e) { toast(e.message); }
+        const r = await api("/api/civics/find", { body: { address: $("#civ-addr").value } });
+        let reps = "";
+        try {
+          const rr = await api("/api/civics/representatives", { body: {
+            lat: r.lat, lng: r.lng, state_fips: r.state_fips, district: r.district } });
+          reps = ["state", "federal"].map((k) => {
+            const v = rr[k];
+            if (!v) return "";
+            return `${k}: ${v.ok === false ? esc(v.why) : (v.new || 0) + " new"}`;
+          }).filter(Boolean).join(" · ");
+        } catch (e) { reps = e.message; }
+        $("#civ-findout").innerHTML = `<b>${esc(r.matched)}</b> — ${r.jurisdictions.length}
+          jurisdictions on the register.${reps ? "<br>Officials — " + reps : ""}`;
+        setTimeout(() => { closeModal(); CIV_SEL = r.jurisdictions[r.jurisdictions.length - 1] || 0; renderCivics(); }, 1800);
+      } catch (e) { $("#civ-findout").innerHTML = `<span class="low">${esc(e.message)}</span>`; b.disabled = false; }
     };
   };
 
@@ -329,7 +523,7 @@ async function renderCivics() {
           placeholder="HB 1234"></div>
         <div><label>Where</label><select id="civ-mjur"><option value="0">—</option>
           ${d.jurisdictions.map((j) => `<option value="${j.id}" ${
-            m && m.jurisdiction_id === j.id ? "selected" : ""}>${esc(j.name)}</option>`).join("")}</select></div>
+            (m ? m.jurisdiction_id : CIV_SEL) === j.id ? "selected" : ""}>${esc(j.name)}</option>`).join("")}</select></div>
       </div>
       <div class="row2">
         <div><label>Kind</label><select id="civ-mkind">${d.measure_kinds.map((k) =>
@@ -369,8 +563,7 @@ async function renderCivics() {
     modal(`<h3>${esc(m.ref || "")} ${esc(m.title)}</h3>
       <p class="dim">${esc(m.jurisdiction || "")} · ${esc(m.status.replace(/_/g, " "))}
         · we ${esc(m.position)} · ${esc(m.impact)} impact</p>
-      ${m.why ? `<div class="card"><b>What it would do to us</b>
-        <p>${esc(m.why)}</p></div>` : ""}
+      ${m.why ? `<div class="card"><b>What it would do to us</b><p>${esc(m.why)}</p></div>` : ""}
       ${m.summary ? `<p>${esc(m.summary)}</p>` : ""}
       ${m.url ? `<p><a href="${esc(m.url)}" target="_blank" rel="noopener">The text of it</a></p>` : ""}
       <h3 style="font-size:15px">What has happened</h3>
@@ -388,12 +581,12 @@ async function renderCivics() {
   });
   if ($("#civ-election")) $("#civ-election").onclick = () => {
     modal(`<h3>Add an election</h3>
-      <label>What</label><input id="civ-ename" placeholder="State general">
+      <label>What</label><input id="civ-ename" placeholder="State general, or the HOA annual meeting">
       <div class="row2">
         <div><label>Kind</label><select id="civ-ekind">${d.election_kinds.map((k) =>
           `<option value="${k}">${k}</option>`).join("")}</select></div>
         <div><label>Where</label><select id="civ-ejur"><option value="0">—</option>
-          ${d.jurisdictions.map((j) => `<option value="${j.id}">${esc(j.name)}</option>`).join("")}</select></div>
+          ${d.jurisdictions.map((j) => `<option value="${j.id}" ${CIV_SEL === j.id ? "selected" : ""}>${esc(j.name)}</option>`).join("")}</select></div>
       </div>
       <div class="row2">
         <div><label>Date</label><input id="civ-edate" type="date"></div>
@@ -453,28 +646,25 @@ async function renderCivics() {
     };
   };
   if ($("#civ-cxn")) {
-    connectionCards(["open_states", "congress_gov", "google_civic"],
-                    renderCivics, $("#civ-cxn")).then(() => {
-      d.connections.filter((c) => c.connected).forEach((c) => {
-        const card = view().querySelector(`[data-cxn="${c.name}"] .doc-top`);
-        if (!card) return;
-        const b = document.createElement("button");
-        b.className = "btn alt sm";
-        b.textContent = c.name === "google_civic" ? "Pull representatives"
-          : "Search bills";
-        b.onclick = async () => {
-          const q = c.name === "google_civic" ? "" :
-            prompt("What to search for — a narrow term works better than a "
-              + "broad one.", "minimum wage");
-          if (q === null && c.name !== "google_civic") return;
-          try {
-            const r = await api(`/api/civics/pull/${c.name}`, { body: { query: q || "" } });
-            toast(`${r.new} new`);
-            renderCivics();
-          } catch (e) { toast(e.message); }
-        };
-        card.appendChild(b);
+    connectionCards(["open_states", "congress_gov"], renderCivics, $("#civ-cxn"))
+      .then(() => {
+        d.connections.filter((c) => c.connected).forEach((c) => {
+          const card = view().querySelector(`[data-cxn="${c.name}"] .doc-top`);
+          if (!card) return;
+          const b = document.createElement("button");
+          b.className = "btn alt sm";
+          b.textContent = "Search bills";
+          b.onclick = async () => {
+            const q = prompt("What to search for — a narrow term works better "
+              + "than a broad one.", "minimum wage");
+            if (q === null) return;
+            try {
+              const r = await api(`/api/civics/pull/${c.name}`, { body: { query: q } });
+              toast(`${r.new} new`); renderCivics();
+            } catch (e) { toast(e.message); }
+          };
+          card.appendChild(b);
+        });
       });
-    });
   }
 }

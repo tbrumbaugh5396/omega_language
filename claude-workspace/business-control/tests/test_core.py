@@ -5424,7 +5424,7 @@ _ACTION_IMPL = {
     "push_listing": "def push_google(con)",
     "pull_reviews": "def pull_google_reviews(",
     "pull_measures": "def pull_open_states(",
-    "pull_representatives": "def pull_representatives(",
+    "pull_representatives": "def pull_state_legislators(",
     "reply_review": "def reply_google(",
 }
 _src_families = _src_ig + "".join(
@@ -9170,8 +9170,13 @@ ok(c.delete(f"/api/civics/jurisdictions/{_state}", headers=A).status_code == 400
 _civ_prov = {p["name"]: p for p in c.get("/api/admin/integrations", headers=A
                                           ).json()["providers"]
              if p.get("family") == "civics"}
-ok(set(_civ_prov) == {"open_states", "congress_gov", "google_civic"},
-   "three sources, each needing a key of its own")
+ok(set(_civ_prov) == {"open_states", "congress_gov"},
+   "two keyed sources — the third, the Census geocoder, needs no key and "
+   "so is not a connector at all")
+ok("google_civic" not in json.dumps(c.get("/api/admin/integrations", headers=A).json()),
+   "and Google Civic is not offered: its representatives endpoint was "
+   "turned down in April 2025 and a connector to it would fail on the "
+   "first real key")
 ok(all(not p["connected"] for p in _civ_prov.values()),
    "none connected until somebody connects it")
 _civ_src = Path("src/erp/backend/civics.py").read_text()
@@ -9180,43 +9185,174 @@ ok("publishes nothing an API can" in _civ_src,
    "publish nothing, which is why typing a measure in is a first-class "
    "path rather than a fallback")
 
-# --- the map is ours, drawn here ---
-_civ_js = _ops
-ok("civProject" in _civ_js and "viewBox" in _civ_js,
-   "the map is an SVG projected in the page")
-# Two ways this check has already been wrong: .lower() lowercased the very
-# name it was splitting on, and a fixed window ran past the function into
-# a CSS class called "tile". Bound it to the function, and look for what
-# would actually load something.
-_civ_map_src = _civ_js.split("function civMap")[1]
-_civ_map_src = _civ_map_src[:_civ_map_src.index("\nfunction ")]
-ok(not any(w in _civ_map_src.lower() for w in
-           ("http://", "https://", "<script", "<img", "{z}/{x}", "cdn")),
-   "the map loads nothing from anywhere: no tiles, no script, no image, so "
-   "it works on a laptop with no internet and sends nothing out")
-ok("<svg" in _civ_map_src and "civProject" in _civ_map_src,
-   "it is an SVG this file draws, from the install's own rows")
-ok("civ-blank" in _civ_map_src,
-   "and when there is nothing to draw it says so — a fresh install knows "
-   "no jurisdictions and has no place with a position, and an empty "
-   "rectangle where a map should be reads as a broken map")
+# --- the map: vendored, layered, and honest about the network ---
+ok("/vendor/leaflet/leaflet.js" in _ops and "countries-110m.geojson" in _ops,
+   "the map is Leaflet, vendored, over a bundled outline of every country "
+   "— nothing is fetched from a CDN to draw it")
+for _asset in ("src/storefront/frontend/vendor/leaflet/leaflet.js",
+               "src/storefront/frontend/vendor/leaflet/leaflet.css",
+               "src/storefront/frontend/vendor/leaflet/LICENSE",
+               "src/storefront/frontend/vendor/countries-110m.geojson",
+               "src/storefront/frontend/vendor/countries-110m.LICENSE"):
+    ok(Path(_asset).exists(), f"{_asset.split('/')[-1]} ships with the install")
+ok(c.get("/vendor/leaflet/leaflet.js").status_code == 200
+   and c.get("/vendor/countries-110m.geojson").status_code == 200,
+   "and both are served from the install itself")
+_world = c.get("/vendor/countries-110m.geojson").json()
+ok(len(_world["features"]) >= 170
+   and all(k in _world["features"][0]["properties"]
+           for k in ("name", "iso2", "iso3", "continent")),
+   "every country, with the codes a watched country is matched on")
+ok(len(c.get("/vendor/countries-110m.geojson").content) < 400_000,
+   "stripped and rounded, so it is a download the page can afford")
+ok("tile.openstreetmap.org" in _ops
+   and "outline layer underneath is what the page shows" in _ops,
+   "tiles come from OpenStreetMap when online, and the page says what "
+   "happens when they do not: the outline is what you see, not grey")
+ok("civOfferWatch" in _ops and "/api/civics/watch" in _ops,
+   "clicking a country that is not on the register offers to watch it — "
+   "the map shows every country, the register holds only the watched ones")
+ok("/api/civics/jurisdictions/${jid}/detail" in _ops,
+   "and clicking any place opens that place, not a filter")
 
-# `fill` paints an SVG shape and does nothing whatever to an HTML element.
-# The legend's swatches are <i> tags, so they were transparent while the
-# map itself was correct — the kind of mistake that looks like a missing
-# feature rather than a wrong property.
-_civ_css = _css[_css.index("/* The policy map."):]
-for _lvl in ("country", "state", "district", "place"):
-    ok(f"background: var(--civ-{_lvl})" in _civ_css
-       or f".civ-key i.civ-{_lvl} {{ background:" in _civ_css
-       or f"i.civ-{_lvl} {{ border-radius: 0; background:" in _civ_css,
-       f"the legend's {_lvl} swatch takes a background, not a fill")
-ok("--civ-country:" in _civ_css and "fill: var(--civ-country)" in _civ_css,
-   "and each level's colour is defined once and used by both, so the key "
-   "cannot say a different colour from the map")
-ok("drag.moved" in _civ_js,
-   "a drag that ends on a shape does not also select it, or the map picks "
-   "something new every time somebody moves it")
+# --- the stack now runs from a treaty bloc to a homeowners' association ---
+ok(_civ.LEVEL_ORDER[0] == "bloc" and _civ.LEVEL_ORDER[-2] == "hoa",
+   "the levels run from a treaty bloc down to an HOA, in that order")
 
+# --- finding the stack: the Census geocoder, stubbed in that shape ---
+_census_shape = {"result": {"addressMatches": [{
+    "matchedAddress": "1 CITY HALL PLZ, BOSTON, MA, 02201",
+    "coordinates": {"x": -71.058, "y": 42.360},
+    "geographies": {
+        "States": [{"NAME": "Massachusetts", "GEOID": "25"}],
+        "Counties": [{"NAME": "Suffolk County", "GEOID": "25025"}],
+        "Incorporated Places": [{"NAME": "Boston city", "GEOID": "2507000"}],
+        "119th Congressional Districts": [{"NAME": "Congressional District 8",
+                                          "GEOID": "2508", "BASENAME": "8"}],
+        "2024 State Legislative Districts - Upper": [
+            {"NAME": "First Suffolk District", "GEOID": "25001"}],
+        "2024 State Legislative Districts - Lower": [
+            {"NAME": "Third Suffolk District", "GEOID": "25003"}],
+        "Unified School Districts": [{"NAME": "Boston School District",
+                                     "GEOID": "2502790"}],
+        "Census Tracts": [{"NAME": "Census Tract 303", "GEOID": "25025030300"}],
+    }}]}}
+_real_req3 = _ig._req
+_ig._req = lambda url, method="GET", headers=None, body=None, timeout=15: (
+    (True, _census_shape) if "geocoding.geo.census.gov" in url
+    else (False, "unexpected " + url))
+_r = c.post("/api/civics/find", headers=A, json={"address": "1 City Hall Plaza, Boston, MA"})
+ok(_r.status_code == 200 and _r.json()["matched"].startswith("1 CITY HALL"),
+   "an address is placed by the Census geocoder, which needs no key")
+ok(len(_r.json()["jurisdictions"]) == 8,
+   "and the whole stack comes back: country, state, county, city, the "
+   "congressional district, both state chambers and the school district")
+ok(_r.json()["state_fips"] == "25" and _r.json()["district"] == "8",
+   "with the state and district the keyed sources start from")
+_cv = c.get("/api/civics", headers=A).json()
+_bos = next(j for j in _cv["jurisdictions"] if j["name"] == "Boston city")
+_suf = next(j for j in _cv["jurisdictions"] if j["name"] == "Suffolk County")
+_ma = next(j for j in _cv["jurisdictions"] if j["name"] == "Massachusetts")
+ok(_bos["parent_id"] == _suf["id"] and _suf["parent_id"] == _ma["id"],
+   "nested the way they are on the ground: city inside county inside state")
+ok(_bos["code"] == "census:2507000",
+   "each carrying the FIPS code every other US dataset joins on")
+ok(not any(j["name"].startswith("Census Tract") for j in _cv["jurisdictions"]),
+   "and the layers that mean nothing to a business — tracts, blocks — are "
+   "left where they are")
+_n = len(_cv["jurisdictions"])
+c.post("/api/civics/find", headers=A, json={"address": "1 City Hall Plaza, Boston, MA"})
+ok(len(c.get("/api/civics", headers=A).json()["jurisdictions"]) == _n,
+   "finding twice adds nothing twice")
+ok(_civ._layer(_census_shape["result"]["addressMatches"][0]["geographies"],
+               "Legislative Districts", "Upper")["NAME"] == "First Suffolk District",
+   "layers are matched by what they mean — the Census names them by "
+   "vintage, and the 120th Congress must not break the parser")
+ok(_civ._state_code("25") == "MA" and _civ._state_code("06") == "CA",
+   "a FIPS code becomes the two letters Congress.gov wants")
+_ig._req = lambda url, method="GET", headers=None, body=None, timeout=15: (
+    True, {"result": {"addressMatches": []}})
+_r = c.post("/api/civics/find", headers=A, json={"address": "10 Downing Street, London"})
+ok(_r.status_code == 404 and "United States only" in _r.text,
+   "an address the geocoder cannot place gets a plain answer, and the "
+   "answer says why")
+_ig._req = _real_req3
+
+# --- who holds the offices, from the keyed sources, stubbed in shape ---
+def _reps_req(url, method="GET", headers=None, body=None, timeout=15):
+    if "jurisdictions?per_page=1" in url:
+        return True, {}
+    if "people.geo" in url:
+        return True, {"results": [
+            {"id": "ocd-person/1", "name": "A. Senator", "party": "Independent",
+             "current_role": {"title": "Senator", "org_classification": "upper",
+                              "district": "First Suffolk"},
+             "jurisdiction": {"name": "Massachusetts"}, "email": "a@ma.gov",
+             "openstates_url": "https://openstates.org/person/1"}]}
+    if "/v3/bill?limit=1" in url:
+        return True, {}
+    if "/v3/member/MA" in url:
+        return True, {"members": [
+            {"bioguideId": "S1", "name": "Sen One", "partyName": "D",
+             "terms": {"item": [{"chamber": "Senate"}]}, "url": "u1"},
+            {"bioguideId": "R8", "name": "Rep Eight", "partyName": "D",
+             "district": 8, "terms": {"item": [{"chamber": "House of Representatives"}]}, "url": "u8"},
+            {"bioguideId": "R1", "name": "Rep One", "partyName": "D",
+             "district": 1, "terms": {"item": [{"chamber": "House of Representatives"}]}, "url": "u1b"}]}
+    return False, "unexpected " + url
+_ig._req = _reps_req
+c.post("/api/admin/integrations/open_states/connect", headers=A,
+       json={"fields": {"api_key": "k"}})
+c.post("/api/admin/integrations/congress_gov/connect", headers=A,
+       json={"fields": {"api_key": "k"}})
+_r = c.post("/api/civics/representatives", headers=A, json={
+    "lat": 42.36, "lng": -71.06, "state_fips": "25", "district": "8"})
+ok(_r.status_code == 200 and _r.json()["state"]["new"] == 1
+   and _r.json()["federal"]["new"] == 2,
+   "the state legislators come from Open States by point and the federal "
+   "members from Congress.gov by state — and the representative for a "
+   "different district is left out")
+_offs = {o["name"]: o for o in c.get("/api/civics", headers=A).json()["officials"]}
+ok("Rep Eight" in _offs and "Rep One" not in _offs and "Sen One" in _offs,
+   "both senators, our representative, not the neighbouring one")
+ok(_offs["A. Senator"]["office"].startswith("State Senate"),
+   "and a state chamber is named as a chamber, not as 'upper'")
+_ig._req = _real_req3
+
+# --- the panel: one place, and everything the register knows about it ---
+_ca = c.post("/api/civics/watch", headers=A, json={
+    "iso": "CA", "name": "Canada", "lat": 56.1, "lng": -106.3}).json()["id"]
+ok(c.post("/api/civics/watch", headers=A, json={
+    "iso": "CA", "name": "Canada", "lat": 56.1, "lng": -106.3}).json()["id"] == _ca,
+   "watching a country twice is once")
+_us = next(j["id"] for j in c.get("/api/civics", headers=A).json()["jurisdictions"]
+           if j["level"] == "country" and j.get("iso") == "US")
+ok(c.post("/api/civics/agreements", headers=A, json={
+    "name": "Lonely", "parties": [{"jurisdiction_id": _us}]}).status_code == 400,
+   "an agreement is between at least two places")
+_ag = c.post("/api/civics/agreements", headers=A, json={
+    "name": "USMCA", "kind": "trade", "position": "support", "impact": "high",
+    "why": "Tariff-free parts from Ontario",
+    "parties": [{"jurisdiction_id": _us}, {"jurisdiction_id": _ca}]})
+ok(_ag.status_code == 200, "a trade agreement goes on the register")
+_det = c.get(f"/api/civics/jurisdictions/{_us}/detail", headers=A).json()
+ok(_det["level_label"] == "Country" and not _det["ancestors"],
+   "the panel for a country knows it is at the top of its stack")
+ok(any(k["name"] == "Massachusetts" for k in _det["children"]),
+   "what is inside it")
+ok(_det["agreements"] and _det["agreements"][0]["name"] == "USMCA"
+   and {p["name"] for p in _det["agreements"][0]["parties"]} == {"United States", "Canada"},
+   "what it has agreed, and with whom")
+ok(any(o["name"] == "Sen One" for o in _det["officials"]),
+   "and who runs it")
+_bd = c.get(f"/api/civics/jurisdictions/{_bos['id']}/detail", headers=A).json()
+ok([a["name"] for a in _bd["ancestors"]]
+   == ["United States", "Massachusetts", "Suffolk County"],
+   "and the panel for a city walks the stack above it, in order")
+ok(c.get("/api/civics/jurisdictions/999999/detail", headers=A).status_code == 404,
+   "a place that is not there is nothing")
+ok(c.delete(f"/api/civics/agreements/{_ag.json()['id']}", headers=A).status_code == 200
+   and not c.get(f"/api/civics/jurisdictions/{_us}/detail", headers=A).json()["agreements"],
+   "an agreement removed leaves both parties")
 
 done("core")

@@ -2133,58 +2133,92 @@ body.lane-on { overflow: hidden; }
 .tile { display: flex; flex-direction: column; gap: 2px; }
 .tile b { font-size: 1.35em; }
 
-/* The policy map. Drawn from the install's own rows: no tiles, no outside
-   service, so it works on a laptop with no internet and sends nothing
-   anywhere. The colours are the app's, not a cartographer's — this is a
-   diagram of what the business is inside, not a map of the world.
-
-   Each level's colour is a custom property because it is needed twice, in
-   two languages: `fill` paints an SVG shape and does nothing whatever to
-   an HTML element, so the legend's swatches were transparent while the
-   map itself was correct. One definition, used by both. */
+/* The policy map. Leaflet, vendored, so nothing is fetched from a CDN to
+   draw it. Two layers underneath: OpenStreetMap tiles when the machine is
+   online, and a bundled outline of every country when it is not, so the
+   page never goes grey and the top of the stack — countries and what
+   they have agreed with each other — is clickable with no network at all.
+   Each level's colour is one custom property, used by the map's markers
+   and by the legend's swatches: `fill` paints an SVG shape and does
+   nothing to an HTML element, which is how the legend was once blank
+   while the map was right. */
 .civ-wrap { padding: 0; overflow: hidden;
+  --civ-bloc: color-mix(in srgb, var(--accent) 40%, var(--text));
   --civ-country: color-mix(in srgb, var(--accent) 55%, var(--text));
   --civ-state: color-mix(in srgb, var(--accent) 75%, var(--text));
   --civ-county: var(--accent);
   --civ-district: color-mix(in srgb, var(--warn) 80%, var(--accent));
   --civ-city: var(--accent);
+  --civ-school: color-mix(in srgb, var(--good) 70%, var(--accent));
   --civ-ward: var(--accent);
-  --civ-other: var(--accent); }
-.civ-map { display: block; width: 100%; height: 46vh; min-height: 260px;
-  touch-action: none; cursor: grab; background: var(--panel2); }
-.civ-map:active { cursor: grabbing; }
-.civ-bg { fill: var(--panel2); }
+  --civ-hoa: color-mix(in srgb, var(--warn) 55%, var(--text));
+  --civ-other: var(--dim); }
+.civ-map { display: block; width: 100%; height: 56vh; min-height: 320px;
+  background: var(--panel2); }
+.civ-map .leaflet-container { font: inherit; background: var(--panel2); }
+.civ-map .leaflet-control-attribution { font-size: 10px; }
+.civ-country-outline { fill: color-mix(in srgb, var(--accent) 6%, transparent);
+  stroke: color-mix(in srgb, var(--text) 30%, transparent); stroke-width: 0.6; }
+.civ-country-outline.watched { fill: color-mix(in srgb, var(--accent) 22%, transparent);
+  stroke: var(--accent); stroke-width: 1.2; }
+.civ-country-outline.on { fill: color-mix(in srgb, var(--good) 30%, transparent);
+  stroke: var(--good); stroke-width: 2; }
 .civ-area { fill: color-mix(in srgb, var(--accent) 12%, transparent);
-  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
-  stroke-width: 2; vector-effect: non-scaling-stroke; cursor: pointer; }
-.civ-area:hover { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
-.civ-area.on { fill: color-mix(in srgb, var(--accent) 30%, transparent);
-  stroke-width: 3; }
-.civ-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5;
-  vector-effect: non-scaling-stroke; cursor: pointer; }
-.civ-dot.off { fill: var(--dim); }
-.civ-dot.on { fill: var(--good); stroke-width: 3; }
-.civ-country { fill: var(--civ-country); }
-.civ-state { fill: var(--civ-state); }
-.civ-county { fill: var(--civ-county); }
-.civ-district { fill: var(--civ-district); }
-.civ-city { fill: var(--civ-city); }
-.civ-place { fill: var(--text); stroke: var(--panel); stroke-width: 1.5;
-  vector-effect: non-scaling-stroke; }
+  stroke: var(--accent); stroke-width: 1.5; }
+.civ-area.on { fill: color-mix(in srgb, var(--good) 28%, transparent);
+  stroke: var(--good); stroke-width: 2.5; }
+.civ-pin { border-radius: 50%; border: 2px solid var(--panel);
+  box-shadow: 0 1px 4px rgba(0,0,0,.35); background: var(--accent); }
+.civ-pin.civ-bloc { background: var(--civ-bloc); }
+.civ-pin.civ-country { background: var(--civ-country); }
+.civ-pin.civ-state { background: var(--civ-state); }
+.civ-pin.civ-county { background: var(--civ-county); }
+.civ-pin.civ-district { background: var(--civ-district); }
+.civ-pin.civ-city { background: var(--civ-city); }
+.civ-pin.civ-school { background: var(--civ-school); }
+.civ-pin.civ-hoa { background: var(--civ-hoa); }
+.civ-pin.civ-other { background: var(--civ-other); }
+.civ-pin.on { border-color: var(--good); box-shadow: 0 0 0 3px
+  color-mix(in srgb, var(--good) 40%, transparent); }
+.civ-pin.off { opacity: .45; }
+.civ-place { border-radius: 2px; border: 2px solid var(--panel);
+  background: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
 .civ-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
   padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; }
 .civ-key { display: inline-flex; gap: 5px; align-items: center;
   color: var(--dim); }
-/* The swatch is an HTML element, so it takes a background rather than a
-   fill. Same variables, so it cannot say a different colour from the map. */
 .civ-key i { width: 10px; height: 10px; border-radius: 50%; display: block;
   background: var(--accent); }
+.civ-key i.civ-bloc { background: var(--civ-bloc); }
 .civ-key i.civ-country { background: var(--civ-country); }
 .civ-key i.civ-state { background: var(--civ-state); }
 .civ-key i.civ-county { background: var(--civ-county); }
 .civ-key i.civ-district { background: var(--civ-district); }
 .civ-key i.civ-city { background: var(--civ-city); }
-.civ-key i.civ-place { border-radius: 0; background: var(--text); }
+.civ-key i.civ-school { background: var(--civ-school); }
+.civ-key i.civ-hoa { background: var(--civ-hoa); }
+.civ-key i.civ-other { background: var(--civ-other); }
+.civ-key i.civ-place { border-radius: 2px; background: var(--text); }
+/* What opens when a place is clicked: a panel beside the map on a wide
+   screen, under it on a narrow one. The map is the index; this is the
+   page. */
+.civ-split { display: grid; grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 0; }
+.civ-panel { border-left: 1px solid var(--line); padding: 14px 16px;
+  max-height: 56vh; overflow-y: auto; font-size: 13.5px; }
+.civ-panel h4 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--dim); }
+.civ-panel .crumbs { color: var(--dim); font-size: 12px; margin-bottom: 4px; }
+.civ-panel .crumbs button { background: none; border: 0; padding: 0;
+  color: var(--accent); cursor: pointer; font: inherit; }
+.civ-panel ul { margin: 0; padding-left: 18px; }
+.civ-panel li { margin: 2px 0; }
+.civ-hint { padding: 14px 16px; color: var(--dim); }
+@media (max-width: 900px) {
+  .civ-split { grid-template-columns: minmax(0, 1fr); }
+  .civ-panel { border-left: 0; border-top: 1px solid var(--line);
+    max-height: none; }
+}
 /* Nothing to draw. An empty rectangle where a map should be reads as a
    broken map, so the panel says what would put something in it. */
 .civ-blank { display: flex; align-items: center; justify-content: center;

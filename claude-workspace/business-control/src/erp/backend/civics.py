@@ -156,15 +156,70 @@ CREATE TABLE IF NOT EXISTS contributions (
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS contributions_at ON contributions(at);
+
+/* Something two or more jurisdictions agreed. A trade pact, a defence
+   treaty, membership of a body. Not a jurisdiction: it has parties rather
+   than a parent, and a country can be inside fifty of them at once. */
+CREATE TABLE IF NOT EXISTS agreements (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT DEFAULT 'treaty',              -- see AGREEMENT_KINDS
+  summary TEXT DEFAULT '',
+  url TEXT DEFAULT '',
+  signed_at REAL DEFAULT 0,
+  in_force_at REAL DEFAULT 0,
+  ends_at REAL DEFAULT 0,                  -- 0 = open ended
+  status TEXT DEFAULT 'in_force',          -- proposed|signed|in_force|suspended|ended
+  position TEXT DEFAULT 'watch',           -- what WE think of it
+  impact TEXT DEFAULT 'medium',
+  why TEXT DEFAULT '',
+  note TEXT DEFAULT '',
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agreement_parties (
+  agreement_id INTEGER NOT NULL,
+  jurisdiction_id INTEGER NOT NULL,
+  role TEXT DEFAULT 'party',               -- party|member|observer|signatory
+  since REAL DEFAULT 0,
+  PRIMARY KEY (agreement_id, jurisdiction_id)
+);
+CREATE INDEX IF NOT EXISTS agreement_parties_j ON agreement_parties(jurisdiction_id);
 """
 
+MIGRATIONS = [
+    # ISO code lets a watched country be matched to the map's own outline.
+    "ALTER TABLE jurisdictions ADD COLUMN iso TEXT DEFAULT ''",
+]
+
+# In order from the top of the stack to the bottom. A bloc is a treaty
+# organisation or an alliance — the EU, NATO, a trade pact — which is a
+# jurisdiction in the only sense that matters here: it can change a rule
+# that reaches you. An HOA is the bottom of the same stack, and for a shop
+# in a managed development it is the level that decides the signage.
 LEVELS = {
+    "bloc": "Treaty bloc or alliance",
     "country": "Country",
     "state": "State or province",
     "county": "County",
     "district": "Congressional or legislative district",
     "city": "City or municipality",
+    "school": "School district",
     "ward": "Ward or precinct",
+    "hoa": "Homeowners' or neighbourhood association",
+    "other": "Other",
+}
+LEVEL_ORDER = list(LEVELS)
+# Treaties and agreements are not jurisdictions; they are things
+# jurisdictions have agreed with each other, and a country can be party
+# to fifty of them. So they are rows of their own, linked to their parties.
+AGREEMENT_KINDS = {
+    "treaty": "Treaty",
+    "trade": "Trade or economic agreement",
+    "defense": "Defence or security agreement",
+    "membership": "Membership of a body",
+    "tax": "Tax or investment treaty",
     "other": "Other",
 }
 # Roughly the order a thing travels in. Kept loose on purpose: a hundred
@@ -182,6 +237,11 @@ SOON_DAYS = 90
 
 def init_tables(con):
     con.executescript(TABLES)
+    for stmt in MIGRATIONS:
+        try:
+            con.execute(stmt)
+        except Exception:                                    # noqa: BLE001
+            pass
     con.commit()
 
 
@@ -206,7 +266,7 @@ def map_data(con) -> dict:
     'what are we inside, here?' rather than merely draw a country."""
     js = [dict(r) for r in con.execute(
         "SELECT id, name, level, parent_id, lat, lng, boundary, population,"
-        " watching FROM jurisdictions ORDER BY level, name").fetchall()]
+        " watching, iso FROM jurisdictions ORDER BY level, name").fetchall()]
     for j in js:
         if j["boundary"]:
             try:
@@ -286,21 +346,8 @@ def _check_congress(c: dict) -> tuple:
     return (True, "Congress.gov") if ok else (False, str(d))
 
 
-def _check_google_civic(c: dict) -> tuple:
-    q = urllib.parse.urlencode({"key": c.get("api_key", ""),
-                                "address": c.get("address", "")})
-    ok, d = IG._req(
-        "https://www.googleapis.com/civicinfo/v2/representatives?" + q)
-    if not ok:
-        return False, str(d)
-    who = (d.get("normalizedInput") or {}) if isinstance(d, dict) else {}
-    return True, ", ".join(x for x in (who.get("city"), who.get("state"))
-                           if x) or "Google Civic"
-
-
 IG.CHECKS["open_states"] = _check_open_states
 IG.CHECKS["congress_gov"] = _check_congress
-IG.CHECKS["google_civic"] = _check_google_civic
 
 
 def _jurisdiction_by_name(con, name: str, level: str = "state") -> int:
@@ -447,82 +494,284 @@ def pull_congress(con, query: str) -> dict:
     return {"ok": True, "new": new, "seen": seen}
 
 
-def pull_representatives(con) -> dict:
-    """Who represents an address, at every level Google knows about."""
-    c = IG.creds(con, "google_civic")
-    if not c:
-        raise HTTPException(400, "connect Google Civic first")
-    s = IG.settings(con, "google_civic")
-    address = (s.get("address") or "").strip()
+CENSUS = ("https://geocoding.geo.census.gov/geocoder/geographies/"
+          "onelineaddress")
+
+
+def _layer(geos: dict, *needles: str):
+    """The Census names its layers by vintage — '119th Congressional
+    Districts', '2024 State Legislative Districts - Upper' — so a layer is
+    found by what it means, not by its exact name, and the parser survives
+    the next census and the next redistricting."""
+    for key, rows in geos.items():
+        k = key.lower()
+        if all(n.lower() in k for n in needles) and rows:
+            return rows[0]
+    return None
+
+
+def find_jurisdictions(con, address: str) -> dict:
+    """The stack an address sits in, from the US Census Bureau's geocoder.
+
+    No key, no account, nothing to connect: it is an official public
+    service and it answers the question this whole screen starts with.
+    It knows state, county, city, congressional district, both state
+    legislative chambers and the school district, each with the FIPS code
+    that every other US dataset joins on, and it gives back the point.
+    What it does not know is who holds any of those offices — that is
+    Open States and Congress.gov, keyed, and they start from this.
+
+    US only, because it is the US census. An address elsewhere gets a
+    plain answer rather than a guess.
+    """
+    address = (address or "").strip()
     if not address:
-        raise HTTPException(400, "set the address to look up — the business's "
+        raise HTTPException(400, "an address to look up — the business's "
                                  "own, usually")
-    q = urllib.parse.urlencode({"key": c.get("api_key", ""),
-                                "address": address})
-    ok, d = IG._req(
-        "https://www.googleapis.com/civicinfo/v2/representatives?" + q)
+    q = urllib.parse.urlencode({"address": address,
+                                "benchmark": "Public_AR_Current",
+                                "vintage": "Current_Current",
+                                "layers": "all", "format": "json"})
+    ok, d = IG._req(f"{CENSUS}?{q}", timeout=25)
     if not ok:
-        IG.log(con, "google_civic", "pull_representatives", False, str(d)[:200])
-        raise HTTPException(400, f"Google said: {d}")
-    divisions = (d.get("divisions") or {}) if isinstance(d, dict) else {}
-    offices = d.get("offices") or []
-    people = d.get("officials") or []
-    made = 0
-    by_division = {}
-    for ocd, div in divisions.items():
-        level = "other"
-        if "/country:" in ocd and ocd.count("/") == 1:
-            level = "country"
-        elif "/state:" in ocd and "cd:" not in ocd and "place:" not in ocd \
-                and "county:" not in ocd:
-            level = "state"
-        elif "cd:" in ocd or "sldl:" in ocd or "sldu:" in ocd:
-            level = "district"
-        elif "county:" in ocd:
-            level = "county"
-        elif "place:" in ocd:
-            level = "city"
-        r = con.execute("SELECT id FROM jurisdictions WHERE code=?",
-                        (ocd,)).fetchone()
+        raise HTTPException(400, f"the Census geocoder said: {d}")
+    matches = ((d.get("result") or {}).get("addressMatches") or []) \
+        if isinstance(d, dict) else []
+    if not matches:
+        raise HTTPException(
+            404, "the Census geocoder could not place that address. It "
+                 "covers the United States only, and wants a street, city "
+                 "and state — a business name or a postcode alone is not "
+                 "enough for it")
+    m = matches[0]
+    lat = float((m.get("coordinates") or {}).get("y") or 0)
+    lng = float((m.get("coordinates") or {}).get("x") or 0)
+    geos = m.get("geographies") or {}
+
+    def put(level, row, parent_id, name=None):
+        if row is None:
+            return 0
+        nm = (name or row.get("NAME") or row.get("BASENAME") or "").strip()
+        code = f"census:{row.get('GEOID', '')}"
+        have = con.execute("SELECT id FROM jurisdictions WHERE code=?",
+                           (code,)).fetchone()
+        if have:
+            con.execute("UPDATE jurisdictions SET watching=1, parent_id="
+                        "CASE WHEN parent_id=0 THEN ? ELSE parent_id END"
+                        " WHERE id=?", (parent_id, have["id"]))
+            return have["id"]
+        cur = con.execute(
+            "INSERT INTO jurisdictions(name,level,parent_id,code,lat,lng,"
+            " watching,created_at) VALUES(?,?,?,?,?,?,1,?)",
+            (nm[:120], level, parent_id, code, lat, lng, db.now()))
+        return cur.lastrowid
+
+    us = con.execute("SELECT id FROM jurisdictions WHERE level='country' AND"
+                     " (iso='US' OR code='iso:US')").fetchone()
+    if us:
+        us_id = us["id"]
+    else:
+        us_id = con.execute(
+            "INSERT INTO jurisdictions(name,level,code,iso,lat,lng,watching,"
+            " created_at) VALUES('United States','country','iso:US','US',"
+            " 39.8, -98.6, 1, ?)", (db.now(),)).lastrowid
+    state = put("state", _layer(geos, "States"), us_id)
+    county = put("county", _layer(geos, "Counties"), state)
+    city = put("city", _layer(geos, "Incorporated Places"), county or state)
+    cd = put("district", _layer(geos, "Congressional"), state)
+    upper = put("district", _layer(geos, "Legislative Districts", "Upper"), state)
+    lower = put("district", _layer(geos, "Legislative Districts", "Lower"), state)
+    school = put("school", _layer(geos, "School Districts"), county or state)
+    con.commit()
+    found = [x for x in (us_id, state, county, city, cd, upper, lower, school) if x]
+    IG.log(con, "census", "find_jurisdictions", True,
+           f"{len(found)} for {m.get('matchedAddress', address)[:80]}")
+    return {"ok": True, "matched": m.get("matchedAddress", ""),
+            "lat": lat, "lng": lng, "jurisdictions": found,
+            "state_fips": (_layer(geos, "States") or {}).get("GEOID", ""),
+            "district": (_layer(geos, "Congressional") or {}).get("BASENAME", "")}
+
+
+def _state_code(fips: str) -> str:
+    codes = {"01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA",
+             "08": "CO", "09": "CT", "10": "DE", "11": "DC", "12": "FL",
+             "13": "GA", "15": "HI", "16": "ID", "17": "IL", "18": "IN",
+             "19": "IA", "20": "KS", "21": "KY", "22": "LA", "23": "ME",
+             "24": "MD", "25": "MA", "26": "MI", "27": "MN", "28": "MS",
+             "29": "MO", "30": "MT", "31": "NE", "32": "NV", "33": "NH",
+             "34": "NJ", "35": "NM", "36": "NY", "37": "NC", "38": "ND",
+             "39": "OH", "40": "OK", "41": "OR", "42": "PA", "44": "RI",
+             "45": "SC", "46": "SD", "47": "TN", "48": "TX", "49": "UT",
+             "50": "VT", "51": "VA", "53": "WA", "54": "WV", "55": "WI",
+             "56": "WY", "72": "PR"}
+    return codes.get(str(fips)[:2], "")
+
+
+def _upsert_official(con, *, source, ext, jid, name, office, party="",
+                     district="", email="", phone="", url="") -> bool:
+    have = con.execute("SELECT id FROM officials WHERE source=? AND"
+                       " external_id=?", (source, ext)).fetchone()
+    args = (jid, name[:120], office[:160], (party or "")[:80],
+            (district or "")[:80], (email or "")[:200], (phone or "")[:40],
+            (url or "")[:400])
+    if have:
+        con.execute("UPDATE officials SET jurisdiction_id=?, name=?, office=?,"
+                    " party=?, district=?, email=?, phone=?, url=?, incumbent=1"
+                    " WHERE id=?", args + (have["id"],))
+        return False
+    con.execute("INSERT INTO officials(jurisdiction_id,name,office,party,"
+                " district,email,phone,url,external_id,source,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)", args + (ext, source, db.now()))
+    return True
+
+
+def pull_state_legislators(con, lat: float, lng: float) -> dict:
+    """Who sits for this point in the state legislature, from Open States.
+    Needs its key; starts from the point the Census gave back."""
+    c = IG.creds(con, "open_states")
+    if not c:
+        raise HTTPException(400, "connect Open States first")
+    ok, d = IG._req(f"https://v3.openstates.org/people.geo?lat={lat}&lng={lng}",
+                    headers={"X-API-Key": c.get("api_key", "")})
+    if not ok:
+        IG.log(con, "open_states", "pull_representatives", False, str(d)[:200])
+        raise HTTPException(400, f"Open States said: {d}")
+    new = 0
+    for per in (d.get("results") or []) if isinstance(d, dict) else []:
+        role = per.get("current_role") or {}
+        jur = per.get("jurisdiction") or {}
+        jid = _jurisdiction_by_name(con, jur.get("name", "") or "state", "state") \
+            if jur.get("name") else 0
+        chamber = {"upper": "Senate", "lower": "House"}.get(
+            role.get("org_classification", ""), role.get("org_classification", ""))
+        if _upsert_official(
+                con, source="open_states", ext=str(per.get("id")), jid=jid,
+                name=per.get("name", ""),
+                office=f"State {chamber}, district {role.get('district', '')}".strip(),
+                party=per.get("party", ""), district=str(role.get("district", "")),
+                email=per.get("email", ""), url=per.get("openstates_url", "")):
+            new += 1
+    con.commit()
+    IG.log(con, "open_states", "pull_representatives", True, f"{new} new")
+    return {"ok": True, "new": new}
+
+
+def pull_federal_members(con, state_code: str, district: str) -> dict:
+    """The two senators and the representative, from Congress.gov."""
+    c = IG.creds(con, "congress_gov")
+    if not c:
+        raise HTTPException(400, "connect Congress.gov first")
+    if not state_code:
+        raise HTTPException(400, "find the jurisdictions first — the state "
+                                 "comes from the address")
+    key = urllib.parse.quote(c.get("api_key", ""))
+    ok, d = IG._req(f"https://api.congress.gov/v3/member/{state_code}"
+                    f"?currentMember=true&limit=250&format=json&api_key={key}")
+    if not ok:
+        IG.log(con, "congress_gov", "pull_representatives", False, str(d)[:200])
+        raise HTTPException(400, f"Congress.gov said: {d}")
+    us = con.execute("SELECT id FROM jurisdictions WHERE level='country' AND"
+                     " (iso='US' OR code='iso:US')").fetchone()
+    us_id = us["id"] if us else 0
+    want = str(district or "").strip().lstrip("0")
+    new = 0
+    for mem in (d.get("members") or []) if isinstance(d, dict) else []:
+        dist = str(mem.get("district") or "").strip().lstrip("0")
+        terms = ((mem.get("terms") or {}).get("item") or [])
+        chamber = (terms[-1].get("chamber") if terms else "") or ""
+        senator = "Senate" in chamber or not dist
+        if not senator and want and dist != want:
+            continue
+        if _upsert_official(
+                con, source="congress_gov", ext=str(mem.get("bioguideId")),
+                jid=us_id, name=mem.get("name", ""),
+                office=("US Senator" if senator
+                        else f"US Representative, district {dist}"),
+                party=mem.get("partyName", ""), district=dist,
+                url=mem.get("url", "")):
+            new += 1
+    con.commit()
+    IG.log(con, "congress_gov", "pull_representatives", True, f"{new} new")
+    return {"ok": True, "new": new}
+
+
+# ---------- the picture around one jurisdiction ----------
+
+def ancestors(con, jid: int) -> list:
+    out, seen = [], set()
+    cur = con.execute("SELECT parent_id FROM jurisdictions WHERE id=?",
+                      (jid,)).fetchone()
+    pid = cur["parent_id"] if cur else 0
+    while pid and pid not in seen:
+        seen.add(pid)
+        r = con.execute("SELECT id, name, level, parent_id FROM jurisdictions"
+                        " WHERE id=?", (pid,)).fetchone()
         if r is None:
-            cur = con.execute(
-                "INSERT INTO jurisdictions(name,level,code,watching,"
-                " created_at) VALUES(?,?,?,1,?)",
-                (div.get("name", ocd)[:120], level, ocd, db.now()))
-            by_division[ocd] = cur.lastrowid
-        else:
-            by_division[ocd] = r["id"]
+            break
+        out.append({"id": r["id"], "name": r["name"], "level": r["level"]})
+        pid = r["parent_id"]
+    out.reverse()
+    return out
+
+
+def detail(con, jid: int) -> dict:
+    """Everything the register knows about one place, for the panel that
+    opens when it is clicked. The whole point of the map: a country is a
+    door to its treaties, a city to its ordinances, an HOA to its rules."""
+    j = con.execute("SELECT * FROM jurisdictions WHERE id=?", (jid,)).fetchone()
+    if j is None:
+        raise HTTPException(404, "no such jurisdiction")
+    kids = [dict(r) for r in con.execute(
+        "SELECT id, name, level, watching FROM jurisdictions WHERE parent_id=?"
+        " ORDER BY level, name", (jid,)).fetchall()]
+    agreements = [dict(r) for r in con.execute(
+        "SELECT a.*, p.role, p.since FROM agreements a"
+        " JOIN agreement_parties p ON p.agreement_id=a.id"
+        " WHERE p.jurisdiction_id=? ORDER BY a.kind, a.name", (jid,)).fetchall()]
+    for a in agreements:
+        a["kind_label"] = AGREEMENT_KINDS.get(a["kind"], a["kind"])
+        a["parties"] = [dict(r) for r in con.execute(
+            "SELECT j.id, j.name, j.level, p.role FROM agreement_parties p"
+            " JOIN jurisdictions j ON j.id=p.jurisdiction_id"
+            " WHERE p.agreement_id=? ORDER BY j.name", (a["id"],)).fetchall()]
+    return {
+        **dict(j), "level_label": LEVELS.get(j["level"], j["level"]),
+        "ancestors": ancestors(con, jid), "children": kids,
+        "agreements": agreements,
+        "officials": [dict(r) for r in con.execute(
+            "SELECT * FROM officials WHERE jurisdiction_id=? AND incumbent=1"
+            " ORDER BY office, name", (jid,)).fetchall()],
+        "measures": [shape_measure(con, r) for r in con.execute(
+            "SELECT * FROM measures WHERE jurisdiction_id=?"
+            " ORDER BY (status NOT IN ('enacted','failed','vetoed','withdrawn'))"
+            " DESC, last_action_at DESC LIMIT 50", (jid,)).fetchall()],
+        "elections": [dict(r) for r in con.execute(
+            "SELECT * FROM elections WHERE jurisdiction_id=? AND at>?"
+            " ORDER BY at LIMIT 20", (jid, time.time() - 30 * 86400)).fetchall()],
+        "given_cents": con.execute(
+            "SELECT COALESCE(SUM(amount_cents),0) AS c FROM contributions"
+            " WHERE jurisdiction_id=?", (jid,)).fetchone()["c"],
+    }
+
+
+def watch_country(con, iso: str, name: str, lat: float, lng: float) -> int:
+    """A country from the map's own outline layer becomes a row in the
+    register. The map can show every country; the register holds only the
+    ones this business is watching, or it is a gazetteer nobody reads."""
+    iso = (iso or "").upper()[:3]
+    have = con.execute("SELECT id FROM jurisdictions WHERE level='country' AND"
+                       " (iso=? OR lower(name)=lower(?))", (iso, name)).fetchone()
+    if have:
+        con.execute("UPDATE jurisdictions SET watching=1, iso=CASE WHEN iso=''"
+                    " THEN ? ELSE iso END WHERE id=?", (iso, have["id"]))
+        con.commit()
+        return have["id"]
+    cur = con.execute(
+        "INSERT INTO jurisdictions(name,level,code,iso,lat,lng,watching,"
+        " created_at) VALUES(?,'country',?,?,?,?,1,?)",
+        (name[:120], f"iso:{iso}" if iso else "", iso, lat, lng, db.now()))
     con.commit()
-    for off in offices:
-        jid = by_division.get(off.get("divisionId", ""), 0)
-        for idx in off.get("officialIndices") or []:
-            if idx >= len(people):
-                continue
-            per = people[idx]
-            ext = f"{off.get('divisionId', '')}:{off.get('name', '')}:{per.get('name', '')}"
-            have = con.execute(
-                "SELECT id FROM officials WHERE source='google_civic' AND"
-                " external_id=?", (ext,)).fetchone()
-            args = (jid, per.get("name", "")[:120], off.get("name", "")[:160],
-                    (per.get("party") or "")[:80],
-                    (per.get("emails") or [""])[0][:200],
-                    (per.get("phones") or [""])[0][:40],
-                    (per.get("urls") or [""])[0][:400])
-            if have:
-                con.execute(
-                    "UPDATE officials SET jurisdiction_id=?, name=?, office=?,"
-                    " party=?, email=?, phone=?, url=? WHERE id=?",
-                    args + (have["id"],))
-            else:
-                con.execute(
-                    "INSERT INTO officials(jurisdiction_id,name,office,party,"
-                    " email,phone,url,external_id,source,created_at)"
-                    " VALUES(?,?,?,?,?,?,?,?, 'google_civic',?)",
-                    args + (ext, db.now()))
-                made += 1
-    con.commit()
-    IG.log(con, "google_civic", "pull_representatives", True, f"{made} new")
-    return {"ok": True, "new": made, "divisions": len(divisions)}
+    return cur.lastrowid
 
 
 # ---------- routes ----------
@@ -568,6 +817,12 @@ def civics_page(user=Depends(current_user), con=Depends(get_con)):
         "undisclosed": con.execute(
             "SELECT COUNT(*) AS n FROM contributions WHERE disclosure_ref=''"
             ).fetchone()["n"],
+        "agreements": [dict(r) for r in con.execute(
+            "SELECT a.*, (SELECT COUNT(*) FROM agreement_parties p"
+            " WHERE p.agreement_id=a.id) AS parties FROM agreements a"
+            " ORDER BY a.kind, a.name LIMIT 200").fetchall()],
+        "agreement_kinds": [{"k": k, "label": v}
+                            for k, v in AGREEMENT_KINDS.items()],
         "counts": _counts(con),
         "levels": [{"k": k, "label": v} for k, v in LEVELS.items()],
         "statuses": list(STATUSES), "positions": list(POSITIONS),
@@ -925,6 +1180,162 @@ def civics_pull(name: str, body: PullBody, user=Depends(current_user),
         return pull_open_states(con, body.query)
     if name == "congress_gov":
         return pull_congress(con, body.query)
-    if name == "google_civic":
-        return pull_representatives(con)
     raise HTTPException(404, "no such source")
+
+
+class FindBody(BaseModel):
+    address: str
+
+
+@router.post("/api/civics/find")
+def civics_find(body: FindBody, user=Depends(current_user),
+                con=Depends(get_con)):
+    """The stack an address sits in. Keyless: the Census geocoder is an
+    official public service, so there is nothing to connect first."""
+    _require(user)
+    return find_jurisdictions(con, body.address)
+
+
+class RepsBody(BaseModel):
+    lat: float
+    lng: float
+    state_fips: str = ""
+    district: str = ""
+
+
+@router.post("/api/civics/representatives")
+def civics_representatives(body: RepsBody, user=Depends(current_user),
+                           con=Depends(get_con)):
+    """Who holds the offices, from whichever keyed sources are connected.
+    Each is tried; each reports; neither failing stops the other."""
+    _require(user)
+    out = {"state": None, "federal": None}
+    try:
+        out["state"] = pull_state_legislators(con, body.lat, body.lng)
+    except HTTPException as e:
+        out["state"] = {"ok": False, "why": str(e.detail)}
+    try:
+        out["federal"] = pull_federal_members(
+            con, _state_code(body.state_fips), body.district)
+    except HTTPException as e:
+        out["federal"] = {"ok": False, "why": str(e.detail)}
+    return out
+
+
+@router.get("/api/civics/jurisdictions/{jid}/detail")
+def civics_detail(jid: int, user=Depends(current_user), con=Depends(get_con)):
+    if not _may_see(user):
+        raise HTTPException(403, "an office screen")
+    return detail(con, jid)
+
+
+class WatchBody(BaseModel):
+    iso: str = ""
+    name: str
+    lat: float
+    lng: float
+
+
+@router.post("/api/civics/watch")
+def civics_watch(body: WatchBody, user=Depends(current_user),
+                 con=Depends(get_con)):
+    _require(user)
+    if not body.name.strip():
+        raise HTTPException(400, "a country has a name")
+    return {"ok": True, "id": watch_country(con, body.iso, body.name.strip(),
+                                            body.lat, body.lng)}
+
+
+class AgreementBody(BaseModel):
+    id: int = 0
+    name: str
+    kind: str = "treaty"
+    summary: str = ""
+    url: str = ""
+    signed_at: float = 0
+    in_force_at: float = 0
+    ends_at: float = 0
+    status: str = "in_force"
+    position: str = "watch"
+    impact: str = "medium"
+    why: str = ""
+    note: str = ""
+    parties: list = []          # [{jurisdiction_id, role}]
+
+
+AGREEMENT_STATUSES = ("proposed", "signed", "in_force", "suspended", "ended")
+
+
+@router.post("/api/civics/agreements")
+def agreement_save(body: AgreementBody, user=Depends(current_user),
+                   con=Depends(get_con)):
+    _require(user)
+    if body.kind not in AGREEMENT_KINDS:
+        raise HTTPException(400, f"kind is one of {sorted(AGREEMENT_KINDS)}")
+    if body.status not in AGREEMENT_STATUSES:
+        raise HTTPException(400, f"status is one of {AGREEMENT_STATUSES}")
+    if body.position not in POSITIONS or body.impact not in IMPACTS:
+        raise HTTPException(400, "position and impact are from the lists")
+    if not body.name.strip():
+        raise HTTPException(400, "an agreement needs a name")
+    parties = []
+    for pt in body.parties or []:
+        jid = int(pt.get("jurisdiction_id") or 0)
+        if jid and con.execute("SELECT 1 FROM jurisdictions WHERE id=?",
+                               (jid,)).fetchone():
+            parties.append((jid, str(pt.get("role") or "party")[:20]))
+    if len({j for j, _ in parties}) < 2 and not body.id:
+        raise HTTPException(400, "an agreement is between at least two "
+                                 "jurisdictions — add the parties to it")
+    now = time.time()
+    args = (body.name.strip()[:200], body.kind, body.summary.strip()[:4000],
+            body.url.strip()[:400], body.signed_at, body.in_force_at,
+            body.ends_at, body.status, body.position, body.impact,
+            body.why.strip()[:2000], body.note.strip()[:2000], now)
+    if body.id:
+        if con.execute("SELECT 1 FROM agreements WHERE id=?",
+                       (body.id,)).fetchone() is None:
+            raise HTTPException(404, "no such agreement")
+        con.execute(
+            "UPDATE agreements SET name=?, kind=?, summary=?, url=?, signed_at=?,"
+            " in_force_at=?, ends_at=?, status=?, position=?, impact=?, why=?,"
+            " note=?, updated_at=? WHERE id=?", args + (body.id,))
+        aid = body.id
+        if parties:
+            con.execute("DELETE FROM agreement_parties WHERE agreement_id=?",
+                        (aid,))
+    else:
+        cur = con.execute(
+            "INSERT INTO agreements(name,kind,summary,url,signed_at,in_force_at,"
+            " ends_at,status,position,impact,why,note,updated_at,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", args + (db.now(),))
+        aid = cur.lastrowid
+    for jid, role in parties:
+        con.execute("INSERT OR IGNORE INTO agreement_parties(agreement_id,"
+                    " jurisdiction_id,role) VALUES(?,?,?)", (aid, jid, role))
+    con.commit()
+    return {"ok": True, "id": aid}
+
+
+@router.get("/api/civics/agreements/{aid}")
+def agreement_detail(aid: int, user=Depends(current_user), con=Depends(get_con)):
+    if not _may_see(user):
+        raise HTTPException(403, "an office screen")
+    a = con.execute("SELECT * FROM agreements WHERE id=?", (aid,)).fetchone()
+    if a is None:
+        raise HTTPException(404, "no such agreement")
+    return {**dict(a), "kind_label": AGREEMENT_KINDS.get(a["kind"], a["kind"]),
+            "parties": [dict(r) for r in con.execute(
+                "SELECT j.id, j.name, j.level, p.role, p.since"
+                " FROM agreement_parties p JOIN jurisdictions j"
+                " ON j.id=p.jurisdiction_id WHERE p.agreement_id=?"
+                " ORDER BY j.name", (aid,)).fetchall()]}
+
+
+@router.delete("/api/civics/agreements/{aid}")
+def agreement_delete(aid: int, user=Depends(current_user), con=Depends(get_con)):
+    _require(user)
+    con.execute("DELETE FROM agreement_parties WHERE agreement_id=?", (aid,))
+    con.execute("DELETE FROM agreements WHERE id=?", (aid,))
+    con.commit()
+    return {"ok": True}

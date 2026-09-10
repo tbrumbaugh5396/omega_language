@@ -316,12 +316,14 @@ TOOLS = [
     },
     {
         "name": "bc_policy",
-        "summary": "The jurisdictions this business sits inside, the bills "
-                   "and ordinances it is tracking with its own position on "
-                   "each, upcoming elections, and its register of political "
-                   "giving. The register is a disclosure record: nothing "
-                   "in it checks a contribution limit or reads a statute, "
-                   "so never present it as compliance.",
+        "summary": "The jurisdictions this business sits inside from a "
+                   "treaty bloc down to a homeowners' association, the "
+                   "agreements between them, the bills and ordinances it "
+                   "is tracking with its own position on each, upcoming "
+                   "elections, and its register of political giving. The "
+                   "register is a disclosure record: nothing in it checks a "
+                   "contribution limit or reads a statute, so never present "
+                   "it as compliance.",
         "method": "GET", "path": "/api/civics",
     },
 

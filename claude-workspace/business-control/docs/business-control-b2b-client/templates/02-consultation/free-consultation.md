@@ -230,7 +230,6 @@ they describe. A module they didn't ask for is a module they won't open.
 | Yelp (`yelp`) | ☐ | ☐ | Listing and latest review excerpts read; Yelp takes no reply or edit by API |
 | Open States (`open_states`) | ☐ | ☐ | Bills moving through a US state legislature, with your own position on each kept separate from theirs |
 | Congress.gov (`congress_gov`) | ☐ | ☐ | Federal bills; the API has no full-text search, so a narrow term works better than a broad one |
-| Google Civic (`google_civic`) | ☐ | ☐ | Which jurisdictions an address sits in and who holds each office. Below the state line most places publish nothing an API can read |
 | Your own | ☐ | ☐ | Any service with an https URL and a key: declared on the Integrations tab, joins the same event list and log |
 | Other: ______ | ☐ | ☐ | Assess separately — a new connector is a line item |
 
