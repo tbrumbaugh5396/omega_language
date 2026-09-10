@@ -168,6 +168,8 @@ const TABS = [
     roles: ["admin"] },
   { id: "legal", label: "Legal register", icon: "shield2", group: "Company",
     roles: ["admin", "employee"] },
+  { id: "civics", label: "Policy & elections", icon: "pin", group: "Company",
+    roles: ["admin", "employee", "director", "board"] },
   { id: "automation", label: "Automations", icon: "flask", group: "Company",
     roles: ["admin"] },
   { id: "hq", label: "HQ", icon: "hq", group: "Company", roles: ["admin"] },
@@ -241,7 +243,7 @@ const TAB_CAP = {
   intake: "fundraising", results: "learning",
   accounting: "accounting", treasury: "treasury", legal: "legal",
   automation: "automation", finance: "finance", payroll: "payroll",
-  onboarding: "onboarding",
+  onboarding: "onboarding", civics: "civics",
 };
 const CAP_LABEL = {
   selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
@@ -252,6 +254,7 @@ const CAP_LABEL = {
   accounting: "Accounting", treasury: "Treasury & investments",
   legal: "Legal", automation: "Automation", finance: "Finance",
   payroll: "Payroll", onboarding: "Onboarding",
+  civics: "Civics & policy",
   api: "API & data platform", infosec: "InfoSec",
 };
 // null caps = everything on: legacy installs, the provider, and any tenant
@@ -491,6 +494,7 @@ async function render() {
     treasury: renderTreasury, legal: renderLegal,
     automation: renderAutomations, finance: renderFinance,
     payroll: renderPayroll, onboarding: renderOnboarding,
+    civics: renderCivics,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

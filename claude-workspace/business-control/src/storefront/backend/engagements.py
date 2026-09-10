@@ -3194,12 +3194,13 @@ CAP_NAMES = {
     "intelligence": "Intelligence", "automation": "Automation",
     "comms": "Comms", "infosec": "InfoSec",
     "api": "API & data platform", "legal": "Legal",
+    "civics": "Civics & policy",
     "pwa": "Progressive App",
 }
 
 
 def _cap_catalog() -> list:
-    """The 28 capabilities WITH their commercial facts — group, band,
+    """Every capability WITH its commercial facts — group, band,
     price — in the price book's own order. The grant editor is a screen
     where money is approved; it must show the money, from the same parse
     everything else prices from. Fail-safe to names alone: a book that

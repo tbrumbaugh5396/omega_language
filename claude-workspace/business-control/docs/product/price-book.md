@@ -126,6 +126,7 @@ An asterisk marks the nine that had no price in v1.
 | API & data platform | Standard | **$30** | Core |
 | Progressive App | Light | **$20** | Core |
 | Legal * | Light | **$20** | Core |
+| Civics & policy | Heavy | **$50** | Core |
 
 **Affiliates** is priced but still absent from the capability graph in the
 product docs. The dependency on Core above is an assumption, not a record.
@@ -183,7 +184,7 @@ discount.
 | Voice | — | — | 3,000 min |
 
 **Learning, Fundraising, Accounting, Finance, Treasury, Onboarding, Payroll,
-InfoSec, Legal and Voice sit outside every tier.** Course businesses,
+InfoSec, Legal, Civics & policy and Voice sit outside every tier.** Course businesses,
 nonprofits and anyone who wants the finance stack buys the menu. That is the
 honest answer, not a gap to be filled — a commerce tier that quietly includes
 an LMS is a tier nobody can price.

@@ -132,6 +132,7 @@ native app build and two store submissions per release.
 | **Automation** — triggers, rules, schedules, approvals | — | $30 | ☐ |
 | **InfoSec** — single sign-on, audit logs, access reviews | — | $30 | ☐ |
 | **Legal** — contracts, policies, document vault | — | $20 | ☐ |
+| **Civics & policy** — the jurisdictions you sit in, on a map; bills and ordinances with your own position on each; elections; a register of political giving for disclosure | — | $50 | ☐ |
 
 **Three to five capabilities take 8% off. Six to nine, 15%. Ten or more,
 25%.** That is why a bundle costs less than the same boxes chosen one at a

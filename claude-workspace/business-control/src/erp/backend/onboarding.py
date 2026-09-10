@@ -1,4 +1,4 @@
-"""Onboarding: the first fortnight, as a list somebody owns.
+"""Joining and leaving: the first fortnight and the last day.
 
 Hiring already wrote a six-line list when it opened an account, which was
 right and was not enough. The same six lines went to a delivery driver
@@ -24,7 +24,26 @@ So the list becomes a template, and there can be more than one:
 Hiring keeps calling this: a hire whose role matches a template gets that
 template, and anything else gets the built-in list, so an install that
 never opens this screen behaves exactly as it did before.
+
+**Leaving is the same machinery pointed the other way, and one thing
+more.** A template has a kind, so a business can write the list for a
+last day as it writes the list for a first one — hand back the keys,
+final expenses in, handover written. What a checklist cannot be trusted
+with is access, because the whole risk of somebody leaving badly is the
+gap between the decision and the account still working. So closing
+access is an ACTION here rather than a line to tick: it deactivates the
+account, forgets the PIN and the clock badge, revokes every API key
+bound to them, and takes them off the shifts nobody has worked yet. One
+button, done in one transaction, and recorded.
+
+Two deliberate limits. Nothing is deleted: the person, their hours, what
+they were paid and what they did stay exactly where they are, because a
+business that erases a leaver cannot answer a question about last year
+and in most places may not. And the reason for leaving is recorded
+plainly, including dismissal, without the software offering an opinion
+about it.
 """
+import secrets
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -36,6 +55,7 @@ TABLES = """
 CREATE TABLE IF NOT EXISTS onboarding_templates (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
+  kind TEXT DEFAULT 'joining',             -- joining|leaving
   role TEXT DEFAULT '',                    -- '' = anybody
   active INTEGER DEFAULT 1,
   note TEXT DEFAULT '',
@@ -63,12 +83,37 @@ CREATE TABLE IF NOT EXISTS onboarding_journeys (
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS onboarding_journeys_u ON onboarding_journeys(user_id);
+
+/* Somebody leaving. One row per departure, kept forever: a business that
+   erases a leaver cannot answer a question about last year, and in most
+   places may not. */
+CREATE TABLE IF NOT EXISTS departures (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  name TEXT DEFAULT '',                    -- as it was on the day
+  role TEXT DEFAULT '',
+  reason TEXT NOT NULL,                    -- see REASONS
+  last_day REAL NOT NULL,
+  notice_given REAL DEFAULT 0,
+  rehire TEXT DEFAULT 'unknown',           -- yes|no|unknown
+  note TEXT DEFAULT '',
+  journey_id INTEGER DEFAULT 0,            -- their leaving list
+  access_closed_at REAL DEFAULT 0,
+  access_closed_by TEXT DEFAULT '',
+  access_detail TEXT DEFAULT '',           -- what closing it actually did
+  final_pay_run_id INTEGER DEFAULT 0,
+  recorded_by TEXT DEFAULT '',
+  created_at REAL NOT NULL,
+  UNIQUE(user_id, last_day)
+);
 """
 
 # onboarding_tasks belongs to hiring and predates this; these are the
 # columns a dated, document-aware list needs. CREATE TABLE IF NOT EXISTS
 # leaves an existing table alone, so they are added explicitly.
 MIGRATIONS = [
+    "ALTER TABLE onboarding_templates ADD COLUMN kind TEXT DEFAULT 'joining'",
+    "ALTER TABLE onboarding_journeys ADD COLUMN kind TEXT DEFAULT 'joining'",
     "ALTER TABLE onboarding_tasks ADD COLUMN journey_id INTEGER DEFAULT 0",
     "ALTER TABLE onboarding_tasks ADD COLUMN due REAL DEFAULT 0",
     "ALTER TABLE onboarding_tasks ADD COLUMN needs_document INTEGER DEFAULT 0",
@@ -99,6 +144,20 @@ def init_tables(con):
                 "INSERT INTO onboarding_steps(template_id,title,tab,"
                 " days_after,position) VALUES(?,?,?,?,?)",
                 (tid, title, tab, [0, 1, 1, 2, 3, 7][i] if i < 6 else i, i))
+    if not con.execute("SELECT 1 FROM onboarding_templates WHERE kind='leaving'"
+                       ).fetchone():
+        cur = con.execute(
+            "INSERT INTO onboarding_templates(name,kind,role,note,created_at)"
+            " VALUES('Last day','leaving','',?,?)",
+            ("What a last day needs whatever the reason for it. Closing "
+             "access is a button on the departure, not a tick here.",
+             db.now()))
+        lid = cur.lastrowid
+        for i, (title, tab, days) in enumerate(LEAVING):
+            con.execute(
+                "INSERT INTO onboarding_steps(template_id,title,tab,"
+                " days_after,position) VALUES(?,?,?,?,?)",
+                (lid, title, tab, days, i))
     con.commit()
 
 
@@ -111,16 +170,38 @@ def _require(user) -> None:
         raise HTTPException(403, "onboarding is the office's")
 
 
-def template_for(con, role: str):
+REASONS = {
+    "resigned": "Resigned",
+    "dismissed": "Dismissed",
+    "redundancy": "Redundancy",
+    "end_of_contract": "End of contract",
+    "retired": "Retired",
+    "died": "Died",
+    "other": "Other",
+}
+KINDS = ("joining", "leaving")
+# The list every business needs on a last day, whatever else it adds.
+LEAVING = [
+    ("Handover written and handed over", "board", 0),
+    ("Keys, badge and equipment back", "staff", 0),
+    ("Final expenses and hours in", "expenses", 0),
+    ("Access closed", "staff", 0),
+    ("Final pay run", "payroll", 7),
+]
+
+
+def template_for(con, role: str, kind: str = "joining"):
     """The template for a role, then the one for anybody, then nothing."""
     return con.execute(
         "SELECT * FROM onboarding_templates WHERE active=1 AND role=?"
-        " ORDER BY id LIMIT 1", (role or "",)).fetchone() or con.execute(
+        " AND kind=? ORDER BY id LIMIT 1", (role or "", kind)).fetchone() \
+        or con.execute(
         "SELECT * FROM onboarding_templates WHERE active=1 AND role=''"
-        " ORDER BY id LIMIT 1").fetchone()
+        " AND kind=? ORDER BY id LIMIT 1", (kind,)).fetchone()
 
 
-def start(con, uid: int, template_id: int = 0, starts: float = 0) -> dict:
+def start(con, uid: int, template_id: int = 0, starts: float = 0,
+          kind: str = "joining") -> dict:
     """Put somebody on a list. Idempotent per template: starting the same
     one twice would leave two of every step and no way to tell which tick
     counted."""
@@ -129,7 +210,7 @@ def start(con, uid: int, template_id: int = 0, starts: float = 0) -> dict:
         raise HTTPException(404, "no such person")
     t = con.execute("SELECT * FROM onboarding_templates WHERE id=?",
                     (template_id,)).fetchone() if template_id \
-        else template_for(con, u["role"])
+        else template_for(con, u["role"], kind)
     if t is None:
         raise HTTPException(400, "no template to start them on")
     have = con.execute(
@@ -139,8 +220,9 @@ def start(con, uid: int, template_id: int = 0, starts: float = 0) -> dict:
         return {"ok": True, "journey_id": have["id"], "already": True}
     at = starts or time.time()
     cur = con.execute(
-        "INSERT INTO onboarding_journeys(user_id,template_id,starts,created_at)"
-        " VALUES(?,?,?,?)", (uid, t["id"], at, db.now()))
+        "INSERT INTO onboarding_journeys(user_id,template_id,starts,kind,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (uid, t["id"], at, t["kind"] or kind, db.now()))
     jid = cur.lastrowid
     steps = con.execute(
         "SELECT * FROM onboarding_steps WHERE template_id=?"
@@ -232,6 +314,9 @@ def onboarding_page(user=Depends(current_user), con=Depends(get_con)):
             " ORDER BY position, id", (t["id"],)).fetchall()]})
     rows = board(con)
     return {"templates": temps, "journeys": rows,
+            "departures": departures(con),
+            "reasons": [{"k": k, "label": v} for k, v in REASONS.items()],
+            "template_kinds": list(KINDS),
             "roles": [r for r in ROLES_ALLOWED if r not in ("customer", "donor")],
             "jobs": list(JOBS),
             "counts": {
@@ -247,6 +332,7 @@ def onboarding_page(user=Depends(current_user), con=Depends(get_con)):
 class TemplateBody(BaseModel):
     id: int = 0
     name: str
+    kind: str = "joining"
     role: str = ""
     active: bool = True
     note: str = ""
@@ -258,16 +344,18 @@ def template_save(body: TemplateBody, user=Depends(current_user),
     _require(user)
     if not body.name.strip():
         raise HTTPException(400, "name the template")
-    args = (body.name.strip()[:80], body.role.strip()[:40], int(body.active),
-            body.note.strip()[:400])
+    if body.kind not in KINDS:
+        raise HTTPException(400, f"kind is one of {KINDS}")
+    args = (body.name.strip()[:80], body.kind, body.role.strip()[:40],
+            int(body.active), body.note.strip()[:400])
     if body.id:
-        con.execute("UPDATE onboarding_templates SET name=?, role=?, active=?,"
-                    " note=? WHERE id=?", args + (body.id,))
+        con.execute("UPDATE onboarding_templates SET name=?, kind=?, role=?,"
+                    " active=?, note=? WHERE id=?", args + (body.id,))
         con.commit()
         return {"ok": True, "id": body.id}
     cur = con.execute(
-        "INSERT INTO onboarding_templates(name,role,active,note,created_at)"
-        " VALUES(?,?,?,?,?)", args + (db.now(),))
+        "INSERT INTO onboarding_templates(name,kind,role,active,note,"
+        " created_at) VALUES(?,?,?,?,?,?)", args + (db.now(),))
     con.commit()
     return {"ok": True, "id": cur.lastrowid}
 
@@ -321,13 +409,15 @@ class StartBody(BaseModel):
     user_id: int
     template_id: int = 0
     starts: float = 0
+    kind: str = "joining"
 
 
 @router.post("/api/onboarding/start")
 def onboarding_start(body: StartBody, user=Depends(current_user),
                      con=Depends(get_con)):
     _require(user)
-    return start(con, body.user_id, body.template_id, body.starts)
+    return start(con, body.user_id, body.template_id, body.starts,
+                 body.kind if body.kind in KINDS else "joining")
 
 
 class TickBody(BaseModel):
@@ -348,3 +438,185 @@ def my_onboarding(user=Depends(current_user), con=Depends(get_con)):
     js = con.execute("SELECT * FROM onboarding_journeys WHERE user_id=?"
                      " ORDER BY starts DESC", (user["id"],)).fetchall()
     return {"journeys": [_journey_row(con, j) for j in js]}
+
+
+# ---------- leaving ----------
+
+def close_access(con, uid: int, by: str) -> dict:
+    """Shut every door at once.
+
+    A checklist cannot be trusted with this. The whole risk of somebody
+    leaving badly is the gap between the decision and the account still
+    working, and a line somebody means to tick tomorrow is exactly that
+    gap. So it is one action, in one transaction, and it says what it
+    did — a security step whose result nobody can read is a security
+    step nobody can rely on.
+
+    Nothing is deleted. The account is deactivated, not removed: their
+    hours, their pay and what they did stay where they are.
+    """
+    u = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if u is None:
+        raise HTTPException(404, "no such person")
+    did = []
+    if u["active"]:
+        con.execute("UPDATE users SET active=0 WHERE id=?", (uid,))
+        did.append("account deactivated")
+    if (u["pin_hash"] or "") or (u["pin"] or ""):
+        con.execute("UPDATE users SET pin_hash='', pin='' WHERE id=?", (uid,))
+        did.append("time-clock PIN forgotten")
+    if u["clock_token"] or "":
+        con.execute("UPDATE users SET clock_token='' WHERE id=?", (uid,))
+        did.append("clock badge void")
+    # A token is a live session. Rotating it signs them out everywhere,
+    # which a deactivated flag alone does not do until they next load a
+    # page that checks.
+    con.execute("UPDATE users SET token=? WHERE id=?",
+                (secrets.token_urlsafe(24), uid))
+    did.append("signed out everywhere")
+    try:
+        n = con.execute(
+            "UPDATE api_keys SET revoked_at=? WHERE user_id=? AND"
+            " revoked_at IS NULL", (time.time(), uid)).rowcount
+        if n:
+            did.append(f"{n} API key{'s' if n != 1 else ''} revoked")
+    except Exception:                                        # noqa: BLE001
+        pass
+    try:
+        n = con.execute(
+            "DELETE FROM scheduled_shifts WHERE user_id=? AND starts>?",
+            (uid, time.time())).rowcount
+        if n:
+            did.append(f"{n} future shift{'s' if n != 1 else ''} removed")
+    except Exception:                                        # noqa: BLE001
+        pass
+    con.commit()
+    return {"ok": True, "did": did}
+
+
+def record_departure(con, *, uid: int, reason: str, last_day: float,
+                     notice_given: float, rehire: str, note: str,
+                     by: str, start_list: bool = True) -> dict:
+    u = con.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+    if u is None:
+        raise HTTPException(404, "no such person")
+    if reason not in REASONS:
+        raise HTTPException(400, f"reason is one of {sorted(REASONS)}")
+    if rehire not in ("yes", "no", "unknown"):
+        raise HTTPException(400, "rehire is yes, no or unknown")
+    have = con.execute("SELECT id FROM departures WHERE user_id=? AND"
+                       " access_closed_at=0", (uid,)).fetchone()
+    if have:
+        raise HTTPException(400, "a departure for them is already open")
+    jid = 0
+    if start_list:
+        try:
+            jid = start(con, uid, 0, last_day, "leaving").get("journey_id", 0)
+        except HTTPException:
+            jid = 0          # no leaving template; the record still stands
+    cur = con.execute(
+        "INSERT INTO departures(user_id,name,role,reason,last_day,"
+        " notice_given,rehire,note,journey_id,recorded_by,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (uid, u["name"], u["role"], reason, last_day, notice_given, rehire,
+         note[:2000], jid, by[:120], db.now()))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid, "journey_id": jid}
+
+
+def departures(con) -> list:
+    rows = []
+    for r in con.execute(
+            "SELECT d.*, u.active FROM departures d"
+            " LEFT JOIN users u ON u.id=d.user_id"
+            " ORDER BY d.last_day DESC LIMIT 200").fetchall():
+        d = dict(r)
+        d["reason_label"] = REASONS.get(d["reason"], d["reason"])
+        d["access_open"] = not d["access_closed_at"]
+        if d["journey_id"]:
+            j = con.execute("SELECT * FROM onboarding_journeys WHERE id=?",
+                            (d["journey_id"],)).fetchone()
+            if j is not None:
+                jr = _journey_row(con, j)
+                d["done"] = jr["done"]
+                d["total"] = jr["total"]
+                d["overdue"] = jr["overdue"]
+        rows.append(d)
+    return rows
+
+
+class DepartureBody(BaseModel):
+    user_id: int
+    reason: str
+    last_day: float
+    notice_given: float = 0
+    rehire: str = "unknown"
+    note: str = ""
+    close_now: bool = False
+
+
+@router.post("/api/onboarding/departures")
+def departure_add(body: DepartureBody, user=Depends(current_user),
+                  con=Depends(get_con)):
+    """Record that somebody is leaving, and open their last-day list.
+
+    Closing access is a separate act on purpose. Somebody resigning with
+    a month's notice keeps working that month; somebody dismissed on the
+    spot does not, and the person recording it should say which rather
+    than have the software decide from the reason.
+    """
+    _require(user)
+    if body.user_id == user["id"]:
+        raise HTTPException(400, "somebody else records your leaving — "
+                                 "closing your own access mid-form is how "
+                                 "a half-finished departure gets stranded")
+    out = record_departure(
+        con, uid=body.user_id, reason=body.reason, last_day=body.last_day,
+        notice_given=body.notice_given, rehire=body.rehire, note=body.note,
+        by=user["name"])
+    if body.close_now:
+        shut = close_access(con, body.user_id, user["name"])
+        con.execute(
+            "UPDATE departures SET access_closed_at=?, access_closed_by=?,"
+            " access_detail=? WHERE id=?",
+            (time.time(), user["name"], ", ".join(shut["did"]), out["id"]))
+        con.commit()
+        out["access"] = shut["did"]
+    return out
+
+
+@router.post("/api/onboarding/departures/{did}/close-access")
+def departure_close(did: int, user=Depends(current_user), con=Depends(get_con)):
+    _require(user)
+    d = con.execute("SELECT * FROM departures WHERE id=?", (did,)).fetchone()
+    if d is None:
+        raise HTTPException(404, "no such departure")
+    if d["access_closed_at"]:
+        raise HTTPException(400, "already closed — "
+                                 + (d["access_detail"] or "nothing to do"))
+    shut = close_access(con, d["user_id"], user["name"])
+    con.execute(
+        "UPDATE departures SET access_closed_at=?, access_closed_by=?,"
+        " access_detail=? WHERE id=?",
+        (time.time(), user["name"], ", ".join(shut["did"]), did))
+    con.commit()
+    return {"ok": True, "did": shut["did"]}
+
+
+class RehireBody(BaseModel):
+    rehire: str = "unknown"
+    note: str = ""
+
+
+@router.patch("/api/onboarding/departures/{did}")
+def departure_edit(did: int, body: RehireBody, user=Depends(current_user),
+                   con=Depends(get_con)):
+    """The note and whether they would be taken back. The reason and the
+    date are not editable: they are what was decided on the day."""
+    _require(user)
+    if body.rehire not in ("yes", "no", "unknown"):
+        raise HTTPException(400, "rehire is yes, no or unknown")
+    con.execute("UPDATE departures SET rehire=?, note=? WHERE id=?",
+                (body.rehire, body.note[:2000], did))
+    con.commit()
+    return {"ok": True}

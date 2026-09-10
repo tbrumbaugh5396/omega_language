@@ -64,7 +64,23 @@ Things to know before touching them:
   nothing silently. That guard caught payroll trying to take `pay_rates`
   from classroom.py, and found two live collisions — `api_keys`, which
   had been 500ing every `/api/v1` call, and `audit_log`.
-- Every capability in the price book now has something behind it.
+- Invoicing lives in `finance.py`: a draft is editable, an issued invoice
+  is not, and a correction is a credit note. It posts to the ledger at
+  ISSUE, unlike an order, because a claim you only recognise when it is
+  settled cannot tell you what you are owed. Credit notes stay out of the
+  outstanding and overdue figures.
+- Leaving lives in `onboarding.py`. `close_access()` is one transaction
+  and it must stay that way: account off, PIN and badge forgotten, token
+  rotated, API keys revoked, future shifts dropped. Never turn it into a
+  checklist line.
+- `civics.py` is the Civics & policy capability. Its map is an SVG drawn
+  in `31-civics.js` from the install's own rows — no tiles, no CDN, no
+  network. A test asserts the map function loads nothing.
+- **Adding a capability touches six places**: the price book table, the
+  parser's count in `pricebook.py`, `CAP_NAMES`, `TAB_CAP` and
+  `CAP_LABEL`, the client capability menu, and the sales deck's price
+  model. The suite checks every one of them.
+- Every capability in the price book has something behind it.
 
 ## The agent door
 

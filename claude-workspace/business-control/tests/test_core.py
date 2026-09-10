@@ -5423,11 +5423,14 @@ _ACTION_IMPL = {
     "pull_listing": "def pull_google(con)",
     "push_listing": "def push_google(con)",
     "pull_reviews": "def pull_google_reviews(",
+    "pull_measures": "def pull_open_states(",
+    "pull_representatives": "def pull_representatives(",
     "reply_review": "def reply_google(",
 }
 _src_families = _src_ig + "".join(
     Path(f"src/erp/backend/{m}.py").read_text()
-    for m in ("ads", "hiring", "marketplaces", "listings", "intake"))
+    for m in ("ads", "hiring", "marketplaces", "listings", "intake",
+              "civics"))
 for _n, _pd in _ig.PROVIDERS.items():
     for _a in _pd.get("actions", []):
         ok(_a in _ACTION_IMPL,
@@ -5969,7 +5972,7 @@ _navd = set(re.findall(r'\{ id: "([\w:-]+)"', _ops))
 # person looks for it. Thirty rail entries is a list nobody scans.
 _FAMILY_TAB = {"intake": "intake", "ads": "ads", "hiring": "hiring",
                "delivery": "marketplaces", "listings": "listings",
-               "results": "results"}
+               "results": "results", "civics": "civics"}
 _missing = [n for n in _pnames
             if n not in _navd and f"ig-{n}" not in _navd
             and _FAMILY_TAB.get(_ig.PROVIDERS[n].get("family", "")) not in _navd]
@@ -8271,7 +8274,10 @@ ok(all("WRITES" in _mcps.description_for(t) if hasattr(_mcps, "description_for")
 
 # Nothing that spends, publishes or cannot be undone, even with writes on.
 _offered = {f"{t['method']} {t['path']}" for t in _mcpt.TOOLS}
-for _forbidden in ("POST /api/payroll/runs/{rid}/paid",
+for _forbidden in ("POST /api/finance/invoices/{iid}/send",
+                   "POST /api/civics/contributions",
+                   "POST /api/onboarding/departures",
+                   "POST /api/payroll/runs/{rid}/paid",
                    "POST /api/payroll/rates",
                    "POST /api/accounting/journals",
                    "POST /api/treasury/transfer",
@@ -8850,10 +8856,11 @@ ok("not a prediction" in _fc["note"],
 ok(c.get("/api/onboarding", headers=_WCU).status_code == 403,
    "onboarding is the office's")
 _ob = c.get("/api/onboarding", headers=A).json()
-ok(_ob["templates"] and _ob["templates"][0]["steps"],
-   "the built-in list is seeded as an editable template — an empty "
+ok(_ob["templates"] and all(t["steps"] for t in _ob["templates"]),
+   "the built-in lists are seeded as editable templates — an empty "
    "template editor teaches nobody what a template is for")
-ok([s["title"] for s in _ob["templates"][0]["steps"]]
+_joining = next(t for t in _ob["templates"] if t["kind"] == "joining")
+ok([s["title"] for s in _joining["steps"]]
    == [t[0] for t in _hir.ONBOARDING],
    "and it is the list hiring already used, so nothing changed for an "
    "install that never opens this screen")
@@ -8914,6 +8921,284 @@ for _cap in ("finance", "payroll", "onboarding"):
                                     "is sold as")
     ok(_re3.search(rf'\{{ id: "{_cap}",[^}}]*group: "\w', _ops),
        f"and {_cap} has a place in the navigation")
+
+
+
+# ===== invoicing, leaving, and the policy register =====================
+from erp.backend import civics as _civ  # noqa: E402
+
+# --- invoices: a receivable you can send ---
+_r = c.post("/api/finance/invoices", headers=A, json={
+    "bill_to": "Harbour Estates", "bill_email": "ap@harbour.test",
+    "reference": "PO-4471", "terms_days": 30, "lines": [
+        {"what": "Consulting, March", "qty": 12, "unit_cents": 9000,
+         "tax_bps": 2000},
+        {"what": "Materials", "qty": 1, "unit_cents": 25000}]})
+ok(_r.status_code == 200, "an invoice starts as a draft")
+_iid = _r.json()["id"]
+_inv = c.get(f"/api/finance/invoices/{_iid}", headers=A).json()
+ok(_inv["subtotal_cents"] == 133000 and _inv["tax_cents"] == 21600
+   and _inv["total_cents"] == 154600,
+   f"the lines add up and tax is per line ({_inv['total_cents']})")
+ok(_inv["state"] == "draft" and not _inv["number"],
+   "a draft has no number — an abandoned one must not consume one, "
+   "because a gap in an invoice sequence is a question somebody asks")
+ok(c.get("/api/finance/invoices", headers=_WCU).status_code == 403,
+   "invoices are the office's")
+
+_r = c.post(f"/api/finance/invoices/{_iid}/issue", headers=A, json={})
+ok(_r.status_code == 200 and _r.json()["number"].endswith("-0001"),
+   f"issuing numbers it ({_r.json().get('number')})")
+_num = _r.json()["number"]
+ok(_r.json()["journal_id"],
+   "and puts it in the books at ISSUE, not at payment — a business that "
+   "only recognises a claim when it is settled cannot say what it is owed")
+_j = c.get(f"/api/accounting/journals/{_r.json()['journal_id']}",
+           headers=A).json()
+_by = {}
+for _l in _j["lines"]:
+    _by[_l["account"]] = _by.get(_l["account"], 0) + _l["debit_cents"] - _l["credit_cents"]
+ok(_by.get("1200") == 154600 and _by.get("4000") == -133000
+   and _by.get("2100") == -21600,
+   "they owe us the whole of it; we earned the net and hold the tax")
+ok(c.post("/api/finance/invoices", headers=A, json={
+    "id": _iid, "bill_to": "Somebody else"}).status_code == 400,
+   "an issued invoice cannot be edited — somebody has a copy of what it "
+   "said")
+
+_r = c.post(f"/api/finance/invoices/{_iid}/payments", headers=A,
+            json={"amount_cents": 50000, "method": "transfer"})
+ok(_r.status_code == 200 and _r.json()["paid_cents"] == 50000,
+   "part payment is normal and is recorded as what arrived")
+ok(c.get(f"/api/finance/invoices/{_iid}", headers=A).json()["state"]
+   == "part_paid", "which leaves it part paid rather than open or shut")
+ok(c.post(f"/api/finance/invoices/{_iid}/payments", headers=A,
+          json={"amount_cents": 9_999_999}).status_code == 400,
+   "and nobody can pay more than is outstanding")
+
+_fin_owed = c.get("/api/finance", headers=A).json()["receivables"]
+ok(any(x.get("kind") == "invoice" and x["total_cents"] == 104600
+       for x in _fin_owed["rows"]),
+   "an issued invoice is owed to us in the same list as an unpaid order, "
+   "for what is left on it")
+
+_r = c.post(f"/api/finance/invoices/{_iid}/credit", headers=A,
+            json={"reason": "Work cancelled"})
+ok(_r.status_code == 200 and _r.json()["number"].endswith("-CN"),
+   "a correction is a credit note")
+ok(c.get(f"/api/finance/invoices/{_iid}", headers=A).json()["state"] == "void"
+   and c.get(f"/api/finance/invoices/{_iid}", headers=A).json()["number"] == _num,
+   "the original keeps its number and says it was credited, rather than "
+   "changing into something else")
+ok(c.post(f"/api/finance/invoices/{_iid}/credit", headers=A,
+          json={}).status_code == 400, "and is credited once")
+_acc_now = c.get("/api/accounting", headers=A).json()
+ok(_acc_now["trial_balance"]["balanced"],
+   "the books still balance with the invoice and its credit in them")
+_inv_list = c.get("/api/finance/invoices", headers=A).json()
+ok(_inv_list["outstanding_cents"] == 0 and _inv_list["overdue_cents"] == 0
+   and _inv_list["credited_cents"] == 154600,
+   "a credit note is money we owe THEM: counting it as outstanding would "
+   "say the business is owed the very amount it gave back")
+ok(not any(x.get("kind") == "invoice"
+           for x in c.get("/api/finance", headers=A).json()["receivables"]["rows"]),
+   "and a credited invoice leaves the receivables entirely")
+
+_tok = c.get(f"/api/finance/invoices/{_iid}", headers=A).json()["token"]
+_page = c.get(f"/invoice/{_tok}")
+ok(_page.status_code == 200 and "Harbour Estates" in _page.text
+   and "PO-4471" in _page.text,
+   "the customer opens it from a link with no sign-in — a customer made "
+   "to open an account to read a bill telephones instead")
+ok(c.get(f"/api/finance/invoices/{_iid}", headers=A).json()["viewed_at"],
+   "and opening it is recorded, which answers 'we never received it'")
+ok(c.get("/invoice/nonsense").status_code == 404, "a bad token is nothing")
+_pdf = c.get(f"/api/finance/invoices/{_iid}/pdf", headers=A)
+ok(_pdf.status_code == 200 and _pdf.content[:4] == b"%PDF",
+   "and there is a PDF of it to attach to an email")
+
+# --- leaving ---
+_leaver = c.post("/api/login", json={"name": "Leaving Person",
+                                     "role": "employee"}).json()
+_lcon = _db.connect()
+_lcon.execute("UPDATE users SET pin_hash='abc', clock_token='badge1'"
+              " WHERE id=?", (_leaver["id"],))
+_lcon.execute("INSERT INTO scheduled_shifts(user_id,starts,ends,created_at)"
+              " VALUES(?,?,?,?)",
+              (_leaver["id"], _t0.time() + 3 * 86400,
+               _t0.time() + 3 * 86400 + 8 * 3600, _t0.time()))
+_lcon.commit()
+_lcon.close()
+_key = c.post("/api/admin/api-keys", headers=A, json={
+    "name": "their key", "scope": "read", "user_id": _leaver["id"]}).json()
+ok(_key.get("secret"), "they have a live API key before they leave")
+
+_last = _t0.time() + 14 * 86400
+_r = c.post("/api/onboarding/departures", headers=A, json={
+    "user_id": _leaver["id"], "reason": "resigned", "last_day": _last,
+    "rehire": "yes", "note": "Moving abroad"})
+ok(_r.status_code == 200 and _r.json()["journey_id"],
+   "recording a departure opens their last-day list")
+_did = _r.json()["id"]
+ok(c.post("/api/onboarding/departures", headers=A, json={
+    "user_id": _leaver["id"], "reason": "dismissed", "last_day": _last}
+   ).status_code == 400, "and there is only one open departure per person")
+_ob = c.get("/api/onboarding", headers=A).json()
+_dep = next(x for x in _ob["departures"] if x["id"] == _did)
+ok(_dep["access_open"] and _dep["total"] == len(_onb.LEAVING),
+   "access is still open at that point, which is the state the screen "
+   "shouts about")
+ok(c.get("/api/onboarding", headers=A).json()["templates"] and any(
+    t["kind"] == "leaving" for t in _ob["templates"]),
+   "a last-day template is seeded beside the first-fortnight one")
+
+_r = c.post(f"/api/onboarding/departures/{_did}/close-access", headers=A,
+            json={})
+ok(_r.status_code == 200, "closing access is one action, not a tick")
+_did_what = set(_r.json()["did"])
+_ccon = _db.connect()
+_u = _ccon.execute("SELECT * FROM users WHERE id=?", (_leaver["id"],)).fetchone()
+ok(not _u["active"], "the account is deactivated")
+ok(not (_u["pin_hash"] or "") and not (_u["clock_token"] or ""),
+   "the time-clock PIN and the badge are forgotten, so neither opens a "
+   "door tomorrow")
+ok(_u["token"] != _leaver["token"],
+   "their session token is rotated — a deactivated flag alone leaves them "
+   "signed in until something happens to check")
+ok(_ccon.execute("SELECT COUNT(*) AS n FROM api_keys WHERE user_id=? AND"
+                 " revoked_at IS NULL", (_leaver["id"],)).fetchone()["n"] == 0,
+   "every API key bound to them is revoked")
+ok(_ccon.execute("SELECT COUNT(*) AS n FROM scheduled_shifts WHERE user_id=?"
+                 " AND starts>?", (_leaver["id"], _t0.time())
+                 ).fetchone()["n"] == 0,
+   "and shifts nobody has worked yet are dropped")
+ok(_ccon.execute("SELECT COUNT(*) AS n FROM users WHERE id=?",
+                 (_leaver["id"],)).fetchone()["n"] == 1,
+   "nothing is deleted: a business that erases a leaver cannot answer a "
+   "question about last year")
+_ccon.close()
+ok(c.get("/api/whoami", headers={"Authorization": "Bearer " + _leaver["token"]}
+         ).status_code in (401, 403),
+   "and their old token opens nothing")
+ok(c.post(f"/api/onboarding/departures/{_did}/close-access", headers=A,
+          json={}).status_code == 400, "closing twice is refused, with what "
+                                       "the first one did")
+
+# --- civics ---
+ok(c.get("/api/civics", headers=_WCU).status_code == 403,
+   "the policy register is an office screen")
+_country = c.post("/api/civics/jurisdictions", headers=A, json={
+    "name": "United States", "level": "country", "lat": 39.8, "lng": -98.6}
+    ).json()["id"]
+_state = c.post("/api/civics/jurisdictions", headers=A, json={
+    "name": "Illinois", "level": "state", "parent_id": _country,
+    "lat": 40.0, "lng": -89.0}).json()["id"]
+_city = c.post("/api/civics/jurisdictions", headers=A, json={
+    "name": "Springfield", "level": "city", "parent_id": _state,
+    "lat": 39.8, "lng": -89.65, "population": 114394,
+    "boundary": {"type": "Polygon", "coordinates": [
+        [[-89.7, 39.75], [-89.6, 39.75], [-89.6, 39.85], [-89.7, 39.85],
+         [-89.7, 39.75]]]}}).json()["id"]
+ok(c.post("/api/civics/jurisdictions", headers=A, json={
+    "name": "Nowhere", "level": "city", "lat": 999}).status_code == 400,
+   "a latitude that is not on the earth is refused")
+_cv = c.get("/api/civics", headers=A).json()
+ok(len(_cv["map"]["jurisdictions"]) == 3 and _cv["map"]["bounds"],
+   "the map is drawn from the install's own rows, with bounds to fit it in")
+ok(any(isinstance(j["boundary"], dict) for j in _cv["map"]["jurisdictions"]),
+   "a boundary comes back as geometry the page can draw, not as a string")
+ok("places" in _cv["map"],
+   "and the business's own places go on it beside them — 'what are we "
+   "inside, here' is the question that starts every enquiry")
+
+_mid = c.post("/api/civics/measures", headers=A, json={
+    "jurisdiction_id": _state, "ref": "HB 1234",
+    "title": "Minimum wage increase", "status": "in_committee",
+    "position": "oppose", "impact": "high",
+    "why": "About 40k a year across the two shops"}).json()["id"]
+ok(c.post("/api/civics/measures", headers=A, json={
+    "title": "x", "position": "furious"}).status_code == 400,
+   "a position is one of the four, not a mood")
+c.post("/api/civics/measures", headers=A, json={
+    "id": _mid, "jurisdiction_id": _state, "title": "Minimum wage increase",
+    "status": "passed_one", "position": "oppose", "impact": "high"})
+_m = c.get(f"/api/civics/measures/{_mid}", headers=A).json()
+ok(any("in_committee" in e["what"] and "passed_one" in e["what"]
+       for e in _m["events"]),
+   "a stage change writes itself into the history, so the page is not a "
+   "snapshot of the last time somebody looked")
+ok(_m["jurisdiction"] == "Illinois", "and a measure knows where it is")
+
+_r = c.post("/api/civics/elections", headers=A, json={
+    "jurisdiction_id": _state, "name": "State general", "kind": "general",
+    "at": _t0.time() + 60 * 86400,
+    "registration_deadline": _t0.time() + 30 * 86400})
+ok(_r.status_code == 200, "an election goes on the calendar")
+ok(c.post("/api/civics/elections", headers=A, json={
+    "name": "Backwards", "at": _t0.time(),
+    "registration_deadline": _t0.time() + 86400}).status_code == 400,
+   "registration closes before the election, not after it")
+
+ok(c.post("/api/civics/contributions", headers=A, json={
+    "recipient": "Somebody", "amount_cents": 50000}).status_code == 400,
+   "a contribution with nobody recorded as having authorised it is the "
+   "one that becomes a problem later, so it is refused")
+ok(c.post("/api/civics/contributions", headers=A, json={
+    "recipient": "Committee for Main Street", "amount_cents": 50000,
+    "authorised_by": "Boss", "jurisdiction_id": _state}).status_code == 200,
+   "with one, it is recorded")
+_cv = c.get("/api/civics", headers=A).json()
+ok(_cv["given_cents"] == 50000 and _cv["undisclosed"] == 1,
+   "and what has no filing reference yet is counted, because that is the "
+   "number somebody has to work down")
+ok("not advice" in _cv["disclaimer"] and "files" in _cv["disclaimer"],
+   "the screen says plainly that it checks no limit and files nothing — "
+   "software that looked like it had checked would be worse than a "
+   "spreadsheet, which does not look like it has")
+_csv = c.get("/api/civics/contributions.csv", headers=A)
+ok(_csv.status_code == 200 and "authorised by" in _csv.text
+   and "Committee for Main Street" in _csv.text,
+   "the register exports as a file, because a disclosure is attached to a "
+   "form on a website this software has never heard of")
+ok(_cv["counts"]["live_measures"] == 1 and _cv["counts"]["high_impact"] == 1
+   and _cv["counts"]["elections_soon"] == 1,
+   "and the counts at the top are the four questions worth asking")
+ok(c.delete(f"/api/civics/jurisdictions/{_state}", headers=A).status_code == 400,
+   "a jurisdiction with measures under it does not simply vanish")
+
+# The three sources, and what they honestly are.
+_civ_prov = {p["name"]: p for p in c.get("/api/admin/integrations", headers=A
+                                          ).json()["providers"]
+             if p.get("family") == "civics"}
+ok(set(_civ_prov) == {"open_states", "congress_gov", "google_civic"},
+   "three sources, each needing a key of its own")
+ok(all(not p["connected"] for p in _civ_prov.values()),
+   "none connected until somebody connects it")
+_civ_src = Path("src/erp/backend/civics.py").read_text()
+ok("publishes nothing an API can" in _civ_src,
+   "and the file says out loud that below the state line most places "
+   "publish nothing, which is why typing a measure in is a first-class "
+   "path rather than a fallback")
+
+# --- the map is ours, drawn here ---
+_civ_js = _ops
+ok("civProject" in _civ_js and "viewBox" in _civ_js,
+   "the map is an SVG projected in the page")
+# Two ways this check has already been wrong: .lower() lowercased the very
+# name it was splitting on, and a fixed window ran past the function into
+# a CSS class called "tile". Bound it to the function, and look for what
+# would actually load something.
+_civ_map_src = _civ_js.split("function civMap")[1]
+_civ_map_src = _civ_map_src[:_civ_map_src.index("\nfunction ")]
+ok(not any(w in _civ_map_src.lower() for w in
+           ("http://", "https://", "<script", "<img", "{z}/{x}", "cdn")),
+   "the map loads nothing from anywhere: no tiles, no script, no image, so "
+   "it works on a laptop with no internet and sends nothing out")
+ok("<svg" in _civ_map_src and "civProject" in _civ_map_src,
+   "it is an SVG this file draws, from the install's own rows")
+ok("drag.moved" in _civ_js,
+   "a drag that ends on a shape does not also select it, or the map picks "
+   "something new every time somebody moves it")
 
 
 done("core")

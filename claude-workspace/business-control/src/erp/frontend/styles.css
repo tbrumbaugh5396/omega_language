@@ -2132,3 +2132,34 @@ body.lane-on { overflow: hidden; }
   gap: 10px; margin-bottom: 14px; }
 .tile { display: flex; flex-direction: column; gap: 2px; }
 .tile b { font-size: 1.35em; }
+
+/* The policy map. Drawn from the install's own rows: no tiles, no outside
+   service, so it works on a laptop with no internet and sends nothing
+   anywhere. The colours are the app's, not a cartographer's — this is a
+   diagram of what the business is inside, not a map of the world. */
+.civ-wrap { padding: 0; overflow: hidden; }
+.civ-map { display: block; width: 100%; height: 46vh; min-height: 260px;
+  touch-action: none; cursor: grab; background: var(--panel2); }
+.civ-map:active { cursor: grabbing; }
+.civ-bg { fill: var(--panel2); }
+.civ-area { fill: color-mix(in srgb, var(--accent) 12%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+  stroke-width: 2; vector-effect: non-scaling-stroke; cursor: pointer; }
+.civ-area:hover { fill: color-mix(in srgb, var(--accent) 22%, transparent); }
+.civ-area.on { fill: color-mix(in srgb, var(--accent) 30%, transparent);
+  stroke-width: 3; }
+.civ-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5;
+  vector-effect: non-scaling-stroke; cursor: pointer; }
+.civ-dot.off { fill: var(--dim); }
+.civ-dot.on { fill: var(--good); stroke-width: 3; }
+.civ-country { fill: color-mix(in srgb, var(--accent) 55%, var(--text)); }
+.civ-state { fill: color-mix(in srgb, var(--accent) 75%, var(--text)); }
+.civ-district { fill: color-mix(in srgb, var(--warn, #b8860b) 80%, var(--accent)); }
+.civ-place { fill: var(--text); stroke: var(--panel); stroke-width: 1.5;
+  vector-effect: non-scaling-stroke; }
+.civ-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+  padding: 10px 14px; border-top: 1px solid var(--line); font-size: 12px; }
+.civ-key { display: inline-flex; gap: 5px; align-items: center;
+  color: var(--dim); }
+.civ-key i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.civ-key i.civ-place { border-radius: 0; }

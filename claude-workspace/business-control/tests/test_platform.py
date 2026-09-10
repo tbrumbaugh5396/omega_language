@@ -252,8 +252,8 @@ ok('data-studioview="' in _opsjs and '"/api/store/admin/studio"' in _opsjs
 from storefront.backend import pricebook as _pb
 
 _caps_pb = _pb.capabilities()
-ok(len(_caps_pb) == 29 and {c["price"] for c in _caps_pb} == {20, 30, 50},
-   "the price book parses into code — 29 capabilities on three bands, one "
+ok(len(_caps_pb) == 30 and {c["price"] for c in _caps_pb} == {20, 30, 50},
+   "the price book parses into code — 30 capabilities on three bands, one "
    "table read rather than a fourth copy typed out")
 ok(_pb.core_price() == 50
    and [t["price"] for t in _pb.tiers()] == [200, 400, 700]
@@ -296,7 +296,7 @@ ok(_seed.returncode == 0, f"the studio storefront seeds ({_seed.stderr[-200:]})"
 _tn.bust_cache()
 _shop = c.get("/", headers=HA).text
 ok('class="band band-light"' in _shop
-   and _shop.count("class=\"band band-") == 29,
+   and _shop.count("class=\"band band-") == 30,
    "the home page carries the whole capability menu — all 29, banded — "
    "because a buyer who can see the menu and add it up does not have to "
    "ask for a call first")
@@ -363,9 +363,9 @@ ok(_names["Food brand"]["billing"] == "month"
 # --- the configurator: the menu, acted on ------------------------------------
 _pbld = c.get("/api/store/plan-builder", headers=HA).json()
 ok(_pbld["core"] == 50 and len(_pbld["groups"]) == 5
-   and sum(len(g["items"]) for g in _pbld["groups"]) == 29
+   and sum(len(g["items"]) for g in _pbld["groups"]) == 30
    and [v["rate"] for v in _pbld["volume"]] == [0.0, 0.08, 0.15, 0.25],
-   "the configurator is served the book: 29 capabilities in five groups, "
+   "the configurator is served the book: 30 capabilities in five groups, "
    "Core, and the volume ladder — no number the page invented")
 ok([p["name"] for p in _pbld["packs"]]
    == [g["name"] for g in _pbld["groups"]]
@@ -3290,7 +3290,7 @@ _gcon.execute("UPDATE page_sections SET settings=json_set(settings,"
 _gcon.commit()
 
 _fbrd = c.get("/api/store/admin/fleet", headers=AA).json()
-ok(len(_fbrd["cap_catalog"]) == 29 and _fbrd["core_price"] == 50,
+ok(len(_fbrd["cap_catalog"]) == 30 and _fbrd["core_price"] == 50,
    "the board carries the full catalog, so the grant editor lists what "
    "can actually be sold")
 _sellcap = next(x for x in _fbrd["cap_catalog"] if x["id"] == "selling")

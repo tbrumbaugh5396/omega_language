@@ -304,6 +304,27 @@ TOOLS = [
         "method": "GET", "path": "/api/onboarding",
     },
 
+    {
+        "name": "bc_invoices",
+        "summary": "Invoices with their state, what is outstanding and "
+                   "what is overdue. An issued invoice cannot be changed — "
+                   "a correction is a credit note.",
+        "method": "GET", "path": "/api/finance/invoices",
+        "query": {"state": {"type": "string",
+                            "description": "draft, issued, part_paid, paid "
+                                           "or void"}},
+    },
+    {
+        "name": "bc_policy",
+        "summary": "The jurisdictions this business sits inside, the bills "
+                   "and ordinances it is tracking with its own position on "
+                   "each, upcoming elections, and its register of political "
+                   "giving. The register is a disclosure record: nothing "
+                   "in it checks a contribution limit or reads a statute, "
+                   "so never present it as compliance.",
+        "method": "GET", "path": "/api/civics",
+    },
+
     # ---------- writing: additive, reversible, off by default ----------
     {
         "name": "bc_add_ticket",
@@ -433,6 +454,14 @@ EXCLUDED = {
                                          "puts it in the books",
     "POST /api/payroll/rates": "what somebody is paid is not an agent's "
                                "decision",
+    "POST /api/finance/invoices/{iid}/issue": "issues a numbered claim "
+                                              "against somebody",
+    "POST /api/finance/invoices/{iid}/send": "emails a customer a bill",
+    "POST /api/onboarding/departures": "records that somebody is leaving, "
+                                       "and can shut their access",
+    "POST /api/civics/contributions": "a political contribution is a "
+                                      "regulated act somebody has to "
+                                      "authorise by name",
     "DELETE *": "nothing here deletes",
     "POST /api/admin/*": "settings, staff, permissions and keys",
     "/api/store/admin/*": "the shop front's own admin",

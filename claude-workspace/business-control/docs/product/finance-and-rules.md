@@ -1,4 +1,4 @@
-# The seven that were sold and not built
+# The capabilities that were sold before they were built
 
 Accounting, Treasury, Legal, Automation, Finance, Payroll and Onboarding
 were rows in the price book with nothing behind them. A quote could be
@@ -13,6 +13,7 @@ built that a customer could not be delivered. These are them.
 | Finance | Owed & planned (Money) | `finance.py` |
 | Payroll | Payroll (Money) | `payroll.py` |
 | Onboarding | Onboarding (Team) | `onboarding.py` |
+| Civics & policy | Policy & elections (Company) | `civics.py` |
 
 ## Accounting — a ledger, not a report
 
@@ -217,6 +218,105 @@ The suite asserts no table name is declared by two modules. That guard is
 what caught payroll's own attempt to take `pay_rates`, which
 `classroom.py` has owned all along for teaching pay.
 
+## Invoicing
+
+An unpaid order is a receivable; an invoice is a receivable you can
+**send**. That is the half of a business that bills rather than sells: a
+school billing a term, a studio billing a milestone, anyone on terms.
+
+A draft is editable and an issued one is not, because it is somebody
+else's copy now. A correction is a credit note that reverses it — the
+same rule the ledger keeps, for the same reason. The number is assigned
+at issue rather than at draft, so an abandoned draft does not consume
+one: a gap in an invoice sequence is a question somebody asks.
+
+**It posts at issue, not at payment.** That is the opposite of the order
+path and deliberate. An order is recorded when the money arrives; an
+invoice is a claim, and a business that only recognises a claim when it
+is settled cannot tell you what it is owed. Part payment adds a row
+rather than flipping a flag, because an invoice that can only be paid in
+full is one somebody settles in a spreadsheet instead.
+
+The customer opens it from a link with no sign-in, the way every other
+outward link here works, and opening it is recorded — which answers the
+argument that starts "we never received it". There is a PDF to attach to
+an email.
+
+A credit note is money owed the other way and is kept out of the
+outstanding and overdue figures. Counting it would have said the business
+was owed the very amount it had just given back.
+
+## Leaving
+
+The same machinery as onboarding pointed the other way, and one thing
+more. A template has a kind, so a business writes the list for a last day
+as it writes the list for a first one.
+
+**Closing access is an action, not a line to tick.** The whole risk of
+somebody leaving badly is the gap between the decision and the account
+still working, and a line somebody means to tick tomorrow is exactly that
+gap. One button deactivates the account, forgets the PIN and the clock
+badge, rotates the session token so they are signed out everywhere,
+revokes every API key bound to them, and drops shifts nobody has worked
+yet. It is done in one transaction and it says what it did.
+
+Recording a departure and closing access are separate on purpose.
+Somebody resigning with a month's notice keeps working that month;
+somebody dismissed on the spot does not, and the person recording it
+should say which rather than have the software infer it from a reason
+code.
+
+**Nothing is deleted.** The person, their hours, what they were paid and
+what they did stay exactly where they are. A business that erases a
+leaver cannot answer a question about last year, and in most places may
+not. The reason is recorded plainly, dismissal included, without the
+software offering an opinion about it.
+
+## Civics & policy
+
+A business sits inside a stack of jurisdictions at once — a city, a
+county, a state, a congressional district, a country — and any of them
+can change a rule that costs it money. The information exists in a dozen
+places, none of which knows the business is there.
+
+Jurisdictions in a tree, each with a point and optionally a boundary.
+Officials, so "who do we call" has an answer. Measures — bills,
+ordinances, rules, ballot questions — with the business's **own position
+and its own note on what it would do to them**, because tracking
+something without that is a news feed. Elections, because a date is what
+everything hangs off.
+
+**The map is drawn here.** No tiles, no outside service, nothing sent
+anywhere: an SVG projected from the install's own rows, with the
+business's own places plotted beside the jurisdictions. Scroll to zoom
+toward the pointer, drag to move, click to filter everything below. The
+limit is real and worth stating: there is no basemap, so a jurisdiction
+is where somebody said it is. The gain is that the page works on a laptop
+with no internet.
+
+Three sources can fill it in, each needing its own key: Open States for
+US state legislatures, Congress.gov for the federal one, Google Civic for
+who represents an address. None covers everything. Below the state line
+most places publish nothing an API can read, which is why typing a
+measure in by hand is a first-class path rather than a fallback. A
+refresh never overwrites the position or the note — those are the
+business's, not the source's.
+
+### The giving register
+
+Kept apart, and written to be a disclosure record and nothing else. Who
+received it, under which jurisdiction's rules, how much, when, how, **who
+authorised it by name**, and the reference of the filing it appears in.
+A contribution with nobody recorded as having approved it is refused,
+because that is the one that becomes a problem later. It exports as a CSV
+for attaching to a form on a website this software has never heard of.
+
+**It gives no advice, checks no limit, and files nothing.** Political
+contributions by a business are regulated nearly everywhere and the rules
+differ at every level of the stack above. A screen that implied otherwise
+would be worse than a spreadsheet, because a spreadsheet does not look
+like it has checked.
+
 ## What these still stop short of
 
 - **Accounting**: no tax computation, no bank feed.
@@ -225,7 +325,11 @@ what caught payroll's own attempt to take `pay_rates`, which
 - **Payroll**: no tax tables, no filings, and contractors paid per route
   are deliberately out — that is an invoice, and treating it as a payslip
   is how somebody gets misclassified by accident.
-- **Finance**: no invoicing. A receivable here is an unpaid order, not a
-  document you can send.
+- **Invoicing**: no payment link. A customer reads the invoice and pays
+  however they already pay; nothing here takes a card.
+- **Civics**: no statute text, no compliance checking, and no data below
+  the state line except what somebody types. The map has no basemap.
+- **Leaving**: it closes what this install controls. Accounts in other
+  systems are somebody's list item, not something this can revoke.
 
-Every capability in the price book now has something behind it.
+Every capability in the price book has something behind it.

@@ -82,11 +82,12 @@ def _init_core(tid=None):
         from . import listings as _lst, marketplaces as _mkt
         from . import accounting as _acc, automation as _aut
         from . import legal as _lgl, treasury as _tre
+        from . import civics as _civ
         from . import finance as _fin, onboarding as _onb, payroll as _pay
         # onboarding after hiring: it adds columns to hiring's table and
         # seeds a template from hiring's own list.
         for _m in (_ads, _hir, _mkt, _lst, _ink, _acc, _tre, _lgl, _aut,
-                   _fin, _pay, _onb):
+                   _fin, _pay, _onb, _civ):
             _m.init_tables(con)
         con.commit()
         con.close()
@@ -6734,10 +6735,10 @@ from . import presentations  # noqa: E402  (safe: included late)
 app.include_router(presentations.router)
 from . import ads, hiring, intake, listings, marketplaces  # noqa: E402  (safe: included late)
 from . import accounting, automation, legal, treasury  # noqa: E402  (safe: included late)
-from . import finance, onboarding, payroll  # noqa: E402  (safe: included late)
+from . import civics, finance, onboarding, payroll  # noqa: E402  (safe: included late)
 for _fam in (ads, hiring, marketplaces, listings, intake,
              accounting, treasury, legal, automation,
-             finance, payroll, onboarding):
+             finance, payroll, onboarding, civics):
     app.include_router(_fam.router)
 
 

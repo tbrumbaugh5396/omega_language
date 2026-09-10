@@ -741,6 +741,62 @@ PROVIDERS.update({
                 "here.",
     },
 
+    # --- civics: who governs the places this business sits in ---
+    # None of these covers everything, and the gaps are the point. Open
+    # States is US state legislatures. Congress.gov is the US federal
+    # one. Google Civic answers "who represents this address". Below the
+    # state line most of the country publishes nothing an API can read,
+    # which is why typing a measure in by hand is a first-class path on
+    # that screen rather than a fallback.
+    "open_states": {
+        "label": "Open States", "family": "civics",
+        "blurb": "Bills moving through a US state legislature.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "api_key", "label": "API key", "secret": True,
+             "hint": "Register at openstates.org/accounts/signup — the free "
+                     "tier is generous for watching a handful of bills."}],
+        "settings_fields": [
+            {"k": "jurisdiction", "label": "Which legislature",
+             "hint": "A state name, or an OCD id like "
+                     "ocd-jurisdiction/country:us/state:ca/government"}],
+        "events": [], "actions": ["pull_measures"],
+        "does": "Searches one state's bills and brings back what matches, "
+                "with each bill's latest action as a dated entry. Refreshing "
+                "never overwrites your own position on a bill or your note "
+                "about what it would do to you.",
+    },
+    "congress_gov": {
+        "label": "Congress.gov", "family": "civics",
+        "blurb": "Bills before the US Congress.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "api_key", "label": "API key", "secret": True,
+             "hint": "Free from api.congress.gov/sign-up."}],
+        "events": [], "actions": ["pull_measures"],
+        "does": "Reads the most recently updated federal bills and keeps "
+                "the ones matching your search term. Congress.gov has no "
+                "full-text search in its API, so the filter happens here "
+                "and a narrow term works better than a broad one.",
+    },
+    "google_civic": {
+        "label": "Google Civic Information", "family": "civics",
+        "blurb": "Who represents a given address, at every level.",
+        "auth": "api_token",
+        "fields": [
+            {"k": "api_key", "label": "API key", "secret": True,
+             "hint": "A Google Cloud API key with the Civic Information API "
+                     "enabled."}],
+        "settings_fields": [
+            {"k": "address", "label": "Address to look up",
+             "hint": "The business's own, usually. It decides which "
+                     "jurisdictions and officials come back."}],
+        "events": [], "actions": ["pull_representatives"],
+        "does": "Fills in the stack of jurisdictions an address sits in — "
+                "country, state, county, city, congressional district — and "
+                "the people who hold each office, with how to reach them.",
+    },
+
     # --- listings and reviews ---
     "google_business": {
         "label": "Google Business Profile", "family": "listings",
