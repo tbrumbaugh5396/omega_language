@@ -93,6 +93,21 @@ Things to know before touching them:
   state). **Google Civic is not offered**: its
   representatives endpoint was turned down in April 2025. Do not add it
   back from memory.
+- Civics has a time axis: `measure_events.status_after` records the
+  stage each event led to, `status_as_of` replays it, `detail(as_of=)`
+  shows a place as it was, and `timeline()` scopes events as
+  own / inherited (from `ancestors`) / inside (from `descendants`) /
+  world. The slider never redraws the map — a boundary is its boundary
+  now — and the page says so.
+- `ideas.py` is the ideas graph: notes with `[[title]]` links rewritten
+  on every save (`relink`), explicit labelled links kept until removed,
+  unwritten titles kept as dotted nodes and claimed when written
+  (`adopt`). Titles are unique by folded slug. The graph is drawn by
+  `32-ideas.js` itself (a force layout in SVG) — no library.
+- `cameras.py` is the camera wall. The BROWSER fetches every feed; this
+  server proxies nothing, on purpose. RTSP is refused with the `ffmpeg`
+  relay command. hls.js is vendored under `storefront/frontend/vendor/hls/`
+  for HLS outside Safari. Nothing is recorded.
 - **Adding a capability touches six places**: the price book table, the
   parser's count in `pricebook.py`, `CAP_NAMES`, `TAB_CAP` and
   `CAP_LABEL`, the client capability menu, and the sales deck's price

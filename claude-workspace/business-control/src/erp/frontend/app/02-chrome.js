@@ -80,6 +80,8 @@ const TABS = [
     roles: ["admin", "employee"] },
   { id: "field", label: "Field", icon: "pin", group: "Stock & supply",
     roles: ["admin", "employee", "cashier"] },
+  { id: "cameras", label: "Cameras", icon: "video", group: "Stock & supply",
+    roles: ["admin", "employee"] },
 
   // A working day: clock in, see the rota, do the board, log the rest.
   { id: "clock", label: "Time Clock", icon: "clock", group: "Work", roles: "*" },
@@ -94,6 +96,8 @@ const TABS = [
   { id: "scan", label: "Scan", icon: "camera", group: "Work", roles: "*" },
   { id: "expenses", label: "Expenses", icon: "file", group: "Work",
     roles: ["admin", "employee", "teacher", "volunteer", "cashier", "distributor"] },
+  { id: "ideas", label: "Ideas", icon: "link", group: "Work",
+    roles: ["admin", "employee", "teacher", "director", "board", "volunteer"] },
 
   // The classroom, and what is taught in it.
   { id: "learning", label: "Learning", icon: "pen", group: "Teach",
@@ -494,7 +498,7 @@ async function render() {
     treasury: renderTreasury, legal: renderLegal,
     automation: renderAutomations, finance: renderFinance,
     payroll: renderPayroll, onboarding: renderOnboarding,
-    civics: renderCivics,
+    civics: renderCivics, ideas: renderIdeas, cameras: renderCameras,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

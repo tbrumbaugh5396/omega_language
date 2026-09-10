@@ -2226,3 +2226,96 @@ body.lane-on { overflow: hidden; }
   background: var(--panel2); }
 .civ-blank div { max-width: 42ch; }
 .civ-blank b { display: block; margin-bottom: 6px; }
+
+/* Time, on the policy screen. A slider from the earliest thing known to a
+   little past now, and the list of dated things for the selected scope
+   under it. An event after the chosen date is still listed, faded: the
+   slider is a way of looking, not a way of deleting. */
+.civ-time { padding: 14px 16px; }
+.civ-timehead { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  margin-bottom: 8px; }
+.civ-time input[type=range] { width: 100%; accent-color: var(--accent); }
+.civ-timeaxis { display: flex; justify-content: space-between; font-size: 11px;
+  margin: 2px 0 10px; }
+.civ-tllist { list-style: none; margin: 0; padding: 0; max-height: 46vh;
+  overflow-y: auto; }
+.civ-tlday { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--dim); margin: 10px 0 4px; padding-top: 6px;
+  border-top: 1px solid var(--line); }
+.civ-tlev { display: flex; gap: 10px; align-items: flex-start; padding: 5px 6px;
+  border-radius: var(--r-sm); cursor: pointer; font-size: 13.5px; }
+.civ-tlev:hover { background: var(--panel2); }
+.civ-tlev .ic { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 2px;
+  color: var(--dim); }
+.civ-tlev .ic svg { width: 16px; height: 16px; }
+.civ-tlev.inherited { border-left: 3px solid var(--civ-state); }
+.civ-tlev.own { border-left: 3px solid var(--good); }
+.civ-tlev.inside { border-left: 3px solid var(--line); }
+.civ-tlev.future { opacity: .45; }
+.civ-tlev.future:hover { opacity: .8; }
+
+/* Ideas: the graph on the left, the note or the list on the right. */
+.ide-split { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+  gap: 16px; align-items: start; }
+@media (max-width: 900px) { .ide-split { grid-template-columns: 1fr; } }
+.ide-graph { padding: 8px; }
+.ide-graph svg { width: 100%; height: auto; aspect-ratio: 800 / 560; display: block;
+  background: var(--panel2); border-radius: var(--r-sm); touch-action: none;
+  cursor: grab; }
+.ide-legend { font-size: 11.5px; padding: 6px 4px 0; }
+.ide-link { stroke: var(--line); stroke-width: 1.4; }
+.ide-link.explicit { stroke: var(--accent); stroke-width: 1.8; }
+.ide-llabel { font-size: 9px; fill: var(--dim); text-anchor: middle;
+  pointer-events: none; }
+.ide-node { cursor: pointer; }
+.ide-node circle { fill: var(--accent); stroke: var(--panel); stroke-width: 1.5; }
+.ide-node text { font-size: 10.5px; fill: var(--text); text-anchor: middle;
+  pointer-events: none; }
+.ide-node.ghost circle { fill: var(--panel); stroke: var(--dim); stroke-dasharray: 3 2; }
+.ide-node.ghost text { fill: var(--dim); font-style: italic; }
+.ide-node.sel circle { stroke: var(--text); stroke-width: 3; }
+.ide-node.hit circle { stroke: var(--warn); stroke-width: 3; }
+.ide-side { padding: 12px 14px; max-height: 70vh; overflow-y: auto; }
+.ide-list { list-style: none; margin: 0; padding: 0; }
+.ide-list li { padding: 7px 6px; border-radius: var(--r-sm); cursor: pointer;
+  border-bottom: 1px solid var(--line); }
+.ide-list li:hover { background: var(--panel2); }
+.ide-list li.hit { border-left: 3px solid var(--warn); }
+.ide-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle; }
+.ide-notehead { display: flex; justify-content: space-between; gap: 8px;
+  align-items: flex-start; flex-wrap: wrap; margin-bottom: 6px; }
+.ide-notehead b { font-size: 17px; }
+.ide-body { line-height: 1.55; margin: 10px 0; white-space: normal; }
+.ide-wl { color: var(--accent); cursor: pointer; text-decoration: underline;
+  text-decoration-style: dotted; }
+.ide-wl.ghost { color: var(--dim); }
+.ide-links { list-style: none; padding: 0; margin: 4px 0 10px; }
+.ide-links li { padding: 3px 0; }
+.ide-note h4 { margin: 12px 0 2px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--dim); }
+
+/* Cameras: the wall. Tiles keep a 16:9 shape, the caption sits over the
+   bottom edge, a double-clicked tile spans the row. */
+.cam-wall { --cam-cols: 3; }
+.cam-wall:fullscreen { background: #000; padding: 8px; overflow: auto; }
+.cam-wall:fullscreen .cam-site { color: #ddd; background: #000; }
+.cam-site { margin: 14px 0 6px; }
+.cam-grid { display: grid; grid-template-columns: repeat(var(--cam-cols), minmax(0, 1fr));
+  gap: 8px; }
+.cam-tile { position: relative; aspect-ratio: 16 / 9; background: #111;
+  border-radius: var(--r-sm); overflow: hidden; }
+.cam-tile.big { grid-column: 1 / -1; }
+.cam-tile img, .cam-tile video, .cam-tile iframe { width: 100%; height: 100%;
+  object-fit: contain; border: 0; display: block; background: #000; }
+.cam-tile img.dead { opacity: .2; }
+.cam-cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px 10px;
+  background: rgba(0, 0, 0, .55); color: #fff; font-size: 12.5px;
+  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.cam-cap .dim { color: #ccc; background: #1a1a1a; padding: 0 3px; border-radius: 3px; }
+.cam-dead { position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; gap: 6px;
+  padding: 16px; color: #ddd; background: #111; font-size: 13px; }
+.cam-help { padding: 12px 16px; margin-top: 16px; }
+.cam-help pre { white-space: pre-wrap; word-break: break-all; font-size: 12px;
+  background: var(--panel2); padding: 10px; border-radius: var(--r-sm); }

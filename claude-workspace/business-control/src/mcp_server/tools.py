@@ -326,8 +326,55 @@ TOOLS = [
                    "it as compliance.",
         "method": "GET", "path": "/api/civics",
     },
+    {
+        "name": "bc_policy_timeline",
+        "summary": "Everything dated in the policy register for one place "
+                   "and the places that reach it: a state's law applies to "
+                   "the county under it, so it is on the county's timeline "
+                   "marked as inherited; what is inside a place is marked "
+                   "inside. No place means the whole world.",
+        "method": "GET", "path": "/api/civics/timeline",
+        "query": {"jurisdiction_id": {"type": "integer",
+                                      "description": "the place, or omit "
+                                                     "for the world"},
+                  "since": {"type": "number", "description": "unix seconds"},
+                  "until": {"type": "number", "description": "unix seconds"}},
+    },
+    {
+        "name": "bc_ideas",
+        "summary": "The team's notes and the graph they make: which note "
+                   "points at which, and the titles referred to that nobody "
+                   "has written yet. A search says which notes hit.",
+        "method": "GET", "path": "/api/ideas",
+        "query": {"q": {"type": "string",
+                        "description": "a word to find in titles, text or tags"}},
+    },
+    {
+        "name": "bc_idea",
+        "summary": "One note in full, with what it points at and what "
+                   "points at it.",
+        "method": "GET", "path": "/api/ideas/{iid}",
+        "path_params": {"iid": {"type": "integer", "description": "note id"}},
+        "required": ["iid"],
+    },
 
     # ---------- writing: additive, reversible, off by default ----------
+    {
+        "name": "bc_write_idea",
+        "summary": "Write or rewrite a note in the ideas graph. Put "
+                   "another note's title in double brackets in the text to "
+                   "link to it; a title nobody has written becomes a dotted "
+                   "node. Titles are unique because links are by title.",
+        "method": "POST", "path": "/api/ideas", "write": True,
+        "body": {"id": {"type": "integer",
+                        "description": "an existing note to rewrite; omit "
+                                       "for a new one"},
+                 "title": {"type": "string", "description": "unique"},
+                 "body": {"type": "string",
+                          "description": "the text, with [[links]]"},
+                 "tags": {"type": "string", "description": "comma separated"}},
+        "required": ["title"],
+    },
     {
         "name": "bc_add_ticket",
         "summary": "Open a support ticket. Somebody will read it; opening "
@@ -464,6 +511,9 @@ EXCLUDED = {
     "POST /api/civics/contributions": "a political contribution is a "
                                       "regulated act somebody has to "
                                       "authorise by name",
+    "GET /api/cameras": "the camera wall's feed URLs are the inside of "
+                        "somebody's network; an agent has no business "
+                        "reading them, and the pictures are not JSON anyway",
     "DELETE *": "nothing here deletes",
     "POST /api/admin/*": "settings, staff, permissions and keys",
     "/api/store/admin/*": "the shop front's own admin",

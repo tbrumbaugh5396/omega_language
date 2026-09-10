@@ -9413,4 +9413,180 @@ ok(c.delete(f"/api/civics/agreements/{_ag.json()['id']}", headers=A).status_code
    and not c.get(f"/api/civics/jurisdictions/{_us}/detail", headers=A).json()["agreements"],
    "an agreement removed leaves both parties")
 
+# --- time: a slider through the register, and a timeline for a scope ---
+# The point of the timeline is inheritance. A state law applies to the
+# county under it, so the county's timeline carries it — marked as from
+# above — and a city's ordinance shows on the county's timeline as inside.
+_tl = c.get(f"/api/civics/timeline?jurisdiction_id={_city}", headers=A).json()
+ok(_tl["counts"]["inherited"] >= 2 and any(
+    e["scope"] == "inherited" and "Minimum wage" in e["what"] for e in _tl["events"]),
+   "the city's timeline carries the state's bill, marked as reaching it "
+   "from above — Maryland's law applies to the county")
+ok(any(e["kind"] == "election" and e["scope"] == "inherited"
+       for e in _tl["events"]),
+   "and the state's election, which the city votes in")
+_tls = c.get(f"/api/civics/timeline?jurisdiction_id={_state}", headers=A).json()
+ok(any(e["scope"] == "own" and "Minimum wage" in e["what"] for e in _tls["events"]),
+   "the same bill is the state's own on the state's timeline")
+ok(_tls["counts"]["inside"] == 0 or all(
+    e["jurisdiction_id"] != _state for e in _tls["events"] if e["scope"] == "inside"),
+   "and what is inside it is marked inside, never as its own")
+ok(_tl["events"] == sorted(_tl["events"], key=lambda e: e["at"]),
+   "events come in time order")
+_tlw = c.get("/api/civics/timeline", headers=A).json()
+ok(_tlw["counts"]["world"] == len(_tlw["events"]) and len(_tlw["events"]) >= len(_tl["events"]),
+   "with nothing selected the timeline is the whole world")
+ok(all(e["status"] for e in _tlw["events"] if e["kind"] == "measure"),
+   "every measure event carries the stage it led to, which is what a "
+   "slider needs to replay the past")
+ok(c.get("/api/civics/timeline?jurisdiction_id=999999", headers=A).status_code == 404,
+   "a scope that is not there is nothing")
+ok(c.get("/api/civics/timeline", headers=_WCU).status_code == 403,
+   "the timeline is an office screen like the rest")
+# Replaying the past: the bill was in committee, then passed one house.
+# Asked about a date between the two, the panel says in committee; asked
+# about a date before it was introduced, the bill is not there at all.
+_evs = c.get(f"/api/civics/measures/{_mid}", headers=A).json()["events"]
+ok(any(e["status_after"] == "in_committee" and e["what"].startswith("recorded as")
+       for e in _evs),
+   "a typed measure's first event is the stage it was recorded at, so "
+   "there is a past to replay")
+_moved = min(e["at"] for e in _evs if e["status_after"] == "passed_one")
+_intro = min(e["at"] for e in _evs)
+_then = c.get(f"/api/civics/jurisdictions/{_state}/detail?as_of={(_intro + _moved) / 2}",
+              headers=A).json()
+ok(_then["as_of"] and any(
+    m["id"] == _mid and m["status"] == "in_committee" for m in _then["measures"]),
+   "the panel as of a moment before it passed shows it still in committee")
+_nowd = c.get(f"/api/civics/jurisdictions/{_state}/detail", headers=A).json()
+ok(any(m["id"] == _mid and m["status"] == "passed_one" for m in _nowd["measures"])
+   and _nowd["as_of"] is None,
+   "and as of now shows where it is")
+_before = c.get(f"/api/civics/jurisdictions/{_state}/detail?as_of={_intro - 1}",
+                headers=A).json()
+ok(not any(m["id"] == _mid for m in _before["measures"]),
+   "before the register first knew of it, it is not shown")
+_ev2 = c.post(f"/api/civics/measures/{_mid}/events", headers=A, json={
+    "what": "Signed", "at": _t0.time(), "status": "enacted"})
+ok(_ev2.status_code == 200 and c.get(f"/api/civics/measures/{_mid}", headers=A)
+   .json()["status"] == "enacted",
+   "an event can carry the stage it moved the measure to, and the measure follows")
+ok(c.post(f"/api/civics/measures/{_mid}/events", headers=A, json={
+    "what": "x", "status": "wishful"}).status_code == 400,
+   "at one of the known stages")
+ok('id="civ-slider"' in _ops and 'type="range"' in _ops
+   and "function civTimeline" in _ops and "function civSetTime" in _ops,
+   "the screen has the slider and the timeline under the map")
+ok("as_of=" in _ops and "as it was on" in _ops,
+   "and the panel is fetched as of the chosen date, and says so")
+ok(".civ-tlev.future" in _css and ".civ-tlev.inherited" in _css,
+   "events after the chosen date fade rather than vanish, and what "
+   "reaches a place from above is marked")
+
+# --- ideas: notes that link, and the graph they make ---
+ok(c.get("/api/ideas", headers=_WCU).status_code == 403,
+   "ideas are the team's, not a customer's")
+_i1 = c.post("/api/ideas", headers=A, json={
+    "title": "Second shop", "tags": "expansion",
+    "body": "Foot traffic from the [[Farmers market]] and the lease from "
+            "[[Landlord talks]]. See [[farmers MARKET]] again."}).json()
+ok(_i1["ok"] and _i1["id"], "a note is a title and some text")
+_g = c.get("/api/ideas", headers=A).json()
+ok({g["title"] for g in _g["ghosts"]} == {"Farmers market", "Landlord talks"},
+   "what it points at that is not written yet is a dotted node — the "
+   "graph's way of saying what has not been thought through")
+ok(sum(1 for l in _g["links"] if l["from_id"] == _i1["id"]) == 2,
+   "and the same title twice, in any case, is one link")
+_i2 = c.post("/api/ideas", headers=A, json={
+    "title": "farmers market", "body": "Saturday stall. Feeds [[Second shop]]."}).json()
+ok(_i2["claimed"] == 1, "a note written claims the dotted links that pointed at its title")
+_g = c.get("/api/ideas", headers=A).json()
+ok({g["title"] for g in _g["ghosts"]} == {"Landlord talks"}
+   and any(l["from_id"] == _i1["id"] and l["to_id"] == _i2["id"] for l in _g["links"])
+   and any(l["from_id"] == _i2["id"] and l["to_id"] == _i1["id"] for l in _g["links"]),
+   "and the two notes now point at each other")
+ok(c.post("/api/ideas", headers=A, json={"title": "Farmers  Market"}).status_code == 409,
+   "two notes with one title would leave links pointing nowhere certain, so refused")
+ok(c.post("/api/ideas", headers=A, json={"title": "  "}).status_code == 400,
+   "a note needs a title — it is what the links point at")
+_n1 = c.get(f"/api/ideas/{_i1['id']}", headers=A).json()
+ok(len(_n1["links_out"]) == 2 and len(_n1["links_in"]) == 1
+   and _n1["links_in"][0]["from_title"] == "farmers market",
+   "a note knows what it points at and what points at it")
+_lk = c.post(f"/api/ideas/{_i1['id']}/links", headers=A, json={
+    "to_id": _i2["id"], "label": "depends on"})
+ok(_lk.status_code == 200 and any(
+    l["kind"] == "explicit" and l["label"] == "depends on"
+    for l in c.get(f"/api/ideas/{_i1['id']}", headers=A).json()["links_out"]),
+   "an explicit connection carries a word for what it is")
+ok(c.post(f"/api/ideas/{_i1['id']}/links", headers=A, json={
+    "to_id": _i1["id"]}).status_code == 400, "an idea cannot link to itself")
+c.post("/api/ideas", headers=A, json={
+    "id": _i1["id"], "title": "Second shop", "body": "Rewritten with no links."})
+_n1 = c.get(f"/api/ideas/{_i1['id']}", headers=A).json()
+ok([l["kind"] for l in _n1["links_out"]] == ["explicit"],
+   "rewriting the text rewrites the text links and leaves the explicit one")
+ok(c.get("/api/ideas?q=stall", headers=A).json()["hits"] == [_i2["id"]],
+   "a search says which notes hit, and the graph stays whole around them")
+c.delete(f"/api/ideas/{_i2['id']}", headers=A)
+_g = c.get("/api/ideas", headers=A).json()
+ok(any(g["title"] == "farmers market" for g in _g["ghosts"])
+   and any(l["from_id"] == _i1["id"] and l["to_id"] == 0 for l in _g["links"]),
+   "removing a note leaves what pointed at it pointing at a title with "
+   "nothing behind it — that three notes referred to it is worth seeing")
+ok(c.delete(f"/api/ideas/links/{_lk.json()['id']}", headers=A).status_code == 200,
+   "an explicit link can be taken away")
+ok('"ideas"' in _ops and "ideas: renderIdeas" in _ops and "function ideGraph" in _ops
+   and 'id="ide-svg"' in _ops,
+   "the screen is on the rail and draws its own graph")
+ok(".ide-node.ghost" in _css, "and a dotted node is dotted")
+
+# --- cameras: every property on one wall ---
+ok(c.get("/api/cameras", headers=_WCU).status_code == 403,
+   "the wall is staff's")
+ok(c.post("/api/cameras", headers=A, json={
+    "name": "Yard", "kind": "hls", "url": "rtsp://cam/stream"}).status_code == 400,
+   "no browser plays RTSP; the wall says so and gives the relay, rather "
+   "than showing a spinner")
+ok(c.post("/api/cameras", headers=A, json={
+    "name": "Yard", "kind": "hologram", "url": "https://cam/a.m3u8"}).status_code == 400,
+   "a kind is one the page can show")
+ok(c.post("/api/cameras", headers=A, json={
+    "name": "Yard", "kind": "snapshot", "url": "http://cam/a.jpg",
+    "store_id": 999999}).status_code == 404, "a store it is at has to exist")
+_c1 = c.post("/api/cameras", headers=A, json={
+    "name": "Front door", "site": "Main St", "kind": "snapshot",
+    "url": "http://192.168.1.20/snapshot.jpg", "refresh_sec": 2}).json()
+_c2 = c.post("/api/cameras", headers=A, json={
+    "name": "Loading bay", "site": "Warehouse", "kind": "mjpeg",
+    "url": "https://192.168.1.21/video.cgi"}).json()
+_w = c.get("/api/cameras", headers=A).json()
+ok([s["name"] for s in _w["sites"]] == ["Main St", "Warehouse"]
+   and all(len(s["cameras"]) == 1 for s in _w["sites"]),
+   "the wall is grouped by where each camera is")
+ok(next(x for x in _w["cameras"] if x["id"] == _c1["id"])["plain_http"]
+   and not next(x for x in _w["cameras"] if x["id"] == _c2["id"])["plain_http"],
+   "and each feed says whether an https install will be able to show it")
+ok("ffmpeg" in _w["relay"] and ".m3u8" in _w["relay"]
+   and {k["k"] for k in _w["kinds"]} == {"snapshot", "mjpeg", "hls", "iframe"},
+   "the relay command and the four kinds a browser can show are on the page")
+ok(c.get("/api/cameras", headers=A).json()["can_edit"],
+   "the office edits the wall")
+c.delete(f"/api/cameras/{_c1['id']}", headers=A)
+c.delete(f"/api/cameras/{_c2['id']}", headers=A)
+ok(not c.get("/api/cameras", headers=A).json()["cameras"],
+   "a camera removed from the wall is gone from it — the camera itself is untouched")
+ok('"cameras"' in _ops and "cameras: renderCameras" in _ops
+   and "/vendor/hls/hls.min.js" in _ops and 'canPlayType("application/vnd.apple.mpegurl")' in _ops,
+   "the screen is on the rail, plays HLS natively where it can and loads "
+   "the vendored player where it cannot")
+ok(c.get("/vendor/hls/hls.min.js").status_code == 200
+   and Path("src/storefront/frontend/vendor/hls/LICENSE").exists(),
+   "the player is vendored with its licence, not fetched from a CDN")
+ok("requestFullscreen" in _ops and ".cam-wall:fullscreen" in _css,
+   "and the wall goes full screen for the eagle eye")
+ok("proxy" not in Path("src/erp/backend/cameras.py").read_text().lower().split("on purpose")[0]
+   or "does not proxy" in Path("src/erp/backend/cameras.py").read_text(),
+   "this server relays no video, on purpose, and the module says why")
+
 done("core")

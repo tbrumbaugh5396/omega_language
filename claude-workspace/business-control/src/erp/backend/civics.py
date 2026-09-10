@@ -195,6 +195,10 @@ MIGRATIONS = [
     # ("119th Congressional Districts"), so the boundary is fetched from
     # the SAME vintage that placed the address rather than the newest one.
     "ALTER TABLE jurisdictions ADD COLUMN census_layer TEXT DEFAULT ''",
+    # An event that changed a measure's stage records the stage it led to,
+    # so "what was this bill's status on the 3rd of March" is answerable by
+    # replaying its events up to that date rather than guessed from prose.
+    "ALTER TABLE measure_events ADD COLUMN status_after TEXT DEFAULT ''",
 ]
 
 # In order from the top of the stack to the bottom. A bloc is a treaty
@@ -388,8 +392,8 @@ def _upsert_measure(con, *, source: str, ext: str, jid: int, ref: str,
             if not seen:
                 con.execute(
                     "INSERT INTO measure_events(measure_id,at,what,source,"
-                    " created_at) VALUES(?,?,?,?,?)",
-                    (have["id"], last_at, last[:300], source, db.now()))
+                    " status_after,created_at) VALUES(?,?,?,?,?,?)",
+                    (have["id"], last_at, last[:300], source, status, db.now()))
         con.commit()
         return False
     cur = con.execute(
@@ -400,9 +404,9 @@ def _upsert_measure(con, *, source: str, ext: str, jid: int, ref: str,
          introduced, last_at, last[:300], ext, source, db.now(), now))
     if last:
         con.execute(
-            "INSERT INTO measure_events(measure_id,at,what,source,created_at)"
-            " VALUES(?,?,?,?,?)",
-            (cur.lastrowid, last_at, last[:300], source, db.now()))
+            "INSERT INTO measure_events(measure_id,at,what,source,status_after,"
+            " created_at) VALUES(?,?,?,?,?,?)",
+            (cur.lastrowid, last_at, last[:300], source, status, db.now()))
     con.commit()
     return True
 
@@ -838,13 +842,136 @@ def ancestors(con, jid: int) -> list:
     return out
 
 
-def detail(con, jid: int) -> dict:
+def descendants(con, jid: int) -> list:
+    """Every jurisdiction inside this one, however deep. A state's law
+    reaches the county and the county's ordinance reaches the city, so the
+    timeline of a place is the timeline of everything above it and, for
+    a place looked at from above, everything within it."""
+    out, frontier, seen = [], [jid], {jid}
+    while frontier:
+        rows = con.execute(
+            "SELECT id FROM jurisdictions WHERE parent_id IN ("
+            + ",".join("?" * len(frontier)) + ")", frontier).fetchall()
+        frontier = [r["id"] for r in rows if r["id"] not in seen]
+        seen.update(frontier)
+        out.extend(frontier)
+    return out
+
+
+def status_as_of(con, measure, at: float | None) -> str:
+    """The stage a measure was at on a date, replayed from its events.
+    Without a date, the stage it is at now. With a date before it was
+    introduced, nothing — it did not exist."""
+    if at is None:
+        return measure["status"]
+    if measure["introduced_at"] and measure["introduced_at"] > at:
+        return ""
+    rows = con.execute(
+        "SELECT status_after FROM measure_events WHERE measure_id=? AND at<=?"
+        " AND status_after<>'' ORDER BY at DESC, id DESC LIMIT 1",
+        (measure["id"], at)).fetchall()
+    if rows:
+        return rows[0]["status_after"]
+    first = con.execute(
+        "SELECT MIN(at) AS at FROM measure_events WHERE measure_id=?"
+        " AND status_after<>''", (measure["id"],)).fetchone()
+    # Nothing recorded on or before this date. With no introduced date,
+    # the earliest event is the earliest the register knows it existed,
+    # so before that it is not shown. A row with no history at all —
+    # older than the history — is at the stage it is at now.
+    return "" if first and first["at"] else measure["status"]
+
+
+def timeline(con, jid: int = 0, since: float = 0, until: float = 0) -> dict:
+    """Everything dated, for a place and the places that reach it.
+
+    Scope is the whole point. With nothing selected it is the world. With
+    a county selected it is the county's own events, the state's and the
+    country's above it — a state law applies to the county, so it belongs
+    on the county's timeline — and everything inside it, marked as
+    inside. Each event says which of those it is, so a reader can tell
+    "our city did this" from "this reached us from above".
+    """
+    own = {jid} if jid else set()
+    above = {a["id"] for a in ancestors(con, jid)} if jid else set()
+    below = set(descendants(con, jid)) if jid else set()
+    scope_of = (lambda j: "own" if j in own else "inherited" if j in above
+                else "inside" if j in below else "") if jid else (lambda j: "world")
+    ids = own | above | below
+    where = ""
+    args: list = []
+    if jid:
+        where = " AND j IN (" + ",".join("?" * len(ids)) + ")"
+        args = list(ids)
+    ev = []
+    jnames = {r["id"]: (r["name"], r["level"]) for r in con.execute(
+        "SELECT id, name, level FROM jurisdictions").fetchall()}
+
+    def add(at, kind, what, j, ref_kind, ref_id, detail_="", status=""):
+        if not at or (since and at < since) or (until and at > until):
+            return
+        sc = scope_of(j)
+        if not sc:
+            return
+        nm, lv = jnames.get(j, ("", ""))
+        ev.append({"at": at, "kind": kind, "what": what, "jurisdiction_id": j,
+                   "jurisdiction": nm, "level": lv, "scope": sc,
+                   "ref_kind": ref_kind, "ref_id": ref_id, "detail": detail_,
+                   "status": status})
+
+    for m in con.execute("SELECT * FROM measures").fetchall():
+        evs = con.execute("SELECT * FROM measure_events WHERE measure_id=?",
+                          (m["id"],)).fetchall()
+        if m["introduced_at"] and not any(e["at"] == m["introduced_at"] for e in evs):
+            add(m["introduced_at"], "measure", f"{m['ref']} {m['title']}".strip(),
+                m["jurisdiction_id"], "measure", m["id"], "introduced", "introduced")
+        for e in evs:
+            add(e["at"], "measure", f"{m['ref']} {m['title']}".strip(),
+                m["jurisdiction_id"], "measure", m["id"], e["what"],
+                e["status_after"])
+    for e in con.execute("SELECT * FROM elections").fetchall():
+        add(e["at"], "election", e["name"], e["jurisdiction_id"], "election",
+            e["id"], e["kind"])
+    for a in con.execute("SELECT * FROM agreements").fetchall():
+        parties = [r["jurisdiction_id"] for r in con.execute(
+            "SELECT jurisdiction_id FROM agreement_parties WHERE agreement_id=?",
+            (a["id"],)).fetchall()]
+        for pj in parties:
+            add(a["signed_at"], "agreement", a["name"], pj, "agreement", a["id"], "signed")
+            add(a["in_force_at"], "agreement", a["name"], pj, "agreement", a["id"], "in force")
+            add(a["ends_at"], "agreement", a["name"], pj, "agreement", a["id"], "ended")
+    for o in con.execute("SELECT * FROM officials").fetchall():
+        add(o["term_start"], "official", o["name"], o["jurisdiction_id"], "official",
+            o["id"], f"took office: {o['office']}")
+        add(o["term_end"], "official", o["name"], o["jurisdiction_id"], "official",
+            o["id"], f"term ends: {o['office']}")
+    for g in con.execute("SELECT * FROM contributions").fetchall():
+        add(g["at"], "giving", g["recipient"], g["jurisdiction_id"], "contribution",
+            g["id"], f"{g['amount_cents'] / 100:,.2f} given")
+    ev.sort(key=lambda x: x["at"])
+    # Each event is one row here but a jurisdiction can appear under
+    # several agreements; that is intended — a treaty between three
+    # countries is an event in each of their histories.
+    span = {"min": ev[0]["at"] if ev else 0, "max": ev[-1]["at"] if ev else 0}
+    return {"events": ev, "span": span, "scope": jid,
+            "counts": {k: sum(1 for e in ev if e["scope"] == k)
+                       for k in ("own", "inherited", "inside", "world")}}
+
+
+def detail(con, jid: int, as_of: float | None = None) -> dict:
     """Everything the register knows about one place, for the panel that
     opens when it is clicked. The whole point of the map: a country is a
-    door to its treaties, a city to its ordinances, an HOA to its rules."""
+    door to its treaties, a city to its ordinances, an HOA to its rules.
+
+    With `as_of`, the place as it was on that date: the officials whose
+    terms covered it, the agreements in force then, each measure at the
+    stage it had reached, elections still ahead of it. What the register
+    cannot do is redraw the map — a county's boundary is its boundary
+    now, and a jurisdiction that did not yet exist is still drawn."""
     j = con.execute("SELECT * FROM jurisdictions WHERE id=?", (jid,)).fetchone()
     if j is None:
         raise HTTPException(404, "no such jurisdiction")
+    t = as_of
     kids = [dict(r) for r in con.execute(
         "SELECT id, name, level, watching FROM jurisdictions WHERE parent_id=?"
         " ORDER BY level, name", (jid,)).fetchall()]
@@ -858,20 +985,46 @@ def detail(con, jid: int) -> dict:
             "SELECT j.id, j.name, j.level, p.role FROM agreement_parties p"
             " JOIN jurisdictions j ON j.id=p.jurisdiction_id"
             " WHERE p.agreement_id=? ORDER BY j.name", (a["id"],)).fetchall()]
-    return {
-        **dict(j), "level_label": LEVELS.get(j["level"], j["level"]),
-        "ancestors": ancestors(con, jid), "children": kids,
-        "agreements": agreements,
-        "officials": [dict(r) for r in con.execute(
+    if t is not None:
+        agreements = [a for a in agreements
+                      if (not a["signed_at"] or a["signed_at"] <= t)
+                      and (not a["ends_at"] or a["ends_at"] > t)]
+        for a in agreements:
+            a["status_then"] = ("in force" if a["in_force_at"] and a["in_force_at"] <= t
+                                else "signed" if a["signed_at"] else a["status"])
+    if t is None:
+        officials = [dict(r) for r in con.execute(
             "SELECT * FROM officials WHERE jurisdiction_id=? AND incumbent=1"
-            " ORDER BY office, name", (jid,)).fetchall()],
-        "measures": [shape_measure(con, r) for r in con.execute(
+            " ORDER BY office, name", (jid,)).fetchall()]
+    else:
+        officials = [dict(r) for r in con.execute(
+            "SELECT * FROM officials WHERE jurisdiction_id=?"
+            " AND (term_start=0 OR term_start<=?)"
+            " AND (term_end=0 OR term_end>?)"
+            " ORDER BY office, name", (jid, t, t)).fetchall()]
+    measures = []
+    for r in con.execute(
             "SELECT * FROM measures WHERE jurisdiction_id=?"
             " ORDER BY (status NOT IN ('enacted','failed','vetoed','withdrawn'))"
-            " DESC, last_action_at DESC LIMIT 50", (jid,)).fetchall()],
+            " DESC, last_action_at DESC LIMIT 50", (jid,)).fetchall():
+        st = status_as_of(con, r, t)
+        if t is not None and not st:
+            continue
+        m = shape_measure(con, r)
+        m["status"] = st
+        m["closed"] = st in ("enacted", "failed", "vetoed", "withdrawn")
+        measures.append(m)
+    now_ = t if t is not None else time.time()
+    return {
+        **dict(j), "level_label": LEVELS.get(j["level"], j["level"]),
+        "as_of": t,
+        "ancestors": ancestors(con, jid), "children": kids,
+        "agreements": agreements,
+        "officials": officials,
+        "measures": measures,
         "elections": [dict(r) for r in con.execute(
             "SELECT * FROM elections WHERE jurisdiction_id=? AND at>?"
-            " ORDER BY at LIMIT 20", (jid, time.time() - 30 * 86400)).fetchall()],
+            " ORDER BY at LIMIT 20", (jid, now_ - 30 * 86400)).fetchall()],
         "given_cents": con.execute(
             "SELECT COALESCE(SUM(amount_cents),0) AS c FROM contributions"
             " WHERE jurisdiction_id=?", (jid,)).fetchone()["c"],
@@ -1067,10 +1220,10 @@ def measure_save(body: MeasureBody, user=Depends(current_user),
             " why=?, owner_id=?, updated_at=? WHERE id=?", args + (body.id,))
         if old["status"] != body.status:
             con.execute(
-                "INSERT INTO measure_events(measure_id,at,what,created_at)"
-                " VALUES(?,?,?,?)",
+                "INSERT INTO measure_events(measure_id,at,what,status_after,"
+                " created_at) VALUES(?,?,?,?,?)",
                 (body.id, now, f"{old['status']} → {body.status}, "
-                 f"recorded by {user['name']}", db.now()))
+                 f"recorded by {user['name']}", body.status, db.now()))
         con.commit()
         return {"ok": True, "id": body.id}
     cur = con.execute(
@@ -1079,6 +1232,14 @@ def measure_save(body: MeasureBody, user=Depends(current_user),
         " external_id,source,created_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'typed',?)",
         args + (f"typed:{int(now * 1000)}", db.now()))
+    # The first event is the stage it was recorded at, dated when it was
+    # introduced if that is known. A slider replays the past from events,
+    # and a measure with no first event has no past to replay.
+    con.execute(
+        "INSERT INTO measure_events(measure_id,at,what,status_after,created_at)"
+        " VALUES(?,?,?,?,?)",
+        (cur.lastrowid, body.introduced_at or now,
+         f"recorded as {body.status} by {user['name']}", body.status, db.now()))
     con.commit()
     return {"ok": True, "id": cur.lastrowid}
 
@@ -1098,6 +1259,7 @@ def measure_detail(mid: int, user=Depends(current_user), con=Depends(get_con)):
 class EventBody(BaseModel):
     what: str
     at: float = 0
+    status: str = ""          # the stage this event moved it to, if any
 
 
 @router.post("/api/civics/measures/{mid}/events")
@@ -1107,12 +1269,17 @@ def measure_event(mid: int, body: EventBody, user=Depends(current_user),
     if not body.what.strip():
         raise HTTPException(400, "say what happened")
     at = body.at or time.time()
+    if body.status and body.status not in STATUSES:
+        raise HTTPException(400, f"status is one of {STATUSES}")
     con.execute(
-        "INSERT INTO measure_events(measure_id,at,what,created_at)"
-        " VALUES(?,?,?,?)", (mid, at, body.what.strip()[:300], db.now()))
+        "INSERT INTO measure_events(measure_id,at,what,status_after,created_at)"
+        " VALUES(?,?,?,?,?)",
+        (mid, at, body.what.strip()[:300], body.status, db.now()))
     con.execute("UPDATE measures SET last_action=?, last_action_at=?,"
                 " updated_at=? WHERE id=?",
                 (body.what.strip()[:300], at, time.time(), mid))
+    if body.status:
+        con.execute("UPDATE measures SET status=? WHERE id=?", (body.status, mid))
     con.commit()
     return {"ok": True}
 
@@ -1360,10 +1527,24 @@ def civics_representatives(body: RepsBody, user=Depends(current_user),
 
 
 @router.get("/api/civics/jurisdictions/{jid}/detail")
-def civics_detail(jid: int, user=Depends(current_user), con=Depends(get_con)):
+def civics_detail(jid: int, as_of: float = 0, user=Depends(current_user),
+                  con=Depends(get_con)):
     if not _may_see(user):
         raise HTTPException(403, "an office screen")
-    return detail(con, jid)
+    return detail(con, jid, as_of or None)
+
+
+@router.get("/api/civics/timeline")
+def civics_timeline(jurisdiction_id: int = 0, since: float = 0,
+                    until: float = 0, user=Depends(current_user),
+                    con=Depends(get_con)):
+    if not _may_see(user):
+        raise HTTPException(403, "an office screen")
+    if jurisdiction_id and con.execute(
+            "SELECT 1 FROM jurisdictions WHERE id=?",
+            (jurisdiction_id,)).fetchone() is None:
+        raise HTTPException(404, "no such jurisdiction")
+    return timeline(con, jurisdiction_id, since, until)
 
 
 class WatchBody(BaseModel):

@@ -48,16 +48,18 @@ once.
 
 ## What it can do
 
-Twenty-eight read tools and six write tools, chosen by hand from the
+Forty-one read tools and seven write tools, chosen by hand from the
 install's several hundred routes and listed in `src/mcp_server/tools.py`.
 Reading covers the catalogue, orders, customers, stock, the numbers, the
 classroom, students, hours and the rota, expenses and the tax summary, the
-ad ledger, hiring, listings and reviews, tickets, the pipeline, suppliers.
+ad ledger, hiring, listings and reviews, tickets, the pipeline, suppliers,
+the books, the bank, the legal diary, invoices, payroll, the policy
+register and its timeline for a place, and the team's ideas graph.
 
 Writing is off unless you turn it on, and then only for things that are
 additive and reversible by somebody who did not expect them: a note on a
 student, a ticket, a pipeline note, a pending expense, an applicant's
-stage, a typed ad-spend row.
+stage, a typed ad-spend row, a note in the ideas graph.
 
 ## What it deliberately cannot do
 
@@ -104,5 +106,5 @@ becomes visible rather than mysterious.
 The catalogue is checked against the install's own OpenAPI document by
 the test suite, so a tool cannot point at a route that does not exist or
 send a field a route would silently drop. What is not checked is
-judgement: whether these are the right thirty-four verbs is a question
+judgement: whether these are the right forty-eight verbs is a question
 answered by using it. Add to `TOOLS` and the guard picks the new entry up.

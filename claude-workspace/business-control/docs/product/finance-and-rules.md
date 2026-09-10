@@ -334,6 +334,31 @@ is why typing a measure in by hand is a first-class path rather than a
 fallback. An HOA's board is entered as officials, its rules as measures
 of kind *rule*, its annual meeting as an election.
 
+### Time, and the timeline of a place
+
+Under the map there is a slider from the earliest thing the register
+knows to a little past now, and a list of everything dated for whatever
+the map has selected. Drag the slider back and the panel shows the place
+**as it was on that date**: the officials whose terms covered it, the
+agreements in force then, each measure at the stage it had reached —
+replayed from its events, which record the stage each one led to — and
+the elections that were still ahead. Events after the chosen date fade
+rather than vanish, because the slider is a way of looking, not a way of
+deleting. A "back to now" button appears whenever the page is not at now.
+
+**Scope is the point of the timeline.** A state law applies to the county
+under it, so it belongs on the county's timeline, marked *applies from
+above*. A city's ordinance appears on the county's timeline marked
+*inside*. The county's own election is marked *here*. With nothing
+selected the timeline is the whole world. Each line says which of those
+it is, so a reader can tell "our city did this" from "this reached us
+from the state". An agreement between three countries is an event in
+each of their histories, once each.
+
+What the slider cannot do is redraw the map. A county's boundary is its
+boundary now, and a place that did not yet exist is still drawn. The page
+says that rather than pretending otherwise.
+
 ### The giving register
 
 Kept apart, and written to be a disclosure record and nothing else. Who
@@ -348,6 +373,69 @@ contributions by a business are regulated nearly everywhere and the rules
 differ at every level of the stack above. A screen that implied otherwise
 would be worse than a spreadsheet, because a spreadsheet does not look
 like it has checked.
+
+## Ideas — notes that link, and the graph they make
+
+A business accumulates thinking that has no table to live in: why the
+second shop is where it is, what the campaign that flopped taught, the
+three suppliers somebody keeps meaning to compare. It ends up in a
+document nobody reopens. This is the other shape for it: short notes,
+and a graph of what points at what — because the useful question about
+a note is rarely "what does it say" and usually "what does it touch".
+
+**A link is text.** Write `[[Second shop]]` inside a note and the link
+exists; nothing is registered. A title that is linked to but not yet
+written is a **dotted node**, which is the graph's way of saying what has
+not been thought through — click it and the note opens ready to write,
+and writing it claims every link that was pointing at its title. Titles
+are unique, because links are by title and two of them would point
+nowhere certain. Beside the text links, an **explicit connection** with a
+label — *depends on*, *contradicts*, *came from* — for the relation the
+prose does not make on its own.
+
+Removing a note leaves what pointed at it pointing at a title with
+nothing behind it. That three notes referred to it is worth seeing, so
+the graph keeps the dotted node rather than the links vanishing.
+
+The graph is drawn by the page itself — a small force layout in SVG,
+drag to move, click to open, scroll to zoom — and positions survive a
+save so the picture does not reshuffle every time somebody writes a
+line. Search highlights the notes that hit and leaves the graph whole
+around them. It is on the rail under Work, part of the core, and open to
+the whole team.
+
+## Cameras — every property on one wall
+
+A business with three sites has three camera apps, three logins and no
+way to see all of them at once. This is one wall: each feed a tile,
+grouped by where it is, one to six across, full screen for the eagle
+eye, a tile double-clicked to span the row.
+
+What a browser can and cannot show, stated rather than discovered:
+
+- **Snapshot** — a still image the camera re-serves, refreshed on a timer.
+  Works with almost anything.
+- **MJPEG** — a motion-JPEG stream. Most IP cameras have one.
+- **HLS** — an `.m3u8` playlist. Native in Safari; elsewhere a vendored
+  player (hls.js, Apache-2.0) is loaded when the wall has one.
+- **A page** — the camera's own web page, framed.
+- **RTSP** — what most cameras speak, and what no browser can play. The
+  wall refuses an `rtsp://` URL and shows the `ffmpeg` command that turns
+  it into HLS on a machine that can reach the camera. A feature that
+  pretended to play RTSP would be a spinner.
+
+**The browser fetches the feed, not this server.** A camera has to be
+reachable from wherever the wall is being looked at: the same network, a
+VPN, a port forward, or the vendor's cloud URL. Each tile says when it
+gets no picture. This install relays no video, on purpose — a server that
+fetches any URL a form is given can be pointed at anything on its own
+network. An install served over HTTPS cannot show a plain-HTTP feed, and
+each such tile says so instead of going black.
+
+Nothing is recorded here. A recording is the camera's job, or the
+relay's, and a page that appeared to keep footage while keeping none
+would be worse than one that says so. On the rail under Stock & supply,
+part of the core; the office adds cameras, staff can look.
 
 ## What these still stop short of
 
@@ -365,6 +453,11 @@ like it has checked.
   typed place has no Census outline and takes a pasted one. Treaties and
   blocs are typed, because no free source of them is trustworthy enough
   to seed as fact.
+- **Time**: the slider replays statuses, terms and agreements; it does
+  not redraw boundaries or know when a place was created.
+- **Ideas**: one graph per install, no attachments, no history of a note.
+- **Cameras**: no recording, no motion alerts, no relay of its own; RTSP
+  needs `ffmpeg` on a box that can reach the camera.
 - **Leaving**: it closes what this install controls. Accounts in other
   systems are somebody's list item, not something this can revoke.
 

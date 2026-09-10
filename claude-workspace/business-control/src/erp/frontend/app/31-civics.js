@@ -19,6 +19,8 @@ let CIV_SEL = 0;          // the jurisdiction the panel is showing
 let CIV_MAP = null;       // the Leaflet map, kept across renders
 let CIV_LAYERS = {};      // what is drawn on it, so it can be redrawn
 let CIV_WORLD = null;     // the bundled countries, loaded once
+let CIV_ASOF = 0;         // 0 = now; otherwise the date the page is looked at as of
+let CIV_TL = null;        // the timeline for the current scope
 
 const CIV_LEVEL_ZOOM = { bloc: 2, country: 4, state: 6, county: 8,
   district: 8, city: 11, school: 10, ward: 13, hoa: 15, other: 9 };
@@ -195,13 +197,14 @@ async function civPanel(d, jid) {
     return;
   }
   let x;
-  try { x = await api(`/api/civics/jurisdictions/${jid}/detail`); }
+  try { x = await api(`/api/civics/jurisdictions/${jid}/detail${CIV_ASOF ? "?as_of=" + CIV_ASOF : ""}`); }
   catch (e) { panel.innerHTML = `<p class="low">${esc(e.message)}</p>`; return; }
   const posPill = { support: "ok", oppose: "bad", watch: "", neutral: "" };
   const crumbs = x.ancestors.map((a) =>
     `<button data-civgo="${a.id}">${esc(a.name)}</button>`).join(" › ");
   panel.innerHTML = `
     ${crumbs ? `<div class="crumbs">${crumbs} ›</div>` : ""}
+    ${x.as_of ? `<div class="pill warn">as it was on ${fmtDate(x.as_of)}</div>` : ""}
     <b>${esc(x.name)}</b> <span class="dim">${esc(x.level_label)}${
       x.population ? " · " + Number(x.population).toLocaleString() + " people" : ""}${
       x.watching ? "" : " · not watching"}</span>
@@ -396,6 +399,18 @@ async function renderCivics() {
         ${hasAny ? '<button class="btn alt sm" id="civ-fit">Fit</button>' : ""}
       </div>
     </div>
+    <div class="card civ-time">
+      <div class="civ-timehead">
+        <b id="civ-tlhead">${CIV_ASOF ? "As of " + fmtDate(CIV_ASOF) : "Now"}</b>
+        <span class="dim" id="civ-tlscope"></span>
+        <button class="btn alt sm" id="civ-now" ${CIV_ASOF ? "" : "hidden"}>Back to now</button>
+      </div>
+      <input type="range" id="civ-slider" min="0" max="1000" value="1000"
+        aria-label="Move backwards and forwards in time">
+      <div class="civ-timeaxis"><span id="civ-tlmin" class="dim"></span>
+        <span id="civ-tlmax" class="dim"></span></div>
+      <div id="civ-tl"></div>
+    </div>
     <h3>What is moving${sel ? " in " + esc(sel.name) : ""}</h3>
     ${measures.length ? `<div class="card"><div class="tablewrap"><table>
       <thead><tr><th>measure</th><th>where</th><th>stage</th><th>we say</th>
@@ -483,7 +498,9 @@ async function renderCivics() {
   if (CIV_MAP) {
     if (CIV_SEL) civSelect(d, CIV_SEL); else { civFit(d); civPanel(d, null); }
   }
+  civTimeline(d);
   if ($("#civ-all")) $("#civ-all").onclick = () => { CIV_SEL = 0; renderCivics(); };
+  $("#civ-now").onclick = () => civSetTime(d, 0);
   if ($("#civ-fit")) $("#civ-fit").onclick = () => civFit(d);
   if ($("#civ-place")) $("#civ-place").onclick = () => civPlaceForm(d, 0);
   if ($("#civ-agree")) $("#civ-agree").onclick = () => civAgreementForm(d, null, 0);
@@ -691,4 +708,100 @@ async function renderCivics() {
         });
       });
   }
+}
+
+
+/* The timeline for whatever the map has selected, and a slider through it.
+   Scope is the point: with a county selected it shows the county's own
+   events, the state's and the country's above it — a state law applies
+   to the county, so it belongs here — and everything inside it, marked.
+   The slider sets the date the whole page is looked at as of: the panel
+   shows a place as it was, and events after the date fade. The map does
+   not redraw for the date; a county's outline is its outline now, and
+   the screen says so rather than pretending otherwise. */
+async function civTimeline(d) {
+  const host = $("#civ-tl");
+  const slider = $("#civ-slider");
+  if (!host || !slider) return;
+  let tl;
+  try {
+    tl = await api(`/api/civics/timeline${CIV_SEL ? "?jurisdiction_id=" + CIV_SEL : ""}`);
+  } catch (e) { host.innerHTML = `<p class="low">${esc(e.message)}</p>`; return; }
+  CIV_TL = tl;
+  const sel = d.jurisdictions.find((j) => j.id === CIV_SEL);
+  const c = tl.counts;
+  $("#civ-tlscope").textContent = sel
+    ? `${esc(sel.name)}: ${c.own} of its own, ${c.inherited} from above, ${c.inside} inside it`
+    : `the whole world: ${tl.events.length} dated things`;
+  const now = Date.now() / 1000;
+  // The axis runs from the earliest thing known to a little past now, so
+  // the right-hand end is always "now" and the future stays reachable.
+  const lo = tl.span.min ? Math.min(tl.span.min, now - 365 * 86400) : now - 365 * 86400;
+  const hi = Math.max(tl.span.max || 0, now) + 30 * 86400;
+  $("#civ-tlmin").textContent = fmtDate(lo);
+  $("#civ-tlmax").textContent = fmtDate(hi);
+  const toT = (v) => lo + (hi - lo) * (v / 1000);
+  const toV = (t) => Math.round((t - lo) / (hi - lo) * 1000);
+  slider.value = CIV_ASOF ? toV(CIV_ASOF) : toV(now);
+  let pending = null;
+  slider.oninput = () => {
+    const t = toT(+slider.value);
+    const atNow = Math.abs(t - now) < 3 * 86400;
+    $("#civ-tlhead").textContent = atNow ? "Now" : "As of " + fmtDate(t);
+    $("#civ-now").hidden = atNow;
+    civDrawTimeline(tl, t, d);
+    clearTimeout(pending);
+    pending = setTimeout(() => civSetTime(d, atNow ? 0 : t, true), 350);
+  };
+  slider._toV = toV;
+  civDrawTimeline(tl, CIV_ASOF || now, d);
+}
+
+/* The date the page is looked at as of. Only the panel is refetched —
+   the map stays where it is, because redrawing it for a date it cannot
+   honour would be motion without meaning. */
+function civSetTime(d, t, fromSlider = false) {
+  CIV_ASOF = t;
+  const slider = $("#civ-slider");
+  if (slider && !fromSlider && slider._toV) {
+    slider.value = slider._toV(t || Date.now() / 1000);
+    $("#civ-tlhead").textContent = t ? "As of " + fmtDate(t) : "Now";
+    $("#civ-now").hidden = !t;
+    if (CIV_TL) civDrawTimeline(CIV_TL, t || Date.now() / 1000, d);
+  }
+  if (CIV_SEL) civPanel(d, CIV_SEL);
+}
+
+function civDrawTimeline(tl, asOf, d) {
+  const host = $("#civ-tl");
+  if (!host) return;
+  if (!tl.events.length) {
+    host.innerHTML = `<p class="dim">Nothing dated yet${CIV_SEL ? " for this place or the places around it" : ""}.
+      Measures, elections, agreements, officials' terms and giving all land here as they are recorded.</p>`;
+    return;
+  }
+  const scopeLabel = { own: "here", inherited: "applies from above", inside: "inside", world: "" };
+  const kindIcon = { measure: "pen", election: "calendar", agreement: "handshake",
+    official: "user", giving: "card" };
+  let lastDay = "";
+  host.innerHTML = `<ul class="civ-tllist">${tl.events.map((e) => {
+    const day = fmtDate(e.at);
+    const head = day !== lastDay ? `<li class="civ-tlday">${esc(day)}</li>` : "";
+    lastDay = day;
+    return head + `<li class="civ-tlev ${e.scope}${e.at > asOf ? " future" : ""}"
+        data-civtl="${e.jurisdiction_id}">
+      <span class="ic">${opsIcon(kindIcon[e.kind] || "pin")}</span>
+      <span><b>${esc(e.what)}</b>${e.detail ? ` <span class="dim">— ${esc(e.detail)}</span>` : ""}
+        <br><span class="dim">${esc(e.jurisdiction)}${e.level ? " · " + esc(e.level) : ""}${
+          scopeLabel[e.scope] ? " · " + scopeLabel[e.scope] : ""}</span></span>
+    </li>`;
+  }).join("")}</ul>`;
+  host.querySelectorAll("[data-civtl]").forEach((li) => li.onclick = () => {
+    const id = +li.dataset.civtl;
+    if (id && id !== CIV_SEL) civSelect(d, id);
+  });
+  // Keep the "now" line in view when the slider has moved a long way.
+  const first = host.querySelector(".civ-tlev.future");
+  if (first && Math.abs(asOf - Date.now() / 1000) > 3 * 86400)
+    first.scrollIntoView({ block: "center" });
 }
