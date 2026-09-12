@@ -17,6 +17,7 @@ async function renderPresentations() {
           deck brought in. Each has a link anyone can open; attach one to a class
           and it is on the course page and the stage.</p></div>
       <div class="top-actions">
+        <button class="btn alt" id="pr-embed" title="Prezi, Google Slides, Canva: paste the share link">Embed a link</button>
         <button class="btn alt" id="pr-upload">Upload a file</button>
         <button class="btn alt" id="pr-record">Record</button>
         <button class="btn" id="pr-new">${opsIcon("pen", "btn-ic")} New deck</button>
@@ -27,6 +28,7 @@ async function renderPresentations() {
       <tbody>${d.presentations.map((p) => `<tr class="${p.published ? "" : "dim"}">
         <td><b>${esc(p.title)}</b>${p.blurb ? `<div class="dim">${esc(p.blurb).slice(0, 90)}</div>` : ""}
           <div class="dim">${p.kind === "deck" ? `${p.slides.length} slide${p.slides.length === 1 ? "" : "s"}`
+            : p.kind === "embed" ? `lives on ${esc(p.embed_source)}`
             : p.material ? esc(p.material.original || p.material.kind) : "nothing uploaded yet"}</div></td>
         <td>${kindPill(p.kind)}${p.published ? "" : ' <span class="pill warn">hidden</span>'}</td>
         <td class="dim">${esc(p.course || "—")}</td>
@@ -38,12 +40,23 @@ async function renderPresentations() {
           ${p.kind === "deck" ? `<button class="btn alt sm" data-predit="${p.id}">Edit</button>
             <a class="btn alt sm" href="/api/presentations/${p.id}/export.pdf?notes=1" download title="slides, then the speaker notes">PDF</a>
             <a class="btn alt sm" href="/api/presentations/${p.id}/export.pptx" download>PowerPoint</a>` : ""}
-          ${p.kind !== "deck" ? `<label class="btn alt sm">Replace file<input type="file" hidden data-prfile="${p.id}"></label>` : ""}
+          ${p.kind === "recording" || p.kind === "file" ? `<label class="btn alt sm">Replace file<input type="file" hidden data-prfile="${p.id}"></label>` : ""}
           <button class="btn alt sm" data-prattach="${p.id}" title="on the course page, in every session's Shared tab, on the stage">Attach to class</button>
           <button class="btn alt sm" data-prdel="${p.id}">Delete</button></td>
       </tr>`).join("")}</tbody></table></div></div>`
       : `<div class="card empty"><b>Nothing yet</b><span class="dim">Write a deck, record your screen
-        with your voice, or upload a PowerPoint, a PDF or a film.</span></div>`}`;
+        with your voice, upload a PowerPoint, a PDF or a film, or embed a Prezi.</span></div>`}
+    <h3>Decks that live elsewhere</h3>
+    <div class="cxn-grid" id="pr-cxn"></div>`;
+  connectionCards(["prezi"], renderPresentations, $("#pr-cxn"));
+  $("#pr-embed").onclick = async () => {
+    const link = prompt("The share link (Prezi, Google Slides, Canva, or any https page that allows framing)");
+    if (!link) return;
+    const title = prompt("A title for it");
+    if (!title) return;
+    try { await api("/api/presentations", { body: { title, kind: "embed", embed_link: link } }); renderPresentations(); }
+    catch (err) { toast(err.message); }
+  };
   $("#pr-new").onclick = async () => {
     const title = prompt("A title for the deck");
     if (!title) return;

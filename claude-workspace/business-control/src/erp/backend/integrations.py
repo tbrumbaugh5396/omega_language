@@ -318,6 +318,21 @@ PROVIDERS = {
         "does": "Records a paid order as a sales receipt against the "
                 "customer, so the month doesn't end with a re-typing session.",
     },
+    "prezi": {
+        "label": "Prezi",
+        "blurb": "Play a Prezi inside a presentation link of this "
+                 "product's own, on the course page and the stage.",
+        "auth": "none",
+        "family": "presentations",
+        "fields": [],
+        "events": [],
+        "actions": ["embed_deck"],
+        "does": "Nothing to connect: Prezi publishes the deck and this "
+                "points at it. Paste the share link on Presentations and it "
+                "plays in a frame under the product's own link, is counted "
+                "like any other presentation, and can be attached to a "
+                "class. Google Slides and Canva share links work the same way.",
+    },
     "canva": {
         "label": "Canva",
         "blurb": "Pull finished artwork straight into the store.",
@@ -993,7 +1008,9 @@ def status(con) -> dict:
             "syncs": bool(p.get("syncs")),
             "actions": list(p.get("actions") or []),
             "live": bool(settings(con, name).get("webhook_id")),
-            "connected": bool(r and r["active"]),
+            # A keyless provider has nothing to connect and is never
+            # "disconnected": the product points at a public thing.
+            "connected": bool(r and r["active"]) or p["auth"] == "none",
             "account": r["account"] if r else "",
             "connected_at": r["connected_at"] if r else 0,
             "inbound_ready": bool(i),

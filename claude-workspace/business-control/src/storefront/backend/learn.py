@@ -774,7 +774,14 @@ def present_page(token: str, request: Request, con=Depends(get_con)):
     m = con.execute("SELECT kind, path, mime, original FROM learning_materials"
                     " WHERE id=?", (r["material_id"],)).fetchone() if r["material_id"] else None
     body = ""
-    if r["kind"] == "deck" or (not m and slides):
+    frame = r["embed_url"] if "embed_url" in r.keys() else ""
+    if r["kind"] == "embed" and frame:
+        body = (f'<iframe class="doc embed" src="{e(frame)}" title="{e(r["title"])}"'
+                ' allowfullscreen allow="fullscreen; autoplay"></iframe>'
+                f'<p class="k">Lives on {e(PR.embed_source(frame))}. If the frame '
+                f'stays blank, that site does not allow framing: '
+                f'<a href="{e(frame)}" target="_blank" rel="noopener">open it there</a>.</p>')
+    elif r["kind"] == "deck" or (not m and slides):
         body = '<div id="deck">' + "".join(
             f'<section class="slide"{" hidden" if i else ""}>'
             f'<h2>{e(s["title"] or f"Slide {i + 1}")}</h2>'
@@ -1139,6 +1146,18 @@ def me_update(body: MeBody, user=Depends(current_customer),
     con.execute("UPDATE users SET email=? WHERE id=?", (email, user["id"]))
     con.commit()
     return {"ok": True}
+
+
+@router.get("/api/learn/me/applications")
+def me_applications(user=Depends(current_customer), con=Depends(get_con)):
+    """Where each application stands, from the student's side: the
+    stage, the deadline, what is ticked and what is still wanted, and
+    the one line the office wrote about what happens next. The office's
+    own notes stay the office's."""
+    _require_cap("learning")
+    from erp.backend import students as _ST
+    return {"applications": _ST.applications_of(con, user["id"], for_student=True),
+            "labels": _ST.APP_LABELS}
 
 
 @router.post("/api/learn/me/signout-all")
@@ -1521,6 +1540,17 @@ def learn_page(con=Depends(get_con)):
  .lrn-row-gap{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
  .pill-live{{border:1px solid #3c9;color:#3c9;border-radius:999px;padding:1px 9px;font-size:.75em;vertical-align:middle}}
  .lrn-idcard{{border:1px solid rgba(127,127,127,.4);border-radius:14px;padding:20px;max-width:340px;text-align:center}}
+ .lrn-apps{{display:grid;gap:10px;margin-bottom:16px}}
+ .lrn-app{{border:1px solid rgba(127,127,127,.4);border-radius:12px;padding:12px 14px}}
+ .lrn-app.closed{{opacity:.7}}
+ .lrn-apphead{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
+ .lrn-stage{{margin-left:auto;font-size:.8em;padding:2px 8px;border-radius:999px;border:1px solid currentColor}}
+ .lrn-stage-accepted,.lrn-stage-enrolled{{color:#1a7f4b}}
+ .lrn-stage-declined,.lrn-stage-withdrawn{{color:#888}}
+ .lrn-appnext{{margin-top:6px;font-weight:600}}
+ .lrn-appchk{{list-style:none;padding:0;margin:8px 0 2px}}
+ .lrn-appchk li{{padding:2px 0}}
+ .lrn-appchk li.lrn-done{{opacity:.6;text-decoration:line-through}}
  .lrn-idcard img{{width:220px;height:220px;background:#fff;padding:8px;border-radius:8px}}
  .lrn-lookup{{position:fixed;right:16px;bottom:84px;z-index:47;max-width:340px}}
  /* bottom:84px + z-index below the buy-fab (48): the lookup stacks ABOVE

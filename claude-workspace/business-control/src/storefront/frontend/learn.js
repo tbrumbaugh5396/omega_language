@@ -914,6 +914,8 @@
     try { prof = await api("/api/learn/me/profile"); } catch (e) {}
     try { card = await api("/api/learn/me/card"); } catch (e) {}
     try { loans = await api("/api/learn/loans"); } catch (e) {}
+    let apps = null;
+    try { apps = await api("/api/learn/me/applications"); } catch (e) {}
     const day = (t) => t ? new Date(t * 1000).toLocaleDateString() : "";
     root.innerHTML = tabs() + `
       ${me ? `<div class="lrn-live" style="align-items:flex-start">
@@ -973,6 +975,20 @@
         Object.entries(prof.profile.extra).map(([k, v]) => `<b>${esc(k)}</b> ${esc(v)}`).join(" · ")}</p>` : ""}
       <p><button class="lrn-btn sm" id="pr-about-save">Save</button>
         <span class="lrn-meta" id="pr-about-note"></span></p>` : ""}
+      ${apps && apps.applications.length ? `<h3>My applications</h3>
+      <p class="lrn-meta">Where each one stands, and what is still wanted
+        from you. The office moves these forward; ask them if something
+        here is wrong.</p>
+      <div class="lrn-apps">${apps.applications.map((a) => `<div class="lrn-app${a.open ? "" : " closed"}">
+        <div class="lrn-apphead"><b>${esc(a.institution)}</b>${a.program ? ` <span class="lrn-meta">· ${esc(a.program)}</span>` : ""}
+          <span class="lrn-stage lrn-stage-${esc(a.stage)}">${esc(a.stage_label)}</span></div>
+        ${a.deadline ? `<div class="lrn-meta">${a.overdue ? "Deadline passed: " : "Deadline: "}${day(a.deadline)}</div>` : ""}
+        ${a.next_step ? `<div class="lrn-appnext">Next: ${esc(a.next_step)}</div>` : ""}
+        ${a.checklist.length ? `<ul class="lrn-appchk">${a.checklist.map((c) => `<li class="${c.done ? "lrn-done" : ""}">${
+          c.done ? "&#10003; " : "&#9633; "}${esc(c.item)}</li>`).join("")}</ul>
+          <div class="lrn-meta">${a.checklist_done} of ${a.checklist.length} done</div>` : ""}
+        ${a.url ? `<a class="lrn-meta" href="${esc(a.url)}" target="_blank" rel="noopener">their website</a>` : ""}
+      </div>`).join("")}</div>` : ""}
       ${card ? `<h3>My ID card</h3>
       <div class="lrn-idcard">
         <img src="/api/qr.svg?data=${encodeURIComponent(card.payload)}"

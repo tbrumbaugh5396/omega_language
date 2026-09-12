@@ -27,8 +27,8 @@ async function connectionCards(names, refresh, box) {
         <div class="doc-main"><b>${esc(p.label)}</b>
           <span class="dim">${esc(p.blurb)}</span></div>
         ${state}
-        ${p.connected ? `<button class="btn alt sm" data-cxtest="${p.name}">Test</button>` : ""}
-        ${p.connected || (p.auth === "inbound" && p.inbound_ready)
+        ${p.connected && p.auth !== "none" ? `<button class="btn alt sm" data-cxtest="${p.name}">Test</button>` : ""}
+        ${(p.connected && p.auth !== "none") || (p.auth === "inbound" && p.inbound_ready)
           ? `<button class="btn alt sm" data-cxoff="${p.name}">${
               p.auth === "inbound" ? "New key" : "Disconnect"}</button>` : ""}
       </div>

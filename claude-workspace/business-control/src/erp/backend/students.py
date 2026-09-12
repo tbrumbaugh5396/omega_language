@@ -92,8 +92,73 @@ STATUS_LABELS = {"active": "active", "inactive": "inactive",
                  "deceased": "passed away"}
 
 
+APPLICATIONS = """
+/* What a student is applying to beyond this place — a college, a job, a
+   scholarship, a programme. The application is theirs; the office moves
+   it forward, keeps the checklist, and the student sees on their own
+   page where it stands and what is still wanted of them. */
+CREATE TABLE IF NOT EXISTS student_applications (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  institution TEXT NOT NULL,               -- Harcum College
+  program TEXT DEFAULT '',                 -- Associate in Nursing
+  kind TEXT DEFAULT 'college',             -- see APP_KINDS
+  stage TEXT DEFAULT 'considering',        -- see APP_STAGES
+  deadline REAL DEFAULT 0,
+  submitted_at REAL DEFAULT 0,
+  decided_at REAL DEFAULT 0,
+  url TEXT DEFAULT '',
+  contact TEXT DEFAULT '',                 -- the admissions person, if known
+  checklist TEXT DEFAULT '[]',             -- JSON [{item, done, by}]
+  next_step TEXT DEFAULT '',               -- one line the student sees
+  notes TEXT DEFAULT '',                   -- the office's, not shown
+  owner_id INTEGER DEFAULT 0,              -- who at the office is helping
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS student_applications_who ON student_applications(user_id);
+CREATE TABLE IF NOT EXISTS application_log (
+  id INTEGER PRIMARY KEY,
+  application_id INTEGER NOT NULL,
+  at REAL NOT NULL,
+  by_name TEXT DEFAULT '',
+  what TEXT NOT NULL
+);
+"""
+
+APP_KINDS = ("college", "job", "scholarship", "program", "housing", "other")
+APP_STAGES = ("considering", "preparing", "submitted", "interview",
+              "accepted", "waitlisted", "declined", "enrolled", "withdrawn")
+APP_OPEN = ("considering", "preparing", "submitted", "interview", "waitlisted")
+APP_LABELS = {
+    "considering": "Considering", "preparing": "Preparing",
+    "submitted": "Submitted", "interview": "Interview",
+    "accepted": "Accepted", "waitlisted": "Waitlisted",
+    "declined": "Declined", "enrolled": "Enrolled", "withdrawn": "Withdrawn",
+}
+# Where a stage usually goes next, offered first on the button; any
+# stage is reachable, because admissions offices do not follow diagrams.
+APP_NEXT = {
+    "considering": "preparing", "preparing": "submitted",
+    "submitted": "interview", "interview": "accepted",
+    "waitlisted": "accepted", "accepted": "enrolled",
+}
+DEFAULT_CHECKLIST = {
+    "college": ["Application form", "Transcript or GED", "Personal statement",
+                "Recommendation letters", "Application fee or waiver",
+                "Financial aid form"],
+    "job": ["Résumé", "Cover letter", "References"],
+    "scholarship": ["Application form", "Essay", "Transcript",
+                    "Recommendation letters"],
+    "program": ["Application form", "Eligibility documents"],
+    "housing": ["Application form", "Proof of income", "References"],
+    "other": [],
+}
+
+
 def init_tables(con):
     con.executescript(TABLES)
+    con.executescript(APPLICATIONS)
     cols = {r["name"] for r in con.execute("PRAGMA table_info(student_profiles)")}
     for col, ddl in (("status", "TEXT DEFAULT 'active'"),
                      ("status_note", "TEXT DEFAULT ''"),
@@ -584,6 +649,54 @@ SELF_FIELDS = ("birth_date", "gender", "nationality", "origin",
                "emergency_contact", "goals", "needs")
 
 
+# ---------- applications ----------
+
+def _app(con, uid: int, aid: int):
+    r = con.execute("SELECT * FROM student_applications WHERE id=? AND user_id=?",
+                    (aid, uid)).fetchone()
+    if r is None:
+        raise HTTPException(404, "no such application")
+    return r
+
+
+def _app_log(con, aid: int, by: str, what: str) -> None:
+    con.execute("INSERT INTO application_log(application_id,at,by_name,what)"
+                " VALUES(?,?,?,?)", (aid, time.time(), by[:80], what[:300]))
+
+
+def shape_application(con, r, *, for_student: bool = False) -> dict:
+    d = dict(r)
+    try:
+        d["checklist"] = json.loads(r["checklist"] or "[]")
+    except ValueError:
+        d["checklist"] = []
+    d["checklist_done"] = sum(1 for c in d["checklist"] if c.get("done"))
+    d["stage_label"] = APP_LABELS.get(r["stage"], r["stage"])
+    d["open"] = r["stage"] in APP_OPEN
+    d["overdue"] = bool(r["deadline"] and r["deadline"] < time.time()
+                        and r["stage"] in ("considering", "preparing"))
+    d["suggested_next"] = APP_NEXT.get(r["stage"], "")
+    o = con.execute("SELECT name FROM users WHERE id=?",
+                    (r["owner_id"],)).fetchone() if r["owner_id"] else None
+    d["owner_name"] = o["name"] if o else ""
+    if for_student:
+        d.pop("notes", None)
+    else:
+        d["log"] = [dict(x) for x in con.execute(
+            "SELECT at, by_name, what FROM application_log WHERE"
+            " application_id=? ORDER BY id DESC LIMIT 30", (r["id"],))]
+    return d
+
+
+def applications_of(con, uid: int, *, for_student: bool = False) -> list:
+    rows = con.execute(
+        "SELECT * FROM student_applications WHERE user_id=?"
+        " ORDER BY (stage IN ('considering','preparing','submitted','interview',"
+        " 'waitlisted')) DESC, deadline=0, deadline, updated_at DESC",
+        (uid,)).fetchall()
+    return [shape_application(con, r, for_student=for_student) for r in rows]
+
+
 def self_view(con, uid: int) -> dict:
     """What the student may see and change of their own profile: every
     field but the office's notes. The office's extra questions they may
@@ -597,3 +710,172 @@ def self_save(con, uid: int, fields: dict, by: str) -> dict:
     allowed = {k: v for k, v in fields.items() if k in SELF_FIELDS}
     save_profile(con, uid, allowed, None, by=by)
     return self_view(con, uid)
+
+
+# ---------- applications: routes ----------
+
+@router.get("/api/students/{uid}/applications")
+def student_applications(uid: int, user=Depends(current_user),
+                         con=Depends(get_con)):
+    _require_office(user)
+    _student(con, uid)
+    return {"applications": applications_of(con, uid),
+            "kinds": list(APP_KINDS), "stages": list(APP_STAGES),
+            "labels": APP_LABELS, "next": APP_NEXT,
+            "default_checklist": DEFAULT_CHECKLIST,
+            "people": [dict(r) for r in con.execute(
+                "SELECT id, name FROM users WHERE active=1 AND (is_admin=1 OR"
+                " role IN ('employee','owner','teacher','director'))"
+                " ORDER BY name")]}
+
+
+class ApplicationBody(BaseModel):
+    id: int = 0
+    institution: str = ""
+    program: str = ""
+    kind: str = "college"
+    deadline: float = 0
+    url: str = ""
+    contact: str = ""
+    next_step: str = ""
+    notes: str = ""
+    owner_id: int = 0
+    checklist: list | None = None
+
+
+def _clean_checklist(raw) -> list:
+    out = []
+    for c in raw or []:
+        if isinstance(c, str):
+            c = {"item": c}
+        item = str(c.get("item", "")).strip()[:160]
+        if item:
+            out.append({"item": item, "done": bool(c.get("done")),
+                        "by": str(c.get("by", ""))[:80]})
+    return out[:40]
+
+
+@router.post("/api/students/{uid}/applications")
+def application_save(uid: int, body: ApplicationBody,
+                     user=Depends(current_user), con=Depends(get_con)):
+    _require_office(user)
+    _student(con, uid)
+    inst = body.institution.strip()
+    if not inst:
+        raise HTTPException(400, "an application is to somewhere — name it")
+    if body.kind not in APP_KINDS:
+        raise HTTPException(400, f"kind is one of {APP_KINDS}")
+    now = time.time()
+    if body.id:
+        r = _app(con, uid, body.id)
+        checklist = (_clean_checklist(body.checklist) if body.checklist is not None
+                     else json.loads(r["checklist"] or "[]"))
+        con.execute(
+            "UPDATE student_applications SET institution=?, program=?, kind=?,"
+            " deadline=?, url=?, contact=?, next_step=?, notes=?, owner_id=?,"
+            " checklist=?, updated_at=? WHERE id=?",
+            (inst[:200], body.program.strip()[:200], body.kind, body.deadline,
+             body.url.strip()[:400], body.contact.strip()[:200],
+             body.next_step.strip()[:300], body.notes.strip()[:4000],
+             body.owner_id, json.dumps(checklist), now, body.id))
+        _app_log(con, body.id, user["name"], "details edited")
+        con.commit()
+        return {"ok": True, "id": body.id}
+    checklist = (_clean_checklist(body.checklist) if body.checklist is not None
+                 else [{"item": i, "done": False, "by": ""}
+                       for i in DEFAULT_CHECKLIST.get(body.kind, [])])
+    cur = con.execute(
+        "INSERT INTO student_applications(user_id,institution,program,kind,"
+        " stage,deadline,url,contact,checklist,next_step,notes,owner_id,"
+        " created_at,updated_at) VALUES(?,?,?,?,'considering',?,?,?,?,?,?,?,?,?)",
+        (uid, inst[:200], body.program.strip()[:200], body.kind, body.deadline,
+         body.url.strip()[:400], body.contact.strip()[:200],
+         json.dumps(checklist), body.next_step.strip()[:300],
+         body.notes.strip()[:4000], body.owner_id or user["id"], now, now))
+    _app_log(con, cur.lastrowid, user["name"], f"opened: {inst[:80]}")
+    con.execute(
+        "INSERT INTO student_log(user_id,kind,title,body,at,by_id,by_name,"
+        " created_at) VALUES(?,?,?,?,?,?,?,?)",
+        (uid, "milestone", f"Applying to {inst[:80]}",
+         body.program.strip()[:200], now, user["id"], user["name"], now))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+class StageBody(BaseModel):
+    stage: str
+    note: str = ""
+    next_step: str | None = None
+
+
+@router.post("/api/students/{uid}/applications/{aid}/stage")
+def application_stage(uid: int, aid: int, body: StageBody,
+                      user=Depends(current_user), con=Depends(get_con)):
+    """Move it forward — or back, or sideways; admissions offices do
+    not follow diagrams. Submitted and decided dates are set the first
+    time those stages are reached, and the student's timeline gets a line
+    for a decision, because being accepted somewhere is a milestone."""
+    _require_office(user)
+    r = _app(con, uid, aid)
+    if body.stage not in APP_STAGES:
+        raise HTTPException(400, f"stage is one of {APP_STAGES}")
+    if body.stage == r["stage"]:
+        return {"ok": True, "unchanged": True}
+    now = time.time()
+    sets = {"stage": body.stage, "updated_at": now}
+    if body.stage == "submitted" and not r["submitted_at"]:
+        sets["submitted_at"] = now
+    if body.stage in ("accepted", "declined", "waitlisted") and not r["decided_at"]:
+        sets["decided_at"] = now
+    if body.next_step is not None:
+        sets["next_step"] = body.next_step.strip()[:300]
+    con.execute("UPDATE student_applications SET "
+                + ", ".join(f"{k}=?" for k in sets) + " WHERE id=?",
+                (*sets.values(), aid))
+    _app_log(con, aid, user["name"],
+             f"{APP_LABELS[r['stage']]} → {APP_LABELS[body.stage]}"
+             + (f": {body.note.strip()[:200]}" if body.note.strip() else ""))
+    if body.stage in ("accepted", "enrolled", "declined", "submitted"):
+        con.execute(
+            "INSERT INTO student_log(user_id,kind,title,body,at,by_id,by_name,"
+            " created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (uid, "achievement" if body.stage in ("accepted", "enrolled") else "milestone",
+             f"{APP_LABELS[body.stage]}: {r['institution'][:80]}",
+             r["program"] or "", now, user["id"], user["name"], now))
+    con.commit()
+    return {"ok": True, "stage": body.stage}
+
+
+class TickBody(BaseModel):
+    index: int
+    done: bool
+
+
+@router.post("/api/students/{uid}/applications/{aid}/tick")
+def application_tick(uid: int, aid: int, body: TickBody,
+                     user=Depends(current_user), con=Depends(get_con)):
+    _require_office(user)
+    r = _app(con, uid, aid)
+    items = json.loads(r["checklist"] or "[]")
+    if not 0 <= body.index < len(items):
+        raise HTTPException(404, "no such item")
+    items[body.index]["done"] = body.done
+    items[body.index]["by"] = user["name"] if body.done else ""
+    con.execute("UPDATE student_applications SET checklist=?, updated_at=?"
+                " WHERE id=?", (json.dumps(items), time.time(), aid))
+    _app_log(con, aid, user["name"],
+             ("done: " if body.done else "undone: ") + items[body.index]["item"])
+    con.commit()
+    return {"ok": True, "done": sum(1 for c in items if c.get("done")),
+            "of": len(items)}
+
+
+@router.delete("/api/students/{uid}/applications/{aid}")
+def application_delete(uid: int, aid: int, user=Depends(current_user),
+                       con=Depends(get_con)):
+    _require_office(user)
+    _app(con, uid, aid)
+    con.execute("DELETE FROM student_applications WHERE id=?", (aid,))
+    con.execute("DELETE FROM application_log WHERE application_id=?", (aid,))
+    con.commit()
+    return {"ok": True}

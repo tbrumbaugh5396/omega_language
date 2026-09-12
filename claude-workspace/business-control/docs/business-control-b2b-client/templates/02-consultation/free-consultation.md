@@ -164,6 +164,7 @@ needed here?
 | `supply` | Suppliers, materials, POs, production | ☐ |
 | `till` | The register: open a drawer, take a sale, print a receipt | ☐ |
 | `rooms` | Rooms and the timetable: book, move and cancel | ☐ |
+| `health` | Patients: records, insurance, visits, files and the queue — every read logged | ☐ |
 
 ---
 
@@ -211,6 +212,7 @@ they describe. A module they didn't ask for is a module they won't open.
 | Dropbox | ☐ | ☐ | Signed documents filed; database backups off the one laptop |
 | QuickBooks | ☐ | ☐ | Sales receipts and supply costs into the books |
 | Canva | ☐ | ☐ | Designs listed alongside campaigns |
+| Prezi | ☐ | ☐ | Paste a share link; the deck plays under the product's own presentation link, on the course page and the stage. Nothing to connect |
 | DocuSign | ☐ | ☐ | Signature requests routed through DocuSign, with verified identity if your plan enforces it |
 | LaceUp | ☐ | ☐ | DSD ordering and routes |
 | google_calendar | ☐ | ☐ | Published shifts, client milestones and ticket due dates in the calendar people already have open |

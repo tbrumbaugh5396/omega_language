@@ -15,7 +15,10 @@ started, not moving, and the reason is written down.
 """
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+import hashlib
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from . import db
@@ -46,6 +49,45 @@ CREATE TABLE IF NOT EXISTS tickets (
 CREATE INDEX IF NOT EXISTS tickets_col ON tickets(col, position);
 CREATE INDEX IF NOT EXISTS tickets_due ON tickets(due);
 
+/* The pieces of a ticket. A task is one line of the work with a box to
+   tick; a link is the page in this product the ticket is about — the
+   order, the student, the client — so the reader lands on it in one
+   click; a file is what somebody attached. None is required, because
+   the fastest way to lose a board is to make filing on it cost more
+   than remembering. */
+CREATE TABLE IF NOT EXISTS ticket_tasks (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  done INTEGER DEFAULT 0,
+  assignee_id INTEGER DEFAULT 0,
+  position INTEGER DEFAULT 0,
+  created_at REAL NOT NULL,
+  done_at REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ticket_tasks_t ON ticket_tasks(ticket_id, position);
+CREATE TABLE IF NOT EXISTS ticket_links (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL,
+  tab TEXT NOT NULL,                       -- a screen of this product
+  ref_id INTEGER DEFAULT 0,                -- the row on it, if any
+  label TEXT DEFAULT '',
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ticket_links_t ON ticket_links(ticket_id);
+CREATE TABLE IF NOT EXISTS ticket_files (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  ext TEXT NOT NULL,
+  mime TEXT DEFAULT '',
+  bytes INTEGER DEFAULT 0,
+  sha256 TEXT DEFAULT '',
+  by_id INTEGER DEFAULT 0,
+  by_name TEXT DEFAULT '',
+  created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ticket_files_t ON ticket_files(ticket_id);
 CREATE TABLE IF NOT EXISTS ticket_log (
   id INTEGER PRIMARY KEY,
   ticket_id INTEGER NOT NULL,
@@ -60,6 +102,14 @@ def init_tables(con):
     con.executescript(TABLES)
 
 
+def _team(user) -> None:
+    """The board is the team's. A customer's account reaches the shop
+    front, not the work behind it — and an attachment on a ticket is
+    the work behind it."""
+    if user["role"] in ("customer", "distributor", "influencer") and not user["is_admin"]:
+        raise HTTPException(403, "the board is the team's")
+
+
 def _row(con, tid: int):
     r = con.execute("SELECT * FROM tickets WHERE id=?", (tid,)).fetchone()
     if r is None:
@@ -72,12 +122,71 @@ def _log(con, tid: int, actor: str, what: str) -> None:
                 " VALUES(?,?,?,?)", (tid, db.now(), actor[:80], what[:200]))
 
 
+# The screens a ticket can point at, and what the number after them
+# means. A ticket about an order links to the order; the reader lands on
+# it. A screen with no rows (the till, the board itself) takes no number.
+LINK_TABS = {
+    "orders": "Order", "customers": "Customer", "clients": "Client",
+    "learning": "Course", "students": "Student", "inventory": "Inventory",
+    "bookings": "Booking", "events": "Event", "hiring": "Applicant",
+    "expenses": "Expense", "civics": "Jurisdiction", "ideas": "Idea",
+    "docs": "Document", "finance": "Invoice", "legal": "Matter",
+    "supply": "Supplier", "rooms": "Room", "presentations": "Presentation",
+    "cameras": "Camera", "shop": "Product", "promos": "Promo",
+    "till": "", "rota": "", "accounting": "", "payroll": "",
+    "onboarding": "", "automation": "", "treasury": "", "analytics": "",
+}
+
+# What may be attached: the vault's list, because a board that takes
+# executables is a board somebody will regret.
+FILE_EXT = {
+    "pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg",
+    "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",
+    "txt": "text/plain", "csv": "text/csv", "md": "text/markdown",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmlformats-officedocument."
+            "presentationml.presentation",
+    "mp4": "video/mp4", "mov": "video/quicktime", "m4a": "audio/mp4",
+    "mp3": "audio/mpeg", "zip": "application/zip", "json": "application/json",
+}
+MAX_FILE = 25 * 1024 * 1024
+
+
+def _dir():
+    from . import tenancy
+    d = tenancy.data_dir() / "uploads" / "tickets"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _shape(con, r) -> dict:
     d = dict(r)
     d["labels"] = [x.strip() for x in (r["labels"] or "").split(",")
                    if x.strip()]
     d["overdue"] = bool(r["due"] and r["due"] < time.time()
                         and r["col"] != "done")
+    d["tasks"] = [dict(x) for x in con.execute(
+        "SELECT t.*, u.name AS assignee_name FROM ticket_tasks t"
+        " LEFT JOIN users u ON u.id=t.assignee_id"
+        " WHERE t.ticket_id=? ORDER BY t.position, t.id", (r["id"],))]
+    d["tasks_done"] = sum(1 for t in d["tasks"] if t["done"])
+    d["links"] = [dict(x) for x in con.execute(
+        "SELECT * FROM ticket_links WHERE ticket_id=? ORDER BY id",
+        (r["id"],))]
+    for l in d["links"]:
+        l["href"] = f"#/{l['tab']}" + (f"/{l['ref_id']}" if l["ref_id"] else "")
+        l["label"] = l["label"] or (
+            f"{LINK_TABS.get(l['tab']) or l['tab']}"
+            + (f" #{l['ref_id']}" if l["ref_id"] else ""))
+    d["files"] = [dict(x) for x in con.execute(
+        "SELECT id, name, ext, mime, bytes, by_name, created_at FROM"
+        " ticket_files WHERE ticket_id=? ORDER BY id", (r["id"],))]
     return d
 
 
@@ -101,7 +210,8 @@ def list_tickets(mine: int = 0, user=Depends(current_user),
         "  'director')) ORDER BY name").fetchall()]
     return {"tickets": out, "columns": list(COLUMNS),
             "priorities": list(PRIORITIES), "people": people,
-            "me": user["id"]}
+            "me": user["id"], "link_tabs": LINK_TABS,
+            "file_ext": sorted(FILE_EXT)}
 
 
 class TicketBody(BaseModel):
@@ -214,7 +324,16 @@ def delete_ticket(tid: int, user=Depends(current_user), con=Depends(get_con)):
     _row(con, tid)
     if not (user["is_admin"] or user["role"] in ("owner", "employee")):
         raise HTTPException(403, "the board is office-side")
-    con.execute("DELETE FROM ticket_log WHERE ticket_id=?", (tid,))
+    # Its pieces go with it — and an attachment's bytes come off disk,
+    # or the folder fills with files no row remembers.
+    for f in con.execute("SELECT id, ext FROM ticket_files WHERE ticket_id=?",
+                         (tid,)).fetchall():
+        try:
+            (_dir() / f"{f['id']}.{f['ext']}").unlink()
+        except FileNotFoundError:
+            pass
+    for t in ("ticket_files", "ticket_links", "ticket_tasks", "ticket_log"):
+        con.execute(f"DELETE FROM {t} WHERE ticket_id=?", (tid,))
     con.execute("DELETE FROM tickets WHERE id=?", (tid,))
     con.commit()
     return {"ok": True}
@@ -301,3 +420,178 @@ def _day_ts(day: str) -> float:
         return time.mktime(time.strptime(str(day)[:10], "%Y-%m-%d"))
     except ValueError:
         return 0.0
+
+
+# ---------- the pieces: tasks, links, files ----------
+
+class TaskBody(BaseModel):
+    title: str = ""
+    done: bool | None = None
+    assignee_id: int | None = None
+
+
+@router.post("/api/tickets/{tid}/tasks")
+def add_task(tid: int, body: TaskBody, user=Depends(current_user),
+             con=Depends(get_con)):
+    _team(user)
+    _row(con, tid)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "a task is a line of work — say what")
+    pos = con.execute("SELECT COALESCE(MAX(position),0)+1 AS p FROM"
+                      " ticket_tasks WHERE ticket_id=?", (tid,)).fetchone()["p"]
+    cur = con.execute(
+        "INSERT INTO ticket_tasks(ticket_id,title,assignee_id,position,"
+        " created_at) VALUES(?,?,?,?,?)",
+        (tid, title[:200], max(0, body.assignee_id or 0), pos, db.now()))
+    _log(con, tid, user["name"], f"added task: {title[:80]}")
+    con.execute("UPDATE tickets SET updated_at=? WHERE id=?", (db.now(), tid))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+@router.patch("/api/tickets/{tid}/tasks/{kid}")
+def edit_task(tid: int, kid: int, body: TaskBody, user=Depends(current_user),
+              con=Depends(get_con)):
+    _row(con, tid)
+    t = con.execute("SELECT * FROM ticket_tasks WHERE id=? AND ticket_id=?",
+                    (kid, tid)).fetchone()
+    if t is None:
+        raise HTTPException(404, "no such task")
+    said = []
+    if body.done is not None and bool(t["done"]) != body.done:
+        con.execute("UPDATE ticket_tasks SET done=?, done_at=? WHERE id=?",
+                    (int(body.done), db.now() if body.done else 0, kid))
+        said.append(("ticked" if body.done else "unticked") + f": {t['title'][:60]}")
+    if body.title.strip() and body.title.strip() != t["title"]:
+        con.execute("UPDATE ticket_tasks SET title=? WHERE id=?",
+                    (body.title.strip()[:200], kid))
+        said.append("reworded a task")
+    if body.assignee_id is not None and body.assignee_id != t["assignee_id"]:
+        con.execute("UPDATE ticket_tasks SET assignee_id=? WHERE id=?",
+                    (max(0, body.assignee_id), kid))
+        who = con.execute("SELECT name FROM users WHERE id=?",
+                          (body.assignee_id,)).fetchone()
+        said.append(f"task to {who['name']}" if who else "task unassigned")
+    if said:
+        _log(con, tid, user["name"], ", ".join(said))
+        con.execute("UPDATE tickets SET updated_at=? WHERE id=?", (db.now(), tid))
+    con.commit()
+    return {"ok": True}
+
+
+@router.delete("/api/tickets/{tid}/tasks/{kid}")
+def drop_task(tid: int, kid: int, user=Depends(current_user),
+              con=Depends(get_con)):
+    _row(con, tid)
+    con.execute("DELETE FROM ticket_tasks WHERE id=? AND ticket_id=?", (kid, tid))
+    _log(con, tid, user["name"], "removed a task")
+    con.commit()
+    return {"ok": True}
+
+
+class LinkBody(BaseModel):
+    tab: str
+    ref_id: int = 0
+    label: str = ""
+
+
+@router.post("/api/tickets/{tid}/links")
+def add_link(tid: int, body: LinkBody, user=Depends(current_user),
+             con=Depends(get_con)):
+    """The page this ticket is about. A ticket that says "the Ortiz order"
+    and a ticket that opens the Ortiz order are different tickets."""
+    _team(user)
+    _row(con, tid)
+    if body.tab not in LINK_TABS:
+        raise HTTPException(400, f"tab is one of {sorted(LINK_TABS)}")
+    if body.ref_id and not LINK_TABS[body.tab]:
+        raise HTTPException(400, f"{body.tab} has no rows to point at")
+    if LINK_TABS[body.tab] and not body.ref_id:
+        raise HTTPException(400, f"which {LINK_TABS[body.tab].lower()}? give its number")
+    if con.execute("SELECT 1 FROM ticket_links WHERE ticket_id=? AND tab=?"
+                   " AND ref_id=?", (tid, body.tab, body.ref_id)).fetchone():
+        return {"ok": True, "already": True}
+    cur = con.execute(
+        "INSERT INTO ticket_links(ticket_id,tab,ref_id,label,created_at)"
+        " VALUES(?,?,?,?,?)",
+        (tid, body.tab, max(0, body.ref_id), body.label.strip()[:120], db.now()))
+    _log(con, tid, user["name"],
+         f"linked {LINK_TABS.get(body.tab) or body.tab}"
+         + (f" #{body.ref_id}" if body.ref_id else ""))
+    con.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+@router.delete("/api/tickets/{tid}/links/{lid}")
+def drop_link(tid: int, lid: int, user=Depends(current_user),
+              con=Depends(get_con)):
+    _row(con, tid)
+    con.execute("DELETE FROM ticket_links WHERE id=? AND ticket_id=?", (lid, tid))
+    con.commit()
+    return {"ok": True}
+
+
+@router.post("/api/tickets/{tid}/files")
+async def add_file(tid: int, request: Request, user=Depends(current_user),
+                   con=Depends(get_con)):
+    """Raw bytes with the name in a header, like every other upload here.
+    Kept on disk under the tenant, one file per row, hashed so a reader
+    can tell whether what they downloaded is what was attached."""
+    _team(user)
+    _row(con, tid)
+    name = (request.headers.get("x-filename") or "file").strip()[:200]
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in FILE_EXT:
+        raise HTTPException(400, f"attach one of: {', '.join(sorted(FILE_EXT))}")
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "the file is empty")
+    if len(data) > MAX_FILE:
+        raise HTTPException(413, "25 MB is the most one attachment may be")
+    cur = con.execute(
+        "INSERT INTO ticket_files(ticket_id,name,ext,mime,bytes,sha256,by_id,"
+        " by_name,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (tid, name, ext, FILE_EXT[ext], len(data),
+         hashlib.sha256(data).hexdigest(), user["id"], user["name"], db.now()))
+    fid = cur.lastrowid
+    (_dir() / f"{fid}.{ext}").write_bytes(data)
+    _log(con, tid, user["name"], f"attached {name[:80]}")
+    con.execute("UPDATE tickets SET updated_at=? WHERE id=?", (db.now(), tid))
+    con.commit()
+    return {"ok": True, "id": fid, "bytes": len(data)}
+
+
+@router.get("/api/tickets/{tid}/files/{fid}")
+def get_file(tid: int, fid: int, user=Depends(current_user),
+             con=Depends(get_con)):
+    _team(user)
+    _row(con, tid)
+    f = con.execute("SELECT * FROM ticket_files WHERE id=? AND ticket_id=?",
+                    (fid, tid)).fetchone()
+    if f is None:
+        raise HTTPException(404, "no such attachment")
+    path = _dir() / f"{fid}.{f['ext']}"
+    if not path.exists():
+        raise HTTPException(410, "the file is no longer on disk")
+    return FileResponse(path, media_type=f["mime"] or "application/octet-stream",
+                        filename=f["name"])
+
+
+@router.delete("/api/tickets/{tid}/files/{fid}")
+def drop_file(tid: int, fid: int, user=Depends(current_user),
+              con=Depends(get_con)):
+    _team(user)
+    _row(con, tid)
+    f = con.execute("SELECT * FROM ticket_files WHERE id=? AND ticket_id=?",
+                    (fid, tid)).fetchone()
+    if f is None:
+        raise HTTPException(404, "no such attachment")
+    con.execute("DELETE FROM ticket_files WHERE id=?", (fid,))
+    try:
+        (_dir() / f"{fid}.{f['ext']}").unlink()
+    except FileNotFoundError:
+        pass
+    _log(con, tid, user["name"], f"removed attachment {f['name'][:60]}")
+    con.commit()
+    return {"ok": True}

@@ -48,6 +48,7 @@ async function studentPage(uid, back) {
       <div class="top-actions">
         <button class="btn alt" id="stu-back">&larr; Back</button>
         <button class="btn alt" id="stu-status" title="no longer attends, moved, passed away, inactive — or back">Status</button>
+        <button class="btn alt" id="stu-idcard" title="on the label sheet, ID card stock">Print ID card</button>
         <button class="btn alt" id="stu-note">Add a note</button>
         <button class="btn" id="stu-ach">Log an achievement</button>
       </div>
@@ -108,6 +109,7 @@ async function studentPage(uid, back) {
         ${d.achievements.length + d.logged_achievements.length ? "" : '<p class="dim">None yet.</p>'}
       </div>
     </div>
+    <div class="card" id="stu-apps"><div class="card-head"><b>Applications</b></div><p class="dim">…</p></div>
     <div class="card">
       <div class="card-head"><b>Timeline</b> <span class="dim">${d.timeline.length} things, newest first</span></div>
       ${d.timeline.length ? `<ul class="stu-tl">${d.timeline.map((e) => `<li>
@@ -121,6 +123,8 @@ async function studentPage(uid, back) {
   $("#stu-note").onclick = () => studentLogForm(uid, "note", () => studentPage(uid, back), d);
   $("#stu-ach").onclick = () => studentLogForm(uid, "achievement", () => studentPage(uid, back), d);
   $("#stu-status").onclick = () => studentStatusForm(uid, d, () => studentPage(uid, back));
+  $("#stu-idcard").onclick = () => { LBL_PRESET = { kind: "students", ids: [uid], layout: "idcard" }; location.hash = "#/labels"; };
+  studentApplications(uid, $("#stu-apps"), () => studentPage(uid, back));
   const extraRow = (k, v) => {
     const div = document.createElement("div");
     div.className = "stu-extra";
@@ -245,5 +249,105 @@ function studentStatusForm(uid, d, after) {
         .filter(Boolean).join(" · ") || "saved");
       if (after) after();
     } catch (err) { toast(err.message); }
+  };
+}
+
+
+/* What the student is applying to beyond here — a college, a job, a
+   scholarship — moved forward by the office, with the checklist of what
+   the place wants and the one line the student sees about what is next. */
+async function studentApplications(uid, box, after) {
+  let d;
+  try { d = await api(`/api/students/${uid}/applications`); }
+  catch (e) { box.innerHTML = `<p class="dim">${esc(e.message)}</p>`; return; }
+  const stagePill = (a) => `<span class="pill${a.stage === "accepted" || a.stage === "enrolled" ? " ok"
+    : a.stage === "declined" || a.stage === "withdrawn" ? "" : a.overdue ? " bad" : a.open ? " warn" : ""}">${esc(a.stage_label)}</span>`;
+  box.innerHTML = `
+    <div class="card-head"><b>Applications</b>
+      <button class="btn alt sm" id="stu-app-new">Add an application</button></div>
+    ${d.applications.length ? d.applications.map((a) => `<div class="stu-app" data-app="${a.id}">
+      <div class="stu-apphead">
+        <div><b>${esc(a.institution)}</b>${a.program ? ` <span class="dim">· ${esc(a.program)}</span>` : ""}
+          <span class="dim">· ${esc(a.kind)}</span></div>
+        <div>${stagePill(a)}
+          ${a.deadline ? `<span class="${a.overdue ? "low" : "dim"}">due ${fmtDate(a.deadline)}</span>` : ""}</div>
+      </div>
+      ${a.next_step ? `<div class="dim">Next for the student: ${esc(a.next_step)}</div>` : ""}
+      ${a.checklist.length ? `<ul class="stu-appchk">${a.checklist.map((c, i) => `<li><label class="chk">
+        <input type="checkbox" data-apptick="${a.id}:${i}" ${c.done ? "checked" : ""}> <span class="${c.done ? "tk-done" : ""}">${esc(c.item)}</span></label>
+        ${c.by ? `<span class="dim">${esc(c.by)}</span>` : ""}</li>`).join("")}</ul>` : ""}
+      <div class="stu-appacts">
+        ${a.suggested_next ? `<button class="btn sm" data-appnext="${a.id}" data-stage="${a.suggested_next}">Move to ${esc(d.labels[a.suggested_next])}</button>` : ""}
+        <select data-appstage="${a.id}"><option value="">other stage…</option>${d.stages.filter((st) => st !== a.stage)
+          .map((st) => `<option value="${st}">${esc(d.labels[st])}</option>`).join("")}</select>
+        <button class="btn alt sm" data-appedit="${a.id}">Edit</button>
+        <button class="btn alt sm" data-appdel="${a.id}">Remove</button>
+        ${a.owner_name ? `<span class="dim">helped by ${esc(a.owner_name)}</span>` : ""}
+      </div>
+      ${a.log.length ? `<details><summary class="dim">history (${a.log.length})</summary>
+        ${a.log.map((l) => `<div class="dim">${fmtDate(l.at)} · ${esc(l.by_name)} · ${esc(l.what)}</div>`).join("")}</details>` : ""}
+    </div>`).join("") : `<p class="dim">Nothing yet. When the student applies somewhere — Harcum College,
+      a job, a scholarship — put it here; they see where it stands on their own page.</p>`}`;
+  const redo = () => studentApplications(uid, box, after);
+  $("#stu-app-new").onclick = () => studentApplicationForm(uid, d, null, redo);
+  box.querySelectorAll("[data-appedit]").forEach((b) => b.onclick = () =>
+    studentApplicationForm(uid, d, d.applications.find((a) => a.id === +b.dataset.appedit), redo));
+  box.querySelectorAll("[data-appdel]").forEach((b) => b.onclick = async () => {
+    if (!confirm("Remove this application and its history?")) return;
+    await api(`/api/students/${uid}/applications/${b.dataset.appdel}`, { method: "DELETE" }); redo();
+  });
+  const move = async (aid, stage) => {
+    if (!stage) return;
+    const note = prompt(`Moving to ${d.labels[stage]}. A line for the student about what happens next (optional):`) || "";
+    try {
+      await api(`/api/students/${uid}/applications/${aid}/stage`, { body: { stage, next_step: note || null } });
+      redo(); if (after && ["accepted", "enrolled", "submitted", "declined"].includes(stage)) after();
+    } catch (e) { toast(e.message); }
+  };
+  box.querySelectorAll("[data-appnext]").forEach((b) => b.onclick = () => move(+b.dataset.appnext, b.dataset.stage));
+  box.querySelectorAll("[data-appstage]").forEach((sel) => sel.onchange = () => move(+sel.dataset.appstage, sel.value));
+  box.querySelectorAll("[data-apptick]").forEach((c) => c.onchange = async () => {
+    const [aid, i] = c.dataset.apptick.split(":");
+    try { await api(`/api/students/${uid}/applications/${aid}/tick`, { body: { index: +i, done: c.checked } }); redo(); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+function studentApplicationForm(uid, d, a, after) {
+  const dl = a && a.deadline ? new Date(a.deadline * 1000).toISOString().slice(0, 10) : "";
+  modal(`<h3>${a ? "Edit application" : "New application"}</h3>
+    <div class="row2">
+      <label>To <input id="app-inst" value="${esc(a ? a.institution : "")}" placeholder="Harcum College"></label>
+      <label>Programme or role <input id="app-prog" value="${esc(a ? a.program : "")}" placeholder="Associate in Nursing"></label>
+    </div>
+    <div class="row2">
+      <label>Kind <select id="app-kind">${d.kinds.map((k) => `<option value="${k}" ${a && a.kind === k ? "selected" : ""}>${k}</option>`).join("")}</select></label>
+      <label>Deadline <input id="app-deadline" type="date" value="${dl}"></label>
+    </div>
+    <div class="row2">
+      <label>Link <input id="app-url" value="${esc(a ? a.url : "")}" placeholder="https://"></label>
+      <label>Admissions contact <input id="app-contact" value="${esc(a ? a.contact : "")}"></label>
+    </div>
+    <label>Helped by <select id="app-owner"><option value="0">—</option>${d.people.map((p) => `<option value="${p.id}" ${a && a.owner_id === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
+    <label>Next step, as the student sees it <input id="app-next" value="${esc(a ? a.next_step : "")}" placeholder="Bring your transcript to the office by Friday"></label>
+    <label>Checklist <span class="opt">one item per line${a ? "" : "; blank for the usual list"}</span>
+      <textarea id="app-chk" rows="5">${esc(a ? a.checklist.map((c) => c.item).join("\n") : "")}</textarea></label>
+    <label>Office notes <span class="opt">the student does not see these</span>
+      <textarea id="app-notes" rows="3">${esc(a ? a.notes : "")}</textarea></label>
+    <div class="actions"><button class="btn" id="app-save">Save</button></div>`);
+  $("#app-save").onclick = async () => {
+    const lines = $("#app-chk").value.split("\n").map((x) => x.trim()).filter(Boolean);
+    const checklist = a
+      ? lines.map((item) => a.checklist.find((c) => c.item === item) || { item, done: false })
+      : (lines.length ? lines : null);
+    try {
+      await api(`/api/students/${uid}/applications`, { body: {
+        id: a ? a.id : 0, institution: $("#app-inst").value, program: $("#app-prog").value,
+        kind: $("#app-kind").value,
+        deadline: $("#app-deadline").value ? new Date($("#app-deadline").value + "T17:00").getTime() / 1000 : 0,
+        url: $("#app-url").value, contact: $("#app-contact").value, owner_id: +$("#app-owner").value,
+        next_step: $("#app-next").value, notes: $("#app-notes").value, checklist } });
+      closeModal(); after();
+    } catch (e) { toast(e.message); }
   };
 }

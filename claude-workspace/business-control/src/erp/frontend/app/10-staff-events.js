@@ -544,6 +544,10 @@ async function renderBoard() {
           fmtDate(t.due)}</span>` : ""}
         ${t.client_name ? `<span class="pill">${esc(t.client_name)}</span>`
           : ""}
+        ${t.tasks.length ? `<span class="${t.tasks_done === t.tasks.length ? "pill ok" : "dim"}">${
+          t.tasks_done}/${t.tasks.length} tasks</span>` : ""}
+        ${t.links.length ? `<span class="dim">${t.links.length} page${t.links.length === 1 ? "" : "s"}</span>` : ""}
+        ${t.files.length ? `<span class="dim">${t.files.length} file${t.files.length === 1 ? "" : "s"}</span>` : ""}
       </div>
     </div>`;
   view().innerHTML = `
@@ -607,6 +611,8 @@ function ticketForm(t, d) {
     </div>
     <label>Labels <span class="opt">comma separated</span></label>
     <input id="tk-labels" value="${esc(((t && t.labels) || []).join(", "))}">
+    ${t ? ticketPieces(t, d) : `<p class="dim">Save it first; then tasks, the pages it is
+      about and attachments go on it.</p>`}
     <div class="modal-foot">
       ${t ? `<button class="btn alt" id="tk-del"
         style="margin-right:auto">Delete</button>` : ""}
@@ -637,6 +643,74 @@ function ticketForm(t, d) {
       closeModal(); renderBoard();
     } catch (err) { toast(err.message); }
   };
+  if (t) ticketPiecesWire(t, d);
+}
+
+/* The pieces of an open ticket: the lines of its work with a box each,
+   the pages in this product it is about — the reader lands on the order
+   or the student in one click — and what somebody attached. */
+function ticketPieces(t, d) {
+  const tabs = Object.keys(d.link_tabs || {}).sort();
+  return `
+    <h4 class="tk-h">Tasks <span class="dim">${t.tasks_done}/${t.tasks.length}</span></h4>
+    <ul class="tk-tasks">${t.tasks.map((k) => `<li>
+      <label class="chk"><input type="checkbox" data-tktick="${k.id}" ${k.done ? "checked" : ""}>
+        <span class="${k.done ? "tk-done" : ""}">${esc(k.title)}</span></label>
+      ${k.assignee_name ? `<span class="dim">${esc(k.assignee_name)}</span>` : ""}
+      <a class="dim" data-tkdrop="${k.id}">remove</a></li>`).join("")}</ul>
+    <div class="tk-add">
+      <input id="tk-task-new" placeholder="a line of the work">
+      <select id="tk-task-who"><option value="0">anyone</option>${d.people.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+      <button class="btn alt sm" id="tk-task-add">Add task</button>
+    </div>
+    <h4 class="tk-h">Pages this is about</h4>
+    ${t.links.length ? `<ul class="tk-links">${t.links.map((l) => `<li>
+      <a data-tkgo="${esc(l.href)}">${esc(l.label)}</a>
+      <a class="dim" data-tkunlink="${l.id}">remove</a></li>`).join("")}</ul>` : ""}
+    <div class="tk-add">
+      <select id="tk-link-tab">${tabs.map((k) => `<option value="${k}">${esc(k)}${d.link_tabs[k] ? ` (${esc(d.link_tabs[k].toLowerCase())} #)` : ""}</option>`).join("")}</select>
+      <input id="tk-link-id" type="number" min="0" placeholder="#" style="max-width:80px">
+      <input id="tk-link-label" placeholder="what to call it (optional)">
+      <button class="btn alt sm" id="tk-link-add">Link page</button>
+    </div>
+    <h4 class="tk-h">Attachments</h4>
+    ${t.files.length ? `<ul class="tk-files">${t.files.map((f) => `<li>
+      <a href="/api/tickets/${t.id}/files/${f.id}?t=${encodeURIComponent(S.user.token)}" target="_blank" rel="noopener">${esc(f.name)}</a>
+      <span class="dim">${(f.bytes / 1024).toFixed(0)} KB · ${esc(f.by_name)}</span>
+      <a class="dim" data-tkunfile="${f.id}">remove</a></li>`).join("")}</ul>` : ""}
+    <label class="btn alt sm">Attach a file<input type="file" hidden id="tk-file"></label>
+    <span class="dim">up to 25 MB; documents, images, sheets, sound and film</span>`;
+}
+
+function ticketPiecesWire(t, d) {
+  const reopen = async () => {
+    const fresh = await api(`/api/tickets/${t.id}`);
+    ticketForm(fresh, d);
+  };
+  const run = async (fn) => { try { await fn(); await reopen(); } catch (err) { toast(err.message); } };
+  const mb = modalBody();
+  mb.querySelectorAll("[data-tktick]").forEach((c) => c.onchange = () => run(() =>
+    api(`/api/tickets/${t.id}/tasks/${c.dataset.tktick}`, { method: "PATCH", body: { done: c.checked } })));
+  mb.querySelectorAll("[data-tkdrop]").forEach((a) => a.onclick = () => run(() =>
+    api(`/api/tickets/${t.id}/tasks/${a.dataset.tkdrop}`, { method: "DELETE" })));
+  $("#tk-task-add").onclick = () => run(() => api(`/api/tickets/${t.id}/tasks`, {
+    body: { title: $("#tk-task-new").value, assignee_id: +$("#tk-task-who").value } }));
+  $("#tk-task-new").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); $("#tk-task-add").click(); } };
+  mb.querySelectorAll("[data-tkgo]").forEach((a) => a.onclick = () => { closeModal(); location.hash = a.dataset.tkgo; });
+  mb.querySelectorAll("[data-tkunlink]").forEach((a) => a.onclick = () => run(() =>
+    api(`/api/tickets/${t.id}/links/${a.dataset.tkunlink}`, { method: "DELETE" })));
+  $("#tk-link-add").onclick = () => run(() => api(`/api/tickets/${t.id}/links`, {
+    body: { tab: $("#tk-link-tab").value, ref_id: +$("#tk-link-id").value || 0,
+            label: $("#tk-link-label").value } }));
+  mb.querySelectorAll("[data-tkunfile]").forEach((a) => a.onclick = () => run(() =>
+    api(`/api/tickets/${t.id}/files/${a.dataset.tkunfile}`, { method: "DELETE" })));
+  $("#tk-file").onchange = () => run(async () => {
+    const f = $("#tk-file").files[0];
+    if (!f) return;
+    const r = await fetch(`/api/tickets/${t.id}/files`, { method: "POST", body: f,
+      headers: { Authorization: "Bearer " + S.user.token, "x-filename": f.name } });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+  });
 }
 
 /* ---------- the calendar ----------

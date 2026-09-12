@@ -97,9 +97,9 @@ async function renderIntegrations() {
             ? "Stop live updates" : "Go live"}</button>
           <button class="btn alt sm" data-igsync="${p.name}"
             >Sync now</button>` : ""}
-        ${p.connected ? `<button class="btn alt sm" data-igtest="${p.name}"
+        ${p.connected && p.auth !== "none" ? `<button class="btn alt sm" data-igtest="${p.name}"
           >Test</button>` : ""}
-        ${p.connected || p.inbound_ready
+        ${(p.connected && p.auth !== "none") || p.inbound_ready
           ? `<button class="btn alt sm" data-igoff="${p.name}">${
               p.auth === "inbound" ? "New key" : "Disconnect"}</button>` : ""}
       </div>

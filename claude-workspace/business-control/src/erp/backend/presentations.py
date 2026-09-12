@@ -25,6 +25,7 @@ one slide per slide with a title box, a body box and the picture.
 """
 import io
 import json
+import re
 import secrets
 import time
 import zipfile
@@ -62,13 +63,53 @@ CREATE TABLE IF NOT EXISTS presentation_views (
 );
 """
 
-KINDS = ("deck", "recording", "file")
+KINDS = ("deck", "recording", "file", "embed")
 MAX_SLIDES = 200
 
 
 def init_tables(con):
     con.executescript(TABLES)
+    try:
+        con.execute("ALTER TABLE presentations ADD COLUMN embed_url TEXT DEFAULT ''")
+    except Exception:                                        # noqa: BLE001
+        pass
     con.commit()
+
+
+# ── decks that live elsewhere ────────────────────────────────────────────────
+
+def embed_url(link: str) -> str:
+    """The frame address for a deck that lives on somebody else's site.
+
+    Prezi shares a view link; the same link with /embed on the end is
+    the version that plays inside a page, and that is the whole
+    integration — no key, no account, nothing to connect, because Prezi
+    publishes the deck and this only points at it. Google Slides and
+    Canva have the same shape. Any other https address is framed as
+    given, which works when the site allows it and shows a blank when it
+    does not; the screen says so.
+    """
+    u = (link or "").strip()
+    if not u.startswith("https://"):
+        raise HTTPException(400, "a deck to embed is an https link")
+    m = re.match(r"https://prezi\.com/(?:view|p)/([A-Za-z0-9_-]+)", u)
+    if m:
+        return f"https://prezi.com/view/{m.group(1)}/embed/"
+    m = re.match(r"https://docs\.google\.com/presentation/d/(?:e/)?([A-Za-z0-9_-]+)", u)
+    if m:
+        return f"https://docs.google.com/presentation/d/{m.group(1)}/embed"
+    m = re.match(r"https://www\.canva\.com/design/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)/", u)
+    if m:
+        return f"https://www.canva.com/design/{m.group(1)}/{m.group(2)}/view?embed"
+    return u.split("#")[0][:800]
+
+
+def embed_source(url: str) -> str:
+    for host, name in (("prezi.com", "Prezi"), ("docs.google.com", "Google Slides"),
+                       ("canva.com", "Canva")):
+        if host in url:
+            return name
+    return "a website"
 
 
 # ── slides ───────────────────────────────────────────────────────────────────
@@ -395,6 +436,8 @@ def shape(con, r) -> dict:
     c = con.execute("SELECT name FROM courses WHERE id=?",
                     (r["course_id"],)).fetchone() if r["course_id"] else None
     d["course"] = c["name"] if c else ""
+    d["embed_url"] = r["embed_url"] if "embed_url" in r.keys() else ""
+    d["embed_source"] = embed_source(d["embed_url"]) if d["embed_url"] else ""
     # the lessons it is on: a deck's PDF or a recording, as lesson material
     d["lessons"] = [dict(x) for x in con.execute(
         "SELECT l.id, l.title FROM learning_materials m JOIN lessons l"
@@ -429,6 +472,7 @@ class PresentationBody(BaseModel):
     slides: list | None = None
     course_id: int | None = None
     published: bool | None = None
+    embed_link: str = ""          # for kind "embed": the share link
 
 
 @router.post("/api/presentations")
@@ -441,14 +485,15 @@ def create_presentation(body: PresentationBody, user=Depends(current_user),
     if not title:
         raise HTTPException(400, "a presentation needs a title")
     now = time.time()
+    frame = embed_url(body.embed_link) if body.kind == "embed" else ""
     cur = con.execute(
         "INSERT INTO presentations(token,title,blurb,kind,slides,material_id,"
-        " course_id,owner_id,published,created_at,updated_at)"
-        " VALUES(?,?,?,?,?,0,?,?,?,?,?)",
+        " course_id,owner_id,published,created_at,updated_at,embed_url)"
+        " VALUES(?,?,?,?,?,0,?,?,?,?,?,?)",
         (secrets.token_urlsafe(12), title[:200], body.blurb.strip()[:2000],
          body.kind, json.dumps(clean_slides(body.slides or [])),
          body.course_id or 0, user["id"],
-         1 if body.published is None or body.published else 0, now, now))
+         1 if body.published is None or body.published else 0, now, now, frame))
     con.commit()
     return {"ok": True, **shape(con, _get(con, cur.lastrowid))}
 
@@ -467,6 +512,9 @@ def update_presentation(pid: int, body: PresentationBody,
          r["course_id"] if body.course_id is None else (body.course_id or 0),
          r["published"] if body.published is None else (1 if body.published else 0),
          time.time(), pid))
+    if body.embed_link.strip():
+        con.execute("UPDATE presentations SET embed_url=?, kind='embed' WHERE id=?",
+                    (embed_url(body.embed_link), pid))
     con.commit()
     return {"ok": True, **shape(con, _get(con, pid))}
 
