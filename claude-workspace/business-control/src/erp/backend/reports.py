@@ -286,6 +286,12 @@ def annual_report(year: int = 0, user=Depends(current_user), con=Depends(get_con
         raise HTTPException(403, "the annual report is the office's and the board's")
     from .main import CFG
     rep = annual(con, _year(year))
+    # The year before, flattened, so every number can say how it moved.
+    # Derived the same way, so the comparison is between like and like.
+    prior = annual(con, rep["year"] - 1)
+    rep["prior"] = {sec: {k: v for k, v in vals.items() if not isinstance(v, list)}
+                    for sec, vals in prior["sections"].items()}
+    rep["prior"]["_months"] = (prior["sections"].get("sales") or {}).get("by_month_cents", [])
     rep["years"] = years_with_data(con)
     rep["brand"] = CFG.get("brand_name") or ""
     return rep

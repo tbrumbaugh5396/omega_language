@@ -10,7 +10,18 @@ async function renderAnnual() {
   const d = await api(`/api/reports/annual${ANN_YEAR ? "?year=" + ANN_YEAR : ""}`);
   ANN_YEAR = d.year;
   const S_ = d.sections, W = d.words;
-  const tile = (label, v, sub = "") => `<div class="card tile"><span class="dim">${label}</span><b>${v}</b>${sub ? `<span class="dim">${sub}</span>` : ""}</div>`;
+  const P = d.prior || {};
+  /* How a number moved against the year before: the same measure, derived
+     the same way. Shown only when both years have it and last year was
+     not zero — a rise from nothing is not a percentage. */
+  const delta = (sec, key, isMoney) => {
+    const now = (S_[sec] || {})[key], then = (P[sec] || {})[key];
+    if (typeof now !== "number" || typeof then !== "number" || !then) return "";
+    const pct = Math.round((now - then) / Math.abs(then) * 100);
+    return `<span class="ann-delta ${pct > 0 ? "up" : pct < 0 ? "down" : ""}" title="${d.year - 1}: ${isMoney ? money(then) : then}">${
+      pct > 0 ? "+" : ""}${pct}% vs ${d.year - 1}</span>`;
+  };
+  const tile = (label, v, sub = "", dl = "") => `<div class="card tile"><span class="dim">${label}</span><b>${v}</b>${sub ? `<span class="dim">${sub}</span>` : ""}${dl}</div>`;
   const max = Math.max(1, ...((S_.sales && S_.sales.by_month_cents) || [0]));
   view().innerHTML = `
     <div class="page-head">
@@ -37,20 +48,23 @@ async function renderAnnual() {
     </div>
     ${S_.sales ? `<h3>Sales</h3>
     <div class="tiles">
-      ${tile("Revenue", money(S_.sales.revenue_cents), `${S_.sales.orders} orders`)}
-      ${tile("Average order", money(S_.sales.average_order_cents))}
-      ${tile("New customers", S_.sales.new_customers, `${S_.sales.returning} came back`)}
+      ${tile("Revenue", money(S_.sales.revenue_cents), `${S_.sales.orders} orders`, delta("sales", "revenue_cents", true))}
+      ${tile("Average order", money(S_.sales.average_order_cents), "", delta("sales", "average_order_cents", true))}
+      ${tile("New customers", S_.sales.new_customers, `${S_.sales.returning} came back`, delta("sales", "new_customers"))}
       ${S_.sales.donations_cents ? tile("Given at checkout", money(S_.sales.donations_cents)) : ""}
     </div>
-    <div class="card ann-months">${S_.sales.by_month_cents.map((c, i) => `<div class="ann-bar" title="${money(c)}">
-      <i style="height:${Math.round(c / max * 100)}%"></i><span>${d.months[i]}</span></div>`).join("")}</div>
+    <div class="card ann-months">${S_.sales.by_month_cents.map((c, i) => {
+      const pm = (P._months || [])[i] || 0, mx = Math.max(max, ...(P._months || [0]));
+      return `<div class="ann-bar" title="${money(c)}${pm ? ` (${d.year - 1}: ${money(pm)})` : ""}">
+      ${pm ? `<u style="height:${Math.round(pm / mx * 100)}%"></u>` : ""}<i style="height:${Math.round(c / mx * 100)}%"></i><span>${d.months[i]}</span></div>`; }).join("")}
+      ${(P._months || []).some((x) => x) ? `<p class="dim ann-key">grey: ${d.year - 1}</p>` : ""}</div>
     ${S_.sales.top_products.length ? `<div class="card"><div class="tablewrap"><table>
       <thead><tr><th>what sold</th><th>units</th><th>revenue</th></tr></thead>
       <tbody>${S_.sales.top_products.map((p) => `<tr><td>${esc(p.name)}</td><td>${p.qty}</td><td>${money(p.cents)}</td></tr>`).join("")}</tbody>
     </table></div></div>` : ""}` : ""}
     ${S_.learning ? `<h3>Learning</h3>
     <div class="tiles">
-      ${tile("Students", S_.learning.students, `${S_.learning.new_seats} new seats`)}
+      ${tile("Students", S_.learning.students, `${S_.learning.new_seats} new seats`, delta("learning", "students"))}
       ${tile("Courses", S_.learning.courses)}
       ${"sessions_held" in S_.learning ? tile("Sessions held", S_.learning.sessions_held, `${S_.learning.attendances || 0} attendances`) : ""}
       ${"quizzes_taken" in S_.learning ? tile("Quizzes taken", S_.learning.quizzes_taken) : ""}
@@ -59,15 +73,15 @@ async function renderAnnual() {
     <h3>People</h3>
     <div class="tiles">
       ${tile("Staff at year end", S_.people.staff_at_end, `${S_.people.joined} joined${"left" in S_.people ? `, ${S_.people.left} left` : ""}`)}
-      ${"hours_worked" in S_.people ? tile("Hours worked", S_.people.hours_worked.toLocaleString()) : ""}
+      ${"hours_worked" in S_.people ? tile("Hours worked", S_.people.hours_worked.toLocaleString(), "", delta("people", "hours_worked")) : ""}
       ${"payroll_gross_cents" in S_.people ? tile("Payroll", money(S_.people.payroll_gross_cents), `${money(S_.people.payroll_net_cents)} net`) : ""}
       ${"applicants" in S_.people ? tile("Applicants", S_.people.applicants) : ""}
     </div>
     ${S_.money ? `<h3>Money out, and money given</h3>
     <div class="tiles">
-      ${"expenses_cents" in S_.money ? tile("Expenses", money(S_.money.expenses_cents)) : ""}
+      ${"expenses_cents" in S_.money ? tile("Expenses", money(S_.money.expenses_cents), "", delta("money", "expenses_cents", true)) : ""}
       ${"invoiced_cents" in S_.money ? tile("Invoiced", money(S_.money.invoiced_cents), `${S_.money.invoices_issued} invoices · ${money(S_.money.invoices_collected_cents)} collected`) : ""}
-      ${"gifts_cents" in S_.money ? tile("Gifts received", money(S_.money.gifts_cents), `${S_.money.gifts} gifts from ${S_.money.donors} donors`) : ""}
+      ${"gifts_cents" in S_.money ? tile("Gifts received", money(S_.money.gifts_cents), `${S_.money.gifts} gifts from ${S_.money.donors} donors`, delta("money", "gifts_cents", true)) : ""}
       ${"political_giving_cents" in S_.money && S_.money.political_giving_cents ? tile("Political giving", money(S_.money.political_giving_cents), "disclosed on the civics register") : ""}
     </div>
     ${S_.money.expenses_by_category && S_.money.expenses_by_category.length ? `<div class="card"><div class="tablewrap"><table>

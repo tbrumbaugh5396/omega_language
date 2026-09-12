@@ -110,6 +110,49 @@ UI_KEYS.update({
     "tax": "Tax", "order_placed": "Order placed", "sign_out": "Sign out",
 })
 
+# What the shop writes to a customer. Placeholders in braces are filled
+# by the sender; a translation keeps them. The money in an email is the
+# base currency, formatted for the language, because a receipt in
+# Spanish with "$1,234.56" in it is half translated.
+UI_KEYS.update({
+    "email_receipt_subject": "Your order #{oid} is in!",
+    "email_receipt_thanks": "Thanks {name}!",
+    "email_discount": "Discount {code}", "email_tax": "Tax",
+    "email_shipping": "Shipping", "email_total": "Total",
+    "email_track": "Track any time: {url}  →  order #{oid}",
+    "email_shipped_subject": "Order #{oid} is on its way",
+    "email_delivered_subject": "Order #{oid} has arrived",
+    "email_hi": "Hi {name},",
+    "email_shipped_line": "Your order #{oid} is on its way.",
+    "email_delivered_line": "Your order #{oid} has arrived.",
+    "email_track_it": "Track it: {url}  →  order #{oid}",
+})
+
+
+def strings_for(con, locale: str) -> dict:
+    """The interface's words in one language: the shipped English, this
+    tenant's overrides, then that locale's translations on top."""
+    base = ui_strings(con)
+    loc = (locale or "en").lower()
+    if loc == "en" or loc not in locales(con):
+        return base
+    return {**base, **translations_for(con, loc)}
+
+
+def fmt_money(con, cents: int, locale: str = "en") -> str:
+    """The base currency, in the conventions of the language: 1.234,56 €
+    for a German reader, $1,234.56 for an American one."""
+    cur = (currencies(con) or CURRENCY_DEFAULT)[0]
+    v = cents / 100
+    loc = (locale or "en").lower().split("-")[0]
+    if loc in ("de", "es", "it", "nl", "pt", "fr", "tr", "pl", "ru"):
+        whole, frac = f"{abs(v):,.2f}".split(".")
+        num = whole.replace(",", "\u00a0" if loc == "fr" else ".") + "," + frac
+        sign = "-" if v < 0 else ""
+        return f"{sign}{num}\u00a0{cur['symbol']}"
+    return f"{'-' if v < 0 else ''}{cur['symbol']}{abs(v):,.2f}"
+
+
 # Languages a shop can offer. A code, a name in its own language, and
 # which way it reads — the three things a picker and a page need. A
 # merchant adds one on Store admin → Languages; translations for it are

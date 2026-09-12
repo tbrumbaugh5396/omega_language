@@ -677,7 +677,10 @@ function ticketPieces(t, d) {
     ${t.files.length ? `<ul class="tk-files">${t.files.map((f) => `<li>
       <a href="/api/tickets/${t.id}/files/${f.id}?t=${encodeURIComponent(S.user.token)}" target="_blank" rel="noopener">${esc(f.name)}</a>
       <span class="dim">${(f.bytes / 1024).toFixed(0)} KB · ${esc(f.by_name)}</span>
-      <a class="dim" data-tkunfile="${f.id}">remove</a></li>`).join("")}</ul>` : ""}
+      ${/^image\//.test(f.mime) || f.mime === "application/pdf" || /^(text|audio|video)\//.test(f.mime)
+        ? `<a class="dim" data-tkpeek="${f.id}" data-mime="${esc(f.mime)}">preview</a>` : ""}
+      <a class="dim" data-tkunfile="${f.id}">remove</a></li>
+      <li class="tk-peek" data-tkpeekbox="${f.id}" hidden></li>`).join("")}</ul>` : ""}
     <label class="btn alt sm">Attach a file<input type="file" hidden id="tk-file"></label>
     <span class="dim">up to 25 MB; documents, images, sheets, sound and film</span>`;
 }
@@ -704,6 +707,25 @@ function ticketPiecesWire(t, d) {
             label: $("#tk-link-label").value } }));
   mb.querySelectorAll("[data-tkunfile]").forEach((a) => a.onclick = () => run(() =>
     api(`/api/tickets/${t.id}/files/${a.dataset.tkunfile}`, { method: "DELETE" })));
+  /* A preview inside the modal: the bytes are fetched with the token and
+     shown as what they are — an image, a PDF in a frame, text, a player —
+     so a screenshot on a ticket is looked at where the ticket is. */
+  mb.querySelectorAll("[data-tkpeek]").forEach((a) => a.onclick = async () => {
+    const box = mb.querySelector(`[data-tkpeekbox="${a.dataset.tkpeek}"]`);
+    if (!box.hidden) { box.hidden = true; box.innerHTML = ""; a.textContent = "preview"; return; }
+    a.textContent = "loading…";
+    try {
+      const r = await fetch(`/api/tickets/${t.id}/files/${a.dataset.tkpeek}`, { cache: "no-store", headers: { Authorization: "Bearer " + S.user.token } });
+      if (!r.ok) throw new Error("could not fetch the file");
+      const mime = a.dataset.mime, blob = await r.blob(), url = URL.createObjectURL(blob);
+      box.innerHTML = /^image\//.test(mime) ? `<img src="${url}" alt="">`
+        : mime === "application/pdf" ? `<iframe src="${url}" title="attachment"></iframe>`
+        : /^video\//.test(mime) ? `<video src="${url}" controls></video>`
+        : /^audio\//.test(mime) ? `<audio src="${url}" controls></audio>`
+        : `<pre>${esc((await blob.text()).slice(0, 20000))}</pre>`;
+      box.hidden = false; a.textContent = "hide";
+    } catch (e) { toast(e.message); a.textContent = "preview"; }
+  });
   $("#tk-file").onchange = () => run(async () => {
     const f = $("#tk-file").files[0];
     if (!f) return;

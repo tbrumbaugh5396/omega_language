@@ -1156,6 +1156,7 @@ def me_applications(user=Depends(current_customer), con=Depends(get_con)):
     own notes stay the office's."""
     _require_cap("learning")
     from erp.backend import students as _ST
+    _ST.run_reminders(con)
     return {"applications": _ST.applications_of(con, user["id"], for_student=True),
             "labels": _ST.APP_LABELS}
 

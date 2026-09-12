@@ -72,6 +72,51 @@ const money = (c) => {
 const fmtDay = (ts, opts) => new Date(ts * 1000).toLocaleDateString(LOCALE,
   opts || { day: "numeric", month: "short", year: "numeric" });
 const fmtNum = (n) => { try { return new Intl.NumberFormat(LOCALE).format(n); } catch (e) { return String(n); } };
+/* An address takes a different shape in each country: a ZIP after the
+   state, a postcode before the town, a PLZ before the Ort, no postal
+   code at all in Ireland's countryside. The form re-labels and reorders
+   itself for the country picked, and a code is required only where the
+   post needs one. The list is the countries the shop is likeliest to
+   ship to; another is typed as "other" and takes the plain shape. */
+const ADDRESS_COUNTRIES = [
+  { code: "US", name: "United States" }, { code: "CA", name: "Canada" },
+  { code: "GB", name: "United Kingdom" }, { code: "IE", name: "Ireland" },
+  { code: "AU", name: "Australia" }, { code: "NZ", name: "New Zealand" },
+  { code: "DE", name: "Deutschland" }, { code: "FR", name: "France" },
+  { code: "ES", name: "España" }, { code: "IT", name: "Italia" },
+  { code: "NL", name: "Nederland" }, { code: "MX", name: "México" },
+  { code: "BR", name: "Brasil" }, { code: "JP", name: "日本" },
+  { code: "IN", name: "India" }, { code: "ZZ", name: "Other" },
+];
+function addressShape(code) {
+  const shapes = {
+    US: { city: "City", postal: { label: "ZIP", required: true, after: true }, region: "State" },
+    CA: { city: "City", postal: { label: "Postal code", required: true, after: true }, region: "Province" },
+    AU: { city: "Suburb", postal: { label: "Postcode", required: true, after: true }, region: "State" },
+    NZ: { city: "Town or city", postal: { label: "Postcode", required: true, after: true } },
+    GB: { city: "Town or city", postal: { label: "Postcode", required: true, after: true } },
+    IE: { city: "Town or city", postal: { label: "Eircode", required: false, after: true } },
+    DE: { city: "Ort", postal: { label: "PLZ", required: true, after: false } },
+    FR: { city: "Ville", postal: { label: "Code postal", required: true, after: false } },
+    ES: { city: "Localidad", postal: { label: "Código postal", required: true, after: false }, region: "Provincia" },
+    IT: { city: "Comune", postal: { label: "CAP", required: true, after: false }, region: "Provincia" },
+    NL: { city: "Plaats", postal: { label: "Postcode", required: true, after: false } },
+    MX: { city: "Ciudad", postal: { label: "Código postal", required: true, after: false }, region: "Estado" },
+    BR: { city: "Cidade", postal: { label: "CEP", required: true, after: true }, region: "Estado" },
+    JP: { city: "市区町村", postal: { label: "郵便番号", required: true, after: false }, region: "都道府県" },
+    IN: { city: "City", postal: { label: "PIN code", required: true, after: true }, region: "State" },
+  };
+  return shapes[code] || { city: "City", postal: { label: "Postal code", required: false, after: true } };
+}
+function addressFields() {
+  const code = $("#co-country") ? $("#co-country").value : (localStorage.getItem("sf_country") || "US");
+  const sh = addressShape(code);
+  const keep = (id) => ($(id) ? $(id).value : "");
+  const city = `<div><label>${esc(sh.city)}</label><input id="co-city" value="${esc(keep("#co-city"))}"></div>`;
+  const postal = `<div><label>${esc(sh.postal.label)}${sh.postal.required ? "" : ` <span class="dim">${t("optional", "optional")}</span>`}</label><input id="co-postal" value="${esc(keep("#co-postal"))}"></div>`;
+  return `<label>${t("address", "Address")}</label><input id="co-addr" placeholder="${t("street_address", "Street address")}" value="${esc(keep("#co-addr"))}">
+    <div class="row">${sh.postal.after ? city + postal : postal + city}</div>`;
+}
 /* The shell's own chrome — header buttons, the side menu — carries
    data-i18n keys; this turns them into the visitor's language at boot. */
 function applyI18n() {
@@ -1214,9 +1259,9 @@ $("#checkout-btn").onclick = async () => {
   openModal(`<h3>Checkout</h3>
     <label>Name</label><input id="co-name" placeholder="Full name">
     <label>Email</label><input id="co-email" type="email" placeholder="you@example.com">
-    <label>Address</label><input id="co-addr" placeholder="Street address">
-    <div class="row"><div><label>City</label><input id="co-city"></div>
-      <div><label>Postal</label><input id="co-postal"></div></div>
+    <label>${t("country", "Country")}</label><select id="co-country">${ADDRESS_COUNTRIES.map((c) =>
+      `<option value="${c.code}" ${c.code === (localStorage.getItem("sf_country") || I18N.default_country || "US") ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
+    <div id="co-addrfields">${addressFields()}</div>
     <label>Shipping</label>
     ${methods.map((m, i) => `<label class="ship-opt">
       <input type="radio" name="co-ship" value="${m.id}" ${i === 0 ? "checked" : ""}>
@@ -1271,6 +1316,7 @@ $("#checkout-btn").onclick = async () => {
       <button class="btn-pill primary sm" id="co-place">Place order</button>
     </div>
     <p class="dim" id="co-msg" style="margin-top:8px"></p>`);
+  $("#co-country").onchange = () => { localStorage.setItem("sf_country", $("#co-country").value); $("#co-addrfields").innerHTML = addressFields(); };
   $("#co-place").onclick = placeOrder;
   document.querySelectorAll(".co-give-amt").forEach((b) =>
     b.onclick = () => {
@@ -1300,7 +1346,9 @@ async function placeOrder() {
   const name = $("#co-name").value.trim();
   const email = $("#co-email").value.trim();
   const msg = $("#co-msg");
-  if (!name || !$("#co-addr").value.trim() || !$("#co-city").value.trim()) {
+  const country = $("#co-country") ? $("#co-country").value : "";
+  if (!name || !$("#co-addr").value.trim() || !$("#co-city").value.trim()
+      || (addressShape(country).postal.required && !$("#co-postal").value.trim())) {
     msg.textContent = "name, address and city are required"; return;
   }
   msg.textContent = "placing order…";
@@ -1329,7 +1377,8 @@ async function placeOrder() {
         pay_method: payEl ? payEl.value : "",
         ship_name: name, address: $("#co-addr").value.trim(),
         city: $("#co-city").value.trim(),
-        postal: $("#co-postal").value.trim() }) });
+        postal: $("#co-postal").value.trim(),
+        country, locale: LOCALE }) });
     const out = await r.json();
     if (!r.ok) { msg.textContent = out.detail || "order failed"; return; }
     funnel("purchase", { value_cents: out.total_cents || 0 });

@@ -19,6 +19,7 @@ async function renderHealth(q = "") {
           cabinet that logs who opened it.</p></div>
       <div class="top-actions">
         <input id="hea-q" placeholder="find a patient" value="${esc(q)}" aria-label="find a patient">
+        <button class="btn alt" id="hea-kiosk" title="the check-in screen for the counter: no sign-in, name and date of birth or the card's code">Kiosk link</button>
         <button class="btn alt" id="hea-desk">Front desk view</button>
         <button class="btn" id="hea-new">Add a patient</button>
       </div>
@@ -42,6 +43,17 @@ async function renderHealth(q = "") {
   $("#hea-q").onkeydown = (e) => { if (e.key === "Enter") renderHealth(e.target.value.trim()); };
   $("#hea-new").onclick = () => heaPickPerson();
   $("#hea-desk").onclick = () => heaDesk(d, st);
+  $("#hea-kiosk").onclick = () => {
+    const url = location.origin + "/health/kiosk";
+    modal(`<h3>The counter kiosk</h3>
+      <p class="dim">Open this on the tablet at the counter. Nobody signs in on it: a patient
+        types their name and date of birth, or shows the code on their ID card, and lands on
+        the queue as arrived. It says nothing from the record — it faces the waiting room.</p>
+      <p><code class="cl-link">${esc(url)}</code></p>${qrImg(url, 160)}
+      <p class="dim">Files on records are encrypted on disk with this install's own key
+        (data/&lt;tenant&gt;/keys/health.key, or BC_HEALTH_KEY_DIR). Lose the key and the files are noise;
+        back it up apart from the data.</p>`);
+  };
   view().querySelectorAll("[data-hea]").forEach((li) => li.onclick = () => heaOpen(+li.dataset.hea, d));
   heaQueueWire(d, st);
   if (HEA_SEL) heaOpen(HEA_SEL, d);

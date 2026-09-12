@@ -36,10 +36,10 @@ from their portal within the window before their time, which is the
 tablet on the counter without the tablet.
 """
 import json
+import pathlib
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from . import auth, db
@@ -188,6 +188,47 @@ def _dir():
     return d
 
 
+# ---------- the bytes on disk ----------
+# A patient's file is encrypted before it touches the disk and decrypted
+# on the way out: AES-256-GCM, a fresh nonce per file, the tenant's key.
+# The key lives in a file of its own, mode 0600, under the tenant's data
+# — or wherever BC_HEALTH_KEY_DIR points, which is how an operator keeps
+# the key on a different disk from the data it unlocks. Lose the key and
+# every file is noise; that is the point, and the docs say so. The
+# database rows (names, notes, vitals) are NOT encrypted by this: that is
+# the host's disk encryption, and a claim otherwise would be a lie.
+
+def _key() -> bytes:
+    import os
+    import secrets
+    from . import tenancy
+    root = os.environ.get("BC_HEALTH_KEY_DIR")
+    d = (pathlib.Path(root) / tenancy.CURRENT.get()) if root else (tenancy.data_dir() / "keys")
+    d.mkdir(parents=True, exist_ok=True)
+    kf = d / "health.key"
+    if not kf.exists():
+        kf.write_bytes(secrets.token_bytes(32))
+        os.chmod(kf, 0o600)
+    return kf.read_bytes()
+
+
+def seal(data: bytes) -> bytes:
+    import os
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce = os.urandom(12)
+    return b"BCH1" + nonce + AESGCM(_key()).encrypt(nonce, data, b"health-file")
+
+
+def unseal(blob: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    if not blob.startswith(b"BCH1"):
+        # A file written before encryption existed: served as it is, and
+        # re-sealed the first time it is read.
+        return blob
+    nonce, body = blob[4:16], blob[16:]
+    return AESGCM(_key()).decrypt(nonce, body, b"health-file")
+
+
 def log_access(con, patient_id: int, user, what: str) -> None:
     con.execute("INSERT INTO health_access(user_id,by_id,by_name,what,at)"
                 " VALUES(?,?,?,?,?)",
@@ -322,6 +363,45 @@ def check_in(con, appointment_id: int, *, method: str, by_user=None,
         (appointment_id, a["user_id"] or 0, now, method, now))
     con.commit()
     return {"ok": True, "arrived_at": now}
+
+
+def kiosk_check_in(con, *, name: str = "", birth_date: str = "", code: str = "") -> dict:
+    """Arrival from the screen on the counter. Nobody is signed in on
+    it, so the patient proves who they are with what a stranger would
+    not know together — their name and date of birth — or by showing
+    the person code on their ID card. It says only that they are
+    checked in, never anything from the record, because a kiosk faces
+    the waiting room."""
+    from . import identity
+    uid = 0
+    if code.strip():
+        parsed = identity.parse_payload(code)
+        r = con.execute("SELECT id FROM users WHERE uid=? AND erased_at IS NULL",
+                        (parsed,)).fetchone() if parsed else None
+        uid = r["id"] if r else 0
+    elif name.strip() and birth_date.strip():
+        rows = con.execute(
+            "SELECT u.id FROM users u JOIN patients p ON p.user_id=u.id"
+            " WHERE lower(u.name)=lower(?) AND p.birth_date=? AND u.erased_at IS NULL",
+            (" ".join(name.split()), birth_date.strip())).fetchall()
+        uid = rows[0]["id"] if len(rows) == 1 else 0
+    if not uid:
+        # One answer whether the name is wrong, the date is wrong, or
+        # there is no record: a kiosk that said which would be telling
+        # the waiting room who is a patient here.
+        raise HTTPException(404, "we could not match that — please see the desk")
+    now = time.time()
+    a = con.execute(
+        "SELECT * FROM appointments WHERE user_id=? AND state IN ('held','confirmed')"
+        " AND starts-?<=? AND ends>? ORDER BY starts LIMIT 1",
+        (uid, CHECKIN_WINDOW, now, now)).fetchone()
+    if a is None:
+        raise HTTPException(404, "no appointment in the next three hours — please see the desk")
+    out = check_in(con, a["id"], method="kiosk", patient_id=uid)
+    out["first_name"] = con.execute("SELECT name FROM users WHERE id=?",
+                                    (uid,)).fetchone()["name"].split()[0]
+    out["at"] = a["starts"]
+    return out
 
 
 # ---------- routes ----------
@@ -583,7 +663,7 @@ async def file_add(uid: int, request: Request, user=Depends(current_user),
         (uid, encounter_id, name, ext, FILE_EXT[ext], len(data),
          hashlib.sha256(data).hexdigest(), kind, int(shared), user["name"],
          db.now())).lastrowid
-    (_dir() / f"{fid}.{ext}").write_bytes(data)
+    (_dir() / f"{fid}.{ext}").write_bytes(seal(data))
     log_access(con, uid, user, f"file:{fid}:add")
     con.commit()
     return {"ok": True, "id": fid, "bytes": len(data)}
@@ -597,8 +677,14 @@ def _serve_file(con, uid: int, fid: int, *, for_patient: bool):
     path = _dir() / f"{fid}.{f['ext']}"
     if not path.exists():
         raise HTTPException(410, "the file is no longer on disk")
-    return FileResponse(path, media_type=f["mime"] or "application/octet-stream",
-                        filename=f["name"])
+    raw = path.read_bytes()
+    data = unseal(raw)
+    if not raw.startswith(b"BCH1"):
+        path.write_bytes(seal(data))          # sealed from now on
+    from fastapi.responses import Response
+    return Response(data, media_type=f["mime"] or "application/octet-stream",
+                    headers={"Content-Disposition": f'inline; filename="{f["name"]}"',
+                             "Cache-Control": "no-store"})
 
 
 @router.get("/api/health/patients/{uid}/files/{fid}")

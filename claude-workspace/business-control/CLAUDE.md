@@ -146,6 +146,13 @@ Things to know before touching them:
   and strips `notes` and unshared rows via `record(for_patient=True)`.
   Appointments are Bookings' rows; `patient_checkins` keys on them.
   Never claim compliance in copy; the module docstring says why.
+- Health files are sealed with `health.seal/unseal` (AES-GCM, key file
+  per tenant; `BCH1` prefix; pre-sealing files are re-sealed on first
+  read). The kiosk (`/health/kiosk`, `kiosk_check_in`) answers every
+  miss identically on purpose. Application reminders are lazy
+  (`students.run_reminders`, dedup via notification keys), there is no
+  scheduler in this app. Order mails use `content.strings_for(con,
+  locale)` + `fmt_money`; the order and the user carry `locale`.
 - **Adding a capability touches six places**: the price book table, the
   parser's count in `pricebook.py`, `CAP_NAMES`, `TAB_CAP` and
   `CAP_LABEL`, the client capability menu, and the sales deck's price

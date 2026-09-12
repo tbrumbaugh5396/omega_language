@@ -14,13 +14,13 @@ lands on the desk's queue the same moment.
 """
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from erp.backend import health as H
 
-from .api import current_customer, get_con, render_shell
+from .api import current_customer, get_con, rate_limit, render_shell
 from .partners import _require_cap, brand_name
 
 router = APIRouter()
@@ -120,6 +120,62 @@ def my_insurance(body: SelfPolicy, user=Depends(current_customer),
     H.log_access(con, user["id"], user, "portal:insurance")
     con.commit()
     return {"ok": True, "id": pid}
+
+
+class KioskBody(BaseModel):
+    name: str = ""
+    birth_date: str = ""
+    code: str = ""
+
+
+@router.post("/api/health/kiosk/checkin")
+def kiosk_checkin(body: KioskBody, request: Request, con=Depends(get_con)):
+    """Public, rate-limited, and answers with nothing from the record."""
+    _require_cap("health")
+    rate_limit(request)
+    return H.kiosk_check_in(con, name=body.name, birth_date=body.birth_date,
+                            code=body.code)
+
+
+@router.get("/health/kiosk", response_class=HTMLResponse)
+def kiosk_page(con=Depends(get_con)):
+    """The screen on the counter: no sign-in, one job, nothing shown."""
+    _require_cap("health")
+    from .api import asset_version
+    brand = brand_name(con)
+    v = asset_version()
+    body = f"""
+<section class="section partner-head">
+ <span class="eyebrow">{brand}</span>
+ <h1>Welcome — please check in</h1>
+ <p class="lede">Type your name and date of birth, or show the code on your
+  card to the camera. We'll tell the desk you're here.</p>
+</section>
+<section class="section" id="hk-root">
+ <div class="hk-form">
+  <label>Your full name<input id="hk-name" autocomplete="off" autocapitalize="words"></label>
+  <label>Date of birth<input id="hk-dob" type="date"></label>
+  <button class="lrn-btn primary" id="hk-go">I have arrived</button>
+  <button class="lrn-btn" id="hk-scan">Scan my card instead</button>
+  <div id="hk-scanbox" hidden></div>
+  <p class="lrn-meta" id="hk-msg"></p>
+ </div>
+</section>
+<style>
+ .hk-form{{display:grid;gap:12px;max-width:420px;font-size:1.15em}}
+ .hk-form label{{display:grid;gap:4px}}
+ .hk-form input{{padding:12px;font-size:1.1em;border-radius:10px;border:1px solid rgba(127,127,127,.45);background:none;color:inherit}}
+ .hk-done{{font-size:1.6em;text-align:center;padding:40px 10px}}
+ .lrn-btn{{padding:12px 18px;border-radius:10px;border:1px solid currentColor;background:none;color:inherit;cursor:pointer;font-size:1em}}
+ .lrn-btn.primary{{font-weight:700}}
+ .lrn-meta{{opacity:.75}}
+ #hk-scanbox video{{width:100%;max-width:420px;border-radius:12px}}
+</style>
+<script src="/qr-scan.js?v={v}"></script>
+<script src="/health-kiosk.js?v={v}"></script>"""
+    return HTMLResponse(render_shell(
+        con, body, title=f"Check in — {brand}",
+        description=f"{brand}: check in for your appointment."))
 
 
 @router.get("/health", response_class=HTMLResponse)

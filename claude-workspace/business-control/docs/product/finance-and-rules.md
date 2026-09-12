@@ -591,7 +591,8 @@ bounds.
 - **Invoicing**: no payment link. A customer reads the invoice and pays
   however they already pay; nothing here takes a card.
 - **Civics**: no statute text, no compliance checking, and no data below
-  the state line except what somebody types. Tiles and the Census
+  the state line except what somebody types. The US federal election
+  calendar is computed and can be put on the timeline with a button. Tiles and the Census
   outlines need the network to fetch; the country outline does not. A
   typed place has no Census outline and takes a pasted one. Treaties and
   blocs are typed, because no free source of them is trustworthy enough
@@ -604,19 +605,31 @@ bounds.
 - **Labels**: no per-tenant custom layouts; the five stocks are the
   five stocks. Photos print only on card layouts, and only when the
   student has one.
-- **Tickets**: attachments are not previewed or virus-scanned; a link
-  points at a screen and a row number, not at a row that has since gone.
+- **Tickets**: attachments preview inside the ticket (images, PDFs,
+  text, sound and film) but are not virus-scanned; a link points at a
+  screen and a row number, not at a row that has since gone.
 - **Prezi**: a frame, not an import — Prezi's own API is not used, and
   a deck that Prezi unpublishes goes blank here too.
 - **Applications**: nothing is sent to the institution; this is the
-  office's record and the student's window on it.
-- **Annual report**: no comparison year and no charts beyond the months;
-  the books section needs journals to have been posted.
-- **Localisation**: translations are typed, not machine-made; emails and
-  receipts stay in the shop's base language; addresses take one shape.
-- **Health**: no claims, no e-prescribing, no lab interfaces, no
-  encryption at rest beyond what the host provides; a kiosk at the
-  counter is the desk's own screen, not a separate device mode.
+  office's record and the student's window on it. A fortnight and three
+  days before a deadline the student is told, once each, what is still
+  wanted — as an in-app notice, sent lazily when a page is opened,
+  because the install has no clock of its own.
+- **Annual report**: the year before sits beside each number and behind
+  each month's bar; there are no charts beyond that, and the books
+  section needs journals to have been posted.
+- **Localisation**: translations are typed, not machine-made. Order
+  receipts and shipping mails go out in the language the shopper was
+  reading in, with money in its conventions, and the checkout shapes
+  the address for the country picked; other mails stay in the base
+  language.
+- **Health**: no claims, no e-prescribing, no lab interfaces. Files on
+  a record are encrypted on disk (AES-256-GCM, a key of the install's
+  own under `data/<tenant>/keys/` or `BC_HEALTH_KEY_DIR`); the database
+  rows are not, which is the host's disk encryption to provide. The
+  counter kiosk at /health/kiosk signs nobody in: a name and date of
+  birth together, or the card's code, mark an arrival and show nothing
+  else, and every miss gets the same answer.
 - **Leaving**: it closes what this install controls. Accounts in other
   systems are somebody's list item, not something this can revoke.
 

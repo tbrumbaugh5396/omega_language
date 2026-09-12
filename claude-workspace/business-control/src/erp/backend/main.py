@@ -1085,6 +1085,8 @@ class OrderBody(BaseModel):
     city: str = ""
     postal: str = ""
     phone: str = ""
+    country: str = ""           # ISO-2, from the checkout's country picker
+    locale: str = ""            # the language the shopper was reading in
     pay_method: str = ""        # "card" to request Stripe Checkout
     discount_code: str = ""     # storefront discount code (store_discounts)
     gift_card_code: str = ""    # storefront gift card (gift_cards)
@@ -1438,15 +1440,21 @@ def _place(con, user, body, as_guest):
         " discount_cents,discount_code,gift_cents,gift_card_code,tax_cents,"
         " shipping_cents,total_cents,payment_status,ship_name,address,city,"
         " postal,phone,affiliate_code,visitor_id,created_at,"
-        " donation_cents,donation_fund_id)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " donation_cents,donation_fund_id,country,locale)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (user["id"], kind, region, body.store_id, subtotal, discount,
          disc_code, gift, body.gift_card_code.strip().upper() if gift else "",
          tax, shipping, total, pay_status, body.ship_name.strip(),
          body.address.strip(), body.city.strip(), body.postal.strip(),
          body.phone.strip(), body.affiliate_code.strip(), body.visitor_id,
-         db.now(), donation, fund_id))
+         db.now(), donation, fund_id, body.country.strip().upper()[:2],
+         body.locale.strip().lower()[:8]))
     oid = cur.lastrowid
+    if body.locale.strip():
+        # The shopper's language, remembered on the account, so what is
+        # sent to them later is in it.
+        con.execute("UPDATE users SET locale=? WHERE id=?",
+                    (body.locale.strip().lower()[:8], user["id"]))
     if donation:
         # The donor's copy, minted with the gift. Never fatal — a gift
         # taken and a receipt that would not generate is a bookkeeping
@@ -1535,21 +1543,28 @@ def _place(con, user, body, as_guest):
     # Order receipt to the customer (dry-mode safe; never blocks the order).
     if user["email"]:
         try:
+            # In the language the shopper was reading in, with money in
+            # its conventions — the translations screen carries these
+            # lines beside everything else.
+            from storefront.backend import content as _ct
+            loc = body.locale.strip().lower() or (user["locale"] if "locale" in user.keys() else "") or ""
+            T = _ct.strings_for(con, loc)
+            M = lambda c: _ct.fmt_money(con, c, loc)  # noqa: E731
             item_lines = "\n".join(
                 f"  {i['qty']}× {i['name']}"
                 f"{' · ' + i['variant_name'] if i.get('variant_name') else ''}"
-                f" — ${i['unit_price_cents'] * i['qty'] / 100:,.2f}"
+                f" — {M(i['unit_price_cents'] * i['qty'])}"
                 for i in d["items"])
             mailer.log_and_send(
                 con, CFG, user["id"], user["email"], "receipt",
-                f"Your order #{oid} is in! 💜",
-                f"Thanks {user['name']}!\n\n{item_lines}\n\n"
-                + (f"Discount {o['discount_code']}:"
-                   f" −${o['discount_cents'] / 100:,.2f}\n"
+                T["email_receipt_subject"].format(oid=oid),
+                T["email_receipt_thanks"].format(name=user["name"]) + f"\n\n{item_lines}\n\n"
+                + (T["email_discount"].format(code=o["discount_code"])
+                   + f": −{M(o['discount_cents'])}\n"
                    if o["discount_cents"] else "")
-                + f"Tax: ${tax / 100:,.2f}\nShipping: ${shipping / 100:,.2f}\n"
-                f"Total: ${total / 100:,.2f}\n\n"
-                f"Track any time: {base_url()}/  →  📦 order #{oid}",
+                + f"{T['email_tax']}: {M(tax)}\n{T['email_shipping']}: {M(shipping)}\n"
+                f"{T['email_total']}: {M(total)}\n\n"
+                + T["email_track"].format(url=base_url() + "/", oid=oid),
                 f"receipt-{oid}")
             con.commit()
         except Exception:
@@ -1713,13 +1728,17 @@ def order_status(oid: int, body: StatusBody, user=Depends(admin_user),
                            (o["user_id"],)).fetchone()
         if cust and cust["email"]:
             try:
-                verb = ("is on its way 🚚" if body.status == "shipped"
-                        else "has arrived 🎉")
+                from storefront.backend import content as _ct
+                loc = (o["locale"] if "locale" in o.keys() else "") or (
+                    cust["locale"] if "locale" in cust.keys() else "") or ""
+                T = _ct.strings_for(con, loc)
+                k = "shipped" if body.status == "shipped" else "delivered"
                 mailer.log_and_send(
                     con, CFG, cust["id"], cust["email"], "order-status",
-                    f"Order #{oid} {verb}",
-                    f"Hi {cust['name']},\n\nYour order #{oid} {verb}\n"
-                    f"Track it: {base_url()}/  →  📦 order #{oid}",
+                    T[f"email_{k}_subject"].format(oid=oid),
+                    T["email_hi"].format(name=cust["name"]) + "\n\n"
+                    + T[f"email_{k}_line"].format(oid=oid) + "\n"
+                    + T["email_track_it"].format(url=base_url() + "/", oid=oid),
                     f"status-{oid}-{body.status}")
                 con.commit()
             except Exception:

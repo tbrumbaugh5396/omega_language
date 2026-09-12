@@ -10021,4 +10021,137 @@ from storefront.backend import pricebook as _pbh  # noqa: E402
 ok(any(x["name"] == "Health" and x["price"] == 50 for x in _pbh.capabilities()),
    "Health is in the price book as a heavy capability")
 
+# --- the six limits, lifted ---
+# The year before, beside each number.
+_ann2 = c.get("/api/reports/annual", headers=A).json()
+ok("prior" in _ann2 and "sales" in _ann2["prior"] and "orders" in _ann2["prior"]["sales"]
+   and "_months" in _ann2["prior"],
+   "the report carries the year before, derived the same way, so each number can say how it moved")
+ok("function delta" not in _ops and "vs ${d.year - 1}" in _ops and ".ann-delta" in _css,
+   "and the screen shows the move beside the tile, last year's bars behind this year's")
+# The federal calendar, computed.
+ok(len(_civ.federal_elections(2020, 2026)) == 4
+   and _civ.federal_elections(2024, 2024)[0]["name"].startswith("2024 presidential")
+   and _civ.federal_elections(2026, 2026)[0]["name"].startswith("2026 midterm")
+   and _dtx.datetime.fromtimestamp(_civ.federal_elections(2024, 2024)[0]["at"]).strftime("%Y-%m-%d") == "2024-11-05",
+   "US general elections are the Tuesday after the first Monday in November of even years — computed, not fetched")
+_seed = c.post("/api/civics/seed/federal-elections", headers=A, json={"years_back": 4, "years_ahead": 4}).json()
+ok(_seed["added"] >= 3 and _seed["jurisdiction_id"] == _us,
+   "seeding puts them on the United States' timeline")
+ok(c.post("/api/civics/seed/federal-elections", headers=A,
+          json={"years_back": 4, "years_ahead": 4}).json()["added"] == 0,
+   "and twice adds nothing twice")
+ok(any(e["kind"] == "election" and "general election" in e["what"]
+       for e in c.get(f"/api/civics/timeline?jurisdiction_id={_us}", headers=A).json()["events"]),
+   "so the timeline has dated things in both directions with no key and no network")
+ok('id="civ-federal"' in _ops, "from a button on the screen")
+# A word before the deadline.
+_apr = c.post(f"/api/students/{_wc['id']}/applications", headers=A, json={
+    "institution": "Reminder U", "kind": "college", "deadline": _t0.time() + 2 * 86400,
+    "next_step": "Send the essay"}).json()
+c.get("/api/learn/me/applications", headers=_WCU)
+_ln = c.get("/api/learn/notifications", headers=_WCU).json()
+_lnl = _ln if isinstance(_ln, list) else _ln.get("items") or _ln.get("notifications") or []
+ok(any("Reminder U" in n["title"] and "Send the essay" in n["body"] for n in _lnl),
+   "a student with a deadline in two days is told, on their own page, what is still wanted")
+c.get("/api/learn/me/applications", headers=_WCU)
+_lnl2 = (lambda x: x if isinstance(x, list) else x.get("items") or x.get("notifications") or [])(
+    c.get("/api/learn/notifications", headers=_WCU).json())
+ok(sum(1 for n in _lnl2 if "Reminder U" in n["title"]) == 1,
+   "and told once — the reminder carries a key, so opening the page again does not repeat it")
+ok(any("reminded" in l["what"] for l in next(
+    a for a in c.get(f"/api/students/{_wc['id']}/applications", headers=A).json()["applications"]
+    if a["id"] == _apr["id"])["log"]),
+   "and the application's history says so")
+c.delete(f"/api/students/{_wc['id']}/applications/{_apr['id']}", headers=A)
+# Attachments previewed where the ticket is.
+ok("data-tkpeek" in _ops and "URL.createObjectURL(blob)" in _ops and ".tk-peek iframe" in _css,
+   "an image, a PDF, a text or a film on a ticket is looked at inside the ticket")
+# The shopper's country and language, on the order and the receipt.
+ok("function addressShape" in _sfjs or "function addressShape" in c.get("/store.js").text,
+   "the checkout shapes the address for the country: ZIP after the state, PLZ before the Ort")
+_sfjs2 = c.get("/store.js").text
+ok('id="co-country"' in _sfjs2 and "country, locale: LOCALE" in _sfjs2,
+   "and sends the country and the language the shopper was reading in")
+c.post("/api/store/admin/i18n", headers=A, json={
+    "locales": [{"code": "de", "label": "Deutsch"}], "default": "en"})
+c.post("/api/store/admin/translations", headers=A, json={
+    "locale": "de", "entries": {"email_receipt_subject": "Deine Bestellung #{oid} ist da!",
+                                "email_total": "Gesamt"}})
+_dcon = _db.connect()
+ok(_ct.strings_for(_dcon, "de")["email_total"] == "Gesamt"
+   and _ct.strings_for(_dcon, "de")["email_tax"] == "Tax"
+   and _ct.strings_for(_dcon, "xx")["email_total"] == "Total",
+   "an email's words come from the translations, English where nothing is translated")
+ok(_ct.fmt_money(_dcon, 123456, "de") == "1.234,56 $" and _ct.fmt_money(_dcon, 123456, "en") == "$1,234.56",
+   "and its money is in the language's conventions")
+_dcon.close()
+_dcon = _db.connect()
+_dcon.execute("UPDATE users SET email='wave@example.com', email_verified_at=? WHERE id=?",
+              (_t0.time(), _wc["id"]))
+_dcon.commit(); _dcon.close()
+_pde = c.post("/api/admin/products", headers=A, json={
+    "sku": "DE-1", "name": "Berlin Sauce", "price_cents": 900,
+    "case_price_cents": 8000}).json()
+_pde_id = _pde.get("id") or next(
+    p["id"] for p in (lambda x: x if isinstance(x, list) else x.get("products", []))(
+        c.get("/api/products").json()) if p["sku"] == "DE-1")
+_ode = c.post("/api/orders", headers=_WCU, json={
+    "items": [{"product_id": _pde_id, "qty": 1}], "ship_name": "Wave Customer",
+    "address": "Hauptstr. 1", "city": "Berlin", "postal": "10115", "country": "de",
+    "locale": "de"})
+ok(_ode.status_code == 200, f"an order carries a country and a language ({_ode.status_code} {_ode.text[:80]})")
+_dcon = _db.connect()
+_orow = _dcon.execute("SELECT country, locale FROM orders WHERE id=?", (_ode.json()["id"],)).fetchone()
+_urow = _dcon.execute("SELECT locale FROM users WHERE id=?", (_wc["id"],)).fetchone()
+_mrow = _dcon.execute("SELECT subject FROM email_log WHERE user_id=? ORDER BY id DESC LIMIT 1",
+                      (_wc["id"],)).fetchone()
+_dcon.close()
+ok(_orow["country"] == "DE" and _orow["locale"] == "de" and _urow["locale"] == "de",
+   "kept on the order, and remembered on the account")
+ok(_mrow is not None and _mrow["subject"].startswith("Deine Bestellung"),
+   "so the receipt goes out in German")
+c.post("/api/store/admin/i18n", headers=A, json={"locales": [], "default": "en"})
+c.post("/api/store/admin/translations", headers=A, json={
+    "locale": "de", "entries": {"email_receipt_subject": "", "email_total": ""}})
+# Files sealed on disk; a counter that signs nobody in.
+from erp.backend import health as _hea  # noqa: E402
+_hf3 = c.post(f"/api/health/patients/{_wc['id']}/files",
+              headers={**_NH, "x-filename": "scan.png"}, content=b"\x89PNG secret").json()
+_hpath = _hea._dir() / f"{_hf3['id']}.png"
+ok(_hpath.read_bytes().startswith(b"BCH1") and b"secret" not in _hpath.read_bytes(),
+   "a patient's file on disk is ciphertext")
+ok(c.get(f"/api/health/patients/{_wc['id']}/files/{_hf3['id']}", headers=_NH).content == b"\x89PNG secret",
+   "and comes back as it went in")
+ok(_hea.unseal(_hea.seal(b"x" * 1000)) == b"x" * 1000 and _hea.seal(b"a") != _hea.seal(b"a"),
+   "AES-GCM under the tenant's key, a fresh nonce every time")
+_hpath.write_bytes(b"\x89PNG legacy")
+ok(c.get(f"/api/health/patients/{_wc['id']}/files/{_hf3['id']}", headers=_NH).content == b"\x89PNG legacy"
+   and _hpath.read_bytes().startswith(b"BCH1"),
+   "a file written before sealing is served as it is and sealed on first read")
+ok(c.get("/health/kiosk").status_code == 200 and "please check in" in c.get("/health/kiosk").text,
+   "the counter kiosk is a public page")
+ok(c.post("/api/health/kiosk/checkin", json={"name": "Wave Customer", "birth_date": "1990-01-01"}).status_code == 404
+   and c.post("/api/health/kiosk/checkin", json={"name": "Nobody", "birth_date": "1990-05-04"}).status_code == 404,
+   "a wrong date, a wrong name and no record all get the same answer — the kiosk faces the waiting room")
+if _appt:
+    _dcon = _db.connect()
+    _dcon.execute("DELETE FROM patient_checkins WHERE appointment_id=?", (_appt,))
+    _dcon.execute("UPDATE appointments SET starts=?, ends=? WHERE id=?",
+                  (_t0.time() + 1800, _t0.time() + 3600, _appt))
+    _dcon.commit(); _dcon.close()
+    _kk = c.post("/api/health/kiosk/checkin", json={"name": "wave customer", "birth_date": "1990-05-04"})
+    ok(_kk.status_code == 200 and _kk.json()["first_name"] == "Wave",
+       "name and date of birth together check the patient in, and the screen says only that")
+    ok(next(r for r in c.get("/api/health", headers=_NH).json()["queue"] if r["id"] == _appt)["method"] == "kiosk",
+       "marked on the queue as from the kiosk")
+    _dcon = _db.connect()
+    _dcon.execute("DELETE FROM patient_checkins WHERE appointment_id=?", (_appt,))
+    _dcon.commit(); _dcon.close()
+    _code = c.get("/api/labels?kind=students&ids=" + str(_wc["id"]), headers=A).json()["labels"]
+    if _code:
+        ok(c.post("/api/health/kiosk/checkin", json={"code": _code[0]["payload"]}).status_code == 200,
+           "or the code on the ID card does")
+ok('id="hea-kiosk"' in _ops and "/health/kiosk" in _ops, "the desk's screen hands out the kiosk link")
+
 done("core")

@@ -1534,6 +1534,61 @@ def civics_detail(jid: int, as_of: float = 0, user=Depends(current_user),
     return detail(con, jid, as_of or None)
 
 
+def federal_elections(first_year: int, last_year: int) -> list:
+    """US federal general elections: the Tuesday after the first Monday
+    in November of every even year, by law since 1845. Computed, not
+    fetched — the one part of the calendar that needs no source and never
+    changes. Presidential every fourth year from 1788, midterm otherwise."""
+    import calendar as _cal
+    out = []
+    for y in range(first_year, last_year + 1):
+        if y % 2:
+            continue
+        first_monday = next(d for d in range(1, 8) if _cal.weekday(y, 11, d) == 0)
+        day = first_monday + 1
+        at = time.mktime((y, 11, day, 7, 0, 0, 0, 0, -1))
+        pres = (y - 1788) % 4 == 0
+        out.append({"year": y, "at": at,
+                    "name": f"{y} {'presidential' if pres else 'midterm'} general election",
+                    "kind": "general",
+                    "note": ("President, all 435 House seats, a third of the Senate"
+                             if pres else "All 435 House seats, a third of the Senate")})
+    return out
+
+
+class SeedBody(BaseModel):
+    years_back: int = 10
+    years_ahead: int = 6
+
+
+@router.post("/api/civics/seed/federal-elections")
+def seed_federal_elections(body: SeedBody, user=Depends(current_user),
+                           con=Depends(get_con)):
+    """Put the federal calendar on the United States' timeline: the past
+    elections and the coming ones. Keyless. Adds only what is not there."""
+    _require(user)
+    us = con.execute("SELECT id FROM jurisdictions WHERE level='country'"
+                     " AND (iso='US' OR name='United States')"
+                     " ORDER BY (iso='US') DESC, id LIMIT 1").fetchone()
+    if us is None:
+        raise HTTPException(400, "watch the United States first — the "
+                                 "outline on the map offers it")
+    y = time.localtime().tm_year
+    added = 0
+    for e in federal_elections(y - max(0, min(body.years_back, 60)),
+                               y + max(0, min(body.years_ahead, 20))):
+        if con.execute("SELECT 1 FROM elections WHERE jurisdiction_id=? AND name=?",
+                       (us["id"], e["name"])).fetchone():
+            continue
+        con.execute(
+            "INSERT INTO elections(jurisdiction_id,name,kind,at,registration_deadline,"
+            " url,note,created_at) VALUES(?,?,?,?,0,'',?,?)",
+            (us["id"], e["name"], e["kind"], e["at"], e["note"], db.now()))
+        added += 1
+    con.commit()
+    return {"ok": True, "added": added, "jurisdiction_id": us["id"]}
+
+
 @router.get("/api/civics/timeline")
 def civics_timeline(jurisdiction_id: int = 0, since: float = 0,
                     until: float = 0, user=Depends(current_user),

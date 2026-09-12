@@ -404,6 +404,7 @@ async function renderCivics() {
         <b id="civ-tlhead">${CIV_ASOF ? "As of " + fmtDate(CIV_ASOF) : "Now"}</b>
         <span class="dim" id="civ-tlscope"></span>
         <button class="btn alt sm" id="civ-now" ${CIV_ASOF ? "" : "hidden"}>Back to now</button>
+        <button class="btn alt sm" id="civ-federal" title="past and coming US general elections, computed — no key, no network">Add the federal election calendar</button>
       </div>
       <input type="range" id="civ-slider" min="0" max="1000" value="1000"
         aria-label="Move backwards and forwards in time">
@@ -501,6 +502,13 @@ async function renderCivics() {
   civTimeline(d);
   if ($("#civ-all")) $("#civ-all").onclick = () => { CIV_SEL = 0; renderCivics(); };
   $("#civ-now").onclick = () => civSetTime(d, 0);
+  $("#civ-federal").onclick = async () => {
+    try {
+      const r = await api("/api/civics/seed/federal-elections", { body: { years_back: 10, years_ahead: 6 } });
+      toast(r.added ? `${r.added} election${r.added === 1 ? "" : "s"} added to the United States` : "already on the calendar");
+      if (r.added) { CIV_SEL = CIV_SEL || r.jurisdiction_id; renderCivics(); }
+    } catch (e) { toast(e.message); }
+  };
   if ($("#civ-fit")) $("#civ-fit").onclick = () => civFit(d);
   if ($("#civ-place")) $("#civ-place").onclick = () => civPlaceForm(d, 0);
   if ($("#civ-agree")) $("#civ-agree").onclick = () => civAgreementForm(d, null, 0);

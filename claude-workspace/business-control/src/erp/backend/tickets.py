@@ -574,8 +574,10 @@ def get_file(tid: int, fid: int, user=Depends(current_user),
     path = _dir() / f"{fid}.{f['ext']}"
     if not path.exists():
         raise HTTPException(410, "the file is no longer on disk")
+    # Never cached: ids are reused after a delete, and a browser that
+    # remembered a 410 for this address would keep answering it.
     return FileResponse(path, media_type=f["mime"] or "application/octet-stream",
-                        filename=f["name"])
+                        filename=f["name"], headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/api/tickets/{tid}/files/{fid}")

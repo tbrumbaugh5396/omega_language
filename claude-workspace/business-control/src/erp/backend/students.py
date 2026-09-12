@@ -712,6 +712,50 @@ def self_save(con, uid: int, fields: dict, by: str) -> dict:
     return self_view(con, uid)
 
 
+REMIND_DAYS = (14, 3)
+
+
+def run_reminders(con) -> int:
+    """A word to the student a fortnight and three days before an
+    application's deadline, while it is still theirs to finish. Sent as
+    an in-app notification with a dedup key, so each reminder fires
+    once, and written on the application's history. Called lazily —
+    when a student opens their page or the office opens applications —
+    because this install has no clock of its own and a reminder a day
+    late is still a reminder."""
+    from . import notify
+    now = time.time()
+    sent = 0
+    for r in con.execute(
+            "SELECT * FROM student_applications WHERE deadline>? AND stage IN"
+            " ('considering','preparing')", (now,)).fetchall():
+        days_left = (r["deadline"] - now) / 86400
+        # One tier applies: the nearest band the deadline has crossed
+        # into. Two days out is the three-day reminder, not the
+        # fortnight's as well.
+        for d in sorted(REMIND_DAYS):
+            if days_left > d:
+                continue
+            key = f"app-remind:{r['id']}:{d}"
+            if con.execute("SELECT 1 FROM notifications WHERE dedup_key=?",
+                           (key,)).fetchone():
+                break
+            undone = [c["item"] for c in json.loads(r["checklist"] or "[]")
+                      if not c.get("done")]
+            body = (f"Deadline {time.strftime('%b %-d', time.localtime(r['deadline']))}."
+                    + (f" Still wanted: {', '.join(undone[:4])}"
+                       + (" …" if len(undone) > 4 else "") if undone else "")
+                    + (f" Next: {r['next_step']}" if r["next_step"] else ""))
+            notify.push(con, f"{r['institution']}: {int(days_left)} day"
+                        f"{'' if int(days_left) == 1 else 's'} left",
+                        body, kind="deadline", user_id=r["user_id"], dedup=key)
+            _app_log(con, r["id"], "reminder", f"reminded: {d} days before the deadline")
+            sent += 1
+            break
+    con.commit()
+    return sent
+
+
 # ---------- applications: routes ----------
 
 @router.get("/api/students/{uid}/applications")
@@ -719,6 +763,7 @@ def student_applications(uid: int, user=Depends(current_user),
                          con=Depends(get_con)):
     _require_office(user)
     _student(con, uid)
+    run_reminders(con)
     return {"applications": applications_of(con, uid),
             "kinds": list(APP_KINDS), "stages": list(APP_STAGES),
             "labels": APP_LABELS, "next": APP_NEXT,
