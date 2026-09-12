@@ -323,6 +323,7 @@
       </div>
       <div class="modal-actions">
         <button class="btn-pill ghost sm" id="ln-add">＋ language</button>
+        <button class="btn-pill ghost sm" id="ln-major" title="every major language, named in its own">＋ all major languages</button>
         <button class="btn-pill primary sm" id="ln-save">Save languages</button>
       </div>
       <p class="dim" id="ln-msg"></p>
@@ -337,9 +338,14 @@
         <div><label>Engine</label><select id="mt-engine"><option value="">— none —</option></select></div>
         <div><label>Address <span class="dim">(LibreTranslate, or a paid DeepL)</span></label><input id="mt-url" placeholder="https://"></div>
         <div><label>Key</label><input id="mt-key" type="password" placeholder="kept on file"></div>
+        <div><label>Model <span class="dim">(LLM engines)</span></label><input id="mt-model" placeholder="claude-sonnet-5"></div>
       </div>
       <p class="dim" id="mt-hint"></p>
-      <div class="modal-actions"><button class="btn-pill primary sm" id="mt-save">Save engine</button></div>
+      <div class="modal-actions">
+        <button class="btn-pill primary sm" id="mt-save">Save engine</button>
+        <button class="btn-pill ghost sm" id="mt-fill-all" title="every language the shop offers, in one go">Fill every language</button>
+      </div>
+      <pre class="dim" id="mt-report" style="white-space:pre-wrap;font-size:12px"></pre>
 
       <h3 style="margin-top:20px">Translations</h3>
       <div class="adm-row">

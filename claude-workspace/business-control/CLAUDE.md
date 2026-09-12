@@ -145,7 +145,11 @@ Things to know before touching them:
   `content.tx` / `translate_settings` in the request's language
   (`LOCALE_CTX`, set by the `request_locale` middleware from `?lang` or
   the `sf_locale` cookie). Machine fill: `content.fill_locale` through
-  `_mt_call` (the seam tests replace); rows carry `source`.
+  `_mt_call` (the seam tests replace); rows carry `source`. The
+  catalogue is `content.LANGUAGES`; `fill_many` / `offer_languages` /
+  `scripts/translate.py` run the same algorithm for a list; `_intact`
+  drops answers that lost a placeholder or tag; the LLM engines
+  (`openai`, `anthropic`) ask for a JSON array and check its length.
 - `health.py` is the Health capability (31st; the count is pinned in
   `pricebook.py`, five places in test_platform, two in test_studio, the
   deck `_D_ID`). Access is `auth.office(user, "health")` — a NAMED

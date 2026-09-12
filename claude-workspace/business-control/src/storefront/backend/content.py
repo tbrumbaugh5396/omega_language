@@ -8,6 +8,7 @@ more than one market.
 import html as _html
 import contextvars
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -258,24 +259,58 @@ def content_keys(con) -> dict:
 # and overwritten the moment somebody types the real thing. The
 # interface's own words are never sent — those shipped translated.
 MT_ENGINES = {
+    "libretranslate": {"label": "LibreTranslate (this node's, or yours)", "url": "",
+                       "hint": "Blank uses the machine's shared translate service "
+                               "(scripts/install_translate.sh) or the tenant's "
+                               "translate_url; else the address of a LibreTranslate "
+                               "server and a key if it asks for one. About thirty "
+                               "languages, fully offline."},
     "deepl": {"label": "DeepL", "url": "https://api-free.deepl.com/v2/translate",
               "hint": "A DeepL API key; the free tier translates 500,000 characters a "
-                      "month. A paid key uses api.deepl.com — set the address too."},
-    "libretranslate": {"label": "LibreTranslate", "url": "",
-                       "hint": "The address of a LibreTranslate server, yours or a public "
-                               "one; a key if it asks for one."},
+                      "month. A paid key uses api.deepl.com — set the address too. "
+                      "About thirty languages."},
+    "openai": {"label": "An LLM (OpenAI-compatible API)", "url": "https://api.openai.com/v1",
+               "hint": "Any OpenAI-compatible chat endpoint — OpenAI, a local Ollama, "
+                       "a gateway — with a key and a model name. Every language."},
+    "anthropic": {"label": "Claude (Anthropic API)", "url": "https://api.anthropic.com",
+                  "hint": "An Anthropic API key and a model name. Every language."},
 }
+LLM_PROMPT = (
+    "You translate a shop's interface and content from English into {lang}. "
+    "Return ONLY a JSON array of strings, one per input, same order, same length. "
+    "Keep every placeholder in braces like {{name}} or {{oid}} exactly as it is, keep "
+    "every HTML tag and attribute exactly as it is and translate only the text "
+    "between tags, keep numbers, prices, product codes and the | separator, and "
+    "use the natural wording a native shop would use rather than a literal one."
+)
+
+
+def _placeholders(text: str) -> list:
+    """What must survive a translation untouched: {braces}, HTML tags."""
+    return sorted(re.findall(r"\{[a-z_]+\}", text)) + sorted(
+        t.lower() for t in re.findall(r"</?[a-zA-Z][a-zA-Z0-9]*", text))
+
+
+def _intact(src: str, out: str) -> bool:
+    """A machine answer is kept only if it kept the placeholders and the
+    tags the source had. A receipt with {oid} gone is not a translation."""
+    return _placeholders(src) == _placeholders(out)
 
 
 def mt_settings(con) -> dict:
-    row = con.execute("SELECT v FROM store_meta WHERE k='mt'").fetchone()
+    cfg = _mt_cfg(con)
+    node = ""
     try:
-        cfg = json.loads(row["v"]) if row else {}
-    except ValueError:
-        cfg = {}
+        from erp.backend import lookup as _lk
+        from erp.backend.main import CFG as _CFG
+        node = _lk._translate_endpoint(_CFG)[2]
+    except Exception:                                        # noqa: BLE001
+        pass
     return {"engine": cfg.get("engine", ""), "url": cfg.get("url", ""),
-            "has_key": bool(cfg.get("key")),
-            "engines": [{"id": k, **v} for k, v in MT_ENGINES.items()]}
+            "model": cfg.get("model", ""), "has_key": bool(cfg.get("key")),
+            "node_translate": node,
+            "engines": [{"id": k, **v} for k, v in MT_ENGINES.items()],
+            "languages": [language_entry(c) for c, _ in LANGUAGES]}
 
 
 def _mt_cfg(con) -> dict:
@@ -291,62 +326,182 @@ def _mt_call(engine: str, cfg: dict, texts: list, target: str, html: bool = Fals
     lang = target.split("-")[0]
     if engine == "deepl":
         url = cfg.get("url") or MT_ENGINES["deepl"]["url"]
+        dl = {"zh": "ZH", "nb": "NB", "pt": "PT-BR"}.get(lang, lang.upper())
+        if target.lower() == "zh-tw":
+            dl = "ZH-HANT"
         data = urllib.parse.urlencode(
-            [("text", t) for t in texts] + [("target_lang", lang.upper()), ("source_lang", "EN")]
+            [("text", t) for t in texts] + [("target_lang", dl), ("source_lang", "EN")]
             + ([("tag_handling", "html")] if html else [])).encode()
         req = urllib.request.Request(url, data=data, headers={
             "Authorization": f"DeepL-Auth-Key {cfg.get('key', '')}",
             "Content-Type": "application/x-www-form-urlencoded"})
-        with urllib.request.urlopen(req, timeout=40) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             out = json.loads(r.read().decode())
         return [x["text"] for x in out.get("translations", [])]
     if engine == "libretranslate":
-        base = (cfg.get("url") or "").rstrip("/")
+        base, key = (cfg.get("url") or "").rstrip("/"), cfg.get("key", "")
         if not base:
-            raise HTTPException(400, "LibreTranslate needs the server's address")
-        body = {"q": texts, "source": "en", "target": lang,
+            try:
+                from erp.backend import lookup as _lk
+                from erp.backend.main import CFG as _CFG
+                base, key, _ = _lk._translate_endpoint(_CFG)
+                base = base.rstrip("/")
+            except Exception:                                # noqa: BLE001
+                base = ""
+        if not base:
+            raise HTTPException(400, "LibreTranslate needs a server: set its address, or "
+                                     "install the node's translate service")
+        body = {"q": texts, "source": "en", "target": "zt" if target.lower() == "zh-tw" else lang,
                 "format": "html" if html else "text"}
-        if cfg.get("key"):
-            body["api_key"] = cfg["key"]
+        if key:
+            body["api_key"] = key
         req = urllib.request.Request(base + "/translate", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:
             out = json.loads(r.read().decode())
         t = out.get("translatedText")
         return t if isinstance(t, list) else [t]
+    if engine in ("openai", "anthropic"):
+        name = LANGUAGE_LABEL.get(target.lower(), target)
+        system = LLM_PROMPT.format(lang=f"{name} ({target})")
+        user = json.dumps(texts, ensure_ascii=False)
+        if engine == "openai":
+            base = (cfg.get("url") or MT_ENGINES["openai"]["url"]).rstrip("/")
+            body = {"model": cfg.get("model") or "gpt-4o-mini", "temperature": 0,
+                    "messages": [{"role": "system", "content": system},
+                                 {"role": "user", "content": user}]}
+            req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json",
+                                                  "Authorization": f"Bearer {cfg.get('key', '')}"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                out = json.loads(r.read().decode())
+            text = out["choices"][0]["message"]["content"]
+        else:
+            base = (cfg.get("url") or MT_ENGINES["anthropic"]["url"]).rstrip("/")
+            body = {"model": cfg.get("model") or "claude-sonnet-5", "max_tokens": 8000,
+                    "temperature": 0, "system": system,
+                    "messages": [{"role": "user", "content": user}]}
+            req = urllib.request.Request(base + "/v1/messages", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json",
+                                                  "x-api-key": cfg.get("key", ""),
+                                                  "anthropic-version": "2023-06-01"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                out = json.loads(r.read().decode())
+            text = "".join(b.get("text", "") for b in out.get("content", []))
+        m = re.search(r"\[.*\]", text, re.S)
+        arr = json.loads(m.group(0) if m else text)
+        if not isinstance(arr, list) or len(arr) != len(texts):
+            raise ValueError("the model did not return one translation per string")
+        return [str(x) for x in arr]
     raise HTTPException(400, "no translation engine is connected")
 
 
-def fill_locale(con, locale: str, *, limit: int = 400) -> dict:
-    """Translate, by machine, every content key this language lacks."""
+def _chunks(keys: list, want: dict, *, budget: int = 6000, most: int = 40) -> list:
+    """Batches sized by characters, not by count: forty short labels go
+    together, one long page goes alone."""
+    out, cur, size = [], [], 0
+    for k in keys:
+        n = len(want[k])
+        if cur and (size + n > budget or len(cur) >= most):
+            out.append(cur); cur, size = [], 0
+        cur.append(k); size += n
+    if cur:
+        out.append(cur)
+    return out
+
+
+def fill_locale(con, locale: str, *, limit: int = 2000, force_machine: bool = False,
+                include_ui: bool = True, dry_run: bool = False) -> dict:
+    """Translate, by machine, everything this language lacks.
+
+    The algorithm, so it can be run for forty languages without thought:
+    what is wanted is every key — the interface's own words and the
+    merchant's content — minus what already has a translation; a shipped
+    translation counts, a typed one always counts, a machine one counts
+    unless `force_machine` asks for a fresh pass. What is wanted goes to
+    the engine in batches sized by characters, HTML apart from text; an
+    answer that lost a placeholder or a tag is dropped rather than kept;
+    what survives is written as the machine's. Run again, it sends only
+    what is still missing, so a crash halfway costs nothing.
+    """
     cfg = _mt_cfg(con)
     if cfg.get("engine") not in MT_ENGINES:
         raise HTTPException(400, "connect a translation engine first — Store admin → Languages")
     loc = locale.strip().lower()
     if not loc or loc == "en":
         raise HTTPException(400, "pick a language other than the base 'en'")
+    own_src = {r["key"]: (r["source"] or "typed") for r in con.execute(
+        "SELECT key, source FROM translations WHERE locale=?", (loc,)).fetchall()}
     have = translations_for(con, loc)
-    want = {k: v for k, v in content_keys(con).items() if k not in have}
+    base = dict(content_keys(con))
+    if include_ui:
+        # The interface's words are sent only when nothing shipped for
+        # this language; the six shipped ones never go out.
+        shipped = BUILTIN.get(loc) or BUILTIN.get(loc.split("-")[0], {})
+        for k, v in ui_strings(con).items():
+            if k not in shipped and v.strip():
+                base[k] = v
+    want = {k: v for k, v in base.items()
+            if k not in have or (force_machine and own_src.get(k) == "machine")}
     keys = list(want)[:limit]
-    done = 0
+    if dry_run:
+        return {"ok": True, "locale": loc, "would_send": len(keys),
+                "characters": sum(len(want[k]) for k in keys), "dry_run": True}
+    done = dropped = 0
     for html in (False, True):
         batch = [k for k in keys if k.endswith(":html") == html]
-        for i in range(0, len(batch), 25):
-            chunk = batch[i:i + 25]
+        for chunk in _chunks(batch, want):
             try:
                 out = _mt_call(cfg["engine"], cfg, [want[k] for k in chunk], loc, html=html)
             except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
+                con.commit()
                 raise HTTPException(502, f"the translation engine did not answer: {e}") from e
             for k, v in zip(chunk, out):
-                if v and str(v).strip():
-                    con.execute(
-                        "INSERT INTO translations(locale,key,value,source) VALUES(?,?,?,'machine')"
-                        " ON CONFLICT(locale,key) DO UPDATE SET value=excluded.value,"
-                        " source='machine'", (loc, k, str(v)))
-                    done += 1
-    con.commit()
-    return {"ok": True, "locale": loc, "filled": done,
+                v = str(v or "").strip()
+                if not v or not _intact(want[k], v):
+                    dropped += 1
+                    continue
+                con.execute(
+                    "INSERT INTO translations(locale,key,value,source) VALUES(?,?,?,'machine')"
+                    " ON CONFLICT(locale,key) DO UPDATE SET value=excluded.value,"
+                    " source='machine'", (loc, k, v))
+                done += 1
+            con.commit()
+    return {"ok": True, "locale": loc, "filled": done, "dropped": dropped,
             "remaining": max(0, len(want) - done)}
+
+
+def fill_many(con, locales: list, **kw) -> dict:
+    """The same, for a list of languages, each reported on its own line;
+    one engine failure stops the run and says which language it was on."""
+    report = []
+    for loc in locales:
+        if loc == "en":
+            continue
+        try:
+            r = fill_locale(con, loc, **kw)
+        except HTTPException as e:
+            report.append({"locale": loc, "error": e.detail})
+            break
+        report.append(r)
+    return {"ok": all("error" not in r for r in report), "languages": report}
+
+
+def offer_languages(con, codes: list, *, default: str | None = None) -> dict:
+    """Add languages to what the shop offers, keeping what was there."""
+    cur = i18n_settings(con)
+    locs = list(cur["locales"])
+    known = {l["code"] for l in locs}
+    for c in codes:
+        c = c.strip().lower()
+        if c and c not in known:
+            locs.append(language_entry(c)); known.add(c)
+    con.execute("INSERT INTO store_meta(k,v) VALUES('i18n',?)"
+                " ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                (json.dumps({"locales": locs, "default": default or cur["default"],
+                             "auto_detect": cur["auto_detect"]}),))
+    con.commit()
+    return i18n_settings(con)
 
 
 def strings_for(con, locale: str) -> dict:
@@ -705,6 +860,31 @@ BUILTIN = {
 # from a code, so it is stored, not derived.
 LOCALE_DEFAULT = [{"code": "en", "label": "English", "dir": "ltr"}]
 RTL = {"ar", "he", "fa", "ur", "ps", "sd", "ug", "yi", "dv"}
+
+# The major languages, as a shop would offer them: ISO 639-1 codes, each
+# named in its own language, with its reading direction. "Add all major
+# languages" offers every one; the fill translates into any of them
+# through an engine that speaks it. Roughly the languages with the most
+# speakers and the most online commerce, not every language on earth.
+LANGUAGES = [
+    ("en", "English"), ("es", "Español"), ("fr", "Français"), ("de", "Deutsch"),
+    ("pt", "Português"), ("it", "Italiano"), ("nl", "Nederlands"), ("sv", "Svenska"),
+    ("da", "Dansk"), ("nb", "Norsk"), ("fi", "Suomi"), ("pl", "Polski"),
+    ("cs", "Čeština"), ("sk", "Slovenčina"), ("hu", "Magyar"), ("ro", "Română"),
+    ("bg", "Български"), ("el", "Ελληνικά"), ("tr", "Türkçe"), ("ru", "Русский"),
+    ("uk", "Українська"), ("he", "עברית"), ("ar", "العربية"), ("fa", "فارسی"),
+    ("hi", "हिन्दी"), ("bn", "বাংলা"), ("ur", "اردو"), ("ta", "தமிழ்"),
+    ("te", "తెలుగు"), ("mr", "मराठी"), ("id", "Bahasa Indonesia"), ("ms", "Bahasa Melayu"),
+    ("vi", "Tiếng Việt"), ("th", "ไทย"), ("ko", "한국어"), ("ja", "日本語"),
+    ("zh", "中文（简体）"), ("zh-tw", "中文（繁體）"), ("sw", "Kiswahili"), ("tl", "Filipino"),
+]
+LANGUAGE_LABEL = dict(LANGUAGES)
+
+
+def language_entry(code: str) -> dict:
+    code = code.strip().lower()
+    return {"code": code, "label": LANGUAGE_LABEL.get(code, code.upper()),
+            "dir": "rtl" if code.split("-")[0] in RTL else "ltr"}
 CURRENCY_DEFAULT = [
     {"code": "USD", "symbol": "$", "rate": 1.0},
     {"code": "EUR", "symbol": "€", "rate": 0.92},
@@ -784,11 +964,11 @@ def i18n_settings(con) -> dict:
         known.add("en")
     for r in con.execute("SELECT DISTINCT locale FROM translations ORDER BY locale").fetchall():
         if r["locale"] not in known:
-            locs.append({"code": r["locale"], "label": r["locale"].upper(),
-                         "dir": "rtl" if r["locale"].split("-")[0] in RTL else "ltr"})
+            locs.append(language_entry(r["locale"]))
             known.add(r["locale"])
     for l in locs:
-        l.setdefault("label", l["code"].upper())
+        if not l.get("label"):
+            l["label"] = LANGUAGE_LABEL.get(l["code"], l["code"].upper())
         l["dir"] = "rtl" if l.get("dir") == "rtl" or (
             "dir" not in l and l["code"].split("-")[0] in RTL) else "ltr"
     default = cfg.get("default") if cfg.get("default") in known else "en"
@@ -1111,6 +1291,7 @@ class MtBody(BaseModel):
     engine: str = ""
     url: str = ""
     key: str = ""
+    model: str = ""
 
 
 @router.get("/api/store/admin/mt")
@@ -1126,6 +1307,7 @@ def mt_save(body: MtBody, u=Depends(admin_user), con=Depends(get_con)):
         raise HTTPException(400, f"engine is one of {sorted(MT_ENGINES)}")
     cur = _mt_cfg(con)
     cfg = {"engine": body.engine, "url": body.url.strip()[:300],
+           "model": body.model.strip()[:80],
            "key": body.key.strip()[:200] or (cur.get("key", "") if body.engine == cur.get("engine") else "")}
     con.execute("INSERT INTO store_meta(k,v) VALUES('mt',?)"
                 " ON CONFLICT(k) DO UPDATE SET v=excluded.v", (json.dumps(cfg),))
@@ -1133,10 +1315,44 @@ def mt_save(body: MtBody, u=Depends(admin_user), con=Depends(get_con)):
     return mt_settings(con)
 
 
+class FillBody(BaseModel):
+    force_machine: bool = False
+    dry_run: bool = False
+
+
 @router.post("/api/store/admin/translations/{locale}/fill")
-def translations_fill(locale: str, u=Depends(admin_user), con=Depends(get_con)):
+def translations_fill(locale: str, body: FillBody | None = None, u=Depends(admin_user),
+                      con=Depends(get_con)):
     """Fill what this language lacks, by machine, marked as the machine's."""
-    return fill_locale(con, locale)
+    body = body or FillBody()
+    return fill_locale(con, locale, force_machine=body.force_machine, dry_run=body.dry_run)
+
+
+class FillAllBody(BaseModel):
+    locales: list = []            # empty = every language the shop offers
+    force_machine: bool = False
+    dry_run: bool = False
+
+
+@router.post("/api/store/admin/translations/fill-all")
+def translations_fill_all(body: FillAllBody, u=Depends(admin_user), con=Depends(get_con)):
+    """Every language the shop offers, in one go."""
+    locs = [c.strip().lower() for c in body.locales if c.strip()] or locales(con)
+    return fill_many(con, locs, force_machine=body.force_machine, dry_run=body.dry_run)
+
+
+class OfferBody(BaseModel):
+    codes: list = []              # empty = all major languages
+
+
+@router.post("/api/store/admin/i18n/offer")
+def i18n_offer(body: OfferBody, u=Depends(admin_user), con=Depends(get_con)):
+    """Offer languages — a list, or every major one — keeping what was there."""
+    codes = [c for c in body.codes if isinstance(c, str)] or [c for c, _ in LANGUAGES]
+    bad = [c for c in codes if not all(ch.isalnum() or ch == "-" for ch in c.strip().lower())]
+    if bad:
+        raise HTTPException(400, f"not language codes: {bad}")
+    return offer_languages(con, codes)
 
 
 class I18nBody(BaseModel):

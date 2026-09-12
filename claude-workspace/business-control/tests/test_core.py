@@ -10279,4 +10279,124 @@ _admh2 = c.get("/admin").text
 ok('id="mt-engine"' in _admh2 and 'id="tr-fill"' in _admh2 and "drawMt" in c.get("/admin.js").text,
    "the store admin connects the engine and fills a language from the translations screen")
 
+# --- every major language, by one algorithm ---
+ok(len(_ct.LANGUAGES) >= 40 and _ct.language_entry("ar")["dir"] == "rtl"
+   and _ct.language_entry("he")["dir"] == "rtl" and _ct.language_entry("ja")["label"] == "日本語"
+   and _ct.language_entry("xx")["label"] == "XX",
+   "a catalogue of the major languages, each named in its own, with its reading direction")
+_off = c.post("/api/store/admin/i18n/offer", headers=A, json={"codes": []}).json()
+ok(len(_off["locales"]) >= 40 and _off["locales"][0]["code"] == "en"
+   and any(l["code"] == "ko" for l in _off["locales"]),
+   "one call offers every major language, English first, keeping what was there")
+ok(c.post("/api/store/admin/i18n/offer", headers=A, json={"codes": ["e s"]}).status_code == 400,
+   "and refuses what is not a code")
+ok(_ct._intact("Your order #{oid} is in!", "¡Tu pedido #{oid} está en marcha!")
+   and not _ct._intact("Your order #{oid} is in!", "¡Tu pedido está en marcha!")
+   and _ct._intact("<b>Part one</b> is the platform", "<b>Primera parte</b> es la plataforma")
+   and not _ct._intact("<b>Part one</b> is the platform", "Primera parte es la plataforma"),
+   "an answer is kept only if every placeholder and every tag survived")
+_big = {f"k{i}": "x" * 500 for i in range(30)}
+ok(all(sum(len(_big[k]) for k in ch) <= 6000 for ch in _ct._chunks(list(_big), _big))
+   and len(_ct._chunks(list(_big), _big)) == 3,
+   "batches are sized by characters, not by count")
+c.post("/api/store/admin/mt", headers=A, json={"engine": "anthropic", "key": "sk-1", "model": "claude-sonnet-5"})
+ok(c.get("/api/store/admin/mt", headers=A).json()["model"] == "claude-sonnet-5",
+   "an LLM engine keeps its model")
+_sent = []
+def _fake_mt2(engine, cfg, texts, target, html=False):
+    _sent.append((target, list(texts)))
+    out = []
+    for t in texts:
+        if t.startswith("DROPME"):
+            out.append("lost it")          # the placeholder is gone
+        else:
+            out.append(f"[{target}] {t}")
+    return out
+_ct._mt_call = _fake_mt2
+try:
+    _dry = c.post("/api/store/admin/translations/it/fill", headers=A, json={"dry_run": True}).json()
+    ok(_dry["dry_run"] and _dry["would_send"] > 0 and not _sent,
+       "a dry run counts what would go and sends nothing")
+    _it = c.post("/api/store/admin/translations/it/fill", headers=A, json={}).json()
+    _es2 = c.post("/api/store/admin/translations/es/fill", headers=A, json={}).json()
+finally:
+    _ct._mt_call = _real_mt
+ok(_it["filled"] > 0
+   and any(any(t == "Preferences" for t in texts) for tgt, texts in _sent if tgt == "it")
+   and not any(any(t == "Preferences" for t in texts) for tgt, texts in _sent if tgt == "es"),
+   "a language nothing shipped for gets the interface's words from the machine; "
+   "a shipped one never sends them")
+_tr_it = c.get("/api/store/admin/translations/it", headers=A).json()
+ok(_tr_it["sources"].get("prefs") == "machine" and _tr_it["own"]["prefs"] == "[it] Preferences",
+   "and they land marked as the machine's")
+_cc = _db.connect()
+_cc.execute("UPDATE products SET description='DROPME {placeholder} text', active=1 WHERE id=?", (_pde_id,))
+_cc.execute("DELETE FROM translations WHERE locale='it' AND key=?", (f"product:{_pde_id}:description",))
+_cc.commit(); _cc.close()
+_sent.clear(); _ct._mt_call = _fake_mt2
+try:
+    _it2 = c.post("/api/store/admin/translations/it/fill", headers=A, json={}).json()
+finally:
+    _ct._mt_call = _real_mt
+ok(_it2["dropped"] >= 1 and f"product:{_pde_id}:description" not in
+   c.get("/api/store/admin/translations/it", headers=A).json()["own"],
+   "an answer that lost a placeholder is dropped, not kept")
+c.post("/api/store/admin/translations", headers=A, json={"locale": "it", "entries": {"prefs": "Impostazioni"}})
+_sent.clear(); _ct._mt_call = _fake_mt2
+try:
+    _it3 = c.post("/api/store/admin/translations/it/fill", headers=A, json={"force_machine": True}).json()
+finally:
+    _ct._mt_call = _real_mt
+ok(not any(any(t == "Preferences" for t in texts) for tgt, texts in _sent)
+   and c.get("/api/store/admin/translations/it", headers=A).json()["own"]["prefs"] == "Impostazioni",
+   "a fresh machine pass never touches what somebody typed")
+_sent.clear(); _ct._mt_call = _fake_mt2
+try:
+    _all = c.post("/api/store/admin/translations/fill-all", headers=A, json={"locales": ["fr", "de", "en"]}).json()
+finally:
+    _ct._mt_call = _real_mt
+ok(_all["ok"] and [l["locale"] for l in _all["languages"]] == ["fr", "de"]
+   and all("filled" in l for l in _all["languages"]),
+   "fill-all runs the same algorithm per language and reports each on its own line")
+# the LLM engines, through the wire
+class _FakeResp:
+    def __init__(self, body): self._b = json.dumps(body).encode()
+    def read(self): return self._b
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+_seen_req = []
+def _fake_open(req, timeout=0):
+    _seen_req.append((req.full_url, dict(req.header_items()), json.loads(req.data.decode())))
+    n = len(json.loads(_seen_req[-1][2]["messages"][-1]["content"]))
+    arr = json.dumps([f"T{i}" for i in range(n)])
+    if "anthropic" in req.full_url:
+        return _FakeResp({"content": [{"type": "text", "text": "Here you go:\n" + arr}]})
+    return _FakeResp({"choices": [{"message": {"content": arr}}]})
+_real_open = _ct.urllib.request.urlopen
+_ct.urllib.request.urlopen = _fake_open
+try:
+    _o1 = _ct._mt_call("openai", {"key": "k", "model": "m"}, ["a", "b"], "sv")
+    _o2 = _ct._mt_call("anthropic", {"key": "k"}, ["a", "b", "c"], "ko")
+finally:
+    _ct.urllib.request.urlopen = _real_open
+ok(_o1 == ["T0", "T1"] and _o2 == ["T0", "T1", "T2"]
+   and _seen_req[0][0].endswith("/chat/completions") and _seen_req[1][0].endswith("/v1/messages")
+   and "Svenska" in _seen_req[0][2]["messages"][0]["content"]
+   and _seen_req[1][1].get("X-api-key") == "k",
+   "an OpenAI-compatible endpoint and the Anthropic API both answer one string per input, "
+   "asked in the language's own name")
+# the command line
+import subprocess as _sp2
+_h = _sp2.run([sys.executable, "scripts/translate.py", "--help"], capture_output=True, text=True,
+              cwd=str(ROOT), env={**os.environ, "PYTHONPATH": "src"})
+ok(_h.returncode == 0 and "--locales" in _h.stdout and "--force-machine" in _h.stdout
+   and "--dry-run" in _h.stdout,
+   "and the same algorithm runs from the command line for a whole language list")
+ok('id="ln-major"' in c.get("/admin").text and 'id="mt-fill-all"' in c.get("/admin").text,
+   "the store admin offers every major language and fills them all with two buttons")
+_cc = _db.connect()
+_cc.execute("UPDATE products SET description='' WHERE id=?", (_pde_id,))
+_cc.execute("DELETE FROM translations WHERE locale IN ('it','fr','de')")
+_cc.execute("DELETE FROM store_meta WHERE k IN ('mt','i18n')"); _cc.commit(); _cc.close()
+
 done("core")

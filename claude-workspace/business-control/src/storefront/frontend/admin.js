@@ -1328,6 +1328,13 @@ function renderLanguageRows() {
 
 $("#ln-add").onclick = () => {
   LOCALES.push({ code: "", label: "", dir: "ltr" }); renderLanguageRows(); };
+$("#ln-major").onclick = async () => {
+  try {
+    const out = await api("/api/store/admin/i18n/offer", { method: "POST", body: JSON.stringify({ codes: [] }) });
+    LOCALES = out.locales; LN_DEFAULT = out.default; renderLanguageRows();
+    $("#ln-msg").textContent = `${out.locales.length} languages offered — fill them below, or trim the list`;
+  } catch (e) { alert(e.message); }
+};
 $("#ln-save").onclick = async () => {
   try {
     const out = await api("/api/store/admin/i18n", { method: "POST",
@@ -1344,17 +1351,31 @@ async function drawMt() {
   $("#mt-engine").innerHTML = '<option value="">— none —</option>' + out.engines.map((e) =>
     `<option value="${e.id}" ${e.id === out.engine ? "selected" : ""}>${e.label}</option>`).join("");
   $("#mt-url").value = out.url || "";
+  $("#mt-model").value = out.model || "";
   $("#mt-key").placeholder = out.has_key ? "on file — type to replace" : "";
+  if (out.node_translate) $("#mt-report").textContent = `This node has a translate service (${out.node_translate}); LibreTranslate with a blank address uses it.`;
   const hint = () => { const e = out.engines.find((x) => x.id === $("#mt-engine").value); $("#mt-hint").textContent = e ? e.hint : ""; };
   $("#mt-engine").onchange = hint; hint();
 }
 $("#mt-save").onclick = async () => {
   try {
     const out = await api("/api/store/admin/mt", { method: "POST",
-      body: JSON.stringify({ engine: $("#mt-engine").value, url: $("#mt-url").value, key: $("#mt-key").value }) });
+      body: JSON.stringify({ engine: $("#mt-engine").value, url: $("#mt-url").value, key: $("#mt-key").value, model: $("#mt-model").value }) });
     $("#mt-key").value = ""; $("#mt-key").placeholder = out.has_key ? "on file — type to replace" : "";
     alert(out.engine ? `${out.engine} connected` : "no engine");
   } catch (e) { alert(e.message); }
+};
+
+$("#mt-fill-all").onclick = async () => {
+  const rep = $("#mt-report");
+  rep.textContent = "translating every language the shop offers… (a big shop takes a few minutes)";
+  try {
+    const out = await api("/api/store/admin/translations/fill-all", { method: "POST", body: JSON.stringify({ locales: [] }) });
+    rep.textContent = out.languages.map((l) => l.error
+      ? `${l.locale}: ${l.error}`
+      : `${l.locale}: ${l.filled} filled, ${l.dropped} dropped, ${l.remaining} left`).join("\n")
+      + (out.ok ? "\n\nRead them over: pick a language in Translations below." : "");
+  } catch (e) { rep.textContent = e.message; }
 };
 
 let TR_BASE = {};

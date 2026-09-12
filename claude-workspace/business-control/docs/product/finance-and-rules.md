@@ -544,6 +544,19 @@ picker with display rates. What it lacked was the rest of localisation.
   what the machine wrote is marked as the machine's, shown as such, and
   replaced the moment you type the real thing. The interface's own words
   are never sent — those ship translated.
+- **Every major language, by one algorithm.** A catalogue of forty
+  languages, each named in its own, with its reading direction. "Add all
+  major languages" offers them; "Fill every language" runs the same
+  procedure for each: everything the language lacks — the interface's
+  words when nothing shipped for it, and every product, page, section,
+  menu and kind — goes to the engine in batches sized by characters,
+  HTML apart from text; an answer that lost a placeholder or a tag is
+  dropped rather than kept; what survives is written as the machine's;
+  run again, only what is still missing is sent. Four engines: the
+  node's own LibreTranslate (offline, about thirty languages), DeepL,
+  any OpenAI-compatible endpoint, or Claude — the last two reach every
+  language. The same runs from the command line for a whole list:
+  `scripts/translate.py --tenant studio --locales all --engine anthropic --key …`.
 - **Languages are a setting.** Store admin → Languages: a code, the name
   in its own language, and which way it reads. With nothing chosen, all
   six are offered; a merchant who wants two keeps two. Right-to-left
