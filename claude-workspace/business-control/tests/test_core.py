@@ -10435,4 +10435,8 @@ ok("{name}" in _g and "<b>" in _g and "</b>" in _g and "&amp;" in _g and "part" 
 ok(_ct._translate_guarded(lambda t: "Y", ["  spaced  "]) == ["  Y  "],
    "and the spacing around each piece is kept")
 
+ok(_ct._join_pieces(["▁从一个安装中运行整个业务.", "第二句。"], "zh") == "从一个安装中运行整个业务.第二句。"
+   and _ct._join_pieces(["▁Hola", "mundo"], "es") == "Hola mundo",
+   "a stray word marker never reaches the page, and languages written without spaces are joined without one")
+
 done("core")

@@ -440,9 +440,22 @@ def _argos_fast(lang: str):
         toks = [sp.encode(x, out_type=str) for x in sents]
         res = tr.translate_batch(toks, beam_size=2, max_batch_size=32,
                                  max_decoding_length=512)
-        return " ".join(sp.decode(r.hypotheses[0]) for r in res)
+        return _join_pieces([sp.decode(r.hypotheses[0]) for r in res], lang)
     _CT2[lang] = one
     return one
+
+
+NO_SPACE_LANGS = {"zh", "zt", "ja", "th"}
+
+
+def _join_pieces(pieces: list, lang: str) -> str:
+    """Decoded sentences back into one string. SentencePiece's word
+    marker sometimes survives decoding at the front of a piece and is
+    not a character anyone wants; languages written without spaces
+    are joined without one."""
+    clean = [p.replace("\u2581", " ").strip() for p in pieces]
+    clean = [p for p in clean if p]
+    return ("" if lang in NO_SPACE_LANGS else " ").join(clean)
 
 
 def translate_batch_fast(texts: list, lang: str) -> list:
