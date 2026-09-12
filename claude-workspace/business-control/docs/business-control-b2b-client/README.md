@@ -36,7 +36,7 @@ back, and what opens the next gate.
 | [05 · Kickoff](templates/05-kickoff/) | Gathering inputs | [Welcome guide](templates/05-kickoff/welcome-guide.md) + 4 questionnaires | Questionnaires returned, content deadline agreed |
 | [06 · Requirements](templates/06-requirements/) | Agreeing what you're building | Requirements + sign-off form | **Signed requirements** |
 | [07 · Brand exploration](templates/07-brand-exploration/) | *Optional* — deciding how it looks | Directions, then the [art direction](templates/07-brand-exploration/art-direction.md) | **Signed art direction** |
-| [08 · Build](templates/08-build/) | Making it, showing it | Feedback forms, change orders | Round 2 signed off |
+| [08 · Build](templates/08-build/) | Making it, showing it | Feedback forms, change orders, the [quality documents](templates/08-build/test-process.md) | Round 2 signed off |
 | [09 · Launch](templates/09-launch/) | Going live | Launch summary | Live, verified, **paid** |
 | [10 · Handover](templates/10-handover/) | Giving them the keys | Handover pack | They can sign in without you |
 | [11 · Aftercare](templates/11-aftercare/) | Keeping it | Care plan + support, monitoring and security schedules; growth retainer; testimonial request | Plan signed or declined |
