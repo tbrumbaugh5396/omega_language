@@ -158,7 +158,10 @@ Things to know before touching them:
   a laptop. Plain-text engines never see tags or `{placeholders}`:
   `_translate_guarded` cuts at them and puts them back. In-process
   engines hang the interpreter at exit (native thread pools):
-  `scripts/translate.py` ends with `os._exit`.
+  `scripts/translate.py` ends with `os._exit`. `_degenerate` drops a
+  looping answer; a forced pass deletes the machine row it could not
+  replace. Argos's `zt` (traditional Chinese) model loops on half of
+  everything — not fit; use an LLM for `zh-tw`.
 - `health.py` is the Health capability (31st; the count is pinned in
   `pricebook.py`, five places in test_platform, two in test_studio, the
   deck `_D_ID`). Access is `auth.office(user, "health")` — a NAMED

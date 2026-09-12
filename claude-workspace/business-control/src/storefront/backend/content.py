@@ -263,9 +263,12 @@ MT_ENGINES = {
     "argos": {"label": "Argos Translate (in this process, no server, no key)", "url": "",
               "hint": "The open-source engine under LibreTranslate, run inside this install: "
                       "pip install argostranslate, then each language's model (about 100 MB) "
-                      "downloads itself the first time it is asked for. Offline after that; "
-                      "a fraction of a second a string. About forty languages, all through "
-                      "English. Tags and placeholders are kept out of its reach and put back."},
+                      "downloads itself the first time it is asked for. Offline after that. "
+                      "Batched through CTranslate2: a whole shop in about a minute a language "
+                      "on a ten-year-old laptop, seconds on a server. About forty languages, "
+                      "all through English; a first pass to read over — its traditional "
+                      "Chinese model loops and is best left to an LLM engine. Tags and "
+                      "placeholders are kept out of its reach and put back."},
     "nllb": {"label": "NLLB (Meta's 200-language model, in this process)", "url": "",
              "hint": "pip install transformers torch sentencepiece; the model (about 2.5 GB, "
                      "facebook/nllb-200-distilled-600M) downloads on first use. Slow on a "
@@ -647,6 +650,13 @@ def fill_locale(con, locale: str, *, limit: int = 2000, force_machine: bool = Fa
                 v = str(v or "").strip()
                 if not v or not _intact(want[k], v) or _degenerate(v):
                     dropped += 1
+                    if own_src.get(k) == "machine":
+                        # A fresh pass that cannot do better than the
+                        # machine's old row does not leave the old row:
+                        # it was the same engine's answer, and missing
+                        # reads as English while junk reads as junk.
+                        con.execute("DELETE FROM translations WHERE locale=? AND key=?"
+                                    " AND source='machine'", (loc, k))
                     continue
                 con.execute(
                     "INSERT INTO translations(locale,key,value,source) VALUES(?,?,?,'machine')"

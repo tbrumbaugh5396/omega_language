@@ -10444,4 +10444,21 @@ ok(_ct._degenerate("有出出出出出出出出出出出出出出出出出出出
    and not _ct._degenerate("<b>aaa</b> {oid}"),
    "an answer that is one character or one word over and over is a model in a loop, not a translation, and is dropped")
 
+# a forced pass that cannot do better than the machine's old row removes it
+_cc = _db.connect()
+_cc.execute("INSERT OR REPLACE INTO translations(locale,key,value,source) VALUES('it',?,?,'machine')",
+            (f"product:{_pde_id}:name", "junk junk junk junk junk"))
+_cc.execute("UPDATE products SET active=1 WHERE id=?", (_pde_id,)); _cc.commit(); _cc.close()
+c.post("/api/store/admin/mt", headers=A, json={"engine": "deepl", "key": "k-2"})
+_ct._mt_call = lambda engine, cfg, texts, target, html=False: ["loop loop loop loop loop" for _ in texts]
+try:
+    _rp = c.post("/api/store/admin/translations/it/fill", headers=A, json={"force_machine": True}).json()
+finally:
+    _ct._mt_call = _real_mt
+ok(_rp["dropped"] >= 1 and f"product:{_pde_id}:name" not in
+   c.get("/api/store/admin/translations/it", headers=A).json()["own"],
+   "when a forced pass drops its answer, the machine's old row goes too — missing reads as "
+   "English, junk reads as junk")
+_cc = _db.connect(); _cc.execute("DELETE FROM translations WHERE locale='it'"); _cc.execute("DELETE FROM store_meta WHERE k='mt'"); _cc.commit(); _cc.close()
+
 done("core")
