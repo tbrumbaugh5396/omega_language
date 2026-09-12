@@ -84,6 +84,39 @@ UI_KEYS = {
     "cart_note": "",
 }
 
+# The shell's own chrome — header buttons, the side menu — was raw
+# literals in index.html and never reached t(). These keys carry them,
+# applied to data-i18n attributes at boot, so a Spanish visitor's menu is
+# in Spanish and not only the product cards.
+UI_KEYS.update({
+    "nav_account": "My account", "nav_track": "Track my order",
+    "nav_support": "Support", "nav_menu": "Menu",
+    "side_learn": "Learn with us", "side_learning": "Learning",
+    "side_learning_sub": "Your courses, lessons, quizzes and people",
+    "side_nutrition": "Nutrition",
+    "side_nutrition_sub": "Plan, prep and track — coach optional",
+    "side_find": "Come find us", "side_stores": "Find a store",
+    "side_stores_sub": "Shops that carry the range", "side_events": "Events",
+    "side_events_sub": "Tastings, pop-ups and markets",
+    "side_work": "Work with us", "side_account": "Your account",
+    "side_signin": "Sign in", "side_signin_sub": "Customers and team — one door",
+    "side_track": "Track an order", "side_track_sub": "Where your order is right now",
+    "side_support": "Support",
+    "side_support_sub": "Real humans, same system the team runs on",
+    "side_a11y": "Accessibility & language",
+    "side_a11y_sub": "Text size, contrast, region and currency",
+    "close": "Close", "back": "Back", "continue": "Continue", "cancel": "Cancel",
+    "quantity": "Quantity", "subtotal": "Subtotal", "shipping": "Shipping",
+    "tax": "Tax", "order_placed": "Order placed", "sign_out": "Sign out",
+})
+
+# Languages a shop can offer. A code, a name in its own language, and
+# which way it reads — the three things a picker and a page need. A
+# merchant adds one on Store admin → Languages; translations for it are
+# typed on the same screen. Direction is the one that is not guessable
+# from a code, so it is stored, not derived.
+LOCALE_DEFAULT = [{"code": "en", "label": "English", "dir": "ltr"}]
+RTL = {"ar", "he", "fa", "ur", "ps", "sd", "ug", "yi", "dv"}
 CURRENCY_DEFAULT = [
     {"code": "USD", "symbol": "$", "rate": 1.0},
     {"code": "EUR", "symbol": "€", "rate": 0.92},
@@ -135,10 +168,39 @@ def currencies(con) -> list:
     return CURRENCY_DEFAULT
 
 
+def i18n_settings(con) -> dict:
+    """Which languages, which is the default, and whether a first visit
+    follows the browser's language. Locales come from the setting when
+    one is kept and from the translations table when it is not, so an
+    install that translated before this setting existed keeps its picker."""
+    row = con.execute("SELECT v FROM store_meta WHERE k='i18n'").fetchone()
+    cfg = {}
+    if row:
+        try:
+            cfg = json.loads(row["v"])
+        except ValueError:
+            cfg = {}
+    locs = [dict(l) for l in cfg.get("locales") or [] if isinstance(l, dict) and l.get("code")]
+    known = {l["code"] for l in locs}
+    if "en" not in known:
+        locs.insert(0, LOCALE_DEFAULT[0])
+        known.add("en")
+    for r in con.execute("SELECT DISTINCT locale FROM translations ORDER BY locale").fetchall():
+        if r["locale"] not in known:
+            locs.append({"code": r["locale"], "label": r["locale"].upper(),
+                         "dir": "rtl" if r["locale"].split("-")[0] in RTL else "ltr"})
+            known.add(r["locale"])
+    for l in locs:
+        l.setdefault("label", l["code"].upper())
+        l["dir"] = "rtl" if l.get("dir") == "rtl" or (
+            "dir" not in l and l["code"].split("-")[0] in RTL) else "ltr"
+    default = cfg.get("default") if cfg.get("default") in known else "en"
+    return {"locales": locs, "default": default,
+            "auto_detect": bool(cfg.get("auto_detect", True))}
+
+
 def locales(con) -> list:
-    rows = con.execute("SELECT DISTINCT locale FROM translations"
-                       " ORDER BY locale").fetchall()
-    return ["en"] + [r["locale"] for r in rows if r["locale"] != "en"]
+    return [l["code"] for l in i18n_settings(con)["locales"]]
 
 
 def translations_for(con, locale: str) -> dict:
@@ -171,7 +233,10 @@ def i18n_payload(con) -> str:
     from erp.backend.main import CFG
     from . import affiliates as aff
     from .api import get_theme
+    i18n = i18n_settings(con)
     data = {"currencies": currencies(con), "locales": locales(con),
+            "locale_info": i18n["locales"], "default_locale": i18n["default"],
+            "auto_detect": i18n["auto_detect"],
             "ui": ui_strings(con),
             # Which stand-in art this shop draws — the client twin of
             # product_art(), reading the one switch rather than guessing.
@@ -431,10 +496,47 @@ def find_redirect(con, path: str):
 
 @router.get("/api/store/i18n")
 def get_i18n(con=Depends(get_con)):
+    i18n = i18n_settings(con)
     return {"currencies": currencies(con), "locales": locales(con),
+            "locale_info": i18n["locales"], "default_locale": i18n["default"],
+            "auto_detect": i18n["auto_detect"],
             "ui": UI_KEYS,
             "strings": {loc: translations_for(con, loc)
                         for loc in locales(con) if loc != "en"}}
+
+
+class I18nBody(BaseModel):
+    locales: list = []
+    default: str = "en"
+    auto_detect: bool = True
+
+
+@router.post("/api/store/admin/i18n")
+def save_i18n(body: I18nBody, u=Depends(admin_user), con=Depends(get_con)):
+    """The languages the shop offers. A code, a name in its own
+    language, and which way it reads."""
+    locs, seen = [], set()
+    for l in body.locales:
+        code = str(l.get("code", "")).strip().lower()[:8]
+        if not code or code in seen:
+            continue
+        if not all(ch.isalnum() or ch == "-" for ch in code):
+            raise HTTPException(400, f"'{code}' is not a language code (es, pt-br, zh-hant)")
+        seen.add(code)
+        locs.append({"code": code, "label": str(l.get("label", "")).strip()[:40] or code.upper(),
+                     "dir": "rtl" if str(l.get("dir", "")) == "rtl" or (
+                         "dir" not in l and code.split("-")[0] in RTL) else "ltr"})
+    if "en" not in seen:
+        locs.insert(0, LOCALE_DEFAULT[0]); seen.add("en")
+    default = body.default.strip().lower()
+    if default not in seen:
+        raise HTTPException(400, "the default has to be one of the languages offered")
+    con.execute("INSERT INTO store_meta(k,v) VALUES('i18n',?)"
+                " ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                (json.dumps({"locales": locs, "default": default,
+                             "auto_detect": body.auto_detect}),))
+    con.commit()
+    return {"ok": True, **i18n_settings(con)}
 
 
 class TranslationBody(BaseModel):

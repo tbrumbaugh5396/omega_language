@@ -1296,6 +1296,48 @@ $("#cu-save").onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 
+// ---------- languages ----------
+let LOCALES = [];
+let LN_DEFAULT = "en";
+async function drawLanguages() {
+  const out = await (await fetch("/api/store/i18n")).json();
+  LOCALES = out.locale_info || [];
+  LN_DEFAULT = out.default_locale || "en";
+  $("#ln-auto").checked = out.auto_detect !== false;
+  renderLanguageRows();
+}
+
+function renderLanguageRows() {
+  $("#ln-list").innerHTML = LOCALES.map((l, i) =>
+    `<div class="adm-row" style="margin-bottom:6px">
+      <div><input data-ln="${i}:code" value="${l.code}" placeholder="es" ${l.code === "en" ? "readonly" : ""}></div>
+      <div><input data-ln="${i}:label" value="${(l.label || "").replace(/"/g, "&quot;")}" placeholder="Español"></div>
+      <div><select data-ln="${i}:dir">
+        <option value="ltr" ${l.dir !== "rtl" ? "selected" : ""}>left to right</option>
+        <option value="rtl" ${l.dir === "rtl" ? "selected" : ""}>right to left</option></select></div>
+      <div>${l.code === "en" ? '<span class="dim">base</span>' :
+        `<button class="btn-pill ghost mini" data-lnrm="${i}">remove</button>`}</div>
+    </div>`).join("");
+  $("#ln-default").innerHTML = LOCALES.map((l) =>
+    `<option value="${l.code}" ${l.code === LN_DEFAULT ? "selected" : ""}>${l.label || l.code}</option>`).join("");
+  $("#ln-list").querySelectorAll("[data-ln]").forEach((el) => el.onchange =
+    () => { const [i, k] = el.dataset.ln.split(":"); LOCALES[+i][k] = el.value; });
+  $("#ln-list").querySelectorAll("[data-lnrm]").forEach((b) => b.onclick =
+    () => { LOCALES.splice(+b.dataset.lnrm, 1); renderLanguageRows(); });
+}
+
+$("#ln-add").onclick = () => {
+  LOCALES.push({ code: "", label: "", dir: "ltr" }); renderLanguageRows(); };
+$("#ln-save").onclick = async () => {
+  try {
+    const out = await api("/api/store/admin/i18n", { method: "POST",
+      body: JSON.stringify({ locales: LOCALES, default: $("#ln-default").value,
+        auto_detect: $("#ln-auto").checked }) });
+    LOCALES = out.locales; LN_DEFAULT = out.default; renderLanguageRows();
+    $("#ln-msg").textContent = `${out.locales.length} language${out.locales.length === 1 ? "" : "s"} offered; default ${out.default}`;
+  } catch (e) { alert(e.message); }
+};
+
 let TR_BASE = {};
 $("#tr-load").onclick = async () => {
   const loc = $("#tr-locale").value.trim().toLowerCase();
@@ -1529,7 +1571,7 @@ async function boot() {
   run("discounts", drawDiscounts); run("discounts", drawGiftCards);
   run("orders", drawOrders);
   run("settings", drawWebhooks); run("settings", drawKeys);
-  run("settings", drawCurrencies); run("settings", drawStaff);
+  run("settings", drawCurrencies); run("settings", drawLanguages); run("settings", drawStaff);
   run("settings", drawAudit); run("settings", drawShipping);
 }
 tryBoot().then((ok) => { if (ok) boot(); });

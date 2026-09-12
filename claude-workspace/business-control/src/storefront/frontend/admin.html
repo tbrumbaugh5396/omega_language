@@ -311,6 +311,22 @@
         <button class="btn-pill primary sm" id="cu-save">Save currencies</button>
       </div>
 
+      <h3 style="margin-top:20px">Languages</h3>
+      <p class="dim">The languages the shop offers, each with its name in
+      its own language and which way it reads. The default is what a
+      first visit gets when the browser's language is not offered.</p>
+      <div id="ln-list"></div>
+      <div class="adm-row" style="margin-top:8px">
+        <div><label>Default</label><select id="ln-default"></select></div>
+        <div><label>First visit</label><label style="display:flex;gap:6px;align-items:center;padding-top:6px">
+          <input type="checkbox" id="ln-auto" checked> follow the browser's language when offered</label></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-pill ghost sm" id="ln-add">＋ language</button>
+        <button class="btn-pill primary sm" id="ln-save">Save languages</button>
+      </div>
+      <p class="dim" id="ln-msg"></p>
+
       <h3 style="margin-top:20px">Translations</h3>
       <div class="adm-row">
         <div><label>Locale code</label>

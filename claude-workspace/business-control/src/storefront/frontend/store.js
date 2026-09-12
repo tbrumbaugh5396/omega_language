@@ -26,9 +26,68 @@ const I18N = window.STORE_I18N || { currencies: [], locales: ["en"],
 let CUR = I18N.currencies.find(
   (c) => c.code === localStorage.getItem("sf_cur")) ||
   I18N.currencies[0] || { code: "USD", symbol: "$", rate: 1 };
-let LOCALE = localStorage.getItem("sf_locale") || "en";
+/* Which language this visit reads in: what they chose last time, else
+   ?lang= in the address, else — when the shop allows it — the browser's
+   own language if the shop offers it, else the shop's default. Stored
+   once chosen, so a shopper who picked Spanish is not bounced back to
+   the browser's guess on the next visit. */
+const LOCALE_INFO = I18N.locale_info || I18N.locales.map((c) => ({ code: c, label: c.toUpperCase(), dir: "ltr" }));
+function resolveLocale() {
+  const offered = I18N.locales.length ? I18N.locales : ["en"];
+  const q = new URLSearchParams(location.search).get("lang");
+  if (q && offered.includes(q.toLowerCase())) {
+    try { localStorage.setItem("sf_locale", q.toLowerCase()); } catch (e) {}
+    return q.toLowerCase();
+  }
+  let saved = null;
+  try { saved = localStorage.getItem("sf_locale"); } catch (e) {}
+  if (saved && offered.includes(saved)) return saved;
+  if (I18N.auto_detect !== false) {
+    for (const l of navigator.languages || [navigator.language || ""]) {
+      const full = String(l).toLowerCase(), base = full.split("-")[0];
+      if (offered.includes(full)) return full;
+      if (offered.includes(base)) return base;
+    }
+  }
+  return offered.includes(I18N.default_locale) ? I18N.default_locale : offered[0];
+}
+let LOCALE = resolveLocale();
+const LOCALE_DIR = (LOCALE_INFO.find((l) => l.code === LOCALE) || {}).dir || "ltr";
+document.documentElement.lang = LOCALE;
+document.documentElement.dir = LOCALE_DIR;
 
-const money = (c) => CUR.symbol + (c / 100 * (CUR.rate || 1)).toFixed(2);
+/* Money and dates in the visitor's own conventions: 1.234,56 € for a
+   German reader, $1,234.56 for an American one, from the same cents.
+   The rate is the merchant's display conversion; the formatting is the
+   browser's, which knows more locales than this file ever will. */
+const money = (c) => {
+  const v = c / 100 * (CUR.rate || 1);
+  try {
+    return new Intl.NumberFormat(LOCALE, { style: "currency", currency: CUR.code,
+      currencyDisplay: "narrowSymbol" }).format(v);
+  } catch (e) {
+    return CUR.symbol + v.toFixed(2);
+  }
+};
+const fmtDay = (ts, opts) => new Date(ts * 1000).toLocaleDateString(LOCALE,
+  opts || { day: "numeric", month: "short", year: "numeric" });
+const fmtNum = (n) => { try { return new Intl.NumberFormat(LOCALE).format(n); } catch (e) { return String(n); } };
+/* The shell's own chrome — header buttons, the side menu — carries
+   data-i18n keys; this turns them into the visitor's language at boot. */
+function applyI18n() {
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    const v = t(el.dataset.i18n, null);
+    if (v && v !== el.dataset.i18n) el.textContent = v;
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const v = t(el.dataset.i18nTitle, null);
+    if (v && v !== el.dataset.i18nTitle) { el.title = v; el.setAttribute("aria-label", v); }
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const v = t(el.dataset.i18nPlaceholder, null);
+    if (v && v !== el.dataset.i18nPlaceholder) el.placeholder = v;
+  });
+}
 // t(key, fallback) — merchant-managed translations, base copy when absent.
 const t = (key, fallback) =>
   (I18N.strings[LOCALE] || {})[key] ?? fallback ?? I18N.ui[key] ?? key;
@@ -56,9 +115,9 @@ function buildPickers() {
     };
   }
   if (ls) {
-    ls.innerHTML = I18N.locales.map((l) =>
-      `<option value="${l}" ${l === LOCALE ? "selected" : ""}>
-        ${l.toUpperCase()}</option>`).join("");
+    ls.innerHTML = LOCALE_INFO.map((l) =>
+      `<option value="${l.code}" ${l.code === LOCALE ? "selected" : ""}>
+        ${l.label || l.code.toUpperCase()}</option>`).join("");
     ls.disabled = I18N.locales.length < 2;
     ls.onchange = () => {
       LOCALE = ls.value; localStorage.setItem("sf_locale", LOCALE);
@@ -680,6 +739,7 @@ async function loadCatalog() {
   const r = await fetch("/api/store/catalog");
   CATALOG = await r.json();
   drawTabs(); drawGrid(); drawSideMenu(); drawReviewWall(); hydrateHero();
+  applyI18n();   // after the chrome is on the page, not before
   wireReviewButtons();
 }
 
@@ -793,7 +853,7 @@ function holdFor(pid) {
   if (h) { delete HOLDS[pid]; saveHolds(); }
   return null;
 }
-const fmtWhen = (ts) => new Date(ts * 1000).toLocaleString(undefined,
+const fmtWhen = (ts) => new Date(ts * 1000).toLocaleString(LOCALE,
   { weekday: "short", day: "numeric", month: "short", hour: "2-digit",
     minute: "2-digit" });
 
@@ -817,7 +877,7 @@ async function openBooking(pid) {
         dayStart.getTime() / 1000}&days=7`)).json();
     } catch { slots.innerHTML = `<span class="dim">could not load times</span>`; return; }
     days.innerHTML = d.days.map((x, i) => `<button class="bk-day ${i === 0 ? "on" : ""}"
-      data-day="${x.day}">${new Date(x.day * 1000).toLocaleDateString(undefined,
+      data-day="${x.day}">${new Date(x.day * 1000).toLocaleDateString(LOCALE,
         { weekday: "short", day: "numeric" })}<small>${x.free ? x.free + " free"
         : "full"}</small></button>`).join("");
     const draw = (day) => {
@@ -1809,7 +1869,7 @@ async function drawAccount() {
         <div class="ship-opt"><b>${money(g.cents)}</b>
           <span class="dim">${esc(g.fund)}${g.payee
             ? " · for " + esc(g.payee) : ""} ·
-            ${new Date(g.created_at * 1000).toLocaleDateString()}</span>
+            ${new Date(g.created_at * 1000).toLocaleDateString(LOCALE)}</span>
           ${g.receipt_url
             ? `<a class="btn-pill ghost sm" href="${g.receipt_url}"
                  target="_blank" rel="noopener">${g.tax_receipt
@@ -2348,7 +2408,7 @@ let openPrefs = () => {};
     localStorage.removeItem("sf_region");
     localStorage.removeItem("sf_cur");
     CUR = I18N.currencies[0] || { code: "USD", symbol: "$", rate: 1 };
-    buildPickers(); drawGrid(); drawCart();
+    applyI18n(); buildPickers(); drawGrid(); drawCart();
     if (LOCALE !== "en") {
       localStorage.setItem("sf_locale", "en"); location.reload();
     }
