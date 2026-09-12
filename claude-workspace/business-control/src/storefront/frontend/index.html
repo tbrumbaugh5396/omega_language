@@ -26,7 +26,7 @@
 </div>
 
 <header class="topbar">
-  <button class="icon-btn" id="menu-btn" aria-label="Menu">
+  <button class="icon-btn" id="menu-btn" aria-label="Menu" data-i18n-title="menu">
     <svg class="ico" aria-hidden="true"><use href="#i-menu"/></svg></button>
   <a class="brand" href="/"><!--BRAND--></a>
   <nav class="top-links"><!--NAV--></nav>
@@ -172,51 +172,51 @@
 <!-- preferences: accessibility + region & language.
      Reachable two ways — this badge while browsing, and an entry in the menu
      (where the badge would otherwise be covered by the fullscreen overlay). -->
-<button class="a11y-fab" id="a11y-fab" aria-label="Accessibility and language options"
+<button class="a11y-fab" id="a11y-fab" aria-label="Accessibility and language options" data-i18n-aria="a11y_open"
         aria-expanded="false" aria-controls="a11y-panel">
   <svg class="ico" aria-hidden="true"><use href="#i-a11y"/></svg></button>
 <div class="a11y-panel" id="a11y-panel" role="dialog"
      aria-label="Accessibility and language options">
-  <div class="side-head"><b>Preferences</b>
+  <div class="side-head"><b data-i18n="prefs">Preferences</b>
     <button class="icon-btn" id="prefs-close" aria-label="Close preferences">
       <svg class="ico" aria-hidden="true"><use href="#i-close"/></svg></button>
   </div>
-  <p class="dim" style="font-size:13px;margin-bottom:2px">Saved on this device.</p>
+  <p class="dim" style="font-size:13px;margin-bottom:2px" data-i18n="prefs_saved">Saved on this device.</p>
 
-  <div class="a11y-group">Accessibility</div>
-  <div class="a11y-row"><span>Text size</span>
+  <div class="a11y-group" data-i18n="accessibility">Accessibility</div>
+  <div class="a11y-row"><span data-i18n="text_size">Text size</span>
     <span class="a11y-seg" id="a11y-text" role="group" aria-label="Text size">
       <button data-size="" class="on">A</button>
       <button data-size="lg">A+</button>
       <button data-size="xl">A++</button>
     </span></div>
-  <div class="a11y-row"><span id="a11y-contrast-lbl">High contrast</span>
+  <div class="a11y-row"><span id="a11y-contrast-lbl" data-i18n="high_contrast">High contrast</span>
     <button class="a11y-toggle" id="a11y-contrast" role="switch"
             aria-checked="false" aria-labelledby="a11y-contrast-lbl"></button></div>
-  <div class="a11y-row"><span id="a11y-motion-lbl">Reduce motion</span>
+  <div class="a11y-row"><span id="a11y-motion-lbl" data-i18n="reduce_motion">Reduce motion</span>
     <button class="a11y-toggle" id="a11y-motion" role="switch"
             aria-checked="false" aria-labelledby="a11y-motion-lbl"></button></div>
-  <div class="a11y-row"><span id="a11y-links-lbl">Underline links</span>
+  <div class="a11y-row"><span id="a11y-links-lbl" data-i18n="underline_links">Underline links</span>
     <button class="a11y-toggle" id="a11y-links" role="switch"
             aria-checked="false" aria-labelledby="a11y-links-lbl"></button></div>
 
   <div class="a11y-group" id="pref-privacy-group" hidden>Privacy</div>
   <div class="a11y-row" id="pref-consent-row" hidden>
-    <span id="pref-consent-lbl">Measurement cookies</span>
+    <span id="pref-consent-lbl" data-i18n="measurement_cookies">Measurement cookies</span>
     <button class="a11y-toggle" id="pref-consent" role="switch"
             aria-checked="false" aria-labelledby="pref-consent-lbl"></button>
   </div>
 
-  <div class="a11y-group">Region &amp; language</div>
-  <div class="a11y-row"><label for="region-select">Region</label>
+  <div class="a11y-group" data-i18n="region_language">Region &amp; language</div>
+  <div class="a11y-row"><label for="region-select" data-i18n="region">Region</label>
     <select id="region-select" class="pref-select"></select></div>
-  <div class="a11y-row"><label for="locale-select">Language</label>
+  <div class="a11y-row"><label for="locale-select" data-i18n="language">Language</label>
     <select id="locale-select" class="pref-select"></select></div>
-  <div class="a11y-row"><label for="currency-select">Currency</label>
+  <div class="a11y-row"><label for="currency-select" data-i18n="currency">Currency</label>
     <select id="currency-select" class="pref-select"></select></div>
 
   <button class="btn-pill ghost sm wide" id="a11y-reset"
-          style="margin-top:14px">Reset all</button>
+          style="margin-top:14px" data-i18n="reset_all">Reset all</button>
 </div>
 
 <!-- always-reachable buy button -->

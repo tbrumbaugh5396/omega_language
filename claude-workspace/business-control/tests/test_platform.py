@@ -5995,7 +5995,7 @@ ok('"#i-bell"' in _ljs2 and "i-bell" in (
    ).read_text(encoding="utf-8"),
    "the bell mounts in the site header's icon cluster, drawn from the "
    "shared sprite")
-ok(all(s in _sjs2 for s in ('["create", "Create account"]',
+ok(all(s in _sjs2 for s in ('["create", t("create_account")]',
                             '["apply", "Apply to a programme"]',
                             'mode: "signin"', 'mode: "create"')),
    "the storefront door offers all three ways in — sign in, create, apply")

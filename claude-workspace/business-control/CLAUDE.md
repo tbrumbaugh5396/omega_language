@@ -136,7 +136,10 @@ Things to know before touching them:
   page; `store.js` `resolveLocale()` (saved → `?lang` → browser →
   default), `money()` uses `Intl.NumberFormat(LOCALE, currency)`, the
   chrome is translated through `data-i18n*` attributes by `applyI18n()`.
-  New chrome strings go in `UI_KEYS` AND on the element as `data-i18n`.
+  New chrome strings go in `UI_KEYS` AND on the element as `data-i18n`
+  (or `data-i18n-title` / `data-i18n-aria` / `data-i18n-placeholder`),
+  AND in every `content.BUILTIN` language — the suite checks each
+  language covers every key.
 - `health.py` is the Health capability (31st; the count is pinned in
   `pricebook.py`, five places in test_platform, two in test_studio, the
   deck `_D_ID`). Access is `auth.office(user, "health")` — a NAMED

@@ -10080,9 +10080,10 @@ c.post("/api/store/admin/translations", headers=A, json={
                                 "email_total": "Gesamt"}})
 _dcon = _db.connect()
 ok(_ct.strings_for(_dcon, "de")["email_total"] == "Gesamt"
-   and _ct.strings_for(_dcon, "de")["email_tax"] == "Tax"
+   and _ct.strings_for(_dcon, "de")["email_tax"] == "Steuern"
    and _ct.strings_for(_dcon, "xx")["email_total"] == "Total",
-   "an email's words come from the translations, English where nothing is translated")
+   "an email's words come from the translations — the merchant's, else the "
+   "shipped ones, else English for a language nobody knows")
 ok(_ct.fmt_money(_dcon, 123456, "de") == "1.234,56 $" and _ct.fmt_money(_dcon, 123456, "en") == "$1,234.56",
    "and its money is in the language's conventions")
 _dcon.close()
@@ -10153,5 +10154,47 @@ if _appt:
         ok(c.post("/api/health/kiosk/checkin", json={"code": _code[0]["payload"]}).status_code == 200,
            "or the code on the ID card does")
 ok('id="hea-kiosk"' in _ops and "/health/kiosk" in _ops, "the desk's screen hands out the kiosk link")
+
+# --- the storefront speaks six languages the day it opens ---
+ok([l["code"] for l in _ct.BUILTIN_LOCALES] == ["es", "fr", "de", "pt", "zh", "ar"]
+   and all(set(_ct.UI_KEYS) - {"cart_tag", "cart_note"} <= set(d) for d in _ct.BUILTIN.values()),
+   "the product ships a translation of every one of its own words in six languages")
+_dcon = _db.connect()
+_dcon.execute("DELETE FROM store_meta WHERE k='i18n'"); _dcon.commit()
+_fresh = _ct.i18n_settings(_dcon)
+ok([l["code"] for l in _fresh["locales"]] == ["en", "es", "fr", "de", "pt", "zh", "ar"]
+   and next(l for l in _fresh["locales"] if l["code"] == "ar")["dir"] == "rtl",
+   "with nothing chosen, the picker offers English and all six — so choosing "
+   "Spanish does something the day the shop opens")
+ok(_ct.translations_for(_dcon, "es")["prefs"] == "Preferencias"
+   and _ct.translations_for(_dcon, "pt-br")["prefs"] == "Preferências",
+   "and a shipped translation answers, a regional code falling back to its language")
+_dcon.execute("INSERT OR REPLACE INTO translations(locale,key,value) VALUES('es','prefs','Ajustes')")
+_dcon.commit()
+ok(_ct.translations_for(_dcon, "es")["prefs"] == "Ajustes"
+   and _ct.translations_for(_dcon, "es")["language"] == "Idioma",
+   "a merchant's own word for a key wins over the shipped one, key by key")
+_dcon.execute("DELETE FROM translations WHERE locale='es' AND key='prefs'"); _dcon.commit()
+_dcon.close()
+_pubi2 = c.get("/api/store/i18n").json()
+ok(_pubi2["locales"][:2] == ["en", "es"] and _pubi2["strings"]["es"]["sign_in"] == "Iniciar sesión"
+   and _pubi2["strings"]["ar"]["prefs"],
+   "every page carries them")
+_tr_es = c.get("/api/store/admin/translations/es", headers=A).json()
+ok(_tr_es["shipped"]["prefs"] == "Preferencias" and "own" in _tr_es,
+   "the translations screen shows what shipped and what the merchant typed, apart")
+_home2 = c.get("/").text
+ok('data-i18n="prefs"' in _home2 and 'data-i18n="language"' in _home2
+   and 'data-i18n="reset_all"' in _home2 and 'data-i18n-aria="a11y_open"' in _home2,
+   "the preferences panel under the accessibility button carries keys for every label")
+_sfjs3 = c.get("/store.js").text
+ok('${t("checkout_title")}' in _sfjs3 and '${t("place_order")}' in _sfjs3
+   and '${t("sign_in")}' in _sfjs3 and '${t("my_account")}' in _sfjs3
+   and '${t("empty_cart_line")}' in _sfjs3 and "data-i18n-aria" in _sfjs3,
+   "and the cart, the checkout, the doors and the account go through the same layer")
+c.post("/api/store/admin/i18n", headers=A, json={"locales": [{"code": "es", "label": "Español"}], "default": "en"})
+ok(c.get("/api/store/i18n").json()["locales"] == ["en", "es"],
+   "a merchant who wants two languages gets two")
+_dcon = _db.connect(); _dcon.execute("DELETE FROM store_meta WHERE k='i18n'"); _dcon.commit(); _dcon.close()
 
 done("core")

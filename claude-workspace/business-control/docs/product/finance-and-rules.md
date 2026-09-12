@@ -525,9 +525,19 @@ The storefront already carried translations: a table of strings by
 locale, product names and descriptions under generated keys, a currency
 picker with display rates. What it lacked was the rest of localisation.
 
+- **The product speaks six languages the day it opens.** Spanish,
+  French, German, Portuguese, Chinese and Arabic translations of every
+  one of the interface's own words — the header, the menu, the
+  preferences panel, the cart, the checkout, the doors, the account, the
+  emails — ship with it, so the language picker under the accessibility
+  button changes the page the first time it is used. A merchant's own
+  translation of any word wins over the shipped one, key by key, and
+  their products and pages are theirs to translate on the same screen.
 - **Languages are a setting.** Store admin → Languages: a code, the name
-  in its own language, and which way it reads. Right-to-left scripts are
-  recognised from the code and can be set by hand. One is the default.
+  in its own language, and which way it reads. With nothing chosen, all
+  six are offered; a merchant who wants two keeps two. Right-to-left
+  scripts are recognised from the code and can be set by hand. One is
+  the default.
 - **A first visit picks a language** the way a visitor would expect:
   what they chose last time, else `?lang=` in the address, else — when
   the shop allows it — the browser's language if the shop offers it,

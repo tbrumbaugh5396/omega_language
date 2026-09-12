@@ -128,6 +128,10 @@ function applyI18n() {
     const v = t(el.dataset.i18nTitle, null);
     if (v && v !== el.dataset.i18nTitle) { el.title = v; el.setAttribute("aria-label", v); }
   });
+  document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+    const v = t(el.dataset.i18nAria, null);
+    if (v && v !== el.dataset.i18nAria) el.setAttribute("aria-label", v);
+  });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
     const v = t(el.dataset.i18nPlaceholder, null);
     if (v && v !== el.dataset.i18nPlaceholder) el.placeholder = v;
@@ -832,7 +836,7 @@ async function openReviews(pid) {
       <option>2</option><option>1</option></select>
     <label>Review</label><textarea id="rv-body" rows="3"></textarea>
     <div class="modal-actions">
-      <button class="btn-pill ghost sm" data-close-modal>Close</button>
+      <button class="btn-pill ghost sm" data-close-modal>${t("close")}</button>
       <button class="btn-pill primary sm" id="rv-send">Post review</button>
     </div>`);
   $("#rv-send").onclick = async () => {
@@ -1045,7 +1049,7 @@ function drawCart() {
       </div></div>`;
   }).join("");
   host.innerHTML = lines || `<div class="cart-empty">
-    ${ico("bag", "ico")}<p>Your cart is empty.</p>
+    ${ico("bag", "ico")}<p>${t("empty_cart_line")}</p>
     <button class="btn-pill ghost sm" id="cart-empty-shop"
       style="margin-top:14px">${t("shop_cta")}</button></div>`;
   drawCodes();
@@ -1256,23 +1260,23 @@ $("#checkout-btn").onclick = async () => {
       }) })).json()).offer;
   } catch { offer = null; }
   const disc = DISCOUNT ? Math.round(sub * (100 - DISCOUNT.pct) / 100) : sub;
-  openModal(`<h3>Checkout</h3>
-    <label>Name</label><input id="co-name" placeholder="Full name">
-    <label>Email</label><input id="co-email" type="email" placeholder="you@example.com">
+  openModal(`<h3>${t("checkout_title")}</h3>
+    <label>${t("name")}</label><input id="co-name" placeholder="${t("full_name")}">
+    <label>${t("email")}</label><input id="co-email" type="email" placeholder="you@example.com">
     <label>${t("country", "Country")}</label><select id="co-country">${ADDRESS_COUNTRIES.map((c) =>
       `<option value="${c.code}" ${c.code === (localStorage.getItem("sf_country") || I18N.default_country || "US") ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
     <div id="co-addrfields">${addressFields()}</div>
-    <label>Shipping</label>
+    <label>${t("shipping_label")}</label>
     ${methods.map((m, i) => `<label class="ship-opt">
       <input type="radio" name="co-ship" value="${m.id}" ${i === 0 ? "checked" : ""}>
       <b>${m.name}</b><span class="dim">${m.eta}</span>
       <span>${m.position === 0 && disc >= 4000 ? "FREE" : money(m.price_cents)}</span>
     </label>`).join("")}
-    <label>Payment</label>
+    <label>${t("payment")}</label>
     <label class="ship-opt"><input type="radio" name="co-pay" value="card" checked>
       <b>Card · Apple Pay · Google Pay</b><span class="dim">via Stripe</span></label>
     <label class="ship-opt"><input type="radio" name="co-pay" value="cod">
-      <b>Pay on delivery</b></label>
+      <b>${t("pay_on_delivery")}</b></label>
     <label class="ship-opt"><input type="checkbox" id="co-subscribe">
       <b>${ico("repeat", "ico ico-sm")} Make it a monthly box</b>
       <span class="dim">skip · pause · cancel any time</span></label>
@@ -1313,7 +1317,7 @@ $("#checkout-btn").onclick = async () => {
     </div>` : ""}
     <div class="modal-actions">
       <button class="btn-pill ghost sm" data-close-modal>Back</button>
-      <button class="btn-pill primary sm" id="co-place">Place order</button>
+      <button class="btn-pill primary sm" id="co-place">${t("place_order")}</button>
     </div>
     <p class="dim" id="co-msg" style="margin-top:8px"></p>`);
   $("#co-country").onchange = () => { localStorage.setItem("sf_country", $("#co-country").value); $("#co-addrfields").innerHTML = addressFields(); };
@@ -1404,7 +1408,7 @@ async function placeOrder() {
       body: JSON.stringify({ email, source: "checkout" }) });
     CART = {}; DISCOUNT = null; HOLDS = {}; saveHolds(); saveCart(); drawCart();
     closeModal(); closeMenus();
-    openModal(`<h3>Order placed</h3>
+    openModal(`<h3>${t("order_placed")}</h3>
       <p>Order <b>#${out.id || out.order_id || ""}</b> is in. Track it any
       time with the parcel button in the header.</p>
       <div class="modal-actions">
@@ -1416,10 +1420,10 @@ async function placeOrder() {
 
 // ---------- order tracking ----------
 function openTracking() {
-  openModal(`<h3>Track my order</h3>
+  openModal(`<h3>${t("track_my_order")}</h3>
     <label>Order number</label><input id="tr-id" type="number" placeholder="e.g. 42">
     <div class="modal-actions">
-      <button class="btn-pill ghost sm" data-close-modal>Close</button>
+      <button class="btn-pill ghost sm" data-close-modal>${t("close")}</button>
       <button class="btn-pill primary sm" id="tr-go">Track</button>
     </div>
     <div id="tr-out"></div>`);
@@ -1647,13 +1651,13 @@ function signInForm(intro, onDone) {
     return out;
   };
   const doorTabs = () => `<div class="door-tabs">
-    ${[["signin", "Sign in"], ["create", "Create account"],
+    ${[["signin", t("sign_in")], ["create", t("create_account")],
        ["apply", "Apply to a programme"]].map(([id, label]) =>
       `<button class="btn-pill sm ${door === id ? "primary" : "ghost"}"
         data-door="${id}">${label}</button>`).join("")}</div>`;
   const draw = async () => {
     if (door === "signin") {
-      openModal(`<h3>Sign in</h3>
+      openModal(`<h3>${t("sign_in")}</h3>
         <p class="dim">${intro}</p>
         ${doorTabs()}
         <label>Name</label><input id="si-name" placeholder="Your name"
@@ -1665,7 +1669,7 @@ function signInForm(intro, onDone) {
         <div class="modal-actions">
           <button class="btn-pill ghost sm" data-close-modal>Later</button>
           <button class="btn-pill ghost sm" id="si-scan">Scan a QR</button>
-          <button class="btn-pill primary sm" id="si-go">Sign in</button>
+          <button class="btn-pill primary sm" id="si-go">${t("sign_in")}</button>
         </div>
         <p class="dim" id="si-msg"></p>
         <p class="dim" style="margin-top:14px;padding-top:12px;
@@ -1712,7 +1716,7 @@ function signInForm(intro, onDone) {
           beats a short password with symbols in it.</p>
         <div class="modal-actions">
           <button class="btn-pill ghost sm" data-close-modal>Later</button>
-          <button class="btn-pill primary sm" id="cr-go">Create account</button>
+          <button class="btn-pill primary sm" id="cr-go">${t("create_account")}</button>
         </div>
         <p class="dim" id="si-msg"></p>`);
       $("#cr-go").onclick = async () => {
@@ -1869,7 +1873,7 @@ async function drawAccount() {
        ${verbs}
        <button class="btn-pill ghost sm" data-sub="${s.id}:cancel">cancel</button>
       </div>`;
-  openModal(`<h3>My account</h3>
+  openModal(`<h3>${t("my_account")}</h3>
     ${plans.length ? `
       <h3 style="font-size:15px;margin-top:6px">${t("plans_heading")}</h3>
       ${plans.map((s) => subRow(s, s.status === "active"
@@ -2281,7 +2285,7 @@ function openTicketLookup() {
   openModal(`<h3>Check on a message</h3>
     <label>Reference</label><input id="tl-ref" placeholder="ZJ-4F2A">
     <div class="modal-actions">
-      <button class="btn-pill ghost sm" data-close-modal>Close</button>
+      <button class="btn-pill ghost sm" data-close-modal>${t("close")}</button>
       <button class="btn-pill primary sm" id="tl-go">Look it up</button>
     </div>
     <div id="tl-out"></div>`);
