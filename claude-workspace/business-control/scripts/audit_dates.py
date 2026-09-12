@@ -94,6 +94,10 @@ def run(label, when, parts):
     because twenty suites end to end is a coffee break and nobody runs a
     check they have to plan around."""
     env = dict(os.environ, BC_FAKE_NOW=str(when), PYTHONPATH="src")
+    # Say which date is running before it runs: each takes a few minutes,
+    # and a few silent minutes read as a hang.
+    print(f"  …   {label:<13} {time.strftime('%a %Y-%m-%d', time.localtime(when))}"
+          f"  running {len(parts)} parts", file=sys.stderr, flush=True)
     procs = [(part, subprocess.Popen(
         [sys.executable, f"tests/test_{part}.py"], cwd=ROOT, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True))

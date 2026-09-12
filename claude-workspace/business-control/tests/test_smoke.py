@@ -12,10 +12,12 @@ script-style file over its own throwaway database:
   test_platform.py  tenancy and up: the split, the router, fleet and
                     worker nodes, entitlements, Learning on tenant alpha
 
-This runner starts all three in parallel, streams nothing while they run,
-and then prints each part's own transcript in order — so the output reads
-the way it always did, and `all N checks passed` still means what it
-meant. One part failing prints that part's tail and exits 1; the others'
+This runner starts all three in parallel, prints a progress line to
+stderr every fifteen seconds while they run — how many checks each part
+has passed so far, and the last thing each was doing — and then prints
+each part's own transcript in order, so the output reads the way it
+always did and `all N checks passed` still means what it meant. Six
+silent minutes read as a hang; the progress line is the difference. One part failing prints that part's tail and exits 1; the others'
 results still print, because a failure in core no longer hides what
 studio and platform found.
 
@@ -53,13 +55,46 @@ def main() -> int:
 
     t0 = time.time()
     procs = {p: subprocess.Popen(
-        [sys.executable, str(HERE / f"test_{p}.py")],
+        [sys.executable, "-u", str(HERE / f"test_{p}.py")],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for p in PARTS}
 
+    # Each part's transcript is collected on a thread as it streams, so
+    # the progress line can say where each part is without waiting for
+    # any of them to finish.
+    import threading
+    lines = {p: [] for p in PARTS}
+
+    def _pump(p):
+        for ln in procs[p].stdout:
+            lines[p].append(ln)
+        procs[p].stdout.close()
+    threads = [threading.Thread(target=_pump, args=(p,), daemon=True) for p in PARTS]
+    for t in threads:
+        t.start()
+    quiet = not sys.stderr.isatty() and os.environ.get("BC_SUITE_PROGRESS") != "1"
+    last = 0.0
+    while any(t.is_alive() for t in threads):
+        time.sleep(0.5)
+        if quiet or time.time() - last < 15:
+            continue
+        last = time.time()
+        bits = []
+        for p in PARTS:
+            n = sum(1 for ln in lines[p] if ln.startswith("  ok:"))
+            doing = next((ln.strip()[4:].strip() for ln in reversed(lines[p])
+                          if ln.startswith("  ok:")), "starting")
+            state = "done" if not threads[PARTS.index(p)].is_alive() else "running"
+            bits.append(f"{p} {n} ({state}: {doing[:48]})")
+        print(f"  … {int(time.time() - t0)}s  " + " · ".join(bits),
+              file=sys.stderr, flush=True)
+    for t in threads:
+        t.join()
+
     total, failed = 0, []
     for p in PARTS:
-        out, _ = procs[p].communicate()
+        procs[p].wait()
+        out = "".join(lines[p])
         m = re.search(rf"^part {p}: (\d+) checks passed$", out, re.M)
         if procs[p].returncode != 0 or not m:
             failed.append(p)
