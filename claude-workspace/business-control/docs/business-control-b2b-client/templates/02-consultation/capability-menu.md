@@ -133,6 +133,7 @@ native app build and two store submissions per release.
 | **InfoSec** — single sign-on, audit logs, access reviews | — | $30 | ☐ |
 | **Legal** — contracts, policies, document vault | — | $20 | ☐ |
 | **Civics & policy** — the jurisdictions you sit in, on a map; bills and ordinances with your own position on each; elections; a register of political giving for disclosure | — | $50 | ☐ |
+| **Health** — patients beside the customer book; insurance on file; visits and notes; files; the day's queue with check-in from the desk or the patient's own portal; every read logged. Not a certified EHR and not billing | — | $50 | ☐ |
 
 **Three to five capabilities take 8% off. Six to nine, 15%. Ten or more,
 25%.** That is why a bundle costs less than the same boxes chosen one at a

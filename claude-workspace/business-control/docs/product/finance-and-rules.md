@@ -437,6 +437,149 @@ relay's, and a page that appeared to keep footage while keeping none
 would be worse than one that says so. On the rail under Stock & supply,
 part of the core; the office adds cameras, staff can look.
 
+## Labels and ID cards — every code the building needs, on one sheet
+
+The product already gave each student a card, each library item a label
+and each member of staff a badge, one at a time, from three screens. A
+term starts with forty students and a shelf of new equipment. The sheet
+is the answer: pick the set — the students of a course, materials and
+equipment by kind, staff with badges — pick the stock in the printer
+(Avery 5160 and 5163 labels, equipment tags, CR80 ID cards, 4×3 badges),
+tick who is on it, and **print**, or **save it as a page** to print later.
+The codes are the ones the scanners already read: a student's person
+code, an item's lending code, a badge's clock code. Nothing is minted
+differently for the sheet. Drawn at exact size in inches, printed with no
+margin; the page says to turn "fit to page" off.
+
+Badges are printed only for staff who already have one, and the sheet
+names who does not. Issuing a badge is a decision about who may clock
+in, made per person on Team & access; a sheet that minted forty because
+forty names were ticked would be making it by accident. A student's own
+page hands one card to the sheet with a button.
+
+## Tickets — tasks, the pages it is about, and attachments
+
+A ticket now carries three kinds of piece, none required. **Tasks** are
+the lines of its work, each with a box and optionally a person; the card
+shows 2/5. **Pages** are where in this product the ticket points — the
+order, the student, the client, the jurisdiction — as links the reader
+lands on in one click; a screen with rows takes a number, a screen
+without (the till) takes none, and only this product's screens can be
+pointed at. **Attachments** are files, up to 25 MB, from the vault's own
+list of kinds — a board that takes executables is a board somebody will
+regret — kept on disk under the tenant, hashed, with who attached them.
+Every tick, link and file is a line on the ticket's own record.
+
+## Prezi — a deck that lives elsewhere, under a link of our own
+
+Prezi publishes a deck at a share link; the same link with /embed on the
+end plays inside a page. That is the whole integration, so there is
+nothing to connect: paste the link on Presentations and it becomes a
+presentation like any other — a public link of this product's own,
+counted like a training's viewers, attachable to a class so it is on the
+course page and the stage. Google Slides and Canva share links work the
+same way, and any https address is framed as given, with a line saying
+what to do if that site refuses framing. Prezi appears as a keyless card
+on the Presentations screen and on All connections, never "disconnected".
+
+## Applications — what a student is applying to beyond here
+
+A college, a job, a scholarship, a programme, housing. The office opens
+it on the student's page — Harcum College, Associate in Nursing, a
+deadline — with the usual checklist for that kind, and moves it through
+stages that admissions offices actually use: considering, preparing,
+submitted, interview, accepted, waitlisted, declined, enrolled, withdrawn.
+The next stage is offered first; any stage is reachable. Submission and
+decision dates are set the first time those stages are reached; ticks are
+signed; the history says who did what. Opening one and being accepted are
+lines on the student's timeline, the second as an achievement.
+
+**The student sees it on their own page**: where it stands, the deadline,
+what is ticked and what is still wanted of them, and the one line the
+office wrote about what happens next. Never the office's own notes.
+
+## The annual report — the year added up, with the words around it
+
+Everything was already in the database as dated rows. What was missing
+was the one page a board, a funder, a landlord or the owner's own family
+asks for in January. Under Money, pick a year: sales by month, orders,
+average order, new and returning customers, what sold; students, seats,
+sessions held, attendances, quizzes, applications; staff at year end,
+who joined and left, hours the clock saw, payroll; expenses by category,
+invoices issued and collected, gifts and donors, political giving; the
+books when journals were posted; tickets closed, support requests,
+appointments, events. **The numbers are worked out fresh every time**,
+so the report never drifts from the rows. A section the install has no
+table for is absent, not a row of zeros dressed as a finding.
+
+**The words are kept, by year**: a title, the letter from the owner or
+the board, highlights, thanks, and whether it is finished. Print opens
+the report as a plain document — the words first, then each section as a
+short table, black on white, the kind of thing that survives a
+photocopier. The CSV is every measure on its own row, for whoever wants
+to check.
+
+## The storefront in the visitor's language
+
+The storefront already carried translations: a table of strings by
+locale, product names and descriptions under generated keys, a currency
+picker with display rates. What it lacked was the rest of localisation.
+
+- **Languages are a setting.** Store admin → Languages: a code, the name
+  in its own language, and which way it reads. Right-to-left scripts are
+  recognised from the code and can be set by hand. One is the default.
+- **A first visit picks a language** the way a visitor would expect:
+  what they chose last time, else `?lang=` in the address, else — when
+  the shop allows it — the browser's language if the shop offers it,
+  else the default. Chosen once, it sticks.
+- **The page reads that way.** The document's `lang` and `dir` are set,
+  so a right-to-left language lays out right to left.
+- **Prices and dates are in that language's conventions**: 1.234,56 €
+  for a German reader, $1,234.56 for an American one, from the same
+  cents and the merchant's display rate; dates likewise.
+- **The shell's own chrome is translatable.** The header buttons and the
+  side menu were raw literals; they carry keys now and are translated on
+  the same Translations screen as everything else.
+
+## Health — a locked cabinet that logs
+
+A clinic, a therapist's practice, a school nurse, a dentist, a
+counselling service: a front desk, a diary and a filing cabinet, and the
+cabinet is the part that must not leak. **Health** ($50, Heavy) is that
+cabinet. A patient is a person in the customer book with a record beside
+it: date of birth, allergies, medications, conditions, emergency contact,
+the practitioner, consent recorded with who took it. **Insurance** on
+file — payer, plan, member and group, whose policy, copay, verified by
+whom and when. **Visits** — a visit, a call, a telehealth, a note, a
+result — dated, with what was measured and what the practitioner typed,
+each marked shared or not. **Files** attached to the record, from the
+same list of kinds as the vault. The day's **queue**: today's
+appointments from Bookings, each with a check-in state — arrived,
+waiting, with practitioner, seen, left — moved by the desk, or by the
+patient.
+
+**Access is a named permission**, `health`, apart from every other
+grant: being on the staff is not being allowed to read a chart. **Every
+read is logged** — who opened which record, or which file, and when —
+and the record shows that log, because the question a patient asks is
+not "what is in my record" but "who has read it".
+
+**The patient portal**, at /health, is the patient's own window: the
+next appointment with a button that says they have arrived, allowed from
+three hours before their time; what is on file; the visits and files the
+practice marked shared; their insurance card, which they can keep on
+file themselves and the desk verifies. The desk's notes and unshared
+visits never appear. Opening the portal is a logged read like any other.
+
+**What it is not, said so nobody builds on the wrong idea.** Not a
+certified electronic health record; no claim of HIPAA, GDPR or any
+regime's compliance is made by the software — that is a property of the
+practice, and this makes only the technical part possible. Not billing:
+insurance is kept so the desk knows the payer and the copay; claims are
+filed elsewhere. Not diagnostic: a note is what the practitioner typed.
+Nothing here is emailed. The agent door names the whole of it as out of
+bounds.
+
 ## What these still stop short of
 
 - **Accounting**: no tax computation, no bank feed.
@@ -458,6 +601,22 @@ part of the core; the office adds cameras, staff can look.
 - **Ideas**: one graph per install, no attachments, no history of a note.
 - **Cameras**: no recording, no motion alerts, no relay of its own; RTSP
   needs `ffmpeg` on a box that can reach the camera.
+- **Labels**: no per-tenant custom layouts; the five stocks are the
+  five stocks. Photos print only on card layouts, and only when the
+  student has one.
+- **Tickets**: attachments are not previewed or virus-scanned; a link
+  points at a screen and a row number, not at a row that has since gone.
+- **Prezi**: a frame, not an import — Prezi's own API is not used, and
+  a deck that Prezi unpublishes goes blank here too.
+- **Applications**: nothing is sent to the institution; this is the
+  office's record and the student's window on it.
+- **Annual report**: no comparison year and no charts beyond the months;
+  the books section needs journals to have been posted.
+- **Localisation**: translations are typed, not machine-made; emails and
+  receipts stay in the shop's base language; addresses take one shape.
+- **Health**: no claims, no e-prescribing, no lab interfaces, no
+  encryption at rest beyond what the host provides; a kiosk at the
+  counter is the desk's own screen, not a separate device mode.
 - **Leaving**: it closes what this install controls. Accounts in other
   systems are somebody's list item, not something this can revoke.
 

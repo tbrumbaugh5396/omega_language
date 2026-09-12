@@ -51,6 +51,10 @@ PERMISSIONS = {
     # and handing that person the shipping config to get it is how a
     # permission list stops meaning anything.
     "rooms": "Rooms and the timetable: book, move and cancel",
+    # Charts. Apart from everything, because being on the staff is not
+    # the same as being allowed to read somebody's medical record, and
+    # every read of one is logged against this name.
+    "health": "Patients: records, insurance, visits, files and the queue",
 }
 
 # What each role gets when no explicit grant is recorded.

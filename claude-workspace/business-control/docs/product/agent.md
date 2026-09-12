@@ -66,7 +66,7 @@ stage, a typed ad-spend row, a note in the ideas graph.
 Even with writes on, the agent cannot place an order, take a payment,
 approve an expense or a timesheet, hire somebody, reply to a Google
 review, email a customer, republish a delivery menu, change settings or
-permissions, or delete anything.
+permissions, read a patient's health record, or delete anything.
 
 The test for inclusion was one question asked of every route: what
 happens if the model is confidently wrong? A wrong note is deleted by

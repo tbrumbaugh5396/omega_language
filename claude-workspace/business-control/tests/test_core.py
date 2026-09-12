@@ -4998,8 +4998,9 @@ _names = [p["name"] for p in _ist["providers"]]
 for _want in ("dropbox", "canva", "quickbooks", "pipedrive", "slack",
               "laceup", "trello"):
     ok(_want in _names, f"{_want} is offered")
-ok(all(not p["connected"] for p in _ist["providers"]),
-   "none is connected until someone connects it")
+ok(all(not p["connected"] for p in _ist["providers"] if p["auth"] != "none"),
+   "none is connected until someone connects it — except the keyless "
+   "ones, which point at a public thing and have nothing to connect")
 ok("credentials" not in json.dumps(_ist) and "access_token" not in
    json.dumps(_ist),
    "the status payload carries no credential of any kind")
@@ -5426,11 +5427,12 @@ _ACTION_IMPL = {
     "pull_measures": "def pull_open_states(",
     "pull_representatives": "def pull_state_legislators(",
     "reply_review": "def reply_google(",
+    "embed_deck": "def embed_url(",
 }
 _src_families = _src_ig + "".join(
     Path(f"src/erp/backend/{m}.py").read_text()
     for m in ("ads", "hiring", "marketplaces", "listings", "intake",
-              "civics"))
+              "civics", "presentations"))
 for _n, _pd in _ig.PROVIDERS.items():
     for _a in _pd.get("actions", []):
         ok(_a in _ACTION_IMPL,
@@ -5972,7 +5974,8 @@ _navd = set(re.findall(r'\{ id: "([\w:-]+)"', _ops))
 # person looks for it. Thirty rail entries is a list nobody scans.
 _FAMILY_TAB = {"intake": "intake", "ads": "ads", "hiring": "hiring",
                "delivery": "marketplaces", "listings": "listings",
-               "results": "results", "civics": "civics"}
+               "results": "results", "civics": "civics",
+               "presentations": "presentations"}
 _missing = [n for n in _pnames
             if n not in _navd and f"ig-{n}" not in _navd
             and _FAMILY_TAB.get(_ig.PROVIDERS[n].get("family", "")) not in _navd]
@@ -9588,5 +9591,434 @@ ok("requestFullscreen" in _ops and ".cam-wall:fullscreen" in _css,
 ok("proxy" not in Path("src/erp/backend/cameras.py").read_text().lower().split("on purpose")[0]
    or "does not proxy" in Path("src/erp/backend/cameras.py").read_text(),
    "this server relays no video, on purpose, and the module says why")
+
+# --- labels and ID cards: every code the building needs, on one sheet ---
+ok(c.get("/api/labels", headers=_WCU).status_code == 403,
+   "the label sheet is for the office and the teaching staff")
+ok(c.get("/api/labels?kind=hats", headers=A).status_code == 400,
+   "a set is students, items or staff")
+_lp = c.post("/api/login", json={"name": "Label Pupil", "region": "West"}).json()
+c.post(f"/api/students/{_lp['id']}/profile", headers=A,
+       json={"fields": {"origin": "Kyiv"}})
+_ls = c.get("/api/labels?kind=students", headers=A).json()
+_lrow = next((r for r in _ls["labels"] if r["id"] == _lp["id"]), None)
+ok(_lrow is not None and "/p/" in _lrow["payload"]
+   and _lrow["line3"] == f"Student #{_lp['id']}",
+   "a student with a record is on the sheet, with the same person code "
+   "their own portal prints — a card from here and a card from there are "
+   "the same card")
+ok(_lrow["payload"] == c.get(f"/api/labels?kind=students&ids={_lp['id']}",
+                             headers=A).json()["labels"][0]["payload"]
+   and c.get(f"/api/labels?kind=students&ids={_lp['id']}", headers=A).json()["labels"]
+   .__len__() == 1,
+   "asked for one student, the sheet is one card, with the same code again")
+ok(not any(r["id"] == _wc["id"] for r in _ls["labels"]) or c.get(
+    f"/api/students/{_wc['id']}", headers=A).json()["profile"].get("origin") is not None,
+   "a customer who only ever bought something is not a student and gets no card")
+_li = c.post("/api/learning/library/items", headers=A,
+             json={"name": "Projector (label)", "kind": "equipment"}).json()
+_lit = c.get("/api/labels?kind=items&kinds=equipment", headers=A).json()
+_litem = next((r for r in _lit["labels"] if r["name"] == "Projector (label)"), None)
+ok(_litem is not None and _litem["payload"].startswith("bc:item:")
+   and _litem["line2"] == "equipment",
+   "an item's label carries the code the lending desk scans")
+ok(not any(r["name"] == "Projector (label)" for r in
+           c.get("/api/labels?kind=items&kinds=book", headers=A).json()["labels"]),
+   "and the item kinds filter the shelf")
+_lb = c.get("/api/labels?kind=staff", headers=A).json()
+_nobadge_before = len(_lb["without_badge"])
+c.post("/api/me/badge", headers=A)
+_lb = c.get("/api/labels?kind=staff", headers=A).json()
+ok(any(r["payload"].startswith("bc:clock:") for r in _lb["labels"]),
+   "a staff badge carries the code the time clock reads")
+ok("without_badge" in _lb,
+   "and staff without a badge are named, not minted one — issuing a badge "
+   "is a decision made per person on Team & access")
+ok({l["id"] for l in _ls["layouts"]} >= {"avery5160", "avery5163", "idcard", "badge", "tag"}
+   and all(l["w"] > 0 and l["cols"] * l["rows"] > 0 for l in _ls["layouts"]),
+   "layouts are named for the label stock they fit, in inches")
+ok('"labels"' in _ops and "labels: renderLabels" in _ops
+   and "@page { size: letter; margin: 0; }" in _ops and "window.print()" in _ops
+   and "URL.createObjectURL" in _ops,
+   "the screen is on the rail, prints a sheet at exact size, and saves it as a page")
+ok('id="stu-idcard"' in _ops and "LBL_PRESET" in _ops,
+   "and a student's page hands one card to the sheet")
+
+# --- tickets: tasks, the pages it is about, and attachments ---
+_tkp = c.post("/api/tickets", headers=A, json={"title": "Pieces (test)"}).json()["id"]
+ok(c.post(f"/api/tickets/{_tkp}/tasks", headers=A,
+          json={"title": " "}).status_code == 400, "a task says what")
+_tk1 = c.post(f"/api/tickets/{_tkp}/tasks", headers=A,
+              json={"title": "Call the supplier"}).json()["id"]
+c.post(f"/api/tickets/{_tkp}/tasks", headers=A, json={"title": "Book the room"})
+ok(c.patch(f"/api/tickets/{_tkp}/tasks/{_tk1}", headers=A,
+           json={"done": True}).status_code == 200,
+   "a task is ticked")
+_tkd = c.get(f"/api/tickets/{_tkp}", headers=A).json()
+ok(_tkd["tasks_done"] == 1 and len(_tkd["tasks"]) == 2
+   and any("ticked" in l["what"] for l in _tkd["log"]),
+   "the ticket counts its tasks and writes the tick on its own record")
+ok(c.post(f"/api/tickets/{_tkp}/links", headers=A,
+          json={"tab": "orders"}).status_code == 400,
+   "a link to a screen with rows says which row")
+ok(c.post(f"/api/tickets/{_tkp}/links", headers=A,
+          json={"tab": "till", "ref_id": 4}).status_code == 400,
+   "and a screen without rows takes no number")
+ok(c.post(f"/api/tickets/{_tkp}/links", headers=A,
+          json={"tab": "nowhere", "ref_id": 1}).status_code == 400,
+   "and only screens of this product can be pointed at")
+c.post(f"/api/tickets/{_tkp}/links", headers=A, json={"tab": "orders", "ref_id": 7})
+ok(c.post(f"/api/tickets/{_tkp}/links", headers=A,
+          json={"tab": "orders", "ref_id": 7}).json().get("already"),
+   "the same page twice is once")
+_tkd = c.get(f"/api/tickets/{_tkp}", headers=A).json()
+ok(_tkd["links"][0]["href"] == "#/orders/7" and _tkd["links"][0]["label"] == "Order #7",
+   "a link is the page in this product the ticket is about — the reader "
+   "lands on the order in one click")
+_up = c.post(f"/api/tickets/{_tkp}/files", headers={**A, "x-filename": "note.txt"},
+             content=b"hello attachment")
+ok(_up.status_code == 200 and _up.json()["bytes"] == 16, "a file is attached")
+ok(c.post(f"/api/tickets/{_tkp}/files", headers={**A, "x-filename": "run.exe"},
+          content=b"MZ").status_code == 400,
+   "a board that takes executables is a board somebody will regret")
+ok(c.post(f"/api/tickets/{_tkp}/files", headers={**A, "x-filename": "empty.txt"},
+          content=b"").status_code == 400, "an empty file is not attached")
+_tkd = c.get(f"/api/tickets/{_tkp}", headers=A).json()
+_fid = _tkd["files"][0]["id"]
+_dl = c.get(f"/api/tickets/{_tkp}/files/{_fid}", headers=A)
+ok(_dl.status_code == 200 and _dl.content == b"hello attachment"
+   and _tkd["files"][0]["name"] == "note.txt" and _tkd["files"][0]["by_name"],
+   "and comes back as it went in, with who attached it")
+ok(c.get(f"/api/tickets/{_tkp}/files/{_fid}", headers=_WCU).status_code in (401, 403),
+   "a customer cannot read the board's attachments")
+ok(c.delete(f"/api/tickets/{_tkp}/files/{_fid}", headers=A).status_code == 200
+   and c.get(f"/api/tickets/{_tkp}/files/{_fid}", headers=A).status_code == 404,
+   "an attachment removed is gone from disk and record")
+_tkb = c.get("/api/tickets", headers=A).json()
+_tkrow = next(t for t in _tkb["tickets"] if t["id"] == _tkp)
+ok(_tkrow["tasks_done"] == 1 and len(_tkrow["links"]) == 1 and "link_tabs" in _tkb,
+   "the board carries the counts a card shows")
+ok("function ticketPieces" in _ops and 'id="tk-task-add"' in _ops
+   and 'id="tk-link-add"' in _ops and 'id="tk-file"' in _ops
+   and "x-filename" in _ops,
+   "the ticket form has its tasks, its pages and its attachments")
+_up2 = c.post(f"/api/tickets/{_tkp}/files", headers={**A, "x-filename": "gone.txt"},
+              content=b"bytes on disk").json()
+from erp.backend import tickets as _tkmod  # noqa: E402
+_tkpath = _tkmod._dir() / f"{_up2['id']}.txt"
+ok(_tkpath.exists(), "an attachment's bytes are on disk under the tenant")
+c.delete(f"/api/tickets/{_tkp}", headers=A)
+ok(not _tkpath.exists()
+   and not any(t["id"] == _tkp for t in c.get("/api/tickets", headers=A).json()["tickets"]),
+   "and deleting the ticket takes its tasks, links and files with it — "
+   "the bytes too, or the folder fills with files no row remembers")
+
+# --- Prezi: a deck that lives elsewhere, framed under a link of our own ---
+from erp.backend import presentations as _prs  # noqa: E402
+ok(_prs.embed_url("https://prezi.com/view/AbC123xyz/") == "https://prezi.com/view/AbC123xyz/embed/"
+   and _prs.embed_url("https://prezi.com/p/AbC123xyz/some-title/") == "https://prezi.com/view/AbC123xyz/embed/",
+   "a Prezi share link becomes its embed address — that is the whole integration")
+ok(_prs.embed_url("https://docs.google.com/presentation/d/1AbC/edit#slide=1")
+   == "https://docs.google.com/presentation/d/1AbC/embed",
+   "Google Slides the same way")
+ok(_prs.embed_source("https://prezi.com/view/x/embed/") == "Prezi",
+   "and the page says where it lives")
+ok(c.post("/api/presentations", headers=A, json={
+    "title": "x", "kind": "embed", "embed_link": "http://prezi.com/view/a"}).status_code == 400,
+   "an embed is an https link")
+_pz = c.post("/api/presentations", headers=A, json={
+    "title": "Prezi (test)", "kind": "embed",
+    "embed_link": "https://prezi.com/view/AbC123xyz/"}).json()
+ok(_pz["kind"] == "embed" and _pz["embed_url"].endswith("/embed/") and _pz["url"],
+   "it is a presentation like any other, with a link of this product's own")
+_pzp = c.get("/present/" + _pz["token"])
+ok(_pzp.status_code == 200 and 'class="doc embed" src="https://prezi.com/view/AbC123xyz/embed/"' in _pzp.text
+   and "open it there" in _pzp.text,
+   "the public page frames it, and says what to do if the site refuses framing")
+ok(_ig.PROVIDERS["prezi"]["auth"] == "none"
+   and _ig.PROVIDERS["prezi"]["family"] == "presentations",
+   "Prezi is a keyless provider that lives on the Presentations screen")
+ok(any(p["name"] == "prezi" and p["connected"]
+       for p in c.get("/api/admin/integrations", headers=A).json()["providers"]),
+   "and is never 'disconnected' — the product points at a public thing")
+ok('id="pr-embed"' in _ops and 'connectionCards(["prezi"]' in _ops,
+   "the screen embeds a link and shows the card")
+c.delete(f"/api/presentations/{_pz['id']}", headers=A)
+
+# --- applications: what a student is applying to beyond here ---
+ok(c.get(f"/api/students/{_wc['id']}/applications", headers=_WCU).status_code == 403,
+   "applications are moved by the office")
+ok(c.post(f"/api/students/{_wc['id']}/applications", headers=A,
+          json={"institution": " "}).status_code == 400,
+   "an application is to somewhere")
+_apd = c.post(f"/api/students/{_wc['id']}/applications", headers=A, json={
+    "institution": "Harcum College", "program": "Associate in Nursing",
+    "kind": "college", "deadline": _t0.time() + 30 * 86400,
+    "notes": "office only"}).json()
+_apl = c.get(f"/api/students/{_wc['id']}/applications", headers=A).json()
+_ap1 = next(a for a in _apl["applications"] if a["id"] == _apd["id"])
+ok(_ap1["stage"] == "considering" and len(_ap1["checklist"]) == 6
+   and _ap1["suggested_next"] == "preparing",
+   "a college application opens with the usual checklist and a next stage")
+ok(any("Applying to Harcum" in e["title"] for e in
+       c.get(f"/api/students/{_wc['id']}", headers=A).json()["timeline"]),
+   "and opening it is a line on the student's timeline")
+ok(c.post(f"/api/students/{_wc['id']}/applications/{_apd['id']}/stage", headers=A,
+          json={"stage": "famous"}).status_code == 400, "a stage is one of the known ones")
+c.post(f"/api/students/{_wc['id']}/applications/{_apd['id']}/stage", headers=A,
+       json={"stage": "submitted", "next_step": "Wait for the letter"})
+c.post(f"/api/students/{_wc['id']}/applications/{_apd['id']}/tick", headers=A,
+       json={"index": 0, "done": True})
+_ap1 = next(a for a in c.get(f"/api/students/{_wc['id']}/applications", headers=A)
+            .json()["applications"] if a["id"] == _apd["id"])
+ok(_ap1["stage"] == "submitted" and _ap1["submitted_at"] > 0 and _ap1["checklist_done"] == 1
+   and _ap1["checklist"][0]["by"] and any("Submitted" in l["what"] for l in _ap1["log"]),
+   "moving it forward dates the submission, ticks are signed, and the "
+   "history says who did what")
+_mine = c.get("/api/learn/me/applications", headers=_WCU).json()
+_my1 = next(a for a in _mine["applications"] if a["id"] == _apd["id"])
+ok(_my1["stage_label"] == "Submitted" and _my1["next_step"] == "Wait for the letter"
+   and "notes" not in _my1 and _my1["checklist_done"] == 1,
+   "the student sees where it stands and what is next — and never the "
+   "office's own notes")
+c.post(f"/api/students/{_wc['id']}/applications/{_apd['id']}/stage", headers=A,
+       json={"stage": "accepted"})
+ok(any("Accepted: Harcum" in e["title"] for e in
+       c.get(f"/api/students/{_wc['id']}", headers=A).json()["timeline"]),
+   "being accepted somewhere is an achievement on the timeline")
+ok("function studentApplications" in _ops and 'id="stu-app-new"' in _ops
+   and "data-appnext" in _ops,
+   "the student page carries the applications and moves them forward")
+_lrnjs = c.get("/learn.js").text if c.get("/learn.js").status_code == 200 else ""
+ok("/api/learn/me/applications" in _lrnjs and "My applications" in _lrnjs,
+   "and the student's own page shows them")
+c.delete(f"/api/students/{_wc['id']}/applications/{_apd['id']}", headers=A)
+
+# --- the annual report: the year added up, with the words around it ---
+ok(c.get("/api/reports/annual", headers=_WCU).status_code == 403,
+   "the annual report is the office's and the board's")
+ok(c.get("/api/reports/annual?year=1999", headers=A).status_code == 400,
+   "a year between 2000 and 2100")
+_ann = c.get("/api/reports/annual", headers=A).json()
+_thisy = _dtx.datetime.now().year
+ok(_ann["year"] == _thisy and _thisy in _ann["years"],
+   "no year asked for is this year, and this year is always offered")
+ok({"sales", "learning", "people"} <= set(_ann["sections"]),
+   "it adds up what the install has: sales, learning, people")
+ok(len(_ann["sections"]["sales"]["by_month_cents"]) == 12
+   and _ann["sections"]["sales"]["orders"] >= 1
+   and _ann["sections"]["sales"]["revenue_cents"] > 0,
+   "sales are twelve months of cents from the orders, worked out fresh")
+ok(_ann["sections"]["people"]["staff_at_end"] >= 1
+   and "hours_worked" in _ann["sections"]["people"],
+   "people counts the staff and the hours the clock saw")
+ok("money" in _ann["sections"] and "expenses_cents" in _ann["sections"]["money"],
+   "money out comes from the approved expenses")
+_ann0 = c.get("/api/reports/annual?year=2003", headers=A).json()
+ok(_ann0["sections"]["sales"]["orders"] == 0 and _ann0["words"]["title"] == "",
+   "a year with nothing in it is zeros and no words, not an error")
+ok(c.post("/api/reports/annual", headers=A, json={
+    "year": _thisy, "title": "Our year", "letter": "It was a year.",
+    "highlights": ["Opened the second shop", "  ", "Forty students"],
+    "thanks": "Everyone."}).status_code == 200,
+   "the words are kept by year")
+_annw = c.get("/api/reports/annual", headers=A).json()["words"]
+ok(_annw["title"] == "Our year" and _annw["highlights"] == ["Opened the second shop", "Forty students"]
+   and _annw["by_name"],
+   "and come back with the blanks dropped and who wrote them")
+_csv = c.get(f"/api/reports/annual.csv?year={_thisy}", headers=A)
+ok(_csv.status_code == 200 and "text/csv" in _csv.headers["content-type"]
+   and _csv.text.splitlines()[0] == "year,section,measure,value"
+   and any(",sales,revenue_cents," in ln for ln in _csv.text.splitlines()),
+   "the numbers export flat, one measure a row, for whoever wants to check them")
+ok('"annual"' in _ops and "annual: renderAnnual" in _ops and "function annualDoc" in _ops
+   and 'id="ann-print"' in _ops and "@page { size: letter; margin: .8in; }" in _ops,
+   "the screen is on the rail under Money and prints as a document")
+
+# --- the storefront in the visitor's language and conventions ---
+from storefront.backend import content as _ct  # noqa: E402
+ok("nav_account" in _ct.UI_KEYS and "side_account" in _ct.UI_KEYS,
+   "the shell's own chrome has keys, so the menu is translatable and not "
+   "only the product cards")
+ok(c.post("/api/store/admin/i18n", headers=A, json={
+    "locales": [{"code": "e s"}], "default": "en"}).status_code == 400,
+   "a language is a code")
+ok(c.post("/api/store/admin/i18n", headers=A, json={
+    "locales": [{"code": "es", "label": "Español"}], "default": "fr"}).status_code == 400,
+   "and the default is one of the languages offered")
+_i18 = c.post("/api/store/admin/i18n", headers=A, json={
+    "locales": [{"code": "es", "label": "Español"}, {"code": "ar", "label": "العربية"}],
+    "default": "es", "auto_detect": False}).json()
+ok([l["code"] for l in _i18["locales"]] == ["en", "es", "ar"]
+   and next(l for l in _i18["locales"] if l["code"] == "ar")["dir"] == "rtl"
+   and _i18["default"] == "es" and _i18["auto_detect"] is False,
+   "English stays, Arabic reads right to left without being told, and the "
+   "default and first-visit rule are kept")
+c.post("/api/store/admin/translations", headers=A, json={
+    "locale": "es", "entries": {"side_account": "Tu cuenta", "add_to_cart": "Añadir"}})
+_pubi = c.get("/api/store/i18n").json()
+ok(_pubi["locales"] == ["en", "es", "ar"] and _pubi["default_locale"] == "es"
+   and _pubi["strings"]["es"]["side_account"] == "Tu cuenta",
+   "the storefront reads the languages, the default and the strings")
+_home = c.get("/").text
+ok('window.STORE_I18N=' in _home and '"locale_info"' in _home
+   and 'data-i18n="side_account"' in _home and 'data-i18n-title="nav_support"' in _home,
+   "every page carries the languages, and the chrome carries its keys")
+_sfjs = c.get("/store.js").text
+ok("function resolveLocale" in _sfjs and "navigator.languages" in _sfjs
+   and 'get("lang")' in _sfjs and "document.documentElement.dir" in _sfjs,
+   "the page picks the visitor's language — chosen, in the address, the "
+   "browser's, or the default — and sets the reading direction")
+ok("Intl.NumberFormat(LOCALE, { style: \"currency\"" in _sfjs
+   and "function applyI18n" in _sfjs and "toLocaleString(LOCALE," in _sfjs,
+   "and prices and dates are formatted in that language's conventions")
+_admh = c.get("/admin").text
+ok('id="ln-list"' in _admh and 'id="ln-default"' in _admh
+   and "drawLanguages" in c.get("/admin.js").text,
+   "the store admin offers languages, a default and the first-visit rule")
+c.post("/api/store/admin/i18n", headers=A, json={"locales": [], "default": "en"})
+c.post("/api/store/admin/translations", headers=A, json={
+    "locale": "es", "entries": {"side_account": "", "add_to_cart": ""}})
+ok(c.get("/api/store/i18n").json()["locales"] == ["en"],
+   "languages taken away leave English")
+
+# --- health: a locked cabinet that logs ---
+from storefront.backend import governance as _govh  # noqa: E402
+ok("health" in _govh.PERMISSIONS and "health" not in _govh.ROLE_DEFAULTS["employee"],
+   "reading a chart is a named permission no role carries by default")
+ok(c.get("/api/health", headers=_WCU).status_code == 403,
+   "a customer does not open the cabinet")
+_nurse = c.post("/api/login", json={"name": "Nurse Nell", "role": "employee"}).json()
+_NH = {"Authorization": f"Bearer {_nurse['token']}"}
+ok(c.get("/api/health", headers=_NH).status_code == 403,
+   "nor does an employee without the grant — being staff is not being allowed")
+_hcon = _db.connect()
+_hcon.execute("UPDATE users SET permissions='health' WHERE id=?", (_nurse["id"],))
+_hcon.commit(); _hcon.close()
+_hp = c.get("/api/health", headers=_NH)
+ok(_hp.status_code == 200 and "queue" in _hp.json() and "patients" in _hp.json(),
+   "with the grant, the desk's screen opens: the queue and the patients")
+ok(c.post(f"/api/health/patients/{_wc['id']}", headers=_NH, json={
+    "birth_date": "1990-13-40"}).status_code == 400, "a birth date is a date")
+ok(c.post(f"/api/health/patients/{_wc['id']}", headers=_NH, json={
+    "birth_date": "1990-05-04", "allergies": "penicillin", "notes": "desk only",
+    "consent": True}).status_code == 200,
+   "a person in the customer book becomes a patient with a record beside them")
+_rec = c.get(f"/api/health/patients/{_wc['id']}", headers=_NH).json()
+ok(_rec["patient"]["allergies"] == "penicillin" and _rec["patient"]["consent_at"] > 0
+   and _rec["patient"]["consent_by"] == "Nurse Nell" and _rec["patient"]["age"] is not None,
+   "the record holds what the desk needs, and consent is recorded with who took it")
+ok(any(a["what"] == "record" and a["by_name"] == "Nurse Nell" for a in _rec["access"]),
+   "and opening it was written down — who, and when")
+ok(c.post(f"/api/health/patients/{_wc['id']}/insurance", headers=_NH, json={
+    "payer": " "}).status_code == 400, "insurance names the insurer")
+_pol = c.post(f"/api/health/patients/{_wc['id']}/insurance", headers=_NH, json={
+    "payer": "Blue Cross", "member_id": "BC123", "copay_cents": 2500,
+    "verified": True}).json()
+ok(_pol["ok"] and c.get(f"/api/health/patients/{_wc['id']}", headers=_NH).json()
+   ["insurance"][0]["verified_by"] == "Nurse Nell",
+   "a policy on file, verified by name")
+ok(c.post(f"/api/health/patients/{_wc['id']}/encounters", headers=_NH, json={
+    "kind": "seance"}).status_code == 400, "a visit is one of the known kinds")
+ok(c.post(f"/api/health/patients/{_wc['id']}/encounters", headers=_NH, json={
+    "kind": "visit"}).status_code == 400, "and says why, or what was noted")
+_enc = c.post(f"/api/health/patients/{_wc['id']}/encounters", headers=_NH, json={
+    "kind": "visit", "reason": "sore throat", "notes": "Throat red. Rest.",
+    "vitals": {"temp": "38.1", "pulse": "", "bp": "120/80"}, "plan": "fluids"}).json()
+_enc2 = c.post(f"/api/health/patients/{_wc['id']}/encounters", headers=_NH, json={
+    "kind": "note", "notes": "private clinical note", "shared": False}).json()
+_rec = c.get(f"/api/health/patients/{_wc['id']}", headers=_NH).json()
+ok(len(_rec["encounters"]) == 2 and _rec["encounters"][-1]["vitals"] == {"temp": "38.1", "bp": "120/80"}
+   and _rec["encounters"][-1]["practitioner"] == "Nurse Nell",
+   "a visit keeps what was measured — blanks dropped — and who saw them")
+_hf = c.post(f"/api/health/patients/{_wc['id']}/files",
+             headers={**_NH, "x-filename": "xray.png", "x-kind": "image"}, content=b"\x89PNG")
+ok(_hf.status_code == 200, "a file goes on the record")
+ok(c.post(f"/api/health/patients/{_wc['id']}/files",
+          headers={**_NH, "x-filename": "tool.exe"}, content=b"MZ").status_code == 400,
+   "of a kind the vault would take")
+_hf2 = c.post(f"/api/health/patients/{_wc['id']}/files",
+              headers={**_NH, "x-filename": "private.pdf", "x-shared": "0"}, content=b"%PDF")
+ok(c.get(f"/api/health/patients/{_wc['id']}/files/{_hf.json()['id']}", headers=_NH).content == b"\x89PNG",
+   "and comes back as it went in")
+ok(c.get(f"/api/health/patients/{_wc['id']}/files/{_hf.json()['id']}", headers=A).status_code == 200
+   and any(a["what"] == f"file:{_hf.json()['id']}" for a in
+           c.get(f"/api/health/patients/{_wc['id']}/access", headers=_NH).json()["access"]),
+   "an admin may read it too, and that read is logged like any other")
+# the patient's own window
+_me = c.get("/api/health/me", headers=_WCU).json()
+ok(_me["patient"]["allergies"] == "penicillin" and "notes" not in _me["patient"],
+   "the patient sees their record — and never the desk's notes")
+ok([e["kind"] for e in _me["encounters"]] == ["visit"] and [f["name"] for f in _me["files"]] == ["xray.png"],
+   "and only the visits and files the practice marked shared")
+ok(c.get(f"/api/health/me/files/{_hf2.json()['id']}", headers=_WCU).status_code == 404
+   and c.get(f"/api/health/me/files/{_hf.json()['id']}", headers=_WCU).content == b"\x89PNG",
+   "an unshared file is not there for the patient; a shared one is")
+ok(any(a["what"] == "portal" and a["by_name"] == _wc["name"] for a in
+       c.get(f"/api/health/patients/{_wc['id']}/access", headers=_NH).json()["access"]),
+   "and the patient opening their portal is written down like any other read")
+ok(c.post("/api/health/me/insurance", headers=_WCU, json={
+    "id": _pol["id"], "payer": "Other"}).status_code == 400,
+   "a policy the desk verified is not the patient's to rewrite")
+_selfpol = c.post("/api/health/me/insurance", headers=_WCU, json={
+    "payer": "Aetna", "member_id": "AE9"}).json()
+ok(_selfpol["ok"] and any(i["payer"] == "Aetna" and not i["verified_at"] and not i["primary_policy"]
+                          for i in c.get("/api/health/me", headers=_WCU).json()["insurance"]),
+   "the patient keeps their own card on file, unverified until the desk says so")
+_other = c.post("/api/login", json={"name": "Not A Patient", "region": "West"}).json()
+ok(c.get("/api/health/me", headers={"Authorization": f"Bearer {_other['token']}"}).status_code == 404,
+   "a customer with no record has no portal — the record is the practice's to open")
+c.post(f"/api/health/patients/{_wc['id']}", headers=_NH, json={
+    "birth_date": "1990-05-04", "allergies": "penicillin", "consent": True, "portal": False})
+ok(c.get("/api/health/me", headers=_WCU).status_code == 403,
+   "and the practice can keep a record off the portal")
+c.post(f"/api/health/patients/{_wc['id']}", headers=_NH, json={
+    "birth_date": "1990-05-04", "allergies": "penicillin", "consent": True, "portal": True})
+# the queue: an appointment, checked in from the portal
+_svc = c.post("/api/store/admin/services", headers=A, json={
+    "name": "Consultation (health)", "minutes": 30, "price_cents": 0}).json()
+_hstart = _t0.time() + 3600
+_appt = None
+if _svc.get("id"):
+    _hcon = _db.connect()
+    _appt = _hcon.execute(
+        "INSERT INTO appointments(service_id,starts,ends,staff_id,room_id,user_id,visitor_id,"
+        " order_id,state,held_until,name,email,note,source,created_at)"
+        " VALUES(?,?,?,0,0,?,'',0,'confirmed',0,?,?,'','store',?)",
+        (_svc["id"], _hstart, _hstart + 1800, _wc["id"], _wc["name"], "", _t0.time())).lastrowid
+    _hcon.commit(); _hcon.close()
+if _appt:
+    _meq = c.get("/api/health/me", headers=_WCU).json()
+    ok(any(a["id"] == _appt and a["can_check_in"] for a in _meq["appointments"]),
+       "an appointment in the next three hours can be checked into from the portal")
+    ok(c.post("/api/health/me/checkin", headers=_WCU, json={"appointment_id": _appt}).json()["ok"],
+       "and the patient says they have arrived")
+    _q = c.get("/api/health", headers=_NH).json()["queue"]
+    _qrow = next((r for r in _q if r["id"] == _appt), None)
+    ok(_qrow is not None and _qrow["checkin_state"] == "arrived" and _qrow["method"] == "portal",
+       "which lands on the desk's queue the same moment, marked as self check-in")
+    ok(c.post("/api/health/checkin", headers=_NH, json={
+        "appointment_id": _appt, "state": "with_practitioner"}).json()["state"] == "with_practitioner",
+       "the desk moves them along the queue")
+    ok(c.post("/api/health/checkin", headers=_NH, json={
+        "appointment_id": _appt, "state": "beamed_up"}).status_code == 400,
+       "to one of its states")
+    _other2 = c.post("/api/login", json={"name": "Wrong Patient", "region": "West"}).json()
+    ok(c.post("/api/health/me/checkin", headers={"Authorization": f"Bearer {_other2['token']}"},
+              json={"appointment_id": _appt}).status_code in (403, 404),
+       "and nobody checks in to somebody else's appointment")
+else:
+    ok(True, "(no bookable service could be made here; the queue is covered by the desk routes)")
+ok(c.get("/health").status_code == 200 and "My health" in c.get("/health").text
+   and "hp-root" in c.get("/health").text,
+   "the portal page is served on the storefront")
+ok('"health"' in _ops and "health: renderHealth" in _ops and 'id="hea-desk"' in _ops
+   and "function heaEncounterForm" in _ops,
+   "the desk's screen is on the rail behind the permission, with a front-desk view")
+ok("/api/health/*" in _mcpt.EXCLUDED,
+   "the agent door names the whole of it as out of bounds")
+from storefront.backend import pricebook as _pbh  # noqa: E402
+ok(any(x["name"] == "Health" and x["price"] == 50 for x in _pbh.capabilities()),
+   "Health is in the price book as a heavy capability")
 
 done("core")

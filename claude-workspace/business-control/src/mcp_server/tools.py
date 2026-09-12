@@ -511,6 +511,9 @@ EXCLUDED = {
     "POST /api/civics/contributions": "a political contribution is a "
                                       "regulated act somebody has to "
                                       "authorise by name",
+    "/api/health/*": "medical records: read only by a named permission, "
+                     "every read logged against a person, and an agent is "
+                     "not a person a patient can ask",
     "GET /api/cameras": "the camera wall's feed URLs are the inside of "
                         "somebody's network; an agent has no business "
                         "reading them, and the pictures are not JSON anyway",

@@ -2319,3 +2319,83 @@ body.lane-on { overflow: hidden; }
 .cam-help { padding: 12px 16px; margin-top: 16px; }
 .cam-help pre { white-space: pre-wrap; word-break: break-all; font-size: 12px;
   background: var(--panel2); padding: 10px; border-radius: var(--r-sm); }
+
+
+/* Labels and ID cards: the controls beside the list, a preview under. */
+.lbl-split { display: grid; grid-template-columns: minmax(280px, 2fr) minmax(260px, 3fr);
+  gap: 16px; align-items: start; }
+@media (max-width: 900px) { .lbl-split { grid-template-columns: 1fr; } }
+.lbl-controls, .lbl-pick { padding: 12px 16px; }
+.lbl-controls label { display: block; margin: 8px 0; }
+.lbl-controls select { width: 100%; }
+.lbl-kinds, .lbl-fields { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0; }
+.lbl-kinds label, .lbl-fields label { margin: 0; }
+.lbl-pickhead { display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px; }
+.lbl-list { list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow-y: auto; }
+.lbl-list li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.lbl-preview { padding: 14px; display: flex; gap: 10px; flex-wrap: wrap;
+  background: var(--panel2); }
+.lbl-preview .cell { position: relative; box-sizing: border-box; padding: .08in;
+  display: flex; gap: .1in; align-items: center; overflow: hidden; background: #fff;
+  color: #000; border: 1px dashed #bbb; }
+.lbl-preview .cell.card { border: 1px solid #bbb; border-radius: .12in; }
+.lbl-preview .cell img { flex: 0 0 auto; display: block; }
+.lbl-preview .cell img.photo { width: auto; border-radius: .06in; object-fit: cover; }
+.lbl-preview .cell .t { min-width: 0; line-height: 1.25; overflow: hidden; }
+.lbl-preview .cell .t b, .lbl-preview .cell .t span { display: block; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.lbl-preview .cell .t span { color: #333; background: #fff; }
+.lbl-preview .cell .t .brand { color: #666; background: #fff; }
+
+/* The pieces of a ticket, inside its modal. */
+.tk-h { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--dim); }
+.tk-tasks, .tk-links, .tk-files { list-style: none; margin: 0 0 6px; padding: 0; }
+.tk-tasks li, .tk-links li, .tk-files li { display: flex; gap: 10px; align-items: center;
+  padding: 3px 0; }
+.tk-tasks li label { flex: 1; }
+.tk-done { text-decoration: line-through; opacity: .6; }
+.tk-add { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.tk-add input, .tk-add select { flex: 1; min-width: 120px; }
+.tk-links a[data-tkgo] { color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+/* A student's applications, on the student page. */
+.stu-app { padding: 10px 0; border-top: 1px solid var(--line); }
+.stu-apphead { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.stu-appchk { list-style: none; margin: 6px 0; padding: 0; columns: 2; column-gap: 20px; }
+.stu-appchk li { break-inside: avoid; padding: 2px 0; display: flex; gap: 8px; }
+.stu-appacts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+
+/* The annual report: the words in a card, the year's months as bars. */
+.ann-words { padding: 14px 16px; }
+.ann-words label { display: block; margin: 8px 0; }
+.ann-words input, .ann-words textarea { width: 100%; }
+.ann-months { display: flex; gap: 6px; align-items: flex-end; height: 140px; padding: 14px 16px 8px; }
+.ann-bar { flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+  align-items: center; height: 100%; font-size: 11px; color: var(--dim); }
+.ann-bar i { display: block; width: 70%; background: var(--accent); border-radius: 3px 3px 0 0;
+  min-height: 2px; margin-bottom: 4px; }
+
+/* Health: the queue on top, the patients beside the open record. */
+.hea-split { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(320px, 2fr);
+  gap: 16px; align-items: start; margin-top: 16px; }
+@media (max-width: 900px) { .hea-split { grid-template-columns: 1fr; } }
+.hea-list, .hea-record { padding: 12px 16px; }
+.hea-people { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow-y: auto; }
+.hea-people li { padding: 7px 6px; border-bottom: 1px solid var(--line); cursor: pointer;
+  border-radius: var(--r-sm); }
+.hea-people li:hover, .hea-people li.on { background: var(--panel2); }
+.hea-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  align-items: flex-start; margin-bottom: 8px; }
+.hea-head b { font-size: 17px; }
+.hea-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.hea-grid > div > span { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.hea-record h4 { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--dim); }
+.hea-ins { list-style: none; margin: 0; padding: 0; }
+.hea-ins li { padding: 4px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+.hea-enc { padding: 8px 0; border-top: 1px solid var(--line); }
+.hea-notes { white-space: pre-wrap; margin: 4px 0; }
+.hea-record a[data-heaencedit], .hea-record a[data-heainsedit], .hea-record a[data-heaverify],
+.hea-record a[data-heainsdel], .hea-record a[data-heafdel], #hea-queue a[data-heaopen] { cursor: pointer; text-decoration: underline; }

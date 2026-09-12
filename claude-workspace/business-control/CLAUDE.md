@@ -108,6 +108,44 @@ Things to know before touching them:
   server proxies nothing, on purpose. RTSP is refused with the `ffmpeg`
   relay command. hls.js is vendored under `storefront/frontend/vendor/hls/`
   for HLS outside Safari. Nothing is recorded.
+- `labels.py` is the label/ID sheet (core, no capability). It mints
+  nothing new: students get `identity.payload_for` (URL form), items
+  `library.ITEM_PREFIX`, staff their existing `clock_token`; staff
+  without a badge are NAMED, never minted one. Layouts are inches, in
+  `LAYOUTS`. The sheet is built client-side (`34-labels.js`,
+  `lblSheet`) and opened in a print window.
+- Tickets carry `ticket_tasks`, `ticket_links` (a `tab` from
+  `LINK_TABS` + `ref_id`; screens without rows take no number) and
+  `ticket_files` (raw body + `x-filename`, `FILE_EXT` whitelist, on
+  disk under `data/<tenant>/uploads/tickets/`).
+- Prezi is `PROVIDERS["prezi"]` with `auth: "none"` — keyless providers
+  are always `connected` in `status()` and show no Test/Disconnect.
+  Presentations gain `kind="embed"` + `embed_url` (`embed_url()` turns
+  Prezi/Slides/Canva share links into frame addresses); the public
+  `/present/{token}` frames it.
+- Student applications live in `students.py` (`student_applications`,
+  `APP_STAGES`, `APP_NEXT`, `DEFAULT_CHECKLIST`); the learner reads
+  them at `/api/learn/me/applications` with the office's `notes`
+  stripped. Stage changes write `student_log` lines.
+- `reports.py` is the annual report: `annual(con, year)` derives every
+  number from the rows each call (sections absent when a table is
+  absent — use `_has`), `annual_reports` keeps the words by year. Core,
+  under Money. Printing is client-side (`annualDoc` in `35-annual.js`).
+- Storefront localisation: `content.i18n_settings` (store_meta `i18n`:
+  locales with `dir`, default, auto_detect) feeds `STORE_I18N` on every
+  page; `store.js` `resolveLocale()` (saved → `?lang` → browser →
+  default), `money()` uses `Intl.NumberFormat(LOCALE, currency)`, the
+  chrome is translated through `data-i18n*` attributes by `applyI18n()`.
+  New chrome strings go in `UI_KEYS` AND on the element as `data-i18n`.
+- `health.py` is the Health capability (31st; the count is pinned in
+  `pricebook.py`, five places in test_platform, two in test_studio, the
+  deck `_D_ID`). Access is `auth.office(user, "health")` — a NAMED
+  permission in `governance.PERMISSIONS`, never a role. `log_access`
+  on every read, including the portal's. The patient portal is
+  `storefront/backend/health_portal.py` (`/health`, `/api/health/me*`)
+  and strips `notes` and unshared rows via `record(for_patient=True)`.
+  Appointments are Bookings' rows; `patient_checkins` keys on them.
+  Never claim compliance in copy; the module docstring says why.
 - **Adding a capability touches six places**: the price book table, the
   parser's count in `pricebook.py`, `CAP_NAMES`, `TAB_CAP` and
   `CAP_LABEL`, the client capability menu, and the sales deck's price

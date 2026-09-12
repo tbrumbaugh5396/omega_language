@@ -1323,7 +1323,7 @@ _menu = Path("docs/business-control-b2b-client/templates/02-consultation/"
              "capability-menu.md").read_text()
 _caps = re.findall(r"^\| ([A-Z][^|*]+?)(?: \*)? \| (?:Light|Standard|Heavy)"
                    r" \| \*\*\$(\d+)\*\* \|", _book, re.M)
-ok(len(_caps) == 30,
+ok(len(_caps) == 31,
    f"the book's capability table parses whole ({len(_caps)} of 30)")
 _off = [f"{n} ${p}" for n, p in _caps
         if not re.search(r"\*\*" + re.escape(n) + r"\*\*[^|]*\| [^|]*\|"
@@ -1376,7 +1376,7 @@ _D_ID = {"Sourcing": "src", "Inventory": "inv", "Production": "prd",
          "Intelligence": "intel", "Automation": "auto", "Comms": "com",
          "InfoSec": "sec", "API & data platform": "api",
          "Progressive App": "pwa", "Legal": "leg",
-         "Civics & policy": "civ"}
+         "Civics & policy": "civ", "Health": "hea"}
 _doff = [f"{n} ${p}" for n, p in _caps
          if not re.search(r'id:"' + _D_ID[n] + r'",\s*nm:"[^"]*",price:'
                           + p + ",", _deck)]
@@ -1690,7 +1690,7 @@ ok(c.get(f"/api/store/admin/engagements/{_eid}/docs/{_gen['doc_id']}"
 _ofr = c.get("/api/store/admin/engagements", headers=A).json()["offer"]
 ok(len(_ofr["tiers"]) == 3 and len(_ofr["care"]) == 3
    and len(_ofr["builds"]) == 3 and len(_ofr["setups"]) == 1
-   and len(_ofr["labels"]) == 3 and len(_ofr["caps"]) == 30
+   and len(_ofr["labels"]) == 3 and len(_ofr["caps"]) == 31
    and [t["name"] for t in _ofr["builds"]]
    == ["Week website", "Custom build",
        "Custom build + Branding & creative"]

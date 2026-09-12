@@ -3194,7 +3194,7 @@ CAP_NAMES = {
     "intelligence": "Intelligence", "automation": "Automation",
     "comms": "Comms", "infosec": "InfoSec",
     "api": "API & data platform", "legal": "Legal",
-    "civics": "Civics & policy",
+    "civics": "Civics & policy", "health": "Health",
     "pwa": "Progressive App",
 }
 

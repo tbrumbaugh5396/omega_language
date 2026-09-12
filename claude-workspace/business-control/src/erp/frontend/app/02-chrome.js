@@ -58,6 +58,8 @@ const TABS = [
     roles: ["admin", "employee"] },
   { id: "customers", label: "Customers", icon: "users", group: "Sell",
     roles: ["admin", "employee"] },
+  { id: "health", label: "Patients", icon: "user", group: "Sell",
+    roles: ["admin"], perm: "health" },
   { id: "promos", label: "Promos", icon: "megaphone", group: "Sell",
     roles: ["admin", "employee"] },
   { id: "marketplaces", label: "Delivery apps", icon: "truck", group: "Sell",
@@ -112,6 +114,8 @@ const TABS = [
     roles: ["admin", "employee", "teacher"] },
   { id: "nutrition", label: "Nutrition", icon: "bag", group: "Teach",
     roles: ["admin", "employee"] },
+  { id: "labels", label: "Labels & IDs", icon: "tag", group: "Teach",
+    roles: ["admin", "employee", "teacher", "director"] },
 
   // Finding the next customer, and keeping the last one.
   { id: "outreach", label: "Outreach", icon: "handshake", group: "Grow",
@@ -158,6 +162,8 @@ const TABS = [
     roles: ["admin", "employee"] },
   { id: "payroll", label: "Payroll", icon: "users", group: "Money",
     roles: ["admin", "employee"] },
+  { id: "annual", label: "Annual report", icon: "file", group: "Money",
+    roles: ["admin", "director", "board"] },
 
   // The company itself: its paperwork, its bill, its machines, its record.
   { id: "docs", label: "Documents", icon: "file", group: "Company",
@@ -247,7 +253,7 @@ const TAB_CAP = {
   intake: "fundraising", results: "learning",
   accounting: "accounting", treasury: "treasury", legal: "legal",
   automation: "automation", finance: "finance", payroll: "payroll",
-  onboarding: "onboarding", civics: "civics",
+  onboarding: "onboarding", civics: "civics", health: "health",
 };
 const CAP_LABEL = {
   selling: "Selling", marketing: "Marketing", crm: "CRM & Support",
@@ -258,7 +264,7 @@ const CAP_LABEL = {
   accounting: "Accounting", treasury: "Treasury & investments",
   legal: "Legal", automation: "Automation", finance: "Finance",
   payroll: "Payroll", onboarding: "Onboarding",
-  civics: "Civics & policy",
+  civics: "Civics & policy", health: "Health",
   api: "API & data platform", infosec: "InfoSec",
 };
 // null caps = everything on: legacy installs, the provider, and any tenant
@@ -499,6 +505,7 @@ async function render() {
     automation: renderAutomations, finance: renderFinance,
     payroll: renderPayroll, onboarding: renderOnboarding,
     civics: renderCivics, ideas: renderIdeas, cameras: renderCameras,
+    labels: renderLabels, annual: renderAnnual, health: renderHealth,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,
