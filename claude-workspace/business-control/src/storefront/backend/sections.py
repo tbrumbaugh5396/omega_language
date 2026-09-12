@@ -709,6 +709,13 @@ def render_one(con, row, liquid_renderer=None) -> str:
     notice rather than taking down the page.
     """
     s = _settings(row)
+    # Every string a translation exists for, swapped for the request's
+    # language; the layout, the images and the links stay what they are.
+    try:
+        from . import content as _content
+        s = _content.translate_settings(con, f"section:{row['id']}", s)
+    except Exception:                                        # noqa: BLE001
+        pass
     try:
         if row["type"] == "custom_html":
             html = _custom_html(con, s, liquid_renderer)

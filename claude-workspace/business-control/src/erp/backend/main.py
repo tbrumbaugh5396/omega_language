@@ -97,6 +97,21 @@ def _init_core(tid=None):
 
 
 @app.middleware("http")
+async def request_locale(request: Request, call_next):
+    """The language this request is served in: ?lang= wins, else the
+    sf_locale cookie the storefront writes when it resolves one. Set for
+    the length of the request so whatever the server renders — the
+    menu, the sections, a page — comes out in it."""
+    from storefront.backend import content as _content
+    loc = (request.query_params.get("lang") or request.cookies.get("sf_locale") or "").strip().lower()[:8]
+    tok = _content.LOCALE_CTX.set(loc if loc.replace("-", "").isalnum() else "")
+    try:
+        return await call_next(request)
+    finally:
+        _content.LOCALE_CTX.reset(tok)
+
+
+@app.middleware("http")
 async def audit_edits(request: Request, call_next):
     """Record every change, at the one place every change goes through.
 

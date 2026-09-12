@@ -327,6 +327,20 @@
       </div>
       <p class="dim" id="ln-msg"></p>
 
+      <h3 style="margin-top:20px">Machine translation</h3>
+      <p class="dim">A translator the shop connects, used for one thing: filling
+      what a language lacks — your products, pages, sections and menus — so the
+      shop speaks it this afternoon. What it writes is marked as the machine's
+      and is replaced the moment you type the real thing. The interface's own
+      words never go out; those ship translated.</p>
+      <div class="adm-row">
+        <div><label>Engine</label><select id="mt-engine"><option value="">— none —</option></select></div>
+        <div><label>Address <span class="dim">(LibreTranslate, or a paid DeepL)</span></label><input id="mt-url" placeholder="https://"></div>
+        <div><label>Key</label><input id="mt-key" type="password" placeholder="kept on file"></div>
+      </div>
+      <p class="dim" id="mt-hint"></p>
+      <div class="modal-actions"><button class="btn-pill primary sm" id="mt-save">Save engine</button></div>
+
       <h3 style="margin-top:20px">Translations</h3>
       <div class="adm-row">
         <div><label>Locale code</label>
@@ -337,6 +351,7 @@
       <p class="dim" id="tr-msg"></p>
       <div id="tr-form"></div>
       <div class="modal-actions">
+        <button class="btn-pill ghost sm hidden" id="tr-fill">Fill what is missing by machine</button>
         <button class="btn-pill primary sm hidden" id="tr-save">Save translations</button>
       </div>
     </div>

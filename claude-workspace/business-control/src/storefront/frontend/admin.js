@@ -1338,23 +1338,57 @@ $("#ln-save").onclick = async () => {
   } catch (e) { alert(e.message); }
 };
 
+// ---------- machine translation ----------
+async function drawMt() {
+  const out = await api("/api/store/admin/mt");
+  $("#mt-engine").innerHTML = '<option value="">— none —</option>' + out.engines.map((e) =>
+    `<option value="${e.id}" ${e.id === out.engine ? "selected" : ""}>${e.label}</option>`).join("");
+  $("#mt-url").value = out.url || "";
+  $("#mt-key").placeholder = out.has_key ? "on file — type to replace" : "";
+  const hint = () => { const e = out.engines.find((x) => x.id === $("#mt-engine").value); $("#mt-hint").textContent = e ? e.hint : ""; };
+  $("#mt-engine").onchange = hint; hint();
+}
+$("#mt-save").onclick = async () => {
+  try {
+    const out = await api("/api/store/admin/mt", { method: "POST",
+      body: JSON.stringify({ engine: $("#mt-engine").value, url: $("#mt-url").value, key: $("#mt-key").value }) });
+    $("#mt-key").value = ""; $("#mt-key").placeholder = out.has_key ? "on file — type to replace" : "";
+    alert(out.engine ? `${out.engine} connected` : "no engine");
+  } catch (e) { alert(e.message); }
+};
+
 let TR_BASE = {};
-$("#tr-load").onclick = async () => {
+const SRC_BADGE = { shipped: "shipped", machine: "machine", typed: "yours" };
+async function loadTranslations() {
   const loc = $("#tr-locale").value.trim().toLowerCase();
   if (!loc) return;
   const out = await api(`/api/store/admin/translations/${loc}`);
   TR_BASE = out.base;
+  const src = (k) => out.sources[k] || (out.shipped[k] ? "shipped" : "");
   $("#tr-form").innerHTML = Object.entries(out.base).map(([k, v]) =>
     `<div style="margin:6px 0"><label style="font-size:11px;color:#8a82a0">
-      ${k}</label>
+      ${k}${src(k) ? ` <span class="dim">· ${SRC_BADGE[src(k)] || src(k)}</span>` : ""}</label>
      <div class="adm-row"><div class="dim" style="font-size:12.5px;
        padding-top:8px">${String(v).slice(0, 60)}</div>
-     <div><input data-tr="${k}" value="${(out.values[k] || "")
-       .replace(/"/g, "&quot;")}" placeholder="translation"></div></div></div>`)
+     <div><input data-tr="${k}" value="${(out.own[k] || out.values[k] || "")
+       .replace(/"/g, "&quot;")}" placeholder="${out.shipped[k] ? "shipped: " + String(out.shipped[k]).slice(0, 40) : "translation"}"></div></div></div>`)
     .join("");
   $("#tr-save").classList.remove("hidden");
+  $("#tr-fill").classList.toggle("hidden", !out.missing);
+  $("#tr-fill").textContent = `Fill the ${out.missing} missing by machine`;
   $("#tr-msg").textContent =
-    `${Object.keys(out.values).length} strings translated for "${loc}"`;
+    `${Object.keys(out.values).length} of ${Object.keys(out.base).length} strings have a translation for "${loc}"`
+    + (out.missing ? ` — ${out.missing} missing` : "");
+}
+$("#tr-load").onclick = loadTranslations;
+$("#tr-fill").onclick = async () => {
+  const loc = $("#tr-locale").value.trim().toLowerCase();
+  $("#tr-msg").textContent = "translating…";
+  try {
+    const out = await api(`/api/store/admin/translations/${loc}/fill`, { method: "POST", body: "{}" });
+    $("#tr-msg").textContent = `${out.filled} filled by machine${out.remaining ? `, ${out.remaining} still missing — run it again` : ""}`;
+    loadTranslations();
+  } catch (e) { $("#tr-msg").textContent = e.message; }
 };
 
 $("#tr-save").onclick = async () => {
@@ -1571,7 +1605,7 @@ async function boot() {
   run("discounts", drawDiscounts); run("discounts", drawGiftCards);
   run("orders", drawOrders);
   run("settings", drawWebhooks); run("settings", drawKeys);
-  run("settings", drawCurrencies); run("settings", drawLanguages); run("settings", drawStaff);
+  run("settings", drawCurrencies); run("settings", drawLanguages); run("settings", drawMt); run("settings", drawStaff);
   run("settings", drawAudit); run("settings", drawShipping);
 }
 tryBoot().then((ok) => { if (ok) boot(); });

@@ -6,7 +6,11 @@ links, and a translation/currency layer so the same storefront can serve
 more than one market.
 """
 import html as _html
+import contextvars
 import json
+import urllib.error
+import urllib.parse
+import urllib.request
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -129,6 +133,222 @@ UI_KEYS.update({
 })
 
 
+# The language this request is being served in. Set by a middleware from
+# the sf_locale cookie (which the page writes when it resolves a
+# language) or ?lang=, so what the server renders — the menu, the
+# sections, a page — is in the visitor's language and not swapped after
+# the fact. Empty means the base language.
+LOCALE_CTX: contextvars.ContextVar = contextvars.ContextVar("sf_locale", default="")
+
+
+def current_locale() -> str:
+    return LOCALE_CTX.get() or ""
+
+
+def tx(con, key: str, fallback: str, locale: str | None = None) -> str:
+    """One string in the current language: the merchant's translation,
+    else the shipped one, else what was passed."""
+    loc = (locale if locale is not None else current_locale()).lower()
+    if not loc or loc == "en":
+        return fallback
+    v = translations_for(con, loc).get(key)
+    return v if v else fallback
+
+
+def translate_settings(con, prefix: str, settings: dict, locale: str | None = None) -> dict:
+    """A section's settings with every string a translation exists for
+    swapped, keyed `section:<id>:<field>`. Lists of dicts (columns,
+    questions) are keyed by index too, so a three-column feature strip
+    translates column by column."""
+    loc = (locale if locale is not None else current_locale()).lower()
+    if not loc or loc == "en":
+        return settings
+    tr = translations_for(con, loc)
+    if not tr:
+        return settings
+
+    def walk(node, key):
+        if isinstance(node, str):
+            v = tr.get(key)
+            return v if v else node
+        if isinstance(node, dict):
+            return {k: walk(v, f"{key}:{k}") for k, v in node.items()}
+        if isinstance(node, list):
+            return [walk(v, f"{key}:{i}") for i, v in enumerate(node)]
+        return node
+    return walk(settings, prefix)
+
+
+# The merchant's content, as keys: what the translations screen lists
+# beside the interface's own words and what a machine fill translates.
+# Products by id, menus by id, product kinds by id, pages by slug,
+# sections by id and field — every string a visitor reads that came out
+# of this database rather than out of the code.
+CONTENT_SKIP = {"url", "href", "image", "img", "src", "link", "video", "color",
+                "colour", "icon", "anchor", "id", "slug", "align", "layout",
+                "product_ids", "collection", "kind", "handle", "class", "style",
+                "type", "variant", "size", "width", "height", "position",
+                "css", "js", "bg", "background", "font", "theme", "mode"}
+
+
+def _walk_strings(node, key, out):
+    if isinstance(node, str):
+        last = key.rsplit(":", 1)[-1]
+        if (node.strip() and last not in CONTENT_SKIP
+                and not node.startswith(("http", "/", "#", "data:")) and len(node) <= 4000):
+            out[key] = node
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            _walk_strings(v, f"{key}:{k}", out)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            _walk_strings(v, f"{key}:{i}", out)
+
+
+def content_keys(con) -> dict:
+    keys: dict = {}
+    for r in con.execute("SELECT id, name, description FROM products WHERE active=1").fetchall():
+        keys[f"product:{r['id']}:name"] = r["name"]
+        if r["description"]:
+            keys[f"product:{r['id']}:description"] = r["description"]
+    try:
+        for r in con.execute("SELECT id, name FROM collections").fetchall():
+            if r["name"]:
+                keys[f"collection:{r['id']}:name"] = r["name"]
+    except Exception:                                        # noqa: BLE001
+        pass
+    for r in con.execute("SELECT id, label FROM store_menus ORDER BY location, position").fetchall():
+        if r["label"]:
+            keys[f"menu:{r['id']}:label"] = r["label"]
+    try:
+        from .api import PRODUCT_KINDS
+        for k in PRODUCT_KINDS:
+            keys[f"kind:{k['id']}:label"] = k["label"]
+            if k.get("note"):
+                keys[f"kind:{k['id']}:note"] = k["note"]
+    except Exception:                                        # noqa: BLE001
+        pass
+    try:
+        from .api import get_theme
+        for i, a in enumerate(get_theme(con).get("announce") or []):
+            if str(a).strip():
+                keys[f"announce:{i}"] = str(a)
+    except Exception:                                        # noqa: BLE001
+        pass
+    for r in con.execute("SELECT slug, title, content_html FROM store_pages"
+                         " WHERE published=1").fetchall():
+        if r["title"]:
+            keys[f"page:{r['slug']}:title"] = r["title"]
+        if r["content_html"] and len(r["content_html"]) <= 20000:
+            keys[f"page:{r['slug']}:html"] = r["content_html"]
+    for r in con.execute("SELECT id, settings FROM page_sections WHERE enabled=1").fetchall():
+        try:
+            st = json.loads(r["settings"] or "{}")
+        except ValueError:
+            continue
+        _walk_strings(st, f"section:{r['id']}", keys)
+    return keys
+
+
+# ---------- machine translation ----------
+# An engine the merchant connects, used for one thing: filling what is
+# missing in a language so a shop with two hundred products speaks it
+# this afternoon rather than after a fortnight of typing. What it writes
+# is marked as the machine's, shown as such on the translations screen,
+# and overwritten the moment somebody types the real thing. The
+# interface's own words are never sent — those shipped translated.
+MT_ENGINES = {
+    "deepl": {"label": "DeepL", "url": "https://api-free.deepl.com/v2/translate",
+              "hint": "A DeepL API key; the free tier translates 500,000 characters a "
+                      "month. A paid key uses api.deepl.com — set the address too."},
+    "libretranslate": {"label": "LibreTranslate", "url": "",
+                       "hint": "The address of a LibreTranslate server, yours or a public "
+                               "one; a key if it asks for one."},
+}
+
+
+def mt_settings(con) -> dict:
+    row = con.execute("SELECT v FROM store_meta WHERE k='mt'").fetchone()
+    try:
+        cfg = json.loads(row["v"]) if row else {}
+    except ValueError:
+        cfg = {}
+    return {"engine": cfg.get("engine", ""), "url": cfg.get("url", ""),
+            "has_key": bool(cfg.get("key")),
+            "engines": [{"id": k, **v} for k, v in MT_ENGINES.items()]}
+
+
+def _mt_cfg(con) -> dict:
+    row = con.execute("SELECT v FROM store_meta WHERE k='mt'").fetchone()
+    try:
+        return json.loads(row["v"]) if row else {}
+    except ValueError:
+        return {}
+
+
+def _mt_call(engine: str, cfg: dict, texts: list, target: str, html: bool = False) -> list:
+    """The one place an outside translator is spoken to. Tests replace it."""
+    lang = target.split("-")[0]
+    if engine == "deepl":
+        url = cfg.get("url") or MT_ENGINES["deepl"]["url"]
+        data = urllib.parse.urlencode(
+            [("text", t) for t in texts] + [("target_lang", lang.upper()), ("source_lang", "EN")]
+            + ([("tag_handling", "html")] if html else [])).encode()
+        req = urllib.request.Request(url, data=data, headers={
+            "Authorization": f"DeepL-Auth-Key {cfg.get('key', '')}",
+            "Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=40) as r:
+            out = json.loads(r.read().decode())
+        return [x["text"] for x in out.get("translations", [])]
+    if engine == "libretranslate":
+        base = (cfg.get("url") or "").rstrip("/")
+        if not base:
+            raise HTTPException(400, "LibreTranslate needs the server's address")
+        body = {"q": texts, "source": "en", "target": lang,
+                "format": "html" if html else "text"}
+        if cfg.get("key"):
+            body["api_key"] = cfg["key"]
+        req = urllib.request.Request(base + "/translate", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            out = json.loads(r.read().decode())
+        t = out.get("translatedText")
+        return t if isinstance(t, list) else [t]
+    raise HTTPException(400, "no translation engine is connected")
+
+
+def fill_locale(con, locale: str, *, limit: int = 400) -> dict:
+    """Translate, by machine, every content key this language lacks."""
+    cfg = _mt_cfg(con)
+    if cfg.get("engine") not in MT_ENGINES:
+        raise HTTPException(400, "connect a translation engine first — Store admin → Languages")
+    loc = locale.strip().lower()
+    if not loc or loc == "en":
+        raise HTTPException(400, "pick a language other than the base 'en'")
+    have = translations_for(con, loc)
+    want = {k: v for k, v in content_keys(con).items() if k not in have}
+    keys = list(want)[:limit]
+    done = 0
+    for html in (False, True):
+        batch = [k for k in keys if k.endswith(":html") == html]
+        for i in range(0, len(batch), 25):
+            chunk = batch[i:i + 25]
+            try:
+                out = _mt_call(cfg["engine"], cfg, [want[k] for k in chunk], loc, html=html)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
+                raise HTTPException(502, f"the translation engine did not answer: {e}") from e
+            for k, v in zip(chunk, out):
+                if v and str(v).strip():
+                    con.execute(
+                        "INSERT INTO translations(locale,key,value,source) VALUES(?,?,?,'machine')"
+                        " ON CONFLICT(locale,key) DO UPDATE SET value=excluded.value,"
+                        " source='machine'", (loc, k, str(v)))
+                    done += 1
+    con.commit()
+    return {"ok": True, "locale": loc, "filled": done,
+            "remaining": max(0, len(want) - done)}
+
+
 def strings_for(con, locale: str) -> dict:
     """The interface's words in one language: the shipped English, this
     tenant's overrides, then that locale's translations on top."""
@@ -171,7 +391,12 @@ UI_KEYS.update({
     "payment": "Payment", "pay_on_delivery": "Pay on delivery",
     "menu": "Menu", "search_placeholder": "Search…", "checkout_title": "Checkout",
     "country": "Country", "address": "Address", "street_address": "Street address",
-    "optional": "optional",
+    "optional": "optional", "buy_now": "Buy now", "build_your_own": "Build your own",
+    "build_your_own_note": "Pick the capabilities your business actually does and watch the "
+                           "price add itself up — the same menu these are cut from, priced "
+                           "from the same book.",
+    "open_the_menu": "Open the menu", "all_products": "All products",
+    "everything": "Everything", "the_case": "The case",
 })
 
 # Translations the product ships with, so a shop that offers Spanish
@@ -231,6 +456,10 @@ BUILTIN = {
   "pay_on_delivery": "Pago contra entrega", "menu": "Menú", "search_placeholder": "Buscar…",
   "country": "País", "address": "Dirección", "street_address": "Calle y número", "optional": "opcional",
   "checkout_title": "Pago",
+  "buy_now": "Comprar",
+  "build_your_own": "Arma el tuyo",
+  "build_your_own_note": "Elige las capacidades que tu negocio realmente usa y mira cómo el precio se suma solo: el mismo menú del que salen estos, con los precios del mismo libro.", "open_the_menu": "Abrir el menú",
+  "all_products": "Todos los productos", "everything": "Todo", "the_case": "La caja",
  },
  "fr": {
   "shop": "Boutique", "reviews": "Avis", "faq": "FAQ", "cart": "Votre panier",
@@ -274,6 +503,10 @@ BUILTIN = {
   "pay_on_delivery": "Paiement à la livraison", "menu": "Menu", "search_placeholder": "Rechercher…",
   "country": "Pays", "address": "Adresse", "street_address": "Rue et numéro", "optional": "facultatif",
   "checkout_title": "Commande",
+  "buy_now": "Acheter",
+  "build_your_own": "Composez le vôtre",
+  "build_your_own_note": "Choisissez les capacités que votre entreprise utilise vraiment et regardez le prix s'additionner — le même menu dont ceux-ci sont tirés, aux prix du même livre.", "open_the_menu": "Ouvrir le menu",
+  "all_products": "Tous les produits", "everything": "Tout", "the_case": "Le carton",
  },
  "de": {
   "shop": "Shop", "reviews": "Bewertungen", "faq": "FAQ", "cart": "Dein Warenkorb",
@@ -317,6 +550,10 @@ BUILTIN = {
   "pay_on_delivery": "Zahlung bei Lieferung", "menu": "Menü", "search_placeholder": "Suchen…",
   "country": "Land", "address": "Adresse", "street_address": "Straße und Hausnummer", "optional": "optional",
   "checkout_title": "Kasse",
+  "buy_now": "Jetzt kaufen",
+  "build_your_own": "Selbst zusammenstellen",
+  "build_your_own_note": "Wähle die Fähigkeiten, die dein Betrieb wirklich braucht, und sieh zu, wie sich der Preis von selbst zusammenrechnet — dasselbe Menü, aus dem diese geschnitten sind, zu denselben Preisen.", "open_the_menu": "Menü öffnen",
+  "all_products": "Alle Produkte", "everything": "Alles", "the_case": "Die Kiste",
  },
  "pt": {
   "shop": "Loja", "reviews": "Avaliações", "faq": "Perguntas", "cart": "Seu carrinho",
@@ -360,6 +597,10 @@ BUILTIN = {
   "pay_on_delivery": "Pagar na entrega", "menu": "Menu", "search_placeholder": "Buscar…",
   "country": "País", "address": "Endereço", "street_address": "Rua e número", "optional": "opcional",
   "checkout_title": "Finalizar compra",
+  "buy_now": "Comprar",
+  "build_your_own": "Monte o seu",
+  "build_your_own_note": "Escolha as capacidades que o seu negócio realmente usa e veja o preço se somar sozinho — o mesmo menu de onde estes saem, com os preços do mesmo livro.", "open_the_menu": "Abrir o menu",
+  "all_products": "Todos os produtos", "everything": "Tudo", "the_case": "A caixa",
  },
  "zh": {
   "shop": "商店", "reviews": "评价", "faq": "常见问题", "cart": "购物车",
@@ -403,6 +644,10 @@ BUILTIN = {
   "pay_on_delivery": "货到付款", "menu": "菜单", "search_placeholder": "搜索…",
   "country": "国家/地区", "address": "地址", "street_address": "街道地址", "optional": "选填",
   "checkout_title": "结账",
+  "buy_now": "立即购买",
+  "build_your_own": "自选组合",
+  "build_your_own_note": "选出你的业务真正用到的能力，看着价格自动加总——这些套餐正是从同一份菜单裁出的，价格来自同一本价目表。", "open_the_menu": "打开菜单",
+  "all_products": "全部商品", "everything": "全部", "the_case": "整箱",
  },
  "ar": {
   "shop": "المتجر", "reviews": "التقييمات", "faq": "الأسئلة الشائعة", "cart": "سلتك",
@@ -446,6 +691,10 @@ BUILTIN = {
   "pay_on_delivery": "الدفع عند الاستلام", "menu": "القائمة", "search_placeholder": "بحث…",
   "country": "البلد", "address": "العنوان", "street_address": "الشارع والرقم", "optional": "اختياري",
   "checkout_title": "إتمام الشراء",
+  "buy_now": "اشترِ الآن",
+  "build_your_own": "كوّن خطتك",
+  "build_your_own_note": "اختر القدرات التي يستخدمها عملك فعلًا وشاهد السعر يُحسب من تلقاء نفسه — القائمة نفسها التي قُصّت منها هذه، بأسعار الكتاب نفسه.", "open_the_menu": "افتح القائمة",
+  "all_products": "كل المنتجات", "everything": "الكل", "the_case": "الصندوق",
  },
 }
 
@@ -466,6 +715,10 @@ CURRENCY_DEFAULT = [
 
 def init_tables(con):
     con.executescript(TABLES)
+    try:
+        con.execute("ALTER TABLE translations ADD COLUMN source TEXT DEFAULT 'typed'")
+    except Exception:                                        # noqa: BLE001
+        pass
     # Root-relative, not bare fragments. The same nav renders on /blog and
     # /affiliates, where "#shop" is a fragment of a page that has no such
     # section — it silently does nothing. "/#shop" navigates home and then
@@ -854,6 +1107,38 @@ def get_i18n(con=Depends(get_con)):
                         for loc in locales(con) if loc != "en"}}
 
 
+class MtBody(BaseModel):
+    engine: str = ""
+    url: str = ""
+    key: str = ""
+
+
+@router.get("/api/store/admin/mt")
+def mt_get(u=Depends(admin_user), con=Depends(get_con)):
+    return mt_settings(con)
+
+
+@router.post("/api/store/admin/mt")
+def mt_save(body: MtBody, u=Depends(admin_user), con=Depends(get_con)):
+    """Which translator, and how to reach it. A blank engine disconnects;
+    a blank key keeps the one on file."""
+    if body.engine and body.engine not in MT_ENGINES:
+        raise HTTPException(400, f"engine is one of {sorted(MT_ENGINES)}")
+    cur = _mt_cfg(con)
+    cfg = {"engine": body.engine, "url": body.url.strip()[:300],
+           "key": body.key.strip()[:200] or (cur.get("key", "") if body.engine == cur.get("engine") else "")}
+    con.execute("INSERT INTO store_meta(k,v) VALUES('mt',?)"
+                " ON CONFLICT(k) DO UPDATE SET v=excluded.v", (json.dumps(cfg),))
+    con.commit()
+    return mt_settings(con)
+
+
+@router.post("/api/store/admin/translations/{locale}/fill")
+def translations_fill(locale: str, u=Depends(admin_user), con=Depends(get_con)):
+    """Fill what this language lacks, by machine, marked as the machine's."""
+    return fill_locale(con, locale)
+
+
 class I18nBody(BaseModel):
     locales: list = []
     default: str = "en"
@@ -905,8 +1190,8 @@ def save_translations(body: TranslationBody, u=Depends(admin_user),
                         (loc, k))
         else:
             con.execute(
-                "INSERT INTO translations(locale,key,value) VALUES(?,?,?)"
-                " ON CONFLICT(locale,key) DO UPDATE SET value=excluded.value",
+                "INSERT INTO translations(locale,key,value,source) VALUES(?,?,?,'typed')"
+                " ON CONFLICT(locale,key) DO UPDATE SET value=excluded.value, source='typed'",
                 (loc, k, str(v)))
     con.commit()
     return {"ok": True, "locale": loc,
@@ -916,18 +1201,18 @@ def save_translations(body: TranslationBody, u=Depends(admin_user),
 @router.get("/api/store/admin/translations/{locale}")
 def read_translations(locale: str, u=Depends(admin_user),
                       con=Depends(get_con)):
-    prods = con.execute(
-        "SELECT id, name, description FROM products WHERE active=1").fetchall()
-    keys = dict(UI_KEYS)
-    for p in prods:
-        keys[f"product:{p['id']}:name"] = p["name"]
-        if p["description"]:
-            keys[f"product:{p['id']}:description"] = p["description"]
-    own = {r["key"]: r["value"] for r in con.execute(
-        "SELECT key, value FROM translations WHERE locale=?", (locale,)).fetchall()}
+    keys = {**UI_KEYS, **content_keys(con)}
+    own, sources = {}, {}
+    for r in con.execute("SELECT key, value, source FROM translations WHERE locale=?",
+                         (locale,)).fetchall():
+        own[r["key"]] = r["value"]
+        sources[r["key"]] = r["source"] or "typed"
+    have = translations_for(con, locale)
     return {"locale": locale, "base": keys,
-            "values": translations_for(con, locale),
-            "shipped": BUILTIN.get(locale, {}), "own": own}
+            "values": have,
+            "shipped": BUILTIN.get(locale, {}), "own": own, "sources": sources,
+            "missing": sum(1 for k in keys if k not in have and k not in ("cart_tag", "cart_note")),
+            "mt": mt_settings(con)}
 
 
 class CurrencyBody(BaseModel):

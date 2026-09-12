@@ -4551,7 +4551,7 @@ ok('{ updateViaCache: "none" }' in _ops
    "and both registrations refuse the HTTP cache outright — the worker is "
    "what ships the fix, so it cannot be the thing that arrives stale")
 ok("Every flavor" not in _store_js2 and "data-kindnav" in _store_js2
-   and '<div class="side-group">All products</div>' in _store_js2,
+   and '<div class="side-group">\' + esc(t("all_products")) + \'</div>' in _store_js2,
    "the menu is the shop's own table of contents: All products, then one "
    "lane per category, each its own section — not one wall of faces under "
    "a heading inherited from a drinks brand")
@@ -10196,5 +10196,87 @@ c.post("/api/store/admin/i18n", headers=A, json={"locales": [{"code": "es", "lab
 ok(c.get("/api/store/i18n").json()["locales"] == ["en", "es"],
    "a merchant who wants two languages gets two")
 _dcon = _db.connect(); _dcon.execute("DELETE FROM store_meta WHERE k='i18n'"); _dcon.commit(); _dcon.close()
+
+# --- the merchant's content in the visitor's language, and a machine to fill it ---
+_ck = _ct.content_keys(_db.connect())
+ok(any(k.startswith("product:") and k.endswith(":name") for k in _ck)
+   and any(k.startswith("kind:") for k in _ck)
+   and any(k.startswith("section:") for k in _ck),
+   "the merchant's content — products, kinds, sections, menus, pages — is listed as keys")
+ok(not any(k.endswith(":image") or k.endswith(":url") for k in _ck),
+   "and only the words: images, links and layout are not translated")
+_cc = _db.connect()
+_mk = next((k for k in _ck if k.startswith("menu:")), None)
+_sk = next((k for k in _ck if k.startswith("section:") and not k.endswith(":html")), None)
+_cc.execute("INSERT OR REPLACE INTO translations(locale,key,value,source) VALUES('es',?,?,'typed')",
+            (_mk or "menu:0:label", "Menú de prueba"))
+if _sk:
+    _cc.execute("INSERT OR REPLACE INTO translations(locale,key,value,source) VALUES('es',?,?,'typed')",
+                (_sk, "TEXTO TRADUCIDO"))
+_cc.commit()
+ok(_ct.tx(_cc, _mk or "menu:0:label", "Menu", "es") == "Menú de prueba"
+   and _ct.tx(_cc, _mk or "menu:0:label", "Menu", "en") == "Menu"
+   and _ct.tx(_cc, "menu:none:label", "Menu", "es") == "Menu",
+   "a string comes back in the language when a translation exists, as it was when none does")
+_home_es = c.get("/?lang=es")
+ok(_home_es.status_code == 200 and '<html lang="es"' in _home_es.text
+   and ("Menú de prueba" in _home_es.text if _mk else True)
+   and ("TEXTO TRADUCIDO" in _home_es.text if _sk else True),
+   "with ?lang=es the server renders the menu and the sections in Spanish, "
+   "and says so in the html tag")
+_home_ck = c.get("/", cookies={"sf_locale": "es"})
+ok('<html lang="es"' in _home_ck.text and ("Menú de prueba" in _home_ck.text if _mk else True),
+   "and the sf_locale cookie the page writes does the same on every later visit")
+ok('<html lang="ar" dir="rtl"' in c.get("/?lang=ar").text,
+   "a right-to-left language is right to left from the first byte")
+ok('<html lang="en"' in c.get("/").text and "Menú de prueba" not in c.get("/").text,
+   "and with no language chosen, the base")
+_sfjs4 = c.get("/store.js").text
+ok("syncLocaleCookie" in _sfjs4 and "sf_locale_reloaded" in _sfjs4
+   and "t(`kind:${k.id}:label`" in _sfjs4,
+   "the page writes the cookie and reloads once when its language and the cookie disagree, "
+   "and the kind headings go through the layer")
+_cc.execute("DELETE FROM translations WHERE locale='es' AND value IN ('Menú de prueba','TEXTO TRADUCIDO')")
+_cc.commit(); _cc.close()
+# the machine
+ok(c.post("/api/store/admin/translations/es/fill", headers=A).status_code == 400,
+   "no engine connected: the fill says so")
+ok(c.post("/api/store/admin/mt", headers=A, json={"engine": "babelfish"}).status_code == 400,
+   "an engine is one of the known ones")
+_mts = c.post("/api/store/admin/mt", headers=A, json={"engine": "deepl", "key": "k-1"}).json()
+ok(_mts["engine"] == "deepl" and _mts["has_key"] and "key" not in _mts,
+   "an engine and a key are kept, and the key never comes back")
+_calls = []
+def _fake_mt(engine, cfg, texts, target, html=False):
+    _calls.append((engine, target, html, len(texts)))
+    return [f"[{target}] {t}" for t in texts]
+_real_mt = _ct._mt_call
+_ct._mt_call = _fake_mt
+try:
+    _fill = c.post("/api/store/admin/translations/es/fill", headers=A).json()
+finally:
+    _ct._mt_call = _real_mt
+ok(_fill["ok"] and _fill["filled"] > 0 and _calls and all(cl[0] == "deepl" and cl[1] == "es" for cl in _calls),
+   f"the fill sends what the language lacks to the engine, in batches ({len(_calls)} calls)")
+_tr_es2 = c.get("/api/store/admin/translations/es", headers=A).json()
+_mkey = next((k for k in _tr_es2["own"] if k.startswith("product:")), None)
+ok(_mkey and _tr_es2["sources"][_mkey] == "machine" and _tr_es2["own"][_mkey].startswith("[es] "),
+   "what it wrote is marked as the machine's")
+ok("prefs" not in _tr_es2["own"] or _tr_es2["sources"].get("prefs") != "machine",
+   "and the interface's own words were never sent")
+c.post("/api/store/admin/translations", headers=A, json={"locale": "es", "entries": {_mkey: "Salsa de la casa"}})
+_tr_es3 = c.get("/api/store/admin/translations/es", headers=A).json()
+ok(_tr_es3["sources"][_mkey] == "typed" and _tr_es3["own"][_mkey] == "Salsa de la casa",
+   "and is replaced the moment somebody types the real thing")
+_calls.clear(); _ct._mt_call = _fake_mt
+try:
+    _fill2 = c.post("/api/store/admin/translations/es/fill", headers=A).json()
+finally:
+    _ct._mt_call = _real_mt
+ok(_fill2["filled"] == 0 and not _calls, "a second fill sends nothing — nothing is missing")
+_cc = _db.connect(); _cc.execute("DELETE FROM translations WHERE locale='es'"); _cc.execute("DELETE FROM store_meta WHERE k='mt'"); _cc.commit(); _cc.close()
+_admh2 = c.get("/admin").text
+ok('id="mt-engine"' in _admh2 and 'id="tr-fill"' in _admh2 and "drawMt" in c.get("/admin.js").text,
+   "the store admin connects the engine and fills a language from the translations screen")
 
 done("core")

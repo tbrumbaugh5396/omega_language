@@ -139,7 +139,13 @@ Things to know before touching them:
   New chrome strings go in `UI_KEYS` AND on the element as `data-i18n`
   (or `data-i18n-title` / `data-i18n-aria` / `data-i18n-placeholder`),
   AND in every `content.BUILTIN` language — the suite checks each
-  language covers every key.
+  language covers every key. Merchant content is keyed by
+  `content.content_keys` (`product:`, `collection:`, `kind:`, `menu:`,
+  `page:`, `section:<id>:<field>`), rendered server-side through
+  `content.tx` / `translate_settings` in the request's language
+  (`LOCALE_CTX`, set by the `request_locale` middleware from `?lang` or
+  the `sf_locale` cookie). Machine fill: `content.fill_locale` through
+  `_mt_call` (the seam tests replace); rows carry `source`.
 - `health.py` is the Health capability (31st; the count is pinned in
   `pricebook.py`, five places in test_platform, two in test_studio, the
   deck `_D_ID`). Access is `auth.office(user, "health")` — a NAMED

@@ -684,8 +684,9 @@ def render_shell(con, body_html: str, *, title=None, description=None,
     v = asset_version()
     for asset in ("/store.css", "/store.js", "/qr-scan.js", "/qr-scan.css"):
         shell = shell.replace(f'"{asset}"', f'"{asset}?v={v}"')
-    announce = "".join(f"<span>{sect.esc(a)}</span>"
-                       for a in (t.get("announce") or []) * 2)
+    announce = "".join(
+        f"<span>{sect.esc(content_mod.tx(con, f'announce:{i}', a))}</span>"
+        for i, a in list(enumerate(t.get("announce") or [])) * 2)
     if not announce:
         # no announcements = no bar, not an empty purple strip
         shell = shell.replace(
@@ -708,12 +709,17 @@ def render_shell(con, body_html: str, *, title=None, description=None,
     _ui = content_mod.ui_strings(con)
     repl = {
         "<!--NAV-->": "".join(
-            f'<a href="{sect.esc(m["url"])}">{sect.esc(m["label"])}</a>'
+            f'<a href="{sect.esc(m["url"])}">'
+            f'{sect.esc(content_mod.tx(con, f"menu:{m["id"]}:label", m["label"]))}</a>'
             for m in nav.get("header", [])),
         "<!--FOOTNAV-->": "".join(
-            f'<a href="{sect.esc(m["url"])}">{sect.esc(m["label"])}</a>'
+            f'<a href="{sect.esc(m["url"])}">'
+            f'{sect.esc(content_mod.tx(con, f"menu:{m["id"]}:label", m["label"]))}</a>'
             for m in nav.get("footer", [])),
         "<!--I18N-->": content_mod.i18n_payload(con),
+        '<html lang="en">': (lambda loc: f'<html lang="{sect.esc(loc)}"'
+                             + (' dir="rtl"' if loc.split("-")[0] in content_mod.RTL else "")
+                             + ">")(content_mod.current_locale() or "en"),
         "<!--ICONS-->": icon_sprite(),
         "<!--SECTIONS-->": body_html,
         "<!--ANNOUNCE-->": announce,
@@ -1383,11 +1389,13 @@ def page(slug: str, con=Depends(get_con)):
     if row is None:
         raise HTTPException(404, "page not found")
     rows = page_rows(con, slug)
+    from . import content as _content
+    title = _content.tx(con, f"page:{slug}:title", row["title"])
     if rows:            # built visually — same engine as the theme editor
         body = sect.render_page(con, rows, render_liquid)
-        html = render_shell(con, body, title=f"{row['title']} — "
+        html = render_shell(con, body, title=f"{title} — "
                             f"{get_theme(con)['brand']}",
-                            description=row["title"])
+                            description=title)
         return HTMLResponse(html.replace(
             "</body>",
             f"<script>(function(){{let v=localStorage.getItem('sf_vid')||"

@@ -55,6 +55,22 @@ let LOCALE = resolveLocale();
 const LOCALE_DIR = (LOCALE_INFO.find((l) => l.code === LOCALE) || {}).dir || "ltr";
 document.documentElement.lang = LOCALE;
 document.documentElement.dir = LOCALE_DIR;
+/* The server renders the menu, the sections and the pages in the
+   language of the sf_locale cookie. When the page resolves a language
+   the cookie does not yet say — a first visit, or a change — it writes
+   the cookie and reloads once, so what came down in the base language
+   is fetched again in the right one. */
+(function syncLocaleCookie() {
+  const m = document.cookie.match(/(?:^|; )sf_locale=([^;]*)/);
+  const had = m ? decodeURIComponent(m[1]) : "";
+  if (had !== LOCALE) {
+    document.cookie = `sf_locale=${encodeURIComponent(LOCALE)}; path=/; max-age=31536000; samesite=lax`;
+    if (!sessionStorage.getItem("sf_locale_reloaded")) {
+      sessionStorage.setItem("sf_locale_reloaded", "1");
+      location.reload();
+    }
+  } else { sessionStorage.removeItem("sf_locale_reloaded"); }
+})();
 
 /* Money and dates in the visitor's own conventions: 1.234,56 € for a
    German reader, $1,234.56 for an American one, from the same cents.
@@ -170,6 +186,7 @@ function buildPickers() {
     ls.disabled = I18N.locales.length < 2;
     ls.onchange = () => {
       LOCALE = ls.value; localStorage.setItem("sf_locale", LOCALE);
+      document.cookie = `sf_locale=${encodeURIComponent(LOCALE)}; path=/; max-age=31536000; samesite=lax`;
       location.reload();
     };
   }
@@ -469,10 +486,10 @@ function drawTabs() {
       flavs.push({ slug: p.flavour, name: pname(p), colour: flavourOf(p) });
     }
   }
-  const tabs = [{ slug: null, name: "All products" },
+  const tabs = [{ slug: null, name: t("all_products") },
     // What things ARE comes first: on a shelf selling plans, care, builds
     // and licences, the kind is the filter a person reaches for.
-    ...(CATALOG.kinds || []).map((k) => ({ slug: "k:" + k.id, name: k.label,
+    ...(CATALOG.kinds || []).map((k) => ({ slug: "k:" + k.id, name: t(`kind:${k.id}:label`, k.label),
                                           colour: k.colour })),
     ...CATALOG.collections.map((c) => ({ slug: c.id, name: c.name })),
     ...flavs.map((f) => ({ slug: "f:" + f.slug, name: f.name, colour: f.colour }))];
@@ -622,18 +639,16 @@ function drawGrid() {
     <a class="product cfg-card" href="/plan-builder"
        style="--flavour:${k.colour}">
       <div class="body">
-        <b>Build your own</b>
-        <span class="note">Pick the capabilities your business actually
-          does and watch the price add itself up — the same menu these
-          are cut from, priced from the same book.</span>
-        <span class="cfg-card-go">Open the menu &rarr;</span>
+        <b>${t("build_your_own")}</b>
+        <span class="note">${t("build_your_own_note", "Pick the capabilities your business actually does and watch the price add itself up — the same menu these are cut from, priced from the same book.")}</span>
+        <span class="cfg-card-go">${t("open_the_menu", "Open the menu")} &rarr;</span>
       </div>
     </a>`;
   gridHost.innerHTML = featureHtml + (kinds.length < 2
     ? prods.map(card).join("")
     : kinds.map((k) => `
-        <h3 class="kind-head" style="--kind:${k.colour}">${esc(k.label)}
-          <small>${esc(k.note || "")}</small></h3>
+        <h3 class="kind-head" style="--kind:${k.colour}">${esc(t(`kind:${k.id}:label`, k.label))}
+          <small>${esc(t(`kind:${k.id}:note`, k.note || ""))}</small></h3>
         ${prods.filter((p) => p.kind === k.id).map(card).join("")}
         ${builderCard(k)}`).join(""))
     || (featureHtml ? "" :
@@ -681,24 +696,24 @@ function drawSideMenu() {
   // Browse first: the shopper picks a lane, then sees the faces. Putting the
   // tiles above the filters made people scroll past the filters entirely.
   let html = `<div class="menu-headline">${t("shop_cta")}</div>` +
-    '<div class="side-group">All products</div><div class="menu-cols">' +
+    '<div class="side-group">' + esc(t("all_products")) + '</div><div class="menu-cols">' +
     `<a class="side-item" href="/#shop" data-close data-colnav="">${
-      ico("bag", "ico ico-sm")} Everything</a>`;
+      ico("bag", "ico ico-sm")} ${t("everything")}</a>`;
   // Then the categories, each its own lane. A menu that lists what a shop
   // sells is a menu you can shop from; one flat wall of faces is a wall.
   for (const k of (CATALOG.kinds || [])) {
     html += `<a class="side-item" href="/#shop" data-close
       data-kindnav="${k.id}"><span class="swatch"
-      style="background:${k.colour}"></span> ${esc(k.label)}</a>`;
+      style="background:${k.colour}"></span> ${esc(t(`kind:${k.id}:label`, k.label))}</a>`;
   }
   for (const c of CATALOG.collections) {
     html += `<a class="side-item" href="/#shop" data-close
-      data-colnav="${c.id}">${c.name}</a>`;
+      data-colnav="${c.id}">${esc(t(`collection:${c.id}:name`, c.name))}</a>`;
   }
   html += "</div>";                     // closes .menu-cols
   const kase = CATALOG.products.find(isCase);
   if (kase) {
-    html += '<div class="side-group">The case</div>' +
+    html += '<div class="side-group">' + esc(t("the_case")) + '</div>' +
       `<a class="menu-tile wide" href="/product/${kase.id}-${kase.slug}"
         style="--flavour:${flavourOf(kase)}">
         ${art(kase, "art", false)}
@@ -717,7 +732,7 @@ function drawSideMenu() {
   for (const g of groups) {
     if (g.label) {
       html += `<div class="side-group" style="--kind:${g.colour}">
-        ${esc(g.label)}${g.note ? ` <small>${esc(g.note)}</small>` : ""}
+        ${esc(t(`kind:${g.id}:label`, g.label))}${g.note ? ` <small>${esc(t(`kind:${g.id}:note`, g.note))}</small>` : ""}
         </div>`;
     }
     html += '<div class="menu-tiles">';

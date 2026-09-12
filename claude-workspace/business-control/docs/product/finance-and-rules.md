@@ -533,6 +533,17 @@ picker with display rates. What it lacked was the rest of localisation.
   button changes the page the first time it is used. A merchant's own
   translation of any word wins over the shipped one, key by key, and
   their products and pages are theirs to translate on the same screen.
+- **Your content translates too, and a machine can do the first pass.**
+  Products, collections, product kinds, menu labels, pages and every
+  section's words are listed as keys on the same Translations screen.
+  The server renders the menu, the sections and the pages in the
+  visitor's language — from the cookie the page writes, or `?lang=` —
+  so nothing is swapped after the fact and the html tag says the
+  language. Connect a translator on Store admin → Languages (DeepL, or a
+  LibreTranslate server) and one button fills what a language lacks;
+  what the machine wrote is marked as the machine's, shown as such, and
+  replaced the moment you type the real thing. The interface's own words
+  are never sent — those ship translated.
 - **Languages are a setting.** Store admin → Languages: a code, the name
   in its own language, and which way it reads. With nothing chosen, all
   six are offered; a merchant who wants two keeps two. Right-to-left
@@ -628,11 +639,11 @@ bounds.
 - **Annual report**: the year before sits beside each number and behind
   each month's bar; there are no charts beyond that, and the books
   section needs journals to have been posted.
-- **Localisation**: translations are typed, not machine-made. Order
-  receipts and shipping mails go out in the language the shopper was
-  reading in, with money in its conventions, and the checkout shapes
-  the address for the country picked; other mails stay in the base
-  language.
+- **Localisation**: a machine fill is a first pass, not a translation;
+  it is marked so and meant to be read over. Order receipts and shipping
+  mails go out in the shopper's language; other mails stay in the base
+  language. The provider's own sales pages (plans, pricing, how a build
+  runs) are templates in English.
 - **Health**: no claims, no e-prescribing, no lab interfaces. Files on
   a record are encrypted on disk (AES-256-GCM, a key of the install's
   own under `data/<tenant>/keys/` or `BC_HEALTH_KEY_DIR`); the database
