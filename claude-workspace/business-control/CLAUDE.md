@@ -178,6 +178,14 @@ Things to know before touching them:
   (`students.run_reminders`, dedup via notification keys), there is no
   scheduler in this app. Order mails use `content.strings_for(con,
   locale)` + `fmt_money`; the order and the user carry `locale`.
+- `traffic.py` is the request log and the door. `traffic_guard` is the
+  middleware added just BEFORE `resolve_tenant` in main.py (so it runs
+  inside the tenant context, outside audit/locale); it calls
+  `_trf.decide` first and answers 403 before any handler. Log lines are
+  buffered per tenant and flushed in batches (`record`/`flush`); the
+  screen flushes before it reads. Rules cache for 5 s (`_forget_rules`
+  after a write). Auto-bans (`note_rate`) never fire for loopback. The
+  tab is `traffic` under Company; `audit` moved to Team to make room.
 - **Adding a capability touches six places**: the price book table, the
   parser's count in `pricebook.py`, `CAP_NAMES`, `TAB_CAP` and
   `CAP_LABEL`, the client capability menu, and the sales deck's price

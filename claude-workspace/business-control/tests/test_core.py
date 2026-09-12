@@ -10461,4 +10461,106 @@ ok(_rp["dropped"] >= 1 and f"product:{_pde_id}:name" not in
    "English, junk reads as junk")
 _cc = _db.connect(); _cc.execute("DELETE FROM translations WHERE locale='it'"); _cc.execute("DELETE FROM store_meta WHERE k='mt'"); _cc.commit(); _cc.close()
 
+# --- traffic: every request written down, and the door with a list ---
+from erp.backend import traffic as _trf  # noqa: E402
+_CFGH["trust_forwarded_for"] = True          # the test client has no address of its own
+_XF = lambda ip: {"X-Forwarded-For": ip}     # noqa: E731
+ok(c.get("/api/traffic", headers=_WCU).status_code == 403,
+   "the door is the owner's and the admin's")
+c.get("/api/products", headers=_XF("203.0.113.10"))
+c.get("/no/such/page", headers=_XF("203.0.113.10"))
+_tp = c.get("/api/traffic?minutes=5", headers={**A, **_XF("203.0.113.1")}).json()
+_mine = [r for r in _tp["recent"] if r["ip"] == "203.0.113.10"]
+ok(len(_mine) >= 2 and {r["path"] for r in _mine} >= {"/api/products", "/no/such/page"}
+   and any(r["status"] == 404 for r in _mine) and all("kind" in r and r["ms"] >= 0 for r in _mine),
+   "every request is written down: who, what, how it went, how long")
+ok(not any(r["path"].startswith("/vendor/") for r in _tp["recent"])
+   and _tp["settings"]["log_assets"] is False,
+   "assets are not logged unless asked — noise")
+ok(any(t["ip"] == "203.0.113.10" and t["n"] >= 2 and t["sample_paths"] for t in _tp["talkers"]),
+   "and the screen says who is asking the most, with what they asked for")
+ok(_trf.classify({"ua": "Mozilla/5.0 (compatible; Googlebot/2.1)", "n": 3, "paths": 3, "errors": 0}) == "bot, says so"
+   and _trf.classify({"ua": "", "n": 3, "paths": 3, "errors": 0}) == "no user agent"
+   and _trf.classify({"ua": "Mozilla", "n": 200, "paths": 80, "errors": 0}) == "crawling"
+   and _trf.classify({"ua": "Mozilla", "n": 10, "paths": 3, "errors": 8}) == "mostly errors",
+   "each address is described by how it behaves, not judged")
+# the door
+ok(c.post("/api/traffic/rules", headers=A, json={"target": "ip", "value": "203.0.113.10"}).status_code == 400,
+   "a ban needs a reason")
+ok(c.post("/api/traffic/rules", headers=A, json={"target": "ip", "value": "not-an-ip", "reason": "x"}).status_code == 400,
+   "and an address that is one")
+_ban = c.post("/api/traffic/rules", headers=A, json={
+    "target": "ip", "value": "203.0.113.10", "reason": "hammering the checkout (test)", "hours": 1}).json()
+ok(_ban["ok"] and c.get("/api/products", headers=_XF("203.0.113.10")).status_code == 403
+   and c.get("/", headers=_XF("203.0.113.10")).status_code == 403
+   and c.get("/api/products", headers=_XF("203.0.113.11")).status_code == 200,
+   "a banned address is refused everywhere, before any handler; its neighbour is not")
+_tp = c.get("/api/traffic?minutes=5&status=blocked", headers={**A, **_XF("203.0.113.1")}).json()
+ok(any(r["ip"] == "203.0.113.10" and r["blocked"] for r in _tp["recent"])
+   and next(r for r in _tp["rules"] if r["id"] == _ban["id"])["hits"] >= 2,
+   "a refused request is logged as refused, and the rule counts its hits")
+c.post("/api/traffic/rules", headers=A, json={"target": "ip", "value": "203.0.113.0/28", "reason": "the whole block (test)"})
+ok(c.get("/api/products", headers=_XF("203.0.113.14")).status_code == 403
+   and c.get("/api/products", headers=_XF("203.0.113.20")).status_code == 200,
+   "a network ban covers the range and nothing past it")
+c.post("/api/traffic/rules", headers=A, json={"target": "ua", "value": "EvilScraper", "reason": "scraper (test)"})
+ok(c.get("/api/products", headers={**_XF("203.0.113.30"), "User-Agent": "EvilScraper/1.0"}).status_code == 403
+   and c.get("/api/products", headers={**_XF("203.0.113.30"), "User-Agent": "Mozilla/5.0"}).status_code == 200,
+   "a user agent can be refused")
+c.post("/api/traffic/rules", headers=A, json={"target": "path", "value": "/xmlrpc", "reason": "never ours (test)"})
+ok(c.get("/xmlrpc.php", headers=_XF("203.0.113.31")).status_code == 403, "and a path")
+# the allow list, the sharp tool
+_al = c.post("/api/traffic/rules", headers=A, json={
+    "kind": "allow", "target": "ip", "value": "203.0.113.100", "scope": "/ops", "reason": "the office (test)"}).json()
+ok(c.get("/ops/", headers=_XF("203.0.113.40")).status_code == 403
+   and c.get("/ops/", headers=_XF("203.0.113.100")).status_code == 200
+   and c.get("/", headers=_XF("203.0.113.40")).status_code == 200,
+   "an allow list on /ops locks /ops to the listed addresses and touches nothing else")
+c.delete(f"/api/traffic/rules/{_al['id']}", headers=A)
+ok(c.get("/ops/", headers=_XF("203.0.113.40")).status_code == 200, "lifting it opens the door again")
+# expiry
+_dcon = _db.connect()
+_dcon.execute("UPDATE access_rules SET expires_at=? WHERE id=?", (_t0.time() - 1, _ban["id"])); _dcon.commit(); _dcon.close()
+_trf._forget_rules()
+ok(c.get("/api/products", headers=_XF("203.0.113.10")).status_code == 403,
+   "(the /28 still covers .10)")
+_dcon = _db.connect(); _dcon.execute("DELETE FROM access_rules WHERE reason LIKE '%(test)%'"); _dcon.commit(); _dcon.close()
+_trf._forget_rules()
+ok(c.get("/api/products", headers=_XF("203.0.113.10")).status_code == 200,
+   "an expired or lifted ban lets the address back in")
+# automatic bans
+ok(c.get("/wp-login.php", headers=_XF("203.0.113.50")).status_code == 404
+   and c.get("/api/products", headers=_XF("203.0.113.50")).status_code == 403,
+   "one request for /wp-login.php is a scanner: banned for a day without anyone looking")
+_auto = [r for r in c.get("/api/traffic", headers={**A, **_XF("203.0.113.1")}).json()["rules"]
+         if r["value"] == "203.0.113.50"]
+ok(_auto and _auto[0]["auto"] and "automatic" in _auto[0]["reason"] and _auto[0]["expires_at"] > _t0.time(),
+   "marked as the guard's own, with the reason and an expiry")
+c.post("/api/traffic/settings", headers=A, json={"patch": {"rate_per_minute": 5, "rate_ban_minutes": 1}})
+for _i in range(8):
+    c.get("/api/products", headers=_XF("203.0.113.60"))
+ok(c.get("/api/products", headers=_XF("203.0.113.60")).status_code == 403,
+   "more requests in a minute than a person makes earns a short ban")
+ok(c.get("/wp-login.php").status_code == 404 and c.get("/api/products").status_code == 200,
+   "but never for this machine itself — an operator cannot lock the box out")
+c.post("/api/traffic/settings", headers=A, json={"patch": {"rate_per_minute": 300, "rate_ban_minutes": 30}})
+ok(c.post("/api/traffic/settings", headers=A, json={"patch": {"keep_days": "soon"}}).status_code == 400,
+   "a setting that is a number is a number")
+_csv = c.get("/api/traffic/export.csv?minutes=60", headers={**A, **_XF("203.0.113.1")})
+ok(_csv.status_code == 200 and "text/csv" in _csv.headers["content-type"]
+   and _csv.text.splitlines()[0].startswith("at,ip,method,path")
+   and "203.0.113.10" in _csv.text,
+   "the log exports as CSV")
+ok(not any(k in _csv.text for k in ("Authorization", "Bearer", _wc["token"])),
+   "and never a token, a cookie or a body")
+_dcon = _db.connect(); _dcon.execute("DELETE FROM access_rules"); _dcon.commit(); _dcon.close(); _trf._forget_rules()
+_CFGH["trust_forwarded_for"] = False
+ok('"traffic"' in _ops and "traffic: renderTraffic" in _ops and "data-trfban" in _ops
+   and 'id="trf-save"' in _ops,
+   "the screen is on the rail under Company with a Ban button beside each address")
+_tabs_src2 = _ops[_ops.index("const TABS = ["):_ops.index("\n];", _ops.index("const TABS = ["))]
+ok('id: "audit", label: "Audit log", icon: "shield2", group: "Team"' in _tabs_src2,
+   "and the audit log moved to Team — who did what is about the team")
+ok("/api/traffic/*" in _mcpt.EXCLUDED, "the agent door does not reach the log or the bans")
+
 done("core")

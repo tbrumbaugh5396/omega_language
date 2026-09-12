@@ -85,10 +85,11 @@ def _init_core(tid=None):
         from . import civics as _civ
         from . import finance as _fin, onboarding as _onb, payroll as _pay
         from . import cameras as _cam, health as _hea, ideas as _ide, reports as _rep
+        from . import traffic as _trf
         # onboarding after hiring: it adds columns to hiring's table and
         # seeds a template from hiring's own list.
         for _m in (_ads, _hir, _mkt, _lst, _ink, _acc, _tre, _lgl, _aut,
-                   _fin, _pay, _onb, _civ, _ide, _cam, _rep, _hea):
+                   _fin, _pay, _onb, _civ, _ide, _cam, _rep, _hea, _trf):
             _m.init_tables(con)
         con.commit()
         con.close()
@@ -191,6 +192,82 @@ async def note_page_loads(request: Request, call_next):
                 con.close()
     except Exception:                                        # noqa: BLE001
         pass                          # a log must never cost a page
+    return response
+
+
+@app.middleware("http")
+async def traffic_guard(request: Request, call_next):
+    """Every request written down, and the door checked first.
+
+    Inside the tenant context (added before resolve_tenant) so the log
+    and the rules are the tenant's own; outside everything else so a
+    banned address costs one lookup and no handler runs. The log line is
+    queued, not written, so no request waits on a disk write for its own
+    record; a request the log cannot keep still gets its answer.
+    """
+    from . import traffic as _trf
+    path = request.url.path
+    if path.startswith("/api/node/") or path == "/caddy/ask":
+        return await call_next(request)
+    t0 = time.time()
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent", "")
+    con = None
+    try:
+        con = db.connect()
+        s = _trf._cached_settings(con)
+        allowed, rule = (True, None)
+        if s.get("enabled"):
+            allowed, rule = _trf.decide(con, ip, ua, path)
+    except Exception:                                        # noqa: BLE001
+        s, allowed, rule = _trf.SETTINGS_DEFAULT, True, None
+    finally:
+        if con is not None:
+            con.close()
+    if not allowed:
+        response = JSONResponse({"detail": "refused: " + (rule.get("reason") or "by rule")},
+                                status_code=403)
+        try:
+            con = db.connect()
+            con.execute("UPDATE access_rules SET hits=hits+1, last_hit=? WHERE id=?",
+                        (time.time(), rule["id"]))
+            con.commit(); con.close()
+        except Exception:                                    # noqa: BLE001
+            pass
+    else:
+        response = await call_next(request)
+    if not s.get("enabled"):
+        return response
+    kind = _trf._kind_of(path)
+    if kind == "asset" and not s.get("log_assets"):
+        return response
+    user_id = 0
+    tok = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if tok:
+        try:
+            con = db.connect()
+            u = auth.user_for_token(con, tok)
+            user_id = u["id"] if u else 0
+            con.close()
+        except Exception:                                    # noqa: BLE001
+            pass
+    try:
+        _trf.record(_trf._con_for, ip=ip, method=request.method, path=path,
+                    query=str(request.url.query or ""), status=response.status_code,
+                    ms=int((time.time() - t0) * 1000), ua=ua,
+                    referer=request.headers.get("referer", ""), user_id=user_id,
+                    blocked=not allowed, rule_id=(rule or {}).get("id", 0))
+        if allowed:
+            why, detail = _trf.note_rate(ip, path, response.status_code, s)
+            if why and not _loopback(ip):
+                con = db.connect()
+                hours = (s.get("probe_ban_hours", 24) if why == "probe"
+                         else s.get("rate_ban_minutes", 30) / 60)
+                _trf.add_rule(con, kind="deny", target="ip", value=ip, hours=hours,
+                              reason=f"automatic: {detail}", by="the guard", auto=True)
+                con.close()
+    except Exception:                                        # noqa: BLE001
+        pass                          # a log must never cost a request
     return response
 
 
@@ -6773,11 +6850,11 @@ app.include_router(presentations.router)
 from . import ads, hiring, intake, listings, marketplaces  # noqa: E402  (safe: included late)
 from . import accounting, automation, legal, treasury  # noqa: E402  (safe: included late)
 from . import civics, finance, onboarding, payroll  # noqa: E402  (safe: included late)
-from . import cameras, health, ideas, labels, reports  # noqa: E402  (safe: included late)
+from . import cameras, health, ideas, labels, reports, traffic  # noqa: E402  (safe: included late)
 for _fam in (ads, hiring, marketplaces, listings, intake,
              accounting, treasury, legal, automation,
              finance, payroll, onboarding, civics, ideas, cameras, labels,
-             reports, health):
+             reports, health, traffic):
     app.include_router(_fam.router)
 
 

@@ -2411,3 +2411,15 @@ body.lane-on { overflow: hidden; }
 .tk-peek img, .tk-peek video { max-width: 100%; max-height: 360px; border-radius: var(--r-sm); }
 .tk-peek iframe { width: 100%; height: 420px; border: 1px solid var(--line); border-radius: var(--r-sm); }
 .tk-peek pre { max-height: 300px; overflow: auto; background: var(--panel2); padding: 8px; border-radius: var(--r-sm); font-size: 12px; }
+
+
+/* Traffic: filters in a row, the log dense, a refused row marked. */
+.trf-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 10px 14px; }
+.trf-filters input, .trf-filters select { min-width: 120px; }
+.trf-log td { font-size: 12.5px; padding: 4px 8px; }
+.trf-blocked td { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.trf-ua { font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trf-settings { padding: 12px 16px; }
+.trf-settings label { display: block; margin: 6px 0; }
+.trf-settings input[type=number] { width: 120px; }
+.trf-settings textarea { width: 100%; }

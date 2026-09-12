@@ -618,6 +618,34 @@ filed elsewhere. Not diagnostic: a note is what the practitioner typed.
 Nothing here is emailed. The agent door names the whole of it as out of
 bounds.
 
+## Traffic — every request written down, and a door with a list
+
+Every request to the install is logged as it happens — the address,
+the method, the path, how it went, how long it took, the user agent,
+the referer, and the account if one was signed in. Never the body, a
+cookie or a token: a log that held those would be the leak it was meant
+to catch. Under Company, **Traffic & bans** shows the last hour, the
+last day, who is asking the most and what each of them looks like — a
+bot that says so, no user agent at all, crawling, mostly errors, signed
+in, a visitor — with the paths each asked for, and beside each one the
+buttons: ban this address, block this user agent, refuse this path, for
+an hour, a day, a week or for good, always with a reason.
+
+**Rules are checked before anything else the server does**, so a
+banned address costs one lookup and nothing more. Deny rules refuse.
+An allow list is the sharp tool: once any address is allowed for a
+scope such as /ops, only listed addresses may open it — off until
+somebody turns it on, because an allow list missing the operator's own
+address locks the operator out.
+
+**Automatic bans are for what needs no judgement.** An address asking
+for /wp-login.php, /.env or /phpmyadmin is not a customer; an address
+making more requests in a minute than a person could, or collecting
+errors faster than a person could, is not a person. Both earn a
+temporary ban with the reason written down, both can be lifted, and the
+thresholds and the probe list are the operator's to edit. The log is
+kept for a fortnight by default and exports as CSV.
+
 ## What these still stop short of
 
 - **Accounting**: no tax computation, no bank feed.
@@ -668,6 +696,10 @@ bounds.
   counter kiosk at /health/kiosk signs nobody in: a name and date of
   birth together, or the card's code, mark an arrival and show nothing
   else, and every miss gets the same answer.
+- **Traffic**: the address is what the proxy reports and is a household
+  as often as a person; no geolocation, no reverse lookup, no CAPTCHA.
+  Behind a CDN, bans by address need the CDN's own client header named
+  in config, as the kiosk check does.
 - **Leaving**: it closes what this install controls. Accounts in other
   systems are somebody's list item, not something this can revoke.
 
