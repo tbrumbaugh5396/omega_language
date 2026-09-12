@@ -10399,4 +10399,32 @@ _cc.execute("UPDATE products SET description='' WHERE id=?", (_pde_id,))
 _cc.execute("DELETE FROM translations WHERE locale IN ('it','fr','de')")
 _cc.execute("DELETE FROM store_meta WHERE k IN ('mt','i18n')"); _cc.commit(); _cc.close()
 
+# --- translators that are Python packages, not APIs ---
+ok([e["id"] for e in _ct.mt_settings(_db.connect())["engines"]][:2] == ["argos", "nllb"]
+   and "pip install" in _ct.MT_ENGINES["argos"]["hint"],
+   "two engines run inside the process — a pip package, no server, no key — and are offered first")
+import sys as _sys2
+_saved_mod = {k: _sys2.modules.get(k) for k in ("argostranslate", "argostranslate.package", "argostranslate.translate")}
+for k in _saved_mod:
+    _sys2.modules[k] = None                       # makes `import argostranslate…` raise ImportError
+try:
+    try:
+        _ct._argos(["hello"], "es"); _argos_msg = ""
+    except Exception as e:                         # noqa: BLE001
+        _argos_msg = getattr(e, "detail", str(e))
+finally:
+    for k, v in _saved_mod.items():
+        if v is None:
+            _sys2.modules.pop(k, None)
+        else:
+            _sys2.modules[k] = v
+ok("pip install argostranslate" in _argos_msg,
+   "without the package installed, the engine says what to install rather than crashing")
+ok(_ct.NLLB_CODES["ar"] == "arb_Arab" and _ct.NLLB_CODES["zh-tw"] == "zho_Hant"
+   and all(c in _ct.NLLB_CODES for c, _ in _ct.LANGUAGES),
+   "and every language in the catalogue has an NLLB code")
+_h2 = _sp2.run([sys.executable, "scripts/translate.py", "--help"], capture_output=True, text=True,
+               cwd=str(ROOT), env={**os.environ, "PYTHONPATH": "src"})
+ok("argos" in _h2.stdout and "nllb" in _h2.stdout, "the command line offers them")
+
 done("core")

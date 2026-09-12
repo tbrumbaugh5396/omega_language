@@ -552,10 +552,14 @@ picker with display rates. What it lacked was the rest of localisation.
   menu and kind — goes to the engine in batches sized by characters,
   HTML apart from text; an answer that lost a placeholder or a tag is
   dropped rather than kept; what survives is written as the machine's;
-  run again, only what is still missing is sent. Four engines: the
-  node's own LibreTranslate (offline, about thirty languages), DeepL,
-  any OpenAI-compatible endpoint, or Claude — the last two reach every
-  language. The same runs from the command line for a whole list:
+  run again, only what is still missing is sent. Six engines, two of
+  them Python packages that run inside the install with no server and
+  no key: Argos Translate (the engine under LibreTranslate; about forty
+  languages, a 100 MB model each, downloaded on first use, offline after)
+  and NLLB (Meta's two-hundred-language model, 2.5 GB, wants transformers
+  and torch); then the node's own LibreTranslate, DeepL, any
+  OpenAI-compatible endpoint, or Claude — the LLMs reach every language
+  and read best. The same runs from the command line for a whole list:
   `scripts/translate.py --tenant studio --locales all --engine anthropic --key …`.
 - **Languages are a setting.** Store admin → Languages: a code, the name
   in its own language, and which way it reads. With nothing chosen, all

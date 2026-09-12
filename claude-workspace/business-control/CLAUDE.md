@@ -149,7 +149,10 @@ Things to know before touching them:
   catalogue is `content.LANGUAGES`; `fill_many` / `offer_languages` /
   `scripts/translate.py` run the same algorithm for a list; `_intact`
   drops answers that lost a placeholder or tag; the LLM engines
-  (`openai`, `anthropic`) ask for a JSON array and check its length.
+  (`openai`, `anthropic`) ask for a JSON array and check its length;
+  `argos` and `nllb` are in-process (lazy imports, models cached in
+  `_ARGOS_READY` / `_NLLB`; a missing package is a 400 naming the pip
+  install, never a crash).
 - `health.py` is the Health capability (31st; the count is pinned in
   `pricebook.py`, five places in test_platform, two in test_studio, the
   deck `_D_ID`). Access is `auth.office(user, "health")` — a NAMED

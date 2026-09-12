@@ -11,3 +11,7 @@ fpdf2>=2.8
 # Rows in Postgres (optional: only when the install's store is postgres, or
 # BC_STORE=postgres). The SQLite face stays the default and needs nothing.
 psycopg[binary]>=3.2
+# Translating the shop without a server or a key (optional): Argos Translate
+# runs in this process and downloads a model per language on first use.
+# NLLB (200 languages) wants transformers + torch + sentencepiece on top.
+# argostranslate>=1.9

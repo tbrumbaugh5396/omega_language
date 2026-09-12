@@ -2,7 +2,8 @@
 """Translate a shop into every major language, from the command line.
 
     PYTHONPATH=src .venv/bin/python scripts/translate.py --tenant studio \\
-        --locales all --engine anthropic --key sk-ant-… [--model claude-sonnet-5]
+        --locales all --engine argos                # a pip package, no key, offline
+    …/translate.py --tenant studio --locales all --engine anthropic --key sk-ant-…
 
     …/translate.py --tenant studio --locales es,fr,de --dry-run
     …/translate.py --tenant studio --locales all --force-machine
@@ -34,8 +35,9 @@ def main() -> int:
     ap.add_argument("--locales", default="all",
                     help="comma-separated codes, or 'all' for every major language, "
                          "or 'offered' for what the shop already offers")
-    ap.add_argument("--engine", choices=("libretranslate", "deepl", "openai", "anthropic"),
-                    help="which translator; omit to use the one saved on the tenant")
+    ap.add_argument("--engine", choices=("argos", "nllb", "libretranslate", "deepl", "openai", "anthropic"),
+                    help="which translator; omit to use the one saved on the tenant. "
+                         "argos and nllb are Python packages run in this process — no server, no key")
     ap.add_argument("--key", default="", help="the engine's API key")
     ap.add_argument("--url", default="", help="the engine's address, where one is needed")
     ap.add_argument("--model", default="", help="the model, for an LLM engine")

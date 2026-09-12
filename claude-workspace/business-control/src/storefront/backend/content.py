@@ -259,6 +259,15 @@ def content_keys(con) -> dict:
 # and overwritten the moment somebody types the real thing. The
 # interface's own words are never sent — those shipped translated.
 MT_ENGINES = {
+    "argos": {"label": "Argos Translate (in this process, no server, no key)", "url": "",
+              "hint": "The open-source engine under LibreTranslate, run inside this install: "
+                      "pip install argostranslate, then each language's model (about 100 MB) "
+                      "downloads itself the first time it is asked for. Offline after that. "
+                      "About forty languages, all through English."},
+    "nllb": {"label": "NLLB (Meta's 200-language model, in this process)", "url": "",
+             "hint": "pip install transformers torch sentencepiece; the model (about 2.5 GB, "
+                     "facebook/nllb-200-distilled-600M) downloads on first use. Slow on a "
+                     "laptop CPU, fine on a server, and speaks two hundred languages offline."},
     "libretranslate": {"label": "LibreTranslate (this node's, or yours)", "url": "",
                        "hint": "Blank uses the machine's shared translate service "
                                "(scripts/install_translate.sh) or the tenant's "
@@ -321,9 +330,76 @@ def _mt_cfg(con) -> dict:
         return {}
 
 
-def _mt_call(engine: str, cfg: dict, texts: list, target: str, html: bool = False) -> list:
-    """The one place an outside translator is spoken to. Tests replace it."""
+# Argos and NLLB run inside this process. A model is a few hundred
+# megabytes to a few gigabytes, so it is loaded once and kept; the
+# first request for a language pays for the download, later ones do not.
+_ARGOS_READY: set = set()
+_NLLB: dict = {}
+NLLB_CODES = {
+    "es": "spa_Latn", "fr": "fra_Latn", "de": "deu_Latn", "pt": "por_Latn", "it": "ita_Latn",
+    "nl": "nld_Latn", "sv": "swe_Latn", "da": "dan_Latn", "nb": "nob_Latn", "fi": "fin_Latn",
+    "pl": "pol_Latn", "cs": "ces_Latn", "sk": "slk_Latn", "hu": "hun_Latn", "ro": "ron_Latn",
+    "bg": "bul_Cyrl", "el": "ell_Grek", "tr": "tur_Latn", "ru": "rus_Cyrl", "uk": "ukr_Cyrl",
+    "he": "heb_Hebr", "ar": "arb_Arab", "fa": "pes_Arab", "hi": "hin_Deva", "bn": "ben_Beng",
+    "ur": "urd_Arab", "ta": "tam_Taml", "te": "tel_Telu", "mr": "mar_Deva", "id": "ind_Latn",
+    "ms": "zsm_Latn", "vi": "vie_Latn", "th": "tha_Thai", "ko": "kor_Hang", "ja": "jpn_Jpan",
+    "zh": "zho_Hans", "zh-tw": "zho_Hant", "sw": "swh_Latn", "tl": "tgl_Latn", "en": "eng_Latn",
+}
+
+
+def _argos(texts: list, target: str) -> list:
+    try:
+        import argostranslate.package as P
+        import argostranslate.translate as T
+    except ImportError as e:
+        raise HTTPException(400, "Argos Translate is not installed: pip install "
+                                 "argostranslate, then try again") from e
     lang = target.split("-")[0]
+    if lang == "zh-tw" or target.lower() == "zh-tw":
+        lang = "zt"
+    if lang not in _ARGOS_READY:
+        have = {(p.from_code, p.to_code) for p in P.get_installed_packages()}
+        if ("en", lang) not in have:
+            P.update_package_index()
+            pk = next((p for p in P.get_available_packages()
+                       if p.from_code == "en" and p.to_code == lang), None)
+            if pk is None:
+                raise HTTPException(400, f"Argos has no English → {target} model; use an "
+                                         "LLM engine or NLLB for this language")
+            P.install_from_path(pk.download())
+        _ARGOS_READY.add(lang)
+    return [T.translate(t, "en", lang) for t in texts]
+
+
+def _nllb(texts: list, target: str) -> list:
+    code = NLLB_CODES.get(target.lower()) or NLLB_CODES.get(target.split("-")[0])
+    if not code:
+        raise HTTPException(400, f"NLLB has no code for {target} here")
+    try:
+        if not _NLLB:
+            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            name = "facebook/nllb-200-distilled-600M"
+            _NLLB["tok"] = AutoTokenizer.from_pretrained(name, src_lang="eng_Latn")
+            _NLLB["model"] = AutoModelForSeq2SeqLM.from_pretrained(name)
+    except ImportError as e:
+        raise HTTPException(400, "NLLB needs pip install transformers torch sentencepiece") from e
+    tok, model = _NLLB["tok"], _NLLB["model"]
+    out = []
+    for t in texts:
+        enc = tok(t, return_tensors="pt", truncation=True, max_length=1024)
+        gen = model.generate(**enc, forced_bos_token_id=tok.convert_tokens_to_ids(code),
+                             max_length=1024)
+        out.append(tok.batch_decode(gen, skip_special_tokens=True)[0])
+    return out
+
+
+def _mt_call(engine: str, cfg: dict, texts: list, target: str, html: bool = False) -> list:
+    """The one place a translator is spoken to. Tests replace it."""
+    lang = target.split("-")[0]
+    if engine == "argos":
+        return _argos(texts, target)
+    if engine == "nllb":
+        return _nllb(texts, target)
     if engine == "deepl":
         url = cfg.get("url") or MT_ENGINES["deepl"]["url"]
         dl = {"zh": "ZH", "nb": "NB", "pt": "PT-BR"}.get(lang, lang.upper())
