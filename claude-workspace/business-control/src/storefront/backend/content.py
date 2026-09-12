@@ -8,6 +8,7 @@ more than one market.
 import html as _html
 import contextvars
 import json
+import pathlib
 import re
 import urllib.error
 import urllib.parse
@@ -262,8 +263,9 @@ MT_ENGINES = {
     "argos": {"label": "Argos Translate (in this process, no server, no key)", "url": "",
               "hint": "The open-source engine under LibreTranslate, run inside this install: "
                       "pip install argostranslate, then each language's model (about 100 MB) "
-                      "downloads itself the first time it is asked for. Offline after that. "
-                      "About forty languages, all through English."},
+                      "downloads itself the first time it is asked for. Offline after that; "
+                      "a fraction of a second a string. About forty languages, all through "
+                      "English. Tags and placeholders are kept out of its reach and put back."},
     "nllb": {"label": "NLLB (Meta's 200-language model, in this process)", "url": "",
              "hint": "pip install transformers torch sentencepiece; the model (about 2.5 GB, "
                      "facebook/nllb-200-distilled-600M) downloads on first use. Slow on a "
@@ -347,7 +349,39 @@ NLLB_CODES = {
 }
 
 
+_TOKEN = re.compile(r"(<[^<>]+>|\{[a-z_]+\}|&[a-z]+;|&#\d+;)")
+
+
+def _translate_guarded(translate_one, texts: list) -> list:
+    """Run a plain-text engine over strings that carry HTML tags and
+    {placeholders} without letting it see either. Each string is cut at
+    every tag, entity and placeholder; only the prose between them goes
+    to the engine; the pieces are put back exactly where they were.
+    That is how a statistical engine that would otherwise eat <b> and
+    {oid} gets to translate a receipt and a table."""
+    out = []
+    for text in texts:
+        parts = _TOKEN.split(text)
+        built = []
+        for i, part in enumerate(parts):
+            if i % 2 == 1 or not part.strip():
+                built.append(part)
+                continue
+            lead = part[:len(part) - len(part.lstrip())]
+            trail = part[len(part.rstrip()):]
+            built.append(lead + translate_one(part.strip()) + trail)
+        out.append("".join(built))
+    return out
+
+
 def _argos(texts: list, target: str) -> list:
+    import os
+    # Stanza, the sentence splitter Argos reaches for by default, is a
+    # PyTorch model that took minutes per sentence on a laptop; the
+    # light splitter is a fraction of a second. Set before the import,
+    # and only when the operator has not chosen otherwise.
+    os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
+    os.environ.setdefault("ARGOS_STANZA_AVAILABLE", "0")
     try:
         import argostranslate.package as P
         import argostranslate.translate as T
@@ -368,7 +402,58 @@ def _argos(texts: list, target: str) -> list:
                                          "LLM engine or NLLB for this language")
             P.install_from_path(pk.download())
         _ARGOS_READY.add(lang)
-    return [T.translate(t, "en", lang) for t in texts]
+    fast = _argos_fast(lang)
+    if fast is not None:
+        return _translate_guarded(fast, texts)
+    return _translate_guarded(lambda t: T.translate(t, "en", lang), texts)
+
+
+_CT2: dict = {}
+_SENT = re.compile(r"(?<=[.!?。！？])\s+")
+
+
+def _argos_fast(lang: str):
+    """Argos's own model, driven through CTranslate2 directly: a whole
+    batch of sentences in one pass, int8 on the CPU, beam of two. Ten
+    times what one string at a time gives. Returns a callable that
+    translates one string (its sentences batched), or None when the
+    package layout is not what is expected — then Argos's own call is
+    used, slower but right."""
+    if lang in _CT2:
+        return _CT2[lang]
+    try:
+        import ctranslate2
+        import sentencepiece as spm
+        import argostranslate.package as P
+        pkg = next(p for p in P.get_installed_packages()
+                   if p.from_code == "en" and p.to_code == lang)
+        root = pathlib.Path(pkg.package_path)
+        sp = spm.SentencePieceProcessor(model_file=str(root / "sentencepiece.model"))
+        tr = ctranslate2.Translator(str(root / "model"), device="cpu",
+                                    compute_type="int8", inter_threads=1, intra_threads=0)
+    except Exception:                                        # noqa: BLE001
+        _CT2[lang] = None
+        return None
+
+    def one(text: str) -> str:
+        sents = [x for x in _SENT.split(text) if x.strip()] or [text]
+        toks = [sp.encode(x, out_type=str) for x in sents]
+        res = tr.translate_batch(toks, beam_size=2, max_batch_size=32,
+                                 max_decoding_length=512)
+        return " ".join(sp.decode(r.hypotheses[0]) for r in res)
+    _CT2[lang] = one
+    return one
+
+
+def translate_batch_fast(texts: list, lang: str) -> list:
+    """Many strings at once through the batched path: every sentence of
+    every string in one CTranslate2 call, then reassembled. What the
+    fill uses when Argos is the engine and the model is on disk."""
+    fast = _argos_fast(lang)
+    if fast is None:
+        return None
+    import sentencepiece  # noqa: F401  (present if fast is)
+    return _translate_guarded(fast, texts)
 
 
 def _nllb(texts: list, target: str) -> list:
@@ -384,13 +469,13 @@ def _nllb(texts: list, target: str) -> list:
     except ImportError as e:
         raise HTTPException(400, "NLLB needs pip install transformers torch sentencepiece") from e
     tok, model = _NLLB["tok"], _NLLB["model"]
-    out = []
-    for t in texts:
+
+    def one(t: str) -> str:
         enc = tok(t, return_tensors="pt", truncation=True, max_length=1024)
         gen = model.generate(**enc, forced_bos_token_id=tok.convert_tokens_to_ids(code),
                              max_length=1024)
-        out.append(tok.batch_decode(gen, skip_special_tokens=True)[0])
-    return out
+        return tok.batch_decode(gen, skip_special_tokens=True)[0]
+    return _translate_guarded(one, texts)
 
 
 def _mt_call(engine: str, cfg: dict, texts: list, target: str, html: bool = False) -> list:

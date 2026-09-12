@@ -152,7 +152,13 @@ Things to know before touching them:
   (`openai`, `anthropic`) ask for a JSON array and check its length;
   `argos` and `nllb` are in-process (lazy imports, models cached in
   `_ARGOS_READY` / `_NLLB`; a missing package is a 400 naming the pip
-  install, never a crash).
+  install, never a crash). Argos is driven through CTranslate2
+  directly (`_argos_fast`: int8, beam 2, sentences batched) with Stanza
+  OFF (`ARGOS_CHUNK_TYPE=MINISBD`) — Stanza took minutes a sentence on
+  a laptop. Plain-text engines never see tags or `{placeholders}`:
+  `_translate_guarded` cuts at them and puts them back. In-process
+  engines hang the interpreter at exit (native thread pools):
+  `scripts/translate.py` ends with `os._exit`.
 - `health.py` is the Health capability (31st; the count is pinned in
   `pricebook.py`, five places in test_platform, two in test_studio, the
   deck `_D_ID`). Access is `auth.office(user, "health")` — a NAMED

@@ -47,7 +47,42 @@ def main() -> int:
     ap.add_argument("--no-offer", action="store_true", help="fill without adding to the picker")
     ap.add_argument("--no-save", action="store_true", help="do not keep the engine on the tenant")
     ap.add_argument("--ui-only", action="store_true", help="only the interface's words")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="languages to run at once, each its own process (an in-process "
+                         "engine is one core per language; use the number of cores)")
+    ap.add_argument("--prepare", action="store_true",
+                    help="only download the models the languages need (argos), translate nothing")
     args = ap.parse_args()
+
+    if args.jobs > 1 and not args.dry_run:
+        # Fan out: one child per language, this process only collects.
+        import subprocess
+        codes = ([c for c, _ in __import__("storefront.backend.content", fromlist=["LANGUAGES"]).LANGUAGES if c != "en"]
+                 if args.locales == "all" else
+                 [c.strip().lower() for c in args.locales.split(",") if c.strip() and c.strip() != "en"])
+        base = [sys.executable, str(ROOT / "scripts" / "translate.py"), "--jobs", "1", "--no-save"]
+        for flag in ("--tenant", "--engine", "--key", "--url", "--model"):
+            v = getattr(args, flag[2:])
+            if v:
+                base += [flag, v]
+        for flag in ("--force-machine", "--no-offer", "--ui-only", "--prepare"):
+            if getattr(args, flag[2:].replace("-", "_")):
+                base.append(flag)
+        running, rc = [], 0
+        while codes or running:
+            while codes and len(running) < args.jobs:
+                c = codes.pop(0)
+                running.append((c, subprocess.Popen(base + ["--locales", c], stdout=subprocess.PIPE,
+                                                    stderr=subprocess.STDOUT, text=True)))
+            for c, pr in list(running):
+                if pr.poll() is not None:
+                    out = pr.stdout.read()
+                    print("".join(ln + "\n" for ln in out.splitlines() if ln[:8].strip() == c or "translations" in ln), end="")
+                    rc |= pr.returncode
+                    running.remove((c, pr))
+            import time as _t
+            _t.sleep(0.5)
+        return rc
 
     import json
     from erp.backend import db, tenancy
@@ -80,6 +115,14 @@ def main() -> int:
             codes = [c.strip().lower() for c in args.locales.split(",") if c.strip() and c.strip() != "en"]
         if not args.no_offer and not args.dry_run:
             C.offer_languages(con, codes)
+        if args.prepare:
+            for code in codes:
+                try:
+                    C._argos([""], code)
+                    print(f"{code:<8} model ready")
+                except Exception as e:                        # noqa: BLE001
+                    print(f"{code:<8} {getattr(e, 'detail', e)}")
+            return 0
         print(f"{'language':<8} {'sent':>6} {'kept':>6} {'dropped':>8} {'left':>6}")
         total = 0
         for code in codes:
@@ -105,4 +148,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    code = main()
+    # The in-process engines leave native thread pools that can hold the
+    # interpreter open at exit; the work is done and written, so leave.
+    sys.stdout.flush(); sys.stderr.flush()
+    import os
+    os._exit(code)

@@ -10427,4 +10427,12 @@ _h2 = _sp2.run([sys.executable, "scripts/translate.py", "--help"], capture_outpu
                cwd=str(ROOT), env={**os.environ, "PYTHONPATH": "src"})
 ok("argos" in _h2.stdout and "nllb" in _h2.stdout, "the command line offers them")
 
+_g = _ct._translate_guarded(lambda t: "X" * len(t), ["Hi {name}, <b>part one</b> is &amp; the platform"])[0]
+ok("{name}" in _g and "<b>" in _g and "</b>" in _g and "&amp;" in _g and "part" not in _g
+   and _ct._intact("Hi {name}, <b>part one</b> is &amp; the platform", _g),
+   "a plain-text engine never sees a tag, an entity or a placeholder — the prose between them "
+   "goes out and comes back into the same slots, so the guard passes it")
+ok(_ct._translate_guarded(lambda t: "Y", ["  spaced  "]) == ["  Y  "],
+   "and the spacing around each piece is kept")
+
 done("core")
