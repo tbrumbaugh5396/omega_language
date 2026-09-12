@@ -124,15 +124,18 @@ def main() -> int:
                     print(f"{code:<8} {getattr(e, 'detail', e)}")
             return 0
         print(f"{'language':<8} {'sent':>6} {'kept':>6} {'dropped':>8} {'left':>6}")
-        total = 0
+        total, failed = 0, False
         for code in codes:
             try:
                 r = C.fill_locale(con, code, force_machine=args.force_machine,
                                   dry_run=args.dry_run, include_ui=True)
             except Exception as e:                            # noqa: BLE001
+                # One language the engine lacks does not stop the others;
+                # it is named, and the run ends non-zero so a script notices.
                 detail = getattr(e, "detail", str(e))
                 print(f"{code:<8} {'—':>6} {'—':>6} {'—':>8} {'—':>6}  {detail}")
-                return 1
+                failed = True
+                continue
             if args.dry_run:
                 print(f"{code:<8} {r['would_send']:>6} {'':>6} {'':>8} {'':>6}  ~{r['characters']:,} characters")
             else:
@@ -141,7 +144,7 @@ def main() -> int:
         if not args.dry_run:
             print(f"\n{total} translations written as the machine's across {len(codes)} languages. "
                   f"Read them over on Store admin → Languages; typing a line replaces the machine's.")
-        return 0
+        return 1 if failed else 0
     finally:
         if tok is not None:
             tenancy.CURRENT.reset(tok)
