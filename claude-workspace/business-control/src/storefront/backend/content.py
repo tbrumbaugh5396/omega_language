@@ -302,6 +302,19 @@ def _placeholders(text: str) -> list:
         t.lower() for t in re.findall(r"</?[a-zA-Z][a-zA-Z0-9]*", text))
 
 
+def _degenerate(out: str) -> bool:
+    """A small model sometimes falls into a loop and emits one character
+    or one word over and over. That is not a translation and is not
+    kept: more than half of a longish answer being one repeated
+    character, or one word repeated four times in a row, is the sign."""
+    text = re.sub(r"<[^<>]+>|\{[a-z_]+\}", "", out).strip()
+    if len(text) >= 12:
+        top = max(text.count(ch) for ch in set(text) if not ch.isspace()) if text.strip() else 0
+        if top / max(1, len(text.replace(" ", ""))) > 0.5:
+            return True
+    return bool(re.search(r"(\b\w+\b)(?:\s+\1\b){3,}", text))
+
+
 def _intact(src: str, out: str) -> bool:
     """A machine answer is kept only if it kept the placeholders and the
     tags the source had. A receipt with {oid} gone is not a translation."""
@@ -632,7 +645,7 @@ def fill_locale(con, locale: str, *, limit: int = 2000, force_machine: bool = Fa
                 raise HTTPException(502, f"the translation engine did not answer: {e}") from e
             for k, v in zip(chunk, out):
                 v = str(v or "").strip()
-                if not v or not _intact(want[k], v):
+                if not v or not _intact(want[k], v) or _degenerate(v):
                     dropped += 1
                     continue
                 con.execute(

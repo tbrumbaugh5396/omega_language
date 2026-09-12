@@ -10439,4 +10439,9 @@ ok(_ct._join_pieces(["▁从一个安装中运行整个业务.", "第二句。"]
    and _ct._join_pieces(["▁Hola", "mundo"], "es") == "Hola mundo",
    "a stray word marker never reaches the page, and languages written without spaces are joined without one")
 
+ok(_ct._degenerate("有出出出出出出出出出出出出出出出出出出出出出出") and _ct._degenerate("plan plan plan plan plan")
+   and not _ct._degenerate("从一个安装中运行整个业务.") and not _ct._degenerate("Plan de acción")
+   and not _ct._degenerate("<b>aaa</b> {oid}"),
+   "an answer that is one character or one word over and over is a model in a loop, not a translation, and is dropped")
+
 done("core")
