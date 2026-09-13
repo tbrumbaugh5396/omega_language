@@ -1,0 +1,20 @@
+{
+ "date": "2026-09-13",
+ "commit": "8b46868",
+ "areas": {
+  "sensitive": {
+   "pct": 85.9,
+   "floor": 95.0,
+   "ok": false,
+   "covered": 2992,
+   "total": 3484
+  },
+  "server": {
+   "pct": 81.0,
+   "floor": 85.0,
+   "ok": false,
+   "covered": 20930,
+   "total": 25836
+  }
+ }
+}

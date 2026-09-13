@@ -224,6 +224,77 @@ ok("project-roadmap.md" in (_studio / "procedures" / "weekly-rhythm.md").read_te
    "and the weekly rhythm is what re-sends it — a status document nobody "
    "updates is worse than none, because it reads as current")
 
+# --- the evidence beside the code: review, coverage, test reports -----------
+# The client's stage-08 documents promise a review record with every change,
+# coverage floors, and a test report per release. The internal procedures say
+# how, the templates are what a person fills in, and two scripts make the
+# artifacts under reports/ — so the promise is a thing that runs, not prose.
+_proc = _studio / "procedures"
+for _name, _word in (("code-review.md", "reports/reviews/"),
+                     ("code-coverage.md", "scripts/coverage.py"),
+                     ("test-reports.md", "scripts/test_report.py")):
+    _t = (_proc / _name).read_text()
+    ok(_t.startswith("# ") and "Internal" in _t[:300] and _word in _t,
+       f"procedures/{_name} is internal, and points at what makes its artifact ({_word})")
+    ok(f"({_name})" in (_proc / "README.md").read_text(),
+       f"and the procedures index lists it")
+ok("95%" in (_proc / "code-coverage.md").read_text()
+   and "85%" in (_proc / "code-coverage.md").read_text()
+   and "95%" in (_studio / "templates" / "08-build" / "code-coverage.md").read_text(),
+   "the internal floors are the floors the client was promised")
+ok("../templates/08-build/code-review.md" in (_proc / "code-review.md").read_text(),
+   "the review procedure links the client's view of the same thing")
+_rr = (_proc / "templates" / "review-record.md").read_text()
+ok("Reviewer" in _rr and "| 10 |" in _rr and "Outcome" in _rr,
+   "the review record template carries the reviewer, all ten checklist lines and an outcome")
+ok("Verdict" in (_proc / "templates" / "test-report.md").read_text(),
+   "the hand-written test report template leads with the verdict")
+_ROOT = Path.cwd()
+_rep = _ROOT / "reports"
+ok((_rep / "README.md").exists() and (_rep / "reviews" / "README.md").exists(),
+   "reports/ exists in the tree with its own note and a reviews/ folder")
+import subprocess as _sp, sys as _sys, os as _os
+for _script in ("scripts/coverage.py", "scripts/test_report.py"):
+    _h = _sp.run([_sys.executable, str(_ROOT / _script), "--help"], capture_output=True, text=True,
+                 cwd=_ROOT, env={**_os.environ, "PYTHONPATH": "src"})
+    ok(_h.returncode == 0 and "reports/" in _h.stdout,
+       f"{_script} --help runs and says where its artifact goes")
+# test_report.py reads logs from runs already made — a fake pair proves the
+# parse, and a red date makes a red verdict.
+import tempfile as _tf
+with _tf.TemporaryDirectory() as _d:
+    _sl = Path(_d, "s.log"); _dl = Path(_d, "d.log"); _o = Path(_d, "r.md")
+    _sl.write_text("part core: 10 checks passed\npart studio: 5 checks passed\npart platform: 2 checks passed\n"
+                   "\nall 17 checks passed  (1s, 3 parts in parallel)\n")
+    _dl.write_text("ok    sunday        Sun 2026-01-04\nFAIL  year-end      Wed 2025-12-31\n\n1/2 dates clean\n")
+    _r = _sp.run([_sys.executable, str(_ROOT / "scripts/test_report.py"), "--suite-log", str(_sl),
+                  "--dates-log", str(_dl), "--out", str(_o)], capture_output=True, text=True, cwd=_ROOT,
+                 env={**_os.environ, "PYTHONPATH": "src"})
+    _txt = _o.read_text() if _o.exists() else ""
+    ok(_r.returncode == 1 and _txt.startswith("# Test report") and "**Verdict:** RED" in _txt
+       and "all 17 checks passed" in _txt and "dates 1/2" in _txt and "year-end" in _txt,
+       "a test report from logs: the counts are read, a failed date makes the verdict RED and the exit 1")
+    _dl.write_text("ok    sunday        Sun 2026-01-04\nok    year-end      Wed 2025-12-31\n\n2/2 dates clean\n")
+    _cj = Path(_d, "c.json")
+    _cj.write_text(json.dumps({"date": "2026-01-04", "commit": "abc", "areas": {
+        "sensitive": {"pct": 96.0, "floor": 95.0, "ok": True, "covered": 96, "total": 100},
+        "server": {"pct": 90.0, "floor": 85.0, "ok": True, "covered": 90, "total": 100}}}))
+    _r = _sp.run([_sys.executable, str(_ROOT / "scripts/test_report.py"), "--suite-log", str(_sl),
+                  "--dates-log", str(_dl), "--out", str(_o), "--coverage-json", str(_cj)],
+                 capture_output=True, text=True, cwd=_ROOT, env={**_os.environ, "PYTHONPATH": "src"})
+    _txt = _o.read_text()
+    ok(_r.returncode == 0 and "**Verdict:** GREEN" in _txt and "core 10 · studio 5 · platform 2" in _txt
+       and "sensitive 96.0% (floor 95)" in _txt,
+       "and with every date clean and coverage above its floors the same logs make a GREEN report per part")
+    _cj.write_text(json.dumps({"date": "2026-01-04", "commit": "abc", "areas": {
+        "sensitive": {"pct": 80.0, "floor": 95.0, "ok": False, "covered": 80, "total": 100},
+        "server": {"pct": 90.0, "floor": 85.0, "ok": True, "covered": 90, "total": 100}}}))
+    _r = _sp.run([_sys.executable, str(_ROOT / "scripts/test_report.py"), "--suite-log", str(_sl),
+                  "--dates-log", str(_dl), "--out", str(_o), "--coverage-json", str(_cj)],
+                 capture_output=True, text=True, cwd=_ROOT, env={**_os.environ, "PYTHONPATH": "src"})
+    ok(_r.returncode == 1 and "**Verdict:** RED" in _o.read_text() and "sensitive at 80.0% under its floor 95%" in _o.read_text(),
+       "and coverage under a floor alone makes the verdict RED — a green suite does not paper over it")
+
 # The rate card must never reach a client. The index is hand-edited, so the
 # guarantee is asserted on the document itself rather than on prose elsewhere.
 _rate = (_studio / "templates" / "03-proposal" / "rate-card.md").read_text()

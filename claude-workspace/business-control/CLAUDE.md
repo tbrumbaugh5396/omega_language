@@ -243,6 +243,19 @@ part file directly). Shared prologue lives in `tests/_harness.py` — a
 part must build all of its own state; never lean on another part's.
 Still run the full suite in background with output to a file.
 
+The evidence beside the code lives under `reports/` (tracked):
+`scripts/coverage.py` runs the three parts under `coverage` and writes
+`reports/coverage/<date>.md/.json` with per-area floors (`SENSITIVE`
+modules 95%, rest of `src/` 85%; `--enforce` fails below, `--never`
+lists unreached lines); `scripts/test_report.py` runs the suite and the
+date audit (or reads `--suite-log/--dates-log`) and writes
+`reports/test-report-<date>.md` — verdict first, newest coverage, review
+records from `reports/reviews/` since the last report. The procedures
+(`docs/business-control-b2b-client/procedures/code-review.md`,
+`code-coverage.md`, `test-reports.md`) and the templates under
+`procedures/templates/` are internal; the client's view is stage 08.
+A new module that touches money, stock or a person goes on `SENSITIVE`.
+
 ## Where the rows live
 
 Since 2026-09-09 a tenant's rows can live in Postgres instead of the

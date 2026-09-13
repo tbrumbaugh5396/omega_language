@@ -2,3 +2,6 @@
 # same suite against the real thing with nothing installed on the machine.
 -r requirements.txt
 pgserver>=0.1
+# Measures which lines the suite reached: scripts/coverage.py, the floors
+# in procedures/code-coverage.md.
+coverage>=7.4

@@ -16,6 +16,9 @@ it was written, it isn't finished.
 | [Handing over](handing-over.md) | Whoever finishes it |
 | [Running a care plan](running-a-care-plan.md) | Whoever holds maintenance this month |
 | [Weekly rhythm](weekly-rhythm.md) | Everyone, every week |
+| [Code review](code-review.md) | Whoever reads a change before it merges — and the record they keep |
+| [Code coverage](code-coverage.md) | Whoever measures a release — the areas, the floors, the never-reached list |
+| [Test reports](test-reports.md) | Whoever ships a release — the three artifacts delivered beside the code |
 
 > **These are living documents.** When something goes wrong that a procedure
 > should have caught, fix the procedure the same week — while you still
