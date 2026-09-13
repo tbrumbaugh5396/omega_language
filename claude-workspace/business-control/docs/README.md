@@ -5,6 +5,7 @@ Two halves, and the split is deliberate.
 | | |
 |---|---|
 | [**`product/`**](product/README.md) | How Business Control works, what it costs to run, and the architecture decisions behind it |
+| [**`verification/`**](verification/README.md) | Blank internal templates the team fills per release to verify architecture, code organisation, requirements, behaviour, testing and coverage |
 | [**`business-control-b2b-client/`**](business-control-b2b-client/README.md) | How to sell busines control as a b2b to clients, what the scope of work is, how to build, how to deliver and maintain it for a client |
 
 One describes the thing. 

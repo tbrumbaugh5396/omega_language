@@ -295,6 +295,18 @@ with _tf.TemporaryDirectory() as _d:
     ok(_r.returncode == 1 and "**Verdict:** RED" in _o.read_text() and "sensitive at 80.0% under its floor 95%" in _o.read_text(),
        "and coverage under a floor alone makes the verdict RED — a green suite does not paper over it")
 
+# --- the verification templates: blank masters with repeatable blocks -------
+_ver = _ROOT / "docs" / "verification"
+for _name in ("architecture.md", "code-organization.md", "requirements.md",
+              "behaviour.md", "testing.md", "code-coverage.md"):
+    _t = (_ver / _name).read_text()
+    ok(_t.startswith("# ") and "<!-- repeat:" in _t and "## Sign-off" in _t,
+       f"verification/{_name} is a template: a repeatable block and a sign-off")
+    ok("| **Commit** |" in _t and "**Release**" in _t,
+       f"and it carries the release and commit it is filled for")
+    ok(f"({_name})" in (_ver / "README.md").read_text(), "and the index lists it")
+ok((_ver / "releases" / "README.md").exists(), "filled copies go under releases/<date>/, the masters stay blank")
+
 # The rate card must never reach a client. The index is hand-edited, so the
 # guarantee is asserted on the document itself rather than on prose elsewhere.
 _rate = (_studio / "templates" / "03-proposal" / "rate-card.md").read_text()

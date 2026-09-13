@@ -256,6 +256,12 @@ records from `reports/reviews/` since the last report. The procedures
 `procedures/templates/` are internal; the client's view is stage 08.
 A new module that touches money, stock or a person goes on `SENSITIVE`.
 
+`docs/verification/` holds blank internal templates (architecture, code
+organisation, requirements traceability, behaviour walkthroughs, testing,
+coverage). Each has a repeatable block to copy per module / requirement /
+walkthrough; the team fills them by hand per release into
+`docs/verification/releases/<date>/`. Nothing in them is generated.
+
 ## Where the rows live
 
 Since 2026-09-09 a tenant's rows can live in Postgres instead of the
