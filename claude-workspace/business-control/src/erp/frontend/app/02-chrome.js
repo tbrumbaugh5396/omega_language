@@ -314,12 +314,14 @@ function renderChrome() {
     // Your own name is the obvious way in to your own record — it's where
     // everyone reaches for it.
     who.innerHTML = `<a id="bell" title="notifications">${opsIcon("bell","bell-ic")}${unread
-      ? `<span class="bell-n">${unread}</span>` : ""}</a> ·
+      ? `<span class="bell-n">${unread}</span>` : ""}</a>
+      <a id="settings-link" title="settings: text size, contrast, motion">${opsIcon("gear","bell-ic")}</a> ·
       <a id="me-link" title="your profile">${esc(S.user.name)}</a> ·
       ${esc(roleLabel)}` +
       (S.user.is_admin ? " · admin" : "") + ` · <a id="logout">sign out</a>`;
     $("#logout").onclick = logout;
     $("#bell").onclick = toggleNotifPanel;
+    $("#settings-link").onclick = () => { S.tab = "settings"; render(); };
     $("#me-link").onclick = () => { S.tab = "profile"; render(); };
   } else {
     who.innerHTML = `<a id="login-link">sign in</a>`;
@@ -329,7 +331,7 @@ function renderChrome() {
   // "enrol" is a screen without a tab: a tablet arrives on it from a QR
   // with nobody signed in, and bouncing it to the first allowed tab —
   // which is what an unknown id does — silently threw the setup away.
-  if (S.tab !== "login" && S.tab !== "enrol" && S.tab !== "display"
+  if (S.tab !== "login" && S.tab !== "enrol" && S.tab !== "display" && S.tab !== "settings"
       && !tabs.find((t) => t.id === S.tab)) S.tab = tabs[0].id;
   const btn = (t) =>
     `<button data-t="${t.id}" class="${t.id === S.tab ? "on" : ""}${
@@ -508,7 +510,7 @@ async function render() {
     payroll: renderPayroll, onboarding: renderOnboarding,
     civics: renderCivics, ideas: renderIdeas, cameras: renderCameras,
     labels: renderLabels, annual: renderAnnual, health: renderHealth,
-    traffic: renderTraffic,
+    traffic: renderTraffic, settings: renderSettings,
     display: renderDisplay,
     board: renderBoard, calendar: renderCalendar, hours: renderHours,
     rota: renderSchedule,

@@ -119,6 +119,39 @@ function applyPermissions() {
     : `${ME.name} · ${ME.permissions.join(", ") || "no permissions"}`;
 }
 
+// ---------- settings: how this screen reads to you ----------
+/* The same four switches the storefront and the ops app offer, kept on
+   this device under a key of this surface's own, applied to <html>
+   before the first paint. */
+const ADM_A11Y_KEY = "adm_a11y";
+let ADM_A11Y = { text: "", contrast: false, motion: false, links: false };
+try { ADM_A11Y = { ...ADM_A11Y, ...JSON.parse(localStorage.getItem(ADM_A11Y_KEY) || "{}") }; } catch (e) { /* fresh */ }
+function applyAdmA11y() {
+  const r = document.documentElement;
+  r.classList.remove("a11y-text-lg", "a11y-text-xl");
+  if (ADM_A11Y.text) r.classList.add("a11y-text-" + ADM_A11Y.text);
+  r.classList.toggle("a11y-contrast", !!ADM_A11Y.contrast);
+  r.classList.toggle("a11y-motion", !!ADM_A11Y.motion);
+  r.classList.toggle("a11y-links", !!ADM_A11Y.links);
+  try { localStorage.setItem(ADM_A11Y_KEY, JSON.stringify(ADM_A11Y)); } catch (e) { /* private mode */ }
+  document.querySelectorAll("[data-adm-text]").forEach((b) => b.classList.toggle("on", b.dataset.admText === (ADM_A11Y.text || "")));
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+  set("adm-a11y-contrast", ADM_A11Y.contrast); set("adm-a11y-motion", ADM_A11Y.motion); set("adm-a11y-links", ADM_A11Y.links);
+}
+applyAdmA11y();
+document.querySelectorAll("[data-adm-text]").forEach((b) => b.onclick = () => { ADM_A11Y.text = b.dataset.admText; applyAdmA11y(); });
+for (const [id, key] of [["adm-a11y-contrast", "contrast"], ["adm-a11y-motion", "motion"], ["adm-a11y-links", "links"]]) {
+  const el = document.getElementById(id);
+  if (el) el.onchange = () => { ADM_A11Y[key] = el.checked; applyAdmA11y(); };
+}
+const _admReset = document.getElementById("adm-a11y-reset");
+if (_admReset) _admReset.onclick = () => { ADM_A11Y = { text: "", contrast: false, motion: false, links: false }; applyAdmA11y(); };
+document.querySelectorAll("[data-goto]").forEach((a) => a.onclick = (e) => {
+  e.preventDefault();
+  const t = document.querySelector(`#adm-tabs .tab[data-tab="${a.dataset.goto}"]`);
+  if (t) t.click();
+});
+
 // ---------- tabs ----------
 document.querySelectorAll("#adm-tabs .tab").forEach((b) => b.onclick = () => {
   document.querySelectorAll("#adm-tabs .tab").forEach((x) =>

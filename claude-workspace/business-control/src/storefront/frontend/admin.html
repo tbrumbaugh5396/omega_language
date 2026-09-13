@@ -8,6 +8,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/store.css">
   <style>
+    /* accessibility preference classes, set on <html> from the Settings tab */
+    html.a11y-text-lg { font-size: 112.5%; }
+    html.a11y-text-xl { font-size: 125%; }
+    html.a11y-links a:not(.btn-pill):not(.brand) { text-decoration: underline; text-underline-offset: 2px; }
+    html.a11y-contrast { --ink: #000; --ink-2: #2f2b35; --ink-3: #4a4553; --line: #7c7488; --line-2: #b9b2c4; --bg: #fff; }
+    html.a11y-contrast .adm-panel, html.a11y-contrast .tab, html.a11y-contrast input { border-width: 1.5px; }
+    html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
+      animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    .adm-a11y { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line-2, #ddd); }
+    .adm-a11y input { width: 18px; height: 18px; }
+    #adm-a11y-text .btn-pill.on { background: var(--purple); color: #fff; }
     /* Sprite icons — one set shared with the storefront. */
     .ico-s { width: 17px; height: 17px; stroke: currentColor; fill: none;
       stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
@@ -190,9 +201,9 @@
   <b style="color:var(--ink-3);font-weight:600;font-size:14px">Store admin</b>
   <span class="dim" id="who-label" style="font-size:12px"></span>
   <div class="top-actions" style="gap:8px">
-    <a class="btn-pill dark sm" href="/admin/theme"
-       style="background:var(--purple)">Theme &amp; pages</a>
     <a class="btn-pill ghost sm" href="/">View store</a>
+    <a class="btn-pill dark sm" href="/admin/theme"
+       style="background:var(--purple)">Store front admin</a>
     <a class="btn-pill ghost sm" href="/ops/">ERP / ops</a>
     <button class="btn-pill ghost sm" id="sign-out" hidden>Sign out</button>
   </div>
@@ -238,6 +249,7 @@
       <button class="tab" data-tab="intl">Currency &amp; language</button>
       <button class="tab" data-tab="api">API keys</button>
       <button class="tab" data-tab="staff">Staff &amp; audit</button>
+      <button class="tab" data-tab="settings">Settings</button>
       <button class="tab" data-tab="analytics">Analytics</button>
     </div>
 
@@ -299,6 +311,24 @@
         <button class="btn-pill primary sm" id="rd-add">Add redirect</button>
       </div>
       <div class="adm-list" id="rd-list"></div>
+    </div>
+
+    <div class="adm-panel hidden" data-panel="settings">
+      <h3>Settings</h3>
+      <p class="dim">How this screen reads to you — saved on this device, applied
+      before the first paint. The business's own settings are the tabs beside
+      this one: <a href="#" data-goto="intl">Currency &amp; language</a>,
+      <a href="#" data-goto="api">API keys</a>, <a href="#" data-goto="staff">Staff &amp; audit</a>,
+      <a href="#" data-goto="webhooks">Webhooks</a>, <a href="#" data-goto="nav">Nav &amp; redirects</a>.</p>
+      <h3 style="margin-top:16px">Accessibility</h3>
+      <div class="adm-row"><div><label>Text size</label>
+        <span id="adm-a11y-text"><button class="btn-pill ghost sm" data-adm-text="">A</button>
+          <button class="btn-pill ghost sm" data-adm-text="lg">A+</button>
+          <button class="btn-pill ghost sm" data-adm-text="xl">A++</button></span></div></div>
+      <label class="adm-a11y"><input type="checkbox" id="adm-a11y-contrast"> High contrast</label>
+      <label class="adm-a11y"><input type="checkbox" id="adm-a11y-motion"> Reduce motion</label>
+      <label class="adm-a11y"><input type="checkbox" id="adm-a11y-links"> Underline links</label>
+      <div class="modal-actions"><button class="btn-pill ghost sm" id="adm-a11y-reset">Reset all</button></div>
     </div>
 
     <div class="adm-panel hidden" data-panel="intl">

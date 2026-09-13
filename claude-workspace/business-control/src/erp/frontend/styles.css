@@ -2423,3 +2423,24 @@ body.lane-on { overflow: hidden; }
 .trf-settings label { display: block; margin: 6px 0; }
 .trf-settings input[type=number] { width: 120px; }
 .trf-settings textarea { width: 100%; }
+
+
+/* Accessibility, set on <html> from Settings — the same four switches
+   the storefront offers, with this app's own palette. */
+html.a11y-text-lg { font-size: 112.5%; }
+html.a11y-text-xl { font-size: 125%; }
+html.a11y-links a:not(.btn) { text-decoration: underline; text-underline-offset: 2px; }
+html.a11y-contrast { --text: #000; --dim: #3a3a44; --line: #6f6b7a; --panel: #fff; --panel2: #f0eef5; }
+html.a11y-contrast .card, html.a11y-contrast .tile, html.a11y-contrast .btn { border-width: 1.5px; }
+html.a11y-motion *, html.a11y-motion *::before, html.a11y-motion *::after {
+  animation-duration: .001ms !important; animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important; scroll-behavior: auto !important; }
+#settings-link { cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; margin-left: 6px; }
+.set-card { padding: 14px 16px; margin-bottom: 14px; }
+.set-card h3 { margin: 0 0 8px; }
+.set-row { display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  padding: 10px 0; border-top: 1px solid var(--line); }
+.set-row:first-of-type { border-top: 0; }
+.set-row input[type=checkbox] { width: 20px; height: 20px; }
+.set-seg { display: inline-flex; gap: 4px; }
+.set-seg .btn.on { background: var(--accent); color: #fff; }

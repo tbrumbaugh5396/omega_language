@@ -186,6 +186,12 @@ Things to know before touching them:
   screen flushes before it reads. Rules cache for 5 s (`_forget_rules`
   after a write). Auto-bans (`note_rate`) never fire for loopback. The
   tab is `traffic` under Company; `audit` moved to Team to make room.
+- Accessibility is per surface, per device: `sf_a11y` (storefront),
+  `adm_a11y` (store admin), `bc_a11y` (ops), all applying the same
+  `html.a11y-*` classes before first paint. Ops `settings` is a screen
+  without a rail entry (reached by the header gear; listed in
+  `applyRoute`'s exceptions like `profile`). Store admin's header order
+  is View store → Store front admin → ERP / ops; a test pins it.
 - **Adding a capability touches six places**: the price book table, the
   parser's count in `pricebook.py`, `CAP_NAMES`, `TAB_CAP` and
   `CAP_LABEL`, the client capability menu, and the sales deck's price

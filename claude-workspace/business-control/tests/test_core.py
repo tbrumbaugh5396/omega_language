@@ -10563,4 +10563,26 @@ ok('id: "audit", label: "Audit log", icon: "shield2", group: "Team"' in _tabs_sr
    "and the audit log moved to Team — who did what is about the team")
 ok("/api/traffic/*" in _mcpt.EXCLUDED, "the agent door does not reach the log or the bans")
 
+# --- settings on both surfaces: how the screen reads to you ---
+_admh3 = c.get("/admin").text
+ok(_admh3.index('href="/">View store</a>') < _admh3.index('Store front admin</a>')
+   and "Theme &amp; pages" not in _admh3,
+   "the store admin's header leads with View store, and the theme door is called Store front admin")
+ok('data-tab="settings"' in _admh3 and 'data-panel="settings"' in _admh3
+   and 'id="adm-a11y-contrast"' in _admh3 and 'data-adm-text="xl"' in _admh3
+   and "html.a11y-contrast" in _admh3,
+   "the store admin has a Settings tab with the four accessibility switches")
+_admjs3 = c.get("/admin.js").text
+ok('"adm_a11y"' in _admjs3 and "function applyAdmA11y" in _admjs3 and "applyAdmA11y();" in _admjs3,
+   "kept on this device and applied to the page before anything else")
+ok('id="settings-link"' in _ops and 'opsIcon("gear","bell-ic")' in _ops
+   and "settings: renderSettings" in _ops and 'S.tab !== "settings"' in _ops,
+   "the ops header has a settings gear that opens a screen the rail does not need to list")
+ok('"bc_a11y"' in _ops and "function applyOpsA11y" in _ops and "applyOpsA11y();" in _ops
+   and 'sw("set-contrast", "contrast"' in _ops and 'seg("xl", "A++")' in _ops and 'id="set-folded"' in _ops,
+   "with the same four switches, and the rail's start")
+ok("html.a11y-text-xl" in _css and "html.a11y-contrast" in _css and "html.a11y-motion" in _css
+   and "html.a11y-links" in _css,
+   "and the ops styles honour every one of them")
+
 done("core")
