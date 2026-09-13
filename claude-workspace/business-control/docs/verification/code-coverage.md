@@ -13,15 +13,19 @@
 
 ## 1. Areas and floors
 
-*Repeat from here one row per area.*
+*Repeat from here once per area — how many: [HOW MANY]*
+
 | Area | What is in it (modules or paths) | Floor | Reached | At floor? |
 |---|---|---|---|---|
 | | | | | |
 
+*End of the repeated block.*
+
 ## 2. Per area
 
-*Repeat from here one block per area.*
-### 2.n · [AREA]
+*Repeat from here once per area (its files as rows below) — how many: [HOW MANY]*
+
+### 2.[N] · [AREA]
 
 *Files, most unreached first.*
 
@@ -35,10 +39,13 @@
 
 *Allowed reasons: impossible (the schema forbids the state) · outside (a third-party failure that cannot be simulated, and the seam is tested) · scheduled (a test is owed, with the record that owes it). "Hard to test" is not a reason.*
 
-*Repeat from here one row per file with unreached sensitive lines.*
+*Repeat from here once per file with unreached sensitive lines — how many: [HOW MANY]*
+
 | File | Lines | Reason | By |
 |---|---|---|---|
 | | | | |
+
+*End of the repeated block.*
 
 ## 4. Verification
 

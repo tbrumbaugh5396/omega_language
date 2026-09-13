@@ -17,16 +17,19 @@
 
 ## 2. What was read
 
-*Repeat from here one row per file read; a file in the diff not listed here was not reviewed.*
+*Repeat from here once per file read (a file in the diff not listed here was not reviewed) — how many: [HOW MANY]*
+
 | File | Lines | Read fully? | Notes |
 |---|---|---|---|
 | | | | |
+
+*End of the repeated block.*
 
 ## 3. Checklist
 
 *One line per item, even the ones that pass. "n/a" is a line; blank is not.*
 
-*Repeat from here add items the team agrees on; never remove one without the team.*
+*Add items the team agrees on; never remove one without the team.*
 | # | Question | Line |
 |---|---|---|
 | 1 | Does it do what the requirement says, line by line? | |
@@ -43,7 +46,8 @@
 
 ## 4. Findings
 
-*Repeat from here one block per finding.*
+*Repeat from here once per finding — how many: [HOW MANY]*
+
 ### F[N] · [DEFECT OR QUESTION] · `[FILE]:[LINE]`
 
 **Finding.** (What is wrong or unclear, in a sentence the author can act on.)

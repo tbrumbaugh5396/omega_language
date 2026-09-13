@@ -13,8 +13,9 @@
 
 ## 1. The parts
 
-*Repeat from here one block per test file or group.*
-### 1.n · [PART NAME] — `[PATH]`
+*Repeat from here once per test file or group — how many: [HOW MANY]*
+
+### 1.[N] · [PART NAME] — `[PATH]`
 
 | | |
 |---|---|
@@ -30,17 +31,23 @@
 
 *Checks that read the tree rather than the running app: naming, duplicates, forbidden content, structure.*
 
-*Repeat from here one row per guard.*
+*Repeat from here once per guard — how many: [HOW MANY]*
+
 | Guard | Where (file · section) | Fails when | Present this run |
 |---|---|---|---|
 | | | | |
 
+*End of the repeated block.*
+
 ## 3. The dates
 
-*Repeat from here one row per clock the suite is run on.*
+*Repeat from here once per clock the suite is run on — how many: [HOW MANY]*
+
 | Clock | Why this day | Result |
 |---|---|---|
 | | | |
+
+*End of the repeated block.*
 
 ## 4. Verification
 

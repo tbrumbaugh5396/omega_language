@@ -11,15 +11,19 @@
 
 ## 1. Sources
 
-*Repeat from here one row per source of requirements.*
+*Repeat from here once per source of requirements — how many: [HOW MANY]*
+
 | Source | Holds | Where | Version / date |
 |---|---|---|---|
 | | | | |
 
+*End of the repeated block.*
+
 ## 2. Requirements
 
-*Repeat from here one block per source; one row per requirement inside it.*
-### 2.n · [SOURCE NAME]
+*Repeat from here once per source (its requirements as rows below) — how many: [HOW MANY]*
+
+### 2.[N] · [SOURCE NAME]
 
 | Req. | Statement (as written in the source) | Implemented in (module · screen) | Proof (test file · section or case) | Reviewed in (record) | Ran on this commit | Initials |
 |---|---|---|---|---|---|---|

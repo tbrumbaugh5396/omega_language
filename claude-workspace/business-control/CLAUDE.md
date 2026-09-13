@@ -260,7 +260,22 @@ A new module that touches money, stock or a person goes on `SENSITIVE`.
 organisation, requirements traceability, behaviour walkthroughs, testing,
 coverage). Each has a repeatable block to copy per module / requirement /
 walkthrough; the team fills them by hand per release into
-`docs/verification/releases/<date>/`. Nothing in them is generated.
+`docs/verification/releases/<date>/`. Nothing in them is generated. The
+folder is also a twelfth kit group (`engagements.VERIFY`, stage
+`verification` → client stage `07-build`, side forced internal), so the
+clients screen offers the masters under Build.
+
+**Repeated blocks** (`documents.expand_repeats`): a block between
+`*Repeat from here once per X — how many: [HOW MANY]*` and
+`*End of the repeated block.*` is laid out N times when the count blank
+is answered — block mode adds a `*X k of N.*` line per copy and turns
+`[N]` into the copy number; a block that is a table (header, separator,
+blank rows) repeats the rows under one header. Changing the count grows
+(blank copies from the template via `kit_source`) or trims; nesting
+works because copy lines carry the block's own label. Every fill door
+calls it: engagement fill, vault edit, generation, refresh-kit (which
+lays out first, then re-fills so `X#2` answers land in copy 2). `[N]`
+is never a blank.
 
 ## Where the rows live
 

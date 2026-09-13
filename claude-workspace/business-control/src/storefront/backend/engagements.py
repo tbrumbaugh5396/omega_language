@@ -1513,6 +1513,8 @@ def file_kit_doc(con, e, rel_path: str, fills: dict | None = None,
     sugg = {k: v for k, v in suggested_fills(e).items()
             if k.strip() not in GLOBAL_TOKENS}
     filled = fill(text, {**sugg, **given})
+    from .documents import expand_repeats
+    filled = expand_repeats(text, filled, text)
     remaining = placeholders(filled)
     title = (title or "").strip()
     if not title:
@@ -2089,6 +2091,8 @@ def doc_fill(eid: int, did: int, body: FillBody, u=Depends(admin_user),
                                  "is what was attested to. Supersede it "
                                  "rather than editing it")
     filled = fill(r["body"], body.fills or {})
+    from .documents import expand_repeats, kit_source
+    filled = expand_repeats(r["body"], filled, kit_source(con, did))
     remaining = placeholders(filled)
     con.execute("UPDATE documents SET body=?, status=? WHERE id=?",
                 (filled, "draft" if remaining else "active", did))
@@ -2146,7 +2150,12 @@ def refresh_from_kit(eid: int, did: int, u=Depends(admin_user),
         _, val = token_value(m)
         if val is not None:
             kept[k] = val
-    filled = fill(text, kept)
+    # Repeated blocks are laid out first, to the counts the document
+    # holds, so answers keyed X#2, X#3 find the copies they belong in.
+    from .documents import expand_repeats
+    counts = {k: v for k, v in kept.items() if k.startswith("HOW MANY")}
+    laid = expand_repeats(text, fill(text, counts), text)
+    filled = fill(laid, kept)
     remaining = placeholders(filled)
     con.execute("UPDATE documents SET body=?, status=? WHERE id=?",
                 (filled, "draft" if remaining else "active", did))

@@ -236,6 +236,8 @@ def _matches(text: str):
             continue
         if m.group(1).strip() in RESERVED_MARKERS:
             continue
+        if m.group(1).strip() == "N":             # a copy's index, not a blank
+            continue
         yield m
 
 
@@ -377,6 +379,190 @@ def apply_regions(text: str, edits: dict) -> str:
                 ("[x]" if on else "[ ]")
             text = text[:r["start"]] + rep + text[r["end"]:]
     return text
+
+
+# ---------- repeated blocks ----------
+# A template can say "this section, once per component" and leave the
+# count to whoever fills it in. The block sits between two marker lines:
+#
+#   *Repeat from here once per component — how many: [HOW MANY]*
+#   ### 2.[N] · [COMPONENT NAME]
+#   ...
+#   *End of the repeated block.*
+#
+# [HOW MANY] is an ordinary blank; answering it with 3 lays the block out
+# three times. In BLOCK mode each copy opens with a line of its own —
+# "*Component 1 of 3.*" — and [N] inside it becomes the copy's number, so
+# headings read 2.1, 2.2, 2.3. When the block is a table (a header, its
+# separator, then the blank rows) the copies are rows: the header stays
+# once and the rows repeat, with nothing between them. Answering the count
+# again grows or trims the copies; the ones already written are kept, and
+# the new ones come from the template the document was generated from, so
+# they arrive blank rather than as a photocopy of the last one.
+REPEAT_START = re.compile(
+    r"^\*Repeat from here once per (?P<what>[^*\n]+?) — how many: "
+    r"\[HOW MANY(?:=(?P<n>[^\]\n]*))?\]\*[ \t]*$")
+REPEAT_END = "*End of the repeated block.*"
+_COPY = re.compile(r"^\*(?P<what>[^*\n]+?) (?P<k>\d+) of (?P<n>\d+)\.\*[ \t]*$")
+_TSEP = re.compile(r"^\|(?:\s*:?-{2,}:?\s*\|)+\s*$")
+MAX_COPIES = 50
+
+
+def _repeat_blocks(lines: list) -> list:
+    """[(start, end, label)] for every block, outer before inner, by depth."""
+    out, stack = [], []
+    for i, ln in enumerate(lines):
+        st = ln.strip()
+        m = REPEAT_START.match(st)
+        if m:
+            stack.append((i, _copy_label(m.group("what"))))
+        elif st == REPEAT_END and stack:
+            s, label = stack.pop()
+            out.append((s, i, label))
+    out.sort()
+    return out
+
+
+def _copy_label(what: str) -> str:
+    """'component (a process, a surface…)' -> 'Component'."""
+    w = what.split(" (")[0].strip().rstrip(".:")
+    return (w[:1].upper() + w[1:]) if w else "Copy"
+
+
+def _copy_count(v) -> int | None:
+    try:
+        n = int(str(v or "").strip())
+    except ValueError:
+        return None
+    return n if 1 <= n <= MAX_COPIES else None
+
+
+def _row_head(region: list) -> int:
+    """Lines of table header at the top of a region (0 = block mode)."""
+    idx = [i for i, l in enumerate(region) if l.strip()]
+    if (len(idx) >= 2 and region[idx[0]].lstrip().startswith("|")
+            and _TSEP.match(region[idx[1]].strip())):
+        return idx[1] + 1
+    return 0
+
+
+def _blank_copy(lines: list) -> list:
+    """The last resort for a new copy: the previous one with its blanks
+    emptied. Tokens and checkboxes come back; typed-over cells do not."""
+    out = []
+    for l in lines:
+        l = re.sub(r"\[([^\[\]\n=]{1,60})=[^\[\]\n]*\]",
+                   lambda m: f"[{m.group(1)}]", l)
+        l = l.replace("- [x]", "- [ ]").replace("* [x]", "* [ ]")
+        l = l.replace("☑", "☐")
+        out.append(l)
+    return out
+
+
+def _nth_block(blocks: list, label: str, k: int):
+    same = [b for b in blocks if b[2] == label]
+    return same[k] if k < len(same) else None
+
+
+def expand_repeats(old_text: str, new_text: str,
+                   source_text: str | None = None) -> str:
+    """Lay out every repeat block of new_text to the count its [HOW MANY]
+    now holds. old_text is the document before this save (its counts say
+    how the copies are laid out now); source_text is the template it came
+    from, the source of blank copies."""
+    lines = new_text.split("\n")
+    old_lines = (old_text or "").split("\n")
+    src_lines = source_text.split("\n") if source_text else []
+    done = 0
+    while True:
+        blocks = _repeat_blocks(lines)
+        if done >= len(blocks):
+            break
+        s, e, label = blocks[done]
+        done += 1
+        m = REPEAT_START.match(lines[s].strip())
+        n_new = _copy_count(m.group("n"))
+        if n_new is None:
+            continue
+        nth = sum(1 for b in blocks[:done - 1] if b[2] == label)
+        region = lines[s + 1:e]
+
+        # how the block was laid out before this save
+        n_old = None
+        ob = _nth_block(_repeat_blocks(old_lines), label, nth)
+        if ob:
+            om = REPEAT_START.match(old_lines[ob[0]].strip())
+            n_old = _copy_count(om.group("n")) if om else None
+
+        # the pristine unit, from the template when there is one
+        unit, unit_head = None, []
+        sb = _nth_block(_repeat_blocks(src_lines), label, nth)
+        if sb:
+            sreg = src_lines[sb[0] + 1:sb[1]]
+            hh = _row_head(sreg)
+            unit_head, unit = sreg[:hh], sreg[hh:]
+
+        h = _row_head(region)
+        if n_old is None:
+            head, cur = region[:h], region[h:]
+            if unit is None:
+                unit = cur
+            copies = []
+        elif h:
+            head, rows = region[:h], region[h:]
+            per = max(1, len(rows) // n_old)
+            copies = [rows[i:i + per] for i in range(0, len(rows), per)]
+            if unit is None:
+                unit = _blank_copy(copies[-1]) if copies else rows
+        else:
+            head, copies, cur = [], [], None
+            for l in region:
+                cm = _COPY.match(l.strip())
+                if cm and cm.group("what") == label:
+                    cur = []
+                    copies.append(cur)
+                elif cur is not None:
+                    cur.append(l)
+            if not copies:                      # counted but never laid out
+                if unit is None:
+                    unit = region
+            elif unit is None:
+                unit = _blank_copy(copies[-1])
+        if h and not head and unit_head:
+            head = unit_head
+
+        copies = copies[:n_new]
+        while len(copies) < n_new:
+            k = len(copies) + 1
+            copies.append([l.replace("[N]", str(k)) for l in unit])
+        if h:
+            new_region = head + [l for c in copies for l in c]
+        else:
+            new_region = []
+            for k, c in enumerate(copies, 1):
+                body = list(c)
+                while body and not body[0].strip():
+                    body.pop(0)
+                while body and not body[-1].strip():
+                    body.pop()
+                new_region += ["", f"*{label} {k} of {n_new}.*", ""] + body
+            new_region.append("")
+        lines = lines[:s + 1] + new_region + lines[e:]
+    return "\n".join(lines)
+
+
+def kit_source(con, did: int) -> str | None:
+    """The template a vault document was generated from, if it was."""
+    r = con.execute("SELECT notes FROM documents WHERE id=?",
+                    (did,)).fetchone()
+    note = (r["notes"] if r else "") or ""
+    from . import engagements as eng                 # avoids a cycle
+    if not note.startswith(eng.KIT_NOTE):
+        return None
+    try:
+        return eng.template_path(note[len(eng.KIT_NOTE):].strip()).read_text()
+    except Exception:
+        return None
 
 
 # ---------- markdown, just enough ----------
@@ -1227,6 +1413,7 @@ def vault_edit(did: int, body: EditBody, u=Depends(admin_user),
 
     text = apply_regions(d["body"], body.regions or {})
     text = fill(text, fills)
+    text = expand_repeats(d["body"], text, kit_source(con, did))
     remaining = placeholders(text)
     con.execute("UPDATE documents SET body=?, status=? WHERE id=?",
                 (text, "draft" if remaining else "active", did))

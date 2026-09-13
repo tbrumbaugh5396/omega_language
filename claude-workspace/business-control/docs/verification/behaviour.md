@@ -20,7 +20,8 @@
 
 ## Walkthroughs
 
-*Repeat from here one block per flow.*
+*Repeat from here once per flow — how many: [HOW MANY]*
+
 ### W[N] · [FLOW NAME]
 
 *Who is doing this, starting where, with what already true.*

@@ -8,9 +8,12 @@
    `releases/<YYYY-MM-DD>/` and copy every template into it. The masters
    stay blank.
 2. **Grow by repeating blocks.** Every template has one or more blocks
-   marked *Repeat from here*: a module, a requirement, a walkthrough, a file. Copy
-   the block as many times as the release needs. A block you do not need
-   is deleted, not left blank.
+   marked *Repeat from here … how many: [HOW MANY]*. Filed from the clients
+   screen, answer the count and the block is laid out that many times:
+   sections numbered 1, 2, 3; table rows added under the one header. Change
+   the count later and copies are added or trimmed, the ones written kept.
+   On paper, copy the block by hand. A block you do not need is deleted,
+   not left blank.
 3. **Fill from the codebase, not from memory.** Each block says what to
    look at. Write what you found, in words a new team member could act
    on. "ok" is not a finding.

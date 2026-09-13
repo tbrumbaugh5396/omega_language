@@ -1917,6 +1917,53 @@ for _badp in ("verification/README.md", "verification/../../CLAUDE.md",
     ok(c.get(f"/api/store/admin/engagements/{_eid}/template", headers=A,
              params={"path": _badp}).status_code == 404,
        f"the README and anything outside the folder are refused: {_badp}")
+# --- repeated blocks: answer the count, get that many copies -----------------
+from storefront.backend.documents import expand_repeats as _xr, fill as _xf, placeholders as _xp
+_rtpl = (_ROOT / "docs" / "verification" / "code-review.md").read_text()
+_r1 = _xr(_rtpl, _xf(_rtpl, {"HOW MANY": "2", "HOW MANY#2": "3"}), _rtpl)
+ok(re.findall(r"^\*(Finding \d of \d)\.\*$", _r1, re.M) == ["Finding 1 of 3", "Finding 2 of 3", "Finding 3 of 3"]
+   and re.findall(r"^### F(\d) ", _r1, re.M) == ["1", "2", "3"]
+   and len(re.findall(r"^\| \| \| \| \|$", _r1, re.M)) == 2 and "| 10 |" in _r1,
+   "a count of 3 lays the finding block out three times, numbered F1..F3 with a line naming each copy; "
+   "a count of 2 on the files-read table adds rows under one header; the checklist between them is untouched")
+_r2 = _xr(_r1, _xf(_r1, {"HOW MANY#2": "4", "DEFECT OR QUESTION": "defect"}), _rtpl)
+ok(re.findall(r"^\*Finding (\d) of (\d)\.\*$", _r2, re.M) == [(str(i), "4") for i in range(1, 5)]
+   and "[DEFECT OR QUESTION=defect]" in _r2 and _r2.count("[DEFECT OR QUESTION]") == 3,
+   "raising the count to 4 adds a blank fourth copy from the template and keeps what was written in the first")
+_r3 = _xr(_r2, _xf(_r2, {"HOW MANY#2": "1"}), _rtpl)
+ok(re.findall(r"^\*(Finding \d of \d)\.\*$", _r3, re.M) == ["Finding 1 of 1"] and "[DEFECT OR QUESTION=defect]" in _r3
+   and "### F2 " not in _r3, "lowering it to 1 trims the later copies and keeps the first, answer and all")
+_otpl = (_ROOT / "docs" / "verification" / "code-organization.md").read_text()
+_o1 = _xr(_otpl, _xf(_otpl, {"HOW MANY": "2"}), _otpl)
+_okeys = [k for k in _xp(_o1) if k.startswith("HOW MANY")]
+_o2 = _xr(_o1, _xf(_o1, {_okeys[0]: "3"}), _otpl)
+_a1, _a2 = _o2.split("*Area 2 of 2.*")
+ok(re.findall(r"^### 2\.(\d) ", _o2, re.M) == ["1", "2"] and _o1.count("once per module in the area") == 2
+   and len(re.findall(r"^\| \| \| \| \| \| \|$", _a1, re.M)) == 3
+   and len(re.findall(r"^\| \| \| \| \| \| \|$", _a2, re.M)) == 1,
+   "a block inside a block: two areas each carry their own module table with its own count, and three "
+   "modules in area 1 leave area 2's single blank row alone")
+ok("N" not in _xp("### 2.[N] · [AREA]") and "HOW MANY" in _xp("*Repeat from here once per x — how many: [HOW MANY]*"),
+   "[N] is the copy's index and never a blank to fill; [HOW MANY] is an ordinary blank")
+# over the wire: generate with a count, then change it through both fill doors
+_vg3 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "verification/code-review.md", "fills": {"HOW MANY#2": "3"}}).json()
+_vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).text
+ok(_vb.count("*Finding ") == 3 and "### F3 " in _vb and "[HOW MANY=3]" in _vb,
+   "generating with a count lays the copies out on the filed document")
+c.post(f"/api/store/admin/engagements/{_eid}/docs/{_vg3['doc_id']}/fill", headers=A,
+       json={"fills": {"HOW MANY#2": "4", "FILE": "main.py"}})
+_vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).text
+ok(_vb.count("*Finding ") == 4 and "[FILE=main.py]" in _vb, "the engagement fill door grows it to four and keeps the answer")
+c.post(f"/api/store/admin/documents/{_vg3['doc_id']}/edit", headers=A, json={"fills": {"HOW MANY#2": "2"}})
+_vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).text
+ok(_vb.count("*Finding ") == 2 and "[FILE=main.py]" in _vb and "Finding 2 of 2" in _vb,
+   "the vault's own editor door trims it to two — one save path, same layout")
+_vref = c.post(f"/api/store/admin/engagements/{_eid}/docs/{_vg3['doc_id']}/refresh-kit", headers=A, json={}).json()
+_vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).text
+ok(_vb.count("*Finding ") == 2 and "[FILE=main.py]" in _vb,
+   "refreshing from the template lays the copies out first, so the answers land back in them")
+
 _vexp = c.post(f"/api/store/admin/engagements/{_eid}/export", headers=A, json={})
 ok(_vexp.status_code == 200, "the client folder still exports with an internal verification document in it")
 c.post(f"/api/store/admin/engagements/{_eid}/docs/{_kitd['doc_id']}/fill",

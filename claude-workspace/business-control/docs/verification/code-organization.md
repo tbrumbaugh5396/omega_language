@@ -23,25 +23,32 @@
 
 ## 2. Areas and modules
 
-*Repeat from here one block per area (a directory of modules).*
-### 2.n · [AREA] — `[PATH]`
+*Repeat from here once per area (a directory of modules) — how many: [HOW MANY]*
+
+### 2.[N] · [AREA] — `[PATH]`
 
 *What this area is for, in a sentence.*
 
-*Repeat from here one row per module in the area; add rows freely.*
+*Repeat from here once per module in the area — how many: [HOW MANY]*
+
 | Module | Purpose (one line) | Owns (tables, files, state) | Exposes (routes, functions, screens) | Depends on | Sensitive? |
 |---|---|---|---|---|---|
 | | | | | | |
 
 *End of the repeated block.*
 
+*End of the repeated block.*
+
 ## 3. The rules
 
-*Repeat from here one row per rule; say who enforces it.*
+*Repeat from here once per rule — how many: [HOW MANY]*
+
 | # | Rule | Enforced by (test guard · review · tooling) | Where |
 |---|---|---|---|
 | R1 | | | |
 | R2 | | | |
+
+*End of the repeated block.*
 
 ## 4. Verification
 

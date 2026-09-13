@@ -16,8 +16,9 @@
 
 ## 2. Components
 
-*Repeat from here one block per component (a process, a surface, a data store, a pipeline stage, an external boundary).*
-### 2.n · [COMPONENT NAME]
+*Repeat from here once per component (a process, a surface, a data store, a pipeline stage, an external boundary) — how many: [HOW MANY]*
+
+### 2.[N] · [COMPONENT NAME]
 
 | | |
 |---|---|
@@ -38,8 +39,9 @@
 
 ## 3. Cross-cutting
 
-*Repeat from here one block per concern that crosses components (tenancy, auth, audit, i18n, errors, logging, backups…).*
-### 3.n · [CONCERN]
+*Repeat from here once per concern that crosses components (tenancy, auth, audit, i18n, errors, logging, backups…) — how many: [HOW MANY]*
+
+### 3.[N] · [CONCERN]
 
 | | |
 |---|---|
@@ -56,10 +58,13 @@
 
 ## 4. Decisions
 
-*Repeat from here one row per decision the shape depends on.*
+*Repeat from here once per decision the shape depends on — how many: [HOW MANY]*
+
 | Decision | Chosen | Instead of | Because | Revisit when |
 |---|---|---|---|---|
 | | | | | |
+
+*End of the repeated block.*
 
 ## 5. Known gaps
 
