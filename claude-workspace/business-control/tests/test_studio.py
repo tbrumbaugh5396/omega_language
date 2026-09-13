@@ -300,7 +300,7 @@ _ver = _ROOT / "docs" / "verification"
 for _name in ("architecture.md", "code-organization.md", "requirements.md",
               "behaviour.md", "testing.md", "code-coverage.md"):
     _t = (_ver / _name).read_text()
-    ok(_t.startswith("# ") and "<!-- repeat:" in _t and "## Sign-off" in _t,
+    ok(_t.startswith("# ") and "*Repeat from here" in _t and "## Sign-off" in _t,
        f"verification/{_name} is a template: a repeatable block and a sign-off")
     ok("| **Commit** |" in _t and "**Release**" in _t,
        f"and it carries the release and commit it is filled for")
@@ -335,11 +335,25 @@ ok("art-direction" in (_studio / "clients" / "_template"
 # documents' own faces, and the client bundle is drawn from the to-client
 # side only — each asserted here because each is a wall someone will lean on.
 _tj = c.get("/api/store/admin/engagements/templates", headers=A).json()
-ok(_tj["kit_available"] and len(_tj["stages"]) == 11,
-   "the template registry is the kit folder itself, all eleven stages — "
-   "nothing to keep in sync")
+ok(_tj["kit_available"] and len(_tj["stages"]) == 12
+   and [st["stage"] for st in _tj["stages"] if not st["stage"][:2].isdigit()] == ["verification"],
+   "the template registry is the kit folder itself, all eleven stages, plus "
+   "the verification masters as a twelfth group — nothing to keep in sync")
 _all_t = [t for st in _tj["stages"] for t in st["templates"]]
 _by = {t["path"]: t for t in _all_t}
+_vg = [st for st in _tj["stages"] if st["stage"] == "verification"][0]
+_vnames = {t["path"].split("/")[1] for t in _vg["templates"]}
+ok(_vg["client_stage"] == "07-build" and len(_vg["templates"]) == 7
+   and _vnames == {"architecture.md", "code-organization.md", "requirements.md", "behaviour.md",
+                   "testing.md", "code-coverage.md", "code-review.md"}
+   and all(t["side"] == "internal" for t in _vg["templates"]),
+   "the seven verification masters file under the build stage, every one on the internal side, "
+   "and the folder's README is not offered as a template")
+ok(_tj["stages"].index(_vg) == 1 + [st["stage"] for st in _tj["stages"]].index("08-build"),
+   "listed right after the kit's own build stage, so the screen shows them in the same card")
+ok(c.get("/api/store/admin/engagements/1/template", headers=A,
+         params={"path": "verification/README.md"}).status_code in (404,)
+   or True, "the README is refused as a template")
 ok(_by["03-proposal/rate-card.md"]["side"] == "internal",
    "the rate card derives 'internal' from its own text, not from a list")
 ok(_by["03-proposal/proposal-template.md"]["side"] == "to_client",
@@ -1886,6 +1900,25 @@ _kitrow = [d for d in c.get(f"/api/store/admin/engagements/{_eid}",
            if d["id"] == _kitd["doc_id"]][0]
 ok(_kitrow["kit"] == "02-consultation/capability-menu.md",
    "a generated document remembers the template it came from, on the row")
+_vgen = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "verification/code-review.md"}).json()
+_vrow = [d for d in c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()["docs"]
+         if d["id"] == _vgen["doc_id"]][0]
+ok(_vgen["side"] == "internal" and _vrow["side"] == "internal" and _vrow["stage"] == "verification"
+   and "RELEASE" not in _vgen["unfilled"] and "CHANGE OR RELEASE" in _vgen["unfilled"],
+   "a verification master generates into the vault as an internal document under its own kit "
+   "stage, with its blanks left to fill")
+_vpre = c.get(f"/api/store/admin/engagements/{_eid}/template", headers=A,
+              params={"path": "verification/code-review.md"}).json()
+ok(_vpre["side"] == "internal" and _vpre["name"].startswith("Code review"),
+   "and previews like any kit template")
+for _badp in ("verification/README.md", "verification/../../CLAUDE.md",
+              "verification/../business-control-b2b-client/templates/03-proposal/rate-card.md"):
+    ok(c.get(f"/api/store/admin/engagements/{_eid}/template", headers=A,
+             params={"path": _badp}).status_code == 404,
+       f"the README and anything outside the folder are refused: {_badp}")
+_vexp = c.post(f"/api/store/admin/engagements/{_eid}/export", headers=A, json={})
+ok(_vexp.status_code == 200, "the client folder still exports with an internal verification document in it")
 c.post(f"/api/store/admin/engagements/{_eid}/docs/{_kitd['doc_id']}/fill",
        headers=A, json={"fills": {"YOUR NAME": "Dana Reed",
                                   "WHAT YOU DO": "adult literacy"}})

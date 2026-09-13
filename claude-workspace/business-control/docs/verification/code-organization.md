@@ -1,6 +1,6 @@
-# Code organisation — <release or date>
+# Code organisation — [RELEASE OR DATE]
 
-*Where things go, what each part owns, and the rules the tree keeps. Copy the area block once per top-level area, and the module block once per module inside it. Add areas as the tree grows.*
+*Internal. Never send this to a client. Where things go, what each part owns, and the rules the tree keeps. Copy the area block once per top-level area, and the module block once per module inside it. Add areas as the tree grows.*
 
 | | |
 |---|---|
@@ -14,7 +14,7 @@
 *Paste the top-level tree (two levels is usually enough) and write one line per directory saying what belongs there and what does not.*
 
 ```
-<paste tree>
+[PASTE TREE]
 ```
 
 | Directory | Belongs here | Does not belong here |
@@ -23,21 +23,21 @@
 
 ## 2. Areas and modules
 
-<!-- repeat: one block per area (a directory of modules) -->
-### 2.n · <Area> — `<path>`
+*Repeat from here one block per area (a directory of modules).*
+### 2.n · [AREA] — `[PATH]`
 
 *What this area is for, in a sentence.*
 
-<!-- repeat: one row per module in the area; add rows freely -->
+*Repeat from here one row per module in the area; add rows freely.*
 | Module | Purpose (one line) | Owns (tables, files, state) | Exposes (routes, functions, screens) | Depends on | Sensitive? |
 |---|---|---|---|---|---|
 | | | | | | |
 
-<!-- end repeat -->
+*End of the repeated block.*
 
 ## 3. The rules
 
-<!-- repeat: one row per rule; say who enforces it -->
+*Repeat from here one row per rule; say who enforces it.*
 | # | Rule | Enforced by (test guard · review · tooling) | Where |
 |---|---|---|---|
 | R1 | | | |

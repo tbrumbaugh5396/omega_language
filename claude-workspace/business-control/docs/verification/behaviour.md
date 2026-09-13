@@ -1,6 +1,6 @@
-# Behaviour walkthroughs — <release or date>
+# Behaviour walkthroughs — [RELEASE OR DATE]
 
-*What a person sees at the keyboard, on the built artifact, done by someone who did not build the change. Copy the walkthrough block once per flow; add steps freely. Every unexpected thing is a defect, even when the step passed.*
+*Internal. Never send this to a client. What a person sees at the keyboard, on the built artifact, done by someone who did not build the change. Copy the walkthrough block once per flow; add steps freely. Every unexpected thing is a defect, even when the step passed.*
 
 | | |
 |---|---|
@@ -20,8 +20,8 @@
 
 ## Walkthroughs
 
-<!-- repeat: one block per flow -->
-### W<n> · <Flow name>
+*Repeat from here one block per flow.*
+### W[N] · [FLOW NAME]
 
 *Who is doing this, starting where, with what already true.*
 
@@ -33,7 +33,7 @@
 
 Notes: (anything odd — timing, layout, wording, console)
 
-<!-- end repeat -->
+*End of the repeated block.*
 
 ## Defects found
 

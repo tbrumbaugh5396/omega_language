@@ -1,6 +1,6 @@
-# Testing — <release or date>
+# Testing — [RELEASE OR DATE]
 
-*The suite itself: what it is, that it ran on this commit, on the awkward dates, and that every guard is still standing. Copy the part block once per test file or test group; the guard block once per guard.*
+*Internal. Never send this to a client. The suite itself: what it is, that it ran on this commit, on the awkward dates, and that every guard is still standing. Copy the part block once per test file or test group; the guard block once per guard.*
 
 | | |
 |---|---|
@@ -13,8 +13,8 @@
 
 ## 1. The parts
 
-<!-- repeat: one block per test file or group -->
-### 1.n · <Part name> — `<path>`
+*Repeat from here one block per test file or group.*
+### 1.n · [PART NAME] — `[PATH]`
 
 | | |
 |---|---|
@@ -24,20 +24,20 @@
 | **Checks last release** | |
 | **Change explained in** | (review record, if the count fell) |
 
-<!-- end repeat -->
+*End of the repeated block.*
 
 ## 2. The guards
 
 *Checks that read the tree rather than the running app: naming, duplicates, forbidden content, structure.*
 
-<!-- repeat: one row per guard -->
+*Repeat from here one row per guard.*
 | Guard | Where (file · section) | Fails when | Present this run |
 |---|---|---|---|
 | | | | |
 
 ## 3. The dates
 
-<!-- repeat: one row per clock the suite is run on -->
+*Repeat from here one row per clock the suite is run on.*
 | Clock | Why this day | Result |
 |---|---|---|
 | | | |

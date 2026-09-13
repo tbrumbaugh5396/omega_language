@@ -46,6 +46,12 @@ router = APIRouter()
 # an empty registry and a clear message rather than an error.
 KIT = Path(__file__).resolve().parents[3] \
     / "docs" / "business-control-b2b-client" / "templates"
+# The verification templates — architecture, code organisation, requirements,
+# behaviour, testing, coverage, code review — are internal paperwork the team
+# fills per release. They live beside the codebase rather than in the kit,
+# and file under the build stage on the internal side of the wall.
+VERIFY = Path(__file__).resolve().parents[3] / "docs" / "verification"
+VERIFY_STAGE = "verification"
 
 def EXPORT_ROOT():
     from erp.backend import tenancy
@@ -193,6 +199,9 @@ KIT_TO_CLIENT_STAGE = {
     "05-kickoff": "04-kickoff",
     "06-requirements": "05-requirements",
     "07-brand-exploration": "06-brand-exploration",
+    # The verification templates share the build folder; listed before the
+    # kit's own build stage so the stage report still files under 08-build.
+    "verification": "07-build",
     "08-build": "07-build",
     "09-launch": "08-launch",
     "10-handover": "09-handover",
@@ -659,14 +668,46 @@ def scan_templates():
                     "client_stage": KIT_TO_CLIENT_STAGE.get(stage_dir.name,
                                                             stage_dir.name),
                     "templates": templates})
+        if stage_dir.name == "08-build" and VERIFY.is_dir():
+            out.append(_verification_group())
     return out
 
 
+def _verification_group() -> dict:
+    """docs/verification/ as one more stage group, every template internal.
+
+    The masters say "never send" on their face, so side_of() files them on
+    the internal side like any kit document that says so — but a template
+    that lost the sentence would leak, so the side is forced here too."""
+    templates = []
+    for f in sorted(VERIFY.glob("*.md")):
+        if f.name == "README.md":
+            continue
+        text = f.read_text()
+        # "Architecture — [RELEASE OR DATE]" is the document's title; the
+        # list wants the noun, and the blank is filled on the paper.
+        name = re.sub(r"\s+—\s+\[[^\]]+\]\s*$", "", template_title(text, f.name))
+        templates.append({"path": f"{VERIFY_STAGE}/{f.name}",
+                          "name": name,
+                          "side": "internal", "category": "other"})
+    return {"stage": VERIFY_STAGE,
+            "client_stage": KIT_TO_CLIENT_STAGE[VERIFY_STAGE],
+            "templates": templates}
+
+
 def template_path(rel: str) -> Path:
-    """Resolve a template path and refuse anything outside the kit."""
-    p = (KIT / rel).resolve()
+    """Resolve a template path and refuse anything outside the kit.
+
+    `verification/<file>.md` resolves under docs/verification/ instead; the
+    same containment rule holds there, and its README is not a template."""
+    root = KIT
+    if rel.startswith(VERIFY_STAGE + "/"):
+        root, rel = VERIFY, rel[len(VERIFY_STAGE) + 1:]
+        if rel == "README.md":
+            raise HTTPException(404, "no such template")
+    p = (root / rel).resolve()
     if not (p.is_file() and p.suffix == ".md"
-            and str(p).startswith(str(KIT.resolve()) + "/")):
+            and str(p).startswith(str(root.resolve()) + "/")):
         raise HTTPException(404, "no such template")
     return p
 

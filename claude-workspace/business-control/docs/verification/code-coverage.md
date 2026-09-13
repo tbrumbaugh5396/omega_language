@@ -1,6 +1,6 @@
-# Code coverage — <release or date>
+# Code coverage — [RELEASE OR DATE]
 
-*Which lines the suite reached, per area, against each area's floor; and for the sensitive areas, a reason beside every line it did not reach. Copy the area block once per area; add file rows freely.*
+*Internal. Never send this to a client. Which lines the suite reached, per area, against each area's floor; and for the sensitive areas, a reason beside every line it did not reach. Copy the area block once per area; add file rows freely.*
 
 | | |
 |---|---|
@@ -13,15 +13,15 @@
 
 ## 1. Areas and floors
 
-<!-- repeat: one row per area -->
+*Repeat from here one row per area.*
 | Area | What is in it (modules or paths) | Floor | Reached | At floor? |
 |---|---|---|---|---|
 | | | | | |
 
 ## 2. Per area
 
-<!-- repeat: one block per area -->
-### 2.n · <Area>
+*Repeat from here one block per area.*
+### 2.n · [AREA]
 
 *Files, most unreached first.*
 
@@ -29,13 +29,13 @@
 |---|---|---|---|
 | | | | |
 
-<!-- end repeat -->
+*End of the repeated block.*
 
 ## 3. Never-reached lines — sensitive areas — with reasons
 
 *Allowed reasons: impossible (the schema forbids the state) · outside (a third-party failure that cannot be simulated, and the seam is tested) · scheduled (a test is owed, with the record that owes it). "Hard to test" is not a reason.*
 
-<!-- repeat: one row per file with unreached sensitive lines -->
+*Repeat from here one row per file with unreached sensitive lines.*
 | File | Lines | Reason | By |
 |---|---|---|---|
 | | | | |

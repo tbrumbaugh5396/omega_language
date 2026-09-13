@@ -1,6 +1,6 @@
-# Requirements traceability — <release or date>
+# Requirements traceability — [RELEASE OR DATE]
 
-*Every requirement, where it is met, what proves it, and that the proof ran. Copy the source block once per place requirements come from (a signed scope, a price list, a standard, an internal invariant), and add requirement rows freely.*
+*Internal. Never send this to a client. Every requirement, where it is met, what proves it, and that the proof ran. Copy the source block once per place requirements come from (a signed scope, a price list, a standard, an internal invariant), and add requirement rows freely.*
 
 | | |
 |---|---|
@@ -11,21 +11,21 @@
 
 ## 1. Sources
 
-<!-- repeat: one row per source of requirements -->
+*Repeat from here one row per source of requirements.*
 | Source | Holds | Where | Version / date |
 |---|---|---|---|
 | | | | |
 
 ## 2. Requirements
 
-<!-- repeat: one block per source; one row per requirement inside it -->
-### 2.n · <Source name>
+*Repeat from here one block per source; one row per requirement inside it.*
+### 2.n · [SOURCE NAME]
 
 | Req. | Statement (as written in the source) | Implemented in (module · screen) | Proof (test file · section or case) | Reviewed in (record) | Ran on this commit | Initials |
 |---|---|---|---|---|---|---|
 | | | | | | | |
 
-<!-- end repeat -->
+*End of the repeated block.*
 
 ## 3. Requirements without a proof
 

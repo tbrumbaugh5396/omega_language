@@ -1,6 +1,6 @@
-# Architecture — <release or date>
+# Architecture — [RELEASE OR DATE]
 
-*How the system is built, one section per component, with a check for every claim. Copy the component block once per process, surface, store, pipeline stage or boundary. Add sections as the system grows; delete blocks that do not apply.*
+*Internal. Never send this to a client. How the system is built, one section per component, with a check for every claim. Copy the component block once per process, surface, store, pipeline stage or boundary. Add sections as the system grows; delete blocks that do not apply.*
 
 | | |
 |---|---|
@@ -16,8 +16,8 @@
 
 ## 2. Components
 
-<!-- repeat: one block per component (a process, a surface, a data store, a pipeline stage, an external boundary) -->
-### 2.n · <Component name>
+*Repeat from here one block per component (a process, a surface, a data store, a pipeline stage, an external boundary).*
+### 2.n · [COMPONENT NAME]
 
 | | |
 |---|---|
@@ -34,12 +34,12 @@
 | 2 | | | | |
 | 3 | | | | |
 
-<!-- end repeat -->
+*End of the repeated block.*
 
 ## 3. Cross-cutting
 
-<!-- repeat: one block per concern that crosses components (tenancy, auth, audit, i18n, errors, logging, backups…) -->
-### 3.n · <Concern>
+*Repeat from here one block per concern that crosses components (tenancy, auth, audit, i18n, errors, logging, backups…).*
+### 3.n · [CONCERN]
 
 | | |
 |---|---|
@@ -52,11 +52,11 @@
 | 1 | | | | |
 | 2 | | | | |
 
-<!-- end repeat -->
+*End of the repeated block.*
 
 ## 4. Decisions
 
-<!-- repeat: one row per decision the shape depends on -->
+*Repeat from here one row per decision the shape depends on.*
 | Decision | Chosen | Instead of | Because | Revisit when |
 |---|---|---|---|---|
 | | | | | |
