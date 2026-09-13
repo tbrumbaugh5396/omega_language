@@ -1,6 +1,6 @@
 # Code review — [CHANGE OR RELEASE]
 
-*Internal. Never send this to a client. One record per reviewed change; copy the finding block once per finding and the file block once per file read. A change merges when no defect is open and both people have signed.*
+*Internal. Never send this to a client. One record per reviewed change. Every list below grows by its count: files read, checklist items, findings. A change merges when no defect is open and both people have signed.*
 
 | | |
 |---|---|
@@ -15,13 +15,17 @@
 
 *What, why, what could break. Written by the author before the review starts. No note, no review.*
 
+______
+
 ## 2. What was read
 
-*Repeat from here once per file read (a file in the diff not listed here was not reviewed) — how many: [HOW MANY]*
+*A file in the diff not listed here was not reviewed.*
 
-| File | Lines | Read fully? | Notes |
-|---|---|---|---|
-| | | | |
+*Repeat from here once per file read — how many: [HOW MANY]*
+
+| # | File | Lines | Read fully? | Notes |
+|---|---|---|---|---|
+| [N] | | | | |
 
 *End of the repeated block.*
 
@@ -29,7 +33,6 @@
 
 *One line per item, even the ones that pass. "n/a" is a line; blank is not.*
 
-*Add items the team agrees on; never remove one without the team.*
 | # | Question | Line |
 |---|---|---|
 | 1 | Does it do what the requirement says, line by line? | |
@@ -42,7 +45,14 @@
 | 8 | Is it the same on a narrow screen? | |
 | 9 | Does it respect the tree's rules (see the code organisation sheet)? | |
 | 10 | Did the date audit run? | |
-| | (add rows) | |
+
+*Repeat from here once per item the team has added (never remove one without the team) — how many: [HOW MANY]*
+
+| # | Question | Line |
+|---|---|---|
+| 10+[N] | | |
+
+*End of the repeated block.*
 
 ## 4. Findings
 
@@ -50,13 +60,13 @@
 
 ### F[N] · [DEFECT OR QUESTION] · `[FILE]:[LINE]`
 
-**Finding.** (What is wrong or unclear, in a sentence the author can act on.)
+**Finding.** [WHAT IS WRONG OR UNCLEAR]
 
-**Requirement or rule.** (Which line it breaks, if any.)
+**Requirement or rule.** [WHICH LINE IT BREAKS]
 
-**Outcome.** fixed in `[COMMIT]` · answered: (the answer) · withdrawn: (why)
+**Outcome.** fixed in [COMMIT] · answered: [ANSWER] · withdrawn: [WHY]
 
-**Closed by.** (the reviewer, after re-reading the fix)
+**Closed by.** [REVIEWER, AFTER RE-READING THE FIX]
 
 *End of the repeated block.*
 
@@ -64,7 +74,7 @@
 
 - [ ] No open defects
 - [ ] Every question answered in writing
-- [ ] Suite green after the fixes — checks: · dates:
+- [ ] Suite green after the fixes — checks: [CHECKS] · dates: [DATES]
 - [ ] The requirements sheet row for this change points at its proof
 - [ ] The code organisation sheet is updated if a module, table or screen was added or moved
 

@@ -1905,7 +1905,7 @@ _vgen = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
 _vrow = [d for d in c.get(f"/api/store/admin/engagements/{_eid}", headers=A).json()["docs"]
          if d["id"] == _vgen["doc_id"]][0]
 ok(_vgen["side"] == "internal" and _vrow["side"] == "internal" and _vrow["stage"] == "verification"
-   and "RELEASE" not in _vgen["unfilled"] and "CHANGE OR RELEASE" in _vgen["unfilled"],
+   and "CHANGE OR RELEASE" in _vgen["unfilled"] and "HOW MANY#3" in _vgen["unfilled"],
    "a verification master generates into the vault as an internal document under its own kit "
    "stage, with its blanks left to fill")
 _vpre = c.get(f"/api/store/admin/engagements/{_eid}/template", headers=A,
@@ -1918,44 +1918,51 @@ for _badp in ("verification/README.md", "verification/../../CLAUDE.md",
              params={"path": _badp}).status_code == 404,
        f"the README and anything outside the folder are refused: {_badp}")
 # --- repeated blocks: answer the count, get that many copies -----------------
-from storefront.backend.documents import expand_repeats as _xr, fill as _xf, placeholders as _xp
+from storefront.backend.documents import expand_repeats as _xr, fill as _xf, placeholders as _xp, md_html as _xh
 _rtpl = (_ROOT / "docs" / "verification" / "code-review.md").read_text()
-_r1 = _xr(_rtpl, _xf(_rtpl, {"HOW MANY": "2", "HOW MANY#2": "3"}), _rtpl)
+_r1 = _xr(_rtpl, _xf(_rtpl, {"HOW MANY": "2", "HOW MANY#3": "3"}), _rtpl)
 ok(re.findall(r"^\*(Finding \d of \d)\.\*$", _r1, re.M) == ["Finding 1 of 3", "Finding 2 of 3", "Finding 3 of 3"]
    and re.findall(r"^### F(\d) ", _r1, re.M) == ["1", "2", "3"]
-   and len(re.findall(r"^\| \| \| \| \|$", _r1, re.M)) == 2 and "| 10 |" in _r1,
+   and "| 1 | | | | |\n| 2 | | | | |\n" in _r1 and "| 10 |" in _r1,
    "a count of 3 lays the finding block out three times, numbered F1..F3 with a line naming each copy; "
-   "a count of 2 on the files-read table adds rows under one header; the checklist between them is untouched")
-_r2 = _xr(_r1, _xf(_r1, {"HOW MANY#2": "4", "DEFECT OR QUESTION": "defect"}), _rtpl)
+   "a count of 2 on the files-read table adds numbered rows under one header, touching, so it stays one table")
+ok(_xh(_r1).count("<table") == _xh(_rtpl).count("<table") and "| |" not in re.sub(r"<[^>]+>", "", _xh(_r1)),
+   "and the rendered page has the same number of tables as the master — no row leaks out as raw pipes")
+_r2 = _xr(_r1, _xf(_r1, {"HOW MANY#3": "4", "DEFECT OR QUESTION": "defect"}), _rtpl)
 ok(re.findall(r"^\*Finding (\d) of (\d)\.\*$", _r2, re.M) == [(str(i), "4") for i in range(1, 5)]
    and "[DEFECT OR QUESTION=defect]" in _r2 and _r2.count("[DEFECT OR QUESTION]") == 3,
    "raising the count to 4 adds a blank fourth copy from the template and keeps what was written in the first")
-_r3 = _xr(_r2, _xf(_r2, {"HOW MANY#2": "1"}), _rtpl)
+_r3 = _xr(_r2, _xf(_r2, {"HOW MANY#3": "1"}), _rtpl)
 ok(re.findall(r"^\*(Finding \d of \d)\.\*$", _r3, re.M) == ["Finding 1 of 1"] and "[DEFECT OR QUESTION=defect]" in _r3
    and "### F2 " not in _r3, "lowering it to 1 trims the later copies and keeps the first, answer and all")
-_otpl = (_ROOT / "docs" / "verification" / "code-organization.md").read_text()
-_o1 = _xr(_otpl, _xf(_otpl, {"HOW MANY": "2"}), _otpl)
-_okeys = [k for k in _xp(_o1) if k.startswith("HOW MANY")]
-_o2 = _xr(_o1, _xf(_o1, {_okeys[0]: "3"}), _otpl)
-_a1, _a2 = _o2.split("*Area 2 of 2.*")
-ok(re.findall(r"^### 2\.(\d) ", _o2, re.M) == ["1", "2"] and _o1.count("once per module in the area") == 2
-   and len(re.findall(r"^\| \| \| \| \| \| \|$", _a1, re.M)) == 3
-   and len(re.findall(r"^\| \| \| \| \| \| \|$", _a2, re.M)) == 1,
-   "a block inside a block: two areas each carry their own module table with its own count, and three "
-   "modules in area 1 leave area 2's single blank row alone")
+_atpl = (_ROOT / "docs" / "verification" / "architecture.md").read_text()
+_a1 = _xr(_atpl, _xf(_atpl, {"HOW MANY": "2"}), _atpl)
+_akeys = [k for k in _xp(_a1) if k.startswith("HOW MANY")]
+_a2 = _xr(_a1, _xf(_a1, {_akeys[0]: "3"}), _atpl)
+_c1, _c2 = _a2.split("*Component 2 of 2.*")
+ok(re.findall(r"^### 2\.(\d) ", _a2, re.M) == ["1", "2"]
+   and re.findall(r"^\| (\d) \| \| \| \| \|$", _c1, re.M) == ["1", "2", "3"] and "| [N] | | | | |" in _c2,
+   "a table inside a section: two components each carry their own claims table with its own count; three "
+   "claims in component 1 are numbered 1..3 and component 2's row keeps its [N] for its own count")
 ok("N" not in _xp("### 2.[N] · [AREA]") and "HOW MANY" in _xp("*Repeat from here once per x — how many: [HOW MANY]*"),
    "[N] is the copy's index and never a blank to fill; [HOW MANY] is an ordinary blank")
+for _name in ("architecture.md", "code-organization.md", "requirements.md", "behaviour.md",
+              "testing.md", "code-coverage.md", "code-review.md"):
+    _t = (_ROOT / "docs" / "verification" / _name).read_text()
+    _n = _t.count("*Repeat from here once per")
+    ok(_n >= 3 and _n == _t.count("*End of the repeated block.*") and "(add rows)" not in _t,
+       f"{_name}: every list grows by a count ({_n} blocks), each block closed, no hand-added rows left")
 # over the wire: generate with a count, then change it through both fill doors
 _vg3 = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
-    "template_path": "verification/code-review.md", "fills": {"HOW MANY#2": "3"}}).json()
+    "template_path": "verification/code-review.md", "fills": {"HOW MANY#3": "3"}}).json()
 _vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).text
 ok(_vb.count("*Finding ") == 3 and "### F3 " in _vb and "[HOW MANY=3]" in _vb,
    "generating with a count lays the copies out on the filed document")
 c.post(f"/api/store/admin/engagements/{_eid}/docs/{_vg3['doc_id']}/fill", headers=A,
-       json={"fills": {"HOW MANY#2": "4", "FILE": "main.py"}})
+       json={"fills": {"HOW MANY#3": "4", "FILE": "main.py"}})
 _vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).text
 ok(_vb.count("*Finding ") == 4 and "[FILE=main.py]" in _vb, "the engagement fill door grows it to four and keeps the answer")
-c.post(f"/api/store/admin/documents/{_vg3['doc_id']}/edit", headers=A, json={"fills": {"HOW MANY#2": "2"}})
+c.post(f"/api/store/admin/documents/{_vg3['doc_id']}/edit", headers=A, json={"fills": {"HOW MANY#3": "2"}})
 _vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).text
 ok(_vb.count("*Finding ") == 2 and "[FILE=main.py]" in _vb and "Finding 2 of 2" in _vb,
    "the vault's own editor door trims it to two — one save path, same layout")

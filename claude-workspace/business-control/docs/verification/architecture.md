@@ -1,6 +1,6 @@
 # Architecture — [RELEASE OR DATE]
 
-*Internal. Never send this to a client. How the system is built, one section per component, with a check for every claim. Copy the component block once per process, surface, store, pipeline stage or boundary. Add sections as the system grows; delete blocks that do not apply.*
+*Internal. Never send this to a client. How the system is built, one section per component, with a check for every claim. Every list below grows by its count: answer how many and that many blocks or rows are laid out.*
 
 | | |
 |---|---|
@@ -13,6 +13,8 @@
 ## 1. Overview
 
 *Three to six sentences: what runs, where, and how the pieces reach each other. A drawing may replace the prose; attach it and name it here.*
+
+______
 
 ## 2. Components
 
@@ -29,17 +31,19 @@
 | **Owns** | (data, files, keys, ports) |
 | **Does not** | (what it deliberately leaves to another component) |
 
-| # | Claim about this component | How to check | Result | Initials |
+*Repeat from here once per claim about this component — how many: [HOW MANY]*
+
+| # | Claim | How to check | Result | Initials |
 |---|---|---|---|---|
-| 1 | | | | |
-| 2 | | | | |
-| 3 | | | | |
+| [N] | | | | |
+
+*End of the repeated block.*
 
 *End of the repeated block.*
 
 ## 3. Cross-cutting
 
-*Repeat from here once per concern that crosses components (tenancy, auth, audit, i18n, errors, logging, backups…) — how many: [HOW MANY]*
+*Repeat from here once per concern that crosses components (tenancy, auth, audit, i18n, errors, logging, backups) — how many: [HOW MANY]*
 
 ### 3.[N] · [CONCERN]
 
@@ -49,10 +53,13 @@
 | **Where enforced** | |
 | **Where it could be bypassed** | |
 
+*Repeat from here once per claim about this concern — how many: [HOW MANY]*
+
 | # | Claim | How to check | Result | Initials |
 |---|---|---|---|---|
-| 1 | | | | |
-| 2 | | | | |
+| [N] | | | | |
+
+*End of the repeated block.*
 
 *End of the repeated block.*
 
@@ -60,17 +67,21 @@
 
 *Repeat from here once per decision the shape depends on — how many: [HOW MANY]*
 
-| Decision | Chosen | Instead of | Because | Revisit when |
-|---|---|---|---|---|
-| | | | | |
+| # | Decision | Chosen | Instead of | Because | Revisit when |
+|---|---|---|---|---|---|
+| [N] | | | | | |
 
 *End of the repeated block.*
 
 ## 5. Known gaps
 
-| Gap | Risk | Owner | Planned for |
-|---|---|---|---|
-| | | | |
+*Repeat from here once per known gap — how many: [HOW MANY]*
+
+| # | Gap | Risk | Owner | Planned for |
+|---|---|---|---|---|
+| [N] | | | | |
+
+*End of the repeated block.*
 
 ## Sign-off
 

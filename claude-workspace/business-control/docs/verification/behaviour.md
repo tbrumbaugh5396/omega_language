@@ -1,6 +1,6 @@
 # Behaviour walkthroughs — [RELEASE OR DATE]
 
-*Internal. Never send this to a client. What a person sees at the keyboard, on the built artifact, done by someone who did not build the change. Copy the walkthrough block once per flow; add steps freely. Every unexpected thing is a defect, even when the step passed.*
+*Internal. Never send this to a client. What a person sees at the keyboard, on the built artifact, done by someone who did not build the change. Every list below grows by its count: answer how many flows, and how many steps in each.*
 
 | | |
 |---|---|
@@ -24,23 +24,29 @@
 
 ### W[N] · [FLOW NAME]
 
-*Who is doing this, starting where, with what already true.*
+*Who is doing this, starting where, with what already true:* [SETTING]
+
+*Repeat from here once per step — how many: [HOW MANY]*
 
 | Step | Do | Expected | Result (desktop) | Result (narrow) |
 |---|---|---|---|---|
-| 1 | | | | |
-| 2 | | | | |
-| 3 | | | | |
+| [N] | | | | |
 
-Notes: (anything odd — timing, layout, wording, console)
+*End of the repeated block.*
+
+Notes (anything odd — timing, layout, wording, console): [NOTES]
 
 *End of the repeated block.*
 
 ## Defects found
 
+*Repeat from here once per defect found — how many: [HOW MANY]*
+
 | # | Walkthrough · step | What happened | Filed as |
 |---|---|---|---|
-| | | | |
+| [N] | | | |
+
+*End of the repeated block.*
 
 ## Sign-off
 

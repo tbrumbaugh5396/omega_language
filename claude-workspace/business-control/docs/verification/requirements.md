@@ -1,6 +1,6 @@
 # Requirements traceability — [RELEASE OR DATE]
 
-*Internal. Never send this to a client. Every requirement, where it is met, what proves it, and that the proof ran. Copy the source block once per place requirements come from (a signed scope, a price list, a standard, an internal invariant), and add requirement rows freely.*
+*Internal. Never send this to a client. Every requirement, where it is met, what proves it, and that the proof ran. Every list below grows by its count: answer how many and that many blocks or rows are laid out.*
 
 | | |
 |---|---|
@@ -11,33 +11,39 @@
 
 ## 1. Sources
 
-*Repeat from here once per source of requirements — how many: [HOW MANY]*
+*Repeat from here once per source of requirements (a signed scope, a price list, a standard, an internal invariant) — how many: [HOW MANY]*
 
-| Source | Holds | Where | Version / date |
-|---|---|---|---|
-| | | | |
+| # | Source | Holds | Where | Version / date |
+|---|---|---|---|---|
+| [N] | | | | |
 
 *End of the repeated block.*
 
 ## 2. Requirements
 
-*Repeat from here once per source (its requirements as rows below) — how many: [HOW MANY]*
+*Repeat from here once per source — how many: [HOW MANY]*
 
 ### 2.[N] · [SOURCE NAME]
 
+*Repeat from here once per requirement in this source — how many: [HOW MANY]*
+
 | Req. | Statement (as written in the source) | Implemented in (module · screen) | Proof (test file · section or case) | Reviewed in (record) | Ran on this commit | Initials |
 |---|---|---|---|---|---|---|
-| | | | | | | |
+| [N] | | | | | | |
+
+*End of the repeated block.*
 
 *End of the repeated block.*
 
 ## 3. Requirements without a proof
 
-*Every row above with an empty proof column, and what will be done.*
+*Repeat from here once per requirement without a proof — how many: [HOW MANY]*
 
 | Req. | Why no proof yet | Owner | Due |
 |---|---|---|---|
 | | | | |
+
+*End of the repeated block.*
 
 ## 4. Verification
 
@@ -47,7 +53,14 @@
 | Q2 | Every proof named exists | | | |
 | Q3 | Every proof ran green on this commit | | | |
 | Q4 | No implementation changed without its proof changing, or a record says why | | | |
-| | (add rows) | | | |
+
+*Repeat from here once per further claim — how many: [HOW MANY]*
+
+| # | Claim | How to check | Result | Initials |
+|---|---|---|---|---|
+| Q4+[N] | | | | |
+
+*End of the repeated block.*
 
 ## Sign-off
 

@@ -1,6 +1,6 @@
 # Testing — [RELEASE OR DATE]
 
-*Internal. Never send this to a client. The suite itself: what it is, that it ran on this commit, on the awkward dates, and that every guard is still standing. Copy the part block once per test file or test group; the guard block once per guard.*
+*Internal. Never send this to a client. The suite itself: what it is, that it ran on this commit, on the awkward dates, and that every guard is still standing. Every list below grows by its count.*
 
 | | |
 |---|---|
@@ -33,9 +33,9 @@
 
 *Repeat from here once per guard — how many: [HOW MANY]*
 
-| Guard | Where (file · section) | Fails when | Present this run |
-|---|---|---|---|
-| | | | |
+| # | Guard | Where (file · section) | Fails when | Present this run |
+|---|---|---|---|---|
+| [N] | | | | |
 
 *End of the repeated block.*
 
@@ -43,9 +43,9 @@
 
 *Repeat from here once per clock the suite is run on — how many: [HOW MANY]*
 
-| Clock | Why this day | Result |
-|---|---|---|
-| | | |
+| # | Clock | Why this day | Result |
+|---|---|---|---|
+| [N] | | | |
 
 *End of the repeated block.*
 
@@ -60,7 +60,14 @@
 | T5 | Every guard in section 2 is present | | | |
 | T6 | Each new behaviour in this release has a new check | | | |
 | T7 | No check was weakened or deleted without a record | | | |
-| | (add rows) | | | |
+
+*Repeat from here once per further claim — how many: [HOW MANY]*
+
+| # | Claim | How to check | Result | Initials |
+|---|---|---|---|---|
+| T7+[N] | | | | |
+
+*End of the repeated block.*
 
 ## Sign-off
 

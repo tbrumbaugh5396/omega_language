@@ -1,6 +1,6 @@
 # Code coverage — [RELEASE OR DATE]
 
-*Internal. Never send this to a client. Which lines the suite reached, per area, against each area's floor; and for the sensitive areas, a reason beside every line it did not reach. Copy the area block once per area; add file rows freely.*
+*Internal. Never send this to a client. Which lines the suite reached, per area, against each area's floor; and for the sensitive areas, a reason beside every line it did not reach. Every list below grows by its count.*
 
 | | |
 |---|---|
@@ -15,23 +15,27 @@
 
 *Repeat from here once per area — how many: [HOW MANY]*
 
-| Area | What is in it (modules or paths) | Floor | Reached | At floor? |
-|---|---|---|---|---|
-| | | | | |
+| # | Area | What is in it (modules or paths) | Floor | Reached | At floor? |
+|---|---|---|---|---|---|
+| [N] | | | | | |
 
 *End of the repeated block.*
 
 ## 2. Per area
 
-*Repeat from here once per area (its files as rows below) — how many: [HOW MANY]*
+*Repeat from here once per area — how many: [HOW MANY]*
 
 ### 2.[N] · [AREA]
 
 *Files, most unreached first.*
 
-| File | Reached % | Unreached lines | Changed this release? |
-|---|---|---|---|
-| | | | |
+*Repeat from here once per file in this area — how many: [HOW MANY]*
+
+| # | File | Reached % | Unreached lines | Changed this release? |
+|---|---|---|---|---|
+| [N] | | | | |
+
+*End of the repeated block.*
 
 *End of the repeated block.*
 
@@ -41,9 +45,9 @@
 
 *Repeat from here once per file with unreached sensitive lines — how many: [HOW MANY]*
 
-| File | Lines | Reason | By |
-|---|---|---|---|
-| | | | |
+| # | File | Lines | Reason | By |
+|---|---|---|---|---|
+| [N] | | | | |
 
 *End of the repeated block.*
 
@@ -57,7 +61,14 @@
 | V4 | Every unreached sensitive line has a reason | | | |
 | V5 | New code in this release is at the floor on its own | | | |
 | V6 | No floor was lowered, or the client's document changed first | | | |
-| | (add rows) | | | |
+
+*Repeat from here once per further claim — how many: [HOW MANY]*
+
+| # | Claim | How to check | Result | Initials |
+|---|---|---|---|---|
+| V6+[N] | | | | |
+
+*End of the repeated block.*
 
 ## Sign-off
 

@@ -1,6 +1,6 @@
 # Code organisation — [RELEASE OR DATE]
 
-*Internal. Never send this to a client. Where things go, what each part owns, and the rules the tree keeps. Copy the area block once per top-level area, and the module block once per module inside it. Add areas as the tree grows.*
+*Internal. Never send this to a client. Where things go, what each part owns, and the rules the tree keeps. Every list below grows by its count: answer how many and that many blocks or rows are laid out.*
 
 | | |
 |---|---|
@@ -11,15 +11,19 @@
 
 ## 1. Layout
 
-*Paste the top-level tree (two levels is usually enough) and write one line per directory saying what belongs there and what does not.*
+*Paste the top-level tree (two levels is usually enough), then one row per directory.*
 
 ```
-[PASTE TREE]
+[TREE]
 ```
 
-| Directory | Belongs here | Does not belong here |
-|---|---|---|
-| | | |
+*Repeat from here once per directory — how many: [HOW MANY]*
+
+| # | Directory | Belongs here | Does not belong here |
+|---|---|---|---|
+| [N] | | | |
+
+*End of the repeated block.*
 
 ## 2. Areas and modules
 
@@ -27,13 +31,13 @@
 
 ### 2.[N] · [AREA] — `[PATH]`
 
-*What this area is for, in a sentence.*
+*What this area is for:* [PURPOSE]
 
 *Repeat from here once per module in the area — how many: [HOW MANY]*
 
-| Module | Purpose (one line) | Owns (tables, files, state) | Exposes (routes, functions, screens) | Depends on | Sensitive? |
-|---|---|---|---|---|---|
-| | | | | | |
+| # | Module | Purpose (one line) | Owns (tables, files, state) | Exposes (routes, functions, screens) | Depends on | Sensitive? |
+|---|---|---|---|---|---|---|
+| [N] | | | | | | |
 
 *End of the repeated block.*
 
@@ -45,8 +49,7 @@
 
 | # | Rule | Enforced by (test guard · review · tooling) | Where |
 |---|---|---|---|
-| R1 | | | |
-| R2 | | | |
+| R[N] | | | |
 
 *End of the repeated block.*
 
@@ -59,13 +62,24 @@
 | O3 | No two modules own the same table or file | | | |
 | O4 | Every rule in section 3 is enforced where it says | | | |
 | O5 | Nothing runtime-generated or secret is tracked | | | |
-| | (add rows) | | | |
+
+*Repeat from here once per further claim — how many: [HOW MANY]*
+
+| # | Claim | How to check | Result | Initials |
+|---|---|---|---|---|
+| O5+[N] | | | | |
+
+*End of the repeated block.*
 
 ## 5. Changes since the last sheet
 
-| Module | Added · moved · removed · grew | Why | Review record |
-|---|---|---|---|
-| | | | |
+*Repeat from here once per module added, moved, removed or grown — how many: [HOW MANY]*
+
+| # | Module | Added · moved · removed · grew | Why | Review record |
+|---|---|---|---|---|
+| [N] | | | | |
+
+*End of the repeated block.*
 
 ## Sign-off
 

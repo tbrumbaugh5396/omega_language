@@ -459,6 +459,21 @@ def _blank_copy(lines: list) -> list:
     return out
 
 
+def _index_copy(lines: list, k: int) -> list:
+    """[N] -> the copy's number, but not inside a block nested in this one:
+    those are numbered by their own count when it is answered."""
+    out, depth = [], 0
+    for l in lines:
+        st = l.strip()
+        if REPEAT_START.match(st):
+            depth += 1
+        elif st == REPEAT_END and depth:
+            depth -= 1
+        out.append(l.replace("[N]", str(k)) if depth == 0
+                   and not REPEAT_START.match(st) else l)
+    return out
+
+
 def _nth_block(blocks: list, label: str, k: int):
     same = [b for b in blocks if b[2] == label]
     return same[k] if k < len(same) else None
@@ -503,6 +518,12 @@ def expand_repeats(old_text: str, new_text: str,
             unit_head, unit = sreg[:hh], sreg[hh:]
 
         h = _row_head(region)
+        if h:
+            # rows only: a blank line inside a table ends it, so the unit
+            # and the copies are the table lines and nothing else
+            region = region[:h] + [l for l in region[h:] if l.strip()]
+            if unit is not None:
+                unit = [l for l in unit if l.strip()]
         if n_old is None:
             head, cur = region[:h], region[h:]
             if unit is None:
@@ -534,9 +555,9 @@ def expand_repeats(old_text: str, new_text: str,
         copies = copies[:n_new]
         while len(copies) < n_new:
             k = len(copies) + 1
-            copies.append([l.replace("[N]", str(k)) for l in unit])
+            copies.append(_index_copy(unit, k))
         if h:
-            new_region = head + [l for c in copies for l in c]
+            new_region = [""] + head + [l for c in copies for l in c] + [""]
         else:
             new_region = []
             for k, c in enumerate(copies, 1):
