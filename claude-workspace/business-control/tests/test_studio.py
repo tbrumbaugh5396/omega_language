@@ -1971,6 +1971,29 @@ _vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).
 ok(_vb.count("*Finding ") == 2 and "[FILE=main.py]" in _vb,
    "refreshing from the template lays the copies out first, so the answers land back in them")
 
+# every cell meant to be answered is a field — no "(hint)" standing where an answer goes
+for _name in ("architecture.md", "code-organization.md", "requirements.md", "behaviour.md",
+              "testing.md", "code-coverage.md", "code-review.md"):
+    _t = (_ROOT / "docs" / "verification" / _name).read_text()
+    ok(not re.findall(r"^\|[^|]*\| \([^|]*\) \|$", _t, re.M),
+       f"{_name}: no header cell holds only a hint — the hint sits by the label and the cell is a blank")
+_crt = (_ROOT / "docs" / "verification" / "code-review.md").read_text()
+ok(all(t in _crt for t in ("[CHANGE]", "[REQUIREMENT IT MEETS]", "[SUITE BEFORE REVIEW]", "[REVIEWER, AFTER RE-READING THE FIX]")),
+   "the review record's change, requirement and suite-before-review are named blanks")
+# the tree: a paragraph box inside the code fence, so a pasted tree keeps its lines and its monospace
+from storefront.backend.documents import scan_regions as _xs, md_html as _xhtml
+_cot = (_ROOT / "docs" / "verification" / "code-organization.md").read_text()
+ok("```\n______\n```" in _cot and "[TREE]" not in _cot, "the layout tree is a paragraph box inside its code fence")
+_vgo = c.post(f"/api/store/admin/engagements/{_eid}/docs", headers=A, json={
+    "template_path": "verification/code-organization.md"}).json()
+_vob = c.get(f"/api/store/admin/documents/{_vgo['doc_id']}/markdown", headers=A).text
+_area = [i for i, r in enumerate(_xs(_vob)) if r["kind"] == "area"][0]
+c.post(f"/api/store/admin/documents/{_vgo['doc_id']}/edit", headers=A,
+       json={"regions": {str(_area): "src/\n  erp/\n    backend/\n  storefront/"}})
+_vob = c.get(f"/api/store/admin/documents/{_vgo['doc_id']}/markdown", headers=A).text
+ok("```\nsrc/\n  erp/\n    backend/\n  storefront/\n```" in _vob and "<pre" in _xhtml(_vob),
+   "a pasted tree lands inside the fence with its line breaks and renders preformatted")
+
 _vexp = c.post(f"/api/store/admin/engagements/{_eid}/export", headers=A, json={})
 ok(_vexp.status_code == 200, "the client folder still exports with an internal verification document in it")
 c.post(f"/api/store/admin/engagements/{_eid}/docs/{_kitd['doc_id']}/fill",

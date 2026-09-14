@@ -11,10 +11,10 @@
 
 ## 1. Layout
 
-*Paste the top-level tree (two levels is usually enough), then one row per directory.*
+*Paste the top-level tree into the box (two levels is usually enough — line breaks are kept), then one row per directory.*
 
 ```
-[TREE]
+______
 ```
 
 *Repeat from here once per directory — how many: [HOW MANY]*

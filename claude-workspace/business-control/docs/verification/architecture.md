@@ -8,7 +8,7 @@
 | **Commit** | |
 | **Prepared by** | |
 | **Date** | |
-| **Sources read** | (files, docs, diagrams you used) |
+| **Sources read** (files, docs, diagrams you used) | [SOURCES READ] |
 
 ## 1. Overview
 
@@ -24,12 +24,12 @@ ______
 
 | | |
 |---|---|
-| **Kind** | process · surface · store · middleware · boundary · other |
-| **Lives in** | (path or service) |
-| **Responsibility** | (one sentence) |
-| **Talks to** | (components, in and out) |
-| **Owns** | (data, files, keys, ports) |
-| **Does not** | (what it deliberately leaves to another component) |
+| **Kind** (process · surface · store · middleware · boundary · other) | [KIND] |
+| **Lives in** (path or service) | [LIVES IN] |
+| **Responsibility** (one sentence) | [RESPONSIBILITY] |
+| **Talks to** (components, in and out) | [TALKS TO] |
+| **Owns** (data, files, keys, ports) | [OWNS] |
+| **Does not** (what it deliberately leaves to another component) | [DOES NOT] |
 
 *Repeat from here once per claim about this component — how many: [HOW MANY]*
 
@@ -49,9 +49,9 @@ ______
 
 | | |
 |---|---|
-| **Rule** | (the invariant, in one sentence) |
-| **Where enforced** | |
-| **Where it could be bypassed** | |
+| **Rule** (the invariant, in one sentence) | [RULE] |
+| **Where enforced** | [WHERE ENFORCED] |
+| **Where it could be bypassed** | [WHERE BYPASSED] |
 
 *Repeat from here once per claim about this concern — how many: [HOW MANY]*
 

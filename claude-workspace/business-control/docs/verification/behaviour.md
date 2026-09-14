@@ -6,8 +6,8 @@
 |---|---|
 | **Release** | |
 | **Commit** | |
-| **Build under test** | (URL, port, seed used) |
-| **Walked by** | (not the author) |
+| **Build under test** (URL, port, seed used) | [BUILD UNDER TEST] |
+| **Walked by** (not the author) | [WALKED BY] |
 | **Browser · widths** | |
 | **Date** | |
 

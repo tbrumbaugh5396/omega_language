@@ -19,11 +19,11 @@
 
 | | |
 |---|---|
-| **Scope** | (what it covers) |
-| **Isolation** | (its own data? shares state with another part?) |
-| **Checks this run** | |
-| **Checks last release** | |
-| **Change explained in** | (review record, if the count fell) |
+| **Scope** (what it covers) | [SCOPE] |
+| **Isolation** (its own data? shares state with another part?) | [ISOLATION] |
+| **Checks this run** | [CHECKS THIS RUN] |
+| **Checks last release** | [CHECKS LAST RELEASE] |
+| **Change explained in** (review record, if the count fell) | [CHANGE EXPLAINED IN] |
 
 *End of the repeated block.*
 

@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| **Change** | (commit, branch or pull request) |
-| **Requirement it meets** | (the line in the requirements sheet, or "housekeeping") |
+| **Change** (commit, branch or pull request) | [CHANGE] |
+| **Requirement it meets** (the line in the requirements sheet, or "housekeeping") | [REQUIREMENT IT MEETS] |
 | **Author** | |
 | **Reviewer** | |
 | **Date** | |
-| **Suite before review** | (green? checks · dates) |
+| **Suite before review** (green? checks · dates) | [SUITE BEFORE REVIEW] |
 
 ## 1. The author's note
 
