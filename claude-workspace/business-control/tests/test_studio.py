@@ -297,13 +297,14 @@ with _tf.TemporaryDirectory() as _d:
 
 # --- the verification templates: blank masters with repeatable blocks -------
 _ver = _ROOT / "docs" / "verification"
-for _name in ("architecture.md", "code-organization.md", "requirements.md",
-              "behaviour.md", "testing.md", "code-coverage.md"):
+for _name in ("architecture.md", "code-organization.md", "requirements.md", "behaviour.md", "testing.md",
+              "code-coverage.md", "code-review.md", "test-strategy.md", "test-run.md", "non-functional-run.md",
+              "design-review.md", "demo-record.md"):
     _t = (_ver / _name).read_text()
     ok(_t.startswith("# ") and "*Repeat from here" in _t and "## Sign-off" in _t,
        f"verification/{_name} is a template: a repeatable block and a sign-off")
-    ok("| **Commit** |" in _t and "**Release**" in _t,
-       f"and it carries the release and commit it is filled for")
+    ok("| | |\n|---|---|" in _t and "commit" in _t[:1500].lower(),
+       f"and it opens with a header block that names the commit (or build) it is filled for")
     ok(f"({_name})" in (_ver / "README.md").read_text(), "and the index lists it")
 ok((_ver / "releases" / "README.md").exists(), "filled copies go under releases/<date>/, the masters stay blank")
 
@@ -343,11 +344,12 @@ _all_t = [t for st in _tj["stages"] for t in st["templates"]]
 _by = {t["path"]: t for t in _all_t}
 _vg = [st for st in _tj["stages"] if st["stage"] == "verification"][0]
 _vnames = {t["path"].split("/")[1] for t in _vg["templates"]}
-ok(_vg["client_stage"] == "07-build" and len(_vg["templates"]) == 7
+ok(_vg["client_stage"] == "07-build" and len(_vg["templates"]) == 12
    and _vnames == {"architecture.md", "code-organization.md", "requirements.md", "behaviour.md",
-                   "testing.md", "code-coverage.md", "code-review.md"}
+                   "testing.md", "code-coverage.md", "code-review.md", "test-strategy.md", "test-run.md",
+                   "non-functional-run.md", "design-review.md", "demo-record.md"}
    and all(t["side"] == "internal" for t in _vg["templates"]),
-   "the seven verification masters file under the build stage, every one on the internal side, "
+   "the twelve verification masters file under the build stage, every one on the internal side, "
    "and the folder's README is not offered as a template")
 ok(_tj["stages"].index(_vg) == 1 + [st["stage"] for st in _tj["stages"]].index("08-build"),
    "listed right after the kit's own build stage, so the screen shows them in the same card")
@@ -1947,7 +1949,8 @@ ok(re.findall(r"^### 2\.(\d) ", _a2, re.M) == ["1", "2"]
 ok("N" not in _xp("### 2.[N] · [AREA]") and "HOW MANY" in _xp("*Repeat from here once per x — how many: [HOW MANY]*"),
    "[N] is the copy's index and never a blank to fill; [HOW MANY] is an ordinary blank")
 for _name in ("architecture.md", "code-organization.md", "requirements.md", "behaviour.md",
-              "testing.md", "code-coverage.md", "code-review.md"):
+              "testing.md", "code-coverage.md", "code-review.md", "test-strategy.md", "test-run.md",
+              "non-functional-run.md", "design-review.md", "demo-record.md"):
     _t = (_ROOT / "docs" / "verification" / _name).read_text()
     _n = _t.count("*Repeat from here once per")
     ok(_n >= 3 and _n == _t.count("*End of the repeated block.*") and "(add rows)" not in _t,
@@ -1971,9 +1974,23 @@ _vb = c.get(f"/api/store/admin/documents/{_vg3['doc_id']}/markdown", headers=A).
 ok(_vb.count("*Finding ") == 2 and "[FILE=main.py]" in _vb,
    "refreshing from the template lays the copies out first, so the answers land back in them")
 
+_ts = (_ROOT / "docs" / "verification" / "test-strategy.md").read_text()
+ok(all(k in _ts for k in ("| Unit |", "| Integration |", "| System |", "| User acceptance (UAT) |", "| Performance |",
+                          "| Security |", "| Usability |", "| Compatibility |", "| Smoke |", "| Sanity |",
+                          "| Regression, automated |", "| Regression, full manual |"))
+   and "Static analysis rules" in _ts and "Process gates" in _ts and "Coverage rules" in _ts and "cadence" in _ts.lower(),
+   "the strategy master names every kind of test — functional, non-functional, cross-cutting — plus the gates, "
+   "the coverage rules, the static analysis rules and the release cadence")
+ok("given · when · then" in (_ROOT / "docs" / "verification" / "test-run.md").read_text().lower()
+   and "Completeness review" in (_ROOT / "docs" / "verification" / "test-run.md").read_text(),
+   "a test run takes BDD scenarios and carries QA's completeness review")
+ok("Ready for QA" in (_ROOT / "docs" / "verification" / "design-review.md").read_text()
+   and "external" in (_ROOT / "docs" / "verification" / "demo-record.md").read_text(),
+   "design review hands to QA; the demo record covers internal and external audiences")
 # every cell meant to be answered is a field — no "(hint)" standing where an answer goes
 for _name in ("architecture.md", "code-organization.md", "requirements.md", "behaviour.md",
-              "testing.md", "code-coverage.md", "code-review.md"):
+              "testing.md", "code-coverage.md", "code-review.md", "test-strategy.md", "test-run.md",
+              "non-functional-run.md", "design-review.md", "demo-record.md"):
     _t = (_ROOT / "docs" / "verification" / _name).read_text()
     ok(not re.findall(r"^\|[^|]*\| \([^|]*\) \|$", _t, re.M),
        f"{_name}: no header cell holds only a hint — the hint sits by the label and the cell is a blank")

@@ -1,6 +1,6 @@
 # Verification templates
 
-*Internal. Blank masters the team fills in by hand to verify a release: what the software is, how the code is organised, what it is required to do, how it behaves, how it was tested, and how much of it the tests reached. Nothing here is generated; nothing here goes to a client.*
+*Internal. Blank masters the team fills in by hand to verify a release: what the software is, how the code is organised, what it is required to do, how it behaves, how it was tested at every level from unit to demo, and how much of it the tests reached. Nothing here is generated; nothing here goes to a client.*
 
 ## How to use them
 
@@ -32,6 +32,11 @@
 | [testing.md](testing.md) | The suite ran on this commit, on the awkward dates, and its guards are standing | every release |
 | [code-coverage.md](code-coverage.md) | Coverage per area against the floors, and a reason for every unreached sensitive line | every release |
 | [code-review.md](code-review.md) | One change, read by a second person: what was read, the checklist, the findings, the outcome | every change, before it merges |
+| [test-strategy.md](test-strategy.md) | Every kind of test the product gets — functional, non-functional, cross-cutting, the process gates, coverage rules, static analysis rules — who does it, what breaks the build, where the evidence lives | every release; when the strategy changes |
+| [test-run.md](test-run.md) | One run of one test type: BDD integration, manual QA, smoke, sanity, automated or full manual regression, UAT — scope, cases, defects, QA's completeness review, verdict | every run |
+| [non-functional-run.md](non-functional-run.md) | Performance, security, usability and compatibility for a release — scenarios, thresholds, findings, platforms | every release |
+| [design-review.md](design-review.md) | The design team's review of a feature before QA — what was reviewed, checklist, findings, ready-for-QA | every new feature |
+| [demo-record.md](demo-record.md) | A demo to the internal group or to customers — who saw what, what they said, what changed | every demo |
 
 Related: the procedures for review, coverage and the test report live in
 `../business-control-b2b-client/procedures/`; the artifacts those produce
